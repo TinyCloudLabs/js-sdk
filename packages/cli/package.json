@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/cli",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "TinyCloud CLI - manage data, delegations, and nodes from the terminal",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -10,7 +10,10 @@
   "bin": {
     "tc": "./bin/tc"
   },
-  "files": ["dist", "bin"],
+  "files": [
+    "dist",
+    "bin"
+  ],
   "engines": {
     "node": ">=18"
   },
