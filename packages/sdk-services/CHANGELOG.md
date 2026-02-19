@@ -1,5 +1,17 @@
 # @tinycloudlabs/sdk-services
 
+## 1.2.0
+
+### Minor Changes
+
+- ca9b2c6: Add SQL service (tinycloud.sql/\*) with full TypeScript SDK support
+
+  - New SQLService in sdk-services: query, execute, batch, executeStatement, export
+  - DatabaseHandle for per-database operations
+  - SQL re-exports in sdk-core with TinyCloud.sql getter
+  - Node-SDK: SQL wiring in TinyCloudNode, DelegatedAccess, root delegation defaults
+  - Fix type-only re-exports preventing bun runtime resolution
+
 ## 1.0.0
 
 ### Major Changes
