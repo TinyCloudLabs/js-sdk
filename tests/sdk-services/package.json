@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-services-test",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "Testing utilities for TinyCloud SDK Services",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",

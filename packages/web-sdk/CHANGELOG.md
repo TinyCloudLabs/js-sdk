@@ -1,5 +1,15 @@
 # @tinycloudlabs/web-sdk
 
+## 1.5.0
+
+### Minor Changes
+
+- d134d86: Switch module output from UMD to ESM for native compatibility with Vite, SvelteKit, and other modern bundlers. Adds proper `exports`, `module`, and `browser` fields to package.json. Consumers using `require()` will need to switch to `import`.
+
+### Patch Changes
+
+- @tinycloud/sdk-core@1.5.0
+
 ## 1.3.0
 
 ### Minor Changes
