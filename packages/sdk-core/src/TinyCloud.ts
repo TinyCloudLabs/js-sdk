@@ -11,6 +11,8 @@ import {
   KVService,
   ISQLService,
   SQLService,
+  IDuckDbService,
+  DuckDbService,
   IDataVaultService,
   ServiceSession,
   InvokeFunction,
@@ -209,6 +211,7 @@ export class TinyCloud {
     const serviceConstructors: Record<string, ServiceConstructor> = {
       kv: KVService,
       sql: SQLService,
+      duckdb: DuckDbService,
       ...this.config.services,
     };
 
@@ -279,6 +282,24 @@ export class TinyCloud {
     const service = this._services.get("sql") as ISQLService | undefined;
     if (!service) {
       throw new Error("SQL service is not registered.");
+    }
+    return service;
+  }
+
+  /**
+   * Get the DuckDB service.
+   * @throws Error if services are not initialized
+   */
+  public get duckdb(): IDuckDbService {
+    if (!this._servicesInitialized) {
+      throw new Error(
+        "Services not initialized. Call initializeServices() first, " +
+          "or use TinyCloudWeb/TinyCloudNode which handles this automatically."
+      );
+    }
+    const service = this._services.get("duckdb") as IDuckDbService | undefined;
+    if (!service) {
+      throw new Error("DuckDB service is not registered.");
     }
     return service;
   }
