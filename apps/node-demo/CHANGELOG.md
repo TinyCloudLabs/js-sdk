@@ -1,5 +1,12 @@
 # @tinycloudlabs/node-demo
 
+## 0.0.9
+
+### Patch Changes
+
+- @tinycloud/sdk-core@1.5.0
+- @tinycloud/node-sdk@1.5.0
+
 ## 0.0.8
 
 ### Patch Changes

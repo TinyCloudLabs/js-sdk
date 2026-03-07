@@ -1,5 +1,16 @@
 # @tinycloud/cli
 
+## 0.2.0
+
+### Minor Changes
+
+- 349ae57: Add `tc secrets` and `tc vars` CLI commands for managing encrypted secrets (vault) and plaintext variables (KV) with `secrets/` and `variables/` prefixes.
+
+### Patch Changes
+
+- 96ce2b3: Add `tc secrets manage` command to open the Secrets Manager web UI and `--space` flag for cross-space secret listing
+  - @tinycloud/node-sdk@1.5.0
+
 ## 0.1.1
 
 ### Patch Changes
