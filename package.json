@@ -50,6 +50,7 @@
     "changeset:add": "bun changeset add",
     "changeset:version": "bun changeset version",
     "changeset:publish": "bun changeset publish --access public",
+    "test:esm": "node tests/esm-compat/test.mjs",
     "release": "./scripts/release.sh",
     "publish": "./scripts/publish.sh"
   },
