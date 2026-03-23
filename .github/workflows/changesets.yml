@@ -1,55 +1,115 @@
 name: Release
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - master
+  release:
+    types: [published]
+
+concurrency:
+  group: release-${{ github.event_name }}
+  cancel-in-progress: true
 
 jobs:
-  release:
-    name: Release
+  # On push to master: publish beta pre-releases for packages with pending changesets
+  beta:
+    name: Beta Release
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       id-token: write
     steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-      - name: Install Dependencies
-        run: bun install
+      - run: bun install
+
+      - name: Check for pending changesets
+        id: check
+        run: |
+          COUNT=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
+          echo "pending=$COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Version as beta snapshot
+        if: steps.check.outputs.pending != '0'
+        run: bun changeset version --snapshot beta
+
+      - name: Build packages
+        if: steps.check.outputs.pending != '0'
+        run: bun run build
+        env:
+          BUILD_SETUP_ENABLED: true
+
+      - name: Publish beta to npm
+        if: steps.check.outputs.pending != '0'
+        run: bun changeset publish --tag beta
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # On GitHub Release published: version properly and publish stable
+  stable:
+    name: Stable Release
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: master
+          token: ${{ secrets.GH_TOKEN }}
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - run: bun install
+
+      - name: Version packages
+        run: bun changeset version
 
       - name: Build packages
         run: bun run build
         env:
           BUILD_SETUP_ENABLED: true
 
-      - name: Create Release Pull Request or Publish
-        id: changesets
-        uses: changesets/action@v1
-        with:
-          publish: bun run publish
-          version: bun changeset version
-          commit: "chore: version packages"
-          title: "chore: version packages"
+      - name: Publish to npm
+        run: bun changeset publish --tag latest
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Commit version bumps
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "chore: version packages [skip ci]" || echo "No changes to commit"
+          git push origin master
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
