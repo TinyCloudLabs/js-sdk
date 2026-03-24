@@ -5,31 +5,31 @@
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/index.cjs",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "default": "./dist/index.js"
+      "require": "./dist/index.cjs"
     },
     "./kv": {
       "types": "./dist/kv/index.d.ts",
       "import": "./dist/kv/index.js",
-      "default": "./dist/kv/index.js"
+      "require": "./dist/kv/index.cjs"
     },
     "./sql": {
       "types": "./dist/sql/index.d.ts",
       "import": "./dist/sql/index.js",
-      "default": "./dist/sql/index.js"
+      "require": "./dist/sql/index.cjs"
     }
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsup",
     "clean": "rm -rf dist",
     "test": "bun test"
   },
@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "tsup": "^8.0.0",
     "typescript": "^5.0.0"
   },
   "repository": {
