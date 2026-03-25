@@ -37,7 +37,7 @@
     "siwe": "^2.3.2"
   },
   "devDependencies": {
-    "@types/node": "^20",
+    "@types/node": "^25",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0"
   },
