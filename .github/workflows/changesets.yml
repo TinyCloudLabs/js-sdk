@@ -44,9 +44,13 @@ jobs:
           COUNT=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
           echo "pending=$COUNT" >> "$GITHUB_OUTPUT"
 
-      - name: Version as beta snapshot
+      - name: Enter pre-release mode
         if: steps.check.outputs.pending != '0'
-        run: bun changeset version --snapshot beta
+        run: bun changeset pre enter beta
+
+      - name: Version packages
+        if: steps.check.outputs.pending != '0'
+        run: bun changeset version
 
       - name: Build packages
         if: steps.check.outputs.pending != '0'
@@ -54,12 +58,21 @@ jobs:
         env:
           BUILD_SETUP_ENABLED: true
 
+      - name: Setup npm auth
+        if: steps.check.outputs.pending != '0'
+        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish beta to npm
         if: steps.check.outputs.pending != '0'
         run: bun changeset publish --tag beta
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Exit pre-release mode
+        if: steps.check.outputs.pending != '0'
+        run: bun changeset pre exit
 
   # On GitHub Release published: version properly and publish stable
   stable:
@@ -98,11 +111,15 @@ jobs:
         env:
           BUILD_SETUP_ENABLED: true
 
+      - name: Setup npm auth
+        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish to npm
         run: bun changeset publish --tag latest
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Commit version bumps
         run: |
