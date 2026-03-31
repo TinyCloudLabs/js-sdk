@@ -63,6 +63,7 @@ import {
   SharingService,
   ISharingService,
   // v2 types
+  SiweConfig,
   Delegation,
   CreateDelegationParams,
   KeyInfo,
@@ -116,6 +117,8 @@ export interface TinyCloudNodeConfig {
   ensResolver?: IENSResolver;
   /** Custom space creation handler (default: auto-approve when autoCreateSpace is true) */
   spaceCreationHandler?: ISpaceCreationHandler;
+  /** Optional SIWE configuration overrides (e.g., nonce for server-provided nonces) */
+  siweConfig?: SiweConfig;
 }
 
 /**
@@ -312,6 +315,7 @@ export class TinyCloudNode {
       autoCreateSpace: config.autoCreateSpace,
       enablePublicSpace: config.enablePublicSpace ?? true,
       spaceCreationHandler: config.spaceCreationHandler,
+      siweConfig: config.siweConfig,
     });
 
     this.tc = new TinyCloud(this.auth);

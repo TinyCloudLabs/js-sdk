@@ -7,6 +7,7 @@ import {
   Extension,
   PersistedSessionData,
   TinyCloudSession,
+  SiweConfig,
   fetchPeerId,
   submitHostDelegation,
   activateSessionWithHost,
@@ -56,6 +57,8 @@ export interface NodeUserAuthorizationConfig {
   enablePublicSpace?: boolean;
   /** WASM bindings for cryptographic operations. Required. */
   wasmBindings: IWasmBindings;
+  /** Optional SIWE configuration overrides (e.g., nonce for server-provided nonces) */
+  siweConfig?: SiweConfig;
 }
 
 /**
@@ -104,6 +107,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly spaceCreationHandler?: ISpaceCreationHandler;
   private readonly tinycloudHosts: string[];
   private readonly enablePublicSpace: boolean;
+  private readonly siweConfig?: SiweConfig;
   private readonly wasm: IWasmBindings;
 
   private sessionManager: ISessionManager;
@@ -162,6 +166,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.spaceCreationHandler = config.spaceCreationHandler;
     this.tinycloudHosts = config.tinycloudHosts ?? ["https://node.tinycloud.xyz"];
     this.enablePublicSpace = config.enablePublicSpace ?? true;
+    this.siweConfig = config.siweConfig;
 
     // Initialize session manager via WASM bindings
     this.sessionManager = this.wasm.createSessionManager();
@@ -421,6 +426,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       expirationTime: expirationTime.toISOString(),
       spaceId,
       jwk,
+      nonce: this.siweConfig?.nonce,
     });
 
     // Sign the SIWE message from prepareSession (NOT a separately generated SIWE)
@@ -615,6 +621,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       expirationTime: expirationTime.toISOString(),
       spaceId,
       jwk,
+      nonce: this.siweConfig?.nonce,
     });
 
     return {
