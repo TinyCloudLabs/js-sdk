@@ -19,45 +19,38 @@ jobs:
           ref: ${{ github.head_ref }}
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Get PR info
-        id: pr
-        run: |
-          echo "title=${{ github.event.pull_request.title }}" >> "$GITHUB_OUTPUT"
-          echo "branch=${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
-
       - name: Generate changeset
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
-          CHANGESET_ID="dependabot-$(echo '${{ github.head_ref }}' | sed 's/[^a-zA-Z0-9]/-/g' | head -c 50)"
+          CHANGESET_ID="dependabot-$(echo "$HEAD_REF" | sed 's/[^a-zA-Z0-9]/-/g' | head -c 50)"
 
-          # Detect which packages are affected
-          CHANGED_PKGS=$(git diff HEAD~1 --name-only | grep 'package.json' | head -5)
+          # Find the package that was actually changed
+          CHANGED_PKG_DIR=$(git diff HEAD~1 --name-only | grep 'package.json' | grep -v '^package.json$' | head -1 | xargs dirname 2>/dev/null || true)
 
-          # Build changeset header based on repo
           HEADER="---"
 
-          # Check for workspace packages
-          if [ -f "package.json" ]; then
-            WORKSPACES=$(node -e "const p = require('./package.json'); (p.workspaces || []).forEach(w => { try { const wp = require('./' + w + '/package.json'); console.log(wp.name); } catch(e) {} })" 2>/dev/null || true)
-
-            if [ -n "$WORKSPACES" ]; then
-              # Monorepo: add patch for each workspace package
-              while IFS= read -r pkg; do
-                [ -n "$pkg" ] && HEADER="$HEADER
-\"$pkg\": patch"
-              done <<< "$WORKSPACES"
-            else
-              # Single package
-              PKG_NAME=$(node -e "console.log(require('./package.json').name)" 2>/dev/null || echo "unknown")
+          if [ -n "$CHANGED_PKG_DIR" ] && [ -f "$CHANGED_PKG_DIR/package.json" ]; then
+            PKG_NAME=$(node -e "console.log(require('./$CHANGED_PKG_DIR/package.json').name)" 2>/dev/null || echo "")
+            if [ -n "$PKG_NAME" ]; then
               HEADER="$HEADER
 \"$PKG_NAME\": patch"
             fi
+          fi
+
+          # Fallback: if no specific package found, use root
+          if [ "$HEADER" = "---" ]; then
+            PKG_NAME=$(node -e "console.log(require('./package.json').name)" 2>/dev/null || echo "unknown")
+            HEADER="$HEADER
+\"$PKG_NAME\": patch"
           fi
 
           HEADER="$HEADER
 ---"
 
           mkdir -p .changeset
-          printf '%s\n\n%s\n' "$HEADER" "${{ github.event.pull_request.title }}" > ".changeset/${CHANGESET_ID}.md"
+          printf '%s\n\n%s\n' "$HEADER" "$PR_TITLE" > ".changeset/${CHANGESET_ID}.md"
 
           echo "Created changeset: .changeset/${CHANGESET_ID}.md"
           cat ".changeset/${CHANGESET_ID}.md"
