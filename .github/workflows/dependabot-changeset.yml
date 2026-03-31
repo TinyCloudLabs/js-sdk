@@ -26,33 +26,29 @@ jobs:
         run: |
           CHANGESET_ID="dependabot-$(echo "$HEAD_REF" | sed 's/[^a-zA-Z0-9]/-/g' | head -c 50)"
 
-          # Find the package that was actually changed
           CHANGED_PKG_DIR=$(git diff HEAD~1 --name-only | grep 'package.json' | grep -v '^package.json$' | head -1 | xargs dirname 2>/dev/null || true)
 
-          HEADER="---"
-
+          PKG_NAME=""
           if [ -n "$CHANGED_PKG_DIR" ] && [ -f "$CHANGED_PKG_DIR/package.json" ]; then
             PKG_NAME=$(node -e "console.log(require('./$CHANGED_PKG_DIR/package.json').name)" 2>/dev/null || echo "")
-            if [ -n "$PKG_NAME" ]; then
-              HEADER="$HEADER
-\"$PKG_NAME\": patch"
-            fi
           fi
-
-          # Fallback: if no specific package found, use root
-          if [ "$HEADER" = "---" ]; then
+          if [ -z "$PKG_NAME" ]; then
             PKG_NAME=$(node -e "console.log(require('./package.json').name)" 2>/dev/null || echo "unknown")
-            HEADER="$HEADER
-\"$PKG_NAME\": patch"
           fi
-
-          HEADER="$HEADER
----"
 
           mkdir -p .changeset
-          printf '%s\n\n%s\n' "$HEADER" "$PR_TITLE" > ".changeset/${CHANGESET_ID}.md"
+          cat > ".changeset/${CHANGESET_ID}.md" << CHANGESET_EOF
+          ---
+          "${PKG_NAME}": patch
+          ---
 
-          echo "Created changeset: .changeset/${CHANGESET_ID}.md"
+          ${PR_TITLE}
+          CHANGESET_EOF
+
+          # Strip leading whitespace from heredoc indentation
+          sed -i 's/^          //' ".changeset/${CHANGESET_ID}.md"
+
+          echo "Created changeset:"
           cat ".changeset/${CHANGESET_ID}.md"
 
       - name: Commit changeset
