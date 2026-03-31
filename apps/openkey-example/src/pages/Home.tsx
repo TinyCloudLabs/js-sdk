@@ -2,7 +2,7 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useLocation } from "react-router-dom";
 import { TinyCloudWeb } from "@tinycloud/web-sdk";
-import { OpenKey, OpenKeyEIP1193Provider } from "@openkey/sdk";
+import { OpenKey, OpenKeyProvider } from "@openkey/sdk";
 import { providers } from "ethers";
 import Header from "../components/Header";
 import Footer from "../components/Footer";
@@ -111,7 +111,7 @@ function Home() {
       const authResult = await openkey.connect();
       setOpenKeyAddress(authResult.address);
 
-      const eip1193Provider = new OpenKeyEIP1193Provider(openkey, authResult);
+      const eip1193Provider = new OpenKeyProvider(openkey, authResult);
       const ethersProvider = new providers.Web3Provider(eip1193Provider as any);
 
       const tcwConfig = getTinyCloudWebConfig({

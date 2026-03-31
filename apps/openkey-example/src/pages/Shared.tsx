@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { useLocation, Link as RouterLink } from 'react-router-dom';
 import { TinyCloudWeb } from '@tinycloud/web-sdk';
-import { OpenKey, OpenKeyEIP1193Provider } from '@openkey/sdk';
+import { OpenKey, OpenKeyProvider } from '@openkey/sdk';
 import { providers } from 'ethers';
 import { Eye, Edit3, Save, Check, Columns, Code } from 'lucide-react';
 
@@ -135,7 +135,7 @@ const Shared = () => {
     try {
       const openkey = new OpenKey({ host: 'https://openkey.so' });
       const authResult = await openkey.connect();
-      const eip1193Provider = new OpenKeyEIP1193Provider(openkey, authResult);
+      const eip1193Provider = new OpenKeyProvider(openkey, authResult);
       const ethersProvider = new providers.Web3Provider(eip1193Provider as any);
 
       const tcwInstance = new TinyCloudWeb({
