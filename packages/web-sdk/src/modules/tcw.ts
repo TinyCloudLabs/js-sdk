@@ -199,6 +199,7 @@ export class TinyCloudWeb {
       sessionExpirationMs: this.config.sessionExpirationMs,
       notificationHandler: this.notificationHandler,
       wasmBindings: this.wasmBindings,
+      siweConfig: this.config.siweConfig,
     };
 
     // Wire up signer if available
