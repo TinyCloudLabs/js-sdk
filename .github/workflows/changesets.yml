@@ -18,12 +18,13 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
 
       - uses: oven-sh/setup-bun@v1
         with:
@@ -70,9 +71,17 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Exit pre-release mode
+      - name: Commit version bumps
         if: steps.check.outputs.pending != '0'
-        run: bun changeset pre exit
+        run: |
+          bun changeset pre exit
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --staged --quiet && echo "No changes to commit" || {
+            git commit -m "chore: beta version packages [skip ci]"
+            git push origin master
+          }
 
   # On GitHub Release published: version properly and publish stable
   stable:
