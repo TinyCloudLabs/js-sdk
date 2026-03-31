@@ -1,5 +1,14 @@
 # @tinycloudlabs/node-demo
 
+## 0.0.14
+
+### Patch Changes
+
+- Updated dependencies [7bb188f]
+- Updated dependencies [3401b3c]
+  - @tinycloud/sdk-core@2.0.2
+  - @tinycloud/node-sdk@2.0.2
+
 ## 0.0.13
 
 ### Patch Changes
@@ -115,7 +124,6 @@
 - a2b4b66: Migrate node-demo to use new node-sdk package.
 
   Changes:
-
   - Add sdk-core and node-sdk dependencies
   - Refactor demo.ts to use NodeUserAuthorization and PrivateKeySigner
   - Rename original demo to demo-legacy.ts for reference

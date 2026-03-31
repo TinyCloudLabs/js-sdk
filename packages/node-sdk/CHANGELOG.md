@@ -1,5 +1,19 @@
 # @tinycloudlabs/node-sdk
 
+## 2.0.2
+
+### Patch Changes
+
+- 3401b3c: Fix siweConfig.nonce passthrough to SIWE message generation
+
+  The nonce field from siweConfig was accepted in the configuration but never
+  forwarded to the WASM prepareSession() call, causing server-provided nonces
+  to be silently ignored. This broke single-signature auth flows where an
+  external service (e.g. billing sidecar) provides a nonce for verification.
+
+- Updated dependencies [7bb188f]
+  - @tinycloud/sdk-core@2.0.2
+
 ## 2.0.1
 
 ### Patch Changes
@@ -13,26 +27,22 @@
 - 6eebc29: Unify web-sdk and node-sdk: TinyCloudWeb is now a thin wrapper around TinyCloudNode.
 
   Breaking changes (web-sdk):
-
   - `@tinycloud/web-core` package deleted — import types from `@tinycloud/sdk-core` or `@tinycloud/web-sdk`
   - `WebUserAuthorization` class removed — use `tcw.session()`, `tcw.did`, `tcw.address()` instead
   - `tcw.webAuth` and `tcw.userAuthorization` accessors removed
   - `WebSignStrategy` / `WalletPopupStrategy` types removed
 
   New in node-sdk:
-
   - `signer`, `wasmBindings`, `notificationHandler`, `ensResolver`, `spaceCreationHandler` config options
   - `connectSigner()` method for injecting any ISigner
   - `@tinycloud/node-sdk/core` entry point (zero Node WASM deps, for browser bundlers)
   - `restoreSession()` now initializes Vault
 
   New in sdk-core:
-
   - `INotificationHandler`, `IENSResolver`, `IWasmBindings`, `ISessionManager` interfaces
   - `ClientSession`, `SiweConfig`, `EnsData` types (moved from web-core)
 
   New in web-sdk:
-
   - `sql`, `duckdb` services now available
   - Browser adapters: `BrowserWalletSigner`, `BrowserSessionStorage`, `BrowserNotificationHandler`, `BrowserWasmBindings`, `BrowserENSResolver`
   - ENS name resolution in delegation methods
@@ -94,7 +104,6 @@
 - 94ad509: Add Data Vault service for client-side encrypted KV storage with X25519 key exchange and AES-256-GCM encryption
 - 94ad509: Add multi-space session support with enablePublicSpace config (default: true). Single signIn covers both primary and public space. Fix space-scoped KV factory to properly scope to target space.
 - 94ad509: Add public space support for discoverable, unauthenticated data publishing
-
   - `makePublicSpaceId(address, chainId)` utility for deterministic public space ID construction
   - `TinyCloud.ensurePublicSpace()` creates the user's public space on first need
   - `TinyCloud.publicKV` getter returns IKVService scoped to the user's public space
@@ -118,7 +127,6 @@
 
 - 2014a20: Add sessionStorage to TinyCloudNodeConfig types and switch build to tsup for proper ESM/CJS output
 - bcbebbe: Add public space support for discoverable, unauthenticated data publishing
-
   - `makePublicSpaceId(address, chainId)` utility for deterministic public space ID construction
   - `TinyCloud.ensurePublicSpace()` creates the user's public space on first need
   - `TinyCloud.publicKV` getter returns IKVService scoped to the user's public space
@@ -126,7 +134,6 @@
   - `TinyCloud.readPublicKey(host, address, chainId, key)` static convenience method
 
 - ca9b2c6: Add SQL service (tinycloud.sql/\*) with full TypeScript SDK support
-
   - New SQLService in sdk-services: query, execute, batch, executeStatement, export
   - DatabaseHandle for per-database operations
   - SQL re-exports in sdk-core with TinyCloud.sql getter
@@ -164,19 +171,16 @@
 - 866981c: # v1.0.0 Release
 
   ## Protocol Version System
-
   - Added `checkNodeVersion()` to all sign-in flows for SDK-node compatibility verification
   - Added `ProtocolMismatchError` and `VersionCheckError` error types
   - SDK now requires TinyCloud Node v1.0.0+ with `/version` endpoint
 
   ## API Surface Cleanup
-
   - Replaced blanket `export *` with explicit curated exports
   - Renamed 40+ `TCW`-prefixed types (e.g. `TCWClientSession` -> `ClientSession`, `TCWExtension` -> `Extension`)
   - Trimmed internal utilities from public API surface
 
   ## Breaking Changes
-
   - All `TCW`-prefixed types have been renamed (drop the `TCW` prefix)
   - Blanket re-exports from `@tinycloudlabs/web-core` removed; use explicit named imports
   - Some internal sdk-core utilities removed from public API
@@ -185,7 +189,6 @@
 ### Patch Changes
 
 - b863afb: Fix sharing link delegation bugs
-
   - Fix 401 Unauthorized error: Clamp sharing link expiry to session expiry to ensure child delegation expiry never exceeds parent
   - Fix "Invalid symbol 32" base64 decode error: Remove incorrect "Bearer " prefix from authHeader in sharing link data
 
@@ -204,20 +207,17 @@
   ### node-sdk
 
   **BREAKING: `allowSubDelegation` → `disableSubDelegation`**
-
   - Sub-delegation is now allowed by default (aligns with ocap/UCAN expectations)
   - Use `disableSubDelegation: true` to prevent recipients from creating sub-delegations
   - Before: `createDelegation({ allowSubDelegation: true })` to enable
   - After: `createDelegation({})` enables by default, use `disableSubDelegation: true` to disable
 
   **BREAKING: `autoCreateNamespace` default changed to `false`**
-
   - Namespaces are no longer auto-created during sign-in
   - Use `autoCreateNamespace: true` explicitly for namespace owners
   - Delegates using shared namespaces should not set this flag
 
   ### web-sdk
-
   - Fixed `KVServiceAdapter` to include `jwk` property required by `ServiceSession`
 
 ### Patch Changes
@@ -225,7 +225,6 @@
 - a2b4b66: Create node-sdk package with Node.js-specific TinyCloud SDK implementations.
 
   This package provides:
-
   - `PrivateKeySigner`: ISigner implementation using private keys via WASM
   - `NodeUserAuthorization`: IUserAuthorization with configurable sign strategies
     - auto-sign: Automatically approve all sign requests
@@ -238,7 +237,6 @@
   Part of TC-401: IUserAuthorization shared interface implementation.
 
 - a2b4b66: Fix delegation chain support for user-to-user delegations
-
   - Added `pkhDid` getter for PKH DID format (`did:pkh:eip155:{chainId}:{address}`)
   - Fixed `createDelegation` to use `delegateUri` for targeting recipient's PKH DID
   - Fixed `createSubDelegation` to use `delegateUri` instead of generating random JWK
