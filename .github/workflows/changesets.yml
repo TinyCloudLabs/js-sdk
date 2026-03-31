@@ -4,21 +4,18 @@ on:
   push:
     branches:
       - master
-  release:
-    types: [published]
 
 concurrency:
-  group: release-${{ github.event_name }}
+  group: release
   cancel-in-progress: true
 
 jobs:
-  # On push to master: publish beta pre-releases for packages with pending changesets
-  beta:
-    name: Beta Release
-    if: github.event_name == 'push'
+  release:
+    name: Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -45,97 +42,40 @@ jobs:
           COUNT=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
           echo "pending=$COUNT" >> "$GITHUB_OUTPUT"
 
-      - name: Enter pre-release mode
-        if: steps.check.outputs.pending != '0'
-        run: bun changeset pre enter beta
-
-      - name: Version packages
-        if: steps.check.outputs.pending != '0'
-        run: bun changeset version
-
-      - name: Build packages
-        if: steps.check.outputs.pending != '0'
-        run: bun run build
-        env:
-          BUILD_SETUP_ENABLED: true
-
-      - name: Setup npm auth
-        if: steps.check.outputs.pending != '0'
-        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish beta to npm
-        if: steps.check.outputs.pending != '0'
-        run: bun changeset publish
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Commit version bumps
+      # --- Beta: publish pre-releases for every push with pending changesets ---
+      - name: Beta pre-release
         if: steps.check.outputs.pending != '0'
         run: |
+          bun changeset pre enter beta
+          bun changeset version
+          bun run build
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          bun changeset publish
           bun changeset pre exit
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .
-          git diff --staged --quiet && echo "No changes to commit" || {
-            git commit -m "chore: beta version packages [skip ci]"
-            git push origin master
-          }
-
-  # On GitHub Release published: version properly and publish stable
-  stable:
-    name: Stable Release
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: master
-          token: ${{ secrets.GH_TOKEN }}
-
-      - uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
-      - run: bun install
-
-      - name: Version packages
-        run: bun changeset version
-
-      - name: Build packages
-        run: bun run build
+          git checkout -- .
         env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           BUILD_SETUP_ENABLED: true
 
+      # --- Stable: changesets/action handles two cases automatically:
+      #     1. Pending changesets → creates/updates "Version Packages" PR
+      #     2. No pending changesets (PR was just merged) → runs publish command
       - name: Setup npm auth
-        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish to npm
-        run: bun changeset publish --tag latest
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Commit version bumps
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "chore: version packages [skip ci]" || echo "No changes to commit"
-          git push origin master
+          ./scripts/npm-auth.sh
+          bun run npm-pub
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create Release PR or Publish
+        uses: changesets/action@v1
+        with:
+          version: bun changeset version
+          publish: bun run build && bun changeset publish --access public
+          title: "chore: version packages"
+          commit: "chore: version packages"
+          createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          BUILD_SETUP_ENABLED: true
