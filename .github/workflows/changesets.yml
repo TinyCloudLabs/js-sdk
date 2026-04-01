@@ -52,6 +52,7 @@ jobs:
         if: steps.check.outputs.pending != '0'
         run: |
           bun changeset version
+          bun install
           bun run build
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
           bun changeset publish
@@ -102,6 +103,7 @@ jobs:
         run: |
           bun changeset pre exit
           bun changeset version
+          bun install
 
       - name: Build
         run: bun run build
