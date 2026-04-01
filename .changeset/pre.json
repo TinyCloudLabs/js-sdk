@@ -17,6 +17,7 @@
     "@tinycloud/sdk-services-test": "6.0.2"
   },
   "changesets": [
-    "fix-siwe-domain"
+    "fix-siwe-domain",
+    "move-polyfills-to-devdeps"
   ]
 }

@@ -1,5 +1,11 @@
 # @tinycloudlabs/web-sdk
 
+## 2.0.3-beta.1
+
+### Patch Changes
+
+- 9e05e08: Move webpack polyfill packages from dependencies to devDependencies to reduce install size for consumers
+
 ## 2.0.3-beta.0
 
 ### Patch Changes
