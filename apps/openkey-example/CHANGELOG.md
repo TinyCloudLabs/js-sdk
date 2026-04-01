@@ -1,5 +1,17 @@
 # tinycloud-openkey-example-app
 
+## 0.0.12
+
+### Patch Changes
+
+- b846534: Fix broken dependabot bumps in openkey-example app
+  - Pin react-router-dom to ^6.30.3 (v7 has breaking changes, is essentially Remix)
+  - OpenKeyEIP1193Provider → OpenKeyProvider rename already applied
+  - react/react-dom already aligned at ^18.3.1
+
+- Updated dependencies [3401b3c]
+  - @tinycloud/web-sdk@2.0.2
+
 ## 0.0.11
 
 ### Patch Changes

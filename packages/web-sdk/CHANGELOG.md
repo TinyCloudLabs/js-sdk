@@ -1,5 +1,21 @@
 # @tinycloudlabs/web-sdk
 
+## 2.0.2
+
+### Patch Changes
+
+- 3401b3c: Fix siweConfig.nonce passthrough to SIWE message generation
+
+  The nonce field from siweConfig was accepted in the configuration but never
+  forwarded to the WASM prepareSession() call, causing server-provided nonces
+  to be silently ignored. This broke single-signature auth flows where an
+  external service (e.g. billing sidecar) provides a nonce for verification.
+
+- Updated dependencies [7bb188f]
+- Updated dependencies [3401b3c]
+  - @tinycloud/sdk-core@2.0.2
+  - @tinycloud/node-sdk@2.0.2
+
 ## 2.0.1
 
 ### Patch Changes
@@ -14,26 +30,22 @@
 - 6eebc29: Unify web-sdk and node-sdk: TinyCloudWeb is now a thin wrapper around TinyCloudNode.
 
   Breaking changes (web-sdk):
-
   - `@tinycloud/web-core` package deleted — import types from `@tinycloud/sdk-core` or `@tinycloud/web-sdk`
   - `WebUserAuthorization` class removed — use `tcw.session()`, `tcw.did`, `tcw.address()` instead
   - `tcw.webAuth` and `tcw.userAuthorization` accessors removed
   - `WebSignStrategy` / `WalletPopupStrategy` types removed
 
   New in node-sdk:
-
   - `signer`, `wasmBindings`, `notificationHandler`, `ensResolver`, `spaceCreationHandler` config options
   - `connectSigner()` method for injecting any ISigner
   - `@tinycloud/node-sdk/core` entry point (zero Node WASM deps, for browser bundlers)
   - `restoreSession()` now initializes Vault
 
   New in sdk-core:
-
   - `INotificationHandler`, `IENSResolver`, `IWasmBindings`, `ISessionManager` interfaces
   - `ClientSession`, `SiweConfig`, `EnsData` types (moved from web-core)
 
   New in web-sdk:
-
   - `sql`, `duckdb` services now available
   - Browser adapters: `BrowserWalletSigner`, `BrowserSessionStorage`, `BrowserNotificationHandler`, `BrowserWasmBindings`, `BrowserENSResolver`
   - ENS name resolution in delegation methods
@@ -94,7 +106,6 @@
 - 94ad509: Add Data Vault (encrypted KV) support with WASM crypto bindings, vault service initialization in TinyCloudWeb, public space helpers, and NodeUserAuthorization improvements
 - 94ad509: Add Data Vault service for client-side encrypted KV storage with X25519 key exchange and AES-256-GCM encryption
 - 94ad509: Add public space support for discoverable, unauthenticated data publishing
-
   - `makePublicSpaceId(address, chainId)` utility for deterministic public space ID construction
   - `TinyCloud.ensurePublicSpace()` creates the user's public space on first need
   - `TinyCloud.publicKV` getter returns IKVService scoped to the user's public space
@@ -115,7 +126,6 @@
 ### Minor Changes
 
 - bcbebbe: Add public space support for discoverable, unauthenticated data publishing
-
   - `makePublicSpaceId(address, chainId)` utility for deterministic public space ID construction
   - `TinyCloud.ensurePublicSpace()` creates the user's public space on first need
   - `TinyCloud.publicKV` getter returns IKVService scoped to the user's public space
@@ -133,14 +143,12 @@
 ### Minor Changes
 
 - 0499ab9: Remove legacy UserAuthorization, make WebUserAuthorization the default
-
   - Remove `useNewAuth` config flag — `WebUserAuthorization` is now always used
   - Delete legacy `UserAuthorization` class (1,231 lines)
   - Remove `isNewAuthEnabled` getter and all legacy mode guards
   - Auth modes simplified from legacy/new-wallet/new-session-only to wallet/session-only
 
 - 855e0d9: Remove legacy code for v1 cleanup
-
   - Remove deprecated `onSessionExtensionNeeded` callback from SharingService (use `onRootDelegationNeeded` instead)
   - Remove deprecated `extendSessionForSharing()` method from TinyCloudWeb
   - Remove legacy `delegationCid` share link format support (only `cid` is supported)
@@ -152,7 +160,6 @@
   When creating share links with expiry longer than the current session, the SDK now creates a direct delegation from the wallet (PKH) to the share key, bypassing the session delegation chain. This allows share links to have any expiry duration regardless of session length.
 
   **New callback**: `onRootDelegationNeeded` in SharingServiceConfig
-
   - Called when share expiry exceeds session expiry
   - Receives the share key DID to delegate to
   - Returns a direct wallet-to-share-key delegation
@@ -185,19 +192,16 @@
 - 866981c: # v1.0.0 Release
 
   ## Protocol Version System
-
   - Added `checkNodeVersion()` to all sign-in flows for SDK-node compatibility verification
   - Added `ProtocolMismatchError` and `VersionCheckError` error types
   - SDK now requires TinyCloud Node v1.0.0+ with `/version` endpoint
 
   ## API Surface Cleanup
-
   - Replaced blanket `export *` with explicit curated exports
   - Renamed 40+ `TCW`-prefixed types (e.g. `TCWClientSession` -> `ClientSession`, `TCWExtension` -> `Extension`)
   - Trimmed internal utilities from public API surface
 
   ## Breaking Changes
-
   - All `TCW`-prefixed types have been renamed (drop the `TCW` prefix)
   - Blanket re-exports from `@tinycloudlabs/web-core` removed; use explicit named imports
   - Some internal sdk-core utilities removed from public API
@@ -206,7 +210,6 @@
 ### Patch Changes
 
 - b863afb: Fix sharing link delegation bugs
-
   - Fix 401 Unauthorized error: Clamp sharing link expiry to session expiry to ensure child delegation expiry never exceeds parent
   - Fix "Invalid symbol 32" base64 decode error: Remove incorrect "Bearer " prefix from authHeader in sharing link data
 
@@ -226,7 +229,6 @@
 ### Patch Changes
 
 - 69fc83e: Fix space creation flow and host configuration consistency
-
   - Fixed sign-in flow to setup space session before calling extension hooks
   - Added `getTinycloudHosts()` method to `IUserAuthorization` interface
   - Updated `TinyCloudStorage` to use hosts from `UserAuthorization` for consistency
@@ -242,26 +244,22 @@
   ### node-sdk
 
   **BREAKING: `allowSubDelegation` → `disableSubDelegation`**
-
   - Sub-delegation is now allowed by default (aligns with ocap/UCAN expectations)
   - Use `disableSubDelegation: true` to prevent recipients from creating sub-delegations
   - Before: `createDelegation({ allowSubDelegation: true })` to enable
   - After: `createDelegation({})` enables by default, use `disableSubDelegation: true` to disable
 
   **BREAKING: `autoCreateNamespace` default changed to `false`**
-
   - Namespaces are no longer auto-created during sign-in
   - Use `autoCreateNamespace: true` explicitly for namespace owners
   - Delegates using shared namespaces should not set this flag
 
   ### web-sdk
-
   - Fixed `KVServiceAdapter` to include `jwk` property required by `ServiceSession`
 
 - a2b4b66: Refactor web-sdk to use shared sdk-core interfaces.
 
   Changes:
-
   - Add sdk-core dependency
   - UserAuthorization now implements IUserAuthorization from sdk-core
   - Re-export sdk-core interfaces (TinyCloud, ISigner, ISessionStorage, etc.)
