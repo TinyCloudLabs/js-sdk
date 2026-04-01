@@ -1,4 +1,5 @@
 // src/index.ts
+import { readFileSync as readFileSync2 } from "fs";
 import { Command } from "commander";
 
 // src/config/constants.ts
@@ -225,10 +226,10 @@ function resolveCommitHash() {
     return null;
   }
 }
-function formatBannerLine(version) {
+function formatBannerLine(version2) {
   const commit = resolveCommitHash();
   const tagline = pickTagline();
-  const versionPart = `tc v${version}`;
+  const versionPart = `tc v${version2}`;
   const commitPart = commit ? ` (${commit})` : "";
   const separator = " \u2014 ";
   if (!isInteractive()) {
@@ -237,18 +238,18 @@ function formatBannerLine(version) {
   return [
     theme.brand("\u2601\uFE0F  tc"),
     " ",
-    theme.muted(`v${version}`),
+    theme.muted(`v${version2}`),
     commit ? theme.dim(` (${commit})`) : "",
     theme.dim(separator),
     theme.primary(tagline)
   ].join("");
 }
-function emitBanner(version) {
+function emitBanner(version2) {
   if (bannerEmitted) return;
   if (!isInteractive()) return;
   if (process.env.TC_HIDE_BANNER === "1") return;
   bannerEmitted = true;
-  process.stderr.write(formatBannerLine(version) + "\n\n");
+  process.stderr.write(formatBannerLine(version2) + "\n\n");
 }
 
 // src/config/profiles.ts
@@ -462,6 +463,8 @@ var ProfileManager = class _ProfileManager {
 
 // src/auth/local-key.ts
 import { TCWSessionManager, initPanicHook } from "@tinycloud/node-sdk-wasm";
+import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { randomBytes } from "crypto";
 var wasmInitialized = false;
 function ensureWasm() {
   if (!wasmInitialized) {
@@ -478,6 +481,38 @@ function generateKey() {
   const jwk = JSON.parse(jwkStr);
   const did = mgr.getDID(keyId);
   return { jwk, did };
+}
+function generateEthereumPrivateKey() {
+  const keyBytes = randomBytes(32);
+  return "0x" + keyBytes.toString("hex");
+}
+async function deriveAddress(privateKey) {
+  const signer = new PrivateKeySigner(privateKey);
+  return signer.getAddress();
+}
+function addressToDID(address, chainId = 1) {
+  return `did:pkh:eip155:${chainId}:${address}`;
+}
+async function generateLocalIdentity(chainId = 1) {
+  const privateKey = generateEthereumPrivateKey();
+  const address = await deriveAddress(privateKey);
+  const did = addressToDID(address, chainId);
+  return { privateKey, address, did };
+}
+async function localKeySignIn(options) {
+  const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
+  const node = new TinyCloudNode2({
+    privateKey: options.privateKey,
+    host: options.host,
+    autoCreateSpace: true
+  });
+  await node.signIn();
+  const address = await new PrivateKeySigner(options.privateKey).getAddress();
+  return {
+    spaceId: node.spaceId ?? "",
+    address,
+    chainId: 1
+  };
 }
 
 // src/auth/browser-auth.ts
@@ -713,40 +748,57 @@ function registerInitCommand(program2) {
 }
 
 // src/commands/auth.ts
+import { createInterface as createInterface2 } from "readline";
+async function promptAuthMethod() {
+  if (!isInteractive()) {
+    return "local";
+  }
+  const rl = createInterface2({
+    input: process.stdin,
+    output: process.stderr
+  });
+  return new Promise((resolve3) => {
+    process.stderr.write("\n" + theme.heading("Choose authentication method:") + "\n");
+    process.stderr.write(`  ${theme.accent("1)")} OpenKey ${theme.muted("(browser-based, for interactive use)")}
+`);
+    process.stderr.write(`  ${theme.accent("2)")} Local key ${theme.muted("(Ethereum private key, for agents/CI)")}
+
+`);
+    rl.question("Enter choice [1]: ", (answer) => {
+      rl.close();
+      const trimmed = answer.trim();
+      if (trimmed === "2" || trimmed.toLowerCase() === "local") {
+        resolve3("local");
+      } else {
+        resolve3("openkey");
+      }
+    });
+  });
+}
 function registerAuthCommand(program2) {
   const auth = program2.command("auth").description("Authentication management");
-  auth.command("login").description("Authenticate with OpenKey").option("--paste", "Use manual paste mode instead of browser callback").action(async (options, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--paste", "Use manual paste mode instead of browser callback").option("--method <method>", "Authentication method: local or openkey").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const key = await ProfileManager.getKey(ctx.profile);
-      if (!key) {
-        throw new CLIError(
-          "NO_KEY",
-          `No key found for profile "${ctx.profile}". Run \`tc init\` first.`,
-          ExitCode.AUTH_REQUIRED
-        );
+      let method;
+      if (options.method) {
+        if (options.method !== "local" && options.method !== "openkey") {
+          throw new CLIError(
+            "INVALID_METHOD",
+            `Invalid auth method "${options.method}". Use "local" or "openkey".`,
+            ExitCode.USAGE_ERROR
+          );
+        }
+        method = options.method;
+      } else {
+        method = await promptAuthMethod();
       }
-      const profile = await ProfileManager.getProfile(ctx.profile);
-      const delegationData = await startAuthFlow(profile.did, {
-        paste: options.paste,
-        jwk: key,
-        host: ctx.host
-      });
-      await ProfileManager.setSession(ctx.profile, delegationData);
-      if (delegationData.spaceId) {
-        await ProfileManager.setProfile(ctx.profile, {
-          ...profile,
-          spaceId: delegationData.spaceId,
-          primaryDid: delegationData.primaryDid
-        });
+      if (method === "local") {
+        await handleLocalAuth(ctx.profile, ctx.host);
+      } else {
+        await handleOpenKeyAuth(ctx.profile, ctx.host, options.paste);
       }
-      outputJson({
-        authenticated: true,
-        profile: ctx.profile,
-        did: profile.did,
-        spaceId: delegationData.spaceId
-      });
     } catch (error) {
       handleError(error);
     }
@@ -782,15 +834,19 @@ function registerAuthCommand(program2) {
           spaceId: profile?.spaceId ?? null,
           host: ctx.host,
           profile: ctx.profile,
-          hasKey: hasKey !== null
+          hasKey: hasKey !== null,
+          authMethod: profile?.authMethod ?? null,
+          address: profile?.address ?? null
         });
       } else {
         process.stdout.write(theme.heading("Authentication Status") + "\n");
         process.stdout.write(formatField("Profile", ctx.profile) + "\n");
         process.stdout.write(formatField("Authenticated", authenticated) + "\n");
+        process.stdout.write(formatField("Auth Method", profile?.authMethod ?? null) + "\n");
         process.stdout.write(formatField("Host", ctx.host) + "\n");
         process.stdout.write(formatField("DID", profile?.did ?? null) + "\n");
         process.stdout.write(formatField("Primary DID", profile?.primaryDid ?? null) + "\n");
+        process.stdout.write(formatField("Address", profile?.address ?? null) + "\n");
         process.stdout.write(formatField("Space ID", profile?.spaceId ?? null) + "\n");
         process.stdout.write(formatField("Has Key", hasKey !== null) + "\n");
       }
@@ -812,13 +868,17 @@ function registerAuthCommand(program2) {
           primaryDid: profile.primaryDid ?? null,
           spaceId: profile.spaceId ?? null,
           host: profile.host,
-          authenticated
+          authenticated,
+          authMethod: profile.authMethod ?? null,
+          address: profile.address ?? null
         });
       } else {
         process.stdout.write(theme.heading("Identity") + "\n");
         process.stdout.write(formatField("Profile", ctx.profile) + "\n");
         process.stdout.write(formatField("DID", profile.did) + "\n");
         process.stdout.write(formatField("Primary DID", profile.primaryDid ?? null) + "\n");
+        process.stdout.write(formatField("Auth Method", profile.authMethod ?? null) + "\n");
+        process.stdout.write(formatField("Address", profile.address ?? null) + "\n");
         process.stdout.write(formatField("Space ID", profile.spaceId ?? null) + "\n");
         process.stdout.write(formatField("Host", profile.host) + "\n");
         process.stdout.write(formatField("Authenticated", authenticated) + "\n");
@@ -826,6 +886,103 @@ function registerAuthCommand(program2) {
     } catch (error) {
       handleError(error);
     }
+  });
+}
+async function handleLocalAuth(profileName, host) {
+  const profile = await ProfileManager.getProfile(profileName).catch(() => null);
+  let privateKey;
+  let address;
+  let did;
+  if (profile?.authMethod === "local" && profile.privateKey && profile.address) {
+    privateKey = profile.privateKey;
+    address = profile.address;
+    did = profile.did;
+    if (isInteractive()) {
+      process.stderr.write(theme.muted("Using existing local key") + "\n");
+      process.stderr.write(formatField("Address", address) + "\n");
+    }
+  } else {
+    const identity = await withSpinner("Generating Ethereum key...", async () => {
+      return generateLocalIdentity(DEFAULT_CHAIN_ID);
+    });
+    privateKey = identity.privateKey;
+    address = identity.address;
+    did = identity.did;
+    if (isInteractive()) {
+      process.stderr.write("\n" + theme.heading("Local Key Generated") + "\n");
+      process.stderr.write(formatField("Address", address) + "\n");
+      process.stderr.write(formatField("DID", did) + "\n\n");
+    }
+  }
+  const hasKey = await ProfileManager.getKey(profileName);
+  if (!hasKey) {
+    const { jwk } = await withSpinner("Generating session key...", async () => {
+      return generateKey();
+    });
+    await ProfileManager.setKey(profileName, jwk);
+  }
+  const sessionResult = await withSpinner("Signing in...", async () => {
+    return localKeySignIn({ privateKey, host });
+  });
+  await ProfileManager.setSession(profileName, {
+    authMethod: "local",
+    address,
+    chainId: DEFAULT_CHAIN_ID,
+    spaceId: sessionResult.spaceId
+  });
+  await ProfileManager.setProfile(profileName, {
+    name: profileName,
+    host,
+    chainId: DEFAULT_CHAIN_ID,
+    spaceName: "default",
+    did,
+    primaryDid: did,
+    spaceId: sessionResult.spaceId,
+    createdAt: profile?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+    authMethod: "local",
+    privateKey,
+    address
+  });
+  outputJson({
+    authenticated: true,
+    profile: profileName,
+    did,
+    address,
+    spaceId: sessionResult.spaceId,
+    authMethod: "local"
+  });
+}
+async function handleOpenKeyAuth(profileName, host, paste) {
+  const key = await ProfileManager.getKey(profileName);
+  if (!key) {
+    throw new CLIError(
+      "NO_KEY",
+      `No key found for profile "${profileName}". Run \`tc init\` first.`,
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  const profile = await ProfileManager.getProfile(profileName);
+  const delegationData = await startAuthFlow(profile.did, {
+    paste,
+    jwk: key,
+    host
+  });
+  await ProfileManager.setSession(profileName, delegationData);
+  const updatedProfile = {
+    ...profile,
+    authMethod: "openkey"
+  };
+  if (delegationData.spaceId) {
+    updatedProfile.spaceId = delegationData.spaceId;
+    updatedProfile.primaryDid = delegationData.primaryDid;
+  }
+  await ProfileManager.setProfile(profileName, updatedProfile);
+  outputJson({
+    authenticated: true,
+    profile: profileName,
+    did: profile.did,
+    spaceId: delegationData.spaceId,
+    authMethod: "openkey"
   });
 }
 
@@ -839,12 +996,21 @@ async function createSDKInstance(ctx, options) {
   const profile = await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile);
   const key = await ProfileManager.getKey(ctx.profile);
-  if (!key) {
+  const effectivePrivateKey = options?.privateKey ?? profile.privateKey;
+  if (!key && !effectivePrivateKey) {
     throw new CLIError(
       "AUTH_REQUIRED",
       `No key found for profile "${ctx.profile}". Run \`tc init\` first.`,
       ExitCode.AUTH_REQUIRED
     );
+  }
+  if (profile.authMethod === "local" && effectivePrivateKey) {
+    const node2 = new TinyCloudNode({
+      host: ctx.host,
+      privateKey: effectivePrivateKey
+    });
+    await node2.signIn();
+    return node2;
   }
   const node = new TinyCloudNode({
     host: ctx.host,
@@ -866,6 +1032,10 @@ async function createSDKInstance(ctx, options) {
   return node;
 }
 async function ensureAuthenticated(ctx, options) {
+  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+  if (profile?.authMethod === "local" && profile.privateKey) {
+    return createSDKInstance(ctx, { privateKey: profile.privateKey });
+  }
   const session = await ProfileManager.getSession(ctx.profile);
   if (!session) {
     throw new CLIError(
@@ -1356,7 +1526,7 @@ function registerNodeCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const response = await fetch(`${ctx.host}/version`);
+      const response = await fetch(`${ctx.host}/info`);
       if (!response.ok) {
         throw new CLIError("NODE_ERROR", `Node returned ${response.status}`, ExitCode.NODE_ERROR);
       }
@@ -1373,7 +1543,7 @@ function registerNodeCommand(program2) {
       const start = Date.now();
       const [healthRes, versionRes] = await Promise.allSettled([
         fetch(`${ctx.host}/healthz`),
-        fetch(`${ctx.host}/version`)
+        fetch(`${ctx.host}/info`)
       ]);
       const latencyMs = Date.now() - start;
       const healthy = healthRes.status === "fulfilled" && healthRes.value.ok;
@@ -1394,7 +1564,7 @@ function registerNodeCommand(program2) {
 }
 
 // src/commands/profile.ts
-import { createInterface as createInterface2 } from "readline";
+import { createInterface as createInterface3 } from "readline";
 function registerProfileCommand(program2) {
   const profile = program2.command("profile").description("Profile management");
   profile.command("list").description("List all profiles").action(async (_options, cmd) => {
@@ -1504,7 +1674,7 @@ function registerProfileCommand(program2) {
   profile.command("delete <name>").description("Delete a profile").action(async (name, _options, cmd) => {
     try {
       if (isInteractive()) {
-        const rl = createInterface2({ input: process.stdin, output: process.stderr });
+        const rl = createInterface3({ input: process.stdin, output: process.stderr });
         const answer = await new Promise((resolve3) => {
           rl.question(`Delete profile "${name}"? This cannot be undone. [y/N] `, resolve3);
         });
@@ -1655,7 +1825,7 @@ complete -c tc -l quiet -s q -d "Suppress non-essential output"
 // src/commands/vault.ts
 import { readFile as readFile3 } from "fs/promises";
 import { writeFile as writeFile3 } from "fs/promises";
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
 async function readStdin2() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -1675,7 +1845,7 @@ function resolvePrivateKey(options) {
   return key;
 }
 async function unlockVault(node, privateKey) {
-  const signer = new PrivateKeySigner(privateKey);
+  const signer = new PrivateKeySigner2(privateKey);
   const result = await node.vault.unlock(signer);
   if (result && !result.ok) {
     throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
@@ -1828,7 +1998,7 @@ function registerVaultCommand(program2) {
 // src/commands/secrets.ts
 import { readFile as readFile4 } from "fs/promises";
 import { writeFile as writeFile4 } from "fs/promises";
-import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
+import { PrivateKeySigner as PrivateKeySigner3 } from "@tinycloud/node-sdk";
 var SECRETS_PREFIX = "secrets/";
 async function readStdin3() {
   const chunks = [];
@@ -1849,7 +2019,7 @@ function resolvePrivateKey2(options) {
   return key;
 }
 async function unlockVault2(node, privateKey) {
-  const signer = new PrivateKeySigner2(privateKey);
+  const signer = new PrivateKeySigner3(privateKey);
   const result = await node.vault.unlock(signer);
   if (result && !result.ok) {
     throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
@@ -2484,18 +2654,89 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
   });
 }
 
+// src/commands/upgrade.ts
+import { execSync as execSync2 } from "child_process";
+import { readFileSync } from "fs";
+var PACKAGE_NAME = "@tinycloud/cli";
+function getCurrentVersion() {
+  const pkg = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf-8")
+  );
+  return pkg.version;
+}
+async function getLatestVersion() {
+  const res = await fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch latest version: ${res.status} ${res.statusText}`);
+  }
+  const data = await res.json();
+  return data.version;
+}
+function detectPackageManager() {
+  try {
+    const bunGlobals = execSync2("bun pm ls -g", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    if (bunGlobals.includes(PACKAGE_NAME)) {
+      return "bun";
+    }
+  } catch {
+  }
+  try {
+    const npmGlobals = execSync2("npm ls -g --depth=0", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    if (npmGlobals.includes(PACKAGE_NAME)) {
+      return "npm";
+    }
+  } catch {
+  }
+  return "bun";
+}
+function registerUpgradeCommand(program2) {
+  program2.command("upgrade").description("Upgrade the TinyCloud CLI to the latest version").action(async () => {
+    try {
+      const current = getCurrentVersion();
+      process.stderr.write(theme.muted("Checking for updates...") + "\n");
+      const latest = await getLatestVersion();
+      if (current === latest) {
+        process.stdout.write(theme.success(`Already on latest version (${current})`) + "\n");
+        return;
+      }
+      process.stdout.write(`Current: ${theme.warn(current)} \u2192 Latest: ${theme.success(latest)}
+`);
+      const pm = detectPackageManager();
+      const cmd = pm === "bun" ? `bun install -g ${PACKAGE_NAME}@latest` : `npm install -g ${PACKAGE_NAME}@latest`;
+      process.stderr.write(theme.muted(`Upgrading via ${pm}...`) + "\n\n");
+      try {
+        execSync2(cmd, { stdio: "inherit" });
+        process.stdout.write("\n" + theme.success(`Upgraded to ${latest}`) + "\n");
+      } catch {
+        process.stderr.write("\n" + theme.warn("Automatic upgrade failed.") + "\n");
+        process.stderr.write(theme.muted("Try running manually:") + "\n");
+        process.stderr.write(`  ${theme.command(`bun install -g ${PACKAGE_NAME}@latest`)}
+`);
+        process.stderr.write(theme.muted("  or") + "\n");
+        process.stderr.write(`  ${theme.command(`npm install -g ${PACKAGE_NAME}@latest`)}
+`);
+      }
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+
 // src/index.ts
+var { version } = JSON.parse(
+  readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
+);
 var program = new Command();
-program.name("tc").description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version("0.1.0").option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output");
+program.name("tc").description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output");
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
   if (!opts.quiet) {
-    emitBanner("0.1.1");
+    emitBanner(version);
   }
   const commandName = thisCommand.name();
   const parentName = thisCommand.parent?.name();
   const fullCommand = parentName && parentName !== "tc" ? `${parentName} ${commandName}` : commandName;
-  const skipGuard = ["tc", "init", "doctor", "completion", "help"].includes(commandName) || fullCommand === "profile create";
+  const skipGuard = ["tc", "init", "doctor", "completion", "help", "upgrade"].includes(commandName) || fullCommand === "profile create";
   if (!skipGuard && !opts.quiet && isInteractive()) {
     try {
       const config = await ProfileManager.getConfig();
@@ -2528,6 +2769,7 @@ registerVarsCommand(program);
 registerDoctorCommand(program);
 registerSqlCommand(program);
 registerDuckdbCommand(program);
+registerUpgradeCommand(program);
 program.addHelpText("afterAll", () => {
   if (!process.stdout.isTTY) return "";
   return `

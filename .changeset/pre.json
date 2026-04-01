@@ -16,5 +16,7 @@
     "@tinycloud/web-sdk": "2.0.2",
     "@tinycloud/sdk-services-test": "6.0.2"
   },
-  "changesets": []
+  "changesets": [
+    "fix-siwe-domain"
+  ]
 }

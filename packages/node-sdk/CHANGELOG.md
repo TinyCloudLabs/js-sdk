@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk
 
+## 2.0.3-beta.0
+
+### Patch Changes
+
+- e7e6ee7: Fix SIWE domain to default to app.tinycloud.xyz instead of TinyCloud node URL
+
 ## 2.0.2
 
 ### Patch Changes
