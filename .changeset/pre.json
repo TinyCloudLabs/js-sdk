@@ -1,0 +1,20 @@
+{
+  "mode": "pre",
+  "tag": "beta",
+  "initialVersions": {
+    "@tinycloud/node-demo": "0.0.14",
+    "tinycloud-openkey-example-app": "0.0.12",
+    "openkey-vite": "0.0.10",
+    "tinycloud-web-sdk-example-app": "0.0.2",
+    "@tinycloud/cli": "0.4.4",
+    "@tinycloud/node-sdk": "2.0.2",
+    "@tinycloud/sdk-core": "2.0.2",
+    "@tinycloud/sdk-rs": "1.0.0",
+    "@tinycloud/node-sdk-wasm": "1.7.0",
+    "@tinycloud/web-sdk-wasm": "1.7.0",
+    "@tinycloud/sdk-services": "2.0.2",
+    "@tinycloud/web-sdk": "2.0.2",
+    "@tinycloud/sdk-services-test": "6.0.2"
+  },
+  "changesets": []
+}

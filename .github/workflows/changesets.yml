@@ -4,8 +4,11 @@ on:
   push:
     branches:
       - master
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "release" to confirm stable release'
+        required: true
 
 concurrency:
   group: release-${{ github.event_name }}
@@ -48,11 +51,10 @@ jobs:
       - name: Version, build, and publish beta
         if: steps.check.outputs.pending != '0'
         run: |
-          bun changeset pre enter beta
           bun changeset version
           bun run build
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-          bun changeset publish --tag beta
+          bun changeset publish
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           BUILD_SETUP_ENABLED: true
@@ -60,7 +62,6 @@ jobs:
       - name: Commit beta version bumps
         if: steps.check.outputs.pending != '0'
         run: |
-          bun changeset pre exit
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .
@@ -69,10 +70,10 @@ jobs:
             git push origin master
           }
 
-  # On GitHub Release published: publish stable versions
+  # Manual trigger: graduate betas to stable release
   stable:
     name: Stable Release
-    if: github.event_name == 'release'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -97,23 +98,42 @@ jobs:
 
       - run: bun install
 
-      - name: Version, build, and publish stable
+      - name: Exit pre mode and version
         run: |
+          bun changeset pre exit
           bun changeset version
-          bun run build
-          ./scripts/npm-auth.sh
-          bun run npm-pub
-          bun changeset publish --access public
+
+      - name: Build
+        run: bun run build
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           BUILD_SETUP_ENABLED: true
 
-      - name: Commit version bumps and push
+      - name: Publish stable to npm
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          bun changeset publish
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Re-enter pre mode for next beta cycle
+        run: bun changeset pre enter beta
+
+      - name: Commit, push, and tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .
           git diff --staged --quiet && echo "No changes to commit" || {
-            git commit -m "chore: version packages [skip ci]"
+            git commit -m "chore: release stable packages [skip ci]"
             git push origin master
           }
+
+      - name: Create GitHub Release
+        run: |
+          VERSION=$(node -e "console.log(require('./packages/web-sdk/package.json').version)")
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --generate-notes \
+            --target master
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
