@@ -1,5 +1,6 @@
 ---
 "@tinycloud/web-sdk": patch
+"@tinycloud/node-sdk": patch
 ---
 
-Fix SIWE domain to use calling app's hostname instead of TinyCloud node URL
+Fix SIWE domain to default to app.tinycloud.xyz instead of TinyCloud node URL

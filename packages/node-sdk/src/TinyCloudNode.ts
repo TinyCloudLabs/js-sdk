@@ -178,6 +178,11 @@ export class TinyCloudNode {
     return this.auth?.nodeFeatures ?? [];
   }
 
+  /** SIWE domain — uses config override or defaults to app.tinycloud.xyz */
+  private get siweDomain(): string {
+    return this.config.domain ?? 'app.tinycloud.xyz';
+  }
+
   /**
    * Create a new TinyCloudNode instance.
    *
@@ -301,14 +306,13 @@ export class TinyCloudNode {
    */
   private setupAuth(config: TinyCloudNodeConfig): void {
     const host = this.config.host!;
-    const domain = config.domain ?? new URL(host).hostname;
 
     this.auth = new NodeUserAuthorization({
       signer: this.signer!,
       signStrategy: { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
-      domain,
+      domain: this.siweDomain,
       spacePrefix: config.prefix,
       sessionExpirationMs: config.sessionExpirationMs ?? 60 * 60 * 1000,
       tinycloudHosts: [host],
@@ -547,7 +551,6 @@ export class TinyCloudNode {
 
     const prefix = options?.prefix ?? "default";
     const host = this.config.host!;
-    const domain = new URL(host).hostname;
 
     // Create signer from private key
     if (!TinyCloudNode.nodeDefaults) {
@@ -564,7 +567,7 @@ export class TinyCloudNode {
       signStrategy: { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
-      domain,
+      domain: this.siweDomain,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? 60 * 60 * 1000,
       tinycloudHosts: [host],
@@ -600,7 +603,6 @@ export class TinyCloudNode {
 
     const prefix = options?.prefix ?? "default";
     const host = this.config.host!;
-    const domain = new URL(host).hostname;
 
     this.signer = signer;
 
@@ -609,7 +611,7 @@ export class TinyCloudNode {
       signStrategy: { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
-      domain,
+      domain: this.siweDomain,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? 60 * 60 * 1000,
       tinycloudHosts: [host],
@@ -979,7 +981,7 @@ export class TinyCloudNode {
         abilities,
         address: this.wasmBindings.ensureEip55(session.address),
         chainId: session.chainId,
-        domain: new URL(host).hostname,
+        domain: this.siweDomain,
         issuedAt: now.toISOString(),
         expirationTime: params.requestedExpiry.toISOString(),
         spaceId: params.spaceId,
@@ -1331,7 +1333,7 @@ export class TinyCloudNode {
       abilities,
       address: this.wasmBindings.ensureEip55(this.session.address),
       chainId: this.session.chainId,
-      domain: new URL(this.config.host!).hostname,
+      domain: this.siweDomain,
       issuedAt: now.toISOString(),
       expirationTime: expirationTime.toISOString(),
       spaceId: publicSpaceId,
@@ -1538,7 +1540,7 @@ export class TinyCloudNode {
       abilities,
       address: this.wasmBindings.ensureEip55(session.address),
       chainId: session.chainId,
-      domain: new URL(this.config.host!).hostname,
+      domain: this.siweDomain,
       issuedAt: now.toISOString(),
       expirationTime: expirationTime.toISOString(),
       spaceId: params.spaceIdOverride ?? session.spaceId,
@@ -1592,7 +1594,7 @@ export class TinyCloudNode {
         abilities: publicAbilities,
         address: this.wasmBindings.ensureEip55(session.address),
         chainId: session.chainId,
-        domain: new URL(this.config.host!).hostname,
+        domain: this.siweDomain,
         issuedAt: now.toISOString(),
         expirationTime: expirationTime.toISOString(),
         spaceId: publicSpaceId,
@@ -1721,7 +1723,7 @@ export class TinyCloudNode {
       abilities,
       address: this.wasmBindings.ensureEip55(mySession.address),
       chainId: mySession.chainId,
-      domain: new URL(targetHost).hostname,
+      domain: this.siweDomain,
       issuedAt: now.toISOString(),
       expirationTime: expirationTime.toISOString(),
       spaceId: delegation.spaceId,
@@ -1856,7 +1858,7 @@ export class TinyCloudNode {
       abilities,
       address: this.wasmBindings.ensureEip55(this._address),
       chainId: this._chainId,
-      domain: new URL(targetHost).hostname,
+      domain: this.siweDomain,
       issuedAt: now.toISOString(),
       expirationTime: actualExpiry.toISOString(),
       spaceId: parentDelegation.spaceId,
