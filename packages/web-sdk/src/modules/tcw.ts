@@ -85,6 +85,9 @@ export interface Config extends ClientConfig {
   /** Session expiration time in milliseconds (default: 1 hour) */
   sessionExpirationMs?: number;
 
+  /** SIWE domain (default: window.location.hostname in browser) */
+  domain?: string;
+
   /** Shorthand for passing a Web3 provider */
   provider?: any;
 }
@@ -194,6 +197,7 @@ export class TinyCloudWeb {
 
     const nodeConfig: TinyCloudNodeConfig = {
       host: this.config.tinycloudHosts?.[0] ?? "https://node.tinycloud.xyz",
+      domain: this.config.domain ?? (typeof window !== 'undefined' ? window.location.hostname : undefined),
       prefix: this.config.spacePrefix,
       autoCreateSpace: this.config.autoCreateSpace ?? true,
       sessionExpirationMs: this.config.sessionExpirationMs,
