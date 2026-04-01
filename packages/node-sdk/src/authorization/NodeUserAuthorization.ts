@@ -206,7 +206,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     if (statement) {
       overrides.statement = this.statement
-        ? `${statement}\n${this.statement}`
+        ? `${statement} ${this.statement}`
         : statement;
     }
 
