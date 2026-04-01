@@ -42,16 +42,16 @@ jobs:
           COUNT=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
           echo "pending=$COUNT" >> "$GITHUB_OUTPUT"
 
-      # --- Beta: publish pre-releases for every push with pending changesets ---
-      - name: Beta pre-release
+      # --- Beta: publish snapshot pre-releases for every push with pending changesets ---
+      # Uses --snapshot so versions include a timestamp (e.g. 2.0.2-beta-20260401120000)
+      # and are always unique without needing to track pre-release state in the repo.
+      - name: Beta snapshot release
         if: steps.check.outputs.pending != '0'
         run: |
-          bun changeset pre enter beta
-          bun changeset version
+          bun changeset version --snapshot beta
           bun run build
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-          bun changeset publish
-          bun changeset pre exit
+          bun changeset publish --tag beta
           git checkout -- .
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
