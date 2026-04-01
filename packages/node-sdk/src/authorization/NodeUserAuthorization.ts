@@ -192,6 +192,40 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /**
+   * Build SIWE overrides from siweConfig.
+   * - statement is prepended to the default statement
+   * - resources are appended to the default resources
+   * - uri triggers a warning (overwriting delegation target)
+   * - all other fields override directly
+   */
+  private buildSiweOverrides(): Record<string, unknown> {
+    if (!this.siweConfig) return { uri: this.uri };
+
+    const { statement, resources, uri, ...rest } = this.siweConfig;
+    const overrides: Record<string, unknown> = { uri: this.uri, ...rest };
+
+    if (statement) {
+      overrides.statement = this.statement
+        ? `${statement}\n${this.statement}`
+        : statement;
+    }
+
+    if (resources && resources.length > 0) {
+      overrides.resources = resources;
+    }
+
+    if (uri) {
+      console.warn(
+        "[tinycloud] siweConfig.uri is overwriting the delegation target URI. " +
+        "This may break delegation chain validation if the URI does not match the session key DID.",
+      );
+      overrides.uri = uri;
+    }
+
+    return overrides;
+  }
+
+  /**
    * Add an extension to the authorization flow.
    */
   extend(extension: Extension): void {
@@ -422,12 +456,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
       address,
       chainId,
       domain: this.domain,
-      uri: this.uri,
       issuedAt: now.toISOString(),
       expirationTime: expirationTime.toISOString(),
       spaceId,
       jwk,
-      ...this.siweConfig,
+      ...this.buildSiweOverrides(),
     });
 
     // Sign the SIWE message from prepareSession (NOT a separately generated SIWE)
@@ -618,12 +651,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
       address,
       chainId,
       domain: this.domain,
-      uri: this.uri,
       issuedAt: now.toISOString(),
       expirationTime: expirationTime.toISOString(),
       spaceId,
       jwk,
-      ...this.siweConfig,
+      ...this.buildSiweOverrides(),
     });
 
     return {
