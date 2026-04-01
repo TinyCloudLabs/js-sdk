@@ -4,18 +4,21 @@ on:
   push:
     branches:
       - master
+  release:
+    types: [published]
 
 concurrency:
-  group: release
+  group: release-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
-  release:
-    name: Release
+  # On push to master: publish incrementing beta pre-releases
+  beta:
+    name: Beta Release
+    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -42,40 +45,75 @@ jobs:
           COUNT=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
           echo "pending=$COUNT" >> "$GITHUB_OUTPUT"
 
-      # --- Beta: publish snapshot pre-releases for every push with pending changesets ---
-      # Uses --snapshot so versions include a timestamp (e.g. 2.0.2-beta-20260401120000)
-      # and are always unique without needing to track pre-release state in the repo.
-      - name: Beta snapshot release
+      - name: Version, build, and publish beta
         if: steps.check.outputs.pending != '0'
         run: |
-          bun changeset version --snapshot beta
+          bun changeset pre enter beta
+          bun changeset version
           bun run build
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
           bun changeset publish --tag beta
-          git checkout -- .
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           BUILD_SETUP_ENABLED: true
 
-      # --- Stable: changesets/action handles two cases automatically:
-      #     1. Pending changesets → creates/updates "Version Packages" PR
-      #     2. No pending changesets (PR was just merged) → runs publish command
-      - name: Setup npm auth
+      - name: Commit beta version bumps
+        if: steps.check.outputs.pending != '0'
         run: |
+          bun changeset pre exit
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --staged --quiet && echo "No changes to commit" || {
+            git commit -m "chore: beta version packages [skip ci]"
+            git push origin master
+          }
+
+  # On GitHub Release published: publish stable versions
+  stable:
+    name: Stable Release
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: master
+          token: ${{ secrets.GH_TOKEN }}
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - run: bun install
+
+      - name: Version, build, and publish stable
+        run: |
+          bun changeset version
+          bun run build
           ./scripts/npm-auth.sh
           bun run npm-pub
+          bun changeset publish --access public
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Create Release PR or Publish
-        uses: changesets/action@v1
-        with:
-          version: bun changeset version
-          publish: bun run build && bun changeset publish --access public
-          title: "chore: version packages"
-          commit: "chore: version packages"
-          createGithubReleases: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           BUILD_SETUP_ENABLED: true
+
+      - name: Commit version bumps and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --staged --quiet && echo "No changes to commit" || {
+            git commit -m "chore: version packages [skip ci]"
+            git push origin master
+          }
