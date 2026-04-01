@@ -422,11 +422,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
       address,
       chainId,
       domain: this.domain,
+      uri: this.uri,
       issuedAt: now.toISOString(),
       expirationTime: expirationTime.toISOString(),
       spaceId,
       jwk,
-      nonce: this.siweConfig?.nonce,
+      ...this.siweConfig,
     });
 
     // Sign the SIWE message from prepareSession (NOT a separately generated SIWE)
@@ -617,11 +618,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
       address,
       chainId,
       domain: this.domain,
+      uri: this.uri,
       issuedAt: now.toISOString(),
       expirationTime: expirationTime.toISOString(),
       spaceId,
       jwk,
-      nonce: this.siweConfig?.nonce,
+      ...this.siweConfig,
     });
 
     return {
