@@ -48,17 +48,27 @@ jobs:
           COUNT=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
           echo "pending=$COUNT" >> "$GITHUB_OUTPUT"
 
-      - name: Version, build, and publish beta
+      - name: Version and build
         if: steps.check.outputs.pending != '0'
         run: |
           bun changeset version
           bun install
           bun run build
+        env:
+          BUILD_SETUP_ENABLED: true
+
+      - name: Publish beta to npm
+        if: steps.check.outputs.pending != '0'
+        run: |
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-          bun changeset publish
+          for dir in packages/sdk-core packages/node-sdk packages/web-sdk packages/sdk-services packages/cli packages/sdk-rs/packages/node packages/sdk-rs/packages/web; do
+            if [ -f "$dir/package.json" ] && ! grep -q '"private"' "$dir/package.json"; then
+              echo "Publishing $dir..."
+              (cd "$dir" && bun publish --access public --tag beta) || true
+            fi
+          done
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          BUILD_SETUP_ENABLED: true
 
       - name: Commit beta version bumps
         if: steps.check.outputs.pending != '0'
@@ -113,7 +123,12 @@ jobs:
       - name: Publish stable to npm
         run: |
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-          bun changeset publish
+          for dir in packages/sdk-core packages/node-sdk packages/web-sdk packages/sdk-services packages/cli packages/sdk-rs/packages/node packages/sdk-rs/packages/web; do
+            if [ -f "$dir/package.json" ] && ! grep -q '"private"' "$dir/package.json"; then
+              echo "Publishing $dir..."
+              (cd "$dir" && bun publish --access public) || true
+            fi
+          done
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
