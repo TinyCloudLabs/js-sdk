@@ -17,7 +17,7 @@
     "clean": "rm -rf dist src/wasm"
   },
   "devDependencies": {
-    "@tinycloud/sdk-rs": "workspace:*",
+    "@tinycloud/sdk-rs": "1.0.0",
     "@types/node": "^20",
     "typescript": "^5.7.0"
   },

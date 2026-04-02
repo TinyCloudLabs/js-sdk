@@ -11,7 +11,7 @@
     "clean": "rm -rf dist"
   },
   "devDependencies": {
-    "@tinycloud/sdk-rs": "workspace:*",
+    "@tinycloud/sdk-rs": "1.0.0",
     "@rollup/plugin-wasm": "^6.2.2",
     "rollup": "^2.79.2",
     "rollup-plugin-typescript2": "^0.36.0",

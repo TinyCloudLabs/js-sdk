@@ -32,8 +32,8 @@
     "test": "echo 'Tests are in tests/node-sdk workspace'"
   },
   "dependencies": {
-    "@tinycloud/sdk-core": "workspace:*",
-    "@tinycloud/node-sdk-wasm": "workspace:*",
+    "@tinycloud/sdk-core": "2.0.3-beta.2",
+    "@tinycloud/node-sdk-wasm": "1.7.0",
     "siwe": "^3.0.0"
   },
   "devDependencies": {

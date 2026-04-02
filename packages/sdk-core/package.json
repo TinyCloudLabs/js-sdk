@@ -24,7 +24,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@tinycloud/sdk-services": "workspace:*",
+    "@tinycloud/sdk-services": "2.0.2",
     "siwe": "^3.0.0",
     "zod": "^3.22.0",
     "zod-to-json-schema": "^3.22.0"
