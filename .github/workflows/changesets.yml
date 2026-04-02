@@ -60,7 +60,8 @@ jobs:
       - name: Publish beta to npm
         if: steps.check.outputs.pending != '0'
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> .npmrc
           for dir in packages/sdk-core packages/node-sdk packages/web-sdk packages/sdk-services packages/cli packages/sdk-rs/packages/node packages/sdk-rs/packages/web; do
             if [ -f "$dir/package.json" ] && ! grep -q '"private"' "$dir/package.json"; then
               echo "Publishing $dir..."
@@ -122,7 +123,8 @@ jobs:
 
       - name: Publish stable to npm
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> .npmrc
           for dir in packages/sdk-core packages/node-sdk packages/web-sdk packages/sdk-services packages/cli packages/sdk-rs/packages/node packages/sdk-rs/packages/web; do
             if [ -f "$dir/package.json" ] && ! grep -q '"private"' "$dir/package.json"; then
               echo "Publishing $dir..."
