@@ -1,5 +1,14 @@
 # @tinycloudlabs/web-sdk
 
+## 2.0.3-beta.2
+
+### Patch Changes
+
+- c2f2d54: Upgrade siwe from v2 to v3 (rewritten ABNF parser, removed deprecated validate method)
+- Updated dependencies [c2f2d54]
+  - @tinycloud/sdk-core@2.0.3-beta.2
+  - @tinycloud/node-sdk@2.0.3-beta.2
+
 ## 2.0.3-beta.1
 
 ### Patch Changes
