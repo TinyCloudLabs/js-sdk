@@ -34,7 +34,7 @@
   "dependencies": {
     "@tinycloud/sdk-core": "workspace:*",
     "@tinycloud/node-sdk-wasm": "workspace:*",
-    "siwe": "^2.3.2"
+    "siwe": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^20",
