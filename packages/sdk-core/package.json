@@ -25,7 +25,7 @@
   },
   "dependencies": {
     "@tinycloud/sdk-services": "workspace:*",
-    "siwe": "^2.3.2",
+    "siwe": "^3.0.0",
     "zod": "^3.22.0",
     "zod-to-json-schema": "^3.22.0"
   },
