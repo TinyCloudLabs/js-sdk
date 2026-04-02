@@ -33,6 +33,6 @@
   "devDependencies": {
     "@types/node": "^20",
     "tsup": "^8.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^6.0.2"
   }
 }
