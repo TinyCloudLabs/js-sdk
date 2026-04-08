@@ -14,8 +14,11 @@ import {
   IDuckDbService,
   DuckDbService,
   IDataVaultService,
+  IHooksService,
+  HooksService,
   ServiceSession,
   InvokeFunction,
+  InvokeAnyFunction,
   FetchFunction,
   RetryPolicy,
   defaultRetryPolicy,
@@ -49,6 +52,11 @@ export interface TinyCloudConfig {
    * Required when using services.
    */
   invoke?: InvokeFunction;
+
+  /**
+   * Optional multi-resource invoke function for aggregated capability requests.
+   */
+  invokeAny?: InvokeAnyFunction;
 
   /**
    * Custom fetch implementation.
@@ -202,6 +210,7 @@ export class TinyCloud {
     // Create service context
     this._serviceContext = new ServiceContext({
       invoke: effectiveInvoke,
+      invokeAny: this.config.invokeAny,
       fetch: fetchFn ?? this.config.fetch ?? globalThis.fetch.bind(globalThis),
       hosts: effectiveHosts,
       retryPolicy: this.config.retryPolicy,
@@ -212,6 +221,7 @@ export class TinyCloud {
       kv: KVService,
       sql: SQLService,
       duckdb: DuckDbService,
+      hooks: HooksService,
       ...this.config.services,
     };
 
@@ -300,6 +310,24 @@ export class TinyCloud {
     const service = this._services.get("duckdb") as IDuckDbService | undefined;
     if (!service) {
       throw new Error("DuckDB service is not registered.");
+    }
+    return service;
+  }
+
+  /**
+   * Get the Hooks service.
+   * @throws Error if services are not initialized
+   */
+  public get hooks(): IHooksService {
+    if (!this._servicesInitialized) {
+      throw new Error(
+        "Services not initialized. Call initializeServices() first, " +
+          "or use TinyCloudWeb/TinyCloudNode which handles this automatically."
+      );
+    }
+    const service = this._services.get("hooks") as IHooksService | undefined;
+    if (!service) {
+      throw new Error("Hooks service is not registered.");
     }
     return service;
   }

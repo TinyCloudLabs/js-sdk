@@ -45,6 +45,8 @@ export type {
   ServiceSession,
   RetryPolicy,
   InvokeFunction,
+  InvokeAnyFunction,
+  InvokeAnyEntry,
   InvocationFact,
   InvocationFacts,
   FetchFunction,
@@ -192,6 +194,17 @@ export type {
   ColumnInfo,
   ViewInfo,
 } from "./duckdb";
+
+// Hooks service
+export { HooksService } from "./hooks";
+export type {
+  IHooksService,
+  HookSubscription,
+  HookEvent,
+  HookStreamEvent,
+  SubscribeOptions,
+  HooksServiceConfig,
+} from "./hooks";
 
 // Quota
 export { TinyCloudQuota } from "./quota";

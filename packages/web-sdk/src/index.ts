@@ -68,6 +68,19 @@ export {
   IPrefixedKVService,
 } from '@tinycloud/sdk-core';
 
+// Hooks service
+export {
+  HooksService,
+} from '@tinycloud/sdk-core';
+export type {
+  IHooksService,
+  HookSubscription,
+  HookEvent,
+  HookStreamEvent,
+  SubscribeOptions,
+  HooksServiceConfig,
+} from '@tinycloud/sdk-core';
+
 // Re-export delegation types and services from sdk-core
 export {
   // DelegationManager

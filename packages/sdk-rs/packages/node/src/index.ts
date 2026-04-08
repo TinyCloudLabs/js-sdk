@@ -16,6 +16,7 @@ export {
   prepareSession,
   completeSessionSetup,
   invoke,
+  invokeAny,
   makeSpaceId,
   ensureEip55,
   signEthereumMessage,

@@ -99,6 +99,8 @@ export {
   type ServiceSession,
   // Platform dependencies
   type InvokeFunction,
+  type InvokeAnyFunction,
+  type InvokeAnyEntry,
   type FetchFunction,
   // Retry
   type RetryPolicy,
@@ -140,6 +142,14 @@ export {
   type TableInfo,
   type ColumnInfo,
   type ViewInfo,
+  // Hooks Service
+  HooksService,
+  type IHooksService,
+  type HookSubscription,
+  type HookEvent,
+  type HookStreamEvent,
+  type SubscribeOptions,
+  type HooksServiceConfig,
   // Vault Service
   DataVaultService,
   VaultHeaders,
@@ -273,4 +283,3 @@ export {
   checkNodeInfo,
 } from "./version";
 export type { NodeInfo } from "./version";
-

@@ -41,8 +41,10 @@ import {
   ISQLService,
   DuckDbService,
   IDuckDbService,
+  HooksService,
   DataVaultService,
   IDataVaultService,
+  IHooksService,
   createVaultCrypto,
   ServiceSession,
   ServiceContext,
@@ -159,6 +161,7 @@ export class TinyCloudNode {
   private _kv?: KVService;
   private _sql?: SQLService;
   private _duckdb?: DuckDbService;
+  private _hooks?: HooksService;
   private _vault?: DataVaultService;
   /** Cached public KV with proper delegation (set by ensurePublicSpace) */
   private _publicKV?: KVService;
@@ -328,7 +331,9 @@ export class TinyCloudNode {
       siweConfig: config.siweConfig,
     });
 
-    this.tc = new TinyCloud(this.auth);
+    this.tc = new TinyCloud(this.auth, {
+      invokeAny: this.wasmBindings.invokeAny,
+    });
   }
 
   /**
@@ -411,6 +416,7 @@ export class TinyCloudNode {
     this._kv = undefined;
     this._sql = undefined;
     this._duckdb = undefined;
+    this._hooks = undefined;
     this._serviceContext = undefined;
 
     await this.tc.signIn();
@@ -446,6 +452,7 @@ export class TinyCloudNode {
     this._kv = undefined;
     this._sql = undefined;
     this._duckdb = undefined;
+    this._hooks = undefined;
     this._serviceContext = undefined;
 
     if (sessionData.address) {
@@ -458,6 +465,7 @@ export class TinyCloudNode {
     // Create service context
     this._serviceContext = new ServiceContext({
       invoke: this.wasmBindings.invoke,
+      invokeAny: this.wasmBindings.invokeAny,
       fetch: globalThis.fetch.bind(globalThis),
       hosts: [this.config.host!],
     });
@@ -476,6 +484,10 @@ export class TinyCloudNode {
     this._duckdb = new DuckDbService({});
     this._duckdb.initialize(this._serviceContext);
     this._serviceContext.registerService('duckdb', this._duckdb);
+
+    this._hooks = new HooksService({});
+    this._hooks.initialize(this._serviceContext);
+    this._serviceContext.registerService('hooks', this._hooks);
 
     // Set session on context
     const serviceSession: ServiceSession = {
@@ -585,7 +597,9 @@ export class TinyCloudNode {
     });
 
     // Create TinyCloud instance
-    this.tc = new TinyCloud(this.auth);
+    this.tc = new TinyCloud(this.auth, {
+      invokeAny: this.wasmBindings.invokeAny,
+    });
 
     // Update config with prefix
     this.config.prefix = prefix;
@@ -630,7 +644,9 @@ export class TinyCloudNode {
       siweConfig: this.config.siweConfig,
     });
 
-    this.tc = new TinyCloud(this.auth);
+    this.tc = new TinyCloud(this.auth, {
+      invokeAny: this.wasmBindings.invokeAny,
+    });
     this.config.prefix = prefix;
   }
 
@@ -650,6 +666,7 @@ export class TinyCloudNode {
     // Create service context
     this._serviceContext = new ServiceContext({
       invoke: this.wasmBindings.invoke,
+      invokeAny: this.wasmBindings.invokeAny,
       fetch: globalThis.fetch.bind(globalThis),
       hosts: [this.config.host!],
     });
@@ -673,6 +690,10 @@ export class TinyCloudNode {
       this._duckdb.initialize(this._serviceContext);
       this._serviceContext.registerService('duckdb', this._duckdb);
     }
+
+    this._hooks = new HooksService({});
+    this._hooks.initialize(this._serviceContext);
+    this._serviceContext.registerService('hooks', this._hooks);
 
     // Set session on context
     const serviceSession: ServiceSession = {
@@ -1113,6 +1134,16 @@ export class TinyCloudNode {
       throw new Error("Not signed in. Call signIn() first.");
     }
     return this._vault;
+  }
+
+  /**
+   * Hooks write stream subscription API.
+   */
+  get hooks(): IHooksService {
+    if (!this._hooks) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+    return this._hooks;
   }
 
   // ===========================================================================

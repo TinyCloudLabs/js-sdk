@@ -166,6 +166,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
       capabilities: {
         "": ["tinycloud.capabilities/read"],
       },
+      hooks: {
+        "": ["tinycloud.hooks/subscribe"],
+      },
     };
     this.sessionExpirationMs = config.sessionExpirationMs ?? 60 * 60 * 1000;
     this.autoCreateSpace = config.autoCreateSpace ?? false;

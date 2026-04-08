@@ -178,6 +178,19 @@ export type {
   VaultError,
 } from "@tinycloud/sdk-core";
 
+// Re-export Hooks service values
+export { HooksService } from "@tinycloud/sdk-core";
+
+// Re-export Hooks service types
+export type {
+  IHooksService,
+  HookSubscription,
+  HookEvent,
+  HookStreamEvent,
+  SubscribeOptions,
+  HooksServiceConfig,
+} from "@tinycloud/sdk-core";
+
 // Re-export v2 Delegation service values
 export {
   DelegationManager,
