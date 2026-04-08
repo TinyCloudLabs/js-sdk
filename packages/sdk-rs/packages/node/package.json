@@ -18,7 +18,7 @@
   },
   "devDependencies": {
     "@tinycloud/sdk-rs": "1.0.0",
-    "@types/node": "^20",
+    "@types/node": "^25",
     "typescript": "^5.7.0"
   },
   "files": [
