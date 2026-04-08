@@ -33,7 +33,7 @@
     "stream-http": "^3.2.0",
     "typescript": "5.7.3",
     "viem": "^2.22.13",
-    "wagmi": "^2.14.9",
+    "wagmi": "^3.6.1",
     "web-vitals": "^5.2.0"
   },
   "devDependencies": {
