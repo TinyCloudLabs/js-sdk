@@ -92,6 +92,8 @@ export interface SqlReplicationExportRequest {
 export interface KvReconExportRequest {
   spaceId: string;
   prefix?: string;
+  startAfter?: string;
+  limit?: number;
 }
 
 export interface KvReconItem {
@@ -103,6 +105,8 @@ export interface KvReconItem {
 export interface KvReconExportResponse {
   spaceId: string;
   prefix?: string;
+  hasMore?: boolean;
+  nextStartAfter?: string | null;
   items: KvReconItem[];
 }
 
@@ -110,6 +114,8 @@ export interface KvReconCompareRequest {
   peerUrl: string;
   spaceId: string;
   prefix?: string;
+  startAfter?: string;
+  limit?: number;
 }
 
 export interface KvReconCompareResponse {
@@ -121,6 +127,10 @@ export interface KvReconCompareResponse {
   peerItemCount: number;
   localFingerprint: string;
   peerFingerprint: string;
+  localHasMore?: boolean;
+  peerHasMore?: boolean;
+  localNextStartAfter?: string | null;
+  peerNextStartAfter?: string | null;
   firstMismatchKey?: string | null;
 }
 
