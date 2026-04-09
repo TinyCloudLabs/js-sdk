@@ -1,0 +1,107 @@
+name: Raw Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'npm dist-tag (beta, latest, next)'
+        type: choice
+        options:
+          - beta
+          - latest
+          - next
+        default: 'beta'
+        required: true
+      dry_run:
+        description: 'Dry run (pack + list, do not publish)'
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    name: Raw Publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build all packages
+        run: bun run build
+        env:
+          BUILD_SETUP_ENABLED: true
+
+      - name: Resolve workspace:* versions
+        run: |
+          # Rewrite workspace:* deps to actual version numbers so npm publish works
+          node -e '
+            const fs = require("fs");
+            const glob = require("child_process").execSync("find packages -name package.json -not -path */node_modules/*", {encoding:"utf8"}).trim().split("\n");
+            const versions = {};
+            for (const f of glob) {
+              const pkg = JSON.parse(fs.readFileSync(f, "utf8"));
+              if (pkg.name) versions[pkg.name] = pkg.version;
+            }
+            for (const f of glob) {
+              const raw = fs.readFileSync(f, "utf8");
+              const pkg = JSON.parse(raw);
+              let changed = false;
+              for (const depType of ["dependencies","devDependencies","peerDependencies"]) {
+                if (!pkg[depType]) continue;
+                for (const [name, ver] of Object.entries(pkg[depType])) {
+                  if (typeof ver === "string" && ver.startsWith("workspace:") && versions[name]) {
+                    pkg[depType][name] = versions[name];
+                    changed = true;
+                  }
+                }
+              }
+              if (changed) fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + "\n");
+            }
+          '
+
+      - name: List publishable packages
+        id: list
+        run: |
+          echo "Packages that would be published:"
+          for dir in packages/*/; do
+            if [ -f "$dir/package.json" ] && ! grep -q '"private": true' "$dir/package.json"; then
+              name=$(node -p "require('./$dir/package.json').name")
+              version=$(node -p "require('./$dir/package.json').version")
+              echo "  - $name@$version"
+            fi
+          done
+
+      - name: Publish to npm
+        if: ${{ !inputs.dry_run }}
+        run: |
+          for dir in packages/*/; do
+            if [ -f "$dir/package.json" ] && ! grep -q '"private": true' "$dir/package.json"; then
+              name=$(node -p "require('./$dir/package.json').name")
+              version=$(node -p "require('./$dir/package.json').version")
+              echo "Publishing $name@$version with tag ${{ inputs.tag }}..."
+              (cd "$dir" && npm publish --access public --tag ${{ inputs.tag }})
+            fi
+          done
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Dry run pack
+        if: ${{ inputs.dry_run }}
+        run: |
+          for dir in packages/*/; do
+            if [ -f "$dir/package.json" ] && ! grep -q '"private": true' "$dir/package.json"; then
+              echo "=== $dir ==="
+              (cd "$dir" && npm pack --dry-run)
+            fi
+          done
