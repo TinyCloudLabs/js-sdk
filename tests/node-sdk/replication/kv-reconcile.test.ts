@@ -21,6 +21,7 @@ describe("Replication KV Reconcile", () => {
         const authority = createClusterClient(cluster, "node-a", prefix);
         const replica = createClusterClient(cluster, "node-b", prefix);
         const authorityNode = getClusterNode(cluster, "node-a");
+        const replicaNode = getClusterNode(cluster, "node-b");
 
         await authority.signIn();
         await replica.signIn();
@@ -44,6 +45,11 @@ describe("Replication KV Reconcile", () => {
           authorityNode.url,
           scope
         );
+        const targetSession = await openKvReplicationSession(
+          replica,
+          replicaNode.url,
+          scope
+        );
         const exportResult = await exportFromPeer(
           cluster,
           "node-a",
@@ -61,7 +67,7 @@ describe("Replication KV Reconcile", () => {
           peerUrl: authorityNode.url,
           spaceId: authority.spaceId!,
           prefix: scope,
-        }, exportSession);
+        }, { target: targetSession, peer: exportSession });
 
         expect(firstPass.spaceId).toBe(authority.spaceId);
         expect(firstPass.peerUrl).toBe(authorityNode.url);
@@ -92,7 +98,7 @@ describe("Replication KV Reconcile", () => {
           spaceId: authority.spaceId!,
           prefix: scope,
           sinceSeq: firstPass.appliedUntilSeq,
-        }, exportSession);
+        }, { target: targetSession, peer: exportSession });
 
         expect(secondPass.appliedSequences).toBe(0);
         expect(secondPass.appliedEvents).toBe(0);

@@ -3,8 +3,10 @@ import { startCluster } from "./cluster";
 import {
   createClusterClient,
   getClusterNode,
+  openAuthReplicationSession,
   openKvReplicationSession,
   reconcileAuthFromPeer,
+  requestTransportSession,
   uniqueReplicationPrefix,
 } from "./helpers";
 
@@ -19,15 +21,16 @@ describe("Replication Auth Second Contact", () => {
         const authority = createClusterClient(cluster, "node-a", prefix);
         const authorityNode = getClusterNode(cluster, "node-a");
         const hostNode = getClusterNode(cluster, "node-b");
-        const sharedScope = `replication/auth-second-contact/shared/${Date.now()}`;
-
         await authority.signIn();
         expect(authority.spaceId).toBeDefined();
 
-        const authSyncSession = await openKvReplicationSession(
+        const peerAuthSession = await openAuthReplicationSession(
           authority,
-          authorityNode.url,
-          sharedScope
+          authorityNode.url
+        );
+        const targetAuthSession = await openAuthReplicationSession(
+          authority,
+          hostNode.url
         );
         const authApply = await reconcileAuthFromPeer(
           cluster,
@@ -35,10 +38,11 @@ describe("Replication Auth Second Contact", () => {
           {
             peerUrl: authorityNode.url,
             spaceId: authority.spaceId!,
-            service: "kv",
-            prefix: sharedScope,
           },
-          authSyncSession
+          {
+            target: targetAuthSession,
+            peer: peerAuthSession,
+          }
         );
 
         expect(authApply.importedDelegations).toBeGreaterThan(0);
@@ -49,24 +53,13 @@ describe("Replication Auth Second Contact", () => {
           hostNode.url,
           secondContactScope
         );
-        const secondContactOpen = await fetch(
-          `${hostNode.url}/replication/session/open`,
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              ...hostSession.delegationHeader,
-            },
-            body: JSON.stringify({
-              spaceId: authority.spaceId,
-              service: "kv",
-              prefix: secondContactScope,
-            }),
-          }
-        );
+        const secondContactOpen = await requestTransportSession(hostSession, {
+          supportingDelegations: null,
+        });
 
-        expect(secondContactOpen.status).toBe(200);
-        const secondContactTransport = await secondContactOpen.json();
+        expect(secondContactOpen).toBeDefined();
+        expect(secondContactOpen?.status).toBe(200);
+        const secondContactTransport = await secondContactOpen!.json();
         expect(secondContactTransport.service).toBe("kv");
         expect(secondContactTransport.prefix).toBe(secondContactScope);
       } finally {

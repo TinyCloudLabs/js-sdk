@@ -20,6 +20,7 @@ describe("Replication SQL Schema Drift", () => {
         const authority = createClusterClient(cluster, "node-a", prefix);
         const drifted = createClusterClient(cluster, "node-b", prefix);
         const authorityNode = getClusterNode(cluster, "node-a");
+        const driftedNode = getClusterNode(cluster, "node-b");
 
         await authority.signIn();
         await drifted.signIn();
@@ -78,11 +79,16 @@ describe("Replication SQL Schema Drift", () => {
           authorityNode.url,
           dbName
         );
+        const targetSession = await openSqlReplicationSession(
+          drifted,
+          driftedNode.url,
+          dbName
+        );
         const reconcileResult = await reconcileSqlFromPeer(cluster, "node-b", {
           peerUrl: authorityNode.url,
           spaceId: authority.spaceId!,
           dbName,
-        }, reconcileSession);
+        }, { target: targetSession, peer: reconcileSession });
 
         expect(reconcileResult.spaceId).toBe(authority.spaceId);
         expect(reconcileResult.dbName).toBe(dbName);
