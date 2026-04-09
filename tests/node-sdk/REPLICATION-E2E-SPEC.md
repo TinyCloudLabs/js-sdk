@@ -1,6 +1,6 @@
 # Replication E2E Test Specification
 
-**Status:** Draft  
+**Status:** Draft
 **Runner:** `bun test`
 
 ---

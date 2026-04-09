@@ -133,12 +133,17 @@ export interface TinyCloudKVReplicationScope {
   prefix: string;
 }
 
+export interface TinyCloudAuthReplicationScope {
+  service: "auth";
+}
+
 export interface TinyCloudSqlReplicationScope {
   service: "sql";
   dbName: string;
 }
 
 export type TinyCloudReplicationScope =
+  | TinyCloudAuthReplicationScope
   | TinyCloudKVReplicationScope
   | TinyCloudSqlReplicationScope;
 
@@ -162,6 +167,10 @@ export interface TinyCloudReplicationSession {
 export type OpenReplicationSessionResult = TinyCloudReplicationSession;
 
 function buildReplicationScopeResource(scope: TinyCloudReplicationScope): string {
+  if (scope.service === "auth") {
+    return "auth";
+  }
+
   if (scope.service === "kv") {
     const normalizedPrefix = scope.prefix.replace(/^\/+/, "").replace(/\/+$/, "");
     return normalizedPrefix.length > 0 ? `kv/${normalizedPrefix}` : "kv";
