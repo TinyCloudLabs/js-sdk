@@ -25,6 +25,66 @@ import {
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 
+type AbilityMap = Record<string, Record<string, string[]>>;
+
+const DEFAULT_SESSION_ACTIONS: AbilityMap = {
+  kv: {
+    "": [
+      "tinycloud.kv/put",
+      "tinycloud.kv/get",
+      "tinycloud.kv/del",
+      "tinycloud.kv/list",
+      "tinycloud.kv/metadata",
+    ],
+  },
+  sql: {
+    "": [
+      "tinycloud.sql/read",
+      "tinycloud.sql/write",
+      "tinycloud.sql/admin",
+      "tinycloud.sql/export",
+    ],
+  },
+  duckdb: {
+    "": [
+      "tinycloud.duckdb/read",
+      "tinycloud.duckdb/write",
+      "tinycloud.duckdb/admin",
+      "tinycloud.duckdb/describe",
+      "tinycloud.duckdb/export",
+      "tinycloud.duckdb/import",
+      "tinycloud.duckdb/execute",
+    ],
+  },
+  capabilities: {
+    "": ["tinycloud.capabilities/read"],
+  },
+};
+
+function mergeAbilityMaps(base: AbilityMap, extra?: AbilityMap): AbilityMap {
+  const merged: AbilityMap = {};
+
+  for (const [service, paths] of Object.entries(base)) {
+    merged[service] = Object.fromEntries(
+      Object.entries(paths).map(([path, actions]) => [path, [...actions]])
+    );
+  }
+
+  if (!extra) {
+    return merged;
+  }
+
+  for (const [service, paths] of Object.entries(extra)) {
+    const mergedPaths = (merged[service] ??= {});
+    for (const [path, actions] of Object.entries(paths)) {
+      const existingActions = mergedPaths[path] ?? [];
+      mergedPaths[path] = Array.from(new Set([...existingActions, ...actions]));
+    }
+  }
+
+  return merged;
+}
+
 /**
  * Configuration for NodeUserAuthorization.
  */
@@ -101,7 +161,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly uri: string;
   private readonly statement?: string;
   private readonly spacePrefix: string;
-  private readonly defaultActions: Record<string, Record<string, string[]>>;
+  private readonly defaultActions: AbilityMap;
   private readonly sessionExpirationMs: number;
   private readonly autoCreateSpace: boolean;
   private readonly spaceCreationHandler?: ISpaceCreationHandler;
@@ -128,39 +188,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.uri = config.uri ?? `https://${config.domain}`;
     this.statement = config.statement;
     this.spacePrefix = config.spacePrefix ?? "default";
-    this.defaultActions = config.defaultActions ?? {
-      kv: {
-        "": [
-          "tinycloud.kv/put",
-          "tinycloud.kv/get",
-          "tinycloud.kv/del",
-          "tinycloud.kv/list",
-          "tinycloud.kv/metadata",
-        ],
-      },
-      sql: {
-        "": [
-          "tinycloud.sql/read",
-          "tinycloud.sql/write",
-          "tinycloud.sql/admin",
-          "tinycloud.sql/export",
-        ],
-      },
-      duckdb: {
-        "": [
-          "tinycloud.duckdb/read",
-          "tinycloud.duckdb/write",
-          "tinycloud.duckdb/admin",
-          "tinycloud.duckdb/describe",
-          "tinycloud.duckdb/export",
-          "tinycloud.duckdb/import",
-          "tinycloud.duckdb/execute",
-        ],
-      },
-      capabilities: {
-        "": ["tinycloud.capabilities/read"],
-      },
-    };
+    this.defaultActions = mergeAbilityMaps(
+      DEFAULT_SESSION_ACTIONS,
+      config.defaultActions
+    );
     this.sessionExpirationMs = config.sessionExpirationMs ?? 60 * 60 * 1000;
     this.autoCreateSpace = config.autoCreateSpace ?? false;
     this.spaceCreationHandler = config.spaceCreationHandler;

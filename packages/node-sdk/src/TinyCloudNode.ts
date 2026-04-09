@@ -74,7 +74,10 @@ import {
   UnsupportedFeatureError,
   makePublicSpaceId,
 } from "@tinycloud/sdk-core";
-import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import {
+  NodeUserAuthorization,
+  type NodeUserAuthorizationConfig,
+} from "./authorization/NodeUserAuthorization";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import { PortableDelegation } from "./delegation";
@@ -83,6 +86,8 @@ import { WasmKeyProvider } from "./keys/WasmKeyProvider";
 
 /** Default TinyCloud host */
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
+
+type AbilityMap = NonNullable<NodeUserAuthorizationConfig["defaultActions"]>;
 
 /**
  * Configuration for TinyCloudNode.
@@ -119,6 +124,50 @@ export interface TinyCloudNodeConfig {
   spaceCreationHandler?: ISpaceCreationHandler;
   /** Optional SIWE configuration overrides (e.g., nonce for server-provided nonces) */
   siweConfig?: SiweConfig;
+  /** Optional default actions to grant on sign-in sessions. */
+  defaultActions?: NodeUserAuthorizationConfig["defaultActions"];
+}
+
+export interface TinyCloudKVReplicationScope {
+  service: "kv";
+  prefix: string;
+}
+
+export interface TinyCloudSqlReplicationScope {
+  service: "sql";
+  dbName: string;
+}
+
+export type TinyCloudReplicationScope =
+  | TinyCloudKVReplicationScope
+  | TinyCloudSqlReplicationScope;
+
+export interface OpenReplicationSessionParams {
+  host?: string;
+  scope: TinyCloudReplicationScope;
+  spaceIdOverride?: string;
+}
+
+export interface TinyCloudReplicationSession {
+  host: string;
+  scope: TinyCloudReplicationScope;
+  delegationHeader: { Authorization: string };
+  delegationCid: string;
+  spaceId: string;
+  verificationMethod: string;
+  expiresAt: Date;
+}
+
+export type OpenReplicationSessionResult = TinyCloudReplicationSession;
+
+function buildReplicationScopeResource(scope: TinyCloudReplicationScope): string {
+  if (scope.service === "kv") {
+    const normalizedPrefix = scope.prefix.replace(/^\/+/, "").replace(/\/+$/, "");
+    return normalizedPrefix.length > 0 ? `kv/${normalizedPrefix}` : "kv";
+  }
+
+  const normalizedDbName = scope.dbName.replace(/^\/+/, "").replace(/\/+$/, "");
+  return `sql/${normalizedDbName}`;
 }
 
 /**
@@ -314,6 +363,7 @@ export class TinyCloudNode {
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: config.prefix,
+      defaultActions: config.defaultActions,
       sessionExpirationMs: config.sessionExpirationMs ?? 60 * 60 * 1000,
       tinycloudHosts: [host],
       autoCreateSpace: config.autoCreateSpace,
@@ -381,6 +431,79 @@ export class TinyCloudNode {
    */
   get session(): TinyCloudSession | undefined {
     return this.auth?.tinyCloudSession;
+  }
+
+  async openReplicationSession(
+    params: OpenReplicationSessionParams
+  ): Promise<TinyCloudReplicationSession> {
+    if (!this.signer) {
+      throw new Error(
+        "Cannot openReplicationSession() in session-only mode. Requires wallet mode."
+      );
+    }
+
+    const session = this.session;
+    if (!session) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+
+    const host = (params.host ?? this.config.host)?.replace(/\/$/, "");
+    if (!host) {
+      throw new Error("Replication session host is required.");
+    }
+
+    const scope = params.scope;
+    const spaceId = params.spaceIdOverride ?? session.spaceId;
+    const resource = buildReplicationScopeResource(scope);
+    const abilities: AbilityMap = {
+      space: {
+        [resource]: ["tinycloud.space/sync"],
+      },
+    };
+
+    const now = new Date();
+    const expirationTime = new Date(
+      now.getTime() + (this.config.sessionExpirationMs ?? 60 * 60 * 1000)
+    );
+
+    const prepared = this.wasmBindings.prepareSession({
+      abilities,
+      address: this.wasmBindings.ensureEip55(session.address),
+      chainId: session.chainId,
+      domain: this.siweDomain,
+      issuedAt: now.toISOString(),
+      expirationTime: expirationTime.toISOString(),
+      spaceId,
+      jwk: session.jwk,
+      parents: [session.delegationCid],
+    });
+
+    const signature = await this.signer.signMessage(prepared.siwe);
+    const scopedSession = this.wasmBindings.completeSessionSetup({
+      ...prepared,
+      signature,
+    });
+
+    const activateResult = await activateSessionWithHost(
+      host,
+      scopedSession.delegationHeader
+    );
+
+    if (!activateResult.success) {
+      throw new Error(
+        `Failed to activate replication sync delegation: ${activateResult.error}`
+      );
+    }
+
+    return {
+      host,
+      scope,
+      delegationHeader: scopedSession.delegationHeader,
+      delegationCid: scopedSession.delegationCid,
+      spaceId,
+      verificationMethod: session.verificationMethod,
+      expiresAt: expirationTime,
+    };
   }
 
   /**
@@ -574,6 +697,7 @@ export class TinyCloudNode {
       autoCreateSpace: this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: this.config.spaceCreationHandler,
+      defaultActions: this.config.defaultActions,
     });
 
     // Create TinyCloud instance
@@ -618,6 +742,7 @@ export class TinyCloudNode {
       autoCreateSpace: this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: this.config.spaceCreationHandler,
+      defaultActions: this.config.defaultActions,
     });
 
     this.tc = new TinyCloud(this.auth);

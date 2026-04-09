@@ -67,7 +67,16 @@ export type {
 } from "./authorization/strategies";
 
 // High-level API
-export { TinyCloudNode, TinyCloudNodeConfig } from "./TinyCloudNode";
+export { TinyCloudNode } from "./TinyCloudNode";
+export type {
+  TinyCloudNodeConfig,
+  TinyCloudKVReplicationScope,
+  TinyCloudSqlReplicationScope,
+  TinyCloudReplicationScope,
+  TinyCloudReplicationSession,
+  OpenReplicationSessionParams,
+  OpenReplicationSessionResult,
+} from "./TinyCloudNode";
 
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";

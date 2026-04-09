@@ -94,7 +94,16 @@ export type {
 } from "./authorization/strategies";
 
 // High-level API
-export { TinyCloudNode, TinyCloudNodeConfig } from "./TinyCloudNode";
+export { TinyCloudNode } from "./TinyCloudNode";
+export type {
+  TinyCloudNodeConfig,
+  TinyCloudKVReplicationScope,
+  TinyCloudSqlReplicationScope,
+  TinyCloudReplicationScope,
+  TinyCloudReplicationSession,
+  OpenReplicationSessionParams,
+  OpenReplicationSessionResult,
+} from "./TinyCloudNode";
 
 // WASM bindings
 export { NodeWasmBindings } from "./NodeWasmBindings";
@@ -162,7 +171,12 @@ export type {
 } from "@tinycloud/sdk-core";
 
 // Re-export Vault service values
-export { DataVaultService, VaultHeaders, VaultPublicSpaceKVActions, createVaultCrypto } from "@tinycloud/sdk-core";
+export {
+  DataVaultService,
+  VaultHeaders,
+  VaultPublicSpaceKVActions,
+  createVaultCrypto,
+} from "@tinycloud/sdk-core";
 
 // Re-export Vault service types
 export type {
