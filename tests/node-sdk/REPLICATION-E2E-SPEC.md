@@ -55,6 +55,7 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 
 - requires a replication session handshake before export begins
 - opens a replication session on a first-contact peer by carrying the supporting delegation chain
+- invalidates a replication transport session after its sync delegation is revoked
 - blocks unauthenticated export and reconcile pull-through
 - preserves local authored facts during authority outage
 - resumes convergence after reconnect
@@ -69,6 +70,7 @@ tests/node-sdk/
 ├── setup.ts
 └── replication/
     ├── cluster.ts
+    ├── auth-revocation.test.ts
     ├── auth-session.test.ts
     ├── auth-first-contact.test.ts
     ├── helpers.ts
