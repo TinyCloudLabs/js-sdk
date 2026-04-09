@@ -1,5 +1,15 @@
 # @tinycloud/cli
 
+## 0.4.5
+
+### Patch Changes
+
+- Updated dependencies [e7e6ee7]
+- Updated dependencies [1379b11]
+- Updated dependencies [e422647]
+  - @tinycloud/node-sdk@2.0.3
+  - @tinycloud/node-sdk-wasm@1.7.1
+
 ## 0.4.5-beta.2
 
 ### Patch Changes

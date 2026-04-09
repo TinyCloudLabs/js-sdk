@@ -2,25 +2,19 @@
   "mode": "pre",
   "tag": "beta",
   "initialVersions": {
-    "@tinycloud/node-demo": "0.0.14",
-    "tinycloud-openkey-example-app": "0.0.12",
-    "openkey-vite": "0.0.10",
+    "@tinycloud/node-demo": "0.0.15",
+    "tinycloud-openkey-example-app": "0.0.13",
+    "openkey-vite": "0.0.11",
     "tinycloud-web-sdk-example-app": "0.0.2",
-    "@tinycloud/cli": "0.4.4",
-    "@tinycloud/node-sdk": "2.0.2",
-    "@tinycloud/sdk-core": "2.0.2",
+    "@tinycloud/cli": "0.4.5",
+    "@tinycloud/node-sdk": "2.0.3",
+    "@tinycloud/sdk-core": "2.0.3",
     "@tinycloud/sdk-rs": "1.0.0",
-    "@tinycloud/node-sdk-wasm": "1.7.0",
-    "@tinycloud/web-sdk-wasm": "1.7.0",
-    "@tinycloud/sdk-services": "2.0.2",
-    "@tinycloud/web-sdk": "2.0.2",
+    "@tinycloud/node-sdk-wasm": "1.7.1",
+    "@tinycloud/web-sdk-wasm": "1.7.1",
+    "@tinycloud/sdk-services": "2.0.3",
+    "@tinycloud/web-sdk": "2.0.3",
     "@tinycloud/sdk-services-test": "6.0.2"
   },
-  "changesets": [
-    "bump-siwe-v3",
-    "fix-siwe-domain",
-    "move-polyfills-to-devdeps",
-    "preserve-siwe-upgrade",
-    "top-level-nonce-config"
-  ]
+  "changesets": []
 }
