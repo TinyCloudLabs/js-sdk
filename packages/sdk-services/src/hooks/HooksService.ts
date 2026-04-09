@@ -1,5 +1,12 @@
 import { BaseService } from "../base/BaseService";
-import type { FetchResponse, InvokeAnyEntry, ServiceHeaders } from "../types";
+import type {
+  FetchResponse,
+  InvokeAnyEntry,
+  ServiceHeaders,
+  Result,
+} from "../types";
+import { err, ok } from "../types";
+import { authRequiredError, wrapError } from "../errors";
 import type { IHooksService } from "./IHooksService";
 import type {
   HookEvent,
@@ -7,6 +14,10 @@ import type {
   HookSubscription,
   HooksServiceConfig,
   SubscribeOptions,
+  HookWebhookListOptions,
+  HookWebhookRecord,
+  HookWebhookRegistration,
+  HookWebhookUnregisterOptions,
 } from "./types";
 
 interface HookTicketResponse {
@@ -90,9 +101,13 @@ export class HooksService extends BaseService implements IHooksService {
     return this._config;
   }
 
+  private get host(): string {
+    return this._config.host ?? this.context.hosts[0];
+  }
+
   async *subscribe(
     subscriptions: HookSubscription[],
-    options: SubscribeOptions = {}
+    options: SubscribeOptions = {},
   ): AsyncIterable<HookEvent> {
     if (!this.requireAuth()) {
       throw new Error("Authentication required for hooks subscription");
@@ -134,6 +149,160 @@ export class HooksService extends BaseService implements IHooksService {
         options.signal.removeEventListener("abort", abortHandler);
       }
       abortHandler();
+    }
+  }
+
+  async register(
+    webhook: HookWebhookRegistration,
+  ): Promise<Result<HookWebhookRecord>> {
+    if (!this.requireAuth()) {
+      return err(authRequiredError("hooks"));
+    }
+
+    try {
+      const response = await this.context.fetch(`${this.host}/hooks/webhooks`, {
+        method: "POST",
+        headers: {
+          ...serviceHeadersToRecord(
+            this.createHookHeaders(
+              "tinycloud.hooks/register",
+              buildScopePath(webhook.service, webhook.pathPrefix),
+            ),
+          ),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          space: webhook.space,
+          service: webhook.service,
+          pathPrefix: normalizePathPrefix(webhook.pathPrefix),
+          abilities: webhook.abilities ?? [],
+          callbackUrl: webhook.callbackUrl,
+          secret: webhook.secret,
+        }),
+      });
+
+      if (!response.ok) {
+        return err(
+          await responseError("hooks", "failed to register webhook", response),
+        );
+      }
+
+      const data = normalizeWebhookRecord(await response.json());
+      if (!data) {
+        return err(
+          wrapError(
+            "hooks",
+            new Error("Webhook registration response did not include a record"),
+          ),
+        );
+      }
+
+      return ok(data);
+    } catch (error) {
+      return err(wrapError("hooks", error));
+    }
+  }
+
+  async list(
+    options: HookWebhookListOptions = {},
+  ): Promise<Result<HookWebhookRecord[]>> {
+    if (!this.requireAuth()) {
+      return err(authRequiredError("hooks"));
+    }
+
+    try {
+      const query = new URLSearchParams();
+      if (options.space) {
+        query.set("space", options.space);
+      }
+      if (options.service) {
+        query.set("service", options.service);
+      }
+      if (options.pathPrefix) {
+        const normalizedPrefix = normalizePathPrefix(options.pathPrefix);
+        if (normalizedPrefix) {
+          query.set("prefix", normalizedPrefix);
+        }
+      }
+
+      const response = await this.context.fetch(
+        `${this.host}/hooks/webhooks${query.size > 0 ? `?${query.toString()}` : ""}`,
+        {
+          method: "GET",
+          headers: serviceHeadersToRecord(
+            this.createHookHeaders(
+              "tinycloud.hooks/list",
+              options.service
+                ? buildScopePath(options.service, options.pathPrefix)
+                : "webhooks",
+            ),
+          ),
+        },
+      );
+
+      if (!response.ok) {
+        return err(
+          await responseError("hooks", "failed to list webhooks", response),
+        );
+      }
+
+      const payload = await response.json();
+      const records = normalizeWebhookRecordList(payload);
+      if (!records) {
+        return err(
+          wrapError(
+            "hooks",
+            new Error("Webhook list response did not include records"),
+          ),
+        );
+      }
+
+      return ok(records);
+    } catch (error) {
+      return err(wrapError("hooks", error));
+    }
+  }
+
+  async unregister(
+    id: string,
+    options: HookWebhookUnregisterOptions = {},
+  ): Promise<Result<void>> {
+    if (!this.requireAuth()) {
+      return err(authRequiredError("hooks"));
+    }
+
+    try {
+      const response = await this.context.fetch(
+        `${this.host}/hooks/webhooks/${encodeURIComponent(id)}`,
+        {
+          method: "DELETE",
+          headers: serviceHeadersToRecord(
+            this.createHookHeaders(
+              "tinycloud.hooks/unregister",
+              options.target
+                ? buildScopePath(
+                    options.target.service,
+                    options.target.pathPrefix,
+                  )
+                : `webhooks/${id}`,
+            ),
+          ),
+        },
+      );
+
+      if (!response.ok) {
+        return err(
+          await responseError(
+            "hooks",
+            "failed to unregister webhook",
+            response,
+          ),
+        );
+      }
+
+      return ok(undefined);
+    } catch (error) {
+      return err(wrapError("hooks", error));
     }
   }
 
@@ -192,7 +361,7 @@ export class HooksService extends BaseService implements IHooksService {
     }
 
     const subscriptions = [...merged.values()].sort((left, right) =>
-      subscriptionSignature(left).localeCompare(subscriptionSignature(right))
+      subscriptionSignature(left).localeCompare(subscriptionSignature(right)),
     );
     const ttlSeconds =
       ttlCandidates.length > 0 ? Math.min(...ttlCandidates) : undefined;
@@ -220,17 +389,17 @@ export class HooksService extends BaseService implements IHooksService {
       const ticketResponse = await this.mintHookTicket(
         state.subscriptions,
         state.ttlSeconds,
-        abortController.signal
+        abortController.signal,
       );
       const streamResponse = await this.openHookStream(
         host,
         ticketResponse.ticket,
-        abortController.signal
+        abortController.signal,
       );
 
       for await (const message of parseSseStream(
         streamResponse.body,
-        abortController.signal
+        abortController.signal,
       )) {
         if (!message.data) {
           continue;
@@ -253,10 +422,14 @@ export class HooksService extends BaseService implements IHooksService {
     this._sharedStreamAbort?.abort();
   }
 
+  private createHookHeaders(action: string, path: string): ServiceHeaders {
+    return this.context.invoke(this.session, "hooks", path, action);
+  }
+
   private async mintHookTicket(
     subscriptions: HookSubscription[],
     ttlSeconds: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<HookTicketResponse> {
     const host = this._config.host ?? this.context.hosts[0];
     const headers = this.createInvokeHeaders(subscriptions);
@@ -277,7 +450,7 @@ export class HooksService extends BaseService implements IHooksService {
       throw await responseError(
         "hooks",
         "failed to mint hook ticket",
-        ticketResponse
+        ticketResponse,
       );
     }
 
@@ -292,7 +465,7 @@ export class HooksService extends BaseService implements IHooksService {
   private async openHookStream(
     host: string,
     ticket: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<FetchResponse> {
     const streamResponse = await this.context.fetch(
       `${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`,
@@ -300,21 +473,23 @@ export class HooksService extends BaseService implements IHooksService {
         method: "GET",
         headers: { accept: "text/event-stream" },
         signal,
-      }
+      },
     );
 
     if (!streamResponse.ok) {
       throw await responseError(
         "hooks",
         "failed to open hook stream",
-        streamResponse
+        streamResponse,
       );
     }
 
     return streamResponse;
   }
 
-  private createInvokeHeaders(subscriptions: HookSubscription[]): ServiceHeaders {
+  private createInvokeHeaders(
+    subscriptions: HookSubscription[],
+  ): ServiceHeaders {
     const entries: InvokeAnyEntry[] = subscriptions.map((subscription) => ({
       spaceId: subscription.space,
       service: "hooks",
@@ -334,17 +509,27 @@ export class HooksService extends BaseService implements IHooksService {
         this.session,
         entry.service,
         entry.path,
-        entry.action
+        entry.action,
       );
     }
 
     throw new Error(
-      "This SDK runtime does not support multi-scope hook invocations"
+      "This SDK runtime does not support multi-scope hook invocations",
     );
   }
 }
 
-function normalizeSubscription(subscription: HookSubscription): HookSubscription {
+function buildScopePath(
+  service: HookSubscription["service"],
+  pathPrefix?: string,
+): string {
+  const normalized = normalizePathPrefix(pathPrefix);
+  return normalized ? `${service}/${normalized}` : service;
+}
+
+function normalizeSubscription(
+  subscription: HookSubscription,
+): HookSubscription {
   return {
     ...subscription,
     pathPrefix: normalizePathPrefix(subscription.pathPrefix),
@@ -363,14 +548,16 @@ function subscriptionSignature(subscription: HookSubscription): string {
 
 function matchesAnySubscription(
   event: HookEvent,
-  subscriptions: HookSubscription[]
+  subscriptions: HookSubscription[],
 ): boolean {
-  return subscriptions.some((subscription) => matchesSubscription(event, subscription));
+  return subscriptions.some((subscription) =>
+    matchesSubscription(event, subscription),
+  );
 }
 
 function matchesSubscription(
   event: HookEvent,
-  subscription: HookSubscription
+  subscription: HookSubscription,
 ): boolean {
   if (event.space !== subscription.space) {
     return false;
@@ -382,7 +569,11 @@ function matchesSubscription(
     const prefix = subscription.pathPrefix.endsWith("/")
       ? subscription.pathPrefix
       : `${subscription.pathPrefix}/`;
-    if (event.path && event.path !== subscription.pathPrefix && !event.path.startsWith(prefix)) {
+    if (
+      event.path &&
+      event.path !== subscription.pathPrefix &&
+      !event.path.startsWith(prefix)
+    ) {
       return false;
     }
   }
@@ -401,7 +592,9 @@ function normalizePathPrefix(pathPrefix?: string): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function serviceHeadersToRecord(headers: ServiceHeaders): Record<string, string> {
+function serviceHeadersToRecord(
+  headers: ServiceHeaders,
+): Record<string, string> {
   if (Array.isArray(headers)) {
     return Object.fromEntries(headers);
   }
@@ -411,8 +604,8 @@ function serviceHeadersToRecord(headers: ServiceHeaders): Record<string, string>
 async function responseError(
   service: string,
   message: string,
-  response: FetchResponse
-): Promise<Error> {
+  response: FetchResponse,
+): Promise<ReturnType<typeof wrapError>> {
   let detail = response.statusText;
   try {
     const text = await response.text();
@@ -422,19 +615,19 @@ async function responseError(
   } catch {
     // Ignore secondary body read failure.
   }
-  return new Error(`${service}: ${message}: ${response.status} ${detail}`);
+  return wrapError(
+    service,
+    new Error(`${message}: ${response.status} ${detail}`),
+  );
 }
 
 function isAbortError(error: unknown): boolean {
-  return (
-    error instanceof DOMException &&
-    error.name === "AbortError"
-  );
+  return error instanceof DOMException && error.name === "AbortError";
 }
 
 async function* parseSseStream(
   body: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): AsyncIterable<HookStreamEvent> {
   if (!body) {
     throw new Error("Hook stream response does not expose a readable body");
@@ -467,7 +660,7 @@ async function* parseSseStream(
 
 async function* readBodyChunks(
   body: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): AsyncIterable<Uint8Array> {
   const asyncIterable = body as AsyncIterable<Uint8Array>;
   if (typeof asyncIterable?.[Symbol.asyncIterator] === "function") {
@@ -568,4 +761,155 @@ function parseHookEvent(message: HookStreamEvent): HookEvent {
     eventIndex: parsed.eventIndex ?? 0,
     timestamp: parsed.timestamp ?? "",
   };
+}
+
+function normalizeWebhookRecord(data: unknown): HookWebhookRecord | null {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  const record = isRecordContainer(data);
+  const candidate =
+    pickWebhookRecord(record) ??
+    normalizeWebhookRecord(record.webhook) ??
+    normalizeWebhookRecord(record.hook) ??
+    normalizeWebhookRecord(record.subscription) ??
+    normalizeWebhookRecord(record.data);
+  return candidate ?? null;
+}
+
+function normalizeWebhookRecordList(data: unknown): HookWebhookRecord[] | null {
+  if (Array.isArray(data)) {
+    const records = data
+      .map((entry) => normalizeWebhookRecord(entry))
+      .filter((entry): entry is HookWebhookRecord => entry !== null);
+    return records;
+  }
+
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  const record = isRecordContainer(data);
+  const nested =
+    maybeRecordArray(record.webhooks) ??
+    maybeRecordArray(record.subscriptions) ??
+    maybeRecordArray(record.hooks) ??
+    maybeRecordArray(record.data);
+  if (nested) {
+    return nested;
+  }
+
+  const single = pickWebhookRecord(record);
+  return single ? [single] : null;
+}
+
+function maybeRecordArray(value: unknown): HookWebhookRecord[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const records = value
+    .map((entry) => normalizeWebhookRecord(entry))
+    .filter((entry): entry is HookWebhookRecord => entry !== null);
+  return records;
+}
+
+function pickWebhookRecord(
+  value: Record<string, unknown>,
+): HookWebhookRecord | null {
+  const id = stringField(value, "id");
+  const space = stringField(value, "space") ?? stringField(value, "spaceId");
+  const service = stringField(value, "service");
+  const callbackUrl =
+    stringField(value, "callbackUrl") ?? stringField(value, "callback_url");
+  if (!id || !space || !service || !callbackUrl) {
+    return null;
+  }
+
+  return {
+    id,
+    space,
+    service: service as HookWebhookRecord["service"],
+    pathPrefix:
+      optionalStringField(value, "pathPrefix") ??
+      optionalStringField(value, "path_prefix"),
+    abilities:
+      stringArrayField(value, "abilities") ??
+      parsedStringArrayField(value, "abilitiesJson") ??
+      parsedStringArrayField(value, "abilities_json"),
+    callbackUrl,
+    active: booleanField(value, "active") ?? true,
+    createdAt:
+      stringField(value, "createdAt") ??
+      stringField(value, "created_at") ??
+      new Date().toISOString(),
+    subscriberDid:
+      optionalStringField(value, "subscriberDid") ??
+      optionalStringField(value, "subscriber_did"),
+  };
+}
+
+function isRecordContainer(value: object): Record<string, unknown> {
+  return value as Record<string, unknown>;
+}
+
+function stringField(
+  value: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const field = value[key];
+  return typeof field === "string" ? field : undefined;
+}
+
+function optionalStringField(
+  value: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  return stringField(value, key);
+}
+
+function booleanField(
+  value: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  const field = value[key];
+  return typeof field === "boolean" ? field : undefined;
+}
+
+function stringArrayField(
+  value: Record<string, unknown>,
+  key: string,
+): string[] | undefined {
+  const field = value[key];
+  if (!Array.isArray(field)) {
+    return undefined;
+  }
+  const strings = field.filter(
+    (item): item is string => typeof item === "string",
+  );
+  return strings.length === field.length ? strings : undefined;
+}
+
+function parsedStringArrayField(
+  value: Record<string, unknown>,
+  key: string,
+): string[] | undefined {
+  const field = value[key];
+  if (typeof field !== "string") {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(field) as unknown;
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+    const strings = parsed.filter(
+      (item): item is string => typeof item === "string",
+    );
+    return strings.length === parsed.length ? strings : undefined;
+  } catch {
+    return undefined;
+  }
 }

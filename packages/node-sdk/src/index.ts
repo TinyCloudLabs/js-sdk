@@ -138,7 +138,11 @@ export type {
 } from "@tinycloud/sdk-core";
 
 // Re-export DuckDB service values
-export { DuckDbService, DuckDbDatabaseHandle, DuckDbAction } from "@tinycloud/sdk-core";
+export {
+  DuckDbService,
+  DuckDbDatabaseHandle,
+  DuckDbAction,
+} from "@tinycloud/sdk-core";
 
 // Re-export DuckDB service types
 export type {
@@ -162,7 +166,12 @@ export type {
 } from "@tinycloud/sdk-core";
 
 // Re-export Vault service values
-export { DataVaultService, VaultHeaders, VaultPublicSpaceKVActions, createVaultCrypto } from "@tinycloud/sdk-core";
+export {
+  DataVaultService,
+  VaultHeaders,
+  VaultPublicSpaceKVActions,
+  createVaultCrypto,
+} from "@tinycloud/sdk-core";
 
 // Re-export Vault service types
 export type {
@@ -184,9 +193,15 @@ export { HooksService } from "@tinycloud/sdk-core";
 // Re-export Hooks service types
 export type {
   IHooksService,
+  HookServiceName,
   HookSubscription,
   HookEvent,
   HookStreamEvent,
+  HookWebhookScope,
+  HookWebhookRegistration,
+  HookWebhookRecord,
+  HookWebhookListOptions,
+  HookWebhookUnregisterOptions,
   SubscribeOptions,
   HooksServiceConfig,
 } from "@tinycloud/sdk-core";

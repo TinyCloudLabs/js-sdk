@@ -167,13 +167,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
         "": ["tinycloud.capabilities/read"],
       },
       hooks: {
-        "": ["tinycloud.hooks/subscribe"],
+        "": [
+          "tinycloud.hooks/subscribe",
+          "tinycloud.hooks/register",
+          "tinycloud.hooks/list",
+          "tinycloud.hooks/unregister",
+        ],
       },
     };
     this.sessionExpirationMs = config.sessionExpirationMs ?? 60 * 60 * 1000;
     this.autoCreateSpace = config.autoCreateSpace ?? false;
     this.spaceCreationHandler = config.spaceCreationHandler;
-    this.tinycloudHosts = config.tinycloudHosts ?? ["https://node.tinycloud.xyz"];
+    this.tinycloudHosts = config.tinycloudHosts ?? [
+      "https://node.tinycloud.xyz",
+    ];
     this.enablePublicSpace = config.enablePublicSpace ?? true;
     this.nonce = config.nonce;
     this.siweConfig = config.siweConfig;
@@ -234,7 +241,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     if (uri) {
       console.warn(
         "[tinycloud] siweConfig.uri is overwriting the delegation target URI. " +
-        "This may break delegation chain validation if the URI does not match the session key DID.",
+          "This may break delegation chain validation if the URI does not match the session key DID.",
       );
       overrides.uri = uri;
     }
@@ -318,15 +325,18 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Try to activate the session
     const result = await activateSessionWithHost(
       host,
-      this._tinyCloudSession.delegationHeader
+      this._tinyCloudSession.delegationHeader,
     );
 
     // Determine the effective space creation handler:
     // 1. Explicit spaceCreationHandler takes precedence
     // 2. autoCreateSpace: true uses AutoApproveSpaceCreationHandler
     // 3. Otherwise, no handler (space creation skipped silently)
-    const handler: ISpaceCreationHandler | undefined = this.spaceCreationHandler
-      ?? (this.autoCreateSpace ? new AutoApproveSpaceCreationHandler() : undefined);
+    const handler: ISpaceCreationHandler | undefined =
+      this.spaceCreationHandler ??
+      (this.autoCreateSpace
+        ? new AutoApproveSpaceCreationHandler()
+        : undefined);
 
     const creationContext = {
       spaceId: primarySpaceId,
@@ -363,7 +373,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
           throw err;
         }
       } catch (error) {
-        handler.onSpaceCreationFailed?.(creationContext, error instanceof Error ? error : new Error(String(error)));
+        handler.onSpaceCreationFailed?.(
+          creationContext,
+          error instanceof Error ? error : new Error(String(error)),
+        );
         throw error;
       }
 
@@ -373,12 +386,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
       // Retry activation
       const retryResult = await activateSessionWithHost(
         host,
-        this._tinyCloudSession.delegationHeader
+        this._tinyCloudSession.delegationHeader,
       );
 
       if (!retryResult.success) {
         const err = new Error(
-          `Failed to activate session after creating space: ${retryResult.error}`
+          `Failed to activate session after creating space: ${retryResult.error}`,
         );
         handler.onSpaceCreationFailed?.(creationContext, err);
         throw err;
@@ -407,7 +420,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
           throw err;
         }
       } catch (error) {
-        handler.onSpaceCreationFailed?.(creationContext, error instanceof Error ? error : new Error(String(error)));
+        handler.onSpaceCreationFailed?.(
+          creationContext,
+          error instanceof Error ? error : new Error(String(error)),
+        );
         throw error;
       }
 
@@ -415,12 +431,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
       const retryResult = await activateSessionWithHost(
         host,
-        this._tinyCloudSession.delegationHeader
+        this._tinyCloudSession.delegationHeader,
       );
 
       if (!retryResult.success) {
         const err = new Error(
-          `Failed to activate session after creating space: ${retryResult.error}`
+          `Failed to activate session after creating space: ${retryResult.error}`,
         );
         handler.onSpaceCreationFailed?.(creationContext, err);
         throw err;
@@ -507,10 +523,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Compute additional spaces as metadata (not in the delegation itself).
     // The public space delegation is created lazily via ensurePublicSpace(),
     // not at signIn time, to avoid creating spaces the user may never use.
-    const spacesMetadata: Record<string, string> | undefined =
-        this.enablePublicSpace
-            ? { public: this.wasm.makeSpaceId(address, chainId, "public") }
-            : undefined;
+    const spacesMetadata: Record<string, string> | undefined = this
+      .enablePublicSpace
+      ? { public: this.wasm.makeSpaceId(address, chainId, "public") }
+      : undefined;
 
     // Create TinyCloud session with full delegation data
     // Use sessionManager.getDID(keyId) for verificationMethod to get properly formatted DID URL
@@ -556,7 +572,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._chainId = chainId;
 
     // Verify SDK-node protocol compatibility and discover supported features
-    const nodeInfo = await checkNodeInfo(this.tinycloudHosts[0], this.wasm.protocolVersion());
+    const nodeInfo = await checkNodeInfo(
+      this.tinycloudHosts[0],
+      this.wasm.protocolVersion(),
+    );
     this._nodeFeatures = nodeInfo.features;
 
     // Call extension hooks
@@ -614,7 +633,6 @@ export class NodeUserAuthorization implements IUserAuthorization {
       type: "message",
     });
   }
-
 
   /**
    * Prepare a session for external signing.
@@ -729,10 +747,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     };
 
     // Compute additional spaces as metadata (not in the delegation itself).
-    const spacesMetadata: Record<string, string> | undefined =
-        this.enablePublicSpace
-            ? { public: this.wasm.makeSpaceId(address, chainId, "public") }
-            : undefined;
+    const spacesMetadata: Record<string, string> | undefined = this
+      .enablePublicSpace
+      ? { public: this.wasm.makeSpaceId(address, chainId, "public") }
+      : undefined;
 
     // Create TinyCloud session with full delegation data
     // Use sessionManager.getDID(keyId) for properly formatted DID URL
@@ -785,7 +803,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._chainId = chainId;
 
     // Verify SDK-node protocol compatibility and discover supported features
-    const nodeInfo = await checkNodeInfo(this.tinycloudHosts[0], this.wasm.protocolVersion());
+    const nodeInfo = await checkNodeInfo(
+      this.tinycloudHosts[0],
+      this.wasm.protocolVersion(),
+    );
     this._nodeFeatures = nodeInfo.features;
 
     // Call extension hooks
@@ -833,7 +854,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         const response = await this.signStrategy.handler(request);
         if (!response.approved) {
           throw new Error(
-            response.reason ?? "Sign request rejected by callback"
+            response.reason ?? "Sign request rejected by callback",
           );
         }
         // If callback provides signature, use it; otherwise sign with signer
@@ -846,12 +867,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
         return this.requestSignatureViaEmitter(
           request,
           this.signStrategy.emitter,
-          this.signStrategy.timeout ?? 60000
+          this.signStrategy.timeout ?? 60000,
         );
       }
 
       default:
-        throw new Error(`Unknown sign strategy: ${(this.signStrategy as any).type}`);
+        throw new Error(
+          `Unknown sign strategy: ${(this.signStrategy as any).type}`,
+        );
     }
   }
 
@@ -861,7 +884,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private requestSignatureViaEmitter(
     request: SignRequest,
     emitter: EventEmitter,
-    timeout: number
+    timeout: number,
   ): Promise<string> {
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
@@ -872,7 +895,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         clearTimeout(timeoutId);
         if (!response.approved) {
           reject(
-            new Error(response.reason ?? "Sign request rejected via emitter")
+            new Error(response.reason ?? "Sign request rejected via emitter"),
           );
         } else {
           // If response provides signature, use it; otherwise sign with signer

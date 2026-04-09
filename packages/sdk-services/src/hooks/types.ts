@@ -1,8 +1,40 @@
+export type HookServiceName = "kv" | "sql" | "duckdb";
+
 export interface HookSubscription {
   space: string;
-  service: "kv" | "sql" | "duckdb";
+  service: HookServiceName;
   pathPrefix?: string;
   abilities?: string[];
+}
+
+export interface HookWebhookScope {
+  space: string;
+  service: HookServiceName;
+  pathPrefix?: string;
+  abilities?: string[];
+}
+
+export interface HookWebhookRegistration extends HookWebhookScope {
+  callbackUrl: string;
+  secret?: string;
+}
+
+export interface HookWebhookRecord extends HookWebhookScope {
+  id: string;
+  subscriberDid?: string;
+  callbackUrl: string;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface HookWebhookListOptions {
+  space?: string;
+  service?: HookServiceName;
+  pathPrefix?: string;
+}
+
+export interface HookWebhookUnregisterOptions {
+  target?: HookWebhookScope;
 }
 
 export interface HookEvent {

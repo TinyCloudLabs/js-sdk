@@ -199,9 +199,15 @@ export type {
 export { HooksService } from "./hooks";
 export type {
   IHooksService,
+  HookServiceName,
   HookSubscription,
   HookEvent,
   HookStreamEvent,
+  HookWebhookScope,
+  HookWebhookRegistration,
+  HookWebhookRecord,
+  HookWebhookListOptions,
+  HookWebhookUnregisterOptions,
   SubscribeOptions,
   HooksServiceConfig,
 } from "./hooks";
@@ -211,8 +217,17 @@ export { TinyCloudQuota } from "./quota";
 export type { QuotaConfig, QuotaStatus } from "./quota";
 
 // Vault service
-export { DataVaultService, VaultHeaders, VaultPublicSpaceKVActions, createVaultCrypto } from "./vault";
-export type { IDataVaultService, VaultCrypto, WasmVaultFunctions } from "./vault";
+export {
+  DataVaultService,
+  VaultHeaders,
+  VaultPublicSpaceKVActions,
+  createVaultCrypto,
+} from "./vault";
+export type {
+  IDataVaultService,
+  VaultCrypto,
+  WasmVaultFunctions,
+} from "./vault";
 export type {
   DataVaultConfig,
   VaultPutOptions,
