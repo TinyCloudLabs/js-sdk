@@ -1560,14 +1560,78 @@ export class TinyCloudNode {
     return this.delegationManager.create(params);
   }
 
-  /**
-   * Revoke a delegation using the v2 DelegationManager.
-   *
-   * @param cid - The CID of the delegation to revoke
-   * @returns Result indicating success or failure
-   */
   async revokeDelegation(cid: string): Promise<DelegationResult<void>> {
-    return this.delegationManager.revoke(cid);
+    if (!this.signer) {
+      return {
+        ok: false,
+        error: {
+          code: "NOT_INITIALIZED",
+          message:
+            "Cannot revokeDelegation() in session-only mode. Requires wallet mode.",
+          service: "delegation",
+        },
+      };
+    }
+
+    const session = this.auth?.tinyCloudSession;
+    if (!session) {
+      return {
+        ok: false,
+        error: {
+          code: "NOT_INITIALIZED",
+          message: "Not signed in. Call signIn() first.",
+          service: "delegation",
+        },
+      };
+    }
+
+    try {
+      const issuedAt = new Date().toISOString();
+      const nonce = crypto.randomUUID().replace(/-/g, "");
+      const siwe = [
+        `${this.siweDomain} wants you to sign in with your Ethereum account:`,
+        this.wasmBindings.ensureEip55(session.address),
+        "",
+        "",
+        `URI: ucan:${cid}`,
+        "Version: 1",
+        `Chain ID: ${session.chainId}`,
+        `Nonce: ${nonce}`,
+        `Issued At: ${issuedAt}`,
+      ].join("\n");
+      const signature = await this.signer.signMessage(siwe);
+
+      const response = await globalThis.fetch(`${this.config.host!}/revoke`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ siwe, signature }),
+      });
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: {
+            code: "NETWORK_ERROR",
+            message: `Failed to revoke delegation: ${response.status} - ${await response.text()}`,
+            service: "delegation",
+          },
+        };
+      }
+
+      this._capabilityRegistry.revokeDelegation(cid);
+      return { ok: true, data: undefined };
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: "NETWORK_ERROR",
+          message: `Network error revoking delegation: ${String(error)}`,
+          service: "delegation",
+        },
+      };
+    }
   }
 
   /**
