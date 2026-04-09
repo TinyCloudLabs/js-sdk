@@ -138,6 +138,30 @@ export interface KvReconSplitResponse {
   children: KvReconSplitChild[];
 }
 
+export interface KvReconSplitCompareRequest {
+  peerUrl: string;
+  spaceId: string;
+  prefix?: string;
+}
+
+export interface KvReconSplitChildComparison {
+  prefix: string;
+  status: "match" | "local-missing" | "peer-missing" | "mismatch";
+  localItemCount: number;
+  peerItemCount: number;
+  localFingerprint: string;
+  peerFingerprint: string;
+  leaf: boolean;
+}
+
+export interface KvReconSplitCompareResponse {
+  spaceId: string;
+  prefix?: string;
+  peerUrl: string;
+  matches: boolean;
+  children: KvReconSplitChildComparison[];
+}
+
 export interface KvReconCompareResponse {
   spaceId: string;
   prefix?: string;
@@ -584,6 +608,40 @@ export async function reconSplitFromPeer(
   }
 
   return (await response.json()) as KvReconSplitResponse;
+}
+
+export async function reconSplitCompareFromPeer(
+  cluster: RunningCluster,
+  targetNodeName: string,
+  request: KvReconSplitCompareRequest,
+  sessions: ReplicationPullSessions
+): Promise<KvReconSplitCompareResponse> {
+  const node = getClusterNode(cluster, targetNodeName);
+  const targetHeaders = await buildSessionHeaders(
+    "Replication-Session",
+    sessions.target
+  );
+  const peerHeaders = await buildSessionHeaders(
+    "Peer-Replication-Session",
+    sessions.peer
+  );
+  const response = await fetch(`${node.url}/replication/recon/split/compare`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...targetHeaders,
+      ...peerHeaders,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `KV recon split compare failed on ${targetNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as KvReconSplitCompareResponse;
 }
 
 export async function reconCompareFromPeer(
