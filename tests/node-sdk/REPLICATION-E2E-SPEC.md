@@ -39,6 +39,12 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - proves the same scoped inventory matches after replay reconcile on both nodes
 - proves sibling prefixes do not leak into the scoped inventory
 
+### KV Recon Compare
+
+- compares scoped KV state through an authenticated `recon/compare` endpoint
+- proves mismatch before replay reconcile and match after reconcile
+- proves sibling prefixes remain isolated when compare is run on a narrower prefix
+
 ### KV Offline / Provisional
 
 - authors KV state on a disconnected replica
@@ -86,6 +92,7 @@ tests/node-sdk/
     ├── kv-offline-provisional.test.ts
     ├── kv-peer-serving-enforcement.test.ts
     ├── kv-peer-serving-reconcile.test.ts
+    ├── kv-recon-compare.test.ts
     ├── kv-reconcile.test.ts
     ├── kv-restart-catchup.test.ts
     ├── kv-recon-export.test.ts
