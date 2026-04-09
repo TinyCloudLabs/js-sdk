@@ -72,8 +72,12 @@ import {
   CreateDelegationWasmResult,
   UnsupportedFeatureError,
   makePublicSpaceId,
+  SiweConfig,
 } from "@tinycloud/sdk-core";
-import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import {
+  NodeUserAuthorization,
+  NodeUserAuthorizationConfig,
+} from "./authorization/NodeUserAuthorization";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import { PortableDelegation } from "./delegation";
@@ -98,6 +102,8 @@ export interface TinyCloudNodeConfig {
   prefix?: string;
   /** Domain for SIWE messages (default: derived from host) */
   domain?: string;
+  /** Optional SIWE overrides for primary auth message preparation. */
+  siweConfig?: Pick<SiweConfig, "domain" | "uri" | "statement" | "nonce">;
   /** Session expiration time in milliseconds (default: 1 hour) */
   sessionExpirationMs?: number;
   /** Whether to automatically create space if it doesn't exist (default: false) */
@@ -297,24 +303,45 @@ export class TinyCloudNode {
    * @internal
    */
   private setupAuth(config: TinyCloudNodeConfig): void {
-    const host = this.config.host!;
-    const domain = config.domain ?? new URL(host).hostname;
+    this.auth = new NodeUserAuthorization(
+      this.createAuthorizationConfig({
+        prefix: config.prefix,
+        sessionStorage: config.sessionStorage,
+      })
+    );
 
-    this.auth = new NodeUserAuthorization({
+    this.tc = new TinyCloud(this.auth);
+  }
+
+  private resolveSiweDomain(): string {
+    return this.config.domain
+      ?? this.config.siweConfig?.domain
+      ?? new URL(this.config.host!).hostname;
+  }
+
+  private createAuthorizationConfig(options: {
+    prefix?: string;
+    sessionStorage?: ISessionStorage;
+  } = {}): NodeUserAuthorizationConfig {
+    return {
       signer: this.signer!,
       signStrategy: { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
-      sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
-      domain,
-      spacePrefix: config.prefix,
-      sessionExpirationMs: config.sessionExpirationMs ?? 60 * 60 * 1000,
-      tinycloudHosts: [host],
-      autoCreateSpace: config.autoCreateSpace,
-      enablePublicSpace: config.enablePublicSpace ?? true,
-      spaceCreationHandler: config.spaceCreationHandler,
-    });
-
-    this.tc = new TinyCloud(this.auth);
+      sessionStorage:
+        options.sessionStorage
+        ?? this.config.sessionStorage
+        ?? new MemorySessionStorage(),
+      domain: this.resolveSiweDomain(),
+      uri: this.config.siweConfig?.uri,
+      statement: this.config.siweConfig?.statement,
+      nonce: this.config.siweConfig?.nonce,
+      spacePrefix: options.prefix ?? this.config.prefix,
+      sessionExpirationMs: this.config.sessionExpirationMs ?? 60 * 60 * 1000,
+      tinycloudHosts: [this.config.host!],
+      autoCreateSpace: this.config.autoCreateSpace,
+      enablePublicSpace: this.config.enablePublicSpace ?? true,
+      spaceCreationHandler: this.config.spaceCreationHandler,
+    };
   }
 
   /**
@@ -542,8 +569,6 @@ export class TinyCloudNode {
     }
 
     const prefix = options?.prefix ?? "default";
-    const host = this.config.host!;
-    const domain = new URL(host).hostname;
 
     // Create signer from private key
     if (!TinyCloudNode.nodeDefaults) {
@@ -555,19 +580,12 @@ export class TinyCloudNode {
     this.signer = TinyCloudNode.nodeDefaults.createSigner(privateKey);
 
     // Create authorization handler
-    this.auth = new NodeUserAuthorization({
-      signer: this.signer,
-      signStrategy: { type: "auto-sign" },
-      wasmBindings: this.wasmBindings,
-      sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
-      domain,
-      spacePrefix: prefix,
-      sessionExpirationMs: this.config.sessionExpirationMs ?? 60 * 60 * 1000,
-      tinycloudHosts: [host],
-      autoCreateSpace: this.config.autoCreateSpace,
-      enablePublicSpace: this.config.enablePublicSpace ?? true,
-      spaceCreationHandler: this.config.spaceCreationHandler,
-    });
+    this.auth = new NodeUserAuthorization(
+      this.createAuthorizationConfig({
+        prefix,
+        sessionStorage: options?.sessionStorage,
+      })
+    );
 
     // Create TinyCloud instance
     this.tc = new TinyCloud(this.auth);
@@ -595,24 +613,15 @@ export class TinyCloudNode {
     }
 
     const prefix = options?.prefix ?? "default";
-    const host = this.config.host!;
-    const domain = new URL(host).hostname;
 
     this.signer = signer;
 
-    this.auth = new NodeUserAuthorization({
-      signer: this.signer,
-      signStrategy: { type: "auto-sign" },
-      wasmBindings: this.wasmBindings,
-      sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
-      domain,
-      spacePrefix: prefix,
-      sessionExpirationMs: this.config.sessionExpirationMs ?? 60 * 60 * 1000,
-      tinycloudHosts: [host],
-      autoCreateSpace: this.config.autoCreateSpace,
-      enablePublicSpace: this.config.enablePublicSpace ?? true,
-      spaceCreationHandler: this.config.spaceCreationHandler,
-    });
+    this.auth = new NodeUserAuthorization(
+      this.createAuthorizationConfig({
+        prefix,
+        sessionStorage: options?.sessionStorage,
+      })
+    );
 
     this.tc = new TinyCloud(this.auth);
     this.config.prefix = prefix;

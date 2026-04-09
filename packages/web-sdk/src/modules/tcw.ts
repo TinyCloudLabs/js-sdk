@@ -195,6 +195,7 @@ export class TinyCloudWeb {
     const nodeConfig: TinyCloudNodeConfig = {
       host: this.config.tinycloudHosts?.[0] ?? "https://node.tinycloud.xyz",
       prefix: this.config.spacePrefix,
+      siweConfig: this.config.siweConfig,
       autoCreateSpace: this.config.autoCreateSpace ?? true,
       sessionExpirationMs: this.config.sessionExpirationMs,
       notificationHandler: this.notificationHandler,

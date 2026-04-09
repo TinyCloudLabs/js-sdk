@@ -40,6 +40,8 @@ export interface NodeUserAuthorizationConfig {
   uri?: string;
   /** Statement included in SIWE messages */
   statement?: string;
+  /** Nonce override included in SIWE messages */
+  nonce?: string;
   /** Space prefix for new sessions */
   spacePrefix?: string;
   /** Default actions for sessions */
@@ -97,6 +99,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly domain: string;
   private readonly uri: string;
   private readonly statement?: string;
+  private readonly nonce?: string;
   private readonly spacePrefix: string;
   private readonly defaultActions: Record<string, Record<string, string[]>>;
   private readonly sessionExpirationMs: number;
@@ -123,6 +126,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.domain = config.domain;
     this.uri = config.uri ?? `https://${config.domain}`;
     this.statement = config.statement;
+    this.nonce = config.nonce;
     this.spacePrefix = config.spacePrefix ?? "default";
     this.defaultActions = config.defaultActions ?? {
       kv: {
@@ -184,6 +188,29 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   get nodeFeatures(): string[] {
     return this._nodeFeatures;
+  }
+
+  private preparePrimarySession(params: {
+    address: string;
+    chainId: number;
+    issuedAt: string;
+    expirationTime: string;
+    spaceId: string;
+    jwk: Record<string, unknown>;
+  }) {
+    return this.wasm.prepareSession({
+      abilities: this.defaultActions,
+      address: params.address,
+      chainId: params.chainId,
+      domain: this.domain,
+      uri: this.uri,
+      issuedAt: params.issuedAt,
+      expirationTime: params.expirationTime,
+      spaceId: params.spaceId,
+      jwk: params.jwk,
+      ...(this.statement ? { statement: this.statement } : {}),
+      ...(this.nonce ? { nonce: this.nonce } : {}),
+    });
   }
 
   /**
@@ -412,11 +439,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
 
     // Prepare session - this creates the SIWE message with ReCap capabilities
-    const prepared = this.wasm.prepareSession({
-      abilities: this.defaultActions,
+    const prepared = this.preparePrimarySession({
       address,
       chainId,
-      domain: this.domain,
       issuedAt: now.toISOString(),
       expirationTime: expirationTime.toISOString(),
       spaceId,
@@ -606,11 +631,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
 
     // Prepare session - this creates the SIWE message with ReCap capabilities
-    const prepared = this.wasm.prepareSession({
-      abilities: this.defaultActions,
+    const prepared = this.preparePrimarySession({
       address,
       chainId,
-      domain: this.domain,
       issuedAt: now.toISOString(),
       expirationTime: expirationTime.toISOString(),
       spaceId,
