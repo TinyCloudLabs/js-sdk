@@ -60,7 +60,7 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 ### KV Split-Driven Replay
 
 - replays only the missing immediate child scopes through an authenticated `reconcile/split` endpoint
-- manually reconciles one child first, then runs a broad-scope `reconcile/split` and proves only the remaining child needed replay
+- pages missing child scopes through `childLimit: 1`, proving one child is repaired per pass and the root only converges after the second pass
 - proves a broad-scope reconcile skips an already-matched child prefix and repairs only the remaining missing child prefix
 - proves root split comparison converges after the selective replay
 
