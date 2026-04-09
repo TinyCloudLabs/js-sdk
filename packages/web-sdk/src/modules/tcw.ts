@@ -203,6 +203,7 @@ export class TinyCloudWeb {
       sessionExpirationMs: this.config.sessionExpirationMs,
       notificationHandler: this.notificationHandler,
       wasmBindings: this.wasmBindings,
+      nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
     };
 

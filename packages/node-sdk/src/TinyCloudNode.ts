@@ -117,6 +117,11 @@ export interface TinyCloudNodeConfig {
   ensResolver?: IENSResolver;
   /** Custom space creation handler (default: auto-approve when autoCreateSpace is true) */
   spaceCreationHandler?: ISpaceCreationHandler;
+  /**
+   * SIWE nonce override. If omitted, the WASM layer generates a random nonce.
+   * If `siweConfig.nonce` is also provided, `siweConfig.nonce` wins.
+   */
+  nonce?: string;
   /** Optional SIWE configuration overrides (e.g., nonce for server-provided nonces) */
   siweConfig?: SiweConfig;
 }
@@ -319,6 +324,7 @@ export class TinyCloudNode {
       autoCreateSpace: config.autoCreateSpace,
       enablePublicSpace: config.enablePublicSpace ?? true,
       spaceCreationHandler: config.spaceCreationHandler,
+      nonce: config.nonce,
       siweConfig: config.siweConfig,
     });
 
@@ -574,6 +580,7 @@ export class TinyCloudNode {
       autoCreateSpace: this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: this.config.spaceCreationHandler,
+      nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
     });
 
@@ -619,6 +626,7 @@ export class TinyCloudNode {
       autoCreateSpace: this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: this.config.spaceCreationHandler,
+      nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
     });
 
