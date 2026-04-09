@@ -232,6 +232,11 @@ export interface ReplicationSessionOpenResponse {
   spaceId: string;
   service: string;
   serverDid: string;
+  rolesEnabled: string[];
+  peerServing: boolean;
+  canExport: boolean;
+  recon: boolean;
+  authSync: boolean;
   prefix?: string;
   dbName?: string;
   expiresAt: string;
