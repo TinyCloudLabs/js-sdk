@@ -110,6 +110,7 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 
 - requires a replication session handshake before export begins
 - surfaces a per-space `serverDid` from `replication/session/open` for session identity checks
+- surfaces per-space serving assessment fields from `replication/session/open` for `canExport` and role checks
 - opens a replication session on a first-contact peer by carrying the supporting delegation chain
 - invalidates a replication transport session after its sync delegation is revoked
 - blocks unauthenticated export and reconcile pull-through
@@ -132,6 +133,7 @@ tests/node-sdk/
     ├── auth-recovery.test.ts
     ├── helpers.ts
     ├── auth-session-serverdid.test.ts
+    ├── auth-session-serving-assessment.test.ts
     ├── kv-baseline.test.ts
     ├── kv-delete-reconcile.test.ts
     ├── kv-offline-provisional.test.ts
