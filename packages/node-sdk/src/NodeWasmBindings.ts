@@ -9,6 +9,7 @@
 
 import {
   invoke,
+  invokeAny,
   prepareSession,
   completeSessionSetup,
   ensureEip55,
@@ -47,6 +48,7 @@ export class NodeWasmBindings implements IWasmBindings {
   }
 
   invoke = invoke;
+  invokeAny = invokeAny;
   prepareSession = prepareSession;
   completeSessionSetup = completeSessionSetup;
   ensureEip55 = ensureEip55;

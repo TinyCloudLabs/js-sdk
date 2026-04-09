@@ -166,6 +166,26 @@ export type InvokeFunction = (
 ) => ServiceHeaders;
 
 /**
+ * Multi-resource invocation entry.
+ */
+export interface InvokeAnyEntry {
+  spaceId: string;
+  service: string;
+  path: string;
+  action: string;
+}
+
+/**
+ * Invoke function for minting a single authorization header that covers
+ * multiple capabilities across one effective invoker.
+ */
+export type InvokeAnyFunction = (
+  session: ServiceSession,
+  entries: InvokeAnyEntry[],
+  facts?: InvocationFacts
+) => ServiceHeaders;
+
+/**
  * Fetch request options - compatible with standard fetch API.
  */
 export interface FetchRequestInit {
@@ -182,6 +202,7 @@ export interface FetchResponse {
   ok: boolean;
   status: number;
   statusText: string;
+  body?: unknown;
   headers: {
     get(name: string): string | null;
   };
@@ -271,6 +292,8 @@ export interface IServiceContext {
   // Platform dependencies (injected by SDK)
   /** Platform-specific invoke function from WASM binding */
   readonly invoke: InvokeFunction;
+  /** Optional multi-resource invoke function */
+  readonly invokeAny?: InvokeAnyFunction;
   /** Fetch function (defaults to globalThis.fetch) */
   readonly fetch: FetchFunction;
   /** Available TinyCloud host URLs */

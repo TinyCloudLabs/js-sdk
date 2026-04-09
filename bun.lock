@@ -248,6 +248,7 @@
         "zod": "^3.23.0",
       },
       "devDependencies": {
+        "@tinycloud/node-sdk-wasm": "workspace:*",
         "@types/node": "^20",
         "tsup": "^8.0.0",
         "typescript": "^5.0.0",

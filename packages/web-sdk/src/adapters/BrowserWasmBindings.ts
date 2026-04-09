@@ -1,6 +1,6 @@
 import { IWasmBindings, ISessionManager } from "@tinycloud/sdk-core";
 import { tinycloud, tcwSession, initialized } from "@tinycloud/web-sdk-wasm";
-import { invoke, prepareSession, completeSessionSetup } from "../modules/Storage/tinycloud/module";
+import { invoke, invokeAny, prepareSession, completeSessionSetup } from "../modules/Storage/tinycloud/module";
 
 let wasmReady = false;
 
@@ -15,6 +15,7 @@ export class BrowserWasmBindings implements IWasmBindings {
   }
 
   get invoke() { return invoke; }
+  get invokeAny() { return invokeAny; }
   get prepareSession() { return prepareSession; }
   get completeSessionSetup() { return completeSessionSetup; }
 

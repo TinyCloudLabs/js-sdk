@@ -60,10 +60,7 @@ export {
 } from "./userAuthorization";
 
 // Main TinyCloud class
-export {
-  TinyCloud,
-  TinyCloudConfig,
-} from "./TinyCloud";
+export { TinyCloud, TinyCloudConfig } from "./TinyCloud";
 
 // Re-export service types from sdk-services for convenience
 export {
@@ -99,6 +96,8 @@ export {
   type ServiceSession,
   // Platform dependencies
   type InvokeFunction,
+  type InvokeAnyFunction,
+  type InvokeAnyEntry,
   type FetchFunction,
   // Retry
   type RetryPolicy,
@@ -140,6 +139,20 @@ export {
   type TableInfo,
   type ColumnInfo,
   type ViewInfo,
+  // Hooks Service
+  HooksService,
+  type IHooksService,
+  type HookServiceName,
+  type HookSubscription,
+  type HookEvent,
+  type HookStreamEvent,
+  type HookWebhookScope,
+  type HookWebhookRegistration,
+  type HookWebhookRecord,
+  type HookWebhookListOptions,
+  type HookWebhookUnregisterOptions,
+  type SubscribeOptions,
+  type HooksServiceConfig,
   // Vault Service
   DataVaultService,
   VaultHeaders,
@@ -273,4 +286,3 @@ export {
   checkNodeInfo,
 } from "./version";
 export type { NodeInfo } from "./version";
-

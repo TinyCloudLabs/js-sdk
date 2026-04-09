@@ -45,6 +45,8 @@ export type {
   ServiceSession,
   RetryPolicy,
   InvokeFunction,
+  InvokeAnyFunction,
+  InvokeAnyEntry,
   InvocationFact,
   InvocationFacts,
   FetchFunction,
@@ -193,13 +195,39 @@ export type {
   ViewInfo,
 } from "./duckdb";
 
+// Hooks service
+export { HooksService } from "./hooks";
+export type {
+  IHooksService,
+  HookServiceName,
+  HookSubscription,
+  HookEvent,
+  HookStreamEvent,
+  HookWebhookScope,
+  HookWebhookRegistration,
+  HookWebhookRecord,
+  HookWebhookListOptions,
+  HookWebhookUnregisterOptions,
+  SubscribeOptions,
+  HooksServiceConfig,
+} from "./hooks";
+
 // Quota
 export { TinyCloudQuota } from "./quota";
 export type { QuotaConfig, QuotaStatus } from "./quota";
 
 // Vault service
-export { DataVaultService, VaultHeaders, VaultPublicSpaceKVActions, createVaultCrypto } from "./vault";
-export type { IDataVaultService, VaultCrypto, WasmVaultFunctions } from "./vault";
+export {
+  DataVaultService,
+  VaultHeaders,
+  VaultPublicSpaceKVActions,
+  createVaultCrypto,
+} from "./vault";
+export type {
+  IDataVaultService,
+  VaultCrypto,
+  WasmVaultFunctions,
+} from "./vault";
 export type {
   DataVaultConfig,
   VaultPutOptions,

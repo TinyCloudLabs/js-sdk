@@ -20,6 +20,7 @@ import {
   ISpace,
   ISharingService,
   ICapabilityKeyRegistry,
+  IHooksService,
   DelegationManager,
   Delegation,
   CreateDelegationParams,
@@ -263,11 +264,13 @@ export class TinyCloudWeb {
   get kv(): IKVService { return this.node.kv; }
   get sql(): ISQLService { return this.node.sql; }
   get duckdb(): IDuckDbService { return this.node.duckdb; }
+  get hooks(): IHooksService { return this.node.hooks; }
   get vault(): IDataVaultService { return this.node.vault; }
   get spaces(): ISpaceService { return this.node.spaces; }
   get sharing(): ISharingService { return this.node.sharing; }
   get delegations(): DelegationManager { return this.node.delegationManager; }
   get capabilityRegistry(): ICapabilityKeyRegistry { return this.node.capabilityRegistry; }
+  get spaceId(): string | undefined { return this._node?.spaceId; }
 
   space(nameOrUri: string): ISpace { return this.spaces.get(nameOrUri); }
   get kvPrefix(): string { return this.config.kvPrefix || ""; }

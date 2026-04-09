@@ -9,6 +9,7 @@ import {
   ServiceSession,
   RetryPolicy,
   InvokeFunction,
+  InvokeAnyFunction,
   FetchFunction,
   defaultRetryPolicy,
 } from "./types";
@@ -24,6 +25,8 @@ type EventHandler = (data: unknown) => void;
 export interface ServiceContextConfig {
   /** Function to invoke WASM operations */
   invoke: InvokeFunction;
+  /** Optional function to mint a single authorization header for multiple capabilities */
+  invokeAny?: InvokeAnyFunction;
   /** Function to make HTTP requests (defaults to globalThis.fetch) */
   fetch?: FetchFunction;
   /** List of TinyCloud host URLs */
@@ -61,12 +64,14 @@ export class ServiceContext implements IServiceContext {
   private _eventHandlers: Map<string, Set<EventHandler>> = new Map();
   private _abortController: AbortController = new AbortController();
   private readonly _invoke: InvokeFunction;
+  private readonly _invokeAny?: InvokeAnyFunction;
   private readonly _fetch: FetchFunction;
   private readonly _hosts: string[];
   private readonly _retryPolicy: RetryPolicy;
 
   constructor(config: ServiceContextConfig) {
     this._invoke = config.invoke;
+    this._invokeAny = config.invokeAny;
     this._fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
     this._hosts = config.hosts;
     this._session = config.session ?? null;
@@ -118,6 +123,13 @@ export class ServiceContext implements IServiceContext {
    */
   get invoke(): InvokeFunction {
     return this._invoke;
+  }
+
+  /**
+   * Get the multi-resource invoke function when available.
+   */
+  get invokeAny(): InvokeAnyFunction | undefined {
+    return this._invokeAny;
   }
 
   /**

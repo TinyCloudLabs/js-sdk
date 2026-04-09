@@ -15,7 +15,7 @@ function getModule(): TinyCloudModule {
 
 export const makeSpaceId: TinyCloudModule['makeSpaceId'] = (...args) => {
   try {
-    return getModule().makeSpaceId(...args);
+    return Reflect.apply(getModule().makeSpaceId, getModule(), args);
   } catch (e) {
     throw `${msg}: ${e}`;
   }
@@ -23,7 +23,7 @@ export const makeSpaceId: TinyCloudModule['makeSpaceId'] = (...args) => {
 
 export const prepareSession: TinyCloudModule['prepareSession'] = (...args) => {
   try {
-    return getModule().prepareSession(...args);
+    return Reflect.apply(getModule().prepareSession, getModule(), args);
   } catch (e) {
     throw `${msg}: ${e}`;
   }
@@ -33,7 +33,7 @@ export const completeSessionSetup: TinyCloudModule['completeSessionSetup'] = (
   ...args
 ) => {
   try {
-    return getModule().completeSessionSetup(...args);
+    return Reflect.apply(getModule().completeSessionSetup, getModule(), args);
   } catch (e) {
     throw `${msg}: ${e}`;
   }
@@ -41,7 +41,15 @@ export const completeSessionSetup: TinyCloudModule['completeSessionSetup'] = (
 
 export const invoke: InvokeFunction = (...args) => {
   try {
-    return getModule().invoke(...args) as any;
+    return Reflect.apply(getModule().invoke, getModule(), args) as any;
+  } catch (e) {
+    throw `${msg}: ${e}`;
+  }
+};
+
+export const invokeAny: TinyCloudModule['invokeAny'] = (...args) => {
+  try {
+    return Reflect.apply(getModule().invokeAny, getModule(), args) as any;
   } catch (e) {
     throw `${msg}: ${e}`;
   }
@@ -50,7 +58,11 @@ export const invoke: InvokeFunction = (...args) => {
 export const generateHostSIWEMessage: TinyCloudModule['generateHostSIWEMessage'] =
   (...args) => {
     try {
-      return getModule().generateHostSIWEMessage(...args);
+      return Reflect.apply(
+        getModule().generateHostSIWEMessage,
+        getModule(),
+        args
+      );
     } catch (e) {
       throw `${msg}: ${e}`;
     }
@@ -59,7 +71,11 @@ export const generateHostSIWEMessage: TinyCloudModule['generateHostSIWEMessage']
 export const siweToDelegationHeaders: TinyCloudModule['siweToDelegationHeaders'] =
   (...args) => {
     try {
-      return getModule().siweToDelegationHeaders(...args);
+      return Reflect.apply(
+        getModule().siweToDelegationHeaders,
+        getModule(),
+        args
+      );
     } catch (e) {
       throw `${msg}: ${e}`;
     }

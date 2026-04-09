@@ -7,7 +7,7 @@
  * @packageDocumentation
  */
 
-import type { InvokeFunction } from "@tinycloud/sdk-services";
+import type { InvokeAnyFunction, InvokeFunction } from "@tinycloud/sdk-services";
 
 /**
  * Platform-agnostic WASM bindings interface.
@@ -19,6 +19,8 @@ import type { InvokeFunction } from "@tinycloud/sdk-services";
 export interface IWasmBindings {
   /** Invoke a TinyCloud action */
   invoke: InvokeFunction;
+  /** Invoke multiple TinyCloud capabilities in one authorization header */
+  invokeAny?: InvokeAnyFunction;
   /** Prepare a session (generate session key, build SIWE message) */
   prepareSession: (params: any) => any;
   /** Complete session setup (create delegation) */

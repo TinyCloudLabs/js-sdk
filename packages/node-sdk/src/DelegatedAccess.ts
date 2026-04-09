@@ -2,6 +2,8 @@ import {
   TinyCloudSession,
   KVService,
   IKVService,
+  HooksService,
+  IHooksService,
   SQLService,
   ISQLService,
   DuckDbService,
@@ -26,6 +28,7 @@ export class DelegatedAccess {
   private _kv: KVService;
   private _sql: SQLService;
   private _duckdb: DuckDbService;
+  private _hooks: HooksService;
 
   constructor(
     session: TinyCloudSession,
@@ -60,6 +63,11 @@ export class DelegatedAccess {
     this._duckdb = new DuckDbService({});
     this._duckdb.initialize(this._serviceContext);
     this._serviceContext.registerService('duckdb', this._duckdb);
+
+    // Create and initialize Hooks service with same delegation context
+    this._hooks = new HooksService({});
+    this._hooks.initialize(this._serviceContext);
+    this._serviceContext.registerService('hooks', this._hooks);
 
     // Set session on context
     const serviceSession: ServiceSession = {
@@ -112,5 +120,12 @@ export class DelegatedAccess {
    */
   get duckdb(): IDuckDbService {
     return this._duckdb;
+  }
+
+  /**
+   * Hooks write-stream subscriptions on the delegated space.
+   */
+  get hooks(): IHooksService {
+    return this._hooks;
   }
 }
