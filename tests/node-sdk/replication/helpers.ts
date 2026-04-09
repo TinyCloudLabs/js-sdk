@@ -97,7 +97,6 @@ export interface KvReconExportRequest {
 export interface KvReconItem {
   key: string;
   kind: string;
-  seq?: number;
   invocationId?: string;
 }
 
@@ -105,6 +104,24 @@ export interface KvReconExportResponse {
   spaceId: string;
   prefix?: string;
   items: KvReconItem[];
+}
+
+export interface KvReconCompareRequest {
+  peerUrl: string;
+  spaceId: string;
+  prefix?: string;
+}
+
+export interface KvReconCompareResponse {
+  spaceId: string;
+  prefix?: string;
+  peerUrl: string;
+  matches: boolean;
+  localItemCount: number;
+  peerItemCount: number;
+  localFingerprint: string;
+  peerFingerprint: string;
+  firstMismatchKey?: string | null;
 }
 
 export interface SqlReplicationExportResponse {
@@ -511,4 +528,38 @@ export async function reconExportFromPeer(
   }
 
   return (await response.json()) as KvReconExportResponse;
+}
+
+export async function reconCompareFromPeer(
+  cluster: RunningCluster,
+  targetNodeName: string,
+  request: KvReconCompareRequest,
+  sessions: ReplicationPullSessions
+): Promise<KvReconCompareResponse> {
+  const node = getClusterNode(cluster, targetNodeName);
+  const targetHeaders = await buildSessionHeaders(
+    "Replication-Session",
+    sessions.target
+  );
+  const peerHeaders = await buildSessionHeaders(
+    "Peer-Replication-Session",
+    sessions.peer
+  );
+  const response = await fetch(`${node.url}/replication/recon/compare`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...targetHeaders,
+      ...peerHeaders,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `KV recon compare failed on ${targetNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as KvReconCompareResponse;
 }
