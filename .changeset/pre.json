@@ -19,6 +19,8 @@
   "changesets": [
     "bump-siwe-v3",
     "fix-siwe-domain",
-    "move-polyfills-to-devdeps"
+    "move-polyfills-to-devdeps",
+    "preserve-siwe-upgrade",
+    "top-level-nonce-config"
   ]
 }
