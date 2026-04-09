@@ -54,6 +54,7 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 ### Auth / Recovery
 
 - requires a replication session handshake before export begins
+- opens a replication session on a first-contact peer by carrying the supporting delegation chain
 - blocks unauthenticated export and reconcile pull-through
 - preserves local authored facts during authority outage
 - resumes convergence after reconnect
@@ -69,6 +70,7 @@ tests/node-sdk/
 └── replication/
     ├── cluster.ts
     ├── auth-session.test.ts
+    ├── auth-first-contact.test.ts
     ├── helpers.ts
     ├── kv-baseline.test.ts
     ├── kv-delete-reconcile.test.ts
