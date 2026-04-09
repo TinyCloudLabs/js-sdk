@@ -574,6 +574,7 @@ export class TinyCloudNode {
       autoCreateSpace: this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: this.config.spaceCreationHandler,
+      siweConfig: this.config.siweConfig,
     });
 
     // Create TinyCloud instance
@@ -618,6 +619,7 @@ export class TinyCloudNode {
       autoCreateSpace: this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: this.config.spaceCreationHandler,
+      siweConfig: this.config.siweConfig,
     });
 
     this.tc = new TinyCloud(this.auth);
