@@ -128,9 +128,14 @@ describe("Replication KV Split-Driven Replay", () => {
         expect(firstSplitReconcile.spaceId).toBe(authority.spaceId);
         expect(firstSplitReconcile.peerUrl).toBe(authorityNode.url);
         expect(firstSplitReconcile.prefix).toBe(scopeRoot);
+        expect(firstSplitReconcile.childStartAfter ?? null).toBeNull();
+        expect(firstSplitReconcile.childLimit).toBe(1);
         expect(firstSplitReconcile.matches).toBe(false);
+        expect(firstSplitReconcile.hasMore).toBe(true);
+        expect(firstSplitReconcile.nextChildStartAfter).toBeDefined();
         expect(firstSplitReconcile.attemptedChildren).toBe(1);
         expect(firstSplitReconcile.reconciledChildren).toBe(1);
+        expect(firstSplitReconcile.children.length).toBe(1);
 
         const firstSplitChildren = splitChildMap(firstSplitReconcile.children);
         expect(firstSplitChildren.get(primaryScope)?.beforeStatus).toBe(
@@ -143,14 +148,7 @@ describe("Replication KV Split-Driven Replay", () => {
         expect(firstSplitChildren.get(primaryScope)?.appliedEvents).toBeGreaterThan(
           0
         );
-        expect(firstSplitChildren.get(siblingScope)?.beforeStatus).toBe(
-          "local-missing"
-        );
-        expect(firstSplitChildren.get(siblingScope)?.afterStatus).toBe(
-          "local-missing"
-        );
-        expect(firstSplitChildren.get(siblingScope)?.appliedSequences).toBe(0);
-        expect(firstSplitChildren.get(siblingScope)?.appliedEvents).toBe(0);
+        expect(firstSplitChildren.has(siblingScope)).toBe(false);
 
         await waitForCondition("primary KV available on node-b", async () => {
           const result = await replica.kv.get<{ scope: string }>(
@@ -182,6 +180,8 @@ describe("Replication KV Split-Driven Replay", () => {
         expect(compareAfterFirstChildren.get(siblingScope)?.status).toBe(
           "local-missing"
         );
+        const secondPageCursor = firstSplitReconcile.nextChildStartAfter;
+        expect(secondPageCursor).toBeDefined();
 
         const secondSplitReconcile = await reconcileSplitFromPeer(
           cluster,
@@ -190,6 +190,7 @@ describe("Replication KV Split-Driven Replay", () => {
             peerUrl: authorityNode.url,
             spaceId: authority.spaceId!,
             prefix: scopeRoot,
+            childStartAfter: secondPageCursor === null ? undefined : secondPageCursor,
             childLimit: 1,
           },
           {
@@ -201,15 +202,16 @@ describe("Replication KV Split-Driven Replay", () => {
         expect(secondSplitReconcile.spaceId).toBe(authority.spaceId);
         expect(secondSplitReconcile.peerUrl).toBe(authorityNode.url);
         expect(secondSplitReconcile.prefix).toBe(scopeRoot);
+        expect(secondSplitReconcile.childStartAfter).toBe(secondPageCursor);
+        expect(secondSplitReconcile.childLimit).toBe(1);
         expect(secondSplitReconcile.matches).toBe(true);
+        expect(secondSplitReconcile.hasMore).toBe(false);
+        expect(secondSplitReconcile.nextChildStartAfter ?? null).toBeNull();
         expect(secondSplitReconcile.attemptedChildren).toBe(1);
         expect(secondSplitReconcile.reconciledChildren).toBe(1);
+        expect(secondSplitReconcile.children.length).toBe(1);
 
         const splitChildren = splitChildMap(secondSplitReconcile.children);
-        expect(splitChildren.get(primaryScope)?.beforeStatus).toBe("match");
-        expect(splitChildren.get(primaryScope)?.afterStatus).toBe("match");
-        expect(splitChildren.get(primaryScope)?.appliedSequences).toBe(0);
-        expect(splitChildren.get(primaryScope)?.appliedEvents).toBe(0);
         expect(splitChildren.get(siblingScope)?.beforeStatus).toBe(
           "local-missing"
         );
@@ -220,6 +222,7 @@ describe("Replication KV Split-Driven Replay", () => {
         expect(splitChildren.get(siblingScope)?.appliedEvents).toBeGreaterThan(
           0
         );
+        expect(splitChildren.has(primaryScope)).toBe(false);
 
         await waitForCondition("sibling KV available on node-b", async () => {
           const result = await replica.kv.get<{ scope: string }>(
