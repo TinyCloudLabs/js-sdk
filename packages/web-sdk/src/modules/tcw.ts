@@ -270,6 +270,7 @@ export class TinyCloudWeb {
   get sharing(): ISharingService { return this.node.sharing; }
   get delegations(): DelegationManager { return this.node.delegationManager; }
   get capabilityRegistry(): ICapabilityKeyRegistry { return this.node.capabilityRegistry; }
+  get spaceId(): string | undefined { return this._node?.spaceId; }
 
   space(nameOrUri: string): ISpace { return this.spaces.get(nameOrUri); }
   get kvPrefix(): string { return this.config.kvPrefix || ""; }

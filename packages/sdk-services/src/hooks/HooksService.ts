@@ -5,7 +5,7 @@ import type {
   ServiceHeaders,
   Result,
 } from "../types";
-import { err, ok } from "../types";
+import { ErrorCodes, err, ok, serviceError } from "../types";
 import { authRequiredError, wrapError } from "../errors";
 import type { IHooksService } from "./IHooksService";
 import type {
@@ -157,6 +157,17 @@ export class HooksService extends BaseService implements IHooksService {
   ): Promise<Result<HookWebhookRecord>> {
     if (!this.requireAuth()) {
       return err(authRequiredError("hooks"));
+    }
+
+    if (typeof webhook.secret !== "string" || webhook.secret.trim().length === 0) {
+      return err(
+        serviceError(
+          ErrorCodes.INVALID_INPUT,
+          "Webhook secret is required",
+          "hooks",
+          { meta: { field: "secret" } },
+        ),
+      );
     }
 
     try {

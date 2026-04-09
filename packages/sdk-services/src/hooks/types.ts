@@ -16,7 +16,7 @@ export interface HookWebhookScope {
 
 export interface HookWebhookRegistration extends HookWebhookScope {
   callbackUrl: string;
-  secret?: string;
+  secret: string;
 }
 
 export interface HookWebhookRecord extends HookWebhookScope {
