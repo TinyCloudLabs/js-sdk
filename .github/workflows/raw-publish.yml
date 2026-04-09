@@ -75,6 +75,12 @@ jobs:
               name=$(node -p "require('./$dir/package.json').name")
               version=$(node -p "require('./$dir/package.json').version")
 
+              # Skip if this version is already published
+              if npm view "$name@$version" version >/dev/null 2>&1; then
+                echo "  - $name@$version (SKIP — already published)"
+                continue
+              fi
+
               # Auto-detect tag from version, or use override
               if [ -n "${{ inputs.tag }}" ]; then
                 tag="${{ inputs.tag }}"
@@ -106,6 +112,12 @@ jobs:
               name=$(node -p "require('./$dir/package.json').name")
               version=$(node -p "require('./$dir/package.json').version")
 
+              # Skip if this version is already published
+              if npm view "$name@$version" version >/dev/null 2>&1; then
+                echo "Skipping $name@$version — already published"
+                continue
+              fi
+
               # Auto-detect tag from version, or use override
               if [ -n "${{ inputs.tag }}" ]; then
                 tag="${{ inputs.tag }}"
@@ -131,7 +143,16 @@ jobs:
         run: |
           for dir in packages/*/; do
             if [ -f "$dir/package.json" ] && ! grep -q '"private": true' "$dir/package.json"; then
-              echo "=== $dir ==="
+              name=$(node -p "require('./$dir/package.json').name")
+              version=$(node -p "require('./$dir/package.json').version")
+
+              # Skip if this version is already published
+              if npm view "$name@$version" version >/dev/null 2>&1; then
+                echo "=== $dir (SKIP — $name@$version already published) ==="
+                continue
+              fi
+
+              echo "=== $dir (would publish $name@$version) ==="
               (cd "$dir" && npm pack --dry-run)
             fi
           done
