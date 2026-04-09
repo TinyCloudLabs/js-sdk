@@ -70,6 +70,12 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - pages grandchild children with `childLimit: 1` so only one nested child is repaired per pass
 - proves the coarse child and root remain mismatched until the remaining grandchild is replayed
 
+### KV Split Child Pagination
+
+- pages wide child lists on `recon/split` and `recon/split/compare` with `childStartAfter` and `childLimit`
+- proves `hasMore` and `nextChildStartAfter` advance deterministically across child-page boundaries
+- proves both split surfaces traverse the same child ordering across repeated requests
+
 ### KV Recon Bounded Windows
 
 - pages scoped KV inventory through authenticated `recon/export` and `recon/compare` with `startAfter` and `limit`
@@ -130,6 +136,7 @@ tests/node-sdk/
     ├── kv-recon-split-compare.test.ts
     ├── kv-recon-split-reconcile.test.ts
     ├── kv-recon-split-grandchild.test.ts
+    ├── kv-recon-split-pagination.test.ts
     ├── kv-recon-split.test.ts
     ├── kv-recon-window.test.ts
     ├── sql-baseline.test.ts
