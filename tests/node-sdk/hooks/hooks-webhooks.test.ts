@@ -22,6 +22,7 @@ const SQL_DB_NAME = `phase4_sql_${PHASE4_STAMP}`;
 const SQL_TABLE_NAME = `phase4_sql_items_${PHASE4_STAMP}`;
 const DUCKDB_DB_NAME = `phase4_duckdb_${PHASE4_STAMP}`;
 const DUCKDB_TABLE_NAME = `phase4_duckdb_items_${PHASE4_STAMP}`;
+let duckDbRowId = 1;
 
 describe("Hooks webhooks integration", () => {
   let alice: TinyCloudNode;
@@ -434,10 +435,11 @@ async function putDuckDbValue(
   node: TinyCloudNode,
   label: string,
 ): Promise<void> {
+  const id = duckDbRowId++;
   const result = await node.duckdb
     .db(DUCKDB_DB_NAME)
     .execute(
-      `INSERT INTO ${DUCKDB_TABLE_NAME} (id, label) VALUES (${Date.now()}, '${label}')`,
+      `INSERT INTO ${DUCKDB_TABLE_NAME} (id, label) VALUES (${id}, '${label}')`,
     );
   expect(result.ok).toBe(true);
   if (!result.ok) {
