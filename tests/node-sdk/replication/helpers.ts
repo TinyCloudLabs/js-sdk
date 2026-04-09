@@ -121,6 +121,8 @@ export interface KvReconCompareRequest {
 export interface KvReconSplitRequest {
   spaceId: string;
   prefix?: string;
+  childStartAfter?: string;
+  childLimit?: number;
 }
 
 export interface KvReconSplitChild {
@@ -133,8 +135,12 @@ export interface KvReconSplitChild {
 export interface KvReconSplitResponse {
   spaceId: string;
   prefix?: string;
+  childStartAfter?: string;
+  childLimit?: number;
   itemCount: number;
   fingerprint: string;
+  hasMore?: boolean;
+  nextChildStartAfter?: string | null;
   children: KvReconSplitChild[];
 }
 
@@ -142,6 +148,8 @@ export interface KvReconSplitCompareRequest {
   peerUrl: string;
   spaceId: string;
   prefix?: string;
+  childStartAfter?: string;
+  childLimit?: number;
 }
 
 export interface KvReconSplitReconcileRequest {
@@ -166,7 +174,11 @@ export interface KvReconSplitCompareResponse {
   spaceId: string;
   prefix?: string;
   peerUrl: string;
+  childStartAfter?: string;
+  childLimit?: number;
   matches: boolean;
+  hasMore?: boolean;
+  nextChildStartAfter?: string | null;
   children: KvReconSplitChildComparison[];
 }
 
