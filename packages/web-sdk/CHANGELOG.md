@@ -1,5 +1,14 @@
 # @tinycloudlabs/web-sdk
 
+## 2.0.4-beta.0
+
+### Patch Changes
+
+- fb1d3fd: Trigger republish after CI auth fix — nonce passthrough fix shipped in prior beta was not published to npm due to broken publish step.
+- Updated dependencies [fb1d3fd]
+  - @tinycloud/sdk-core@2.0.4-beta.0
+  - @tinycloud/node-sdk@2.0.4-beta.0
+
 ## 2.0.3
 
 ### Patch Changes
