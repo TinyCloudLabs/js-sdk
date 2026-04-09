@@ -91,6 +91,13 @@ jobs:
             fi
           done
 
+      - name: Setup Node for npm publish
+        if: ${{ !inputs.dry_run }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
       - name: Publish to npm
         if: ${{ !inputs.dry_run }}
         run: |
@@ -117,7 +124,7 @@ jobs:
             fi
           done
         env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Dry run pack
         if: ${{ inputs.dry_run }}

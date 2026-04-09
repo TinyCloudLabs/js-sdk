@@ -57,6 +57,13 @@ jobs:
         env:
           BUILD_SETUP_ENABLED: true
 
+      - name: Setup Node for npm publish
+        if: steps.check.outputs.pending != '0'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
       - name: Publish beta to npm
         if: steps.check.outputs.pending != '0'
         run: |
@@ -91,7 +98,7 @@ jobs:
             fi
           done
         env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Commit beta version bumps
         if: steps.check.outputs.pending != '0'
@@ -143,6 +150,12 @@ jobs:
         env:
           BUILD_SETUP_ENABLED: true
 
+      - name: Setup Node for npm publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
       - name: Publish stable to npm
         run: |
           # Resolve workspace:* to real versions before publishing
@@ -176,7 +189,7 @@ jobs:
             fi
           done
         env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Re-enter pre mode for next beta cycle
         run: bun changeset pre enter beta
