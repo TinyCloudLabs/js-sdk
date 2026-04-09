@@ -96,6 +96,57 @@ export interface KvReconExportRequest {
   limit?: number;
 }
 
+export interface KvStateRequest {
+  spaceId: string;
+  prefix?: string;
+  keys: string[];
+}
+
+export interface KvStateStatusItem {
+  key: string;
+  status: "present" | "deleted" | "absent";
+  seq?: number;
+  invocationId?: string | null;
+  deletedInvocationId?: string | null;
+  valueHash?: string | null;
+}
+
+export interface KvStateResponse {
+  spaceId: string;
+  prefix?: string;
+  items: KvStateStatusItem[];
+}
+
+export interface KvStateCompareRequest {
+  peerUrl: string;
+  spaceId: string;
+  prefix?: string;
+  startAfter?: string;
+  limit?: number;
+}
+
+export interface KvStateCompareItem {
+  key: string;
+  kind: string;
+  localInvocationId?: string | null;
+  peerStatus: "present" | "deleted" | "absent";
+  peerSeq?: number | null;
+  peerInvocationId?: string | null;
+  peerDeletedInvocationId?: string | null;
+  peerValueHash?: string | null;
+}
+
+export interface KvStateCompareResponse {
+  spaceId: string;
+  prefix?: string;
+  peerUrl: string;
+  startAfter?: string;
+  limit?: number;
+  hasMore?: boolean;
+  nextStartAfter?: string | null;
+  items: KvStateCompareItem[];
+}
+
 export interface KvReconItem {
   key: string;
   kind: string;
@@ -631,6 +682,66 @@ export async function reconExportFromPeer(
   }
 
   return (await response.json()) as KvReconExportResponse;
+}
+
+export async function kvStateFromPeer(
+  cluster: RunningCluster,
+  sourceNodeName: string,
+  request: KvStateRequest,
+  session?: TinyCloudReplicationSession
+): Promise<KvStateResponse> {
+  const node = getClusterNode(cluster, sourceNodeName);
+  const headers = await buildSessionHeaders("Replication-Session", session);
+  const response = await fetch(`${node.url}/replication/kv/state`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `KV state export failed on ${sourceNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as KvStateResponse;
+}
+
+export async function kvStateCompareFromPeer(
+  cluster: RunningCluster,
+  targetNodeName: string,
+  request: KvStateCompareRequest,
+  sessions: ReplicationPullSessions
+): Promise<KvStateCompareResponse> {
+  const node = getClusterNode(cluster, targetNodeName);
+  const targetHeaders = await buildSessionHeaders(
+    "Replication-Session",
+    sessions.target
+  );
+  const peerHeaders = await buildSessionHeaders(
+    "Peer-Replication-Session",
+    sessions.peer
+  );
+  const response = await fetch(`${node.url}/replication/kv/state/compare`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...targetHeaders,
+      ...peerHeaders,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `KV state compare failed on ${targetNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as KvStateCompareResponse;
 }
 
 export async function reconSplitFromPeer(

@@ -94,6 +94,19 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - reads provisional local state before canonical commit arrives
 - later observes converged canonical state on all nodes
 
+### KV State Proof
+
+- distinguishes a present KV key from a deleted key and an absent key through an authenticated `kv/state` endpoint
+- proves a peer can ask the authority host for key state after partial reconciliation
+- keeps deleted-key status distinct from never-seen-key status
+
+### KV State Compare
+
+- compares local KV state against a peer through an authenticated `kv/state/compare` endpoint
+- proves a present key reports `peerStatus: present`
+- proves a key deleted on the peer but still locally visible reports `peerStatus: deleted`
+- proves a local-only key reports `peerStatus: absent`
+
 ### SQLite Canonical Replication
 
 - creates a replicated table with an explicit primary key
@@ -139,6 +152,8 @@ tests/node-sdk/
     ├── kv-offline-provisional.test.ts
     ├── kv-peer-serving-enforcement.test.ts
     ├── kv-peer-serving-reconcile.test.ts
+    ├── kv-state.test.ts
+    ├── kv-state-compare.test.ts
     ├── kv-recon-compare.test.ts
     ├── kv-reconcile.test.ts
     ├── kv-restart-catchup.test.ts
