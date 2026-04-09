@@ -57,6 +57,11 @@ export interface NodeUserAuthorizationConfig {
   enablePublicSpace?: boolean;
   /** WASM bindings for cryptographic operations. Required. */
   wasmBindings: IWasmBindings;
+  /**
+   * SIWE nonce override. If omitted, the WASM layer generates a random nonce.
+   * If `siweConfig.nonce` is also provided, `siweConfig.nonce` wins.
+   */
+  nonce?: string;
   /** Optional SIWE configuration overrides (e.g., nonce for server-provided nonces) */
   siweConfig?: SiweConfig;
 }
@@ -107,6 +112,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly spaceCreationHandler?: ISpaceCreationHandler;
   private readonly tinycloudHosts: string[];
   private readonly enablePublicSpace: boolean;
+  private readonly nonce?: string;
   private readonly siweConfig?: SiweConfig;
   private readonly wasm: IWasmBindings;
 
@@ -166,6 +172,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.spaceCreationHandler = config.spaceCreationHandler;
     this.tinycloudHosts = config.tinycloudHosts ?? ["https://node.tinycloud.xyz"];
     this.enablePublicSpace = config.enablePublicSpace ?? true;
+    this.nonce = config.nonce;
     this.siweConfig = config.siweConfig;
 
     // Initialize session manager via WASM bindings
@@ -192,17 +199,24 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /**
-   * Build SIWE overrides from siweConfig.
+   * Build SIWE overrides from the top-level nonce and siweConfig.
+   * - Top-level `nonce` is seeded first so `siweConfig.nonce` wins if both are set.
    * - statement is prepended to the default statement
    * - resources are appended to the default resources
    * - uri triggers a warning (overwriting delegation target)
    * - all other fields override directly
    */
   private buildSiweOverrides(): Record<string, unknown> {
-    if (!this.siweConfig) return { uri: this.uri };
+    // Seed with top-level nonce; siweConfig fields layered on top take precedence.
+    const base: Record<string, unknown> = { uri: this.uri };
+    if (this.nonce !== undefined) {
+      base.nonce = this.nonce;
+    }
+
+    if (!this.siweConfig) return base;
 
     const { statement, resources, uri, ...rest } = this.siweConfig;
-    const overrides: Record<string, unknown> = { uri: this.uri, ...rest };
+    const overrides: Record<string, unknown> = { ...base, ...rest };
 
     if (statement) {
       overrides.statement = this.statement

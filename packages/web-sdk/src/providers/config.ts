@@ -11,6 +11,11 @@ import type { RPCProvider, ServerRoutes } from "./types";
 export interface ClientConfig {
   /** Connection to a cryptographic keypair and/or network. */
   providers?: ClientProviders;
+  /**
+   * SIWE nonce override. If omitted, the WASM layer generates a random nonce.
+   * If `siweConfig.nonce` is also provided, `siweConfig.nonce` wins.
+   */
+  nonce?: string;
   /** Optional session configuration for the SIWE message. */
   siweConfig?: SiweConfig;
   /** Whether or not ENS resolution is enabled. True means resolve all on client. */
