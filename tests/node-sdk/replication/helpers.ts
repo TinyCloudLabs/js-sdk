@@ -149,6 +149,7 @@ export interface KvReconSplitReconcileRequest {
   spaceId: string;
   prefix?: string;
   childLimit?: number;
+  maxDepth?: number;
 }
 
 export interface KvReconSplitChildComparison {

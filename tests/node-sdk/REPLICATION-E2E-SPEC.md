@@ -64,6 +64,12 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - proves a broad-scope reconcile skips an already-matched child prefix and repairs only the remaining missing child prefix
 - proves root split comparison converges after the selective replay
 
+### KV Split-Driven Grandchild Replay
+
+- descends from a broad root scope into a deeper mismatched grandchild prefix under one coarse child via `maxDepth: 2`
+- pages grandchild children with `childLimit: 1` so only one nested child is repaired per pass
+- proves the coarse child and root remain mismatched until the remaining grandchild is replayed
+
 ### KV Recon Bounded Windows
 
 - pages scoped KV inventory through authenticated `recon/export` and `recon/compare` with `startAfter` and `limit`
@@ -123,6 +129,7 @@ tests/node-sdk/
     ├── kv-recon-export.test.ts
     ├── kv-recon-split-compare.test.ts
     ├── kv-recon-split-reconcile.test.ts
+    ├── kv-recon-split-grandchild.test.ts
     ├── kv-recon-split.test.ts
     ├── kv-recon-window.test.ts
     ├── sql-baseline.test.ts
