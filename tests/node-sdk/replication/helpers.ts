@@ -118,6 +118,26 @@ export interface KvReconCompareRequest {
   limit?: number;
 }
 
+export interface KvReconSplitRequest {
+  spaceId: string;
+  prefix?: string;
+}
+
+export interface KvReconSplitChild {
+  prefix: string;
+  itemCount: number;
+  fingerprint: string;
+  leaf: boolean;
+}
+
+export interface KvReconSplitResponse {
+  spaceId: string;
+  prefix?: string;
+  itemCount: number;
+  fingerprint: string;
+  children: KvReconSplitChild[];
+}
+
 export interface KvReconCompareResponse {
   spaceId: string;
   prefix?: string;
@@ -538,6 +558,32 @@ export async function reconExportFromPeer(
   }
 
   return (await response.json()) as KvReconExportResponse;
+}
+
+export async function reconSplitFromPeer(
+  cluster: RunningCluster,
+  sourceNodeName: string,
+  request: KvReconSplitRequest,
+  session?: TinyCloudReplicationSession
+): Promise<KvReconSplitResponse> {
+  const node = getClusterNode(cluster, sourceNodeName);
+  const headers = await buildSessionHeaders("Replication-Session", session);
+  const response = await fetch(`${node.url}/replication/recon/split`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `KV recon split failed on ${sourceNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as KvReconSplitResponse;
 }
 
 export async function reconCompareFromPeer(
