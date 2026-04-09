@@ -73,6 +73,7 @@ tests/node-sdk/
     ├── auth-revocation.test.ts
     ├── auth-session.test.ts
     ├── auth-first-contact.test.ts
+    ├── auth-recovery.test.ts
     ├── helpers.ts
     ├── kv-baseline.test.ts
     ├── kv-delete-reconcile.test.ts
@@ -90,7 +91,7 @@ tests/node-sdk/
 
 Later stages should add:
 
-- `auth-recovery.test.ts` for full auth-sync and recovery semantics beyond session gating
+- `auth-recovery-propagation.test.ts` for broader auth-fact replay and recovery semantics beyond session gating
 
 ---
 
