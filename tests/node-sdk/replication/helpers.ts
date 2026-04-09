@@ -156,6 +156,7 @@ export interface KvReconSplitReconcileRequest {
   peerUrl: string;
   spaceId: string;
   prefix?: string;
+  childStartAfter?: string;
   childLimit?: number;
   maxDepth?: number;
 }
@@ -194,7 +195,11 @@ export interface KvReconSplitReconcileResponse {
   spaceId: string;
   prefix?: string;
   peerUrl: string;
+  childStartAfter?: string;
+  childLimit?: number;
   matches: boolean;
+  hasMore?: boolean;
+  nextChildStartAfter?: string | null;
   attemptedChildren: number;
   reconciledChildren: number;
   children: KvReconSplitReconcileChildResult[];

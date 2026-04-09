@@ -64,6 +64,12 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - proves a broad-scope reconcile skips an already-matched child prefix and repairs only the remaining missing child prefix
 - proves root split comparison converges after the selective replay
 
+### KV Split-Driven Reconcile Pagination
+
+- pages child-level replay on `reconcile/split` with `childStartAfter` and `childLimit`
+- proves a wide root child set can be repaired across multiple paged reconcile calls
+- proves peer-missing child semantics remain unchanged while local-missing children are replayed
+
 ### KV Split-Driven Grandchild Replay
 
 - descends from a broad root scope into a deeper mismatched grandchild prefix under one coarse child via `maxDepth: 2`
@@ -137,6 +143,7 @@ tests/node-sdk/
     ├── kv-recon-split-reconcile.test.ts
     ├── kv-recon-split-grandchild.test.ts
     ├── kv-recon-split-pagination.test.ts
+    ├── kv-recon-split-reconcile-pagination.test.ts
     ├── kv-recon-split.test.ts
     ├── kv-recon-window.test.ts
     ├── sql-baseline.test.ts
