@@ -47,9 +47,31 @@ export class UnsupportedFeatureError extends Error {
   }
 }
 
+export interface NodeServicesInfo {
+  kv: boolean;
+  delegation: boolean;
+  sharing: boolean;
+  sql: boolean;
+  duckdb: boolean;
+}
+
+export interface NodeReplicationInfo {
+  supported: boolean;
+  enabled: boolean;
+  recon: boolean;
+  authSync: boolean;
+  authoredFactExchange: boolean;
+  notifications: boolean;
+  snapshots: boolean;
+}
+
 export interface NodeInfo {
   features: string[];
   quotaUrl?: string;
+  rolesSupported?: string[];
+  rolesEnabled?: string[];
+  services?: NodeServicesInfo;
+  replication?: NodeReplicationInfo;
 }
 
 export async function checkNodeInfo(
@@ -75,6 +97,10 @@ export async function checkNodeInfo(
     version: string;
     features: string[];
     quota_url?: string;
+    rolesSupported?: string[];
+    rolesEnabled?: string[];
+    services?: NodeServicesInfo;
+    replication?: NodeReplicationInfo;
   };
 
   if (sdkProtocol !== data.protocol) {
@@ -89,5 +115,9 @@ export async function checkNodeInfo(
   return {
     features: data.features ?? [],
     quotaUrl: data.quota_url,
+    rolesSupported: data.rolesSupported ?? [],
+    rolesEnabled: data.rolesEnabled ?? [],
+    services: data.services,
+    replication: data.replication,
   };
 }

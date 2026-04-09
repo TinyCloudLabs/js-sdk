@@ -75,6 +75,14 @@ export {
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
 } from "./TinyCloudNode";
+export type {
+  TinyCloudKVReplicationScope,
+  TinyCloudSqlReplicationScope,
+  TinyCloudReplicationScope,
+  TinyCloudReplicationSession,
+  OpenReplicationSessionParams,
+  OpenReplicationSessionResult,
+} from "./TinyCloudNode";
 
 // Capability-chain primitives (spec: .claude/specs/capability-chain.md).
 // Re-exported here so TinyCloudWeb and other consumers can pass
