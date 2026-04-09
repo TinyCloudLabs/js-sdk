@@ -220,6 +220,7 @@ export interface TinyCloudReplicationSession {
   host: string;
   scope: TinyCloudReplicationScope;
   delegationHeader: { Authorization: string };
+  supportingDelegations: string[];
   delegationCid: string;
   spaceId: string;
   verificationMethod: string;
@@ -717,21 +718,11 @@ export class TinyCloudNode {
       signature,
     });
 
-    const activateResult = await activateSessionWithHost(
-      host,
-      scopedSession.delegationHeader
-    );
-
-    if (!activateResult.success) {
-      throw new Error(
-        `Failed to activate replication sync delegation: ${activateResult.error}`
-      );
-    }
-
     return {
       host,
       scope,
       delegationHeader: scopedSession.delegationHeader,
+      supportingDelegations: [session.delegationHeader.Authorization],
       delegationCid: scopedSession.delegationCid,
       spaceId,
       verificationMethod: session.verificationMethod,

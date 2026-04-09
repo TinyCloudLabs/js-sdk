@@ -189,11 +189,13 @@ export async function openTransportSession(
           spaceId: session.spaceId,
           service: "kv",
           prefix: session.scope.prefix,
+          supportingDelegations: session.supportingDelegations,
         }
       : {
           spaceId: session.spaceId,
           service: "sql",
           dbName: session.scope.dbName,
+          supportingDelegations: session.supportingDelegations,
         };
 
   const response = await fetch(`${session.host}/replication/session/open`, {
