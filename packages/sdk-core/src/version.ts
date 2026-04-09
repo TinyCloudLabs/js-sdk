@@ -58,6 +58,7 @@ export interface NodeServicesInfo {
 export interface NodeReplicationInfo {
   supported: boolean;
   enabled: boolean;
+  peerServing: boolean;
   recon: boolean;
   authSync: boolean;
   authoredFactExchange: boolean;

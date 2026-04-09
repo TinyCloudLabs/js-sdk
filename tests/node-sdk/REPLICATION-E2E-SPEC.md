@@ -30,7 +30,8 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - writes a KV value through `node-a`
 - waits for the value to appear through `node-b`
 - proves catch-up still works after a temporary disconnect and restart
-- proves a peer-serving hop from `node-b` into `node-c`
+- proves a host peer-serving hop from `node-b` into `node-c`
+- proves replica peer-serving is denied by default and only enabled when explicitly opted in
 
 ### KV Offline / Provisional
 
@@ -72,6 +73,7 @@ tests/node-sdk/
     ├── kv-baseline.test.ts
     ├── kv-delete-reconcile.test.ts
     ├── kv-offline-provisional.test.ts
+    ├── kv-peer-serving-enforcement.test.ts
     ├── kv-peer-serving-reconcile.test.ts
     ├── kv-reconcile.test.ts
     ├── kv-restart-catchup.test.ts

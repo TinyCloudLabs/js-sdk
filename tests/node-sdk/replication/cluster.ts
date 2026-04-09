@@ -72,6 +72,10 @@ interface AssignedClusterNodeConfig extends ClusterNodeConfig {
   prometheusPort: number;
 }
 
+function replicationRoleEnv(role: ClusterNodeRole): "host" | "replica" {
+  return role === "replica" ? "replica" : "host";
+}
+
 function repoRootFromThisFile(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 }
@@ -311,6 +315,12 @@ async function startNode(
     TINYCLOUD_STORAGE_DATADIR: dataDir,
     TINYCLOUD_STORAGE_DATABASE: `sqlite:${join(dataDir, "caps.db")}`,
     TINYCLOUD_KEYS_TYPE: "Static",
+    TINYCLOUD_REPLICATION_ROLE:
+      config.env?.TINYCLOUD_REPLICATION_ROLE ?? replicationRoleEnv(config.role),
+    ...(config.role === "replica" &&
+    config.env?.TINYCLOUD_REPLICATION_PEER_SERVING === undefined
+      ? { TINYCLOUD_REPLICATION_PEER_SERVING: "false" }
+      : {}),
     TINYCLOUD_KEYS_SECRET:
       config.env?.TINYCLOUD_KEYS_SECRET ??
       base64UrlSecret(config.port - DEFAULT_NODES[0].port + 1),
