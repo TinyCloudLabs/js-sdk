@@ -45,6 +45,12 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - proves mismatch before replay reconcile and match after reconcile
 - proves sibling prefixes remain isolated when compare is run on a narrower prefix
 
+### KV Recon Split
+
+- summarizes immediate KV child scopes through an authenticated `recon/split` endpoint
+- proves a partial replay reconcile can make one child prefix match while another remains missing
+- proves the root split summary converges after both child prefixes are replayed
+
 ### KV Recon Bounded Windows
 
 - pages scoped KV inventory through authenticated `recon/export` and `recon/compare` with `startAfter` and `limit`
@@ -102,6 +108,7 @@ tests/node-sdk/
     ├── kv-reconcile.test.ts
     ├── kv-restart-catchup.test.ts
     ├── kv-recon-export.test.ts
+    ├── kv-recon-split.test.ts
     ├── kv-recon-window.test.ts
     ├── sql-baseline.test.ts
     ├── sql-reconcile.test.ts
