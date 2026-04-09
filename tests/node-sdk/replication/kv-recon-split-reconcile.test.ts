@@ -5,7 +5,6 @@ import {
   getClusterNode,
   openKvReplicationSession,
   reconSplitCompareFromPeer,
-  reconcileFromPeer,
   reconcileSplitFromPeer,
   uniqueReplicationPrefix,
   waitForCondition,
@@ -74,37 +73,6 @@ describe("Replication KV Split-Driven Replay", () => {
           })
         ).toMatchObject({ ok: true });
 
-        const primaryReconcile = await reconcileFromPeer(
-          cluster,
-          "node-b",
-          {
-            peerUrl: authorityNode.url,
-            spaceId: authority.spaceId!,
-            prefix: primaryScope,
-          },
-          {
-            target: await openKvReplicationSession(
-              replica,
-              replicaNode.url,
-              primaryScope
-            ),
-            peer: await openKvReplicationSession(
-              authority,
-              authorityNode.url,
-              primaryScope
-            ),
-          }
-        );
-        expect(primaryReconcile.appliedSequences).toBeGreaterThan(0);
-        expect(primaryReconcile.appliedEvents).toBeGreaterThan(0);
-
-        await waitForCondition("primary KV available on node-b", async () => {
-          const result = await replica.kv.get<{ scope: string }>(
-            primaryProfileKey
-          );
-          return result.ok && result.data.data.scope === "primary";
-        });
-
         const rootTargetSession = await openKvReplicationSession(
           replica,
           replicaNode.url,
@@ -131,8 +99,10 @@ describe("Replication KV Split-Driven Replay", () => {
         );
         const compareBeforeChildren = splitChildMap(compareBefore.children);
         expect(compareBefore.matches).toBe(false);
-        expect(compareBeforeChildren.get(primaryScope)?.status).toBe("match");
-        expect(compareBeforeChildren.get(primaryScope)?.localItemCount).toBe(2);
+        expect(compareBeforeChildren.get(primaryScope)?.status).toBe(
+          "local-missing"
+        );
+        expect(compareBeforeChildren.get(primaryScope)?.localItemCount).toBe(0);
         expect(compareBeforeChildren.get(primaryScope)?.peerItemCount).toBe(2);
         expect(compareBeforeChildren.get(siblingScope)?.status).toBe(
           "local-missing"
@@ -140,14 +110,14 @@ describe("Replication KV Split-Driven Replay", () => {
         expect(compareBeforeChildren.get(siblingScope)?.localItemCount).toBe(0);
         expect(compareBeforeChildren.get(siblingScope)?.peerItemCount).toBe(1);
 
-        const splitReconcile = await reconcileSplitFromPeer(
+        const firstSplitReconcile = await reconcileSplitFromPeer(
           cluster,
           "node-b",
           {
             peerUrl: authorityNode.url,
             spaceId: authority.spaceId!,
             prefix: scopeRoot,
-            childLimit: 10,
+            childLimit: 1,
           },
           {
             target: rootTargetSession,
@@ -155,14 +125,87 @@ describe("Replication KV Split-Driven Replay", () => {
           }
         );
 
-        expect(splitReconcile.spaceId).toBe(authority.spaceId);
-        expect(splitReconcile.peerUrl).toBe(authorityNode.url);
-        expect(splitReconcile.prefix).toBe(scopeRoot);
-        expect(splitReconcile.matches).toBe(true);
-        expect(splitReconcile.attemptedChildren).toBe(1);
-        expect(splitReconcile.reconciledChildren).toBe(1);
+        expect(firstSplitReconcile.spaceId).toBe(authority.spaceId);
+        expect(firstSplitReconcile.peerUrl).toBe(authorityNode.url);
+        expect(firstSplitReconcile.prefix).toBe(scopeRoot);
+        expect(firstSplitReconcile.matches).toBe(false);
+        expect(firstSplitReconcile.attemptedChildren).toBe(1);
+        expect(firstSplitReconcile.reconciledChildren).toBe(1);
 
-        const splitChildren = splitChildMap(splitReconcile.children);
+        const firstSplitChildren = splitChildMap(firstSplitReconcile.children);
+        expect(firstSplitChildren.get(primaryScope)?.beforeStatus).toBe(
+          "local-missing"
+        );
+        expect(firstSplitChildren.get(primaryScope)?.afterStatus).toBe("match");
+        expect(
+          firstSplitChildren.get(primaryScope)?.appliedSequences
+        ).toBeGreaterThan(0);
+        expect(firstSplitChildren.get(primaryScope)?.appliedEvents).toBeGreaterThan(
+          0
+        );
+        expect(firstSplitChildren.get(siblingScope)?.beforeStatus).toBe(
+          "local-missing"
+        );
+        expect(firstSplitChildren.get(siblingScope)?.afterStatus).toBe(
+          "local-missing"
+        );
+        expect(firstSplitChildren.get(siblingScope)?.appliedSequences).toBe(0);
+        expect(firstSplitChildren.get(siblingScope)?.appliedEvents).toBe(0);
+
+        await waitForCondition("primary KV available on node-b", async () => {
+          const result = await replica.kv.get<{ scope: string }>(
+            primaryProfileKey
+          );
+          return result.ok && result.data.data.scope === "primary";
+        });
+
+        const compareAfterFirst = await reconSplitCompareFromPeer(
+          cluster,
+          "node-b",
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+            prefix: scopeRoot,
+          },
+          {
+            target: rootTargetSession,
+            peer: rootPeerSession,
+          }
+        );
+        const compareAfterFirstChildren = splitChildMap(
+          compareAfterFirst.children
+        );
+        expect(compareAfterFirst.matches).toBe(false);
+        expect(compareAfterFirstChildren.get(primaryScope)?.status).toBe(
+          "match"
+        );
+        expect(compareAfterFirstChildren.get(siblingScope)?.status).toBe(
+          "local-missing"
+        );
+
+        const secondSplitReconcile = await reconcileSplitFromPeer(
+          cluster,
+          "node-b",
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+            prefix: scopeRoot,
+            childLimit: 1,
+          },
+          {
+            target: rootTargetSession,
+            peer: rootPeerSession,
+          }
+        );
+
+        expect(secondSplitReconcile.spaceId).toBe(authority.spaceId);
+        expect(secondSplitReconcile.peerUrl).toBe(authorityNode.url);
+        expect(secondSplitReconcile.prefix).toBe(scopeRoot);
+        expect(secondSplitReconcile.matches).toBe(true);
+        expect(secondSplitReconcile.attemptedChildren).toBe(1);
+        expect(secondSplitReconcile.reconciledChildren).toBe(1);
+
+        const splitChildren = splitChildMap(secondSplitReconcile.children);
         expect(splitChildren.get(primaryScope)?.beforeStatus).toBe("match");
         expect(splitChildren.get(primaryScope)?.afterStatus).toBe("match");
         expect(splitChildren.get(primaryScope)?.appliedSequences).toBe(0);
@@ -174,7 +217,9 @@ describe("Replication KV Split-Driven Replay", () => {
         expect(splitChildren.get(siblingScope)?.appliedSequences).toBeGreaterThan(
           0
         );
-        expect(splitChildren.get(siblingScope)?.appliedEvents).toBeGreaterThan(0);
+        expect(splitChildren.get(siblingScope)?.appliedEvents).toBeGreaterThan(
+          0
+        );
 
         await waitForCondition("sibling KV available on node-b", async () => {
           const result = await replica.kv.get<{ scope: string }>(
