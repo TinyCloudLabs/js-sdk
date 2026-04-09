@@ -3,9 +3,11 @@ import { startCluster } from "./cluster";
 import {
   createClusterClient,
   getClusterNode,
+  openAuthReplicationSession,
   openKvReplicationSession,
   openTransportSession,
   reconcileAuthFromPeer,
+  requestTransportSession,
   uniqueReplicationPrefix,
 } from "./helpers";
 
@@ -32,10 +34,13 @@ describe("Replication Auth Revocation Propagation", () => {
         );
         await openTransportSession(sharedSession);
 
-        const bootstrapSession = await openKvReplicationSession(
+        const bootstrapSession = await openAuthReplicationSession(
           authority,
-          authorityNode.url,
-          sharedScope
+          authorityNode.url
+        );
+        const bootstrapTargetSession = await openAuthReplicationSession(
+          authority,
+          hostNode.url
         );
         const bootstrapApply = await reconcileAuthFromPeer(
           cluster,
@@ -43,37 +48,30 @@ describe("Replication Auth Revocation Propagation", () => {
           {
             peerUrl: authorityNode.url,
             spaceId: authority.spaceId!,
-            service: "kv",
-            prefix: sharedScope,
           },
-          bootstrapSession
+          {
+            target: bootstrapTargetSession,
+            peer: bootstrapSession,
+          }
         );
 
         expect(bootstrapApply.importedDelegations).toBeGreaterThan(0);
 
-        const preRevocationOpen = await fetch(
-          `${hostNode.url}/replication/session/open`,
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              ...sharedSession.delegationHeader,
-            },
-            body: JSON.stringify({
-              spaceId: authority.spaceId,
-              service: "kv",
-              prefix: sharedScope,
-            }),
-          }
-        );
-        expect(preRevocationOpen.status).toBe(200);
+        const preRevocationOpen = await requestTransportSession(sharedSession, {
+          supportingDelegations: null,
+        });
+        expect(preRevocationOpen).toBeDefined();
+        expect(preRevocationOpen?.status).toBe(200);
 
         await authority.revokeDelegation(sharedSession.delegationCid);
 
-        const revocationSyncSession = await openKvReplicationSession(
+        const revocationSyncSession = await openAuthReplicationSession(
           authority,
-          authorityNode.url,
-          sharedScope
+          authorityNode.url
+        );
+        const revocationTargetSession = await openAuthReplicationSession(
+          authority,
+          hostNode.url
         );
         const revocationApply = await reconcileAuthFromPeer(
           cluster,
@@ -81,32 +79,22 @@ describe("Replication Auth Revocation Propagation", () => {
           {
             peerUrl: authorityNode.url,
             spaceId: authority.spaceId!,
-            service: "kv",
-            prefix: sharedScope,
           },
-          revocationSyncSession
+          {
+            target: revocationTargetSession,
+            peer: revocationSyncSession,
+          }
         );
 
         expect(revocationApply.importedRevocations).toBeGreaterThan(0);
 
-        const postRevocationOpen = await fetch(
-          `${hostNode.url}/replication/session/open`,
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              ...sharedSession.delegationHeader,
-            },
-            body: JSON.stringify({
-              spaceId: authority.spaceId,
-              service: "kv",
-              prefix: sharedScope,
-            }),
-          }
-        );
+        const postRevocationOpen = await requestTransportSession(sharedSession, {
+          supportingDelegations: null,
+        });
 
-        expect(postRevocationOpen.status).toBe(401);
-        expect(await postRevocationOpen.text()).toContain(
+        expect(postRevocationOpen).toBeDefined();
+        expect(postRevocationOpen?.status).toBe(401);
+        expect(await postRevocationOpen!.text()).toContain(
           "replication delegation is no longer active"
         );
       } finally {

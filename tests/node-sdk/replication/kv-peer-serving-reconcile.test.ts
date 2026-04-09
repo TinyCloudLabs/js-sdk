@@ -22,6 +22,7 @@ describe("Replication KV Peer Serving Reconcile", () => {
         const replica = createClusterClient(cluster, "node-c", prefix);
         const authorityNode = getClusterNode(cluster, "node-a");
         const hostNode = getClusterNode(cluster, "node-b");
+        const replicaNode = getClusterNode(cluster, "node-c");
 
         await authority.signIn();
         await host.signIn();
@@ -47,11 +48,16 @@ describe("Replication KV Peer Serving Reconcile", () => {
           authorityNode.url,
           scope
         );
+        const hostTargetSession = await openKvReplicationSession(
+          host,
+          hostNode.url,
+          scope
+        );
         const firstPass = await reconcileFromPeer(cluster, "node-b", {
           peerUrl: authorityNode.url,
           spaceId: authority.spaceId!,
           prefix: scope,
-        }, hostReconcileSession);
+        }, { target: hostTargetSession, peer: hostReconcileSession });
         expect(firstPass.appliedSequences).toBeGreaterThan(0);
         expect(firstPass.appliedEvents).toBeGreaterThan(0);
 
@@ -60,11 +66,16 @@ describe("Replication KV Peer Serving Reconcile", () => {
           hostNode.url,
           scope
         );
+        const replicaTargetSession = await openKvReplicationSession(
+          replica,
+          replicaNode.url,
+          scope
+        );
         const secondPass = await reconcileFromPeer(cluster, "node-c", {
           peerUrl: hostNode.url,
           spaceId: authority.spaceId!,
           prefix: scope,
-        }, replicaReconcileSession);
+        }, { target: replicaTargetSession, peer: replicaReconcileSession });
         expect(secondPass.appliedSequences).toBeGreaterThan(0);
         expect(secondPass.appliedEvents).toBeGreaterThan(0);
 

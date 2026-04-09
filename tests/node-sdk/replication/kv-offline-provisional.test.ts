@@ -34,6 +34,7 @@ describe("Replication KV Offline Provisional", () => {
         const replica = createClusterClient(cluster, "node-b", prefix);
         const authoringReplica = createClusterClient(cluster, "node-c", prefix);
         const authorityNode = getClusterNode(cluster, "node-a");
+        const replicaNode = getClusterNode(cluster, "node-b");
         const authoringNode = getClusterNode(cluster, "node-c");
 
         await authority.signIn();
@@ -74,11 +75,16 @@ describe("Replication KV Offline Provisional", () => {
           authoringNode.url,
           scope
         );
+        const authorityTargetSession = await openKvReplicationSession(
+          authority,
+          authorityNode.url,
+          scope
+        );
         const firstPass = await reconcileFromPeer(cluster, "node-a", {
           peerUrl: authoringNode.url,
           spaceId: authority.spaceId!,
           prefix: scope,
-        }, authorityReconcileSession);
+        }, { target: authorityTargetSession, peer: authorityReconcileSession });
 
         expect(firstPass.appliedSequences).toBeGreaterThan(0);
         expect(firstPass.appliedEvents).toBeGreaterThan(0);
@@ -100,11 +106,16 @@ describe("Replication KV Offline Provisional", () => {
           authorityNode.url,
           scope
         );
+        const replicaTargetSession = await openKvReplicationSession(
+          replica,
+          replicaNode.url,
+          scope
+        );
         const secondPass = await reconcileFromPeer(cluster, "node-b", {
           peerUrl: authorityNode.url,
           spaceId: authority.spaceId!,
           prefix: scope,
-        }, replicaReconcileSession);
+        }, { target: replicaTargetSession, peer: replicaReconcileSession });
 
         expect(secondPass.appliedSequences).toBeGreaterThan(0);
         expect(secondPass.appliedEvents).toBeGreaterThan(0);

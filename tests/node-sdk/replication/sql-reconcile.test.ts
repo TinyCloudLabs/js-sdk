@@ -21,6 +21,7 @@ describe("Replication SQL Reconcile", () => {
         const authority = createClusterClient(cluster, "node-a", prefix);
         const replica = createClusterClient(cluster, "node-b", prefix);
         const authorityNode = getClusterNode(cluster, "node-a");
+        const replicaNode = getClusterNode(cluster, "node-b");
 
         await authority.signIn();
         await replica.signIn();
@@ -50,6 +51,11 @@ describe("Replication SQL Reconcile", () => {
           authorityNode.url,
           dbName
         );
+        const targetSession = await openSqlReplicationSession(
+          replica,
+          replicaNode.url,
+          dbName
+        );
         const exportResult = await exportSqlFromPeer(
           cluster,
           "node-a",
@@ -67,7 +73,7 @@ describe("Replication SQL Reconcile", () => {
           peerUrl: authorityNode.url,
           spaceId: authority.spaceId!,
           dbName,
-        }, exportSession);
+        }, { target: targetSession, peer: exportSession });
 
         expect(reconcileResult.spaceId).toBe(authority.spaceId);
         expect(reconcileResult.dbName).toBe(dbName);
@@ -103,7 +109,7 @@ describe("Replication SQL Reconcile", () => {
           peerUrl: authorityNode.url,
           spaceId: authority.spaceId!,
           dbName,
-        }, exportSession);
+        }, { target: targetSession, peer: exportSession });
         expect(secondPass.snapshotBytes).toBeGreaterThan(0);
 
         await waitForCondition("updated SQL row available on node-b", async () => {
@@ -139,7 +145,7 @@ describe("Replication SQL Reconcile", () => {
           peerUrl: authorityNode.url,
           spaceId: authority.spaceId!,
           dbName,
-        }, exportSession);
+        }, { target: targetSession, peer: exportSession });
         expect(thirdPass.snapshotBytes).toBeGreaterThan(0);
 
         await waitForCondition("deleted SQL row removed from node-b", async () => {

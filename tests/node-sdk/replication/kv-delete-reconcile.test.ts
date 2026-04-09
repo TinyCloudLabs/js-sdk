@@ -19,8 +19,12 @@ describe("Replication KV Delete Reconcile", () => {
         const writer = createClusterClient(cluster, "node-a", prefix);
         const reader = createClusterClient(cluster, "node-b", prefix);
         const writerNode = cluster.nodes.find((node) => node.name === "node-a");
+        const readerNode = cluster.nodes.find((node) => node.name === "node-b");
         if (!writerNode) {
           throw new Error("node-a missing from cluster");
+        }
+        if (!readerNode) {
+          throw new Error("node-b missing from cluster");
         }
 
         await writer.signIn();
@@ -45,11 +49,16 @@ describe("Replication KV Delete Reconcile", () => {
           writerNode.url,
           scope
         );
+        const targetSession = await openKvReplicationSession(
+          reader,
+          readerNode.url,
+          scope
+        );
         const firstPass = await reconcileFromPeer(cluster, "node-b", {
           peerUrl: writerNode.url,
           spaceId: writer.spaceId!,
           prefix: scope,
-        }, reconcileSession);
+        }, { target: targetSession, peer: reconcileSession });
 
         expect(firstPass.spaceId).toBe(writer.spaceId);
         expect(firstPass.peerUrl).toBe(writerNode.url);
@@ -71,7 +80,7 @@ describe("Replication KV Delete Reconcile", () => {
           spaceId: writer.spaceId!,
           prefix: scope,
           sinceSeq: firstPass.appliedUntilSeq,
-        }, reconcileSession);
+        }, { target: targetSession, peer: reconcileSession });
 
         expect(secondPass.spaceId).toBe(writer.spaceId);
         expect(secondPass.peerUrl).toBe(writerNode.url);

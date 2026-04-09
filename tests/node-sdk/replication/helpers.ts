@@ -25,10 +25,6 @@ export interface ReplicationReconcileRequest {
 export interface AuthReplicationReconcileRequest {
   peerUrl: string;
   spaceId: string;
-  service: "kv" | "sql";
-  prefix?: string;
-  dbName?: string;
-  supportingDelegations?: string[];
 }
 
 export interface ReplicationExportRequest {
@@ -58,9 +54,6 @@ export interface ReplicationApplyResponse {
 export interface AuthReplicationApplyResponse {
   spaceId: string;
   peerUrl?: string;
-  service: string;
-  prefix?: string;
-  dbName?: string;
   importedDelegations: number;
   importedRevocations: number;
 }
@@ -69,6 +62,11 @@ export interface SqlReplicationReconcileRequest {
   peerUrl: string;
   spaceId: string;
   dbName: string;
+}
+
+export interface ReplicationPullSessions {
+  target: TinyCloudReplicationSession;
+  peer: TinyCloudReplicationSession;
 }
 
 function replicationDefaultActions(): Record<string, Record<string, string[]>> {
@@ -104,6 +102,10 @@ export interface ReplicationSessionOpenResponse {
   prefix?: string;
   dbName?: string;
   expiresAt: string;
+}
+
+export interface RequestTransportSessionOptions {
+  supportingDelegations?: string[] | null;
 }
 
 export function getClusterNode(
@@ -202,37 +204,7 @@ export async function openTransportSession(
     return cached;
   }
 
-  const body =
-    session.scope.service === "auth"
-      ? {
-          spaceId: session.spaceId,
-          service: "auth",
-          prefix: null,
-          dbName: null,
-          supportingDelegations: session.supportingDelegations,
-        }
-      : session.scope.service === "kv"
-        ? {
-            spaceId: session.spaceId,
-            service: "kv",
-            prefix: session.scope.prefix,
-            supportingDelegations: session.supportingDelegations,
-          }
-        : {
-            spaceId: session.spaceId,
-            service: "sql",
-            dbName: session.scope.dbName,
-            supportingDelegations: session.supportingDelegations,
-          };
-
-  const response = await fetch(`${session.host}/replication/session/open`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...normalizeHeaders(session.delegationHeader),
-    },
-    body: JSON.stringify(body),
-  });
+  const response = await requestTransportSession(session);
 
   if (!response.ok) {
     throw new Error(
@@ -245,11 +217,62 @@ export async function openTransportSession(
   return opened;
 }
 
+export async function requestTransportSession(
+  session: TinyCloudReplicationSession | undefined,
+  options: RequestTransportSessionOptions = {}
+): Promise<Response | undefined> {
+  if (!session) {
+    return undefined;
+  }
+
+  const body =
+    session.scope.service === "auth"
+      ? {
+          spaceId: session.spaceId,
+          service: "auth",
+          prefix: null,
+          dbName: null,
+        }
+      : session.scope.service === "kv"
+        ? {
+            spaceId: session.spaceId,
+            service: "kv",
+            prefix: session.scope.prefix,
+          }
+        : {
+            spaceId: session.spaceId,
+            service: "sql",
+            dbName: session.scope.dbName,
+          };
+
+  const supportingDelegations =
+    options.supportingDelegations === undefined
+      ? session.supportingDelegations
+      : options.supportingDelegations;
+  const requestBody =
+    supportingDelegations === null
+      ? body
+      : {
+          ...body,
+          supportingDelegations,
+        };
+
+  return fetch(`${session.host}/replication/session/open`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...normalizeHeaders(session.delegationHeader),
+    },
+    body: JSON.stringify(requestBody),
+  });
+}
+
 async function buildSessionHeaders(
+  headerName: string,
   session: TinyCloudReplicationSession | undefined
 ): Promise<Record<string, string>> {
   const opened = await openTransportSession(session);
-  return opened ? { "Replication-Session": opened.sessionToken } : {};
+  return opened ? { [headerName]: opened.sessionToken } : {};
 }
 
 export async function exportFromPeer(
@@ -259,7 +282,7 @@ export async function exportFromPeer(
   session?: TinyCloudReplicationSession
 ): Promise<ReplicationExportResponse> {
   const node = getClusterNode(cluster, sourceNodeName);
-  const headers = await buildSessionHeaders(session);
+  const headers = await buildSessionHeaders("Replication-Session", session);
   const response = await fetch(`${node.url}/replication/export`, {
     method: "POST",
     headers: {
@@ -282,14 +305,22 @@ export async function reconcileFromPeer(
   cluster: RunningCluster,
   targetNodeName: string,
   request: ReplicationReconcileRequest,
-  session?: TinyCloudReplicationSession
+  sessions: ReplicationPullSessions
 ): Promise<ReplicationApplyResponse> {
   const node = getClusterNode(cluster, targetNodeName);
-  const peerHeaders = await buildSessionHeaders(session);
+  const targetHeaders = await buildSessionHeaders(
+    "Replication-Session",
+    sessions.target
+  );
+  const peerHeaders = await buildSessionHeaders(
+    "Peer-Replication-Session",
+    sessions.peer
+  );
   const response = await fetch(`${node.url}/replication/reconcile`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
+      ...targetHeaders,
       ...peerHeaders,
     },
     body: JSON.stringify(request),
@@ -308,14 +339,22 @@ export async function reconcileAuthFromPeer(
   cluster: RunningCluster,
   targetNodeName: string,
   request: AuthReplicationReconcileRequest,
-  session?: TinyCloudReplicationSession
+  sessions: ReplicationPullSessions
 ): Promise<AuthReplicationApplyResponse> {
   const node = getClusterNode(cluster, targetNodeName);
-  const peerHeaders = await buildSessionHeaders(session);
+  const targetHeaders = await buildSessionHeaders(
+    "Replication-Session",
+    sessions.target
+  );
+  const peerHeaders = await buildSessionHeaders(
+    "Peer-Replication-Session",
+    sessions.peer
+  );
   const response = await fetch(`${node.url}/replication/auth/reconcile`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
+      ...targetHeaders,
       ...peerHeaders,
     },
     body: JSON.stringify(request),
@@ -334,14 +373,22 @@ export async function reconcileSqlFromPeer(
   cluster: RunningCluster,
   targetNodeName: string,
   request: SqlReplicationReconcileRequest,
-  session?: TinyCloudReplicationSession
+  sessions: ReplicationPullSessions
 ): Promise<SqlReplicationApplyResponse> {
   const node = getClusterNode(cluster, targetNodeName);
-  const peerHeaders = await buildSessionHeaders(session);
+  const targetHeaders = await buildSessionHeaders(
+    "Replication-Session",
+    sessions.target
+  );
+  const peerHeaders = await buildSessionHeaders(
+    "Peer-Replication-Session",
+    sessions.peer
+  );
   const response = await fetch(`${node.url}/replication/sql/reconcile`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
+      ...targetHeaders,
       ...peerHeaders,
     },
     body: JSON.stringify(request),
@@ -370,6 +417,18 @@ export async function openKvReplicationSession(
   });
 }
 
+export async function openAuthReplicationSession(
+  client: TinyCloudNode,
+  host: string
+): Promise<TinyCloudReplicationSession> {
+  return client.openReplicationSession({
+    host,
+    scope: {
+      service: "auth",
+    },
+  });
+}
+
 export async function openSqlReplicationSession(
   client: TinyCloudNode,
   host: string,
@@ -391,7 +450,7 @@ export async function exportSqlFromPeer(
   session?: TinyCloudReplicationSession
 ): Promise<SqlReplicationExportResponse> {
   const node = getClusterNode(cluster, sourceNodeName);
-  const headers = await buildSessionHeaders(session);
+  const headers = await buildSessionHeaders("Replication-Session", session);
   const response = await fetch(`${node.url}/replication/sql/export`, {
     method: "POST",
     headers: {

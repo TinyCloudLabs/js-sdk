@@ -20,6 +20,7 @@ describe("Replication KV Restart Catch-up", () => {
         const writer = createClusterClient(cluster, "node-a", prefix);
         const reader = createClusterClient(cluster, "node-b", prefix);
         const writerNode = getClusterNode(cluster, "node-a");
+        const readerNode = getClusterNode(cluster, "node-b");
 
         await writer.signIn();
         await reader.signIn();
@@ -48,11 +49,16 @@ describe("Replication KV Restart Catch-up", () => {
           writerNode.url,
           scope
         );
+        const initialTargetSession = await openKvReplicationSession(
+          reader,
+          readerNode.url,
+          scope
+        );
         const firstPass = await reconcileFromPeer(cluster, "node-b", {
           peerUrl: writerNode.url,
           spaceId: writer.spaceId!,
           prefix: scope,
-        }, initialReconcileSession);
+        }, { target: initialTargetSession, peer: initialReconcileSession });
 
         expect(firstPass.appliedSequences).toBeGreaterThan(0);
         expect(firstPass.appliedEvents).toBeGreaterThan(0);
@@ -87,12 +93,17 @@ describe("Replication KV Restart Catch-up", () => {
           writerNode.url,
           scope
         );
+        const restartedTargetSession = await openKvReplicationSession(
+          restartedReader,
+          readerNode.url,
+          scope
+        );
         const secondPass = await reconcileFromPeer(cluster, "node-b", {
           peerUrl: writerNode.url,
           spaceId: writer.spaceId!,
           prefix: scope,
           sinceSeq: firstPass.appliedUntilSeq,
-        }, restartedReconcileSession);
+        }, { target: restartedTargetSession, peer: restartedReconcileSession });
 
         expect(secondPass.appliedSequences).toBeGreaterThan(0);
         expect(secondPass.appliedEvents).toBeGreaterThan(0);

@@ -5,6 +5,7 @@ import {
   getClusterNode,
   openKvReplicationSession,
   openTransportSession,
+  requestTransportSession,
   uniqueReplicationPrefix,
 } from "./helpers";
 
@@ -29,22 +30,10 @@ describe("Replication Auth First Contact", () => {
           scope
         );
 
-        const missingSupportingChain = await fetch(
-          `${hostNode.url}/replication/session/open`,
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              ...hostSession.delegationHeader,
-            },
-            body: JSON.stringify({
-              spaceId: authority.spaceId,
-              service: "kv",
-              prefix: scope,
-            }),
-          }
-        );
-        expect(missingSupportingChain.status).toBe(401);
+        const missingSupportingChain = await requestTransportSession(hostSession, {
+          supportingDelegations: null,
+        });
+        expect(missingSupportingChain?.status).toBe(401);
 
         const hostTransport = await openTransportSession(hostSession);
         expect(hostTransport?.service).toBe("kv");
