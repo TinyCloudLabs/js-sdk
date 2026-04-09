@@ -231,6 +231,7 @@ export interface ReplicationSessionOpenResponse {
   sessionToken: string;
   spaceId: string;
   service: string;
+  serverDid: string;
   prefix?: string;
   dbName?: string;
   expiresAt: string;
