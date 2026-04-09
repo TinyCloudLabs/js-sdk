@@ -33,6 +33,12 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - proves a host peer-serving hop from `node-b` into `node-c`
 - proves replica peer-serving is denied by default and only enabled when explicitly opted in
 
+### KV Recon Inventory Export
+
+- exports scoped KV inventory through an authenticated `recon/export` endpoint
+- proves the same scoped inventory matches after replay reconcile on both nodes
+- proves sibling prefixes do not leak into the scoped inventory
+
 ### KV Offline / Provisional
 
 - authors KV state on a disconnected replica
@@ -82,6 +88,7 @@ tests/node-sdk/
     ├── kv-peer-serving-reconcile.test.ts
     ├── kv-reconcile.test.ts
     ├── kv-restart-catchup.test.ts
+    ├── kv-recon-export.test.ts
     ├── sql-baseline.test.ts
     ├── sql-reconcile.test.ts
     ├── sql-schema-drift.test.ts
