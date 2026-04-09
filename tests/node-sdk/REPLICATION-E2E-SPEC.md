@@ -45,6 +45,12 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - proves mismatch before replay reconcile and match after reconcile
 - proves sibling prefixes remain isolated when compare is run on a narrower prefix
 
+### KV Recon Bounded Windows
+
+- pages scoped KV inventory through authenticated `recon/export` and `recon/compare` with `startAfter` and `limit`
+- proves a reconciled primary scope can be traversed page by page until the cursor is exhausted
+- proves sibling prefixes remain isolated across page boundaries
+
 ### KV Offline / Provisional
 
 - authors KV state on a disconnected replica
@@ -96,6 +102,7 @@ tests/node-sdk/
     ├── kv-reconcile.test.ts
     ├── kv-restart-catchup.test.ts
     ├── kv-recon-export.test.ts
+    ├── kv-recon-window.test.ts
     ├── sql-baseline.test.ts
     ├── sql-reconcile.test.ts
     ├── sql-schema-drift.test.ts
