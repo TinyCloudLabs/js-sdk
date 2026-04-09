@@ -4,14 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'npm dist-tag (beta, latest, next)'
-        type: choice
-        options:
-          - beta
-          - latest
-          - next
-        default: 'beta'
-        required: true
+        description: 'npm dist-tag override (leave empty to auto-detect from version)'
+        type: string
+        default: ''
+        required: false
       dry_run:
         description: 'Dry run (pack + list, do not publish)'
         type: boolean
@@ -78,7 +74,20 @@ jobs:
             if [ -f "$dir/package.json" ] && ! grep -q '"private": true' "$dir/package.json"; then
               name=$(node -p "require('./$dir/package.json').name")
               version=$(node -p "require('./$dir/package.json').version")
-              echo "  - $name@$version"
+
+              # Auto-detect tag from version, or use override
+              if [ -n "${{ inputs.tag }}" ]; then
+                tag="${{ inputs.tag }}"
+              else
+                prerelease=$(echo "$version" | sed -n 's/.*-\([a-zA-Z]*\)\..*/\1/p')
+                if [ -n "$prerelease" ]; then
+                  tag="$prerelease"
+                else
+                  tag="latest"
+                fi
+              fi
+
+              echo "  - $name@$version (tag: $tag)"
             fi
           done
 
@@ -89,8 +98,22 @@ jobs:
             if [ -f "$dir/package.json" ] && ! grep -q '"private": true' "$dir/package.json"; then
               name=$(node -p "require('./$dir/package.json').name")
               version=$(node -p "require('./$dir/package.json').version")
-              echo "Publishing $name@$version with tag ${{ inputs.tag }}..."
-              (cd "$dir" && npm publish --access public --tag ${{ inputs.tag }})
+
+              # Auto-detect tag from version, or use override
+              if [ -n "${{ inputs.tag }}" ]; then
+                tag="${{ inputs.tag }}"
+              else
+                # Parse prerelease identifier from version (e.g. "2.0.3-beta.3" -> "beta")
+                prerelease=$(echo "$version" | sed -n 's/.*-\([a-zA-Z]*\)\..*/\1/p')
+                if [ -n "$prerelease" ]; then
+                  tag="$prerelease"
+                else
+                  tag="latest"
+                fi
+              fi
+
+              echo "Publishing $name@$version with tag $tag..."
+              (cd "$dir" && npm publish --access public --tag "$tag")
             fi
           done
         env:
