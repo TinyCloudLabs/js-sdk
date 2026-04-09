@@ -144,6 +144,13 @@ export interface KvReconSplitCompareRequest {
   prefix?: string;
 }
 
+export interface KvReconSplitReconcileRequest {
+  peerUrl: string;
+  spaceId: string;
+  prefix?: string;
+  childLimit?: number;
+}
+
 export interface KvReconSplitChildComparison {
   prefix: string;
   status: "match" | "local-missing" | "peer-missing" | "mismatch";
@@ -160,6 +167,24 @@ export interface KvReconSplitCompareResponse {
   peerUrl: string;
   matches: boolean;
   children: KvReconSplitChildComparison[];
+}
+
+export interface KvReconSplitReconcileChildResult {
+  prefix: string;
+  beforeStatus: "match" | "local-missing" | "peer-missing" | "mismatch";
+  afterStatus: "match" | "local-missing" | "peer-missing" | "mismatch";
+  appliedSequences: number;
+  appliedEvents: number;
+}
+
+export interface KvReconSplitReconcileResponse {
+  spaceId: string;
+  prefix?: string;
+  peerUrl: string;
+  matches: boolean;
+  attemptedChildren: number;
+  reconciledChildren: number;
+  children: KvReconSplitReconcileChildResult[];
 }
 
 export interface KvReconCompareResponse {
@@ -642,6 +667,40 @@ export async function reconSplitCompareFromPeer(
   }
 
   return (await response.json()) as KvReconSplitCompareResponse;
+}
+
+export async function reconcileSplitFromPeer(
+  cluster: RunningCluster,
+  targetNodeName: string,
+  request: KvReconSplitReconcileRequest,
+  sessions: ReplicationPullSessions
+): Promise<KvReconSplitReconcileResponse> {
+  const node = getClusterNode(cluster, targetNodeName);
+  const targetHeaders = await buildSessionHeaders(
+    "Replication-Session",
+    sessions.target
+  );
+  const peerHeaders = await buildSessionHeaders(
+    "Peer-Replication-Session",
+    sessions.peer
+  );
+  const response = await fetch(`${node.url}/replication/reconcile/split`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...targetHeaders,
+      ...peerHeaders,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `KV split reconcile failed on ${targetNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as KvReconSplitReconcileResponse;
 }
 
 export async function reconCompareFromPeer(

@@ -57,6 +57,13 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - proves a partial replay reconcile marks one child prefix as `match` while another remains `local-missing`
 - proves the root split comparison converges to all `match` after the remaining child prefix is replayed
 
+### KV Split-Driven Replay
+
+- replays only the missing immediate child scopes through an authenticated `reconcile/split` endpoint
+- manually reconciles one child first, then runs a broad-scope `reconcile/split` and proves only the remaining child needed replay
+- proves a broad-scope reconcile skips an already-matched child prefix and repairs only the remaining missing child prefix
+- proves root split comparison converges after the selective replay
+
 ### KV Recon Bounded Windows
 
 - pages scoped KV inventory through authenticated `recon/export` and `recon/compare` with `startAfter` and `limit`
@@ -115,6 +122,7 @@ tests/node-sdk/
     ├── kv-restart-catchup.test.ts
     ├── kv-recon-export.test.ts
     ├── kv-recon-split-compare.test.ts
+    ├── kv-recon-split-reconcile.test.ts
     ├── kv-recon-split.test.ts
     ├── kv-recon-window.test.ts
     ├── sql-baseline.test.ts
