@@ -42,7 +42,7 @@ describe("Replication Cluster Smoke", () => {
             enabled: true,
             peerServing: node.role === "replica" ? false : true,
             recon: false,
-            authSync: false,
+            authSync: true,
             authoredFactExchange: true,
             notifications: false,
             snapshots: false,
@@ -56,7 +56,7 @@ describe("Replication Cluster Smoke", () => {
               enabled: true,
               peerServing: node.role === "replica" ? false : true,
               recon: false,
-              authSync: false,
+              authSync: true,
               authoredFactExchange: true,
               notifications: false,
               snapshots: false,
@@ -66,6 +66,12 @@ describe("Replication Cluster Smoke", () => {
           expect(replication.endpoints).toContain("GET /replication/info");
           expect(replication.endpoints).toContain(
             "POST /replication/session/open"
+          );
+          expect(replication.endpoints).toContain(
+            "POST /replication/auth/export"
+          );
+          expect(replication.endpoints).toContain(
+            "POST /replication/auth/reconcile"
           );
           expect(replication.endpoints).toContain("POST /replication/export");
           expect(replication.endpoints).toContain(

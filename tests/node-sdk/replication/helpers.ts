@@ -22,6 +22,15 @@ export interface ReplicationReconcileRequest {
   limit?: number;
 }
 
+export interface AuthReplicationReconcileRequest {
+  peerUrl: string;
+  spaceId: string;
+  service: "kv" | "sql";
+  prefix?: string;
+  dbName?: string;
+  supportingDelegations?: string[];
+}
+
 export interface ReplicationExportRequest {
   spaceId: string;
   prefix?: string;
@@ -44,6 +53,16 @@ export interface ReplicationApplyResponse {
   appliedSequences: number;
   appliedEvents: number;
   appliedUntilSeq?: number;
+}
+
+export interface AuthReplicationApplyResponse {
+  spaceId: string;
+  peerUrl?: string;
+  service: string;
+  prefix?: string;
+  dbName?: string;
+  importedDelegations: number;
+  importedRevocations: number;
 }
 
 export interface SqlReplicationReconcileRequest {
@@ -184,19 +203,27 @@ export async function openTransportSession(
   }
 
   const body =
-    session.scope.service === "kv"
+    session.scope.service === "auth"
       ? {
           spaceId: session.spaceId,
-          service: "kv",
-          prefix: session.scope.prefix,
+          service: "auth",
+          prefix: null,
+          dbName: null,
           supportingDelegations: session.supportingDelegations,
         }
-      : {
-          spaceId: session.spaceId,
-          service: "sql",
-          dbName: session.scope.dbName,
-          supportingDelegations: session.supportingDelegations,
-        };
+      : session.scope.service === "kv"
+        ? {
+            spaceId: session.spaceId,
+            service: "kv",
+            prefix: session.scope.prefix,
+            supportingDelegations: session.supportingDelegations,
+          }
+        : {
+            spaceId: session.spaceId,
+            service: "sql",
+            dbName: session.scope.dbName,
+            supportingDelegations: session.supportingDelegations,
+          };
 
   const response = await fetch(`${session.host}/replication/session/open`, {
     method: "POST",
@@ -275,6 +302,32 @@ export async function reconcileFromPeer(
   }
 
   return (await response.json()) as ReplicationApplyResponse;
+}
+
+export async function reconcileAuthFromPeer(
+  cluster: RunningCluster,
+  targetNodeName: string,
+  request: AuthReplicationReconcileRequest,
+  session?: TinyCloudReplicationSession
+): Promise<AuthReplicationApplyResponse> {
+  const node = getClusterNode(cluster, targetNodeName);
+  const peerHeaders = await buildSessionHeaders(session);
+  const response = await fetch(`${node.url}/replication/auth/reconcile`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...peerHeaders,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Auth replication reconcile failed on ${targetNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as AuthReplicationApplyResponse;
 }
 
 export async function reconcileSqlFromPeer(
