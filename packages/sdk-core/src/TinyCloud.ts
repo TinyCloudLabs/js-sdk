@@ -188,7 +188,7 @@ export class TinyCloud {
   public initializeServices(
     invoke?: InvokeFunction,
     hosts?: string[],
-    fetchFn?: FetchFunction
+    fetchFn?: FetchFunction,
   ): void {
     const effectiveInvoke = invoke ?? this.config.invoke;
     const effectiveHosts = hosts ?? this.config.hosts;
@@ -196,14 +196,14 @@ export class TinyCloud {
     if (!effectiveInvoke) {
       throw new Error(
         "invoke function is required to initialize services. " +
-          "Provide it via config.invoke or initializeServices()."
+          "Provide it via config.invoke or initializeServices().",
       );
     }
 
     if (!effectiveHosts || effectiveHosts.length === 0) {
       throw new Error(
         "hosts are required to initialize services. " +
-          "Provide them via config.hosts or initializeServices()."
+          "Provide them via config.hosts or initializeServices().",
       );
     }
 
@@ -244,7 +244,7 @@ export class TinyCloud {
   public get serviceContext(): IServiceContext {
     if (!this._serviceContext) {
       throw new Error(
-        "Services not initialized. Call initializeServices() first."
+        "Services not initialized. Call initializeServices() first.",
       );
     }
     return this._serviceContext;
@@ -268,7 +268,7 @@ export class TinyCloud {
     if (!this._servicesInitialized) {
       throw new Error(
         "Services not initialized. Call initializeServices() first, " +
-          "or use TinyCloudWeb/TinyCloudNode which handles this automatically."
+          "or use TinyCloudWeb/TinyCloudNode which handles this automatically.",
       );
     }
     const service = this._services.get("kv") as IKVService | undefined;
@@ -286,7 +286,7 @@ export class TinyCloud {
     if (!this._servicesInitialized) {
       throw new Error(
         "Services not initialized. Call initializeServices() first, " +
-          "or use TinyCloudWeb/TinyCloudNode which handles this automatically."
+          "or use TinyCloudWeb/TinyCloudNode which handles this automatically.",
       );
     }
     const service = this._services.get("sql") as ISQLService | undefined;
@@ -304,7 +304,7 @@ export class TinyCloud {
     if (!this._servicesInitialized) {
       throw new Error(
         "Services not initialized. Call initializeServices() first, " +
-          "or use TinyCloudWeb/TinyCloudNode which handles this automatically."
+          "or use TinyCloudWeb/TinyCloudNode which handles this automatically.",
       );
     }
     const service = this._services.get("duckdb") as IDuckDbService | undefined;
@@ -322,7 +322,7 @@ export class TinyCloud {
     if (!this._servicesInitialized) {
       throw new Error(
         "Services not initialized. Call initializeServices() first, " +
-          "or use TinyCloudWeb/TinyCloudNode which handles this automatically."
+          "or use TinyCloudWeb/TinyCloudNode which handles this automatically.",
       );
     }
     const service = this._services.get("hooks") as IHooksService | undefined;
@@ -340,10 +340,12 @@ export class TinyCloud {
     if (!this._servicesInitialized) {
       throw new Error(
         "Services not initialized. Call initializeServices() first, " +
-          "or use TinyCloudWeb/TinyCloudNode which handles this automatically."
+          "or use TinyCloudWeb/TinyCloudNode which handles this automatically.",
       );
     }
-    const service = this._services.get("vault") as IDataVaultService | undefined;
+    const service = this._services.get("vault") as
+      | IDataVaultService
+      | undefined;
     if (!service) {
       throw new Error("Vault service is not registered.");
     }
@@ -377,7 +379,7 @@ export class TinyCloud {
    * Returns null if session lacks required fields.
    */
   private toServiceSession(
-    clientSession: ClientSession | undefined
+    clientSession: ClientSession | undefined,
   ): ServiceSession | null {
     if (!clientSession) return null;
 
@@ -514,8 +516,8 @@ export class TinyCloud {
         serviceError(
           ErrorCodes.AUTH_REQUIRED,
           "Must be signed in to ensure public space",
-          "public-space"
-        )
+          "public-space",
+        ),
       );
     }
 
@@ -524,8 +526,8 @@ export class TinyCloud {
         serviceError(
           ErrorCodes.AUTH_REQUIRED,
           "Services not initialized. Call initializeServices() or signIn() first.",
-          "public-space"
-        )
+          "public-space",
+        ),
       );
     }
 
@@ -539,8 +541,8 @@ export class TinyCloud {
           serviceError(
             ErrorCodes.AUTH_REQUIRED,
             "No active session",
-            "public-space"
-          )
+            "public-space",
+          ),
         );
       }
 
@@ -548,12 +550,12 @@ export class TinyCloud {
         session,
         "space",
         spaceId,
-        "tinycloud.space/info"
+        "tinycloud.space/info",
       );
 
       const response = await this._serviceContext.fetch(
         `${this._serviceContext.hosts[0]}/invoke`,
-        { method: "POST", headers, body: JSON.stringify({ spaceId }) }
+        { method: "POST", headers, body: JSON.stringify({ spaceId }) },
       );
 
       if (response.ok) {
@@ -566,7 +568,7 @@ export class TinyCloud {
           session,
           "space",
           "public",
-          "tinycloud.space/create"
+          "tinycloud.space/create",
         );
 
         const createResponse = await this._serviceContext.fetch(
@@ -575,7 +577,7 @@ export class TinyCloud {
             method: "POST",
             headers: createHeaders,
             body: JSON.stringify({ name: "public" }),
-          }
+          },
         );
 
         if (!createResponse.ok) {
@@ -588,8 +590,8 @@ export class TinyCloud {
             serviceError(
               ErrorCodes.NETWORK_ERROR,
               `Failed to create public space: ${createResponse.status} - ${errorText}`,
-              "public-space"
-            )
+              "public-space",
+            ),
           );
         }
 
@@ -602,8 +604,8 @@ export class TinyCloud {
         serviceError(
           ErrorCodes.NETWORK_ERROR,
           `Failed to check public space: ${response.status} - ${errorText}`,
-          "public-space"
-        )
+          "public-space",
+        ),
       );
     } catch (error) {
       return err(
@@ -611,8 +613,8 @@ export class TinyCloud {
           ErrorCodes.NETWORK_ERROR,
           `Network error ensuring public space: ${String(error)}`,
           "public-space",
-          { cause: error instanceof Error ? error : undefined }
-        )
+          { cause: error instanceof Error ? error : undefined },
+        ),
       );
     }
   }
@@ -627,7 +629,7 @@ export class TinyCloud {
     if (!this._servicesInitialized || !this._serviceContext) {
       throw new Error(
         "Services not initialized. Call initializeServices() first, " +
-          "or use TinyCloudWeb/TinyCloudNode which handles this automatically."
+          "or use TinyCloudWeb/TinyCloudNode which handles this automatically.",
       );
     }
 
@@ -680,10 +682,10 @@ export class TinyCloud {
     host: string,
     spaceId: string,
     key: string,
-    fetchFn?: FetchFunction
+    fetchFn?: FetchFunction,
   ): Promise<Result<T, ServiceError>> {
     const doFetch = fetchFn ?? globalThis.fetch.bind(globalThis);
-    const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+    const encodedKey = key.split("/").map(encodeURIComponent).join("/");
     const url = `${host}/public/${encodeURIComponent(spaceId)}/kv/${encodedKey}`;
 
     try {
@@ -695,8 +697,8 @@ export class TinyCloud {
             serviceError(
               ErrorCodes.NOT_FOUND,
               `Key not found: ${key} in space ${spaceId}`,
-              "public-space"
-            )
+              "public-space",
+            ),
           );
         }
         const errorText = await response.text();
@@ -705,8 +707,8 @@ export class TinyCloud {
             ErrorCodes.NETWORK_ERROR,
             `Failed to read public space: ${response.status} - ${errorText}`,
             "public-space",
-            { meta: { status: response.status } }
-          )
+            { meta: { status: response.status } },
+          ),
         );
       }
 
@@ -731,8 +733,8 @@ export class TinyCloud {
           ErrorCodes.NETWORK_ERROR,
           `Network error reading public space: ${String(error)}`,
           "public-space",
-          { cause: error instanceof Error ? error : undefined }
-        )
+          { cause: error instanceof Error ? error : undefined },
+        ),
       );
     }
   }
@@ -753,10 +755,9 @@ export class TinyCloud {
     address: string,
     chainId: number,
     key: string,
-    fetchFn?: FetchFunction
+    fetchFn?: FetchFunction,
   ): Promise<Result<T, ServiceError>> {
     const spaceId = makePublicSpaceId(address, chainId);
     return TinyCloud.readPublicSpace<T>(host, spaceId, key, fetchFn);
   }
-
 }
