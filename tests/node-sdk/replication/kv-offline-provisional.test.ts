@@ -14,7 +14,20 @@ describe("Replication KV Offline Provisional", () => {
     "keeps a node-c authored KV write visible locally before later convergence",
     { timeout: 600_000 },
     async () => {
-      const cluster = await startCluster();
+      const cluster = await startCluster({
+        nodes: [
+          { name: "node-a", role: "authority", port: 8010 },
+          { name: "node-b", role: "host", port: 8011 },
+          {
+            name: "node-c",
+            role: "replica",
+            port: 8012,
+            env: {
+              TINYCLOUD_REPLICATION_PEER_SERVING: "true",
+            },
+          },
+        ],
+      });
       try {
         const prefix = uniqueReplicationPrefix("kv-offline-provisional");
         const authority = createClusterClient(cluster, "node-a", prefix);

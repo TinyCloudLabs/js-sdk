@@ -26,7 +26,10 @@ describe("Replication Cluster Smoke", () => {
           expect(Array.isArray(info.features)).toBe(true);
           expect(info.features).toContain("replication");
           expect(info.rolesSupported).toContain("host");
-          expect(info.rolesEnabled).toContain("host");
+          expect(info.rolesSupported).toContain("replica");
+          expect(info.rolesEnabled).toEqual([
+            node.role === "replica" ? "replica" : "host",
+          ]);
           expect(info.services).toMatchObject({
             kv: true,
             delegation: true,
@@ -37,6 +40,7 @@ describe("Replication Cluster Smoke", () => {
           expect(info.replication).toMatchObject({
             supported: true,
             enabled: true,
+            peerServing: node.role === "replica" ? false : true,
             recon: false,
             authSync: false,
             authoredFactExchange: true,
@@ -50,6 +54,7 @@ describe("Replication Cluster Smoke", () => {
             capabilities: {
               supported: true,
               enabled: true,
+              peerServing: node.role === "replica" ? false : true,
               recon: false,
               authSync: false,
               authoredFactExchange: true,
