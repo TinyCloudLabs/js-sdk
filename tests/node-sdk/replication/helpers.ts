@@ -89,6 +89,24 @@ export interface SqlReplicationExportRequest {
   dbName: string;
 }
 
+export interface KvReconExportRequest {
+  spaceId: string;
+  prefix?: string;
+}
+
+export interface KvReconItem {
+  key: string;
+  kind: string;
+  seq?: number;
+  invocationId?: string;
+}
+
+export interface KvReconExportResponse {
+  spaceId: string;
+  prefix?: string;
+  items: KvReconItem[];
+}
+
 export interface SqlReplicationExportResponse {
   spaceId: string;
   dbName: string;
@@ -467,4 +485,30 @@ export async function exportSqlFromPeer(
   }
 
   return (await response.json()) as SqlReplicationExportResponse;
+}
+
+export async function reconExportFromPeer(
+  cluster: RunningCluster,
+  sourceNodeName: string,
+  request: KvReconExportRequest,
+  session?: TinyCloudReplicationSession
+): Promise<KvReconExportResponse> {
+  const node = getClusterNode(cluster, sourceNodeName);
+  const headers = await buildSessionHeaders("Replication-Session", session);
+  const response = await fetch(`${node.url}/replication/recon/export`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `KV recon export failed on ${sourceNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as KvReconExportResponse;
 }
