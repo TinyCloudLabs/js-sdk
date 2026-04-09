@@ -8,9 +8,7 @@
       "@tinycloud/sdk-core",
       "@tinycloud/web-sdk",
       "@tinycloud/node-sdk",
-      "@tinycloud/sdk-services",
-      "@tinycloud/web-sdk-wasm",
-      "@tinycloud/node-sdk-wasm"
+      "@tinycloud/sdk-services"
     ]
   ],
   "access": "public",
