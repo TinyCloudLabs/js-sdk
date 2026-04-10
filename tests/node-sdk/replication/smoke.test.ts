@@ -44,7 +44,7 @@ describe("Replication Cluster Smoke", () => {
             recon: true,
             authSync: true,
             authoredFactExchange: true,
-            notifications: false,
+            notifications: true,
             snapshots: true,
           });
           expect(replication).toMatchObject({
@@ -58,10 +58,11 @@ describe("Replication Cluster Smoke", () => {
               recon: true,
               authSync: true,
               authoredFactExchange: true,
-              notifications: false,
+              notifications: true,
               snapshots: true,
             },
           });
+          expect(typeof replication.capabilities.notifications).toBe("boolean");
           expect(Array.isArray(replication.endpoints)).toBe(true);
           expect(replication.endpoints).toContain("GET /replication/info");
           expect(replication.endpoints).toContain(
@@ -86,6 +87,9 @@ describe("Replication Cluster Smoke", () => {
           expect(replication.endpoints).toContain(
             "POST /replication/sql/reconcile"
           );
+          if (replication.capabilities.notifications) {
+            expect(replication.endpoints).toContain("POST /replication/notify/poll");
+          }
         }
       } finally {
         await cluster.stop();
