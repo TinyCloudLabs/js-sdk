@@ -76,6 +76,7 @@ describe("Replication SQL Conflict Fallback", () => {
 
         expect(sqlReplicationMode(baselineApply)).toBe("snapshot");
         expect(sqlReplicationBytes(baselineApply).snapshotBytes).toBeGreaterThan(0);
+        expect(baselineApply.snapshotReason).toBe("initial-sync");
 
         await waitForCondition("replica sees baseline SQL row", async () => {
           const query = await replicaSql.query(
@@ -117,6 +118,7 @@ describe("Replication SQL Conflict Fallback", () => {
 
         expect(sqlReplicationMode(fallbackApply)).toBe("snapshot");
         expect(sqlReplicationBytes(fallbackApply).snapshotBytes).toBeGreaterThan(0);
+        expect(fallbackApply.snapshotReason).toBe("changeset-conflict");
 
         await waitForCondition("replica falls back to authority snapshot", async () => {
           const query = await replicaSql.query(

@@ -104,6 +104,7 @@ export interface SqlReplicationApplyResponse {
   dbName: string;
   peerUrl?: string;
   mode?: "snapshot" | "changeset";
+  snapshotReason?: string | null;
   changesetBytes?: number;
   snapshotBytes?: number;
   appliedUntilSeq?: number;

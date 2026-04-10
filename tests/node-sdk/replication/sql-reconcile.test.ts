@@ -80,6 +80,7 @@ describe("Replication SQL Reconcile", () => {
         expect(reconcileResult.dbName).toBe(dbName);
         expect(reconcileResult.peerUrl).toBe(authorityNode.url);
         expect(sqlReplicationBytes(reconcileResult).snapshotBytes).toBeGreaterThan(0);
+        expect(reconcileResult.snapshotReason).toBe("initial-sync");
 
         await waitForCondition("replicated SQL row available on node-b", async () => {
           const queryResult = await replicaSql.query(

@@ -72,6 +72,7 @@ describe("Replication SQL Incremental Reconcile", () => {
 
         expect(sqlReplicationMode(baselineApply)).toBe("snapshot");
         expect(sqlReplicationBytes(baselineApply).snapshotBytes).toBeGreaterThan(0);
+        expect(baselineApply.snapshotReason).toBe("initial-sync");
 
         await waitForCondition("replica sees baseline SQL row", async () => {
           const query = await replicaSql.query(
@@ -139,6 +140,9 @@ describe("Replication SQL Incremental Reconcile", () => {
         expect(
           incrementalApplyBytes.snapshotBytes + incrementalApplyBytes.changesetBytes
         ).toBeGreaterThan(0);
+        if (sqlReplicationMode(incrementalApply) === "changeset") {
+          expect(incrementalApply.snapshotReason).toBeNull();
+        }
 
         await waitForCondition("replica sees incremental SQL changes", async () => {
           const query = await replicaSql.query(
