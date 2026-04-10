@@ -11,7 +11,7 @@ import {
 
 describe("Replication KV Offline Provisional", () => {
   test(
-    "keeps a node-c authored KV write visible locally before later convergence",
+    "keeps a node-c authored KV write visible provisionally before later convergence",
     { timeout: 600_000 },
     async () => {
       const cluster = await startCluster({
@@ -56,7 +56,16 @@ describe("Replication KV Offline Provisional", () => {
         const writeResult = await authoringReplica.kv.put(key, initialValue);
         expect(writeResult.ok).toBe(true);
 
-        const localResult = await authoringReplica.kv.get<typeof initialValue>(key);
+        const localCanonical = await authoringReplica.kv.get<typeof initialValue>(key);
+        expect(localCanonical.ok).toBe(false);
+        if (localCanonical.ok) {
+          throw new Error("Expected canonical replica read to stay absent before reconcile");
+        }
+        expect(localCanonical.error.code).toBe("KV_NOT_FOUND");
+
+        const localResult = await authoringReplica.kv.get<typeof initialValue>(key, {
+          readMode: "provisional",
+        });
         expect(localResult.ok).toBe(true);
         if (!localResult.ok) {
           throw new Error(localResult.error.message);
