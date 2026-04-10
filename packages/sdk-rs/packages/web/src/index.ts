@@ -28,6 +28,11 @@ export namespace tinycloud {
   export import ensureEip55 = lib.ensureEip55;
   // Delegation creation
   export import createDelegation = lib.createDelegation;
+  // Recap parsing: extract `{ service, space, path, actions }` entries from a
+  // signed SIWE string. Used by the capability-chain delegation flow to decide
+  // whether a requested delegation is derivable from the current session
+  // without a fresh wallet prompt.
+  export import parseRecapFromSiwe = lib.parseRecapFromSiwe;
   // Protocol version
   export import protocolVersion = lib.protocolVersion;
   // Vault crypto

@@ -286,3 +286,44 @@ export {
   checkNodeInfo,
 } from "./version";
 export type { NodeInfo } from "./version";
+
+// Manifest types and resolution (capability chain delegation)
+export {
+  // Types
+  type Manifest,
+  type ManifestDefaults,
+  type ManifestDelegation,
+  type PermissionEntry,
+  type ResolvedCapabilities,
+  type ResolvedDelegate,
+  type ResourceCapability,
+  // Errors
+  ManifestValidationError,
+  // Constants
+  DEFAULT_DEFAULTS,
+  DEFAULT_EXPIRY,
+  SERVICE_LONG_TO_SHORT,
+  SERVICE_SHORT_TO_LONG,
+  // Functions
+  applyPrefix,
+  expandActionShortNames,
+  loadManifest,
+  normalizeDefaults,
+  parseExpiry,
+  resolveManifest,
+  validateManifest,
+} from "./manifest";
+
+// Capability subset checking and recap parsing
+export {
+  // Errors
+  PermissionNotInManifestError,
+  SessionExpiredError,
+  // Functions
+  isCapabilitySubset,
+  parseRecapCapabilities,
+  // Types
+  type ParseRecapFromSiwe,
+  type SubsetCheckResult,
+  type WasmRecapEntry,
+} from "./capabilities";

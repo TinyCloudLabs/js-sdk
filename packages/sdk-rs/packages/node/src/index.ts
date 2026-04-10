@@ -30,6 +30,11 @@ export {
   siweToDelegationHeaders,
   // Delegation creation
   createDelegation,
+  // Recap parsing: extract `{ service, space, path, actions }` entries from a
+  // signed SIWE string. Used by the capability-chain delegation flow to decide
+  // whether a requested delegation is derivable from the current session
+  // without a fresh wallet prompt.
+  parseRecapFromSiwe,
   // Protocol version
   protocolVersion,
   // Vault crypto
