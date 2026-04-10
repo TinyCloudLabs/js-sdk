@@ -6,6 +6,7 @@ import {
   getClusterNode,
   openSqlReplicationSession,
   reconcileSqlFromPeer,
+  sqlReplicationBytes,
   uniqueReplicationPrefix,
   waitForCondition,
 } from "./helpers";
@@ -78,7 +79,7 @@ describe("Replication SQL Reconcile", () => {
         expect(reconcileResult.spaceId).toBe(authority.spaceId);
         expect(reconcileResult.dbName).toBe(dbName);
         expect(reconcileResult.peerUrl).toBe(authorityNode.url);
-        expect(reconcileResult.snapshotBytes).toBeGreaterThan(0);
+        expect(sqlReplicationBytes(reconcileResult).snapshotBytes).toBeGreaterThan(0);
 
         await waitForCondition("replicated SQL row available on node-b", async () => {
           const queryResult = await replicaSql.query(
@@ -110,7 +111,10 @@ describe("Replication SQL Reconcile", () => {
           spaceId: authority.spaceId!,
           dbName,
         }, { target: targetSession, peer: exportSession });
-        expect(secondPass.snapshotBytes).toBeGreaterThan(0);
+        const secondPassBytes = sqlReplicationBytes(secondPass);
+        expect(
+          secondPassBytes.snapshotBytes + secondPassBytes.changesetBytes
+        ).toBeGreaterThan(0);
 
         await waitForCondition("updated SQL row available on node-b", async () => {
           const queryResult = await replicaSql.query(
@@ -146,7 +150,10 @@ describe("Replication SQL Reconcile", () => {
           spaceId: authority.spaceId!,
           dbName,
         }, { target: targetSession, peer: exportSession });
-        expect(thirdPass.snapshotBytes).toBeGreaterThan(0);
+        const thirdPassBytes = sqlReplicationBytes(thirdPass);
+        expect(
+          thirdPassBytes.snapshotBytes + thirdPassBytes.changesetBytes
+        ).toBeGreaterThan(0);
 
         await waitForCondition("deleted SQL row removed from node-b", async () => {
           const queryResult = await replicaSql.query(

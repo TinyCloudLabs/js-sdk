@@ -45,7 +45,7 @@ describe("Replication Cluster Smoke", () => {
             authSync: true,
             authoredFactExchange: true,
             notifications: false,
-            snapshots: false,
+            snapshots: true,
           });
           expect(replication).toMatchObject({
             routeMounted: true,
@@ -59,7 +59,7 @@ describe("Replication Cluster Smoke", () => {
               authSync: true,
               authoredFactExchange: true,
               notifications: false,
-              snapshots: false,
+              snapshots: true,
             },
           });
           expect(Array.isArray(replication.endpoints)).toBe(true);
