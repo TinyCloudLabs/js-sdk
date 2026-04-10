@@ -8,6 +8,7 @@
  */
 
 import type { InvokeAnyFunction, InvokeFunction } from "@tinycloud/sdk-services";
+import type { WasmRecapEntry } from "./capabilities";
 
 /**
  * Platform-agnostic WASM bindings interface.
@@ -31,6 +32,15 @@ export interface IWasmBindings {
   makeSpaceId: (address: string, chainId: number, prefix: string) => string;
   /** Create a delegation */
   createDelegation: (...args: any[]) => any;
+  /**
+   * Parse the recap resource of a signed SIWE message into structured
+   * permission entries. Used by the capability-chain delegation flow to
+   * decide whether a requested delegation is derivable from the current
+   * session without a fresh wallet prompt.
+   *
+   * Returns an empty array when the SIWE has no recap resource.
+   */
+  parseRecapFromSiwe: (siweString: string) => WasmRecapEntry[];
   /** Generate a host SIWE message for space activation */
   generateHostSIWEMessage: (params: any) => string;
   /** Convert a signed SIWE message to delegation headers */

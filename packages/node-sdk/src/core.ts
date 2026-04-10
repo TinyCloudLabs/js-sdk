@@ -67,7 +67,35 @@ export type {
 } from "./authorization/strategies";
 
 // High-level API
-export { TinyCloudNode, TinyCloudNodeConfig } from "./TinyCloudNode";
+export {
+  TinyCloudNode,
+  TinyCloudNodeConfig,
+  type DelegateToOptions,
+  type DelegateToResult,
+} from "./TinyCloudNode";
+
+// Capability-chain primitives (spec: .claude/specs/capability-chain.md).
+// Re-exported here so TinyCloudWeb and other consumers can pass
+// `PermissionEntry[]` to `delegateTo` and catch the error classes without
+// also importing from `@tinycloud/sdk-core`.
+export {
+  type PermissionEntry,
+  type Manifest,
+  type ManifestDefaults,
+  type ManifestDelegation,
+  type ResolvedCapabilities,
+  type ResolvedDelegate,
+  type ResourceCapability,
+  PermissionNotInManifestError,
+  SessionExpiredError,
+  ManifestValidationError,
+  resolveManifest,
+  validateManifest,
+  loadManifest,
+  isCapabilitySubset,
+  expandActionShortNames,
+  parseExpiry,
+} from "@tinycloud/sdk-core";
 
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";

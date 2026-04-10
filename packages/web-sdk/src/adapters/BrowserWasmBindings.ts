@@ -27,6 +27,15 @@ export class BrowserWasmBindings implements IWasmBindings {
     session: any, delegateDID: string, spaceId: string,
     path: string, actions: string[], expirationSecs: number, notBeforeSecs?: number
   ) { return tinycloud.createDelegation(session, delegateDID, spaceId, path, actions, expirationSecs, notBeforeSecs); }
+  parseRecapFromSiwe(siweString: string) {
+    // The WASM binding returns a JS array of { service, space, path, actions }.
+    return tinycloud.parseRecapFromSiwe(siweString) as {
+      service: string;
+      space: string;
+      path: string;
+      actions: string[];
+    }[];
+  }
   generateHostSIWEMessage(params: any): string { return tinycloud.generateHostSIWEMessage(params); }
   siweToDelegationHeaders(params: any) { return tinycloud.siweToDelegationHeaders(params); }
   protocolVersion(): number { return tinycloud.protocolVersion(); }

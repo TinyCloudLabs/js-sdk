@@ -10,7 +10,12 @@
  * @packageDocumentation
  */
 
-import { TinyCloudNode, TinyCloudNodeConfig } from "@tinycloud/node-sdk/core";
+import {
+  TinyCloudNode,
+  TinyCloudNodeConfig,
+  type DelegateToOptions,
+  type DelegateToResult,
+} from "@tinycloud/node-sdk/core";
 import {
   IKVService,
   ISQLService,
@@ -34,6 +39,7 @@ import {
   ServiceContext,
   ServiceSession,
   ISpaceCreationHandler,
+  type PermissionEntry,
 } from "@tinycloud/sdk-core";
 import type { providers } from "ethers";
 
@@ -359,6 +365,28 @@ export class TinyCloudWeb {
     const node = await this.ensureNode();
     return node.createDelegation(params);
   }
+
+  /**
+   * Issue a delegation using the capability-chain flow (spec:
+   * `.claude/specs/capability-chain.md`). When the requested permissions
+   * are a subset of the current session's recap, no wallet prompt is
+   * shown — the delegation is signed by the session key via WASM. When
+   * they are not, this throws `PermissionNotInManifestError` so callers
+   * can trigger an escalation flow via {@link requestPermissions}.
+   *
+   * Pass `{ forceWalletSign: true }` to bypass the derivability check and
+   * always use the wallet-signed SIWE path.
+   *
+   * Current limitation: exactly one {@link PermissionEntry} per call.
+   */
+  delegateTo = async (
+    did: string,
+    permissions: PermissionEntry[],
+    options?: DelegateToOptions,
+  ): Promise<DelegateToResult> => {
+    const node = await this.ensureNode();
+    return node.delegateTo(did, permissions, options);
+  };
 
   async useDelegation(delegation: PortableDelegation): Promise<DelegatedAccess> {
     const node = await this.ensureNode();
