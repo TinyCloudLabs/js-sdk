@@ -107,7 +107,7 @@ jobs:
           # loop 403'd on sdk-core@2.1.0-beta.0 in the 2026-04-10 release after
           # PR #182, aborting before the wasm packages (which actually needed
           # publishing) were attempted.
-          bunx changeset publish --tag beta
+          bunx changeset publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
