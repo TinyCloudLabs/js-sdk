@@ -147,6 +147,61 @@ export interface KvStateCompareResponse {
   items: KvStateCompareItem[];
 }
 
+export interface KvPeerMissingPlanItem {
+  key: string;
+  kind: string;
+  localInvocationId?: string | null;
+  peerStatus: "present" | "deleted" | "absent";
+  peerSeq?: number | null;
+  peerInvocationId?: string | null;
+  peerDeletedInvocationId?: string | null;
+  peerValueHash?: string | null;
+  action: "keep" | "prune-delete" | "quarantine-absent";
+}
+
+export interface KvPeerMissingPlanResponse {
+  spaceId: string;
+  prefix?: string;
+  peerUrl: string;
+  peerHostRole: boolean;
+  startAfter?: string;
+  limit?: number;
+  hasMore?: boolean;
+  nextStartAfter?: string | null;
+  keepCount: number;
+  pruneDeleteCount: number;
+  quarantineAbsentCount: number;
+  items: KvPeerMissingPlanItem[];
+}
+
+export interface KvPeerMissingApplyItem {
+  key: string;
+  action: "keep" | "prune-delete" | "quarantine-absent";
+  result: string;
+  localInvocationId?: string | null;
+  peerStatus: "present" | "deleted" | "absent";
+  peerDeletedInvocationId?: string | null;
+  appliedSequences: number;
+  appliedEvents: number;
+}
+
+export interface KvPeerMissingApplyResponse {
+  spaceId: string;
+  prefix?: string;
+  peerUrl: string;
+  peerHostRole: boolean;
+  startAfter?: string;
+  limit?: number;
+  hasMore?: boolean;
+  nextStartAfter?: string | null;
+  attemptedItems: number;
+  prunedDeletes: number;
+  quarantined: number;
+  alreadyQuarantined: number;
+  kept: number;
+  items: KvPeerMissingApplyItem[];
+}
+
 export interface KvReconItem {
   key: string;
   kind: string;
@@ -742,6 +797,74 @@ export async function kvStateCompareFromPeer(
   }
 
   return (await response.json()) as KvStateCompareResponse;
+}
+
+export async function peerMissingPlanFromPeer(
+  cluster: RunningCluster,
+  targetNodeName: string,
+  request: KvStateCompareRequest,
+  sessions: ReplicationPullSessions
+): Promise<KvPeerMissingPlanResponse> {
+  const node = getClusterNode(cluster, targetNodeName);
+  const targetHeaders = await buildSessionHeaders(
+    "Replication-Session",
+    sessions.target
+  );
+  const peerHeaders = await buildSessionHeaders(
+    "Peer-Replication-Session",
+    sessions.peer
+  );
+  const response = await fetch(`${node.url}/replication/peer-missing/plan`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...targetHeaders,
+      ...peerHeaders,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Peer-missing plan failed on ${targetNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as KvPeerMissingPlanResponse;
+}
+
+export async function peerMissingApplyFromPeer(
+  cluster: RunningCluster,
+  targetNodeName: string,
+  request: KvStateCompareRequest,
+  sessions: ReplicationPullSessions
+): Promise<KvPeerMissingApplyResponse> {
+  const node = getClusterNode(cluster, targetNodeName);
+  const targetHeaders = await buildSessionHeaders(
+    "Replication-Session",
+    sessions.target
+  );
+  const peerHeaders = await buildSessionHeaders(
+    "Peer-Replication-Session",
+    sessions.peer
+  );
+  const response = await fetch(`${node.url}/replication/peer-missing/apply`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...targetHeaders,
+      ...peerHeaders,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Peer-missing apply failed on ${targetNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as KvPeerMissingApplyResponse;
 }
 
 export async function reconSplitFromPeer(
