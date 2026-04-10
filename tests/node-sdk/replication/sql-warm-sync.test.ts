@@ -3,7 +3,6 @@ import { startCluster } from "./cluster";
 import {
   createClusterClient,
   getClusterNode,
-  notifyReplicationFromPeer,
   openSqlReplicationSession,
   reconcileSqlFromPeer,
   uniqueReplicationPrefix,
@@ -57,32 +56,25 @@ describe("Replication SQL Warm Sync", () => {
           authorityNode.url,
           dbName
         );
-        const baselineNotification = await notifyReplicationFromPeer(
-          cluster,
-          "node-a",
+        const baselineNotification = await authority.notifyReplication(
+          notifySession,
           {
             spaceId: authority.spaceId!,
             service: "sql",
             dbName,
             lastSeenSeq: 0,
             timeoutMs: 100,
-          },
-          notifySession
+          }
         );
         expect(baselineNotification.dirty).toBe(true);
         expect(baselineNotification.latestSeq).toBeGreaterThan(0);
-        const notifyPromise = notifyReplicationFromPeer(
-          cluster,
-          "node-a",
-          {
-            spaceId: authority.spaceId!,
-            service: "sql",
-            dbName,
-            lastSeenSeq: baselineNotification.latestSeq,
-            timeoutMs: 30_000,
-          },
-          notifySession
-        );
+        const notifyPromise = authority.notifyReplication(notifySession, {
+          spaceId: authority.spaceId!,
+          service: "sql",
+          dbName,
+          lastSeenSeq: baselineNotification.latestSeq,
+          timeoutMs: 30_000,
+        });
 
         await sql.execute(`INSERT INTO ${tableName} (id, label) VALUES (?, ?)`, [
           1,

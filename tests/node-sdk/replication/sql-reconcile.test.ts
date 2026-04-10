@@ -5,7 +5,6 @@ import {
   exportSqlFromPeer,
   getClusterNode,
   openSqlReplicationSession,
-  reconcileSqlFromPeer,
   sqlReplicationBytes,
   uniqueReplicationPrefix,
   waitForCondition,
@@ -70,11 +69,14 @@ describe("Replication SQL Reconcile", () => {
         expect(exportResult.dbName).toBe(dbName);
         expect(exportResult.snapshot.length).toBeGreaterThan(0);
 
-        const reconcileResult = await reconcileSqlFromPeer(cluster, "node-b", {
-          peerUrl: authorityNode.url,
-          spaceId: authority.spaceId!,
-          dbName,
-        }, { target: targetSession, peer: exportSession });
+        const reconcileResult = await replica.reconcileSqlFromPeer(
+          { target: targetSession, peer: exportSession },
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+            dbName,
+          }
+        );
 
         expect(reconcileResult.spaceId).toBe(authority.spaceId);
         expect(reconcileResult.dbName).toBe(dbName);
@@ -107,11 +109,14 @@ describe("Replication SQL Reconcile", () => {
         );
         expect(updateResult.ok).toBe(true);
 
-        const secondPass = await reconcileSqlFromPeer(cluster, "node-b", {
-          peerUrl: authorityNode.url,
-          spaceId: authority.spaceId!,
-          dbName,
-        }, { target: targetSession, peer: exportSession });
+        const secondPass = await replica.reconcileSqlFromPeer(
+          { target: targetSession, peer: exportSession },
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+            dbName,
+          }
+        );
         const secondPassBytes = sqlReplicationBytes(secondPass);
         expect(
           secondPassBytes.snapshotBytes + secondPassBytes.changesetBytes
@@ -146,11 +151,14 @@ describe("Replication SQL Reconcile", () => {
         );
         expect(deleteResult.ok).toBe(true);
 
-        const thirdPass = await reconcileSqlFromPeer(cluster, "node-b", {
-          peerUrl: authorityNode.url,
-          spaceId: authority.spaceId!,
-          dbName,
-        }, { target: targetSession, peer: exportSession });
+        const thirdPass = await replica.reconcileSqlFromPeer(
+          { target: targetSession, peer: exportSession },
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+            dbName,
+          }
+        );
         const thirdPassBytes = sqlReplicationBytes(thirdPass);
         expect(
           thirdPassBytes.snapshotBytes + thirdPassBytes.changesetBytes

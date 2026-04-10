@@ -3,7 +3,6 @@ import { startCluster } from "./cluster";
 import {
   createClusterClient,
   getClusterNode,
-  notifyReplicationFromPeer,
   openKvReplicationSession,
   reconcileFromPeer,
   uniqueReplicationPrefix,
@@ -57,18 +56,13 @@ describe("Replication KV Warm Sync", () => {
           authorityNode.url,
           scope
         );
-        const notifyPromise = notifyReplicationFromPeer(
-          cluster,
-          "node-a",
-          {
-            spaceId: authority.spaceId!,
-            service: "kv",
-            prefix: scope,
-            lastSeenSeq: 0,
-            timeoutMs: 30_000,
-          },
-          notifySession
-        );
+        const notifyPromise = authority.notifyReplication(notifySession, {
+          spaceId: authority.spaceId!,
+          service: "kv",
+          prefix: scope,
+          lastSeenSeq: 0,
+          timeoutMs: 30_000,
+        });
 
         expect(await authority.kv.put(key, value)).toMatchObject({ ok: true });
 

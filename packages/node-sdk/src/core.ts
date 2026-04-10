@@ -76,6 +76,7 @@ export {
   type RuntimePermissionGrantOptions,
 } from "./TinyCloudNode";
 export type {
+  TinyCloudAuthReplicationScope,
   TinyCloudKVReplicationScope,
   TinyCloudSqlReplicationScope,
   TinyCloudReplicationScope,
@@ -83,7 +84,6 @@ export type {
   OpenReplicationSessionParams,
   OpenReplicationSessionResult,
 } from "./TinyCloudNode";
-
 // Capability-chain primitives (spec: .claude/specs/capability-chain.md).
 // Re-exported here so TinyCloudWeb and other consumers can pass
 // `PermissionEntry[]` to `delegateTo` and catch the error classes without
@@ -119,6 +119,26 @@ export {
   parseExpiry,
   resourceCapabilitiesToSpaceAbilitiesMap,
 } from "@tinycloud/sdk-core";
+
+// Replication helpers
+export {
+  openTransportSession,
+  requestTransportSession,
+  notifyReplication,
+  reconcileKvReplication,
+  reconcileSqlReplication,
+} from "./replication";
+export type {
+  RequestTransportSessionOptions,
+  ReplicationNotifyRequest,
+  ReplicationNotifyResponse,
+  ReplicationPullSessions,
+  ReplicationKvReconcileRequest,
+  ReplicationKvReconcileResponse,
+  ReplicationSqlReconcileRequest,
+  ReplicationSqlReconcileResponse,
+  ReplicationSessionOpenResponse,
+} from "./replication";
 
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";

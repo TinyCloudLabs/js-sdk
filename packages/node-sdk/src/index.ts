@@ -103,6 +103,7 @@ export {
   type RuntimePermissionGrantOptions,
 } from "./TinyCloudNode";
 export type {
+  TinyCloudAuthReplicationScope,
   TinyCloudKVReplicationScope,
   TinyCloudSqlReplicationScope,
   TinyCloudReplicationScope,
@@ -110,7 +111,6 @@ export type {
   OpenReplicationSessionParams,
   OpenReplicationSessionResult,
 } from "./TinyCloudNode";
-
 // Capability-chain primitives (spec: .claude/specs/capability-chain.md).
 export {
   type PermissionEntry,
@@ -143,6 +143,26 @@ export {
   parseExpiry,
   resourceCapabilitiesToSpaceAbilitiesMap,
 } from "@tinycloud/sdk-core";
+
+// Replication helpers
+export {
+  openTransportSession,
+  requestTransportSession,
+  notifyReplication,
+  reconcileKvReplication,
+  reconcileSqlReplication,
+} from "./replication";
+export type {
+  RequestTransportSessionOptions,
+  ReplicationNotifyRequest,
+  ReplicationNotifyResponse,
+  ReplicationPullSessions,
+  ReplicationKvReconcileRequest,
+  ReplicationKvReconcileResponse,
+  ReplicationSqlReconcileRequest,
+  ReplicationSqlReconcileResponse,
+  ReplicationSessionOpenResponse,
+} from "./replication";
 
 // WASM bindings
 export { NodeWasmBindings } from "./NodeWasmBindings";

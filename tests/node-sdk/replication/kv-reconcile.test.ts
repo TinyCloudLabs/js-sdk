@@ -5,7 +5,6 @@ import {
   exportFromPeer,
   getClusterNode,
   openKvReplicationSession,
-  reconcileFromPeer,
   uniqueReplicationPrefix,
   waitForCondition,
 } from "./helpers";
@@ -63,11 +62,14 @@ describe("Replication KV Reconcile", () => {
         expect(exportResult.prefix).toBe(scope);
         expect(exportResult.sequences.length).toBeGreaterThan(0);
 
-        const firstPass = await reconcileFromPeer(cluster, "node-b", {
-          peerUrl: authorityNode.url,
-          spaceId: authority.spaceId!,
-          prefix: scope,
-        }, { target: targetSession, peer: exportSession });
+        const firstPass = await replica.reconcileKvFromPeer(
+          { target: targetSession, peer: exportSession },
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+            prefix: scope,
+          }
+        );
 
         expect(firstPass.spaceId).toBe(authority.spaceId);
         expect(firstPass.peerUrl).toBe(authorityNode.url);
@@ -93,12 +95,15 @@ describe("Replication KV Reconcile", () => {
         }
         expect(replicaList.data.keys).toContain(key);
 
-        const secondPass = await reconcileFromPeer(cluster, "node-b", {
-          peerUrl: authorityNode.url,
-          spaceId: authority.spaceId!,
-          prefix: scope,
-          sinceSeq: firstPass.appliedUntilSeq,
-        }, { target: targetSession, peer: exportSession });
+        const secondPass = await replica.reconcileKvFromPeer(
+          { target: targetSession, peer: exportSession },
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+            prefix: scope,
+            sinceSeq: firstPass.appliedUntilSeq,
+          }
+        );
 
         expect(secondPass.appliedSequences).toBe(0);
         expect(secondPass.appliedEvents).toBe(0);

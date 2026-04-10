@@ -7,7 +7,6 @@ import {
   openKvReplicationSession,
   peerMissingApplyFromPeer,
   reconcileAuthFromPeer,
-  reconcileFromPeer,
   uniqueReplicationPrefix,
   waitForCondition,
 } from "./helpers";
@@ -126,17 +125,15 @@ describe("Replication KV Quarantine Visibility", () => {
         }
         expect(configuredProvisionalGet.data.data).toEqual(value);
 
-        const authorityPull = await reconcileFromPeer(
-          cluster,
-          "node-a",
+        const authorityPull = await authority.reconcileKvFromPeer(
+          {
+            target: await openKvReplicationSession(authority, authorityNode.url, scope),
+            peer: await openKvReplicationSession(canonicalReplica, replicaNode.url, scope),
+          },
           {
             peerUrl: replicaNode.url,
             spaceId: authority.spaceId!,
             prefix: scope,
-          },
-          {
-            target: await openKvReplicationSession(authority, authorityNode.url, scope),
-            peer: await openKvReplicationSession(canonicalReplica, replicaNode.url, scope),
           }
         );
         expect(authorityPull.appliedEvents).toBeGreaterThan(0);
