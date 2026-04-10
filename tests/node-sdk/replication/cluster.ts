@@ -62,6 +62,8 @@ const DEFAULT_PROMETHEUS_PORT_START = 8510;
 const PORT_RANGE_START = 8000;
 const PORT_RANGE_END = 8999;
 
+let clusterLeaseTail = Promise.resolve();
+
 const DEFAULT_NODES: ClusterNodeConfig[] = [
   { name: "node-a", role: "authority", port: 8010 },
   { name: "node-b", role: "host", port: 8011 },
@@ -70,6 +72,17 @@ const DEFAULT_NODES: ClusterNodeConfig[] = [
 
 interface AssignedClusterNodeConfig extends ClusterNodeConfig {
   prometheusPort: number;
+}
+
+async function acquireClusterLease(): Promise<() => void> {
+  let release: (() => void) | undefined;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = clusterLeaseTail;
+  clusterLeaseTail = clusterLeaseTail.then(() => current);
+  await previous;
+  return () => release?.();
 }
 
 function replicationRoleEnv(role: ClusterNodeRole): "host" | "replica" {
@@ -386,6 +399,14 @@ async function startNode(
 export async function startCluster(
   options: ClusterOptions = {}
 ): Promise<RunningCluster> {
+  let releaseClusterLease: (() => void) | null = await acquireClusterLease();
+  const releaseLease = () => {
+    if (!releaseClusterLease) {
+      return;
+    }
+    releaseClusterLease();
+    releaseClusterLease = null;
+  };
   const clusterTmpRoot =
     process.env.TC_REPLICATION_TMPDIR ?? process.env.TMPDIR ?? tmpdir();
   const rootDir =
@@ -442,6 +463,7 @@ export async function startCluster(
     }
   } catch (error) {
     await Promise.all(nodes.map((node) => stopProcess(node.process)));
+    releaseLease();
     throw new Error(
       `Cluster startup failed. Preserved logs and data at ${rootDir}. ${String(error)}`
     );
@@ -458,8 +480,12 @@ export async function startCluster(
       return await startNodeByName(nodeName);
     },
     async stop() {
-      await Promise.all(nodes.map((node) => stopProcess(node.process)));
-      await rm(rootDir, { recursive: true, force: true });
+      try {
+        await Promise.all(nodes.map((node) => stopProcess(node.process)));
+        await rm(rootDir, { recursive: true, force: true });
+      } finally {
+        releaseLease();
+      }
     },
     async restartNode(nodeName: string) {
       await stopNodeByName(nodeName);
