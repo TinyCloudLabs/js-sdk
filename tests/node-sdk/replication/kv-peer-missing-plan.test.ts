@@ -3,8 +3,11 @@ import { startCluster } from "./cluster";
 import {
   createClusterClient,
   getClusterNode,
+  openAuthReplicationSession,
   openKvReplicationSession,
+  openTransportSession,
   peerMissingPlanFromPeer,
+  reconcileAuthFromPeer,
   reconcileFromPeer,
   uniqueReplicationPrefix,
   waitForCondition,
@@ -77,6 +80,25 @@ describe("Replication Peer Missing Plan", () => {
           ok: true,
         });
 
+        await reconcileAuthFromPeer(
+          cluster,
+          "node-b",
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+          },
+          {
+            target: await openAuthReplicationSession(replica, replicaNode.url),
+            peer: await openAuthReplicationSession(authority, authorityNode.url),
+          }
+        );
+
+        const peerSession = await openKvReplicationSession(
+          authority,
+          authorityNode.url,
+          scope
+        );
+        const peerTransport = await openTransportSession(peerSession);
         const plan = await peerMissingPlanFromPeer(
           cluster,
           "node-b",
@@ -87,13 +109,14 @@ describe("Replication Peer Missing Plan", () => {
           },
           {
             target: await openKvReplicationSession(replica, replicaNode.url, scope),
-            peer: await openKvReplicationSession(authority, authorityNode.url, scope),
+            peer: peerSession,
           }
         );
 
         expect(plan.spaceId).toBe(authority.spaceId);
         expect(plan.prefix).toBe(scope);
         expect(plan.peerUrl).toBe(authorityNode.url);
+        expect(plan.peerServerDid).toBe(peerTransport?.serverDid);
         expect(plan.peerHostRole).toBe(true);
         expect(plan.pruneDeleteCount).toBeGreaterThanOrEqual(1);
         expect(plan.quarantineAbsentCount).toBeGreaterThanOrEqual(1);
@@ -113,41 +136,25 @@ describe("Replication Peer Missing Plan", () => {
   );
 
   test(
-    "rejects authority-mode planning against a peer-serving replica that is not a host",
+    "requires the peer host delegation to be present in the local auth DAG",
     { timeout: 600_000 },
     async () => {
-      const cluster = await startCluster({
-        nodes: [
-          { name: "node-a", role: "authority", port: 8010 },
-          { name: "node-b", role: "host", port: 8011 },
-          {
-            name: "node-c",
-            role: "replica",
-            port: 8012,
-            env: {
-              TINYCLOUD_REPLICATION_PEER_SERVING: "true",
-            },
-          },
-        ],
-      });
+      const cluster = await startCluster();
       try {
-        const prefix = uniqueReplicationPrefix("peer-missing-host-only");
+        const prefix = uniqueReplicationPrefix("peer-missing-auth-dag");
         const authority = createClusterClient(cluster, "node-a", prefix);
         const host = createClusterClient(cluster, "node-b", prefix);
-        const replica = createClusterClient(cluster, "node-c", prefix);
-        const replicaNode = getClusterNode(cluster, "node-c");
+        const authorityNode = getClusterNode(cluster, "node-a");
         const hostNode = getClusterNode(cluster, "node-b");
 
         await authority.signIn();
         await host.signIn();
-        await replica.signIn();
 
         expect(host.spaceId).toBe(authority.spaceId);
-        expect(replica.spaceId).toBe(authority.spaceId);
 
-        const scope = `replication/peer-missing-host-only/${Date.now()}`;
+        const scope = `replication/peer-missing-auth-dag/${Date.now()}`;
         const key = `${scope}/profile.json`;
-        expect(await replica.kv.put(key, { state: "replica-only" })).toMatchObject({
+        expect(await host.kv.put(key, { state: "host-local-only" })).toMatchObject({
           ok: true,
         });
 
@@ -157,21 +164,59 @@ describe("Replication Peer Missing Plan", () => {
             cluster,
             "node-b",
             {
-              peerUrl: replicaNode.url,
+              peerUrl: authorityNode.url,
               spaceId: authority.spaceId!,
               prefix: scope,
             },
             {
               target: await openKvReplicationSession(host, hostNode.url, scope),
-              peer: await openKvReplicationSession(replica, replicaNode.url, scope),
+              peer: await openKvReplicationSession(authority, authorityNode.url, scope),
             }
           );
         } catch (error) {
           message = String(error);
         }
 
-        expect(message).toContain("403");
-        expect(message).toContain("host-role");
+        expect(message).toContain("tinycloud.space/host");
+
+        const authPull = await reconcileAuthFromPeer(
+          cluster,
+          "node-b",
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+          },
+          {
+            target: await openAuthReplicationSession(host, hostNode.url),
+            peer: await openAuthReplicationSession(authority, authorityNode.url),
+          }
+        );
+
+        expect(authPull.importedDelegations).toBeGreaterThanOrEqual(1);
+
+        const peerSession = await openKvReplicationSession(
+          authority,
+          authorityNode.url,
+          scope
+        );
+        const peerTransport = await openTransportSession(peerSession);
+        const plan = await peerMissingPlanFromPeer(
+          cluster,
+          "node-b",
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+            prefix: scope,
+          },
+          {
+            target: await openKvReplicationSession(host, hostNode.url, scope),
+            peer: peerSession,
+          }
+        );
+
+        expect(plan.peerServerDid).toBe(peerTransport?.serverDid);
+        expect(plan.peerHostRole).toBe(true);
+        expect(plan.items.some((item) => item.key === key)).toBe(true);
       } finally {
         await cluster.stop();
       }

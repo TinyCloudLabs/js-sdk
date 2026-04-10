@@ -3,8 +3,11 @@ import { startCluster } from "./cluster";
 import {
   createClusterClient,
   getClusterNode,
+  openAuthReplicationSession,
   openKvReplicationSession,
+  openTransportSession,
   peerMissingApplyFromPeer,
+  reconcileAuthFromPeer,
   reconcileFromPeer,
   uniqueReplicationPrefix,
   waitForCondition,
@@ -62,6 +65,25 @@ describe("Replication Peer Missing Apply", () => {
           ok: true,
         });
 
+        await reconcileAuthFromPeer(
+          cluster,
+          "node-b",
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+          },
+          {
+            target: await openAuthReplicationSession(replica, replicaNode.url),
+            peer: await openAuthReplicationSession(authority, authorityNode.url),
+          }
+        );
+
+        const peerSession = await openKvReplicationSession(
+          authority,
+          authorityNode.url,
+          scope
+        );
+        const peerTransport = await openTransportSession(peerSession);
         const apply = await peerMissingApplyFromPeer(
           cluster,
           "node-b",
@@ -72,13 +94,14 @@ describe("Replication Peer Missing Apply", () => {
           },
           {
             target: await openKvReplicationSession(replica, replicaNode.url, scope),
-            peer: await openKvReplicationSession(authority, authorityNode.url, scope),
+            peer: peerSession,
           }
         );
 
         expect(apply.spaceId).toBe(authority.spaceId);
         expect(apply.prefix).toBe(scope);
         expect(apply.peerUrl).toBe(authorityNode.url);
+        expect(apply.peerServerDid).toBe(peerTransport?.serverDid);
         expect(apply.peerHostRole).toBe(true);
         expect(apply.prunedDeletes).toBeGreaterThanOrEqual(1);
         expect(apply.quarantined).toBeGreaterThanOrEqual(1);

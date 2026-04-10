@@ -163,6 +163,7 @@ export interface KvPeerMissingPlanResponse {
   spaceId: string;
   prefix?: string;
   peerUrl: string;
+  peerServerDid: string;
   peerHostRole: boolean;
   startAfter?: string;
   limit?: number;
@@ -217,6 +218,7 @@ export interface KvPeerMissingApplyResponse {
   spaceId: string;
   prefix?: string;
   peerUrl: string;
+  peerServerDid: string;
   peerHostRole: boolean;
   startAfter?: string;
   limit?: number;
