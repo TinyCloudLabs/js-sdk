@@ -63,6 +63,7 @@ export interface SqlReplicationReconcileRequest {
   peerUrl: string;
   spaceId: string;
   dbName: string;
+  sinceSeq?: number;
 }
 
 export interface ReplicationPullSessions {
@@ -82,12 +83,16 @@ export interface SqlReplicationApplyResponse {
   spaceId: string;
   dbName: string;
   peerUrl?: string;
-  snapshotBytes: number;
+  mode?: "snapshot" | "changeset";
+  changesetBytes?: number;
+  snapshotBytes?: number;
+  appliedUntilSeq?: number;
 }
 
 export interface SqlReplicationExportRequest {
   spaceId: string;
   dbName: string;
+  sinceSeq?: number;
 }
 
 export interface KvReconExportRequest {
@@ -362,7 +367,45 @@ export interface KvReconCompareResponse {
 export interface SqlReplicationExportResponse {
   spaceId: string;
   dbName: string;
-  snapshot: number[];
+  mode?: "snapshot" | "changeset";
+  requestedSinceSeq?: number;
+  exportedUntilSeq?: number;
+  changeset?: number[];
+  changesetBytes?: number;
+  snapshot?: number[];
+  snapshotBytes?: number;
+  snapshotReason?: string;
+}
+
+type SqlReplicationPayloadShape = {
+  mode?: "snapshot" | "changeset";
+  changeset?: number[];
+  snapshot?: number[];
+  changesetBytes?: number;
+  snapshotBytes?: number;
+};
+
+export function sqlReplicationMode(
+  response: SqlReplicationPayloadShape
+): "snapshot" | "changeset" {
+  if (response.mode) {
+    return response.mode;
+  }
+  if (response.changeset && response.changeset.length > 0) {
+    return "changeset";
+  }
+  return "snapshot";
+}
+
+export function sqlReplicationBytes(
+  response: SqlReplicationPayloadShape
+): { changesetBytes: number; snapshotBytes: number } {
+  return {
+    changesetBytes:
+      response.changesetBytes ?? response.changeset?.length ?? 0,
+    snapshotBytes:
+      response.snapshotBytes ?? response.snapshot?.length ?? 0,
+  };
 }
 
 export interface ReplicationSessionOpenResponse {
