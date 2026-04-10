@@ -1,5 +1,17 @@
 # @tinycloudlabs/node-sdk-wasm
 
+## 1.7.2-beta.0
+
+### Patch Changes
+
+- b55ffbd: Add manifest and capability-chain primitives to `@tinycloud/sdk-core`, and re-export `parseRecapFromSiwe` from both WASM wrappers.
+  - `@tinycloud/sdk-core` gains `Manifest`, `PermissionEntry`, `ResolvedCapabilities`, `resolveManifest`, `parseExpiry`, `expandActionShortNames`, default-tier constants, `isCapabilitySubset`, `parseRecapCapabilities`, `PermissionNotInManifestError`, and `SessionExpiredError`. These are the building blocks for the `delegateTo` / `requestPermissions` flow that will follow in `@tinycloud/node-sdk` and `@tinycloud/web-sdk`.
+  - `@tinycloud/node-sdk-wasm` and `@tinycloud/web-sdk-wasm` re-export `parseRecapFromSiwe`, the new WASM export in `tinycloud-node` that decodes recap capabilities from a signed SIWE message.
+  - The Rust rev in `packages/sdk-rs/Cargo.toml` is bumped to the commit that introduced `parseRecapFromSiwe`.
+  - New `ms` dependency on `@tinycloud/sdk-core` for duration parsing.
+
+- 9a9fae1: Re-export `invokeAny` from the node and web WASM bindings. Unblocks `@tinycloud/node-sdk@2.1.x`, which imports `invokeAny` at module load; against the published `@tinycloud/node-sdk-wasm@1.7.1` artifact (built before the symbol existed) consumers hit `SyntaxError: Export named 'invokeAny' not found in module '@tinycloud/node-sdk-wasm'`. The Rust source and TypeScript wrappers already expose `invokeAny` on master (PR #173); this changeset exists to trigger a new WASM release so the symbol reaches npm.
+
 ## 1.7.1
 
 ## 1.7.0

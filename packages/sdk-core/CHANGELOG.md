@@ -1,5 +1,22 @@
 # @tinycloudlabs/sdk-core
 
+## 2.1.0-beta.0
+
+### Minor Changes
+
+- b55ffbd: Add manifest and capability-chain primitives to `@tinycloud/sdk-core`, and re-export `parseRecapFromSiwe` from both WASM wrappers.
+  - `@tinycloud/sdk-core` gains `Manifest`, `PermissionEntry`, `ResolvedCapabilities`, `resolveManifest`, `parseExpiry`, `expandActionShortNames`, default-tier constants, `isCapabilitySubset`, `parseRecapCapabilities`, `PermissionNotInManifestError`, and `SessionExpiredError`. These are the building blocks for the `delegateTo` / `requestPermissions` flow that will follow in `@tinycloud/node-sdk` and `@tinycloud/web-sdk`.
+  - `@tinycloud/node-sdk-wasm` and `@tinycloud/web-sdk-wasm` re-export `parseRecapFromSiwe`, the new WASM export in `tinycloud-node` that decodes recap capabilities from a signed SIWE message.
+  - The Rust rev in `packages/sdk-rs/Cargo.toml` is bumped to the commit that introduced `parseRecapFromSiwe`.
+  - New `ms` dependency on `@tinycloud/sdk-core` for duration parsing.
+
+- 61c031d: Add write-hooks support across the JS SDK surface for SDK services, core, Node, and web packages.
+
+### Patch Changes
+
+- Updated dependencies [61c031d]
+  - @tinycloud/sdk-services@2.1.0-beta.0
+
 ## 2.0.4-beta.0
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-services
 
+## 2.1.0-beta.0
+
+### Minor Changes
+
+- 61c031d: Add write-hooks support across the JS SDK surface for SDK services, core, Node, and web packages.
+
 ## 2.0.3
 
 ## 2.0.2

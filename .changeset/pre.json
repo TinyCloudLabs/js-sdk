@@ -17,6 +17,9 @@
     "@tinycloud/sdk-services-test": "6.0.2"
   },
   "changesets": [
-    "trigger-nonce-republish"
+    "capability-chain-manifest",
+    "reexport-invoke-any",
+    "trigger-nonce-republish",
+    "write-hooks-phase2"
   ]
 }

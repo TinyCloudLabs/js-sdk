@@ -1,5 +1,19 @@
 # @tinycloudlabs/node-sdk
 
+## 2.1.0-beta.0
+
+### Minor Changes
+
+- 61c031d: Add write-hooks support across the JS SDK surface for SDK services, core, Node, and web packages.
+
+### Patch Changes
+
+- Updated dependencies [b55ffbd]
+- Updated dependencies [9a9fae1]
+- Updated dependencies [61c031d]
+  - @tinycloud/sdk-core@2.1.0-beta.0
+  - @tinycloud/node-sdk-wasm@1.7.2-beta.0
+
 ## 2.0.4-beta.0
 
 ### Patch Changes
