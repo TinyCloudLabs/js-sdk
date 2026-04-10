@@ -190,6 +190,7 @@ export {
   CreateDelegationParams,
   CreateDelegationWasmParams,
   CreateDelegationWasmResult,
+  DelegatedResource,
   DelegationChain,
   DelegationApiResponse,
   // Configuration types
@@ -304,13 +305,17 @@ export {
   DEFAULT_EXPIRY,
   SERVICE_LONG_TO_SHORT,
   SERVICE_SHORT_TO_LONG,
+  // Types
+  type AbilitiesMap,
   // Functions
   applyPrefix,
   expandActionShortNames,
   loadManifest,
+  manifestAbilitiesUnion,
   normalizeDefaults,
   parseExpiry,
   resolveManifest,
+  resourceCapabilitiesToAbilitiesMap,
   validateManifest,
 } from "./manifest";
 

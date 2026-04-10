@@ -16,6 +16,10 @@ import {
   AutoApproveSpaceCreationHandler,
   IWasmBindings,
   ISessionManager,
+  Manifest,
+  AbilitiesMap,
+  manifestAbilitiesUnion,
+  resolveManifest,
 } from "@tinycloud/sdk-core";
 import {
   SignStrategy,
@@ -64,6 +68,25 @@ export interface NodeUserAuthorizationConfig {
   nonce?: string;
   /** Optional SIWE configuration overrides (e.g., nonce for server-provided nonces) */
   siweConfig?: SiweConfig;
+  /**
+   * App manifest used to drive the SIWE recap at sign-in.
+   *
+   * When set, `signIn` resolves the manifest (via
+   * {@link resolveManifest}), unions the app's own permissions with
+   * every `delegations[*].permissions` list, converts to the WASM
+   * abilities shape, and uses that map as the session's granted
+   * capabilities — *instead* of `defaultActions`.
+   *
+   * This is what makes manifest-declared pre-delegations usable: the
+   * session key's recap covers both the app's runtime needs and the
+   * downstream delegation targets, so `delegateTo` can issue the
+   * sub-delegation via the session-key UCAN path without a wallet
+   * prompt.
+   *
+   * When omitted, `signIn` falls back to `defaultActions` for
+   * backwards compatibility.
+   */
+  manifest?: Manifest;
 }
 
 /**
@@ -115,6 +138,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly nonce?: string;
   private readonly siweConfig?: SiweConfig;
   private readonly wasm: IWasmBindings;
+  /**
+   * Stored manifest, if one was provided at construction time. Used by
+   * {@link signIn} to derive the session's granted capabilities instead
+   * of falling back to {@link defaultActions}.
+   */
+  private _manifest?: Manifest;
 
   private sessionManager: ISessionManager;
   private extensions: Extension[] = [];
@@ -184,9 +213,28 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.enablePublicSpace = config.enablePublicSpace ?? true;
     this.nonce = config.nonce;
     this.siweConfig = config.siweConfig;
+    this._manifest = config.manifest;
 
     // Initialize session manager via WASM bindings
     this.sessionManager = this.wasm.createSessionManager();
+  }
+
+  /**
+   * Return the manifest currently driving sign-in behavior, or
+   * `undefined` if none is set. Used by TinyCloudWeb/TinyCloudNode
+   * internals to surface the manifest for requestPermissions flows
+   * without forcing the caller to track it separately.
+   */
+  get manifest(): Manifest | undefined {
+    return this._manifest;
+  }
+
+  /**
+   * Install or replace the stored manifest. Takes effect on the next
+   * `signIn()` call — the current session (if any) is not touched.
+   */
+  setManifest(manifest: Manifest | undefined): void {
+    this._manifest = manifest;
   }
 
   /**
@@ -206,6 +254,40 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   get nodeFeatures(): string[] {
     return this._nodeFeatures;
+  }
+
+  /**
+   * Compute the `abilities` map the WASM `prepareSession` call should
+   * see at sign-in time.
+   *
+   * When a manifest is installed, we resolve it and union together:
+   * - the app's own `resources` (what it needs at runtime)
+   * - every `additionalDelegates[*].permissions` list (what it will
+   *   re-delegate to other DIDs post sign-in)
+   *
+   * into the short-service / path / full-URN-actions shape the WASM
+   * layer expects. This is the key invariant that lets
+   * {@link TinyCloudNode.delegateTo} issue manifest-declared
+   * delegations via the session key (no wallet prompt): the session's
+   * own recap already covers every action those delegations need.
+   *
+   * When no manifest is installed, we fall back to the
+   * {@link defaultActions} table so existing callers see no change.
+   *
+   * This is a pure function of `this._manifest` + `this.defaultActions`
+   * — the manifest resolution performs no I/O and throws a
+   * {@link ManifestValidationError} on structural problems (missing
+   * id/name, unparseable expiry, etc), which will surface at sign-in
+   * rather than being silently swallowed.
+   *
+   * @internal
+   */
+  private resolveSignInAbilities(): AbilitiesMap {
+    if (this._manifest === undefined) {
+      return this.defaultActions;
+    }
+    const resolved = resolveManifest(this._manifest);
+    return manifestAbilitiesUnion(resolved);
   }
 
   /**
@@ -483,9 +565,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const now = new Date();
     const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
 
-    // Prepare session - this creates the SIWE message with ReCap capabilities
+    // Prepare session - this creates the SIWE message with ReCap capabilities.
+    //
+    // When a manifest is installed, `resolveSignInAbilities()` returns
+    // the union of app permissions + every manifest-declared
+    // delegation's permissions in the shape `prepareSession` accepts.
+    // Otherwise it returns `defaultActions` unchanged (legacy path).
     const prepared = this.wasm.prepareSession({
-      abilities: this.defaultActions,
+      abilities: this.resolveSignInAbilities(),
       address,
       chainId,
       domain: this.domain,
@@ -680,9 +767,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const now = new Date();
     const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
 
-    // Prepare session - this creates the SIWE message with ReCap capabilities
+    // Prepare session - this creates the SIWE message with ReCap capabilities.
+    //
+    // When a manifest is installed, `resolveSignInAbilities()` returns
+    // the union of app permissions + every manifest-declared
+    // delegation's permissions in the shape `prepareSession` accepts.
+    // Otherwise it returns `defaultActions` unchanged (legacy path).
     const prepared = this.wasm.prepareSession({
-      abilities: this.defaultActions,
+      abilities: this.resolveSignInAbilities(),
       address,
       chainId,
       domain: this.domain,

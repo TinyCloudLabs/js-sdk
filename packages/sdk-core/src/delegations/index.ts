@@ -70,6 +70,7 @@ export {
   // WASM delegation types
   CreateDelegationWasmParams,
   CreateDelegationWasmResult,
+  DelegatedResource,
 } from "./types";
 
 // Classes

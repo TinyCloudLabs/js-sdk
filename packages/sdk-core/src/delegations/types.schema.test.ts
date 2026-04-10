@@ -612,26 +612,40 @@ describe("DelegationApiResponseSchema", () => {
 // =============================================================================
 
 describe("CreateDelegationWasmParamsSchema", () => {
-  it("should validate params with mock session", () => {
+  // Params schema was migrated to the multi-resource shape alongside
+  // the Rust create_delegation WASM change: `path` + `actions` →
+  // `abilities: Record<short service, Record<path, actionURNs[]>>`.
+  // These tests cover the single-entry and multi-entry cases that
+  // flow through the same validator.
+  it("should validate single-entry abilities params", () => {
     const params = {
       session: { did: "did:key:z6MkTest", spaceId: "space-123" },
       delegateDID: "did:key:z6MkTarget",
       spaceId: "space-123",
-      path: "/kv/test",
-      actions: ["tinycloud.kv/get"],
+      abilities: {
+        kv: {
+          "/kv/test": ["tinycloud.kv/get"],
+        },
+      },
       expirationSecs: 1735689600,
     };
     const result = CreateDelegationWasmParamsSchema.safeParse(params);
     expect(result.success).toBe(true);
   });
 
-  it("should validate params with notBeforeSecs", () => {
+  it("should validate multi-service multi-path abilities params", () => {
     const params = {
       session: { did: "did:key:z6MkTest", spaceId: "space-123" },
       delegateDID: "did:key:z6MkTarget",
       spaceId: "space-123",
-      path: "/kv/test",
-      actions: ["tinycloud.kv/get"],
+      abilities: {
+        kv: {
+          "com.listen.app/": ["tinycloud.kv/get", "tinycloud.kv/put"],
+        },
+        sql: {
+          "com.listen.app/data.sqlite": ["tinycloud.sql/read"],
+        },
+      },
       expirationSecs: 1735689600,
       notBeforeSecs: 1704067200,
     };
@@ -641,14 +655,49 @@ describe("CreateDelegationWasmParamsSchema", () => {
 });
 
 describe("CreateDelegationWasmResultSchema", () => {
-  it("should validate a result", () => {
+  // Result schema now carries a `resources` array instead of flat
+  // path/actions fields. For single-entry calls `resources` has
+  // exactly one entry; for multi-entry it has one per
+  // (service, path) tuple in (service, path) lexicographic order.
+  it("should validate a single-resource result", () => {
     const result = {
       delegation: "eyJ0eXAiOiJKV1QiLCJhbGciOiJFZERTQSJ9...",
       cid: "bafyrei1234567890",
       delegateDID: "did:key:z6MkTarget",
-      path: "/kv/test",
-      actions: ["tinycloud.kv/get"],
       expiry: new Date("2025-12-31"),
+      resources: [
+        {
+          service: "kv",
+          space: "tinycloud:pkh:eip155:1:0xabc:default",
+          path: "/kv/test",
+          actions: ["tinycloud.kv/get"],
+        },
+      ],
+    };
+    const parseResult = CreateDelegationWasmResultSchema.safeParse(result);
+    expect(parseResult.success).toBe(true);
+  });
+
+  it("should validate a multi-resource result", () => {
+    const result = {
+      delegation: "eyJ0eXAiOiJKV1QiLCJhbGciOiJFZERTQSJ9...",
+      cid: "bafyrei1234567890",
+      delegateDID: "did:key:z6MkTarget",
+      expiry: new Date("2025-12-31"),
+      resources: [
+        {
+          service: "kv",
+          space: "tinycloud:pkh:eip155:1:0xabc:default",
+          path: "com.listen.app/",
+          actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+        },
+        {
+          service: "sql",
+          space: "tinycloud:pkh:eip155:1:0xabc:default",
+          path: "com.listen.app/data.sqlite",
+          actions: ["tinycloud.sql/read"],
+        },
+      ],
     };
     const parseResult = CreateDelegationWasmResultSchema.safeParse(result);
     expect(parseResult.success).toBe(true);

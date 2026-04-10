@@ -93,14 +93,27 @@ describe("WASM Validation Utilities", () => {
   });
 
   describe("validateCreateDelegationWasmOutput", () => {
+    // The raw result shape now carries a `resources` array instead
+    // of flat path/actions fields. These tests cover both single-
+    // and multi-resource results as well as the three expiry
+    // encodings the Rust WASM layer may emit (number seconds, ISO
+    // string, or Date after serde conversion).
+    const singleResource = [
+      {
+        service: "kv",
+        space: "tinycloud:pkh:eip155:1:0xabc:default",
+        path: "/shared/",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+    ];
+
     it("should validate a correct createDelegation result", () => {
       process.env.NODE_ENV = "development";
       const validResult = {
         delegation: "eyJhbGciOiJFUzI1NksifQ...",
         cid: "bafyreih...",
         delegateDID: "did:key:z6Mk...",
-        path: "/shared/",
-        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+        resources: singleResource,
         expiry: 1704067200,
       };
 
@@ -117,8 +130,7 @@ describe("WASM Validation Utilities", () => {
         delegation: "eyJhbGciOiJFUzI1NksifQ...",
         cid: "bafyreih...",
         delegateDID: "did:key:z6Mk...",
-        path: "/shared/",
-        actions: ["tinycloud.kv/get"],
+        resources: singleResource,
         expiry: new Date("2024-01-01T00:00:00Z"),
       };
 
@@ -134,8 +146,7 @@ describe("WASM Validation Utilities", () => {
         delegation: "eyJhbGciOiJFUzI1NksifQ...",
         cid: "bafyreih...",
         delegateDID: "did:key:z6Mk...",
-        path: "/shared/",
-        actions: ["tinycloud.kv/get"],
+        resources: singleResource,
         expiry: "2024-01-01T00:00:00Z",
       };
 
@@ -145,11 +156,41 @@ describe("WASM Validation Utilities", () => {
       expect(result.issues).toBeUndefined();
     });
 
+    it("should validate a multi-resource result", () => {
+      process.env.NODE_ENV = "development";
+      const validResult = {
+        delegation: "eyJhbGciOiJFUzI1NksifQ...",
+        cid: "bafyreih...",
+        delegateDID: "did:key:z6Mk...",
+        expiry: 1704067200,
+        resources: [
+          {
+            service: "kv",
+            space: "tinycloud:pkh:eip155:1:0xabc:default",
+            path: "com.listen.app/",
+            actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+          },
+          {
+            service: "sql",
+            space: "tinycloud:pkh:eip155:1:0xabc:default",
+            path: "com.listen.app/data.sqlite",
+            actions: ["tinycloud.sql/read"],
+          },
+        ],
+      };
+
+      const result = validateCreateDelegationWasmOutput(validResult);
+
+      expect(result.validated).toBe(true);
+      expect(result.issues).toBeUndefined();
+      expect(result.data.resources.length).toBe(2);
+    });
+
     it("should report issues for missing required fields", () => {
       process.env.NODE_ENV = "development";
       const invalidResult = {
         delegation: "eyJhbGciOiJFUzI1NksifQ...",
-        // missing cid, delegateDID, etc.
+        // missing cid, delegateDID, resources, etc.
       };
 
       // Suppress console.warn for this test

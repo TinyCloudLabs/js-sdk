@@ -105,13 +105,19 @@ export interface Config extends ClientConfig {
   provider?: any;
 
   /**
-   * App manifest used for sign-in and escalation flows.
+   * App manifest used for sign-in and escalation flows. When set,
+   * the SIWE recap issued at sign-in covers the union of the app's
+   * own permissions and every manifest-declared delegation's
+   * permissions — which is what enables
+   * `tcw.delegateTo(manifestDeclaredDid, permissions)` to run via
+   * the session-key UCAN path (no wallet prompt).
    *
    * When provided, {@link TinyCloudWeb.requestPermissions} uses the
    * manifest's `name` and `icon` to title the permission modal and
    * composes escalation requests against the manifest's existing
-   * permission set. Phase 4 stores the manifest verbatim; the
-   * manifest-driven sign-in path itself lands in Phase 5.
+   * permission set. The manifest is forwarded into the underlying
+   * {@link TinyCloudNode} so `signIn()` drives its SIWE recap from
+   * it directly.
    */
   manifest?: Manifest;
 }
@@ -206,9 +212,11 @@ export class TinyCloudWeb {
    * App manifest stored from config (or updated via `setManifest`).
    *
    * `requestPermissions` reads this for the modal title/icon and for
-   * composing an expanded manifest on approve. Phase 4 treats this as a
-   * simple passthrough container — the manifest-driven sign-in flow lands
-   * in Phase 5, where `signIn` will consume this field directly.
+   * composing an expanded manifest on approve. `_init` forwards this
+   * value into the underlying {@link TinyCloudNode} so `signIn()`
+   * drives its SIWE recap from the manifest. `setManifest` mirrors
+   * any post-construction updates onto the node so the next sign-in
+   * picks them up.
    */
   private _manifest?: Manifest;
 
@@ -268,6 +276,12 @@ export class TinyCloudWeb {
       wasmBindings: this.wasmBindings,
       nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
+      // Forward the manifest into the node-sdk layer. This is what
+      // finally wires up the manifest-driven sign-in flow end-to-end:
+      // TinyCloudWeb.Config.manifest → TinyCloudNode → NodeUserAuthorization,
+      // where `resolveManifest` + `manifestAbilitiesUnion` produce the
+      // actual `abilities` map passed to `prepareSession`.
+      manifest: this._manifest,
     };
 
     // Wire up signer if available
@@ -458,9 +472,20 @@ export class TinyCloudWeb {
    * their manifest at runtime (e.g. after fetching a backend's advertised
    * permissions) and by the escalation flow inside
    * {@link requestPermissions}.
+   *
+   * The manifest is forwarded to the underlying TinyCloudNode so the
+   * next `signIn()` picks it up. If the node has not been constructed
+   * yet (pre-init), the manifest is stored locally and forwarded
+   * later inside `_init`.
    */
   setManifest(manifest: Manifest): void {
     this._manifest = manifest;
+    // Forward eagerly if the node is already up. Pre-init, the
+    // manifest rides into the constructor via `nodeConfig.manifest`
+    // inside `_init`, which reads `this._manifest` at that time.
+    if (this._node) {
+      this._node.setManifest(manifest);
+    }
   }
 
   /**
@@ -472,11 +497,11 @@ export class TinyCloudWeb {
    *
    * Spec: `.claude/specs/capability-chain.md` §requestPermissions.
    *
-   * Phase 4 note: the actual manifest-driven `signIn` is Phase 5. For
-   * now, the escalation composes an updated manifest, signs out, and
-   * calls `signIn()` — which still uses the current sign-in path. The
-   * updated `_manifest` field is available for the Phase 5 refactor to
-   * pick up directly.
+   * On approve, this composes the expanded manifest, signs out the
+   * current session, and calls `signIn()` — which now drives its
+   * SIWE recap from `this._manifest` directly, so the fresh session
+   * is signed with the expanded capability set in a single wallet
+   * prompt.
    */
   async requestPermissions(
     additional: PermissionEntry[],
@@ -487,10 +512,10 @@ export class TinyCloudWeb {
     validateAdditionalPermissions(additional);
 
     const manifest = this._manifest;
-    // Phase 4: we require a stored manifest for escalation so we can
-    // compose the expanded permission set. Apps that signed in without a
-    // manifest must set one via `setManifest` before escalating, or
-    // re-run signIn with an explicit manifest (Phase 5).
+    // Escalation requires a stored manifest because we need to
+    // compose the expanded permission set from the current app's
+    // declared permissions. Apps that signed in without a manifest
+    // must set one via `setManifest` before escalating.
     if (manifest === undefined) {
       throw new Error(
         "requestPermissions requires a stored manifest. Pass `manifest` in the TinyCloudWeb config or call setManifest() before requesting escalation.",
@@ -500,6 +525,12 @@ export class TinyCloudWeb {
     // Delegate to the pure core with injected dependencies. Test hooks
     // override any or all of them; production defaults wire to the real
     // modal manager and the class's own signOut/signIn methods.
+    //
+    // `writeManifest` mirrors the updated manifest onto BOTH `_manifest`
+    // and the underlying node so the subsequent `signIn()` call picks
+    // it up automatically. Updating only `_manifest` would leave the
+    // node still configured with the pre-escalation manifest, and the
+    // new sign-in would grant the old capability set.
     return requestPermissionsCore(additional, {
       manifest,
       showModal: this._testHooks?.showModal ?? showPermissionRequestModal,
@@ -507,6 +538,7 @@ export class TinyCloudWeb {
       signIn: this._testHooks?.signIn ?? (() => this.signIn()),
       writeManifest: (next) => {
         this._manifest = next;
+        this._node?.setManifest(next);
       },
     });
   }

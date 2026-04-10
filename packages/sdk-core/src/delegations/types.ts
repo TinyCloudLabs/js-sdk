@@ -90,6 +90,8 @@ export {
   type CreateDelegationWasmParams,
   CreateDelegationWasmResultSchema,
   type CreateDelegationWasmResult,
+  DelegatedResourceSchema,
+  type DelegatedResource,
 
   // Validation helpers
   validateDelegation,

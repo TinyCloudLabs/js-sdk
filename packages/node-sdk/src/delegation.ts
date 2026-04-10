@@ -1,4 +1,4 @@
-import { Delegation } from "@tinycloud/sdk-core";
+import { Delegation, DelegatedResource } from "@tinycloud/sdk-core";
 
 /**
  * A portable delegation that can be transported between users.
@@ -10,6 +10,12 @@ import { Delegation } from "@tinycloud/sdk-core";
  * - `ownerAddress`: Space owner's address for session creation
  * - `chainId`: Chain ID for session creation
  * - `host`: Optional server URL
+ * - `resources`: Multi-resource grant breakdown (present when the
+ *   delegation was issued via the multi-resource WASM path, i.e. one
+ *   UCAN covering multiple `(service, path, actions)` entries). The
+ *   flat `path` + `actions` fields mirror the first entry for
+ *   single-resource callers; consumers that need the full picture
+ *   read `resources`.
  */
 export interface PortableDelegation extends Omit<Delegation, "isRevoked"> {
   /** The authorization header for this delegation (structured format) */
@@ -29,6 +35,15 @@ export interface PortableDelegation extends Omit<Delegation, "isRevoked"> {
 
   /** Companion delegation for the user's public space (auto-created when includePublicSpace is true) */
   publicDelegation?: PortableDelegation;
+
+  /**
+   * Full multi-resource grant breakdown. Present when the delegation
+   * was issued via the multi-resource WASM path; each entry describes
+   * one `(service, space, path, actions)` grant carried by the single
+   * underlying UCAN. When absent, only the flat `path` + `actions`
+   * fields are authoritative (legacy single-resource shape).
+   */
+  resources?: DelegatedResource[];
 }
 
 /**

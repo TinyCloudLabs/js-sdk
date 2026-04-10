@@ -630,3 +630,108 @@ function resolveEntry(
     ...(entryExpiryMs !== undefined ? { expiryMs: entryExpiryMs } : {}),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Abilities map construction (bridge to WASM prepareSession / createDelegation)
+// ---------------------------------------------------------------------------
+
+/**
+ * The shape `prepareSession` and the multi-resource `createDelegation` WASM
+ * export both accept:
+ *
+ * ```
+ * { [shortService]: { [path]: [fullUrnAction, ...] } }
+ * ```
+ *
+ * - `shortService` is the recap-level service segment (`"kv"`, `"sql"`,
+ *   `"duckdb"`, `"capabilities"`, `"hooks"`) — not the manifest long form.
+ * - `path` is the fully-resolved path (prefix already applied). An empty
+ *   string means "no path segment" on the resource URI.
+ * - Action strings are full URNs like `"tinycloud.kv/get"`.
+ *
+ * This is a single source of truth for both the session's own recap (at
+ * sign-in) and the delegations it can derive (post sign-in). We re-use it
+ * for both so one manifest drives both sides.
+ */
+export type AbilitiesMap = Record<string, Record<string, string[]>>;
+
+/**
+ * Convert a list of {@link ResourceCapability} entries (manifest
+ * long-form service, full-URN actions) into the {@link AbilitiesMap}
+ * shape the WASM layer expects.
+ *
+ * When multiple entries target the same `(service, path)` pair, their
+ * action lists are merged and deduped. Entries whose service has no
+ * short-form mapping in {@link SERVICE_LONG_TO_SHORT} are rejected with
+ * a {@link ManifestValidationError} — the SDK does not silently drop
+ * unknown services because the recap encoding would lose them.
+ *
+ * Paths are kept verbatim: this function does NOT collapse
+ * `"com.listen.app/"` and `"com.listen.app"` or reinterpret empty /
+ * slash strings. Callers that care about path canonicalization should
+ * normalize before calling.
+ */
+export function resourceCapabilitiesToAbilitiesMap(
+  resources: readonly ResourceCapability[]
+): AbilitiesMap {
+  const out: AbilitiesMap = {};
+  for (const r of resources) {
+    const shortService = SERVICE_LONG_TO_SHORT[r.service];
+    if (shortService === undefined) {
+      throw new ManifestValidationError(
+        `unknown service '${r.service}' — no short-form mapping. Known services: ${Object.keys(SERVICE_LONG_TO_SHORT).join(", ")}`
+      );
+    }
+    if (out[shortService] === undefined) {
+      out[shortService] = {};
+    }
+    const pathsMap = out[shortService];
+    const existing = pathsMap[r.path];
+    if (existing === undefined) {
+      // Copy so downstream mutation can't leak back into the input.
+      pathsMap[r.path] = [...r.actions];
+    } else {
+      // Merge + dedupe while preserving first-seen order.
+      const seen = new Set(existing);
+      for (const action of r.actions) {
+        if (!seen.has(action)) {
+          existing.push(action);
+          seen.add(action);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Build the {@link AbilitiesMap} that a session should be signed with,
+ * given a {@link ResolvedCapabilities} (i.e. the output of
+ * {@link resolveManifest}).
+ *
+ * The resulting map is the **union** of:
+ * 1. the app's own resources (`resolved.resources`), and
+ * 2. every permission declared in every `additionalDelegates[*]` entry.
+ *
+ * The union is what makes the manifest's delegations ergonomic: at
+ * sign-in, the session key acquires recap coverage for both the app's
+ * runtime needs and every downstream delegation target. Post sign-in,
+ * `delegateTo(backendDID, backendPermissions)` can then issue the
+ * sub-delegation via the session key (no wallet prompt) because the
+ * caps are already part of the granted set.
+ *
+ * Duplicate `(service, path, action)` triples across resources and
+ * delegations are merged and deduped — the session SIWE doesn't need
+ * them repeated.
+ */
+export function manifestAbilitiesUnion(
+  resolved: ResolvedCapabilities
+): AbilitiesMap {
+  const all: ResourceCapability[] = [...resolved.resources];
+  for (const delegate of resolved.additionalDelegates) {
+    for (const perm of delegate.permissions) {
+      all.push(perm);
+    }
+  }
+  return resourceCapabilitiesToAbilitiesMap(all);
+}
