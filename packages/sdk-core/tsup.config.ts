@@ -10,6 +10,7 @@ export default defineConfig({
   // Externalize all dependencies — don't bundle them into the output
   external: [
     '@tinycloud/sdk-services',
+    'ms',
     'siwe',
     'zod',
     'zod-to-json-schema',

@@ -188,4 +188,33 @@ export {
 } from '@tinycloud/node-sdk/core';
 
 // TinyCloudNode re-export (for advanced usage)
-export { TinyCloudNode, TinyCloudNodeConfig } from '@tinycloud/node-sdk/core';
+export {
+  TinyCloudNode,
+  TinyCloudNodeConfig,
+  type DelegateToOptions,
+  type DelegateToResult,
+} from '@tinycloud/node-sdk/core';
+
+// Capability-chain delegation types and errors (spec: .claude/specs/capability-chain.md)
+export {
+  // Manifest shapes — PermissionEntry is what callers pass to delegateTo.
+  type Manifest,
+  type ManifestDefaults,
+  type ManifestDelegation,
+  type PermissionEntry,
+  type ResolvedCapabilities,
+  type ResolvedDelegate,
+  type ResourceCapability,
+  // Errors raised by delegateTo / requestPermissions.
+  PermissionNotInManifestError,
+  SessionExpiredError,
+  ManifestValidationError,
+  // Resolution + subset helpers for apps that want to compose manifests
+  // at runtime.
+  resolveManifest,
+  validateManifest,
+  loadManifest,
+  isCapabilitySubset,
+  expandActionShortNames,
+  parseExpiry,
+} from '@tinycloud/sdk-core';

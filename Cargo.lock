@@ -353,7 +353,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 [[package]]
 name = "cacaos"
 version = "1.0.0"
-source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=e0449685#e04496856a8c0dc2288d5e828754a24e6091fe82"
+source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=3e4b217790dbdb9b4353b9074ddc087336cc12af#3e4b217790dbdb9b4353b9074ddc087336cc12af"
 dependencies = [
  "async-trait",
  "hex",
@@ -3877,7 +3877,7 @@ dependencies = [
 [[package]]
 name = "siwe"
 version = "1.0.0"
-source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=e0449685#e04496856a8c0dc2288d5e828754a24e6091fe82"
+source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=3e4b217790dbdb9b4353b9074ddc087336cc12af#3e4b217790dbdb9b4353b9074ddc087336cc12af"
 dependencies = [
  "hex",
  "http 1.4.0",
@@ -3893,7 +3893,7 @@ dependencies = [
 [[package]]
 name = "siwe-recap"
 version = "1.0.0"
-source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=e0449685#e04496856a8c0dc2288d5e828754a24e6091fe82"
+source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=3e4b217790dbdb9b4353b9074ddc087336cc12af#3e4b217790dbdb9b4353b9074ddc087336cc12af"
 dependencies = [
  "base64 0.22.1",
  "ipld-core",
@@ -4956,7 +4956,7 @@ dependencies = [
 [[package]]
 name = "tinycloud-auth"
 version = "1.2.1"
-source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=e0449685#e04496856a8c0dc2288d5e828754a24e6091fe82"
+source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=3e4b217790dbdb9b4353b9074ddc087336cc12af#3e4b217790dbdb9b4353b9074ddc087336cc12af"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4980,7 +4980,7 @@ dependencies = [
 [[package]]
 name = "tinycloud-sdk-rs"
 version = "1.2.1"
-source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=e0449685#e04496856a8c0dc2288d5e828754a24e6091fe82"
+source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=3e4b217790dbdb9b4353b9074ddc087336cc12af#3e4b217790dbdb9b4353b9074ddc087336cc12af"
 dependencies = [
  "async-trait",
  "hex",
@@ -4998,7 +4998,7 @@ dependencies = [
 [[package]]
 name = "tinycloud-sdk-wasm"
 version = "1.2.1"
-source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=e0449685#e04496856a8c0dc2288d5e828754a24e6091fe82"
+source = "git+https://github.com/tinycloudlabs/tinycloud-node.git?rev=3e4b217790dbdb9b4353b9074ddc087336cc12af#3e4b217790dbdb9b4353b9074ddc087336cc12af"
 dependencies = [
  "aes-gcm",
  "chrono",

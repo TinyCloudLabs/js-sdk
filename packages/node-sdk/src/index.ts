@@ -94,7 +94,32 @@ export type {
 } from "./authorization/strategies";
 
 // High-level API
-export { TinyCloudNode, TinyCloudNodeConfig } from "./TinyCloudNode";
+export {
+  TinyCloudNode,
+  TinyCloudNodeConfig,
+  type DelegateToOptions,
+  type DelegateToResult,
+} from "./TinyCloudNode";
+
+// Capability-chain primitives (spec: .claude/specs/capability-chain.md).
+export {
+  type PermissionEntry,
+  type Manifest,
+  type ManifestDefaults,
+  type ManifestDelegation,
+  type ResolvedCapabilities,
+  type ResolvedDelegate,
+  type ResourceCapability,
+  PermissionNotInManifestError,
+  SessionExpiredError,
+  ManifestValidationError,
+  resolveManifest,
+  validateManifest,
+  loadManifest,
+  isCapabilitySubset,
+  expandActionShortNames,
+  parseExpiry,
+} from "@tinycloud/sdk-core";
 
 // WASM bindings
 export { NodeWasmBindings } from "./NodeWasmBindings";

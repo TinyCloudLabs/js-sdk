@@ -75,6 +75,13 @@ import {
   CreateDelegationWasmResult,
   UnsupportedFeatureError,
   makePublicSpaceId,
+  // Capability-chain delegation
+  type PermissionEntry,
+  PermissionNotInManifestError,
+  SessionExpiredError,
+  expandActionShortNames,
+  isCapabilitySubset,
+  parseRecapCapabilities,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
@@ -82,6 +89,11 @@ import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import { PortableDelegation } from "./delegation";
 import { DelegatedAccess } from "./DelegatedAccess";
 import { WasmKeyProvider } from "./keys/WasmKeyProvider";
+import {
+  legacyParamsToPermissionEntries,
+  resolveExpiryMs,
+  extractSiweExpiration,
+} from "./delegateToHelpers";
 
 /** Default TinyCloud host */
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
@@ -126,6 +138,37 @@ export interface TinyCloudNodeConfig {
   nonce?: string;
   /** Optional SIWE configuration overrides (e.g., nonce for server-provided nonces) */
   siweConfig?: SiweConfig;
+}
+
+/**
+ * Options for {@link TinyCloudNode.delegateTo}.
+ *
+ * `expiry` accepts either an ms-format duration string (e.g. `"7d"`, `"1h"`)
+ * or a raw number of milliseconds. When omitted, the default is 1 hour.
+ *
+ * `forceWalletSign` bypasses the derivability check and sends the
+ * delegation through the legacy wallet-signed SIWE path, which always
+ * triggers a wallet prompt. Used for testing, for explicit wallet
+ * confirmation flows, and by the legacy `createDelegation` fallback.
+ */
+export interface DelegateToOptions {
+  /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
+  expiry?: string | number;
+  /** Force the wallet-signed SIWE path even if the caps are derivable. Default false. */
+  forceWalletSign?: boolean;
+}
+
+/**
+ * Result of {@link TinyCloudNode.delegateTo}.
+ *
+ * `prompted` indicates whether a wallet prompt was shown — `true` for the
+ * legacy wallet path (always), `false` for the session-key UCAN path (never).
+ * Callers wiring single-prompt sign-in flows use this to assert that their
+ * capability chain was derivable.
+ */
+export interface DelegateToResult {
+  delegation: PortableDelegation;
+  prompted: boolean;
 }
 
 /**
@@ -1515,6 +1558,221 @@ export class TinyCloudNode {
     return this.delegationManager.checkPermission(path, action);
   }
 
+  // ===========================================================================
+  // Capability-chain delegation (spec: .claude/specs/capability-chain.md)
+  // ===========================================================================
+
+  /**
+   * Safety margin before the session's own expiry at which {@link delegateTo}
+   * will refuse to issue a derived delegation. Prevents issuing sub-delegations
+   * that would be invalid by the time the recipient used them. Spec: 60 seconds.
+   *
+   * @internal
+   */
+  private static readonly SESSION_EXPIRY_SAFETY_MARGIN_MS = 60_000;
+
+  /**
+   * Issue a delegation using the capability-chain flow.
+   *
+   * When the requested permissions are a subset of the current session's
+   * recap, the delegation is signed by the session key via WASM — no wallet
+   * prompt. When they are not, a {@link PermissionNotInManifestError} is
+   * raised so the caller can trigger an escalation flow (e.g.
+   * `TinyCloudWeb.requestPermissions`). Passing `forceWalletSign: true`
+   * bypasses the derivability check and always uses the wallet-signed SIWE
+   * path — used by the legacy `createDelegation` fallback and by callers
+   * that want explicit wallet confirmation.
+   *
+   * Current limitation: exactly one {@link PermissionEntry} per call. For
+   * multi-resource delegation, call `delegateTo` multiple times. This keeps
+   * each delegation a single `(spaceId, path)` grant, which matches the
+   * underlying `PortableDelegation` shape.
+   *
+   * @throws {@link SessionExpiredError} when there is no session or the
+   *   current session has expired (or will within the 60s safety margin).
+   * @throws {@link PermissionNotInManifestError} when the requested entries
+   *   are not a subset of the granted session capabilities and
+   *   `forceWalletSign` is not set.
+   */
+  async delegateTo(
+    did: string,
+    permissions: PermissionEntry[],
+    options?: DelegateToOptions,
+  ): Promise<DelegateToResult> {
+    // 1. Session validity check — fail fast with a clear error class so
+    //    callers can catch and trigger a fresh sign-in.
+    const session = this.auth?.tinyCloudSession;
+    if (!session) {
+      throw new SessionExpiredError(new Date(0));
+    }
+    const sessionExpiry = extractSiweExpiration(session.siwe);
+    if (sessionExpiry !== undefined) {
+      const now = Date.now();
+      const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;
+      if (sessionExpiry.getTime() <= now + marginMs) {
+        throw new SessionExpiredError(sessionExpiry);
+      }
+    }
+
+    // 2. Require exactly one permission entry per call. The legacy
+    //    createDelegation API bundles actions across services for a single
+    //    (space, path), so we enforce the same cardinality here and let
+    //    callers loop for multi-entry scenarios.
+    if (!Array.isArray(permissions) || permissions.length === 0) {
+      throw new Error(
+        "delegateTo requires a non-empty permissions array",
+      );
+    }
+    if (permissions.length > 1) {
+      throw new Error(
+        "delegateTo currently supports one permission entry per call. " +
+          "Call delegateTo multiple times for multi-resource delegation.",
+      );
+    }
+    const entry = permissions[0];
+
+    // 3. Defensively expand any short-form action names into full URNs so
+    //    the subset check and downstream WASM call both see canonical form.
+    const expandedEntry: PermissionEntry = {
+      ...entry,
+      actions: expandActionShortNames(entry.service, entry.actions),
+    };
+
+    // 4. Compute expiration. `options.expiry` overrides the default 1h.
+    //    ms-format ("7d") or raw millisecond count both accepted.
+    const now = new Date();
+    const expiryMs = resolveExpiryMs(options?.expiry);
+    const expirationTime = new Date(now.getTime() + expiryMs);
+    // Cap expiry at the session's own expiry so we never emit a UCAN whose
+    // validity exceeds the parent chain.
+    let effectiveExpiration = expirationTime;
+    if (sessionExpiry !== undefined && sessionExpiry < expirationTime) {
+      effectiveExpiration = sessionExpiry;
+    }
+
+    // 5. forceWalletSign short-circuit → always legacy path.
+    if (options?.forceWalletSign) {
+      const delegation = await this.createDelegationLegacyWalletPath(
+        did,
+        expandedEntry,
+        effectiveExpiration,
+      );
+      return { delegation, prompted: true };
+    }
+
+    // 6. Derivability check. `parseRecapCapabilities` is a thin wrapper
+    //    around the injected WASM binding; the binding is required because
+    //    `IWasmBindings` declares `parseRecapFromSiwe` as mandatory. If the
+    //    runtime binding hasn't been updated, this call will surface a
+    //    clear TypeError rather than silently falling through.
+    const granted = parseRecapCapabilities(
+      (siwe: string) => this.wasmBindings.parseRecapFromSiwe(siwe),
+      session.siwe,
+    );
+    const requested: PermissionEntry[] = [expandedEntry];
+    const { subset, missing } = isCapabilitySubset(requested, granted);
+
+    if (!subset) {
+      throw new PermissionNotInManifestError(missing, granted);
+    }
+
+    // 7. Subset path — sign the sub-delegation with the session key via WASM.
+    //    No wallet prompt. `createDelegationWrapper` is the same path used
+    //    by SharingService today.
+    const delegation = await this.createDelegationViaWasmPath(
+      did,
+      expandedEntry,
+      effectiveExpiration,
+      session,
+    );
+    return { delegation, prompted: false };
+  }
+
+  /**
+   * Issue a delegation via the session-key UCAN WASM path.
+   *
+   * The caller has already verified the request is derivable from the
+   * current session; we just need to shape the inputs for
+   * {@link createDelegationWrapper}.
+   *
+   * @internal
+   */
+  private async createDelegationViaWasmPath(
+    did: string,
+    entry: PermissionEntry,
+    expirationTime: Date,
+    session: TinyCloudSession,
+  ): Promise<PortableDelegation> {
+    // Translate the manifest `space` field into the server-side spaceId.
+    // "default" resolves to the session's primary space; any other value
+    // is trusted as a raw space URI (this matches how the rest of the
+    // node-sdk treats `spaceIdOverride`).
+    const spaceId = entry.space === "default" ? session.spaceId : entry.space;
+
+    // Build ServiceSession from TinyCloudSession. This mirrors how
+    // SharingService hands sessions to createDelegationWrapper.
+    const serviceSession: ServiceSession = {
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      jwk: session.jwk,
+      spaceId,
+      verificationMethod: session.verificationMethod,
+    };
+
+    const expirationSecs = Math.floor(expirationTime.getTime() / 1000);
+    const result = this.createDelegationWrapper({
+      session: serviceSession,
+      delegateDID: did,
+      spaceId,
+      path: entry.path,
+      actions: entry.actions,
+      expirationSecs,
+    });
+
+    // Translate the WASM result into a PortableDelegation. We don't have a
+    // structured delegation header from the WASM path, so we synthesize one
+    // from the serialized delegation (the recipient decodes it via
+    // `deserializeDelegation`).
+    return {
+      cid: result.cid,
+      delegationHeader: { Authorization: `Bearer ${result.delegation}` },
+      spaceId,
+      path: entry.path,
+      actions: entry.actions,
+      disableSubDelegation: false,
+      expiry: result.expiry,
+      delegateDID: did,
+      ownerAddress: session.address,
+      chainId: session.chainId,
+      host: this.config.host,
+    };
+  }
+
+  /**
+   * Issue a delegation via the legacy wallet-signed SIWE path for a single
+   * {@link PermissionEntry}. Shares the implementation with the public
+   * `createDelegation` method via {@link createDelegationWalletPath} so
+   * both entry points hit exactly the same SIWE / signer / public-space
+   * logic without mutual recursion.
+   *
+   * @internal
+   */
+  private async createDelegationLegacyWalletPath(
+    delegateDID: string,
+    entry: PermissionEntry,
+    expirationTime: Date,
+  ): Promise<PortableDelegation> {
+    const spaceIdOverride = entry.space === "default" ? undefined : entry.space;
+    return this.createDelegationWalletPath({
+      path: entry.path,
+      actions: entry.actions,
+      delegateDID,
+      includePublicSpace: true,
+      expiryMs: Math.max(0, expirationTime.getTime() - Date.now()),
+      spaceIdOverride,
+    });
+  }
+
   /**
    * Create a delegation from this user to another user.
    *
@@ -1540,19 +1798,99 @@ export class TinyCloudNode {
     /** Include a companion delegation for the user's public space (default: true) */
     includePublicSpace?: boolean;
   }): Promise<PortableDelegation> {
+    // Legacy compatibility shim.
+    //
+    // Route through delegateTo so that callers whose requested capabilities
+    // are a subset of their current session get the session-key UCAN path
+    // (no wallet prompt). Fall back to the legacy wallet-sign path on
+    // PermissionNotInManifestError, preserving today's behaviour for
+    // callers that request scope outside their session.
+    //
+    // SessionExpiredError propagates — an expired session can't be fixed
+    // by re-signing the SIWE, the caller needs to run signIn() again.
+    if (!this.signer) {
+      throw new Error("Cannot createDelegation() in session-only mode. Requires wallet mode.");
+    }
+    if (!this.auth?.tinyCloudSession) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+
+    // Resolve ENS names to PKH DIDs up front so both paths see the resolved
+    // DID. The wallet path mutates params further below; we do it here so
+    // the fast path (delegateTo) also picks up the resolved DID.
+    let resolvedDelegateDID = params.delegateDID;
+    if (resolvedDelegateDID.endsWith('.eth') && this.config.ensResolver) {
+      const address = await this.config.ensResolver.resolveAddress(resolvedDelegateDID);
+      if (!address) throw new Error(`Could not resolve ENS name: ${resolvedDelegateDID}`);
+      resolvedDelegateDID = `did:pkh:eip155:1:${address}`;
+    }
+
+    // Legacy params lump multiple services' actions under one path. The
+    // fast-path `delegateTo` emits one `PortableDelegation` per entry, so
+    // we only take the fast path when the legacy request contains actions
+    // for exactly one service. Multi-service legacy calls always go through
+    // the wallet path to preserve today's single-PortableDelegation return
+    // shape (with its `publicDelegation` companion for KV).
+    const entries = legacyParamsToPermissionEntries(
+      params.actions,
+      params.path,
+      params.spaceIdOverride,
+    );
+    if (entries.length === 1) {
+      try {
+        const result = await this.delegateTo(
+          resolvedDelegateDID,
+          [entries[0]],
+          params.expiryMs !== undefined
+            ? { expiry: params.expiryMs }
+            : undefined,
+        );
+        return result.delegation;
+      } catch (err) {
+        if (err instanceof PermissionNotInManifestError) {
+          // Expected — fall through to the wallet path below. Legacy
+          // callers that request scope outside their current session
+          // continue to see a wallet prompt, matching today's behaviour.
+        } else {
+          // SessionExpiredError and any other error class must propagate.
+          // An expired session can't be rescued by re-signing the SIWE
+          // here — the caller needs to run signIn() again.
+          throw err;
+        }
+      }
+    }
+
+    // Legacy wallet-signed SIWE path — same implementation as before the
+    // delegateTo refactor. Callers that request scope outside their
+    // current session land here and see the familiar wallet prompt.
+    return this.createDelegationWalletPath({
+      ...params,
+      delegateDID: resolvedDelegateDID,
+    });
+  }
+
+  /**
+   * Legacy wallet-signed SIWE delegation path. Lifted from the original
+   * `createDelegation` body verbatim so both the legacy public method and
+   * `delegateTo({ forceWalletSign: true })` hit the same code.
+   *
+   * @internal
+   */
+  private async createDelegationWalletPath(params: {
+    path: string;
+    actions: string[];
+    delegateDID: string;
+    disableSubDelegation?: boolean;
+    expiryMs?: number;
+    spaceIdOverride?: string;
+    includePublicSpace?: boolean;
+  }): Promise<PortableDelegation> {
     if (!this.signer) {
       throw new Error("Cannot createDelegation() in session-only mode. Requires wallet mode.");
     }
     const session = this.auth?.tinyCloudSession;
     if (!session) {
       throw new Error("Not signed in. Call signIn() first.");
-    }
-
-    // Resolve ENS names to PKH DIDs
-    if (params.delegateDID.endsWith('.eth') && this.config.ensResolver) {
-      const address = await this.config.ensResolver.resolveAddress(params.delegateDID);
-      if (!address) throw new Error(`Could not resolve ENS name: ${params.delegateDID}`);
-      params = { ...params, delegateDID: `did:pkh:eip155:1:${address}` };
     }
 
     // Build abilities for the delegation
@@ -1942,3 +2280,4 @@ export class TinyCloudNode {
     };
   }
 }
+

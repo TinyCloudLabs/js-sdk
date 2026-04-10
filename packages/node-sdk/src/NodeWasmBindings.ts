@@ -15,6 +15,7 @@ import {
   ensureEip55,
   makeSpaceId,
   createDelegation,
+  parseRecapFromSiwe,
   generateHostSIWEMessage,
   siweToDelegationHeaders,
   protocolVersion,
@@ -54,6 +55,7 @@ export class NodeWasmBindings implements IWasmBindings {
   ensureEip55 = ensureEip55;
   makeSpaceId = makeSpaceId;
   createDelegation = createDelegation;
+  parseRecapFromSiwe = parseRecapFromSiwe;
   generateHostSIWEMessage = generateHostSIWEMessage;
   siweToDelegationHeaders = siweToDelegationHeaders;
   protocolVersion = protocolVersion;
