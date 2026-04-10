@@ -3,9 +3,11 @@ import { startCluster } from "./cluster";
 import {
   createClusterClient,
   getClusterNode,
+  openAuthReplicationSession,
   openKvReplicationSession,
   peerMissingApplyFromPeer,
   peerMissingQuarantineFromLocal,
+  reconcileAuthFromPeer,
   reconcileFromPeer,
   uniqueReplicationPrefix,
   waitForCondition,
@@ -44,6 +46,19 @@ describe("Replication Peer Missing Quarantine", () => {
         expect(await replica.kv.put(pruneKey, { state: "local-only-prune" })).toMatchObject({
           ok: true,
         });
+
+        await reconcileAuthFromPeer(
+          cluster,
+          "node-b",
+          {
+            peerUrl: authorityNode.url,
+            spaceId: authority.spaceId!,
+          },
+          {
+            target: await openAuthReplicationSession(replica, replicaNode.url),
+            peer: await openAuthReplicationSession(authority, authorityNode.url),
+          }
+        );
 
         const firstApply = await peerMissingApplyFromPeer(
           cluster,

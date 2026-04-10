@@ -110,13 +110,17 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 ### Peer-Missing Planning
 
 - builds an authenticated action plan for `peer-missing` KV divergence
-- rejects authority-mode planning against a peer-serving replica that is not a host
+- syncs auth facts before authority-mode planning so host delegations are locally verifiable
+- binds authority-mode planning to the peer's per-space `serverDid`
+- requires an auth-DAG-backed `tinycloud.space/host` delegation for that peer identity
+- rejects authority-mode planning until those host-delegation facts have been auth-synced locally
 - classifies peer-visible deletes as `prune-delete`
 - classifies bare peer absence as `quarantine-absent`
 - keeps still-present peer keys as `keep`
 
 ### Peer-Missing Apply
 
+- syncs auth facts before authority-mode apply so host delegations are locally verifiable
 - applies only delete-backed `peer-missing` actions from explicit tombstone evidence
 - persists bare peer absence as quarantine records rather than deleting local data
 - proves a second apply reports already-quarantined local-only keys
