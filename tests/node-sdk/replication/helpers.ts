@@ -66,6 +66,26 @@ export interface SqlReplicationReconcileRequest {
   sinceSeq?: number;
 }
 
+export interface ReplicationNotifyRequest {
+  spaceId: string;
+  service: "kv" | "sql";
+  prefix?: string;
+  dbName?: string;
+  lastSeenSeq?: number;
+  timeoutMs?: number;
+}
+
+export interface ReplicationNotifyResponse {
+  spaceId: string;
+  service: "kv" | "sql";
+  prefix?: string;
+  dbName?: string;
+  lastSeenSeq?: number;
+  latestSeq: number;
+  dirty: boolean;
+  timedOut: boolean;
+}
+
 export interface ReplicationPullSessions {
   target: TinyCloudReplicationSession;
   peer: TinyCloudReplicationSession;
@@ -790,6 +810,32 @@ export async function exportSqlFromPeer(
   }
 
   return (await response.json()) as SqlReplicationExportResponse;
+}
+
+export async function notifyReplicationFromPeer(
+  cluster: RunningCluster,
+  targetNodeName: string,
+  request: ReplicationNotifyRequest,
+  session: TinyCloudReplicationSession
+): Promise<ReplicationNotifyResponse> {
+  const node = getClusterNode(cluster, targetNodeName);
+  const headers = await buildSessionHeaders("Replication-Session", session);
+  const response = await fetch(`${node.url}/replication/notify/poll`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Replication notify failed on ${targetNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as ReplicationNotifyResponse;
 }
 
 export async function reconExportFromPeer(
