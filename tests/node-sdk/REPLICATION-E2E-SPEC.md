@@ -107,6 +107,21 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - proves a key deleted on the peer but still locally visible reports `peerStatus: deleted`
 - proves a local-only key reports `peerStatus: absent`
 
+### Peer-Missing Planning
+
+- builds an authenticated action plan for `peer-missing` KV divergence
+- rejects authority-mode planning against a peer-serving replica that is not a host
+- classifies peer-visible deletes as `prune-delete`
+- classifies bare peer absence as `quarantine-absent`
+- keeps still-present peer keys as `keep`
+
+### Peer-Missing Apply
+
+- applies only delete-backed `peer-missing` actions from explicit tombstone evidence
+- persists bare peer absence as quarantine records rather than deleting local data
+- proves a second apply reports already-quarantined local-only keys
+- proves local-only data remains visible after apply
+
 ### SQLite Canonical Replication
 
 - creates a replicated table with an explicit primary key
@@ -152,6 +167,8 @@ tests/node-sdk/
     ├── kv-offline-provisional.test.ts
     ├── kv-peer-serving-enforcement.test.ts
     ├── kv-peer-serving-reconcile.test.ts
+    ├── kv-peer-missing-apply.test.ts
+    ├── kv-peer-missing-plan.test.ts
     ├── kv-state.test.ts
     ├── kv-state-compare.test.ts
     ├── kv-recon-compare.test.ts
