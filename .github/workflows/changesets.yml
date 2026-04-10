@@ -48,6 +48,15 @@ jobs:
           COUNT=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
           echo "pending=$COUNT" >> "$GITHUB_OUTPUT"
 
+      - name: List pending changesets
+        if: steps.check.outputs.pending != '0'
+        run: |
+          echo "## Pending changesets to consume:"
+          find .changeset -name '*.md' ! -name 'README.md' -exec basename {} \; | sort
+          echo ""
+          echo "## Current pre.json state:"
+          cat .changeset/pre.json
+
       - name: Version and build
         if: steps.check.outputs.pending != '0'
         run: |
@@ -67,7 +76,9 @@ jobs:
       - name: Publish beta to npm
         if: steps.check.outputs.pending != '0'
         run: |
-          # Resolve workspace:* to real versions before publishing
+          # Resolve workspace:* to real versions before publishing.
+          # Belt-and-suspenders: changeset publish also resolves internally,
+          # but keeping this script ensures consistency with the prior workflow.
           node -e '
             const fs = require("fs");
             const glob = require("child_process").execSync("find packages -name package.json -not -path */node_modules/*", {encoding:"utf8"}).trim().split("\n");
@@ -91,12 +102,12 @@ jobs:
               if (changed) { fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + "\n"); console.log("Resolved workspace refs in", f); }
             }
           '
-          for dir in packages/sdk-core packages/node-sdk packages/web-sdk packages/sdk-services packages/cli packages/sdk-rs/packages/node packages/sdk-rs/packages/web; do
-            if [ -f "$dir/package.json" ] && ! grep -q '"private"' "$dir/package.json"; then
-              echo "Publishing $dir..."
-              (cd "$dir" && npm publish --access public --tag beta)
-            fi
-          done
+          # Use `changeset publish` instead of a hand-rolled loop so that
+          # already-published versions are skipped gracefully. The hand-rolled
+          # loop 403'd on sdk-core@2.1.0-beta.0 in the 2026-04-10 release after
+          # PR #182, aborting before the wasm packages (which actually needed
+          # publishing) were attempted.
+          bunx changeset publish --tag beta
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -158,7 +169,9 @@ jobs:
 
       - name: Publish stable to npm
         run: |
-          # Resolve workspace:* to real versions before publishing
+          # Resolve workspace:* to real versions before publishing.
+          # Belt-and-suspenders: changeset publish also resolves internally,
+          # but keeping this script ensures consistency with the prior workflow.
           node -e '
             const fs = require("fs");
             const glob = require("child_process").execSync("find packages -name package.json -not -path */node_modules/*", {encoding:"utf8"}).trim().split("\n");
@@ -182,12 +195,10 @@ jobs:
               if (changed) { fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + "\n"); console.log("Resolved workspace refs in", f); }
             }
           '
-          for dir in packages/sdk-core packages/node-sdk packages/web-sdk packages/sdk-services packages/cli packages/sdk-rs/packages/node packages/sdk-rs/packages/web; do
-            if [ -f "$dir/package.json" ] && ! grep -q '"private"' "$dir/package.json"; then
-              echo "Publishing $dir..."
-              (cd "$dir" && npm publish --access public)
-            fi
-          done
+          # Use `changeset publish` instead of a hand-rolled loop so that
+          # already-published versions are skipped gracefully, matching the
+          # beta job's behavior.
+          bunx changeset publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
