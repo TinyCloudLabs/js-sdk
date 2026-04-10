@@ -174,10 +174,38 @@ export interface KvPeerMissingPlanResponse {
   items: KvPeerMissingPlanItem[];
 }
 
+export interface KvPeerMissingQuarantineRequest {
+  spaceId: string;
+  prefix?: string;
+  startAfter?: string;
+  limit?: number;
+}
+
+export interface KvPeerMissingQuarantineItem {
+  key: string;
+  peerUrl: string;
+  localInvocationId: string;
+  peerStatus: "present" | "deleted" | "absent";
+  peerInvocationId?: string | null;
+  peerDeletedInvocationId?: string | null;
+  quarantinedAt: number;
+}
+
+export interface KvPeerMissingQuarantineResponse {
+  spaceId: string;
+  prefix?: string;
+  startAfter?: string;
+  limit?: number;
+  hasMore?: boolean;
+  nextStartAfter?: string | null;
+  items: KvPeerMissingQuarantineItem[];
+}
+
 export interface KvPeerMissingApplyItem {
   key: string;
   action: "keep" | "prune-delete" | "quarantine-absent";
   result: string;
+  clearedQuarantine: boolean;
   localInvocationId?: string | null;
   peerStatus: "present" | "deleted" | "absent";
   peerDeletedInvocationId?: string | null;
@@ -198,6 +226,7 @@ export interface KvPeerMissingApplyResponse {
   prunedDeletes: number;
   quarantined: number;
   alreadyQuarantined: number;
+  clearedQuarantine: number;
   kept: number;
   items: KvPeerMissingApplyItem[];
 }
@@ -865,6 +894,35 @@ export async function peerMissingApplyFromPeer(
   }
 
   return (await response.json()) as KvPeerMissingApplyResponse;
+}
+
+export async function peerMissingQuarantineFromLocal(
+  cluster: RunningCluster,
+  targetNodeName: string,
+  request: KvPeerMissingQuarantineRequest,
+  session: TinyCloudReplicationSession
+): Promise<KvPeerMissingQuarantineResponse> {
+  const node = getClusterNode(cluster, targetNodeName);
+  const headers = await buildSessionHeaders("Replication-Session", session);
+  const response = await fetch(
+    `${node.url}/replication/peer-missing/quarantine`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...headers,
+      },
+      body: JSON.stringify(request),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Peer-missing quarantine export failed on ${targetNodeName}: ${response.status} ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as KvPeerMissingQuarantineResponse;
 }
 
 export async function reconSplitFromPeer(

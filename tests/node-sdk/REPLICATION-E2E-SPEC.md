@@ -122,6 +122,12 @@ If a scenario cannot be exercised against live nodes yet, it should stay unimple
 - proves a second apply reports already-quarantined local-only keys
 - proves local-only data remains visible after apply
 
+### Peer-Missing Quarantine
+
+- lists persisted quarantine records for a scoped prefix through an authenticated local endpoint
+- clears quarantine records when a later peer-missing apply resolves the key as `keep`
+- clears quarantine records when a later peer-missing apply resolves the key as `prune-delete`
+
 ### SQLite Canonical Replication
 
 - creates a replicated table with an explicit primary key
@@ -169,6 +175,7 @@ tests/node-sdk/
     ├── kv-peer-serving-reconcile.test.ts
     ├── kv-peer-missing-apply.test.ts
     ├── kv-peer-missing-plan.test.ts
+    ├── kv-peer-missing-quarantine.test.ts
     ├── kv-state.test.ts
     ├── kv-state-compare.test.ts
     ├── kv-recon-compare.test.ts
