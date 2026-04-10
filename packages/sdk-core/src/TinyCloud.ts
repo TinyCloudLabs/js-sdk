@@ -621,7 +621,10 @@ export class TinyCloud {
     }
 
     // Create a KV service with a context that targets the public space
-    const publicKV = new KVService({ prefix: "" });
+    const publicKV = new KVService({
+      ...(this.config.serviceConfigs?.kv ?? {}),
+      prefix: "",
+    });
     const publicContext = new ServiceContext({
       invoke: this._serviceContext.invoke,
       fetch: this._serviceContext.fetch,

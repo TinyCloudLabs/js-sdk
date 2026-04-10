@@ -93,6 +93,7 @@ export { KVService, PrefixedKVService } from "@tinycloud/sdk-core";
 export type {
   IKVService,
   KVServiceConfig,
+  KVReadMode,
   KVResponse,
   IPrefixedKVService,
 } from "@tinycloud/sdk-core";

@@ -116,11 +116,20 @@ describe("Replication Peer Missing Apply", () => {
         expect(deletedResult.ok).toBe(false);
 
         const localOnlyResult = await replica.kv.get<{ state: string }>(localOnlyKey);
-        expect(localOnlyResult.ok).toBe(true);
-        if (!localOnlyResult.ok) {
-          throw new Error(localOnlyResult.error.message);
+        expect(localOnlyResult.ok).toBe(false);
+        if (localOnlyResult.ok) {
+          throw new Error("Expected canonical read to hide quarantined key");
         }
-        expect(localOnlyResult.data.data.state).toBe("local-only");
+        expect(localOnlyResult.error.code).toBe("KV_NOT_FOUND");
+
+        const provisionalLocalOnly = await replica.kv.get<{ state: string }>(localOnlyKey, {
+          readMode: "provisional",
+        });
+        expect(provisionalLocalOnly.ok).toBe(true);
+        if (!provisionalLocalOnly.ok) {
+          throw new Error(provisionalLocalOnly.error.message);
+        }
+        expect(provisionalLocalOnly.data.data.state).toBe("local-only");
 
         const repeatApply = await peerMissingApplyFromPeer(
           cluster,

@@ -79,6 +79,7 @@ export {
   type IKVService,
   type IPrefixedKVService,
   type KVServiceConfig,
+  type KVReadMode,
   type KVGetOptions,
   type KVPutOptions,
   type KVListOptions,
@@ -273,4 +274,3 @@ export {
   checkNodeInfo,
 } from "./version";
 export type { NodeInfo } from "./version";
-

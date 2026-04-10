@@ -13,6 +13,7 @@ import {
   ErrorCodes,
   serviceError,
   FetchResponse,
+  type InvocationFacts,
 } from "../types";
 import {
   authRequiredError,
@@ -35,6 +36,7 @@ import {
   KVListResponse,
   KVResponseHeaders,
   KVAction,
+  type KVReadMode,
 } from "./types";
 
 /**
@@ -174,15 +176,11 @@ export class KVService extends BaseService implements IKVService {
     path: string,
     action: string,
     body?: Blob | string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    facts?: InvocationFacts
   ): Promise<FetchResponse> {
     const session = this.context.session!;
-    const headers = this.context.invoke(
-      session,
-      "kv",
-      path,
-      action
-    );
+    const headers = this.context.invoke(session, "kv", path, action, facts);
 
     return this.context.fetch(`${this.host}/invoke`, {
       method: "POST",
@@ -210,6 +208,20 @@ export class KVService extends BaseService implements IKVService {
         : undefined,
       get: (name: string) => headers.get(name),
     };
+  }
+
+  private resolveReadMode(readMode?: KVReadMode): KVReadMode {
+    return readMode ?? this._config.readMode ?? "canonical";
+  }
+
+  private readModeFacts(readMode: KVReadMode): InvocationFacts {
+    return [
+      {
+        kvReadParams: {
+          type: readMode,
+        },
+      },
+    ];
   }
 
   /**
@@ -263,13 +275,15 @@ export class KVService extends BaseService implements IKVService {
       }
 
       const path = this.getFullPath(key, options?.prefix);
+      const readMode = this.resolveReadMode(options?.readMode);
 
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.GET,
           undefined,
-          options?.signal
+          options?.signal,
+          this.readModeFacts(readMode)
         );
 
         if (!response.ok) {
@@ -403,13 +417,15 @@ export class KVService extends BaseService implements IKVService {
       if (options?.path) {
         listPath = listPath ? `${listPath}/${options.path}` : options.path;
       }
+      const readMode = this.resolveReadMode(options?.readMode);
 
       try {
         const response = await this.invokeOperation(
           listPath,
           KVAction.LIST,
           undefined,
-          options?.signal
+          options?.signal,
+          this.readModeFacts(readMode)
         );
 
         if (!response.ok) {
@@ -527,13 +543,15 @@ export class KVService extends BaseService implements IKVService {
       }
 
       const path = this.getFullPath(key, options?.prefix);
+      const readMode = this.resolveReadMode(options?.readMode);
 
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.HEAD,
           undefined,
-          options?.signal
+          options?.signal,
+          this.readModeFacts(readMode)
         );
 
         if (!response.ok) {

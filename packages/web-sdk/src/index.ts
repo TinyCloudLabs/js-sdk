@@ -67,6 +67,7 @@ export {
   PrefixedKVService,
   IPrefixedKVService,
 } from '@tinycloud/sdk-core';
+export type { KVReadMode } from '@tinycloud/sdk-core';
 
 // Re-export delegation types and services from sdk-core
 export {
