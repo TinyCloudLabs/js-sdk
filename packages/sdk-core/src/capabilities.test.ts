@@ -12,6 +12,7 @@ import {
   PermissionNotInManifestError,
   SessionExpiredError,
   isCapabilitySubset,
+  normalizeSpace,
   parseRecapCapabilities,
   type WasmRecapEntry,
 } from "./capabilities";
@@ -410,5 +411,147 @@ describe("SessionExpiredError", () => {
     expect(err.name).toBe("SessionExpiredError");
     expect(err.expiredAt).toEqual(when);
     expect(err.message).toBe("Session expired at 2024-01-01T00:00:00.000Z");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizeSpace
+// ---------------------------------------------------------------------------
+
+describe("normalizeSpace", () => {
+  it("passes short names through unchanged", () => {
+    expect(normalizeSpace("default")).toBe("default");
+    expect(normalizeSpace("work-space")).toBe("work-space");
+    expect(normalizeSpace("")).toBe("");
+  });
+
+  it("extracts the name from a full pkh URI", () => {
+    expect(
+      normalizeSpace(
+        "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:default"
+      )
+    ).toBe("default");
+    expect(
+      normalizeSpace(
+        "tinycloud:pkh:eip155:1:0xabc0000000000000000000000000000000000000:work-space"
+      )
+    ).toBe("work-space");
+  });
+
+  it("returns the original string on a trailing-colon URI (degrades to strict mismatch)", () => {
+    const malformed = "tinycloud:pkh:eip155:1:0xabc:";
+    expect(normalizeSpace(malformed)).toBe(malformed);
+  });
+
+  it("passes non-tinycloud URIs through unchanged", () => {
+    expect(normalizeSpace("did:key:z6Mk")).toBe("did:key:z6Mk");
+    expect(normalizeSpace("foo")).toBe("foo");
+  });
+});
+
+describe("isCapabilitySubset with mixed space forms", () => {
+  const fullUri =
+    "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:default";
+
+  it("matches short-form requested against full-URI granted (recap parse direction)", () => {
+    const granted: PermissionEntry[] = [
+      {
+        service: "tinycloud.kv",
+        space: fullUri,
+        path: "",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+    ];
+    const requested: PermissionEntry[] = [
+      {
+        service: "tinycloud.kv",
+        space: "default",
+        path: "",
+        actions: ["tinycloud.kv/get"],
+      },
+    ];
+    const { subset, missing } = isCapabilitySubset(requested, granted);
+    expect(subset).toBe(true);
+    expect(missing).toEqual([]);
+  });
+
+  it("matches full-URI requested against short-form granted (defensive symmetric)", () => {
+    const granted: PermissionEntry[] = [
+      {
+        service: "tinycloud.kv",
+        space: "default",
+        path: "",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+    ];
+    const requested: PermissionEntry[] = [
+      {
+        service: "tinycloud.kv",
+        space: fullUri,
+        path: "",
+        actions: ["tinycloud.kv/get"],
+      },
+    ];
+    const { subset, missing } = isCapabilitySubset(requested, granted);
+    expect(subset).toBe(true);
+    expect(missing).toEqual([]);
+  });
+
+  it("still rejects mismatched space names regardless of form", () => {
+    const granted: PermissionEntry[] = [
+      {
+        service: "tinycloud.kv",
+        space: fullUri,
+        path: "",
+        actions: ["tinycloud.kv/get"],
+      },
+    ];
+    const requested: PermissionEntry[] = [
+      {
+        service: "tinycloud.kv",
+        space: "work-space",
+        path: "",
+        actions: ["tinycloud.kv/get"],
+      },
+    ];
+    const { subset, missing } = isCapabilitySubset(requested, granted);
+    expect(subset).toBe(false);
+    expect(missing).toHaveLength(1);
+  });
+});
+
+describe("parseRecapCapabilities normalizes space", () => {
+  it("converts a full pkh URI from the recap to the short name", () => {
+    const parseWasm = (_siwe: string): WasmRecapEntry[] => [
+      {
+        service: "kv",
+        space:
+          "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:default",
+        path: "",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+    ];
+    const out = parseRecapCapabilities(parseWasm, "fake-siwe");
+    expect(out).toEqual([
+      {
+        service: "tinycloud.kv",
+        space: "default",
+        path: "",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+    ]);
+  });
+
+  it("passes short-name spaces through (forward compatibility)", () => {
+    const parseWasm = (_siwe: string): WasmRecapEntry[] => [
+      {
+        service: "sql",
+        space: "default",
+        path: "",
+        actions: ["tinycloud.sql/read"],
+      },
+    ];
+    const out = parseRecapCapabilities(parseWasm, "fake-siwe");
+    expect(out[0].space).toBe("default");
   });
 });

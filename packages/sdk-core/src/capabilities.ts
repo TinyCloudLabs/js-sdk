@@ -58,6 +58,41 @@ export class SessionExpiredError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// Space normalization
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize a space identifier to its short-name form.
+ *
+ * Recap resource URIs in a signed SIWE encode the space as a full URI of the
+ * form `tinycloud:pkh:eip155:{chainId}:{address}:{name}` (e.g.
+ * `tinycloud:pkh:eip155:1:0xd559...:default`). Manifest permissions and
+ * backend-advertised permissions use the short `{name}` form (e.g.
+ * `"default"`).
+ *
+ * Strict string comparison between these two forms would always fail, so we
+ * normalize both sides to the short name before comparing. The trailing
+ * segment after the last `:` in a `tinycloud:` URI is the space name.
+ *
+ * Short names (`"default"`, `"work-space"`) are returned unchanged.
+ * Any non-`tinycloud:` string is returned unchanged. A malformed URI with a
+ * trailing colon is returned unchanged (so the check degrades to a strict
+ * mismatch rather than collapsing to an empty string).
+ *
+ * @internal
+ */
+export function normalizeSpace(space: string): string {
+  if (!space.startsWith("tinycloud:")) {
+    return space;
+  }
+  const lastColon = space.lastIndexOf(":");
+  if (lastColon === -1 || lastColon === space.length - 1) {
+    return space;
+  }
+  return space.slice(lastColon + 1);
+}
+
+// ---------------------------------------------------------------------------
 // Subset check
 // ---------------------------------------------------------------------------
 
@@ -117,7 +152,10 @@ function canonicalizeEntryMatches(
   if (requested.service !== granted.service) {
     return false;
   }
-  if (requested.space !== granted.space) {
+  // Normalize both sides so callers passing short names (`"default"`) match
+  // recap-parsed full URIs (`"tinycloud:pkh:eip155:1:0xd559...:default"`) and
+  // vice versa. Idempotent for short names.
+  if (normalizeSpace(requested.space) !== normalizeSpace(granted.space)) {
     return false;
   }
   if (!pathContains(granted.path, requested.path)) {
@@ -235,7 +273,10 @@ export function parseRecapCapabilities(
         : `tinycloud.${entry.service}`);
     return {
       service: longService,
-      space: entry.space,
+      // The Rust layer emits the space as a full `tinycloud:pkh:...:name`
+      // URI (the recap target URI). Normalize to the short name so the
+      // returned entries match the shape manifests use.
+      space: normalizeSpace(entry.space),
       path: entry.path,
       actions: [...entry.actions],
     };
