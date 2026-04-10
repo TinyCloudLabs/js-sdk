@@ -109,9 +109,14 @@ export function validateWasmOutput<T>(
 /**
  * Schema for validating createDelegation WASM output.
  *
- * This is a relaxed version of CreateDelegationWasmResultSchema that
- * accepts the raw WASM output format (expiry as number/string) before
- * transformation to Date.
+ * This is a relaxed version of {@link CreateDelegationWasmResultSchema}
+ * that accepts the raw WASM output format: `expiry` may come back as a
+ * number (seconds since epoch, the Rust-native form) or a string before
+ * transformation to Date, and `delegateDID` may be emitted under the
+ * camelCase field name the WASM produces (`delegateDid`).
+ *
+ * The multi-resource `resources` array matches the strict schema: the
+ * Rust layer always emits it sorted by `(service, path)`.
  */
 export const CreateDelegationWasmRawResultSchema = z.object({
   /** Base64url-encoded UCAN delegation */
@@ -120,12 +125,21 @@ export const CreateDelegationWasmRawResultSchema = z.object({
   cid: z.string(),
   /** DID of the delegate */
   delegateDID: z.string(),
-  /** Resource path the delegation grants access to */
-  path: z.string(),
-  /** Actions the delegation authorizes */
-  actions: z.array(z.string()),
   /** Expiration time (may be number, string, or Date from WASM) */
   expiry: z.union([z.number(), z.string(), z.date()]),
+  /**
+   * Resources granted by this delegation. Each entry carries its own
+   * `(service, space, path, actions)` tuple. Always non-empty on
+   * success.
+   */
+  resources: z.array(
+    z.object({
+      service: z.string(),
+      space: z.string(),
+      path: z.string(),
+      actions: z.array(z.string()),
+    })
+  ),
 });
 
 export type CreateDelegationWasmRawResult = z.infer<

@@ -39,6 +39,44 @@ import { DelegationErrorCodes } from "./types";
 import type { DelegationManager } from "./DelegationManager";
 import type { ICapabilityKeyRegistry } from "../authorization/CapabilityKeyRegistry";
 import { validateEncodedShareData } from "./SharingService.schema.js";
+import { SERVICE_LONG_TO_SHORT } from "../manifest";
+
+// ---------------------------------------------------------------------------
+// Local helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Infer the short-form service name (`"kv"`, `"sql"`, etc) that all of the
+ * given full-URN action strings belong to.
+ *
+ * SharingService issues single-service delegations (KV-only, SQL-only, …) —
+ * the multi-resource WASM `createDelegation` call requires the service
+ * segment explicitly because it's keyed separately from the action list.
+ * This helper extracts the namespace half (`"tinycloud.kv"`) from each URN,
+ * maps it to the short form via {@link SERVICE_LONG_TO_SHORT}, and returns
+ * `undefined` if the actions are not all from the same known service.
+ *
+ * Returning `undefined` is intentional: the caller must surface a clear
+ * error rather than guessing.
+ */
+function inferShortServiceFromActionUrns(
+  actions: readonly string[]
+): string | undefined {
+  let short: string | undefined;
+  for (const action of actions) {
+    const slash = action.indexOf("/");
+    if (slash === -1) return undefined;
+    const longService = action.slice(0, slash);
+    const candidate = SERVICE_LONG_TO_SHORT[longService];
+    if (candidate === undefined) return undefined;
+    if (short === undefined) {
+      short = candidate;
+    } else if (short !== candidate) {
+      return undefined;
+    }
+  }
+  return short;
+}
 
 // =============================================================================
 // Constants
@@ -752,14 +790,49 @@ export class SharingService implements ISharingService {
     }
 
     if (this.createDelegationWasmFn) {
-      // Client-side delegation creation via WASM
+      // Client-side delegation creation via WASM.
+      //
+      // SharingService always issues single-resource delegations (one
+      // path, one action list). The multi-resource WASM API takes an
+      // `abilities` map shaped `Record<shortService, Record<path,
+      // actions[]>>`, so we infer the short service from the first
+      // action URN (every action in a share call shares the same
+      // service namespace by construction — KV-only, SQL-only, etc).
+      //
+      // The result comes back with a `resources` array; for a
+      // single-entry call it always has exactly one entry, and we
+      // mirror that entry's `path` + `actions` back into the flat
+      // Delegation shape that the rest of SharingService works with.
       try {
+        if (actions.length === 0) {
+          return {
+            ok: false,
+            error: createError(
+              DelegationErrorCodes.VALIDATION_ERROR,
+              "createDelegation requires at least one action"
+            ),
+          };
+        }
+        const shortService = inferShortServiceFromActionUrns(actions);
+        if (shortService === undefined) {
+          return {
+            ok: false,
+            error: createError(
+              DelegationErrorCodes.VALIDATION_ERROR,
+              `createDelegation: cannot infer service from actions ${JSON.stringify(actions)} — expected full URNs like "tinycloud.kv/get"`
+            ),
+          };
+        }
+
         const wasmResult = this.createDelegationWasmFn({
           session: this.session,
           delegateDID,
           spaceId: this.session.spaceId,
-          path,
-          actions,
+          abilities: {
+            [shortService]: {
+              [path]: [...actions],
+            },
+          },
           expirationSecs: Math.floor(expiry.getTime() / 1000),
         });
 
@@ -782,12 +855,27 @@ export class SharingService implements ISharingService {
           };
         }
 
+        // Single-entry call → resources[0] is authoritative for the
+        // flat Delegation shape. We assert length here because a
+        // zero-length result would mean the Rust side dropped our
+        // single input — that's a protocol bug, not a runtime
+        // condition to silently coerce.
+        if (wasmResult.resources.length === 0) {
+          return {
+            ok: false,
+            error: createError(
+              DelegationErrorCodes.CREATION_FAILED,
+              "createDelegation WASM returned empty resources array for a single-entry request"
+            ),
+          };
+        }
+        const primary = wasmResult.resources[0];
         return {
           cid: wasmResult.cid,
           delegateDID: wasmResult.delegateDID,
           spaceId: this.session.spaceId,
-          path: wasmResult.path,
-          actions: wasmResult.actions,
+          path: primary.path,
+          actions: primary.actions,
           expiry: wasmResult.expiry,
           isRevoked: false,
           authHeader: wasmResult.delegation,

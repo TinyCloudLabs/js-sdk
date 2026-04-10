@@ -522,7 +522,42 @@ export type DelegationApiResponse = z.infer<typeof DelegationApiResponseSchema>;
 // =============================================================================
 
 /**
+ * A single (service, space, path, actions) entry inside a
+ * createDelegation WASM result.
+ *
+ * Mirrors the Rust `DelegatedResource` struct in
+ * `tinycloud-sdk-wasm/src/session.rs`. Field names match the manifest
+ * {@link PermissionEntry} shape so callers can reconstruct what they sent
+ * without having to re-parse the UCAN.
+ *
+ * `service` is the short form (e.g. `"kv"`, `"sql"`) as returned by the
+ * Rust layer. The SDK layer translates to the long form
+ * (`"tinycloud.kv"`) when comparing against manifests.
+ */
+export const DelegatedResourceSchema = z.object({
+  /** Short-form service name, e.g. "kv", "sql", "duckdb", "capabilities", "hooks". */
+  service: z.string(),
+  /** Full space id string, e.g. "tinycloud:pkh:eip155:1:0x....:default". */
+  space: z.string(),
+  /** Resource path; empty string when the resource URI had no path segment. */
+  path: z.string(),
+  /** Full-URN ability strings, e.g. ["tinycloud.kv/get", "tinycloud.kv/put"]. */
+  actions: z.array(z.string()),
+});
+
+export type DelegatedResource = z.infer<typeof DelegatedResourceSchema>;
+
+/**
  * Input parameters for the createDelegation WASM function.
+ *
+ * A single call may encode multiple `(service, path, actions)` entries
+ * via the `abilities` map — the underlying UCAN will contain one
+ * attenuation entry per `(service, path)` pair, all signed by the same
+ * session key in one blob.
+ *
+ * The `abilities` shape is identical to what `prepareSession` accepts
+ * (`Record<shortService, Record<path, actionURNs[]>>`), so manifest
+ * resolution can feed both sides from one data structure.
  */
 export const CreateDelegationWasmParamsSchema = z.object({
   /** The session containing delegation credentials */
@@ -534,10 +569,23 @@ export const CreateDelegationWasmParamsSchema = z.object({
   delegateDID: z.string(),
   /** Space ID this delegation applies to */
   spaceId: z.string(),
-  /** Resource path this delegation grants access to */
-  path: z.string(),
-  /** Actions to authorize */
-  actions: z.array(z.string()),
+  /**
+   * Multi-resource abilities map: short-service → path → full-URN actions.
+   * Matches the shape accepted by `prepareSession`.
+   *
+   * Example:
+   * ```
+   * {
+   *   kv: {
+   *     "com.listen.app/": ["tinycloud.kv/get", "tinycloud.kv/put"]
+   *   },
+   *   sql: {
+   *     "com.listen.app/data.sqlite": ["tinycloud.sql/read"]
+   *   }
+   * }
+   * ```
+   */
+  abilities: z.record(z.string(), z.record(z.string(), z.array(z.string()))),
   /** Expiration time in seconds since Unix epoch */
   expirationSecs: z.number(),
   /** Optional not-before time in seconds since Unix epoch */
@@ -548,6 +596,11 @@ export type CreateDelegationWasmParams = z.infer<typeof CreateDelegationWasmPara
 
 /**
  * Result from the createDelegation WASM function.
+ *
+ * A single UCAN may cover multiple resources. The `resources` array
+ * describes every `(service, space, path, actions)` entry granted, in
+ * deterministic (service, path) lexicographic order (the Rust side sorts
+ * the HashMap entries before signing).
  */
 export const CreateDelegationWasmResultSchema = z.object({
   /** Base64url-encoded UCAN delegation */
@@ -556,12 +609,13 @@ export const CreateDelegationWasmResultSchema = z.object({
   cid: z.string(),
   /** DID of the delegate */
   delegateDID: z.string(),
-  /** Resource path the delegation grants access to */
-  path: z.string(),
-  /** Actions the delegation authorizes */
-  actions: z.array(z.string()),
   /** Expiration time */
   expiry: z.coerce.date(),
+  /**
+   * All (service, space, path, actions) entries granted by this delegation.
+   * Always non-empty on success.
+   */
+  resources: z.array(DelegatedResourceSchema),
 });
 
 export type CreateDelegationWasmResult = z.infer<typeof CreateDelegationWasmResultSchema>;
