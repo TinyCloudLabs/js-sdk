@@ -104,9 +104,15 @@ function makeFakeWasmBindings(
       delegation: "fake-serialized-delegation",
       cid: "bafyfake",
       delegateDid: "did:pkh:eip155:1:0xDEAD",
-      path: "items/",
-      actions: ["tinycloud.kv/get"],
       expiry: Math.floor(Date.now() / 1000) + 3600,
+      resources: [
+        {
+          service: "kv",
+          space: "space://test",
+          path: "items/",
+          actions: ["tinycloud.kv/get"],
+        },
+      ],
     })),
     parseRecapFromSiwe: mock(() => [] as any[]),
     generateHostSIWEMessage: mock(() => ""),
@@ -221,9 +227,15 @@ describe("TinyCloudNode.delegateTo", () => {
       delegation: "fake-ucan-delegation",
       cid: "bafyfakeucan",
       delegateDid: BOB_DID,
-      path: "items/",
-      actions: ["tinycloud.kv/get"],
       expiry: Math.floor((Date.now() + 3600_000) / 1000),
+      resources: [
+        {
+          service: "kv",
+          space: "space://test",
+          path: "items/",
+          actions: ["tinycloud.kv/get"],
+        },
+      ],
     }));
     const prepareSessionSpy = mock(() => ({}));
 
@@ -290,8 +302,152 @@ describe("TinyCloudNode.delegateTo", () => {
     expect(prepareSessionSpy).not.toHaveBeenCalled();
   });
 
-  test("multi-entry input throws a clear error", async () => {
-    const wasm = makeFakeWasmBindings();
+  test("multi-entry input → ONE UCAN with merged abilities map", async () => {
+    // Multi-entry delegation is now first-class: the SDK folds every
+    // (service, path, actions) tuple into a single abilities map and
+    // calls WASM createDelegation once. The resulting PortableDelegation
+    // is a single signed blob whose `.resources` array lists every
+    // grant. This is the core fix that lets listen-style apps
+    // pre-declare backend delegations across KV + SQL in one
+    // manifest and have them issue from the session key in a single
+    // wallet-prompt-free operation.
+    const grantedRaw = [
+      {
+        // KV actions granted on the app prefix
+        service: "kv",
+        space: "default",
+        path: "com.listen.app/",
+        actions: [
+          "tinycloud.kv/get",
+          "tinycloud.kv/put",
+          "tinycloud.kv/del",
+          "tinycloud.kv/list",
+          "tinycloud.kv/metadata",
+        ],
+      },
+      {
+        // SQL actions granted on the app's database file
+        service: "sql",
+        space: "default",
+        path: "com.listen.app/data.sqlite",
+        actions: ["tinycloud.sql/read", "tinycloud.sql/write"],
+      },
+    ];
+
+    const parseSpy = mock(() => grantedRaw);
+    const createDelegationSpy = mock(() => ({
+      delegation: "fake-multi-resource-ucan",
+      cid: "bafymulti",
+      delegateDid: BOB_DID,
+      expiry: Math.floor((Date.now() + 3600_000) / 1000),
+      // Rust emits sorted by (service, path); for these entries kv < sql.
+      resources: [
+        {
+          service: "kv",
+          space: "space://test",
+          path: "com.listen.app/",
+          actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+        },
+        {
+          service: "sql",
+          space: "space://test",
+          path: "com.listen.app/data.sqlite",
+          actions: ["tinycloud.sql/read"],
+        },
+      ],
+    }));
+    const prepareSessionSpy = mock(() => ({}));
+
+    const wasm = makeFakeWasmBindings({
+      parseRecapFromSiwe: parseSpy as any,
+      createDelegation: createDelegationSpy as any,
+      prepareSession: prepareSessionSpy as any,
+    });
+
+    const node = new TinyCloudNode({ wasmBindings: wasm });
+    installFakeSession(node, { siwe: buildSiwe(futureExpiry) });
+
+    const entries: PermissionEntry[] = [
+      {
+        service: "tinycloud.kv",
+        space: "default",
+        path: "com.listen.app/",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+      {
+        service: "tinycloud.sql",
+        space: "default",
+        path: "com.listen.app/data.sqlite",
+        actions: ["tinycloud.sql/read"],
+      },
+    ];
+
+    const result = await node.delegateTo(BOB_DID, entries);
+
+    expect(result.prompted).toBe(false);
+    expect(result.delegation.delegateDID).toBe(BOB_DID);
+    // Flat path/actions mirror the first (sorted) resource
+    expect(result.delegation.path).toBe("com.listen.app/");
+    expect(result.delegation.actions).toEqual([
+      "tinycloud.kv/get",
+      "tinycloud.kv/put",
+    ]);
+    // The full multi-resource breakdown is available for consumers
+    // that need it.
+    expect(result.delegation.resources).toEqual([
+      {
+        service: "kv",
+        space: "space://test",
+        path: "com.listen.app/",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+      {
+        service: "sql",
+        space: "space://test",
+        path: "com.listen.app/data.sqlite",
+        actions: ["tinycloud.sql/read"],
+      },
+    ]);
+    // Exactly ONE underlying WASM call for the entire multi-entry
+    // request — not N.
+    expect(createDelegationSpy).toHaveBeenCalledTimes(1);
+    expect(prepareSessionSpy).not.toHaveBeenCalled();
+
+    // Sanity: the abilities map we passed to WASM has both services
+    // grouped correctly. createDelegation is mocked so we can inspect
+    // call.mock.calls for the actual shape.
+    const call = (createDelegationSpy as any).mock.calls[0];
+    // call = [session, delegateDID, spaceId, abilities, expirationSecs, notBeforeSecs]
+    const abilitiesSent = call[3];
+    expect(abilitiesSent).toEqual({
+      kv: {
+        "com.listen.app/": ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+      sql: {
+        "com.listen.app/data.sqlite": ["tinycloud.sql/read"],
+      },
+    });
+  });
+
+  test("multi-entry with one missing cap → PermissionNotInManifestError surfaces ALL missing", async () => {
+    // One entry is a subset; the other is NOT. delegateTo must reject
+    // the whole call, not partially issue — partial issuance would
+    // produce a delegation the caller didn't ask for.
+    const parseSpy = mock(() => [
+      {
+        service: "kv",
+        space: "default",
+        path: "/",
+        actions: ["tinycloud.kv/get"],
+      },
+    ]);
+    const createDelegationSpy = mock(() => ({}));
+
+    const wasm = makeFakeWasmBindings({
+      parseRecapFromSiwe: parseSpy as any,
+      createDelegation: createDelegationSpy as any,
+    });
+
     const node = new TinyCloudNode({ wasmBindings: wasm });
     installFakeSession(node, { siwe: buildSiwe(futureExpiry) });
 
@@ -300,19 +456,20 @@ describe("TinyCloudNode.delegateTo", () => {
         service: "tinycloud.kv",
         space: "default",
         path: "items/",
-        actions: ["tinycloud.kv/get"],
+        actions: ["tinycloud.kv/get"], // covered
       },
       {
         service: "tinycloud.sql",
         space: "default",
         path: "/",
-        actions: ["tinycloud.sql/read"],
+        actions: ["tinycloud.sql/read"], // NOT covered
       },
     ];
 
-    await expect(node.delegateTo(BOB_DID, entries)).rejects.toThrow(
-      /one permission entry per call/,
+    await expect(node.delegateTo(BOB_DID, entries)).rejects.toBeInstanceOf(
+      PermissionNotInManifestError,
     );
+    expect(createDelegationSpy).not.toHaveBeenCalled();
   });
 
   test("empty permissions array throws", async () => {
@@ -345,9 +502,15 @@ describe("TinyCloudNode.delegateTo", () => {
       delegation: "fake",
       cid: "bafy",
       delegateDid: BOB_DID,
-      path: "items/",
-      actions: ["tinycloud.kv/get"],
       expiry: Math.floor(Date.now() / 1000) + 3600,
+      resources: [
+        {
+          service: "kv",
+          space: "space://test",
+          path: "items/",
+          actions: ["tinycloud.kv/get"],
+        },
+      ],
     }));
 
     const wasm = makeFakeWasmBindings({
@@ -402,9 +565,15 @@ describe("TinyCloudNode.delegateTo", () => {
       delegation: "fake-legacy-routed",
       cid: "bafylegacy",
       delegateDid: BOB_DID,
-      path: "items/",
-      actions: ["tinycloud.kv/get"],
       expiry: Math.floor(Date.now() / 1000) + 3600,
+      resources: [
+        {
+          service: "kv",
+          space: "space://test",
+          path: "items/",
+          actions: ["tinycloud.kv/get"],
+        },
+      ],
     }));
 
     const wasm = makeFakeWasmBindings({
