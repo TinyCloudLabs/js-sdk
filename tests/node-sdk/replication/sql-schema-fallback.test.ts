@@ -69,6 +69,7 @@ describe("Replication SQL Schema Fallback", () => {
         );
 
         expect(sqlReplicationBytes(baselineApply).snapshotBytes).toBeGreaterThan(0);
+        expect(baselineApply.snapshotReason).toBe("initial-sync");
 
         await waitForCondition("replica sees baseline SQL row", async () => {
           const query = await replicaSql.query(
@@ -113,6 +114,7 @@ describe("Replication SQL Schema Fallback", () => {
           expect(fallbackApply.mode).toBe("snapshot");
         }
         expect(sqlReplicationBytes(fallbackApply).snapshotBytes).toBeGreaterThan(0);
+        expect(fallbackApply.snapshotReason).toBe("schema-change");
 
         await waitForCondition("replica sees schema fallback snapshot", async () => {
           const query = await replicaSql.query(
