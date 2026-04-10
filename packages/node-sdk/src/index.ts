@@ -105,6 +105,26 @@ export type {
   OpenReplicationSessionResult,
 } from "./TinyCloudNode";
 
+// Replication helpers
+export {
+  openTransportSession,
+  requestTransportSession,
+  notifyReplication,
+  reconcileKvReplication,
+  reconcileSqlReplication,
+} from "./replication";
+export type {
+  RequestTransportSessionOptions,
+  ReplicationNotifyRequest,
+  ReplicationNotifyResponse,
+  ReplicationPullSessions,
+  ReplicationKvReconcileRequest,
+  ReplicationKvReconcileResponse,
+  ReplicationSqlReconcileRequest,
+  ReplicationSqlReconcileResponse,
+  ReplicationSessionOpenResponse,
+} from "./replication";
+
 // WASM bindings
 export { NodeWasmBindings } from "./NodeWasmBindings";
 

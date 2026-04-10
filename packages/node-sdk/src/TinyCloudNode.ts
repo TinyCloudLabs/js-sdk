@@ -82,6 +82,20 @@ import {
 import { FileSessionStorage } from "./storage/FileSessionStorage";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import { PortableDelegation } from "./delegation";
+import {
+  notifyReplication as notifyReplicationTransport,
+  reconcileKvReplication as reconcileKvReplicationTransport,
+  reconcileSqlReplication as reconcileSqlReplicationTransport,
+} from "./replication";
+import type {
+  ReplicationNotifyRequest,
+  ReplicationNotifyResponse,
+  ReplicationKvReconcileRequest,
+  ReplicationKvReconcileResponse,
+  ReplicationSqlReconcileRequest,
+  ReplicationSqlReconcileResponse,
+  ReplicationPullSessions,
+} from "./replication";
 import { DelegatedAccess } from "./DelegatedAccess";
 import { WasmKeyProvider } from "./keys/WasmKeyProvider";
 
@@ -522,6 +536,35 @@ export class TinyCloudNode {
       verificationMethod: session.verificationMethod,
       expiresAt: expirationTime,
     };
+  }
+
+  async notifyReplication(
+    session: TinyCloudReplicationSession,
+    request: ReplicationNotifyRequest
+  ): Promise<ReplicationNotifyResponse> {
+    return notifyReplicationTransport(session, request);
+  }
+
+  async reconcileKvFromPeer(
+    sessions: ReplicationPullSessions,
+    request: ReplicationKvReconcileRequest
+  ): Promise<ReplicationKvReconcileResponse> {
+    return reconcileKvReplicationTransport(
+      sessions.target,
+      sessions.peer,
+      request
+    );
+  }
+
+  async reconcileSqlFromPeer(
+    sessions: ReplicationPullSessions,
+    request: ReplicationSqlReconcileRequest
+  ): Promise<ReplicationSqlReconcileResponse> {
+    return reconcileSqlReplicationTransport(
+      sessions.target,
+      sessions.peer,
+      request
+    );
   }
 
   /**
