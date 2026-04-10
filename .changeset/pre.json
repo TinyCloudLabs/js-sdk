@@ -17,6 +17,7 @@
     "@tinycloud/sdk-services-test": "6.0.2"
   },
   "changesets": [
+    "bump-past-ghost",
     "capability-chain-manifest",
     "reexport-invoke-any",
     "trigger-nonce-republish",
