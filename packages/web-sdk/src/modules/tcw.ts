@@ -39,8 +39,14 @@ import {
   ServiceContext,
   ServiceSession,
   ISpaceCreationHandler,
+  type Manifest,
   type PermissionEntry,
 } from "@tinycloud/sdk-core";
+import { showPermissionRequestModal } from "../notifications/ModalManager";
+import {
+  requestPermissionsCore,
+  validateAdditionalPermissions,
+} from "./requestPermissionsCore";
 import type { providers } from "ethers";
 
 import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
@@ -97,6 +103,27 @@ export interface Config extends ClientConfig {
 
   /** Shorthand for passing a Web3 provider */
   provider?: any;
+
+  /**
+   * App manifest used for sign-in and escalation flows.
+   *
+   * When provided, {@link TinyCloudWeb.requestPermissions} uses the
+   * manifest's `name` and `icon` to title the permission modal and
+   * composes escalation requests against the manifest's existing
+   * permission set. Phase 4 stores the manifest verbatim; the
+   * manifest-driven sign-in path itself lands in Phase 5.
+   */
+  manifest?: Manifest;
+}
+
+/**
+ * Result of {@link TinyCloudWeb.requestPermissions}. Populated with the
+ * fresh session on approve; empty on decline so callers can branch on
+ * `approved` without dereferencing a stale session.
+ */
+export interface RequestPermissionsResult {
+  approved: boolean;
+  session?: ClientSession;
 }
 
 // Share Link Utilities (static, no auth required)
@@ -175,8 +202,37 @@ export class TinyCloudWeb {
   /** User config */
   private config: Config;
 
+  /**
+   * App manifest stored from config (or updated via `setManifest`).
+   *
+   * `requestPermissions` reads this for the modal title/icon and for
+   * composing an expanded manifest on approve. Phase 4 treats this as a
+   * simple passthrough container — the manifest-driven sign-in flow lands
+   * in Phase 5, where `signIn` will consume this field directly.
+   */
+  private _manifest?: Manifest;
+
+  /**
+   * Test hook — override the modal shower and sign-in function used by
+   * {@link requestPermissions}. Not part of the public API. Tests set
+   * these via `(tcw as any)._testHooks = { ... }` so they can exercise
+   * the escalation control flow without a real DOM or wallet.
+   *
+   * @internal
+   */
+  private _testHooks?: {
+    showModal?: (opts: {
+      appName: string;
+      appIcon?: string;
+      additional: PermissionEntry[];
+    }) => Promise<{ approved: boolean }>;
+    signIn?: () => Promise<ClientSession>;
+    signOut?: () => Promise<void>;
+  };
+
   constructor(config: Config = {}) {
     this.config = config;
+    this._manifest = config.manifest;
 
     // Initialize browser notification handler
     this.notificationHandler = new BrowserNotificationHandler(config.notifications);
@@ -387,6 +443,73 @@ export class TinyCloudWeb {
     const node = await this.ensureNode();
     return node.delegateTo(did, permissions, options);
   };
+
+  /**
+   * Get the stored manifest (if any). Returns a shallow clone so callers
+   * can't accidentally mutate our internal state.
+   */
+  getManifest(): Manifest | undefined {
+    if (this._manifest === undefined) return undefined;
+    return { ...this._manifest };
+  }
+
+  /**
+   * Install or replace the stored manifest. Used by apps that compose
+   * their manifest at runtime (e.g. after fetching a backend's advertised
+   * permissions) and by the escalation flow inside
+   * {@link requestPermissions}.
+   */
+  setManifest(manifest: Manifest): void {
+    this._manifest = manifest;
+  }
+
+  /**
+   * Request additional permissions on top of the currently-signed
+   * session. Shows a confirmation modal; on approve, signs out the
+   * current session (without disconnecting the wallet) and runs a fresh
+   * `signIn` with the composed manifest. On decline, returns
+   * `{ approved: false }` with no state changes.
+   *
+   * Spec: `.claude/specs/capability-chain.md` §requestPermissions.
+   *
+   * Phase 4 note: the actual manifest-driven `signIn` is Phase 5. For
+   * now, the escalation composes an updated manifest, signs out, and
+   * calls `signIn()` — which still uses the current sign-in path. The
+   * updated `_manifest` field is available for the Phase 5 refactor to
+   * pick up directly.
+   */
+  async requestPermissions(
+    additional: PermissionEntry[],
+  ): Promise<RequestPermissionsResult> {
+    // Shared validation (also called by the core). Keeping the guard
+    // here short-circuits before any manifest lookup so the error text
+    // is unambiguous.
+    validateAdditionalPermissions(additional);
+
+    const manifest = this._manifest;
+    // Phase 4: we require a stored manifest for escalation so we can
+    // compose the expanded permission set. Apps that signed in without a
+    // manifest must set one via `setManifest` before escalating, or
+    // re-run signIn with an explicit manifest (Phase 5).
+    if (manifest === undefined) {
+      throw new Error(
+        "requestPermissions requires a stored manifest. Pass `manifest` in the TinyCloudWeb config or call setManifest() before requesting escalation.",
+      );
+    }
+
+    // Delegate to the pure core with injected dependencies. Test hooks
+    // override any or all of them; production defaults wire to the real
+    // modal manager and the class's own signOut/signIn methods.
+    return requestPermissionsCore(additional, {
+      manifest,
+      showModal: this._testHooks?.showModal ?? showPermissionRequestModal,
+      signOut: this._testHooks?.signOut ?? (() => this.signOut()),
+      signIn: this._testHooks?.signIn ?? (() => this.signIn()),
+      writeManifest: (next) => {
+        this._manifest = next;
+      },
+    });
+  }
 
   async useDelegation(delegation: PortableDelegation): Promise<DelegatedAccess> {
     const node = await this.ensureNode();

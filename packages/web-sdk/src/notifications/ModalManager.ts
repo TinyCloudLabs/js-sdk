@@ -1,9 +1,18 @@
 import { TinyCloudSpaceModal, type SpaceCreationModalOptions, type SpaceCreationResult } from './SpaceCreationModal';
 import { TinyCloudNodeSelectionModal, type NodeSelectionModalOptions, type NodeSelectionResult } from './NodeSelectionModal';
+import {
+  TinyCloudPermissionRequestModal,
+  type PermissionRequestModalOptions,
+  type PermissionRequestResult,
+} from './PermissionRequestModal';
 
 export class ModalManager {
   private static instance: ModalManager;
-  private activeModal: TinyCloudSpaceModal | TinyCloudNodeSelectionModal | null = null;
+  private activeModal:
+    | TinyCloudSpaceModal
+    | TinyCloudNodeSelectionModal
+    | TinyCloudPermissionRequestModal
+    | null = null;
 
   private constructor() { }
 
@@ -60,6 +69,27 @@ export class ModalManager {
     });
   }
 
+  public showPermissionRequestModal(
+    options: PermissionRequestModalOptions,
+  ): Promise<PermissionRequestResult> {
+    this.closeActiveModal();
+
+    const modal = new TinyCloudPermissionRequestModal({
+      ...options,
+      onDismiss: () => {
+        this.activeModal = null;
+        options.onDismiss?.();
+      },
+    });
+
+    document.body.appendChild(modal);
+    this.activeModal = modal;
+
+    return modal.getCompletionPromise().finally(() => {
+      this.activeModal = null;
+    });
+  }
+
   public closeActiveModal(): void {
     if (this.activeModal) {
       this.activeModal.remove();
@@ -79,4 +109,10 @@ export const showSpaceCreationModal = (options: SpaceCreationModalOptions): Prom
 
 export const showNodeSelectionModal = (options: NodeSelectionModalOptions): Promise<NodeSelectionResult> => {
   return ModalManager.getInstance().showNodeSelectionModal(options);
+};
+
+export const showPermissionRequestModal = (
+  options: PermissionRequestModalOptions,
+): Promise<PermissionRequestResult> => {
+  return ModalManager.getInstance().showPermissionRequestModal(options);
 };
