@@ -19,6 +19,7 @@
   "changesets": [
     "bump-past-ghost",
     "capability-chain-manifest",
+    "manifest-signin-multi-delegate",
     "reexport-invoke-any",
     "trigger-nonce-republish",
     "write-hooks-phase2"

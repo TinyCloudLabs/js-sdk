@@ -38,7 +38,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
-    "@tinycloud/node-sdk-wasm": "1.7.2-beta.1",
+    "@tinycloud/node-sdk-wasm": "1.7.2-beta.2",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0"
   },
