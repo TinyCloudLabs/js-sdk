@@ -77,6 +77,7 @@ export {
   type IKVService,
   type IPrefixedKVService,
   type KVServiceConfig,
+  type KVReadMode,
   type KVGetOptions,
   type KVPutOptions,
   type KVListOptions,

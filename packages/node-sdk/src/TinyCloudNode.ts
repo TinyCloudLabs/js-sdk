@@ -36,6 +36,7 @@ import {
   TinyCloudSession,
   activateSessionWithHost,
   KVService,
+  type KVServiceConfig,
   IKVService,
   SQLService,
   ISQLService,
@@ -194,6 +195,8 @@ export interface TinyCloudNodeConfig {
   includeAccountRegistryPermissions?: boolean;
   /** Optional default actions to grant on sign-in sessions. */
   defaultActions?: NodeUserAuthorizationConfig["defaultActions"];
+  /** Optional KV service config used for all KV services created by this node wrapper. */
+  kvConfig?: KVServiceConfig;
 }
 
 export interface TinyCloudKVReplicationScope {
@@ -371,6 +374,17 @@ export class TinyCloudNode {
     return this.auth?.nodeFeatures ?? [];
   }
 
+  private get kvServiceConfig(): KVServiceConfig {
+    return this.config.kvConfig ?? {};
+  }
+
+  private createKVService(config: KVServiceConfig = {}): KVService {
+    return new KVService({
+      ...this.kvServiceConfig,
+      ...config,
+    });
+  }
+
   /** SIWE domain — uses config override or defaults to app.tinycloud.xyz */
   private get siweDomain(): string {
     return this.config.domain ?? 'app.tinycloud.xyz';
@@ -501,7 +515,7 @@ export class TinyCloudNode {
         // Use pathPrefix as the KV service prefix for sharing links
         // Strip trailing slash to match DelegatedAccess behavior
         const prefix = config.pathPrefix?.replace(/\/$/, '');
-        const kvService = new KVService({ prefix });
+        const kvService = this.createKVService({ prefix });
         // Create a new service context for the KV service
         const kvContext = new ServiceContext({
           invoke: config.invoke,
@@ -559,6 +573,9 @@ export class TinyCloudNode {
 
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
+      serviceConfigs: this.config.kvConfig
+        ? { kv: this.config.kvConfig }
+        : undefined,
     });
   }
 
@@ -923,7 +940,7 @@ export class TinyCloudNode {
     });
 
     // Create and register KV service
-    this._kv = new KVService({});
+    this._kv = this.createKVService();
     this._kv.initialize(this._serviceContext);
     this._serviceContext.registerService('kv', this._kv);
 
@@ -1065,6 +1082,9 @@ export class TinyCloudNode {
     // Create TinyCloud instance
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
+      serviceConfigs: this.config.kvConfig
+        ? { kv: this.config.kvConfig }
+        : undefined,
     });
 
     // Update config with prefix
@@ -1117,6 +1137,9 @@ export class TinyCloudNode {
 
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
+      serviceConfigs: this.config.kvConfig
+        ? { kv: this.config.kvConfig }
+        : undefined,
     });
     this.config.prefix = prefix;
   }
@@ -1143,7 +1166,7 @@ export class TinyCloudNode {
     });
 
     // Create and register KV service
-    this._kv = new KVService({});
+    this._kv = this.createKVService();
     this._kv.initialize(this._serviceContext);
     this._serviceContext.registerService('kv', this._kv);
 
@@ -1187,7 +1210,7 @@ export class TinyCloudNode {
   }
 
   private createSpaceScopedKVService(spaceId: string): KVService {
-    const kvService = new KVService({});
+    const kvService = this.createKVService();
     if (this._serviceContext) {
       const spaceScopedContext = new ServiceContext({
         invoke: this._serviceContext.invoke,
@@ -2180,7 +2203,7 @@ export class TinyCloudNode {
 
     // Cache a properly authorized public KV service using the new delegation
     if (this._serviceContext) {
-      const publicKV = new KVService({ prefix: "" });
+      const publicKV = this.createKVService({ prefix: "" });
       const publicContext = new ServiceContext({
         invoke: this.invokeWithRuntimePermissions,
         fetch: this._serviceContext.fetch,
@@ -3365,7 +3388,13 @@ export class TinyCloudNode {
       // Track received delegation in registry
       this.trackReceivedDelegation(delegation, this.sessionKeyJwk as unknown as JWK);
 
-      return new DelegatedAccess(session, delegation, targetHost, this.wasmBindings.invoke);
+      return new DelegatedAccess(
+        session,
+        delegation,
+        targetHost,
+        this.wasmBindings.invoke,
+        this.kvServiceConfig
+      );
     }
 
     // Wallet mode: create a SIWE sub-delegation
@@ -3451,7 +3480,13 @@ export class TinyCloudNode {
     // Track received delegation in registry
     this.trackReceivedDelegation(delegation, jwk as unknown as JWK);
 
-    return new DelegatedAccess(session, delegation, targetHost, this.wasmBindings.invoke);
+    return new DelegatedAccess(
+      session,
+      delegation,
+      targetHost,
+      this.wasmBindings.invoke,
+      this.kvServiceConfig
+    );
   }
 
   /**

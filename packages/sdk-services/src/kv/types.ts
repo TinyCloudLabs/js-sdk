@@ -9,6 +9,12 @@
  */
 export interface KVServiceConfig {
   /**
+   * Default read mode for KV read operations.
+   * Defaults to canonical, which hides quarantined keys from normal reads.
+   */
+  readMode?: KVReadMode;
+
+  /**
    * Default prefix for all keys.
    * Useful for namespacing data within a space.
    *
@@ -31,9 +37,19 @@ export interface KVServiceConfig {
 }
 
 /**
+ * KV read mode.
+ */
+export type KVReadMode = "canonical" | "provisional";
+
+/**
  * Options for KV get operations.
  */
 export interface KVGetOptions {
+  /**
+   * Override the default read mode for this operation.
+   */
+  readMode?: KVReadMode;
+
   /**
    * Override the default prefix for this operation.
    */
@@ -92,6 +108,11 @@ export interface KVPutOptions {
  */
 export interface KVListOptions {
   /**
+   * Override the default read mode for this operation.
+   */
+  readMode?: KVReadMode;
+
+  /**
    * Override the default prefix for this operation.
    */
   prefix?: string;
@@ -147,6 +168,11 @@ export interface KVDeleteOptions {
  * Options for KV head (metadata) operations.
  */
 export interface KVHeadOptions {
+  /**
+   * Override the default read mode for this operation.
+   */
+  readMode?: KVReadMode;
+
   /**
    * Override the default prefix for this operation.
    */

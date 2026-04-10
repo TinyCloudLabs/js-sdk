@@ -68,6 +68,7 @@ export {
   PrefixedKVService,
   IPrefixedKVService,
 } from '@tinycloud/sdk-core';
+export type { KVReadMode } from '@tinycloud/sdk-core';
 
 // Hooks service
 export {

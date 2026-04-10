@@ -1,6 +1,7 @@
 import { Wallet } from "ethers";
 import {
   TinyCloudNode,
+  type KVServiceConfig,
   type TinyCloudReplicationSession,
 } from "@tinycloud/node-sdk";
 import type { RunningCluster, RunningNode } from "./cluster";
@@ -398,13 +399,17 @@ export function createClusterClient(
   cluster: RunningCluster,
   nodeName: string,
   prefix: string,
-  key = REPLICATION_TEST_KEY
+  key = REPLICATION_TEST_KEY,
+  options: {
+    kvConfig?: KVServiceConfig;
+  } = {}
 ): TinyCloudNode {
   const node = getClusterNode(cluster, nodeName);
   return new TinyCloudNode({
     privateKey: key,
     host: node.url,
     prefix,
+    kvConfig: options.kvConfig,
     autoCreateSpace: true,
     defaultActions: replicationDefaultActions(),
   });

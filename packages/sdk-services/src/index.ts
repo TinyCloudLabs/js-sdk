@@ -147,6 +147,7 @@ export { KVService, PrefixedKVService, IKVService, KVAction } from "./kv";
 export type {
   IPrefixedKVService,
   KVServiceConfig,
+  KVReadMode,
   KVGetOptions,
   KVPutOptions,
   KVListOptions,

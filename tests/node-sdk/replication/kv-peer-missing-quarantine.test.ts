@@ -17,9 +17,17 @@ function quarantineKeys(items: { key: string }[]) {
   return new Set(items.map((item) => item.key));
 }
 
+function expectKvNotFound(result: { ok: boolean; error?: { code: string; message: string } }) {
+  expect(result.ok).toBe(false);
+  if (result.ok || !result.error) {
+    throw new Error("Expected KV lookup to fail");
+  }
+  expect(result.error.code).toBe("KV_NOT_FOUND");
+}
+
 describe("Replication Peer Missing Quarantine", () => {
   test(
-    "lists quarantined keys and clears them after keep and prune-delete resolution",
+    "hides quarantined keys in canonical reads and reveals them with provisional reads",
     { timeout: 600_000 },
     async () => {
       const cluster = await startCluster();
@@ -91,6 +99,49 @@ describe("Replication Peer Missing Quarantine", () => {
         expect(beforeKeys.has(keepKey)).toBe(true);
         expect(beforeKeys.has(pruneKey)).toBe(true);
 
+        const canonicalKeep = await replica.kv.get(keepKey);
+        expectKvNotFound(canonicalKeep);
+
+        const provisionalKeep = await replica.kv.get<{ state: string }>(keepKey, {
+          readMode: "provisional",
+        });
+        expect(provisionalKeep.ok).toBe(true);
+        if (!provisionalKeep.ok) {
+          throw new Error(provisionalKeep.error.message);
+        }
+        expect(provisionalKeep.data.data.state).toBe("local-only-keep");
+
+        const canonicalList = await replica.kv.list({ prefix: scope });
+        expect(canonicalList.ok).toBe(true);
+        if (!canonicalList.ok) {
+          throw new Error(canonicalList.error.message);
+        }
+        expect(canonicalList.data.keys).not.toContain(keepKey);
+        expect(canonicalList.data.keys).not.toContain(pruneKey);
+
+        const provisionalList = await replica.kv.list({
+          prefix: scope,
+          readMode: "provisional",
+        });
+        expect(provisionalList.ok).toBe(true);
+        if (!provisionalList.ok) {
+          throw new Error(provisionalList.error.message);
+        }
+        expect(provisionalList.data.keys).toEqual(
+          expect.arrayContaining([keepKey, pruneKey])
+        );
+
+        const canonicalHead = await replica.kv.head(pruneKey);
+        expectKvNotFound(canonicalHead);
+
+        const provisionalHead = await replica.kv.head(pruneKey, {
+          readMode: "provisional",
+        });
+        expect(provisionalHead.ok).toBe(true);
+        if (!provisionalHead.ok) {
+          throw new Error(provisionalHead.error.message);
+        }
+
         const authorityPull = await reconcileFromPeer(
           cluster,
           "node-a",
@@ -147,6 +198,10 @@ describe("Replication Peer Missing Quarantine", () => {
 
         const keepResult = await replica.kv.get<{ state: string }>(keepKey);
         expect(keepResult.ok).toBe(true);
+        if (!keepResult.ok) {
+          throw new Error(keepResult.error.message);
+        }
+        expect(keepResult.data.data.state).toBe("local-only-keep");
 
         const quarantineAfter = await peerMissingQuarantineFromLocal(
           cluster,
