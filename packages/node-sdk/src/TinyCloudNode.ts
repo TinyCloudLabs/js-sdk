@@ -1884,9 +1884,30 @@ export class TinyCloudNode {
     // (service, path) before signing. Consumers that need the full
     // multi-resource picture read `.resources`.
     const primary = result.resources[0];
+    const delegationHeader = { Authorization: `Bearer ${result.delegation}` };
+
+    // Activate the delegation with the host. This registers the UCAN in
+    // the host's delegation store so that downstream consumers (e.g. a
+    // backend calling `useDelegation`) can reference its CID as a parent
+    // in their own invoker SIWE. Without this step, the host rejects any
+    // downstream delegation with "Cannot find parent delegation" because
+    // the UCAN was only signed client-side and never stored.
+    //
+    // Mirrors the legacy `createDelegationWalletPath` at line 2092 which
+    // does the same for wallet-signed SIWE delegations.
+    const activateResult = await activateSessionWithHost(
+      this.config.host!,
+      delegationHeader,
+    );
+    if (!activateResult.success) {
+      throw new Error(
+        `Failed to activate delegation with host: ${activateResult.error}`,
+      );
+    }
+
     return {
       cid: result.cid,
-      delegationHeader: { Authorization: `Bearer ${result.delegation}` },
+      delegationHeader,
       spaceId,
       path: primary.path,
       actions: primary.actions,

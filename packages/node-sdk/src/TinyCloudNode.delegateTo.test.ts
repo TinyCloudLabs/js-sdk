@@ -8,7 +8,7 @@
  * expiry-check branches in isolation.
  */
 
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import {
   PermissionNotInManifestError,
@@ -173,6 +173,23 @@ describe("TinyCloudNode.delegateTo", () => {
   const BOB_DID = "did:pkh:eip155:1:0x00000000000000000000000000000000000000BB";
 
   const futureExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Stub global fetch so the derivable fast path's `activateSessionWithHost`
+  // call resolves locally without hitting node.tinycloud.xyz. Each test that
+  // exercises the WASM delegation path expects a successful activation; the
+  // SessionExpired / derivability / validation tests never reach fetch.
+  let originalFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ activated: [], skipped: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
 
   test("no session → SessionExpiredError with epoch", async () => {
     const wasm = makeFakeWasmBindings();
