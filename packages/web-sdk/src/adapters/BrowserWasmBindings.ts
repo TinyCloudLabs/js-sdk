@@ -23,10 +23,34 @@ export class BrowserWasmBindings implements IWasmBindings {
   makeSpaceId(address: string, chainId: number, prefix: string): string {
     return tinycloud.makeSpaceId(address, chainId, prefix);
   }
+  /**
+   * Create a multi-resource delegation UCAN.
+   *
+   * The WASM signature changed from
+   *   (session, delegateDID, spaceId, path, actions, expirationSecs, notBeforeSecs)
+   * to
+   *   (session, delegateDID, spaceId, abilities, expirationSecs, notBeforeSecs)
+   * where `abilities` is the same `Record<short service, Record<path,
+   * actions[]>>` shape `prepareSession` accepts. One UCAN now covers
+   * every (service, path, actions) entry in the abilities map.
+   */
   createDelegation(
-    session: any, delegateDID: string, spaceId: string,
-    path: string, actions: string[], expirationSecs: number, notBeforeSecs?: number
-  ) { return tinycloud.createDelegation(session, delegateDID, spaceId, path, actions, expirationSecs, notBeforeSecs); }
+    session: any,
+    delegateDID: string,
+    spaceId: string,
+    abilities: Record<string, Record<string, string[]>>,
+    expirationSecs: number,
+    notBeforeSecs?: number
+  ) {
+    return tinycloud.createDelegation(
+      session,
+      delegateDID,
+      spaceId,
+      abilities,
+      expirationSecs,
+      notBeforeSecs
+    );
+  }
   parseRecapFromSiwe(siweString: string) {
     // The WASM binding returns a JS array of { service, space, path, actions }.
     return tinycloud.parseRecapFromSiwe(siweString) as {
