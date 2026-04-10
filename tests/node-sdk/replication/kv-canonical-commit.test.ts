@@ -13,7 +13,7 @@ import {
 
 describe("Replication KV Canonical Commit", () => {
   test(
-    "keeps replica-authored KV writes visible locally while canonical state catches up through authority reconciliation",
+    "keeps replica-authored KV writes provisional until canonical state catches up through authority reconciliation",
     { timeout: 600_000 },
     async () => {
       const cluster = await startCluster({
@@ -58,19 +58,38 @@ describe("Replication KV Canonical Commit", () => {
         const writeResult = await authoringReplica.kv.put(key, value);
         expect(writeResult.ok).toBe(true);
 
-        const localGet = await authoringReplica.kv.get<typeof value>(key);
-        expect(localGet.ok).toBe(true);
-        if (!localGet.ok) {
-          throw new Error(localGet.error.message);
+        const localCanonicalGet = await authoringReplica.kv.get<typeof value>(key);
+        expect(localCanonicalGet.ok).toBe(false);
+        if (localCanonicalGet.ok) {
+          throw new Error("Expected canonical read to stay absent before authority commit");
         }
-        expect(localGet.data.data).toEqual(value);
+        expect(localCanonicalGet.error.code).toBe("KV_NOT_FOUND");
 
-        const localList = await authoringReplica.kv.list({ prefix: scope });
-        expect(localList.ok).toBe(true);
-        if (!localList.ok) {
-          throw new Error(localList.error.message);
+        const localCanonicalList = await authoringReplica.kv.list({ prefix: scope });
+        expect(localCanonicalList.ok).toBe(true);
+        if (!localCanonicalList.ok) {
+          throw new Error(localCanonicalList.error.message);
         }
-        expect(localList.data.keys).toContain(key);
+        expect(localCanonicalList.data.keys).not.toContain(key);
+
+        const localProvisionalGet = await authoringReplica.kv.get<typeof value>(key, {
+          readMode: "provisional",
+        });
+        expect(localProvisionalGet.ok).toBe(true);
+        if (!localProvisionalGet.ok) {
+          throw new Error(localProvisionalGet.error.message);
+        }
+        expect(localProvisionalGet.data.data).toEqual(value);
+
+        const localProvisionalList = await authoringReplica.kv.list({
+          prefix: scope,
+          readMode: "provisional",
+        });
+        expect(localProvisionalList.ok).toBe(true);
+        if (!localProvisionalList.ok) {
+          throw new Error(localProvisionalList.error.message);
+        }
+        expect(localProvisionalList.data.keys).toContain(key);
 
         const authoritySession = await openKvReplicationSession(
           authority,
@@ -106,9 +125,9 @@ describe("Replication KV Canonical Commit", () => {
           },
           { target: authoritySession, peer: replicaSession }
         );
-        expect(authorityReconBefore.matches).toBe(false);
+        expect(authorityReconBefore.matches).toBe(true);
         expect(authorityReconBefore.localItemCount).toBe(0);
-        expect(authorityReconBefore.peerItemCount).toBeGreaterThan(0);
+        expect(authorityReconBefore.peerItemCount).toBe(0);
 
         const authorityCatchup = await reconcileFromPeer(
           cluster,

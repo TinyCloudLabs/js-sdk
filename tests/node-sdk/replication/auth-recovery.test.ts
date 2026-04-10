@@ -152,7 +152,16 @@ describe("Replication Auth Recovery", () => {
         const writeResult = await authoringReplica.kv.put(key, value);
         expect(writeResult.ok).toBe(true);
 
-        const localReplicaGet = await authoringReplica.kv.get<typeof value>(key);
+        const localReplicaCanonical = await authoringReplica.kv.get<typeof value>(key);
+        expect(localReplicaCanonical.ok).toBe(false);
+        if (localReplicaCanonical.ok) {
+          throw new Error("Expected canonical replica read to stay absent during authority outage");
+        }
+        expect(localReplicaCanonical.error.code).toBe("KV_NOT_FOUND");
+
+        const localReplicaGet = await authoringReplica.kv.get<typeof value>(key, {
+          readMode: "provisional",
+        });
         expect(localReplicaGet.ok).toBe(true);
         if (!localReplicaGet.ok) {
           throw new Error(localReplicaGet.error.message);
