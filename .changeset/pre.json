@@ -17,6 +17,7 @@
     "@tinycloud/sdk-services-test": "6.0.2"
   },
   "changesets": [
+    "bright-bats-jump",
     "bump-past-ghost",
     "capability-chain-manifest",
     "fix-normalize-space-uri",

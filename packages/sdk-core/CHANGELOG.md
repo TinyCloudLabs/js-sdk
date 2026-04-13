@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 2.1.0-beta.5
+
+### Patch Changes
+
+- 303a8eb: Add an optional per-call `nonce` override to `signIn()` while preserving constructor-level `siweConfig.nonce` support.
+
 ## 2.1.0-beta.4
 
 ### Patch Changes
