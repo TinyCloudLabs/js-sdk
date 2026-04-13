@@ -29,7 +29,7 @@ test('Instantiate TinyCloudWeb with providers.web3.driver and successfully sign 
     },
   };
   const tcw = new TinyCloudWeb(config);
-  await expect(tcw.signIn()).resolves.not.toThrowError();
+  await expect(tcw.signIn({ nonce: 'web-call-nonce' })).resolves.not.toThrowError();
   await expect(tcw.signOut()).resolves.not.toThrowError();
 });
 

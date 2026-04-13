@@ -36,6 +36,14 @@ export interface PartialSiweMessage extends Partial<SiweConfig> {
 }
 
 /**
+ * Options for a single sign-in call.
+ */
+export interface SignInOptions {
+  /** Nonce to use for this sign-in only. Overrides `siweConfig.nonce` when provided. */
+  nonce?: string;
+}
+
+/**
  * Platform-agnostic user authorization interface.
  *
  * This interface defines how users authenticate and manage sessions.
@@ -58,9 +66,10 @@ export interface IUserAuthorization {
   /**
    * Sign in and create a new session.
    * This will prompt for wallet signature (browser) or use configured strategy (node).
+   * Per-call options override constructor defaults for this sign-in only.
    * @returns The new session
    */
-  signIn(): Promise<ClientSession>;
+  signIn(options?: SignInOptions): Promise<ClientSession>;
 
   /**
    * Sign out and clear the current session.

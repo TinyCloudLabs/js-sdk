@@ -58,6 +58,7 @@ export {
   PersistedSessionData,
   PartialSiweMessage,
 } from '@tinycloud/sdk-core';
+export type { SignInOptions } from '@tinycloud/sdk-core';
 
 // Re-export KV service types for direct usage
 export {
