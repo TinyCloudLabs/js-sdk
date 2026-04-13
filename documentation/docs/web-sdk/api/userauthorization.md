@@ -26,7 +26,7 @@ Creates a new instance of the UserAuthorization class.
 
 **Parameters:**
 - `config` - Configuration options for user authorization
-  - `siweConfig` - Configuration for Sign-In with Ethereum (SIWE)
+  - `siweConfig` - Configuration for Sign-In with Ethereum (SIWE), including a default `nonce`
   - `walletConnectProjectId` - Optional WalletConnect project ID
 
 ## Properties
@@ -66,17 +66,21 @@ console.log('Connected to wallet:', connected.address);
 ### signIn
 
 ```typescript
-async signIn(): Promise<TCWClientSession>
+async signIn(options?: { nonce?: string }): Promise<TCWClientSession>
 ```
 
 Signs the user in using Sign-In with Ethereum (SIWE).
 
 **Returns:** A Promise that resolves to a TCWClientSession object containing the session information.
 
+**Options:**
+- `nonce` - Per-call nonce override. When provided, it takes precedence over `siweConfig.nonce` for that sign-in only. This nonce should come from your server and be validated there as a one-time challenge.
+
 **Example:**
 ```typescript
 await auth.connect();
-const session = await auth.signIn();
+const nonce = await fetch('/api/siwe/nonce').then((response) => response.text());
+const session = await auth.signIn({ nonce });
 console.log('User signed in:', session.address);
 ```
 

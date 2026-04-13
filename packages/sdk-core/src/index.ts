@@ -58,6 +58,7 @@ export {
   PartialSiweMessage,
   UserAuthorizationConfig,
 } from "./userAuthorization";
+export type { SignInOptions } from "./userAuthorization";
 
 // Main TinyCloud class
 export { TinyCloud, TinyCloudConfig } from "./TinyCloud";

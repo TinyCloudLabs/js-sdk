@@ -48,8 +48,10 @@ The `connect` method will detect available wallets (such as MetaMask) and prompt
 After connecting to a wallet, you can sign the user in:
 
 ```typescript
+const nonce = await fetch('/api/siwe/nonce').then((response) => response.text());
+
 // Sign in the user
-await tc.signIn();
+await tc.signIn({ nonce });
 
 // Check if signed in
 const isSignedIn = tc.isSignedIn();
@@ -61,6 +63,10 @@ The `signIn` method will:
 2. Prompt the user to sign the message with their wallet
 3. Verify the signature
 4. Create a session for the user
+
+If you pass `nonce` to `signIn()`, that value overrides `siweConfig.nonce` for that one call.
+
+The nonce must come from your server or relying party backend. It should be stored server-side, verified on sign-in, and invalidated after use. Do not generate the SIWE nonce in the browser for production authentication flows.
 
 ## Working with Sessions
 
@@ -106,6 +112,13 @@ const tc = new TinyCloudWeb({
     ],
   }
 });
+```
+
+When your backend issues the nonce before sign-in, pass it per call instead of hard-coding it in the constructor:
+
+```typescript
+const nonce = await fetch('/api/siwe/nonce').then((response) => response.text());
+await tc.signIn({ nonce });
 ```
 
 ## Error Handling

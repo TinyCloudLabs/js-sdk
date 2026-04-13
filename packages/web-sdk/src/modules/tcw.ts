@@ -41,6 +41,7 @@ import {
   ISpaceCreationHandler,
   type Manifest,
   type PermissionEntry,
+  SignInOptions,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
 import {
@@ -355,9 +356,9 @@ export class TinyCloudWeb {
   // Auth Methods (delegate to TinyCloudNode)
   // ===========================================================================
 
-  signIn = async (): Promise<ClientSession> => {
+  signIn = async (options?: SignInOptions): Promise<ClientSession> => {
     const node = await this.ensureNode();
-    await node.signIn();
+    await node.signIn(options);
     const session = node.session;
     if (!session) throw new Error("Sign-in completed but no session available");
     return {

@@ -8,6 +8,7 @@ import {
   PersistedSessionData,
   TinyCloudSession,
   SiweConfig,
+  SignInOptions,
   fetchPeerId,
   submitHostDelegation,
   activateSessionWithHost,
@@ -297,17 +298,19 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * - resources are appended to the default resources
    * - uri triggers a warning (overwriting delegation target)
    * - all other fields override directly
+   * - per-call nonce overrides siweConfig.nonce when provided
    */
-  private buildSiweOverrides(): Record<string, unknown> {
-    // Seed with top-level nonce; siweConfig fields layered on top take precedence.
+  private buildSiweOverrides(options?: SignInOptions): Record<string, unknown> {
     const base: Record<string, unknown> = { uri: this.uri };
     if (this.nonce !== undefined) {
       base.nonce = this.nonce;
     }
 
-    if (!this.siweConfig) return base;
+    if (!this.siweConfig && !options?.nonce) {
+      return base;
+    }
 
-    const { statement, resources, uri, ...rest } = this.siweConfig;
+    const { statement, resources, uri, ...rest } = this.siweConfig ?? {};
     const overrides: Record<string, unknown> = { ...base, ...rest };
 
     if (statement) {
@@ -326,6 +329,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
           "This may break delegation chain validation if the URI does not match the session key DID.",
       );
       overrides.uri = uri;
+    }
+
+    if (options?.nonce) {
+      overrides.nonce = options.nonce;
     }
 
     return overrides;
@@ -539,8 +546,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * 2. Call prepareSession() which generates the SIWE with ReCap capabilities
    * 3. Sign the SIWE string from prepareSession
    * 4. Call completeSessionSetup() with the prepared session + signature
+   *
+   * @param options - Optional per-call SIWE overrides for this sign-in only
    */
-  async signIn(): Promise<ClientSession> {
+  async signIn(options?: SignInOptions): Promise<ClientSession> {
     // Get signer address and chain ID
     this._address = await this.signer.getAddress();
     this._chainId = await this.signer.getChainId();
@@ -580,7 +589,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       expirationTime: expirationTime.toISOString(),
       spaceId,
       jwk,
-      ...this.buildSiweOverrides(),
+      ...this.buildSiweOverrides(options),
     });
 
     // Sign the SIWE message from prepareSession (NOT a separately generated SIWE)

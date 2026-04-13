@@ -48,6 +48,7 @@ export type {
   IUserAuthorization,
   ClientSession,
   Extension,
+  SignInOptions,
   PersistedSessionData,
   TinyCloudSession,
   INotificationHandler,

@@ -56,6 +56,7 @@ import {
   IWasmBindings,
   ISessionManager,
   ISpaceCreationHandler,
+  SignInOptions,
   // v2 services
   DelegationManager,
   SpaceService,
@@ -490,8 +491,10 @@ export class TinyCloudNode {
    * Sign in and create a new session.
    * This creates the user's space if it doesn't exist.
    * Requires wallet mode (privateKey in config).
+   *
+   * @param options - Optional per-call SIWE overrides for this sign-in only
    */
-  async signIn(): Promise<void> {
+  async signIn(options?: SignInOptions): Promise<void> {
     if (!this.signer || !this.tc) {
       throw new Error(
         "Cannot signIn() in session-only mode. Provide a privateKey in config to create your own space."
@@ -511,7 +514,7 @@ export class TinyCloudNode {
     this._hooks = undefined;
     this._serviceContext = undefined;
 
-    await this.tc.signIn();
+    await this.tc.signIn(options);
 
     // Initialize service context with session
     this.initializeServices();
