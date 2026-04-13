@@ -115,10 +115,10 @@ function Home() {
       const ethersProvider = new providers.Web3Provider(eip1193Provider as any);
 
       const tcwConfig = getTinyCloudWebConfig({
-        providers: {
-          web3: {
-            driver: ethersProvider,
-          },
+        provider: ethersProvider,
+        siweConfig: {
+          statement: "Sign in to the TinyCloud OpenKey example app.",
+          domain: window.location.hostname,
         },
       });
 

@@ -139,7 +139,11 @@ const Shared = () => {
       const ethersProvider = new providers.Web3Provider(eip1193Provider as any);
 
       const tcwInstance = new TinyCloudWeb({
-        providers: { web3: { driver: ethersProvider } },
+        provider: ethersProvider,
+        siweConfig: {
+          statement: 'Sign in to the TinyCloud OpenKey example app.',
+          domain: window.location.hostname,
+        },
       });
       await tcwInstance.signIn();
       setTcw(tcwInstance);

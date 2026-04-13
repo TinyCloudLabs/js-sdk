@@ -12,8 +12,9 @@ User clicks "Connect with OpenKey"
   -> Returns { address, keyId, keyType }
   -> OpenKeyProvider created
   -> Wrapped in ethers Web3Provider
-  -> Passed to TinyCloudWeb
-  -> signIn() triggers SIWE signing via OpenKey iframe modal
+  -> TinyCloudWeb receives `provider` + `siweConfig`
+  -> TinyCloudWeb uses its normal SIWE nonce flow unless you override `siweConfig.nonce`
+  -> `signIn()` triggers SIWE signing via OpenKey iframe modal
   -> TinyCloud operations work as normal
 ```
 
@@ -156,10 +157,12 @@ src/
 
 ### `src/pages/Home.tsx`
 
-The main authentication flow uses the SDK's built-in `OpenKeyProvider`:
+The main authentication flow uses the SDK's built-in `OpenKeyProvider` and passes the TinyCloud auth config at the app layer:
 
 ```typescript
 import { OpenKey, OpenKeyProvider } from '@openkey/sdk';
+import { TinyCloudWeb } from '@tinycloud/web-sdk';
+import { providers } from 'ethers';
 
 const connectAndSignIn = async () => {
   // 1. Connect to OpenKey (iframe modal)
@@ -174,13 +177,32 @@ const connectAndSignIn = async () => {
 
   // 4. Create TinyCloudWeb with the provider
   const tcw = new TinyCloudWeb({
-    providers: { web3: { driver: web3Provider } },
+    provider: web3Provider,
+    siweConfig: {
+      statement: 'Sign in to the TinyCloud OpenKey example app.',
+      domain: window.location.hostname,
+    },
   });
 
   // 5. Sign in (SIWE signing routed through OpenKey)
   await tcw.signIn();
 };
 ```
+
+If you need to override the nonce in an example, use a fixed placeholder and document that production code must fetch a one-time nonce from your backend:
+
+```typescript
+const tcw = new TinyCloudWeb({
+  provider: web3Provider,
+  siweConfig: {
+    nonce: '1234', // Example only. In production, fetch a random one-time nonce from your server.
+    statement: 'Sign in to the TinyCloud OpenKey example app.',
+    domain: window.location.hostname,
+  },
+});
+```
+
+Do not add browser-side nonce generation helpers. For production authentication, the nonce should be issued by your backend, verified there, and invalidated after use.
 
 ## Building for Production
 
