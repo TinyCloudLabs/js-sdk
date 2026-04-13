@@ -1887,17 +1887,17 @@ export class TinyCloudNode {
     // (service, path) before signing. Consumers that need the full
     // multi-resource picture read `.resources`.
     const primary = result.resources[0];
-    const delegationHeader = { Authorization: `Bearer ${result.delegation}` };
+    // Use the raw JWT without a "Bearer " prefix. The host's HeaderEncode
+    // decoder passes the header value directly to Ucan::decode(), which
+    // expects a bare JWT string. The wallet-signed CACAO path also uses
+    // raw base64 without any prefix. Adding "Bearer " causes a parse
+    // failure that surfaces as a 401 from the host.
+    const delegationHeader = { Authorization: result.delegation };
 
-    // Activate the delegation with the host. This registers the UCAN in
-    // the host's delegation store so that downstream consumers (e.g. a
-    // backend calling `useDelegation`) can reference its CID as a parent
-    // in their own invoker SIWE. Without this step, the host rejects any
-    // downstream delegation with "Cannot find parent delegation" because
-    // the UCAN was only signed client-side and never stored.
-    //
-    // Mirrors the legacy `createDelegationWalletPath` at line 2092 which
-    // does the same for wallet-signed SIWE delegations.
+    // Activate the delegation with the host so downstream consumers (e.g.
+    // a backend calling useDelegation) can find it by CID when building
+    // their invoker SIWE. The host validates the UCAN's parent chain
+    // (session key → wallet SIWE) to confirm authority.
     const activateResult = await activateSessionWithHost(
       this.config.host!,
       delegationHeader,
