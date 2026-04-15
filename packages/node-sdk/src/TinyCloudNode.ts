@@ -39,6 +39,7 @@ import {
   type KVServiceConfig,
   IKVService,
   SQLService,
+  type SQLServiceConfig,
   ISQLService,
   DuckDbService,
   IDuckDbService,
@@ -211,6 +212,8 @@ export interface TinyCloudNodeConfig {
   defaultActions?: NodeUserAuthorizationConfig["defaultActions"];
   /** Optional KV service config used for all KV services created by this node wrapper. */
   kvConfig?: KVServiceConfig;
+  /** Optional SQL service config used for all SQL services created by this node wrapper. */
+  sqlConfig?: SQLServiceConfig;
 }
 
 export interface TinyCloudKVReplicationScope {
@@ -395,6 +398,17 @@ export class TinyCloudNode {
   private createKVService(config: KVServiceConfig = {}): KVService {
     return new KVService({
       ...this.kvServiceConfig,
+      ...config,
+    });
+  }
+
+  private get sqlServiceConfig(): SQLServiceConfig {
+    return this.config.sqlConfig ?? {};
+  }
+
+  private createSQLService(config: SQLServiceConfig = {}): SQLService {
+    return new SQLService({
+      ...this.sqlServiceConfig,
       ...config,
     });
   }
@@ -588,8 +602,13 @@ export class TinyCloudNode {
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
       serviceConfigs: this.config.kvConfig
-        ? { kv: this.config.kvConfig }
-        : undefined,
+        ? {
+            kv: this.config.kvConfig,
+            ...(this.config.sqlConfig ? { sql: this.config.sqlConfig } : {}),
+          }
+        : this.config.sqlConfig
+          ? { sql: this.config.sqlConfig }
+          : undefined,
     });
   }
 
@@ -988,7 +1007,7 @@ export class TinyCloudNode {
     this._serviceContext.registerService('kv', this._kv);
 
     // Create and register SQL service
-    this._sql = new SQLService({});
+    this._sql = this.createSQLService();
     this._sql.initialize(this._serviceContext);
     this._serviceContext.registerService('sql', this._sql);
 
@@ -1126,8 +1145,13 @@ export class TinyCloudNode {
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
       serviceConfigs: this.config.kvConfig
-        ? { kv: this.config.kvConfig }
-        : undefined,
+        ? {
+            kv: this.config.kvConfig,
+            ...(this.config.sqlConfig ? { sql: this.config.sqlConfig } : {}),
+          }
+        : this.config.sqlConfig
+          ? { sql: this.config.sqlConfig }
+          : undefined,
     });
 
     // Update config with prefix
@@ -1181,8 +1205,13 @@ export class TinyCloudNode {
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
       serviceConfigs: this.config.kvConfig
-        ? { kv: this.config.kvConfig }
-        : undefined,
+        ? {
+            kv: this.config.kvConfig,
+            ...(this.config.sqlConfig ? { sql: this.config.sqlConfig } : {}),
+          }
+        : this.config.sqlConfig
+          ? { sql: this.config.sqlConfig }
+          : undefined,
     });
     this.config.prefix = prefix;
   }
@@ -1216,7 +1245,7 @@ export class TinyCloudNode {
     // Create and register SQL service (if supported)
     const features = this.nodeFeatures;
     if (features.length === 0 || features.includes("sql")) {
-      this._sql = new SQLService({});
+      this._sql = this.createSQLService();
       this._sql.initialize(this._serviceContext);
       this._serviceContext.registerService('sql', this._sql);
     }
@@ -3436,7 +3465,8 @@ export class TinyCloudNode {
         delegation,
         targetHost,
         this.wasmBindings.invoke,
-        this.kvServiceConfig
+        this.kvServiceConfig,
+        this.sqlServiceConfig
       );
     }
 
@@ -3528,7 +3558,8 @@ export class TinyCloudNode {
       delegation,
       targetHost,
       this.wasmBindings.invoke,
-      this.kvServiceConfig
+      this.kvServiceConfig,
+      this.sqlServiceConfig
     );
   }
 

@@ -15,6 +15,12 @@ export interface SQLServiceConfig {
   defaultDatabase?: string;
 
   /**
+   * Default read mode for SQL queries.
+   * Defaults to canonical.
+   */
+  readMode?: SQLReadMode;
+
+  /**
    * Default timeout in milliseconds for SQL operations.
    */
   timeout?: number;
@@ -31,6 +37,12 @@ export interface QueryOptions {
    * Custom abort signal for this operation.
    */
   signal?: AbortSignal;
+
+  /**
+   * Read canonical or provisional SQL state.
+   * Defaults to the service config, then canonical.
+   */
+  readMode?: SQLReadMode;
 }
 
 /**
@@ -58,6 +70,8 @@ export interface BatchOptions {
    */
   signal?: AbortSignal;
 }
+
+export type SQLReadMode = "canonical" | "provisional";
 
 /**
  * A SQL value: null, number, string, or binary data.

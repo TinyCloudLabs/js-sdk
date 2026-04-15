@@ -196,6 +196,7 @@ export type {
   ISQLService,
   IDatabaseHandle,
   SQLServiceConfig,
+  SQLReadMode,
   SqlValue,
   SqlStatement,
   QueryOptions,
