@@ -31,7 +31,7 @@
     "zod-to-json-schema": "^3.22.0"
   },
   "devDependencies": {
-    "@types/ms": "^0.7.34",
+    "@types/ms": "^2.1.0",
     "@types/node": "^20",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0"
