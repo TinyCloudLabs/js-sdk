@@ -11,6 +11,7 @@ export {
   SQLAction,
   type SQLActionType,
   type SQLServiceConfig,
+  type SQLReadMode,
   type QueryOptions,
   type ExecuteOptions,
   type BatchOptions,

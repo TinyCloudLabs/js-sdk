@@ -162,6 +162,7 @@ export { SQLService, DatabaseHandle, SQLAction } from "./sql";
 export type { ISQLService, IDatabaseHandle } from "./sql";
 export type {
   SQLServiceConfig,
+  SQLReadMode,
   QueryOptions,
   ExecuteOptions,
   BatchOptions,

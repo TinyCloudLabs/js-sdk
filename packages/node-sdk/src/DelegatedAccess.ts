@@ -5,6 +5,7 @@ import {
   type KVServiceConfig,
   SQLService,
   ISQLService,
+  type SQLServiceConfig,
   DuckDbService,
   IDuckDbService,
   ServiceSession,
@@ -34,6 +35,7 @@ export class DelegatedAccess {
     host: string,
     invoke: InvokeFunction,
     kvConfig: KVServiceConfig = {},
+    sqlConfig: SQLServiceConfig = {},
   ) {
     this.session = session;
     this._delegation = delegation;
@@ -57,7 +59,7 @@ export class DelegatedAccess {
     this._serviceContext.registerService('kv', this._kv);
 
     // Create and initialize SQL service with same delegation context
-    this._sql = new SQLService({});
+    this._sql = new SQLService({ ...sqlConfig });
     this._sql.initialize(this._serviceContext);
     this._serviceContext.registerService('sql', this._sql);
 

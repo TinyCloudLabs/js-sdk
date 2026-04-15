@@ -13,6 +13,7 @@ import {
   ErrorCodes,
   serviceError,
   type FetchResponse,
+  type InvocationFacts,
 } from "../types";
 import { authRequiredError, wrapError, parseAuthError } from "../errors";
 import type { ISQLService } from "./ISQLService";
@@ -23,6 +24,7 @@ import {
   type QueryOptions,
   type ExecuteOptions,
   type BatchOptions,
+  type SQLReadMode,
   type SqlValue,
   type SqlStatement,
   type QueryResponse,
@@ -51,6 +53,20 @@ export class SQLService extends BaseService implements ISQLService {
 
   private get host(): string {
     return this.context.hosts[0];
+  }
+
+  private resolveReadMode(readMode?: SQLReadMode): SQLReadMode {
+    return readMode ?? this._config.readMode ?? "canonical";
+  }
+
+  private readModeFacts(readMode: SQLReadMode): InvocationFacts {
+    return [
+      {
+        sqlReadParams: {
+          type: readMode,
+        },
+      },
+    ];
   }
 
   /**
@@ -106,11 +122,13 @@ export class SQLService extends BaseService implements ISQLService {
       }
 
       try {
+        const readMode = this.resolveReadMode(options?.readMode);
         const response = await this.invokeSQL(
           dbName,
           SQLAction.READ,
           { action: "query", sql, params: params ?? [] },
-          options?.signal
+          options?.signal,
+          this.readModeFacts(readMode)
         );
 
         if (!response.ok) {
@@ -207,11 +225,13 @@ export class SQLService extends BaseService implements ISQLService {
       }
 
       try {
+        const readMode = this.resolveReadMode(options?.readMode);
         const response = await this.invokeSQL(
           dbName,
           SQLAction.EXECUTE,
           { action: "execute_statement", name, params: params ?? [] },
-          options?.signal
+          options?.signal,
+          this.readModeFacts(readMode)
         );
 
         if (!response.ok) {
@@ -238,11 +258,13 @@ export class SQLService extends BaseService implements ISQLService {
       }
 
       try {
+        const readMode = this.resolveReadMode(options?.readMode);
         const response = await this.invokeSQL(
           dbName,
           SQLAction.EXPORT,
           { action: "export" },
-          options?.signal
+          options?.signal,
+          this.readModeFacts(readMode)
         );
 
         if (!response.ok) {
@@ -271,10 +293,11 @@ export class SQLService extends BaseService implements ISQLService {
     dbName: string,
     action: string,
     body: Record<string, unknown>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    facts?: InvocationFacts
   ): Promise<FetchResponse> {
     const session = this.context.session!;
-    const headers = this.context.invoke(session, "sql", dbName, action);
+    const headers = this.context.invoke(session, "sql", dbName, action, facts);
 
     return this.context.fetch(`${this.host}/invoke`, {
       method: "POST",
