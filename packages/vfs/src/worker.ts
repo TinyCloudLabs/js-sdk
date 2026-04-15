@@ -1,10 +1,9 @@
 import { parentPort } from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
-import type { PortableDelegation } from "@tinycloud/node-sdk";
-import { createEACCES, createEIO, createEISDIR, createENOTDIR, createENOTEMPTY, createENOENT, createEINVAL, createEBUSY } from "./errors";
-import { dirnameOf, joinStoragePath, normalizeStoragePrefix, toLogicalPath } from "./pathing";
-import { dataKey, decodeEnvelope, encodeEnvelope, metadataKey, metadataPrefix, normalizeMode, nowMetadata, stripStoragePrefix } from "./metadata";
+import { createEACCES, createEEXIST, createEIO, createEISDIR, createENOTDIR, createENOTEMPTY, createENOENT, createEINVAL, createEBUSY } from "./errors";
+import { dirnameOf, INTERNAL_META_PREFIX, joinStoragePath, normalizeStoragePrefix, toLogicalPath } from "./pathing";
+import { dataKey, decodeEnvelope, decodeMetadata, encodeFileValue, metadataKey, metadataPrefix, normalizeMode, nowMetadata, stripStoragePrefix } from "./metadata";
 import type {
   TinyCloudVfsDirent,
   TinyCloudVfsMetadata,
@@ -24,11 +23,13 @@ type KvLike = {
 
 interface WorkerState {
   kv: KvLike | null;
+  kvPrefix: string;
   storageRoot: string;
 }
 
 const state: WorkerState = {
   kv: null,
+  kvPrefix: "",
   storageRoot: "",
 };
 
@@ -71,21 +72,37 @@ function ensureMountedLogicalPath(inputPath: string): string {
   }
 }
 
+function effectiveStorageRoot(): string {
+  return joinStoragePath(state.kvPrefix, state.storageRoot);
+}
+
+function effectiveStoragePath(logicalPath = ""): string {
+  return joinStoragePath(effectiveStorageRoot(), logicalPath);
+}
+
 function scopedDataKey(logicalPath: string): string {
-  return dataKey(state.storageRoot, logicalPath);
+  return dataKey(effectiveStorageRoot(), logicalPath);
 }
 
 function scopedMetaKey(logicalPath: string): string {
-  return metadataKey(state.storageRoot, logicalPath);
+  return metadataKey(effectiveStorageRoot(), logicalPath);
 }
 
 function scopedMetaPrefix(logicalPath = ""): string {
-  return metadataPrefix(state.storageRoot, logicalPath);
+  return metadataPrefix(effectiveStorageRoot(), logicalPath);
+}
+
+function effectiveListPrefix(logicalPath = "", options?: { trailingSlash?: boolean }): string {
+  const prefix = effectiveStoragePath(logicalPath);
+  if (!options?.trailingSlash || !prefix) {
+    return prefix;
+  }
+  return prefix.endsWith("/") ? prefix : `${prefix}/`;
 }
 
 async function kvGet(key: string): Promise<unknown> {
   const kv = ensureKv();
-  const result = await kv.get(key, { prefix: "" });
+  const result = await kv.get(key);
   if (!result.ok) {
     if (result.error?.code === "KV_NOT_FOUND") {
       throw createENOENT("get", key);
@@ -101,7 +118,7 @@ async function kvGet(key: string): Promise<unknown> {
 
 async function kvPut(key: string, value: unknown): Promise<void> {
   const kv = ensureKv();
-  const result = await kv.put(key, value, { prefix: "" });
+  const result = await kv.put(key, value);
   if (!result.ok) {
     if (result.error?.code === "AUTH_UNAUTHORIZED") {
       throw createEACCES("put", key, result.error.message);
@@ -112,7 +129,7 @@ async function kvPut(key: string, value: unknown): Promise<void> {
 
 async function kvDelete(key: string): Promise<void> {
   const kv = ensureKv();
-  const result = await kv.delete(key, { prefix: "" });
+  const result = await kv.delete(key);
   if (!result.ok) {
     if (result.error?.code === "KV_NOT_FOUND") {
       throw createENOENT("unlink", key);
@@ -126,7 +143,10 @@ async function kvDelete(key: string): Promise<void> {
 
 async function kvList(prefix: string): Promise<string[]> {
   const kv = ensureKv();
-  const result = await kv.list({ prefix, removePrefix: false });
+  const listOptions = prefix
+    ? { prefix, removePrefix: false }
+    : { removePrefix: false };
+  const result = await kv.list(listOptions);
   if (!result.ok) {
     if (result.error?.code === "AUTH_UNAUTHORIZED") {
       throw createEACCES("scandir", prefix, result.error.message);
@@ -138,7 +158,7 @@ async function kvList(prefix: string): Promise<string[]> {
 
 async function tryMetadata(logicalPath: string): Promise<TinyCloudVfsMetadata | null> {
   try {
-    return (await kvGet(scopedMetaKey(logicalPath))) as TinyCloudVfsMetadata;
+    return decodeMetadata(await kvGet(scopedMetaKey(logicalPath)));
   } catch (error) {
     const typed = error as NodeJS.ErrnoException;
     if (typed.code === "ENOENT") {
@@ -148,32 +168,93 @@ async function tryMetadata(logicalPath: string): Promise<TinyCloudVfsMetadata | 
   }
 }
 
+async function tryRawFile(logicalPath: string): Promise<{ content: Buffer; metadata: TinyCloudVfsMetadata } | null> {
+  try {
+    const content = decodeEnvelope(await kvGet(scopedDataKey(logicalPath)));
+    const metadata = nowMetadata(
+      "file",
+      content.length,
+      normalizeMode("file"),
+    );
+    return { content, metadata };
+  } catch (error) {
+    const typed = error as NodeJS.ErrnoException;
+    if (typed.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function listDescendantKeys(logicalPath: string): Promise<{ dataKeys: string[]; metaKeys: string[] }> {
+  const dataPrefixValue = effectiveListPrefix(logicalPath, { trailingSlash: true });
+  const metaPrefixValue = effectiveListPrefix(
+    joinStoragePath(".tcvfs-meta", logicalPath),
+    { trailingSlash: true },
+  );
+
+  const [dataKeys, metaKeys] = await Promise.all([
+    kvList(dataPrefixValue),
+    kvList(metaPrefixValue),
+  ]);
+
+  return { dataKeys, metaKeys };
+}
+
+async function tryInferredDirectory(logicalPath: string): Promise<TinyCloudVfsMetadata | null> {
+  const { dataKeys, metaKeys } = await listDescendantKeys(logicalPath);
+  if (dataKeys.length === 0 && metaKeys.length === 0) {
+    return null;
+  }
+
+  return nowMetadata(
+    "directory",
+    4096,
+    normalizeMode("directory"),
+  );
+}
+
 async function ensureDirectory(logicalPath: string): Promise<TinyCloudVfsMetadata> {
   if (!logicalPath) {
     return nowMetadata("directory", 4096, normalizeMode("directory"));
   }
 
   const metadata = await tryMetadata(logicalPath);
-  if (!metadata) {
+  if (metadata) {
+    if (metadata.kind !== "directory") {
+      throw createENOTDIR("stat", `/${logicalPath}`);
+    }
+    return metadata;
+  }
+
+  const inferred = await tryInferredDirectory(logicalPath);
+  if (!inferred) {
     throw createENOENT("stat", `/${logicalPath}`);
   }
-  if (metadata.kind !== "directory") {
-    throw createENOTDIR("stat", `/${logicalPath}`);
-  }
-  return metadata;
+  return inferred;
 }
 
 async function readFileEntry(logicalPath: string): Promise<{ content: Buffer; metadata: TinyCloudVfsMetadata }> {
   const metadata = await tryMetadata(logicalPath);
-  if (!metadata) {
-    throw createENOENT("open", `/${logicalPath}`);
+  if (metadata) {
+    if (metadata.kind !== "file") {
+      throw createEISDIR("open", `/${logicalPath}`);
+    }
+
+    const content = decodeEnvelope(await kvGet(scopedDataKey(logicalPath)));
+    return { content, metadata };
   }
-  if (metadata.kind !== "file") {
+
+  const rawFile = await tryRawFile(logicalPath);
+  if (rawFile) {
+    return rawFile;
+  }
+
+  if (await tryInferredDirectory(logicalPath)) {
     throw createEISDIR("open", `/${logicalPath}`);
   }
 
-  const content = decodeEnvelope(await kvGet(scopedDataKey(logicalPath)));
-  return { content, metadata };
+  throw createENOENT("open", `/${logicalPath}`);
 }
 
 async function statPath(logicalPath: string): Promise<TinyCloudVfsMetadata> {
@@ -182,10 +263,21 @@ async function statPath(logicalPath: string): Promise<TinyCloudVfsMetadata> {
   }
 
   const metadata = await tryMetadata(logicalPath);
-  if (!metadata) {
-    throw createENOENT("stat", `/${logicalPath}`);
+  if (metadata) {
+    return metadata;
   }
-  return metadata;
+
+  const rawFile = await tryRawFile(logicalPath);
+  if (rawFile) {
+    return rawFile.metadata;
+  }
+
+  const inferredDirectory = await tryInferredDirectory(logicalPath);
+  if (inferredDirectory) {
+    return inferredDirectory;
+  }
+
+  throw createENOENT("stat", `/${logicalPath}`);
 }
 
 async function ensureParentDirectory(logicalPath: string): Promise<void> {
@@ -199,20 +291,14 @@ async function ensureParentDirectory(logicalPath: string): Promise<void> {
 async function collectDirChildren(logicalPath: string): Promise<TinyCloudVfsDirent[]> {
   await ensureDirectory(logicalPath);
 
-  const dirPrefix = joinStoragePath(state.storageRoot, logicalPath);
-  const metaPrefixValue = scopedMetaPrefix(logicalPath);
-
-  const [dataKeys, metaKeys] = await Promise.all([
-    kvList(dirPrefix),
-    kvList(metaPrefixValue),
-  ]);
+  const { dataKeys, metaKeys } = await listDescendantKeys(logicalPath);
 
   const names = new Set<string>();
-  const relativePrefix = normalizeStoragePrefix(logicalPath);
-  const relativeMetaPrefix = normalizeStoragePrefix(joinStoragePath(".tcvfs-meta", logicalPath));
+  const relativePrefix = effectiveStoragePath(logicalPath);
+  const relativeMetaPrefix = scopedMetaPrefix(logicalPath);
 
   for (const fullKey of dataKeys) {
-    const relative = stripStoragePrefix(fullKey, joinStoragePath(state.storageRoot, relativePrefix));
+    const relative = stripStoragePrefix(fullKey, relativePrefix);
     const first = relative.split("/").filter(Boolean)[0];
     if (first) {
       names.add(first);
@@ -220,7 +306,7 @@ async function collectDirChildren(logicalPath: string): Promise<TinyCloudVfsDire
   }
 
   for (const fullKey of metaKeys) {
-    const relative = stripStoragePrefix(fullKey, joinStoragePath(state.storageRoot, relativeMetaPrefix));
+    const relative = stripStoragePrefix(fullKey, relativeMetaPrefix);
     const first = relative.split("/").filter(Boolean)[0];
     if (first) {
       names.add(first);
@@ -229,6 +315,7 @@ async function collectDirChildren(logicalPath: string): Promise<TinyCloudVfsDire
 
   const entries = await Promise.all(
     [...names]
+      .filter((name) => name !== INTERNAL_META_PREFIX)
       .sort()
       .map(async (name): Promise<TinyCloudVfsDirent> => {
         const childPath = joinStoragePath(logicalPath, name);
@@ -247,7 +334,11 @@ async function collectDirChildren(logicalPath: string): Promise<TinyCloudVfsDire
 async function writeFileEntry(logicalPath: string, content: Uint8Array, mode?: number): Promise<TinyCloudVfsMetadata> {
   await ensureParentDirectory(logicalPath);
   const existing = await tryMetadata(logicalPath);
-  if (existing && existing.kind !== "file") {
+  if (existing) {
+    if (existing.kind !== "file") {
+      throw createEISDIR("writeFile", `/${logicalPath}`);
+    }
+  } else if (await tryInferredDirectory(logicalPath)) {
     throw createEISDIR("writeFile", `/${logicalPath}`);
   }
 
@@ -259,7 +350,7 @@ async function writeFileEntry(logicalPath: string, content: Uint8Array, mode?: n
     existing ?? undefined,
   );
 
-  await kvPut(scopedDataKey(logicalPath), encodeEnvelope(buffer));
+  await kvPut(scopedDataKey(logicalPath), encodeFileValue(buffer));
   await kvPut(scopedMetaKey(logicalPath), metadata);
   return metadata;
 }
@@ -275,6 +366,14 @@ async function mkdirEntry(logicalPath: string, recursive = false, mode?: number)
       return;
     }
     throw createEEXIST("mkdir", `/${logicalPath}`);
+  }
+
+  if (await tryRawFile(logicalPath)) {
+    throw createEEXIST("mkdir", `/${logicalPath}`);
+  }
+
+  if (await tryInferredDirectory(logicalPath)) {
+    return;
   }
 
   const segments = logicalPath.split("/").filter(Boolean);
@@ -343,19 +442,15 @@ async function initialize(init: TinyCloudVfsWorkerInit): Promise<void> {
   const node = new TinyCloudNode({ host: init.source.host });
   await node.restoreSession(init.source.session);
 
-  let kv: KvLike;
-  if (init.source.kind === "delegation") {
-    const access = await node.useDelegation(init.source.delegation as PortableDelegation);
-    kv = access.kv as unknown as KvLike;
-  } else {
-    kv = node.kv as unknown as KvLike;
-  }
-
-  const servicePrefix = normalizeStoragePrefix(kv.config?.prefix);
+  const kv = node.kv as unknown as KvLike;
+  const servicePrefix = init.source.kind === "resolved-delegation"
+    ? normalizeStoragePrefix(init.source.kvPrefix)
+    : normalizeStoragePrefix(kv.config?.prefix);
   const mountPrefix = normalizeStoragePrefix(init.mountPrefix);
 
   state.kv = kv;
-  state.storageRoot = joinStoragePath(servicePrefix, mountPrefix);
+  state.kvPrefix = servicePrefix;
+  state.storageRoot = mountPrefix;
 }
 
 async function handleRequest(request: WorkerRequest): Promise<WorkerResponse> {

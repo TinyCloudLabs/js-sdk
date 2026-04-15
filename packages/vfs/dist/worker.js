@@ -39,6 +39,9 @@ function createENOTDIR(syscall, path) {
 function createENOTEMPTY(syscall, path) {
   return createNodeError("ENOTEMPTY", `directory not empty, ${syscall} '${path}'`, syscall, path);
 }
+function createEEXIST(syscall, path) {
+  return createNodeError("EEXIST", `file already exists, ${syscall} '${path}'`, syscall, path);
+}
 function createEACCES(syscall, path, message = "permission denied") {
   return createNodeError("EACCES", `${message}, ${syscall} '${path}'`, syscall, path);
 }
@@ -109,14 +112,50 @@ function encodeEnvelope(content) {
     data: content.toString("base64")
   };
 }
+function isEnvelopeShape(value) {
+  return Boolean(
+    value && typeof value === "object" && value.version === 1 && value.encoding === "base64" && typeof value.data === "string"
+  );
+}
+function encodeFileValue(content) {
+  const utf8 = content.toString("utf8");
+  if (Buffer.from(utf8, "utf8").equals(content)) {
+    return utf8;
+  }
+  return encodeEnvelope(content);
+}
 function decodeEnvelope(value) {
-  if (value && typeof value === "object" && value.version === 1 && value.encoding === "base64" && typeof value.data === "string") {
+  if (isEnvelopeShape(value)) {
     return Buffer.from(value.data, "base64");
   }
   if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (isEnvelopeShape(parsed)) {
+        return Buffer.from(parsed.data, "base64");
+      }
+    } catch {
+    }
     return Buffer.from(value, "utf8");
   }
   throw new Error("unsupported file payload");
+}
+function isMetadataShape(value) {
+  return Boolean(
+    value && typeof value === "object" && (value.kind === "file" || value.kind === "directory") && typeof value.size === "number" && typeof value.mode === "number" && typeof value.ctimeMs === "number" && typeof value.mtimeMs === "number" && typeof value.birthtimeMs === "number"
+  );
+}
+function decodeMetadata(value) {
+  if (isMetadataShape(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = JSON.parse(value);
+    if (isMetadataShape(parsed)) {
+      return parsed;
+    }
+  }
+  throw new Error("unsupported metadata payload");
 }
 function nowMetadata(kind, size, mode, existing) {
   const now = Date.now();
@@ -153,6 +192,7 @@ function stripStoragePrefix(fullKey, prefix) {
 // src/worker.ts
 var state = {
   kv: null,
+  kvPrefix: "",
   storageRoot: ""
 };
 function toWorkerError(error) {
@@ -190,18 +230,31 @@ function ensureMountedLogicalPath(inputPath) {
     throw createENOENT("resolve", inputPath);
   }
 }
+function effectiveStorageRoot() {
+  return joinStoragePath(state.kvPrefix, state.storageRoot);
+}
+function effectiveStoragePath(logicalPath = "") {
+  return joinStoragePath(effectiveStorageRoot(), logicalPath);
+}
 function scopedDataKey(logicalPath) {
-  return dataKey(state.storageRoot, logicalPath);
+  return dataKey(effectiveStorageRoot(), logicalPath);
 }
 function scopedMetaKey(logicalPath) {
-  return metadataKey(state.storageRoot, logicalPath);
+  return metadataKey(effectiveStorageRoot(), logicalPath);
 }
 function scopedMetaPrefix(logicalPath = "") {
-  return metadataPrefix(state.storageRoot, logicalPath);
+  return metadataPrefix(effectiveStorageRoot(), logicalPath);
+}
+function effectiveListPrefix(logicalPath = "", options) {
+  const prefix = effectiveStoragePath(logicalPath);
+  if (!options?.trailingSlash || !prefix) {
+    return prefix;
+  }
+  return prefix.endsWith("/") ? prefix : `${prefix}/`;
 }
 async function kvGet(key) {
   const kv = ensureKv();
-  const result = await kv.get(key, { prefix: "" });
+  const result = await kv.get(key);
   if (!result.ok) {
     if (result.error?.code === "KV_NOT_FOUND") {
       throw createENOENT("get", key);
@@ -215,7 +268,7 @@ async function kvGet(key) {
 }
 async function kvPut(key, value) {
   const kv = ensureKv();
-  const result = await kv.put(key, value, { prefix: "" });
+  const result = await kv.put(key, value);
   if (!result.ok) {
     if (result.error?.code === "AUTH_UNAUTHORIZED") {
       throw createEACCES("put", key, result.error.message);
@@ -225,7 +278,7 @@ async function kvPut(key, value) {
 }
 async function kvDelete(key) {
   const kv = ensureKv();
-  const result = await kv.delete(key, { prefix: "" });
+  const result = await kv.delete(key);
   if (!result.ok) {
     if (result.error?.code === "KV_NOT_FOUND") {
       throw createENOENT("unlink", key);
@@ -238,7 +291,8 @@ async function kvDelete(key) {
 }
 async function kvList(prefix) {
   const kv = ensureKv();
-  const result = await kv.list({ prefix, removePrefix: false });
+  const listOptions = prefix ? { prefix, removePrefix: false } : { removePrefix: false };
+  const result = await kv.list(listOptions);
   if (!result.ok) {
     if (result.error?.code === "AUTH_UNAUTHORIZED") {
       throw createEACCES("scandir", prefix, result.error.message);
@@ -249,7 +303,7 @@ async function kvList(prefix) {
 }
 async function tryMetadata(logicalPath) {
   try {
-    return await kvGet(scopedMetaKey(logicalPath));
+    return decodeMetadata(await kvGet(scopedMetaKey(logicalPath)));
   } catch (error) {
     const typed = error;
     if (typed.code === "ENOENT") {
@@ -258,39 +312,98 @@ async function tryMetadata(logicalPath) {
     throw error;
   }
 }
+async function tryRawFile(logicalPath) {
+  try {
+    const content = decodeEnvelope(await kvGet(scopedDataKey(logicalPath)));
+    const metadata = nowMetadata(
+      "file",
+      content.length,
+      normalizeMode("file")
+    );
+    return { content, metadata };
+  } catch (error) {
+    const typed = error;
+    if (typed.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+async function listDescendantKeys(logicalPath) {
+  const dataPrefixValue = effectiveListPrefix(logicalPath, { trailingSlash: true });
+  const metaPrefixValue = effectiveListPrefix(
+    joinStoragePath(".tcvfs-meta", logicalPath),
+    { trailingSlash: true }
+  );
+  const [dataKeys, metaKeys] = await Promise.all([
+    kvList(dataPrefixValue),
+    kvList(metaPrefixValue)
+  ]);
+  return { dataKeys, metaKeys };
+}
+async function tryInferredDirectory(logicalPath) {
+  const { dataKeys, metaKeys } = await listDescendantKeys(logicalPath);
+  if (dataKeys.length === 0 && metaKeys.length === 0) {
+    return null;
+  }
+  return nowMetadata(
+    "directory",
+    4096,
+    normalizeMode("directory")
+  );
+}
 async function ensureDirectory(logicalPath) {
   if (!logicalPath) {
     return nowMetadata("directory", 4096, normalizeMode("directory"));
   }
   const metadata = await tryMetadata(logicalPath);
-  if (!metadata) {
+  if (metadata) {
+    if (metadata.kind !== "directory") {
+      throw createENOTDIR("stat", `/${logicalPath}`);
+    }
+    return metadata;
+  }
+  const inferred = await tryInferredDirectory(logicalPath);
+  if (!inferred) {
     throw createENOENT("stat", `/${logicalPath}`);
   }
-  if (metadata.kind !== "directory") {
-    throw createENOTDIR("stat", `/${logicalPath}`);
-  }
-  return metadata;
+  return inferred;
 }
 async function readFileEntry(logicalPath) {
   const metadata = await tryMetadata(logicalPath);
-  if (!metadata) {
-    throw createENOENT("open", `/${logicalPath}`);
+  if (metadata) {
+    if (metadata.kind !== "file") {
+      throw createEISDIR("open", `/${logicalPath}`);
+    }
+    const content = decodeEnvelope(await kvGet(scopedDataKey(logicalPath)));
+    return { content, metadata };
   }
-  if (metadata.kind !== "file") {
+  const rawFile = await tryRawFile(logicalPath);
+  if (rawFile) {
+    return rawFile;
+  }
+  if (await tryInferredDirectory(logicalPath)) {
     throw createEISDIR("open", `/${logicalPath}`);
   }
-  const content = decodeEnvelope(await kvGet(scopedDataKey(logicalPath)));
-  return { content, metadata };
+  throw createENOENT("open", `/${logicalPath}`);
 }
 async function statPath(logicalPath) {
   if (!logicalPath) {
     return nowMetadata("directory", 4096, normalizeMode("directory"));
   }
   const metadata = await tryMetadata(logicalPath);
-  if (!metadata) {
-    throw createENOENT("stat", `/${logicalPath}`);
+  if (metadata) {
+    return metadata;
   }
-  return metadata;
+  const rawFile = await tryRawFile(logicalPath);
+  if (rawFile) {
+    return rawFile.metadata;
+  }
+  const inferredDirectory = await tryInferredDirectory(logicalPath);
+  if (inferredDirectory) {
+    return inferredDirectory;
+  }
+  throw createENOENT("stat", `/${logicalPath}`);
 }
 async function ensureParentDirectory(logicalPath) {
   const parent = dirnameOf(logicalPath);
@@ -301,31 +414,26 @@ async function ensureParentDirectory(logicalPath) {
 }
 async function collectDirChildren(logicalPath) {
   await ensureDirectory(logicalPath);
-  const dirPrefix = joinStoragePath(state.storageRoot, logicalPath);
-  const metaPrefixValue = scopedMetaPrefix(logicalPath);
-  const [dataKeys, metaKeys] = await Promise.all([
-    kvList(dirPrefix),
-    kvList(metaPrefixValue)
-  ]);
+  const { dataKeys, metaKeys } = await listDescendantKeys(logicalPath);
   const names = /* @__PURE__ */ new Set();
-  const relativePrefix = normalizeStoragePrefix(logicalPath);
-  const relativeMetaPrefix = normalizeStoragePrefix(joinStoragePath(".tcvfs-meta", logicalPath));
+  const relativePrefix = effectiveStoragePath(logicalPath);
+  const relativeMetaPrefix = scopedMetaPrefix(logicalPath);
   for (const fullKey of dataKeys) {
-    const relative = stripStoragePrefix(fullKey, joinStoragePath(state.storageRoot, relativePrefix));
+    const relative = stripStoragePrefix(fullKey, relativePrefix);
     const first = relative.split("/").filter(Boolean)[0];
     if (first) {
       names.add(first);
     }
   }
   for (const fullKey of metaKeys) {
-    const relative = stripStoragePrefix(fullKey, joinStoragePath(state.storageRoot, relativeMetaPrefix));
+    const relative = stripStoragePrefix(fullKey, relativeMetaPrefix);
     const first = relative.split("/").filter(Boolean)[0];
     if (first) {
       names.add(first);
     }
   }
   const entries = await Promise.all(
-    [...names].sort().map(async (name) => {
+    [...names].filter((name) => name !== INTERNAL_META_PREFIX).sort().map(async (name) => {
       const childPath = joinStoragePath(logicalPath, name);
       const metadata = await statPath(childPath);
       return {
@@ -340,7 +448,11 @@ async function collectDirChildren(logicalPath) {
 async function writeFileEntry(logicalPath, content, mode) {
   await ensureParentDirectory(logicalPath);
   const existing = await tryMetadata(logicalPath);
-  if (existing && existing.kind !== "file") {
+  if (existing) {
+    if (existing.kind !== "file") {
+      throw createEISDIR("writeFile", `/${logicalPath}`);
+    }
+  } else if (await tryInferredDirectory(logicalPath)) {
     throw createEISDIR("writeFile", `/${logicalPath}`);
   }
   const buffer = Buffer.from(content);
@@ -350,7 +462,7 @@ async function writeFileEntry(logicalPath, content, mode) {
     normalizeMode("file", mode ?? existing?.mode),
     existing ?? void 0
   );
-  await kvPut(scopedDataKey(logicalPath), encodeEnvelope(buffer));
+  await kvPut(scopedDataKey(logicalPath), encodeFileValue(buffer));
   await kvPut(scopedMetaKey(logicalPath), metadata);
   return metadata;
 }
@@ -364,6 +476,12 @@ async function mkdirEntry(logicalPath, recursive = false, mode) {
       return;
     }
     throw createEEXIST("mkdir", `/${logicalPath}`);
+  }
+  if (await tryRawFile(logicalPath)) {
+    throw createEEXIST("mkdir", `/${logicalPath}`);
+  }
+  if (await tryInferredDirectory(logicalPath)) {
+    return;
   }
   const segments = logicalPath.split("/").filter(Boolean);
   const targets = recursive ? segments.map((_, index) => segments.slice(0, index + 1).join("/")) : [logicalPath];
@@ -418,17 +536,12 @@ async function renameEntry(oldLogicalPath, newLogicalPath) {
 async function initialize(init) {
   const node = new TinyCloudNode({ host: init.source.host });
   await node.restoreSession(init.source.session);
-  let kv;
-  if (init.source.kind === "delegation") {
-    const access = await node.useDelegation(init.source.delegation);
-    kv = access.kv;
-  } else {
-    kv = node.kv;
-  }
-  const servicePrefix = normalizeStoragePrefix(kv.config?.prefix);
+  const kv = node.kv;
+  const servicePrefix = init.source.kind === "resolved-delegation" ? normalizeStoragePrefix(init.source.kvPrefix) : normalizeStoragePrefix(kv.config?.prefix);
   const mountPrefix = normalizeStoragePrefix(init.mountPrefix);
   state.kv = kv;
-  state.storageRoot = joinStoragePath(servicePrefix, mountPrefix);
+  state.kvPrefix = servicePrefix;
+  state.storageRoot = mountPrefix;
 }
 async function handleRequest(request) {
   switch (request.type) {

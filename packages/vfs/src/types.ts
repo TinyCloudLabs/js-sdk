@@ -30,10 +30,10 @@ export type TinyCloudVfsSource =
       session: TinyCloudVfsSessionData;
     }
   | {
-      kind: "delegation";
+      kind: "resolved-delegation";
       host: string;
       session: TinyCloudVfsSessionData;
-      delegation: PortableDelegationLike;
+      kvPrefix: string;
     };
 
 export interface TinyCloudVfsOptions {
@@ -124,4 +124,13 @@ export interface CreateTinyCloudNodeVfsOptions extends Omit<TinyCloudVfsOptions,
 
 export interface TinyCloudNodeLike {
   session?: TinyCloudVfsSessionData;
+  config?: {
+    host?: string;
+  };
+  useDelegation?: (delegation: PortableDelegationLike) => Promise<{
+    session?: TinyCloudVfsSessionData;
+    kv: {
+      config?: { prefix?: string };
+    };
+  }>;
 }

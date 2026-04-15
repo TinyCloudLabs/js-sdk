@@ -1,5 +1,5 @@
 // src/TinyCloudVfsProvider.ts
-import { Buffer as Buffer2 } from "buffer";
+import { Buffer as Buffer3 } from "buffer";
 import { VirtualProvider, create } from "@platformatic/vfs";
 
 // src/bridge.ts
@@ -103,6 +103,349 @@ var TinyCloudVfsBridge = class {
     return this.requestSync(request);
   }
 };
+
+// src/fsPatch.ts
+import { Buffer as Buffer2 } from "buffer";
+import fs from "fs";
+import fsPromises from "fs/promises";
+import { syncBuiltinESMExports } from "module";
+import { fileURLToPath } from "url";
+var activeVfs = /* @__PURE__ */ new Set();
+var mutableFs = fs;
+var mutableFsPromises = fsPromises;
+var originalFsMethods = {
+  writeFileSync: mutableFs.writeFileSync.bind(mutableFs),
+  appendFileSync: mutableFs.appendFileSync.bind(mutableFs),
+  mkdirSync: mutableFs.mkdirSync.bind(mutableFs),
+  renameSync: mutableFs.renameSync.bind(mutableFs),
+  unlinkSync: mutableFs.unlinkSync.bind(mutableFs),
+  rmdirSync: mutableFs.rmdirSync.bind(mutableFs),
+  writeFile: mutableFs.writeFile.bind(mutableFs),
+  appendFile: mutableFs.appendFile.bind(mutableFs),
+  mkdir: mutableFs.mkdir.bind(mutableFs),
+  rename: mutableFs.rename.bind(mutableFs),
+  unlink: mutableFs.unlink.bind(mutableFs),
+  rmdir: mutableFs.rmdir.bind(mutableFs)
+};
+var originalPromiseMethods = {
+  writeFile: mutableFsPromises.writeFile.bind(mutableFsPromises),
+  appendFile: mutableFsPromises.appendFile.bind(mutableFsPromises),
+  mkdir: mutableFsPromises.mkdir.bind(mutableFsPromises),
+  rename: mutableFsPromises.rename.bind(mutableFsPromises),
+  unlink: mutableFsPromises.unlink.bind(mutableFsPromises),
+  rmdir: mutableFsPromises.rmdir.bind(mutableFsPromises)
+};
+var installed = false;
+function toPathString(path) {
+  if (typeof path === "string") {
+    return path;
+  }
+  if (Buffer2.isBuffer(path)) {
+    return path.toString();
+  }
+  if (path instanceof URL) {
+    return fileURLToPath(path);
+  }
+  return null;
+}
+function activeVfsBySpecificity() {
+  return [...activeVfs].sort((left, right) => {
+    return (right.mountPoint?.length ?? 0) - (left.mountPoint?.length ?? 0);
+  });
+}
+function findMountedVfs(path) {
+  const normalizedPath = toPathString(path);
+  if (!normalizedPath) {
+    return null;
+  }
+  for (const vfs of activeVfsBySpecificity()) {
+    if (vfs.mounted && vfs.shouldHandle(normalizedPath)) {
+      return { vfs, path: normalizedPath };
+    }
+  }
+  return null;
+}
+function findMountedVfsForPaths(paths, syscall) {
+  let selected = null;
+  const normalizedPaths = [];
+  for (const path of paths) {
+    const normalizedPath = toPathString(path);
+    if (!normalizedPath) {
+      normalizedPaths.push(String(path));
+      continue;
+    }
+    normalizedPaths.push(normalizedPath);
+    const match = findMountedVfs(normalizedPath);
+    if (!match) {
+      continue;
+    }
+    if (selected && selected !== match.vfs) {
+      throw createNodeError(
+        "EXDEV",
+        `cross-device link not permitted, ${syscall} '${normalizedPaths.join("' -> '")}'`,
+        syscall,
+        normalizedPath
+      );
+    }
+    selected = match.vfs;
+  }
+  if (!selected) {
+    return null;
+  }
+  return { vfs: selected, paths: normalizedPaths };
+}
+function withCallback(promise, callback) {
+  promise.then(
+    (result) => process.nextTick(callback, null, result),
+    (error) => process.nextTick(callback, error)
+  );
+}
+function installFsWritePatches() {
+  if (installed) {
+    return;
+  }
+  mutableFs.writeFileSync = ((file, data, options) => {
+    const match = findMountedVfs(file);
+    if (!match) {
+      return originalFsMethods.writeFileSync(file, data, options);
+    }
+    return match.vfs.writeFileSync(match.path, data, options);
+  });
+  mutableFs.appendFileSync = ((file, data, options) => {
+    const match = findMountedVfs(file);
+    if (!match) {
+      return originalFsMethods.appendFileSync(file, data, options);
+    }
+    return match.vfs.appendFileSync(match.path, data, options);
+  });
+  mutableFs.mkdirSync = ((path, options) => {
+    const match = findMountedVfs(path);
+    if (!match) {
+      return originalFsMethods.mkdirSync(path, options);
+    }
+    return match.vfs.mkdirSync(match.path, options);
+  });
+  mutableFs.renameSync = ((oldPath, newPath) => {
+    const match = findMountedVfsForPaths([oldPath, newPath], "rename");
+    if (!match) {
+      return originalFsMethods.renameSync(oldPath, newPath);
+    }
+    const [normalizedOld, normalizedNew] = match.paths;
+    return match.vfs.renameSync(normalizedOld, normalizedNew);
+  });
+  mutableFs.unlinkSync = ((path) => {
+    const match = findMountedVfs(path);
+    if (!match) {
+      return originalFsMethods.unlinkSync(path);
+    }
+    return match.vfs.unlinkSync(match.path);
+  });
+  mutableFs.rmdirSync = ((path, options) => {
+    const match = findMountedVfs(path);
+    if (!match) {
+      return originalFsMethods.rmdirSync(path, options);
+    }
+    return match.vfs.rmdirSync(match.path, options);
+  });
+  mutableFs.writeFile = ((file, data, options, callback) => {
+    const match = findMountedVfs(file);
+    if (!match) {
+      return originalFsMethods.writeFile(file, data, options, callback);
+    }
+    const resolvedOptions = typeof options === "function" ? void 0 : options;
+    const resolvedCallback = typeof options === "function" ? options : callback;
+    if (typeof resolvedCallback !== "function") {
+      return originalFsMethods.writeFile(file, data, options, callback);
+    }
+    withCallback(match.vfs.promises.writeFile(match.path, data, resolvedOptions), resolvedCallback);
+  });
+  mutableFs.appendFile = ((file, data, options, callback) => {
+    const match = findMountedVfs(file);
+    if (!match) {
+      return originalFsMethods.appendFile(file, data, options, callback);
+    }
+    const resolvedOptions = typeof options === "function" ? void 0 : options;
+    const resolvedCallback = typeof options === "function" ? options : callback;
+    if (typeof resolvedCallback !== "function") {
+      return originalFsMethods.appendFile(file, data, options, callback);
+    }
+    withCallback(match.vfs.promises.appendFile(match.path, data, resolvedOptions), resolvedCallback);
+  });
+  mutableFs.mkdir = ((path, options, callback) => {
+    const match = findMountedVfs(path);
+    if (!match) {
+      return originalFsMethods.mkdir(path, options, callback);
+    }
+    const resolvedOptions = typeof options === "function" ? void 0 : options;
+    const resolvedCallback = typeof options === "function" ? options : callback;
+    if (typeof resolvedCallback !== "function") {
+      return originalFsMethods.mkdir(path, options, callback);
+    }
+    withCallback(match.vfs.promises.mkdir(match.path, resolvedOptions), resolvedCallback);
+  });
+  mutableFs.rename = ((oldPath, newPath, callback) => {
+    const match = findMountedVfsForPaths([oldPath, newPath], "rename");
+    if (!match) {
+      return originalFsMethods.rename(oldPath, newPath, callback);
+    }
+    if (typeof callback !== "function") {
+      return originalFsMethods.rename(oldPath, newPath, callback);
+    }
+    const [normalizedOld, normalizedNew] = match.paths;
+    withCallback(match.vfs.promises.rename(normalizedOld, normalizedNew), callback);
+  });
+  mutableFs.unlink = ((path, callback) => {
+    const match = findMountedVfs(path);
+    if (!match) {
+      return originalFsMethods.unlink(path, callback);
+    }
+    if (typeof callback !== "function") {
+      return originalFsMethods.unlink(path, callback);
+    }
+    withCallback(match.vfs.promises.unlink(match.path), callback);
+  });
+  mutableFs.rmdir = ((path, options, callback) => {
+    const match = findMountedVfs(path);
+    if (!match) {
+      return originalFsMethods.rmdir(path, options, callback);
+    }
+    const resolvedCallback = typeof options === "function" ? options : callback;
+    if (typeof resolvedCallback !== "function") {
+      return originalFsMethods.rmdir(path, options, callback);
+    }
+    withCallback(match.vfs.promises.rmdir(match.path, typeof options === "function" ? void 0 : options), resolvedCallback);
+  });
+  const promisePatches = {
+    async writeFile(file, data, options) {
+      const match = findMountedVfs(file);
+      if (!match) {
+        return originalPromiseMethods.writeFile(file, data, options);
+      }
+      return match.vfs.promises.writeFile(match.path, data, options);
+    },
+    async appendFile(file, data, options) {
+      const match = findMountedVfs(file);
+      if (!match) {
+        return originalPromiseMethods.appendFile(file, data, options);
+      }
+      return match.vfs.promises.appendFile(match.path, data, options);
+    },
+    async mkdir(path, options) {
+      const match = findMountedVfs(path);
+      if (!match) {
+        return originalPromiseMethods.mkdir(path, options);
+      }
+      return match.vfs.promises.mkdir(match.path, options);
+    },
+    async rename(oldPath, newPath) {
+      const match = findMountedVfsForPaths([oldPath, newPath], "rename");
+      if (!match) {
+        return originalPromiseMethods.rename(oldPath, newPath);
+      }
+      const [normalizedOld, normalizedNew] = match.paths;
+      return match.vfs.promises.rename(normalizedOld, normalizedNew);
+    },
+    async unlink(path) {
+      const match = findMountedVfs(path);
+      if (!match) {
+        return originalPromiseMethods.unlink(path);
+      }
+      return match.vfs.promises.unlink(match.path);
+    },
+    async rmdir(path, options) {
+      const match = findMountedVfs(path);
+      if (!match) {
+        return originalPromiseMethods.rmdir(path, options);
+      }
+      return match.vfs.promises.rmdir(match.path, options);
+    }
+  };
+  mutableFs.promises.writeFile = promisePatches.writeFile;
+  mutableFs.promises.appendFile = promisePatches.appendFile;
+  mutableFs.promises.mkdir = promisePatches.mkdir;
+  mutableFs.promises.rename = promisePatches.rename;
+  mutableFs.promises.unlink = promisePatches.unlink;
+  mutableFs.promises.rmdir = promisePatches.rmdir;
+  mutableFsPromises.writeFile = promisePatches.writeFile;
+  mutableFsPromises.appendFile = promisePatches.appendFile;
+  mutableFsPromises.mkdir = promisePatches.mkdir;
+  mutableFsPromises.rename = promisePatches.rename;
+  mutableFsPromises.unlink = promisePatches.unlink;
+  mutableFsPromises.rmdir = promisePatches.rmdir;
+  syncBuiltinESMExports();
+  installed = true;
+}
+function uninstallFsWritePatches() {
+  if (!installed || activeVfs.size > 0) {
+    return;
+  }
+  mutableFs.writeFileSync = originalFsMethods.writeFileSync;
+  mutableFs.appendFileSync = originalFsMethods.appendFileSync;
+  mutableFs.mkdirSync = originalFsMethods.mkdirSync;
+  mutableFs.renameSync = originalFsMethods.renameSync;
+  mutableFs.unlinkSync = originalFsMethods.unlinkSync;
+  mutableFs.rmdirSync = originalFsMethods.rmdirSync;
+  mutableFs.writeFile = originalFsMethods.writeFile;
+  mutableFs.appendFile = originalFsMethods.appendFile;
+  mutableFs.mkdir = originalFsMethods.mkdir;
+  mutableFs.rename = originalFsMethods.rename;
+  mutableFs.unlink = originalFsMethods.unlink;
+  mutableFs.rmdir = originalFsMethods.rmdir;
+  mutableFs.promises.writeFile = originalPromiseMethods.writeFile;
+  mutableFs.promises.appendFile = originalPromiseMethods.appendFile;
+  mutableFs.promises.mkdir = originalPromiseMethods.mkdir;
+  mutableFs.promises.rename = originalPromiseMethods.rename;
+  mutableFs.promises.unlink = originalPromiseMethods.unlink;
+  mutableFs.promises.rmdir = originalPromiseMethods.rmdir;
+  mutableFsPromises.writeFile = originalPromiseMethods.writeFile;
+  mutableFsPromises.appendFile = originalPromiseMethods.appendFile;
+  mutableFsPromises.mkdir = originalPromiseMethods.mkdir;
+  mutableFsPromises.rename = originalPromiseMethods.rename;
+  mutableFsPromises.unlink = originalPromiseMethods.unlink;
+  mutableFsPromises.rmdir = originalPromiseMethods.rmdir;
+  syncBuiltinESMExports();
+  installed = false;
+}
+function registerMountedVfs(vfs) {
+  activeVfs.add(vfs);
+  installFsWritePatches();
+}
+function deregisterMountedVfs(vfs) {
+  activeVfs.delete(vfs);
+  uninstallFsWritePatches();
+}
+function wrapVfsWithFsWritePatches(vfs) {
+  const patchableVfs = vfs;
+  const originalMount = vfs.mount.bind(vfs);
+  const originalUnmount = vfs.unmount.bind(vfs);
+  const originalDispose = patchableVfs[Symbol.dispose]?.bind(vfs);
+  let registered = false;
+  patchableVfs.mount = ((prefix) => {
+    const mounted = originalMount(prefix);
+    if (!registered) {
+      registerMountedVfs(patchableVfs);
+      registered = true;
+    }
+    return mounted;
+  });
+  patchableVfs.unmount = (() => {
+    if (registered) {
+      deregisterMountedVfs(patchableVfs);
+      registered = false;
+    }
+    return originalUnmount();
+  });
+  if (originalDispose) {
+    patchableVfs[Symbol.dispose] = (() => {
+      if (registered) {
+        deregisterMountedVfs(patchableVfs);
+        registered = false;
+      }
+      return originalDispose();
+    });
+  }
+  return patchableVfs;
+}
 
 // src/pathing.ts
 import { posix as pathPosix } from "path";
@@ -257,7 +600,7 @@ var TinyCloudVfsFileHandle = class {
     const data = buffer.subarray(offset, offset + length);
     const requiredLength = writeFrom + data.length;
     if (requiredLength > this.state.content.length) {
-      const next = Buffer2.alloc(requiredLength);
+      const next = Buffer3.alloc(requiredLength);
       this.state.content.copy(next, 0, 0, this.state.content.length);
       this.state.content = next;
     }
@@ -280,16 +623,16 @@ var TinyCloudVfsFileHandle = class {
     if (encoding) {
       return this.state.content.toString(encoding);
     }
-    return Buffer2.from(this.state.content);
+    return Buffer3.from(this.state.content);
   }
   writeFileSync(data, options) {
     this.ensureOpen();
     const encoding = typeof options === "string" ? options : options?.encoding;
-    const buffer = typeof data === "string" ? Buffer2.from(data, encoding) : Buffer2.from(data);
+    const buffer = typeof data === "string" ? Buffer3.from(data, encoding) : Buffer3.from(data);
     if (isAppendFlag(this.state.flags)) {
-      this.state.content = Buffer2.concat([this.state.content, buffer]);
+      this.state.content = Buffer3.concat([this.state.content, buffer]);
     } else {
-      this.state.content = Buffer2.from(buffer);
+      this.state.content = Buffer3.from(buffer);
     }
     this.state.metadata = {
       ...this.state.metadata,
@@ -346,13 +689,13 @@ var TinyCloudVfsProvider = class extends VirtualProvider {
       this.ensureWritable(normalized, "open");
     }
     let metadata;
-    let content = Buffer2.alloc(0);
+    let content = Buffer3.alloc(0);
     try {
       const response = expectReadFileResult(this.bridge.requestSync({ type: "readFile", path: normalized }));
       metadata = response.metadata;
-      content = Buffer2.from(response.content);
+      content = Buffer3.from(response.content);
       if (isTruncateFlag(flags)) {
-        content = Buffer2.alloc(0);
+        content = Buffer3.alloc(0);
         metadata = {
           ...metadata,
           size: 0,
@@ -471,19 +814,20 @@ function toSessionSource(node, host) {
   if (!node.session) {
     throw new Error("TinyCloudNode has no active session; call signIn() or restoreSession() first.");
   }
+  const resolvedHost = host ?? node.config?.host ?? "https://node.tinycloud.xyz";
   return {
     kind: "session",
-    host: host ?? "https://node.tinycloud.xyz",
+    host: resolvedHost,
     session: node.session
   };
 }
 function createTinyCloudVfs(options) {
   const provider = new TinyCloudVfsProvider(options);
-  const vfs = create(provider, {
+  const vfs = wrapVfsWithFsWritePatches(create(provider, {
     moduleHooks: options.moduleHooks,
     overlay: options.overlay,
     virtualCwd: options.virtualCwd
-  });
+  }));
   if (options.mountPoint) {
     vfs.mount(options.mountPoint);
   }
@@ -495,17 +839,24 @@ function createTinyCloudVfsFromNode(node, options = {}) {
     source: toSessionSource(node, options.host)
   });
 }
-function createTinyCloudDelegatedVfs(options) {
+async function createTinyCloudDelegatedVfs(options) {
   if (!options.node.session) {
     throw new Error("TinyCloudNode has no active session; call signIn() or restoreSession() first.");
+  }
+  if (typeof options.node.useDelegation !== "function") {
+    throw new Error("TinyCloudNode does not expose useDelegation().");
+  }
+  const access = await options.node.useDelegation(options.delegation);
+  if (!access?.session) {
+    throw new Error("Delegated access does not expose a resolved session snapshot.");
   }
   return createTinyCloudVfs({
     ...options,
     source: {
-      kind: "delegation",
+      kind: "resolved-delegation",
       host: options.host ?? options.delegation.host ?? "https://node.tinycloud.xyz",
-      session: options.node.session,
-      delegation: options.delegation
+      session: access.session,
+      kvPrefix: access.kv?.config?.prefix ?? ""
     }
   });
 }

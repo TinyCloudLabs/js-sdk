@@ -21,22 +21,72 @@ export function encodeEnvelope(content: Buffer): TinyCloudVfsFileEnvelope {
   };
 }
 
-export function decodeEnvelope(value: unknown): Buffer {
-  if (
+function isEnvelopeShape(value: unknown): value is TinyCloudVfsFileEnvelope {
+  return Boolean(
     value &&
     typeof value === "object" &&
     (value as TinyCloudVfsFileEnvelope).version === 1 &&
     (value as TinyCloudVfsFileEnvelope).encoding === "base64" &&
     typeof (value as TinyCloudVfsFileEnvelope).data === "string"
-  ) {
+  );
+}
+
+export function encodeFileValue(content: Buffer): string | TinyCloudVfsFileEnvelope {
+  const utf8 = content.toString("utf8");
+  if (Buffer.from(utf8, "utf8").equals(content)) {
+    return utf8;
+  }
+
+  return encodeEnvelope(content);
+}
+
+export function decodeEnvelope(value: unknown): Buffer {
+  if (isEnvelopeShape(value)) {
     return Buffer.from((value as TinyCloudVfsFileEnvelope).data, "base64");
   }
 
   if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (isEnvelopeShape(parsed)) {
+        return Buffer.from(parsed.data, "base64");
+      }
+    } catch {
+      // Plain text payloads are expected and should fall through.
+    }
+
     return Buffer.from(value, "utf8");
   }
 
   throw new Error("unsupported file payload");
+}
+
+function isMetadataShape(value: unknown): value is TinyCloudVfsMetadata {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    (((value as TinyCloudVfsMetadata).kind === "file") || ((value as TinyCloudVfsMetadata).kind === "directory")) &&
+    typeof (value as TinyCloudVfsMetadata).size === "number" &&
+    typeof (value as TinyCloudVfsMetadata).mode === "number" &&
+    typeof (value as TinyCloudVfsMetadata).ctimeMs === "number" &&
+    typeof (value as TinyCloudVfsMetadata).mtimeMs === "number" &&
+    typeof (value as TinyCloudVfsMetadata).birthtimeMs === "number"
+  );
+}
+
+export function decodeMetadata(value: unknown): TinyCloudVfsMetadata {
+  if (isMetadataShape(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = JSON.parse(value) as unknown;
+    if (isMetadataShape(parsed)) {
+      return parsed;
+    }
+  }
+
+  throw new Error("unsupported metadata payload");
 }
 
 export function nowMetadata(kind: "file" | "directory", size: number, mode: number, existing?: TinyCloudVfsMetadata): TinyCloudVfsMetadata {

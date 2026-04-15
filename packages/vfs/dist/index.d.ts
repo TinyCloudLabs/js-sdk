@@ -33,10 +33,10 @@ type TinyCloudVfsSource = {
     host: string;
     session: TinyCloudVfsSessionData;
 } | {
-    kind: "delegation";
+    kind: "resolved-delegation";
     host: string;
     session: TinyCloudVfsSessionData;
-    delegation: PortableDelegationLike;
+    kvPrefix: string;
 };
 interface TinyCloudVfsOptions {
     mountPoint?: string;
@@ -149,6 +149,17 @@ interface CreateTinyCloudNodeVfsOptions extends Omit<TinyCloudVfsOptions, "mount
 }
 interface TinyCloudNodeLike {
     session?: TinyCloudVfsSessionData;
+    config?: {
+        host?: string;
+    };
+    useDelegation?: (delegation: PortableDelegationLike) => Promise<{
+        session?: TinyCloudVfsSessionData;
+        kv: {
+            config?: {
+                prefix?: string;
+            };
+        };
+    }>;
 }
 
 declare class TinyCloudVfsBridge {
@@ -375,9 +386,9 @@ declare function createTinyCloudVfsFromNode(node: TinyCloudNodeLike, options?: C
     provider: TinyCloudVfsProvider;
     vfs: VirtualFileSystem;
 };
-declare function createTinyCloudDelegatedVfs(options: CreateTinyCloudDelegatedVfsOptions): {
+declare function createTinyCloudDelegatedVfs(options: CreateTinyCloudDelegatedVfsOptions): Promise<{
     provider: TinyCloudVfsProvider;
     vfs: VirtualFileSystem;
-};
+}>;
 
 export { type CreateTinyCloudDelegatedVfsOptions, type CreateTinyCloudNodeVfsOptions, type TinyCloudVfsMetadata, type TinyCloudVfsOptions, TinyCloudVfsProvider, type TinyCloudVfsProviderOptions, type TinyCloudVfsSessionData, type TinyCloudVfsSource, createTinyCloudDelegatedVfs, createTinyCloudVfs, createTinyCloudVfsFromNode };

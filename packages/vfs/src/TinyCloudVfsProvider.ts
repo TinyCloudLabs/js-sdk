@@ -7,6 +7,7 @@ import {
   createEROFS,
   fromWorkerError,
 } from "./errors";
+import { wrapVfsWithFsWritePatches } from "./fsPatch";
 import { normalizeMode } from "./metadata";
 import { normalizeVfsPath } from "./pathing";
 import type {
@@ -434,20 +435,22 @@ function toSessionSource(node: TinyCloudNodeLike, host?: string): TinyCloudVfsSo
     throw new Error("TinyCloudNode has no active session; call signIn() or restoreSession() first.");
   }
 
+  const resolvedHost = host ?? node.config?.host ?? "https://node.tinycloud.xyz";
+
   return {
     kind: "session",
-    host: host ?? "https://node.tinycloud.xyz",
+    host: resolvedHost,
     session: node.session,
   };
 }
 
 export function createTinyCloudVfs(options: TinyCloudVfsProviderOptions & TinyCloudVfsOptions): { provider: TinyCloudVfsProvider; vfs: VirtualFileSystem } {
   const provider = new TinyCloudVfsProvider(options);
-  const vfs = create(provider, {
+  const vfs = wrapVfsWithFsWritePatches(create(provider, {
     moduleHooks: options.moduleHooks,
     overlay: options.overlay,
     virtualCwd: options.virtualCwd,
-  });
+  }));
 
   if (options.mountPoint) {
     vfs.mount(options.mountPoint);
@@ -463,18 +466,26 @@ export function createTinyCloudVfsFromNode(node: TinyCloudNodeLike, options: Cre
   });
 }
 
-export function createTinyCloudDelegatedVfs(options: CreateTinyCloudDelegatedVfsOptions) {
+export async function createTinyCloudDelegatedVfs(options: CreateTinyCloudDelegatedVfsOptions) {
   if (!options.node.session) {
     throw new Error("TinyCloudNode has no active session; call signIn() or restoreSession() first.");
+  }
+  if (typeof options.node.useDelegation !== "function") {
+    throw new Error("TinyCloudNode does not expose useDelegation().");
+  }
+
+  const access = await options.node.useDelegation(options.delegation);
+  if (!access?.session) {
+    throw new Error("Delegated access does not expose a resolved session snapshot.");
   }
 
   return createTinyCloudVfs({
     ...options,
     source: {
-      kind: "delegation",
+      kind: "resolved-delegation",
       host: options.host ?? options.delegation.host ?? "https://node.tinycloud.xyz",
-      session: options.node.session,
-      delegation: options.delegation,
+      session: access.session,
+      kvPrefix: access.kv?.config?.prefix ?? "",
     },
   });
 }

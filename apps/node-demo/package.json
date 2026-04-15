@@ -9,6 +9,7 @@
     "demo:vault": "bun run src/demo-data-vault.ts",
     "demo:public-spaces": "bun run src/demo-public-spaces.ts",
     "demo:legacy": "bun run src/demo-legacy.ts",
+    "demo:vfs": "node src/demo-vfs.mjs",
     "test:space": "bun run src/test-space.ts",
     "keygen": "bun run src/keygen.ts",
     "generate-keys": "bun run src/generate-keys.ts"
@@ -17,6 +18,7 @@
     "@tinycloud/sdk-core": "workspace:*",
     "@tinycloud/node-sdk": "workspace:*",
     "@tinycloud/node-sdk-wasm": "workspace:*",
+    "@tinycloud/vfs": "workspace:*",
     "ethers": "^5.7.2"
   },
   "devDependencies": {

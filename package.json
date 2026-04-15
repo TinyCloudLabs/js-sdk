@@ -12,6 +12,7 @@
     "packages/sdk-rs/packages/web",
     "packages/sdk-rs/packages/node",
     "packages/node-sdk",
+    "packages/vfs",
     "packages/cli",
     "apps/*",
     "tests/*"
