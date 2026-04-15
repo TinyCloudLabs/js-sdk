@@ -126,14 +126,31 @@ describe("Replication SQL Read Mode", () => {
         }
         expect(provisionalDefault.data.rows).toEqual([["item-local", "replica-camera", 1]]);
 
+        const authorityPull = await reconcileSqlFromPeer(
+          cluster,
+          "node-a",
+          {
+            peerUrl: replicaNode.url,
+            spaceId: authority.spaceId!,
+            dbName,
+            sinceSeq: baselineApply.appliedUntilSeq,
+          },
+          {
+            target: await openSqlReplicationSession(authority, authorityNode.url, dbName),
+            peer: await openSqlReplicationSession(canonicalReplica, replicaNode.url, dbName),
+          }
+        );
         expect(
-          (
-            await authoritySql.execute(
-              `INSERT INTO ${tableName} (id, name, quantity) VALUES (?, ?, ?)`,
-              ["item-local", "replica-camera", 1]
-            )
-          ).ok
-        ).toBe(true);
+          (authorityPull.snapshotBytes ?? 0) + (authorityPull.changesetBytes ?? 0)
+        ).toBeGreaterThan(0);
+
+        await waitForCondition("authority sees replica-authored row", async () => {
+          const result = await authoritySql.query(
+            `SELECT id, name, quantity FROM ${tableName} WHERE id = ?`,
+            ["item-local"]
+          );
+          return result.ok && result.data.rowCount === 1;
+        });
 
         const replicaCatchup = await reconcileSqlFromPeer(
           cluster,
