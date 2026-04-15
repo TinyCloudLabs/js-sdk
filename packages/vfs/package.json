@@ -1,0 +1,41 @@
+{
+  "name": "@tinycloud/vfs",
+  "version": "0.1.0-beta.0",
+  "description": "TinyCloud Virtual File System for Node.js",
+  "author": "TinyCloud, Inc.",
+  "license": "EGPL",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@platformatic/vfs": "^0.3.0",
+    "@tinycloud/node-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tinycloudlabs/web-sdk"
+  }
+}
