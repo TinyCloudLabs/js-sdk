@@ -40,6 +40,21 @@ function createClient(name, privateKey) {
   });
 }
 
+async function safeDeleteKey(node, key) {
+  try {
+    await node.kv.delete(key);
+  } catch {
+    // ignore cleanup failures in the demo
+  }
+}
+
+async function cleanupKeys(node, keys) {
+  for (const key of keys) {
+    await safeDeleteKey(node, key);
+    await safeDeleteKey(node, `.tcvfs-meta/${key}`);
+  }
+}
+
 async function main() {
   const runId = randomUUID().slice(0, 8);
   const aliceKey = process.env.TC_TEST_PRIVATE_KEY ?? freshPrivateKey();
@@ -131,18 +146,14 @@ async function main() {
       // ignore
     }
 
-    for (const key of [
+    await cleanupKeys(alice, [
       seedKey,
       bobKeyPath,
       `${scope}bob-note-final.txt`,
       `${scope}drafts/second.txt`,
-    ]) {
-      try {
-        await alice.kv.delete(key);
-      } catch {
-        // ignore cleanup failures in the demo
-      }
-    }
+      `${scope}drafts`,
+      scope.slice(0, -1),
+    ]);
   }
 
   console.log();

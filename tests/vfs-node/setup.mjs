@@ -71,5 +71,6 @@ export async function safeDeleteKey(node, key) {
 export async function cleanupKeys(node, keys) {
   for (const key of keys) {
     await safeDeleteKey(node, key);
+    await safeDeleteKey(node, `.tcvfs-meta/${key}`);
   }
 }

@@ -63,5 +63,5 @@ test("owner mount supports read, write, stat, list, rename, unlink, and rmdir", 
   fs.rmdirSync(`${mountPath}/notes`);
   assert.equal(fs.existsSync(`${mountPath}/notes`), false);
 
-  await cleanupKeys(owner, [fileKey, renamedKey]);
+  await cleanupKeys(owner, [fileKey, renamedKey, "notes"]);
 });

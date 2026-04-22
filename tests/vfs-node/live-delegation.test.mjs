@@ -79,7 +79,7 @@ test("delegated mount reads and writes inside the delegated subtree", async (t) 
     assert.equal(stored.data.data, "written by bob");
   }
 
-  await cleanupKeys(owner, [seedKey, writeKey, nestedKey]);
+  await cleanupKeys(owner, [seedKey, writeKey, nestedKey, scope.slice(0, -1), `${scope}nested`]);
 });
 
 test("read-only delegation denies writes with EACCES", async (t) => {
@@ -123,5 +123,5 @@ test("read-only delegation denies writes with EACCES", async (t) => {
     },
   );
 
-  await cleanupKeys(owner, [seedKey, `${scope}blocked.txt`]);
+  await cleanupKeys(owner, [seedKey, `${scope}blocked.txt`, scope.slice(0, -1)]);
 });
