@@ -43,6 +43,9 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc kv get <key>` | Retrieve a value |
 | `tc kv put <key> <value>` | Store a value |
 | `tc kv list` | List all keys |
+| `tc sql query <sql>` | Run a SQLite SELECT query |
+| `tc sql execute <sql>` | Run a SQLite write or schema statement |
+| `tc sql export` | Export a SQLite database file |
 | `tc space list` | List your spaces |
 | `tc space create` | Create a new space |
 | `tc delegation create` | Grant access to another user |

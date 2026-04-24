@@ -2422,8 +2422,39 @@ function registerDoctorCommand(program2) {
 import { writeFile as writeFile6 } from "fs/promises";
 import { resolve } from "path";
 function registerSqlCommand(program2) {
-  const sql = program2.command("sql").description("SQL database operations");
-  sql.command("query <sql>").description("Run a SELECT query").option("--db <name>", "Database name", "default").option("--params <json>", "Bind parameters as JSON array").action(async (sqlStr, options, cmd) => {
+  const sql = program2.command("sql").description("SQLite database operations for your TinyCloud space").addHelpText("after", `
+
+TinyCloud SQL gives each space isolated SQLite databases. Use the default
+database for simple apps, or pass --db to target a named database.
+
+Common workflows:
+  $ tc sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ tc sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
+  $ tc sql query "SELECT id, body FROM notes ORDER BY id"
+  $ tc sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
+  $ tc sql export --db analytics --output analytics.db
+
+Commands:
+  query     Read rows with SELECT statements
+  execute   Run writes and schema changes such as INSERT, UPDATE, DELETE, CREATE, DROP
+  export    Download the raw SQLite database file
+
+Tips:
+  - SQL strings should usually be quoted so your shell passes them as one argument.
+  - --params accepts a JSON array and binds values to ? placeholders.
+  - Add --json for scripting-friendly output.
+`);
+  sql.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
+
+Examples:
+  $ tc sql query "SELECT * FROM notes ORDER BY id"
+  $ tc sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
+  $ tc sql query "SELECT count(*) AS total FROM events" --db analytics --json
+
+Output:
+  Human output is formatted as a table. Piped output or --json returns
+  { "columns": string[], "rows": unknown[][], "rowCount": number }.
+`).action(async (sqlStr, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -2455,7 +2486,17 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       handleError(error);
     }
   });
-  sql.command("execute <sql>").description("Run INSERT/UPDATE/DELETE/DDL statement").option("--db <name>", "Database name", "default").option("--params <json>", "Bind parameters as JSON array").action(async (sqlStr, options, cmd) => {
+  sql.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
+
+Examples:
+  $ tc sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ tc sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
+  $ tc sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
+  $ tc sql execute "DROP TABLE old_notes" --db archive
+
+Output:
+  Returns JSON with the changed row count and last inserted row id when available.
+`).action(async (sqlStr, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -2476,7 +2517,15 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       handleError(error);
     }
   });
-  sql.command("export").description("Export database as binary file").option("--db <name>", "Database name", "default").option("-o, --output <file>", "Output file path", "export.db").action(async (options, cmd) => {
+  sql.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
+
+Examples:
+  $ tc sql export
+  $ tc sql export --db analytics --output analytics.db
+
+Output:
+  Writes the database file locally and returns JSON with the path and size.
+`).action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
