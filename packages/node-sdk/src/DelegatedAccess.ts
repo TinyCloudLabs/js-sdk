@@ -15,6 +15,28 @@ import type { InvokeFunction } from "@tinycloud/sdk-services";
 import { PortableDelegation } from "./delegation";
 
 /**
+ * The handles needed to rehydrate this delegation activation in a fresh
+ * `TinyCloudNode` via `TinyCloudNode.restoreSession(...)` in another process
+ * or after a restart.
+ *
+ * In wallet mode, `delegationHeader` and `delegationCid` are bound to the
+ * session key that ran `useDelegation`. They are NOT intrinsic to the
+ * portable delegation — they expire with the server-side session (typically
+ * ~1h). To keep a restored node alive longer, re-run `useDelegation` with
+ * the original portable delegation and call `restoreSession` again with the
+ * fresh `RestorableSession`.
+ */
+export interface RestorableSession {
+  delegationHeader: { Authorization: string };
+  delegationCid: string;
+  spaceId: string;
+  jwk: object;
+  verificationMethod: string;
+  address: string;
+  chainId: number;
+}
+
+/**
  * Provides access to a space via a received delegation.
  *
  * This is returned by TinyCloudNode.useDelegation() and provides
@@ -127,5 +149,24 @@ export class DelegatedAccess {
    */
   get hooks(): IHooksService {
     return this._hooks;
+  }
+
+  /**
+   * Export the handles needed to rehydrate this activated delegation via
+   * `TinyCloudNode.restoreSession(...)` in another process or after a
+   * restart.
+   *
+   * See `RestorableSession` for lifetime caveats.
+   */
+  get restorable(): RestorableSession {
+    return {
+      delegationHeader: this.session.delegationHeader,
+      delegationCid: this.session.delegationCid,
+      spaceId: this.session.spaceId,
+      jwk: this.session.jwk,
+      verificationMethod: this.session.verificationMethod,
+      address: this.session.address,
+      chainId: this.session.chainId,
+    };
   }
 }

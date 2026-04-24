@@ -127,6 +127,7 @@ export { NodeWasmBindings } from "./NodeWasmBindings";
 
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";
+export type { RestorableSession } from "./DelegatedAccess";
 export {
   PortableDelegation,
   serializeDelegation,
