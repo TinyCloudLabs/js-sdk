@@ -24,6 +24,7 @@
     "fix-wasm-delegation-host-activation",
     "manifest-signin-multi-delegate",
     "reexport-invoke-any",
+    "tidy-sql-help",
     "trigger-nonce-republish",
     "write-hooks-phase2"
   ]

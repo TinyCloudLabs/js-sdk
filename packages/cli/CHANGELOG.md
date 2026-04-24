@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 0.4.7-beta.6
+
+### Patch Changes
+
+- fa130e0: Improve `tc sql` help output with SQLite workflow examples, parameter binding guidance, named database usage, and documented query/execute/export output shapes.
+
 ## 0.4.7-beta.5
 
 ### Patch Changes
