@@ -1,0 +1,12 @@
+{
+  "name": "@tinycloud/vfs-node-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@tinycloud/node-sdk": "workspace:*",
+    "@tinycloud/vfs": "workspace:*"
+  }
+}
