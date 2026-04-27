@@ -23,6 +23,7 @@
     "fix-normalize-space-uri",
     "fix-wasm-delegation-host-activation",
     "manifest-signin-multi-delegate",
+    "publish-ucan-header-fix",
     "reexport-invoke-any",
     "tidy-sql-help",
     "trigger-nonce-republish",

@@ -1,5 +1,20 @@
 # @tinycloudlabs/web-sdk
 
+## 2.1.0-beta.6
+
+### Patch Changes
+
+- 4fac901: Publish the UCAN delegation header fix from PR #192.
+
+  `createDelegationViaWasmPath` now activates session-key UCAN delegations with
+  the raw serialized JWT in the `Authorization` header instead of prefixing it
+  with `Bearer `. The TinyCloud host decodes this header directly as a UCAN JWT;
+  the prefixed value causes host activation to fail with 401 during
+  manifest-driven `delegateTo` flows such as TinyBoilerplate/OpenKey sign-in.
+
+- Updated dependencies [4fac901]
+  - @tinycloud/node-sdk@2.1.0-beta.6
+
 ## 2.1.0-beta.5
 
 ### Patch Changes
