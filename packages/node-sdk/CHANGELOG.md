@@ -1,5 +1,96 @@
 # @tinycloudlabs/node-sdk
 
+## 2.1.0
+
+### Minor Changes
+
+- 8abfb4e: Bump past stale `2.1.0-beta.0` / `1.7.2-beta.0` ghost versions to publish PR #184's capability-chain delegation code.
+
+  The earlier `2.1.0-beta.0` (TS SDKs) and `1.7.2-beta.0` (WASM) tarballs on npm predate PR #184 and are missing `resolveManifest`, `isCapabilitySubset`, manifest types, and the `parseRecapFromSiwe` re-export. This empty changeset forces `changeset version` to land on the next beta counter so the Beta Release workflow actually publishes the post-#184 code.
+
+  All four TS packages in the linked group are named explicitly so `@tinycloud/sdk-services` advances too (naming only `@tinycloud/sdk-core` left it pinned at the ghost `2.1.0-beta.0`). Both WASM wrappers take a patch bump so the TS SDKs don't pin a stale `@tinycloud/*-sdk-wasm@1.7.2-beta.0`.
+
+- 9dad135: Wire manifest-driven `signIn` and multi-resource `delegateTo` end-to-end (closes the two gaps in `2.1.0-beta.1`).
+
+  `signIn` now reads `config.manifest` and resolves it (via `resolveManifest` + the new `manifestAbilitiesUnion`) into the WASM `abilities` map used by `prepareSession`. The resulting SIWE recap covers the union of the app's own permissions AND every manifest-declared delegation's permissions, so the session key acquires coverage for both runtime use and downstream sub-delegations in one wallet prompt. Apps that don't pass a manifest fall back to `defaultActions` (legacy behaviour, no change).
+
+  `delegateTo(did, permissions)` no longer rejects multi-entry input. The SDK now folds every `(service, path, actions)` entry into a single multi-resource abilities map and calls the WASM `createDelegation` once — producing ONE signed UCAN whose `attenuation` carries every grant. The returned `PortableDelegation` has the new optional `resources?: DelegatedResource[]` field listing the full breakdown; the legacy flat `path` + `actions` fields mirror the first (sorted) resource for back-compat.
+
+  Listen-style apps that needed to delegate KV + SQL on the same prefix to a backend can now do so in a single `tcw.delegateTo(backendDID, [...])` call with no wallet prompt.
+
+  **Breaking changes** — pre-2.1.0-beta.2 callers will need to update:
+  - `@tinycloud/sdk-core`: `CreateDelegationWasmParams` swaps `path: string; actions: string[]` for `abilities: Record<string, Record<string, string[]>>`. `CreateDelegationWasmResult` swaps the flat `path` + `actions` for `resources: DelegatedResource[]`. New exports: `DelegatedResource`, `AbilitiesMap`, `manifestAbilitiesUnion`, `resourceCapabilitiesToAbilitiesMap`.
+  - `@tinycloud/node-sdk`: `TinyCloudNodeConfig` gains an optional `manifest?: Manifest` field. `TinyCloudNode` gains `setManifest(manifest)` and `manifest` getter passthroughs to the underlying auth handler. `delegateTo` no longer throws on multi-entry input — apps that relied on that behaviour for validation must add their own length check. `PortableDelegation` gains an optional `resources?: DelegatedResource[]` field.
+  - `@tinycloud/web-sdk`: `TinyCloudWeb.setManifest()` now forwards the new manifest into the underlying `TinyCloudNode` so the next `signIn()` picks it up. `BrowserWasmBindings.createDelegation` signature aligned with the new WASM ABI.
+  - `@tinycloud/node-sdk-wasm` / `@tinycloud/web-sdk-wasm`: the `createDelegation` WASM export takes `abilities: object` (multi-resource map) instead of `path: string, actions: string[]`. The Rust rev in `packages/sdk-rs/Cargo.toml` is bumped to the merge commit of the `feat/create-delegation-multi-resource` PR in `tinycloud-node`.
+
+- 61c031d: Add write-hooks support across the JS SDK surface for SDK services, core, Node, and web packages.
+
+### Patch Changes
+
+- 303a8eb: Add an optional per-call `nonce` override to `signIn()` while preserving constructor-level `siweConfig.nonce` support.
+- b88728a: fix(sdk-core): normalize space URI in recap parse for derivability check
+
+  The Rust WASM `parseRecapFromSiwe` returns `space` as the full recap target
+  URI (`tinycloud:pkh:eip155:{chainId}:{address}:{name}`), while manifest
+  permissions and backend-advertised permissions use the short `{name}` form
+  (e.g. `"default"`). `isCapabilitySubset` was doing strict string comparison
+  on `space`, so mixing the two forms always failed — `delegateTo` would throw
+  `PermissionNotInManifestError` even when the session recap covered every
+  requested capability.
+
+  This broke end-to-end manifest-driven sign-in in the listen app, where the
+  session SIWE was signed correctly with the union of all manifest abilities
+  but `delegateTo(backendDID, info.permissions)` still failed on the subset
+  check because `"tinycloud:pkh:eip155:1:0xd559...:default"` and `"default"`
+  didn't match as strings.
+
+  Fix: add a `normalizeSpace` helper that extracts the trailing name segment
+  from a `tinycloud:` URI. Apply it in `parseRecapCapabilities` (so the output
+  is always in short-name form) and defensively in `isCapabilitySubset` on
+  both sides (so callers passing either form work transparently).
+
+- c586568: fix(node-sdk): activate WASM-path delegations with the host so downstream consumers can reference the parent CID
+
+  `createDelegationViaWasmPath` (the session-key UCAN fast path used by
+  `tcw.delegateTo` when the requested capabilities are derivable from the
+  current session) was building the UCAN client-side and returning it
+  directly without posting it to the host. This meant the host's delegation
+  store never saw the UCAN.
+
+  When a downstream consumer (e.g. a backend calling `node.useDelegation`)
+  tried to reference the UCAN's CID as the parent of its own invoker SIWE,
+  the host's chain-validation step failed with "Cannot find parent
+  delegation" — the host looks up parents by CID in its local database,
+  and the client-side-only UCAN was never stored.
+
+  Fix: after computing the UCAN in `createDelegationViaWasmPath`, call
+  `activateSessionWithHost` to POST the delegation header to `/delegate`
+  before returning the `PortableDelegation`. This mirrors the legacy
+  `createDelegationWalletPath` which has done the same for wallet-signed
+  SIWE delegations since day one.
+
+- 4fac901: Publish the UCAN delegation header fix from PR #192.
+
+  `createDelegationViaWasmPath` now activates session-key UCAN delegations with
+  the raw serialized JWT in the `Authorization` header instead of prefixing it
+  with `Bearer `. The TinyCloud host decodes this header directly as a UCAN JWT;
+  the prefixed value causes host activation to fail with 401 during
+  manifest-driven `delegateTo` flows such as TinyBoilerplate/OpenKey sign-in.
+
+- fb1d3fd: Trigger republish after CI auth fix — nonce passthrough fix shipped in prior beta was not published to npm due to broken publish step.
+- Updated dependencies [303a8eb]
+- Updated dependencies [8abfb4e]
+- Updated dependencies [b55ffbd]
+- Updated dependencies [b88728a]
+- Updated dependencies [c586568]
+- Updated dependencies [9dad135]
+- Updated dependencies [9a9fae1]
+- Updated dependencies [fb1d3fd]
+- Updated dependencies [61c031d]
+  - @tinycloud/sdk-core@2.1.0
+  - @tinycloud/node-sdk-wasm@1.7.2
+
 ## 2.1.0-beta.6
 
 ### Patch Changes

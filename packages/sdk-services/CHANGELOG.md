@@ -1,5 +1,60 @@
 # @tinycloudlabs/sdk-services
 
+## 2.1.0
+
+### Minor Changes
+
+- 8abfb4e: Bump past stale `2.1.0-beta.0` / `1.7.2-beta.0` ghost versions to publish PR #184's capability-chain delegation code.
+
+  The earlier `2.1.0-beta.0` (TS SDKs) and `1.7.2-beta.0` (WASM) tarballs on npm predate PR #184 and are missing `resolveManifest`, `isCapabilitySubset`, manifest types, and the `parseRecapFromSiwe` re-export. This empty changeset forces `changeset version` to land on the next beta counter so the Beta Release workflow actually publishes the post-#184 code.
+
+  All four TS packages in the linked group are named explicitly so `@tinycloud/sdk-services` advances too (naming only `@tinycloud/sdk-core` left it pinned at the ghost `2.1.0-beta.0`). Both WASM wrappers take a patch bump so the TS SDKs don't pin a stale `@tinycloud/*-sdk-wasm@1.7.2-beta.0`.
+
+- 61c031d: Add write-hooks support across the JS SDK surface for SDK services, core, Node, and web packages.
+
+### Patch Changes
+
+- b88728a: fix(sdk-core): normalize space URI in recap parse for derivability check
+
+  The Rust WASM `parseRecapFromSiwe` returns `space` as the full recap target
+  URI (`tinycloud:pkh:eip155:{chainId}:{address}:{name}`), while manifest
+  permissions and backend-advertised permissions use the short `{name}` form
+  (e.g. `"default"`). `isCapabilitySubset` was doing strict string comparison
+  on `space`, so mixing the two forms always failed — `delegateTo` would throw
+  `PermissionNotInManifestError` even when the session recap covered every
+  requested capability.
+
+  This broke end-to-end manifest-driven sign-in in the listen app, where the
+  session SIWE was signed correctly with the union of all manifest abilities
+  but `delegateTo(backendDID, info.permissions)` still failed on the subset
+  check because `"tinycloud:pkh:eip155:1:0xd559...:default"` and `"default"`
+  didn't match as strings.
+
+  Fix: add a `normalizeSpace` helper that extracts the trailing name segment
+  from a `tinycloud:` URI. Apply it in `parseRecapCapabilities` (so the output
+  is always in short-name form) and defensively in `isCapabilitySubset` on
+  both sides (so callers passing either form work transparently).
+
+- c586568: fix(node-sdk): activate WASM-path delegations with the host so downstream consumers can reference the parent CID
+
+  `createDelegationViaWasmPath` (the session-key UCAN fast path used by
+  `tcw.delegateTo` when the requested capabilities are derivable from the
+  current session) was building the UCAN client-side and returning it
+  directly without posting it to the host. This meant the host's delegation
+  store never saw the UCAN.
+
+  When a downstream consumer (e.g. a backend calling `node.useDelegation`)
+  tried to reference the UCAN's CID as the parent of its own invoker SIWE,
+  the host's chain-validation step failed with "Cannot find parent
+  delegation" — the host looks up parents by CID in its local database,
+  and the client-side-only UCAN was never stored.
+
+  Fix: after computing the UCAN in `createDelegationViaWasmPath`, call
+  `activateSessionWithHost` to POST the delegation header to `/delegate`
+  before returning the `PortableDelegation`. This mirrors the legacy
+  `createDelegationWalletPath` which has done the same for wallet-signed
+  SIWE delegations since day one.
+
 ## 2.1.0-beta.4
 
 ### Patch Changes

@@ -2,31 +2,19 @@
   "mode": "pre",
   "tag": "beta",
   "initialVersions": {
-    "@tinycloud/node-demo": "0.0.15",
-    "tinycloud-openkey-example-app": "0.0.13",
-    "openkey-vite": "0.0.11",
+    "@tinycloud/node-demo": "0.0.16",
+    "tinycloud-openkey-example-app": "0.0.14",
+    "openkey-vite": "0.0.12",
     "tinycloud-web-sdk-example-app": "0.0.2",
-    "@tinycloud/cli": "0.4.6",
-    "@tinycloud/node-sdk": "2.0.4",
-    "@tinycloud/sdk-core": "2.0.4",
+    "@tinycloud/cli": "0.4.7",
+    "@tinycloud/node-sdk": "2.1.0",
+    "@tinycloud/sdk-core": "2.1.0",
     "@tinycloud/sdk-rs": "1.0.0",
-    "@tinycloud/node-sdk-wasm": "1.7.1",
-    "@tinycloud/web-sdk-wasm": "1.7.1",
-    "@tinycloud/sdk-services": "2.0.4",
-    "@tinycloud/web-sdk": "2.0.4",
-    "@tinycloud/sdk-services-test": "6.0.2"
+    "@tinycloud/node-sdk-wasm": "1.7.2",
+    "@tinycloud/web-sdk-wasm": "1.7.2",
+    "@tinycloud/sdk-services": "2.1.0",
+    "@tinycloud/web-sdk": "2.1.0",
+    "@tinycloud/sdk-services-test": "7.0.0"
   },
-  "changesets": [
-    "bright-bats-jump",
-    "bump-past-ghost",
-    "capability-chain-manifest",
-    "fix-normalize-space-uri",
-    "fix-wasm-delegation-host-activation",
-    "manifest-signin-multi-delegate",
-    "publish-ucan-header-fix",
-    "reexport-invoke-any",
-    "tidy-sql-help",
-    "trigger-nonce-republish",
-    "write-hooks-phase2"
-  ]
+  "changesets": []
 }
