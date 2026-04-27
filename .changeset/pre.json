@@ -14,7 +14,10 @@
     "@tinycloud/web-sdk-wasm": "1.7.2",
     "@tinycloud/sdk-services": "2.1.0",
     "@tinycloud/web-sdk": "2.1.0",
-    "@tinycloud/sdk-services-test": "7.0.0"
+    "@tinycloud/sdk-services-test": "7.0.0",
+    "@tinycloud/vfs": "0.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "tinycloud-vfs-initial-release"
+  ]
 }
