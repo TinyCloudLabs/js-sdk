@@ -1,15 +1,15 @@
 {
   "$schema": "https://tinycloud.xyz/atlas/schema/inventory.v1.json",
   "generated": {
-    "at": "2026-04-28T21:30:53.985Z",
+    "at": "2026-04-28T21:33:15.728Z",
     "by": "tc atlas rebuild",
     "recipe": "/atlas/data/meta.json"
   },
   "repo": {
     "owner": "TinyCloudLabs",
     "name": "js-sdk",
-    "ref": "atlas/data-gen",
-    "sha": "d55bfd7decdd74d3091cce59ab2cf2d08dc6884c",
+    "ref": "atlas/scaffold",
+    "sha": "d8e72a5d6dc38fecd3e4b071a19ef53301d1c22e",
     "version": "0.0.1",
     "builtAt": "2026-04-28",
     "drift": 0
