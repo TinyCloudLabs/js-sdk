@@ -1,0 +1,71 @@
+---
+import Atlas from '@/layouts/Atlas.astro';
+import { getInventory } from '@/lib/atlas';
+
+const inv = await getInventory();
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const endpointHref = (path: string) => `${base}${path.replace(/^\/atlas/, '')}`;
+---
+<Atlas chapter="09" title="for agents" crumb="for agents">
+  <article class="prose" style="padding: 48px 64px; max-width: 1100px;">
+    <div class="label">chapter 09 · agent surface</div>
+    <h1>for agents</h1>
+    <p>
+      The atlas is two artifacts in one tree: a website for humans and a flat
+      directory of JSON for agents. Same facts, both regenerated from
+      <a class="pkg-link" href={`${base}/data/meta.json`}>/atlas/data/meta.json</a>.
+    </p>
+
+    <h2>start here</h2>
+    <pre style="background: var(--paper-2); border: 1px solid var(--ink-4); padding: 14px 16px; border-radius: 6px; font-family:'JetBrains Mono', monospace; font-size: 13px; overflow-x: auto;">
+curl -s {inv.repo.owner}.github.io/{inv.repo.name}/atlas/data/llms.txt
+curl -s {inv.repo.owner}.github.io/{inv.repo.name}/atlas/data/inventory.json | jq .packages
+curl -s {inv.repo.owner}.github.io/{inv.repo.name}/atlas/data/pkg/sdk-core.json | jq .why
+    </pre>
+
+    <h2>endpoints</h2>
+    <table style="width:100%; border-collapse: collapse; margin: 16px 0; font-family:'JetBrains Mono', monospace; font-size: 13px;">
+      <thead>
+        <tr style="border-bottom: 1px solid var(--ink-4); text-align: left;">
+          <th style="padding: 8px 10px; color: var(--ink-3); font-weight: 500;">method</th>
+          <th style="padding: 8px 10px; color: var(--ink-3); font-weight: 500;">path</th>
+          <th style="padding: 8px 10px; color: var(--ink-3); font-weight: 500;">description</th>
+        </tr>
+      </thead>
+      <tbody>
+        {inv.endpoints.map(e => (
+          <tr style="border-bottom: 1px solid var(--paper-3);">
+            <td style="padding: 10px;"><span class="pill faint">{e.method}</span></td>
+            <td style="padding: 10px;">
+              <a class="pkg-link" href={endpointHref(e.path)}>{e.path}</a>
+            </td>
+            <td style="padding: 10px; color: var(--ink-2); font-family: 'Outfit', sans-serif;">{e.desc}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+
+    <h2>schema (top of inventory.json)</h2>
+    <pre style="background: var(--paper-2); border: 1px solid var(--ink-4); padding: 14px 16px; border-radius: 6px; font-family:'JetBrains Mono', monospace; font-size: 12px; overflow-x: auto;">{`{
+  "$schema": ".../schema/inventory.v1.json",
+  "generated": { "at": ISO8601, "by": "tc atlas rebuild", "recipe": "/atlas/data/meta.json" },
+  "repo":      { "owner", "name", "ref", "sha", "version", "builtAt", "drift" },
+  "packages":  [{ "id", "npm", "kind", "side", "ref": "/atlas/data/pkg/<id>.json" }],
+  "chapters":  [{ "id", "title", "voice", "read" }],
+  "endpoints": [{ "method", "path", "desc" }]
+}`}</pre>
+
+    <h2>regenerating</h2>
+    <p>
+      The atlas is built by walking <code>packages/*</code> for structural facts
+      (modules, loc, exports, boundaries) and merging them with hand-curated
+      prose in <code>atlas/curated/*.yaml</code>. Run locally with:
+    </p>
+    <pre style="background: var(--paper-2); border: 1px solid var(--ink-4); padding: 14px 16px; border-radius: 6px; font-family:'JetBrains Mono', monospace; font-size: 13px;">bun run atlas:rebuild</pre>
+    <p>
+      After a rebuild, <a class="pkg-link" href={`${base}/data/drift.json`}>/atlas/data/drift.json</a>
+      should be empty. Anything in there is a hand-curated note that no longer
+      matches the underlying file hash.
+    </p>
+  </article>
+</Atlas>

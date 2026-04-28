@@ -1,0 +1,106 @@
+{
+  "commands": [
+    {
+      "ns": "tinycloud.kv",
+      "action": "get",
+      "pkg": "sdk-services",
+      "surface": "cli kv get / web .kv.get / node .kv.get"
+    },
+    {
+      "ns": "tinycloud.kv",
+      "action": "put",
+      "pkg": "sdk-services",
+      "surface": "cli kv put / web .kv.put / node .kv.put"
+    },
+    {
+      "ns": "tinycloud.kv",
+      "action": "list",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.kv",
+      "action": "delete",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.kv",
+      "action": "head",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.sql",
+      "action": "query",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.sql",
+      "action": "execute",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.sql",
+      "action": "batch",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.duckdb",
+      "action": "query",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.duckdb",
+      "action": "execute",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.vault",
+      "action": "put",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.vault",
+      "action": "get",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.vault",
+      "action": "list",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.vault",
+      "action": "grant",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.hooks",
+      "action": "subscribe",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.hooks",
+      "action": "webhook",
+      "pkg": "sdk-services"
+    },
+    {
+      "ns": "tinycloud.share",
+      "action": "create",
+      "pkg": "sdk-core"
+    },
+    {
+      "ns": "tinycloud.share",
+      "action": "receive",
+      "pkg": "sdk-core"
+    },
+    {
+      "ns": "tinycloud.delegate",
+      "action": "to",
+      "pkg": "node-sdk"
+    },
+    {
+      "ns": "tinycloud.space",
+      "action": "create",
+      "pkg": "sdk-core"
+    }
+  ]
+}

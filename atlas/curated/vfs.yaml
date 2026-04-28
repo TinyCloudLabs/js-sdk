@@ -1,0 +1,28 @@
+# atlas/curated/vfs.yaml
+#
+# Hand-curated overlay for @tinycloud/vfs.
+
+id: "vfs"
+npm: "@tinycloud/vfs"
+kind: "sdk"
+side: "node"
+
+why: |
+  Node virtual filesystem bridge. Adapts TinyCloud storage into the @platformatic/vfs provider shape, including synchronous file handles, path normalization, metadata, and worker-backed reads and writes.
+
+boundaries:
+  - id: "node-sdk"
+    note: ""   # TODO: why this edge exists
+  - id: "@platformatic/vfs"
+    note: ""   # TODO: why this edge exists
+
+notable_exports:
+  - "TinyCloudVfsProvider"
+  - "createTinyCloudVfs"
+  - "createTinyCloudVfsFromNode"
+  - "createTinyCloudDelegatedVfs"
+
+notable_commands: []
+
+hasFsm: false
+hasSeq: false

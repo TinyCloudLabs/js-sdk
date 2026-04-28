@@ -1,0 +1,64 @@
+# Build & deploy the TinyCloud SDK Atlas to GitHub Pages.
+# Triggers on push to master AND nightly (so drift is detected even
+# when no one is pushing).
+name: atlas
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'atlas/**'
+      - 'packages/**'
+      - '.github/workflows/atlas.yml'
+  schedule:
+    # Daily at 06:00 UTC — picks up package changes, refreshes drift.json
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: atlas-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: atlas
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # rebuild.mjs reads `git rev-parse HEAD`
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.0
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Rebuild atlas data
+        run: bun run atlas:rebuild
+
+      - name: Build static site → ../docs/atlas/
+        run: bun run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

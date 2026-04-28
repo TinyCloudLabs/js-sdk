@@ -1,0 +1,87 @@
+{
+  "id": "siwe-login",
+  "steps": [
+    {
+      "from": "App",
+      "to": "Web",
+      "msg": "new TinyCloudWeb(config)"
+    },
+    {
+      "from": "App",
+      "to": "Web",
+      "msg": "signIn()"
+    },
+    {
+      "from": "Web",
+      "to": "Auth",
+      "msg": "userAuthorization.signIn()"
+    },
+    {
+      "from": "Auth",
+      "to": "Wallet",
+      "msg": "request connection"
+    },
+    {
+      "from": "Wallet",
+      "to": "Auth",
+      "msg": "address + provider",
+      "ret": true
+    },
+    {
+      "from": "Auth",
+      "to": "Wasm",
+      "msg": "createSessionKey(id)"
+    },
+    {
+      "from": "Wasm",
+      "to": "Auth",
+      "msg": "Ed25519 keypair",
+      "ret": true
+    },
+    {
+      "from": "Auth",
+      "to": "Wasm",
+      "msg": "build(siweConfig)"
+    },
+    {
+      "from": "Wasm",
+      "to": "Auth",
+      "msg": "SIWE+ReCap msg",
+      "ret": true
+    },
+    {
+      "from": "Auth",
+      "to": "Wallet",
+      "msg": "signMessage(siwe)"
+    },
+    {
+      "from": "Wallet",
+      "to": "Auth",
+      "msg": "signature",
+      "ret": true
+    },
+    {
+      "from": "Auth",
+      "to": "Node",
+      "msg": "POST /tcw-login"
+    },
+    {
+      "from": "Node",
+      "to": "Auth",
+      "msg": "session token",
+      "ret": true
+    },
+    {
+      "from": "Auth",
+      "to": "Web",
+      "msg": "ClientSession",
+      "ret": true
+    },
+    {
+      "from": "Web",
+      "to": "App",
+      "msg": "authenticated",
+      "ret": true
+    }
+  ]
+}

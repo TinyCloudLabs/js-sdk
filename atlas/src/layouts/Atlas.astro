@@ -1,0 +1,94 @@
+---
+// src/layouts/Atlas.astro — shared shell for every page
+import '@/styles/atlas.css';
+import ThemeToggle from '@/components/ThemeToggle.astro';
+import CmdK from '@/components/CmdK.tsx';
+import { getInventory } from '@/lib/atlas';
+
+interface Props {
+  chapter: string;       // e.g. '01' — for the active TOC item
+  title: string;
+  crumb?: string;        // breadcrumb suffix shown in chrome
+}
+
+const { chapter, title, crumb } = Astro.props;
+const inv = await getInventory();
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>{title} — TinyCloud SDK Atlas</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content={`TinyCloud SDK Atlas — ${title}`} />
+<link rel="alternate" type="application/json" href={`${base}/data/inventory.json`} title="atlas/inventory.json" />
+<link rel="alternate" type="text/plain" href={`${base}/data/llms.txt`} title="atlas/llms.txt" />
+<script is:inline>
+  // Apply persisted theme before paint to avoid flash.
+  (() => {
+    try {
+      const t = localStorage.getItem('atlas-theme') || 'night';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch { document.documentElement.setAttribute('data-theme', 'night'); }
+  })();
+</script>
+</head>
+<body>
+<div class="atlas">
+  <header class="atlas-chrome">
+    <a href={`${base}/`} class="logo">
+      <span class="mark">A</span>
+      <span>atlas</span>
+    </a>
+    <span class="crumbs">
+      <b>tinycloud/js-sdk</b>
+      <span style="color: var(--ink-3); padding: 0 6px;">/</span>
+      <em>{crumb ?? title}</em>
+    </span>
+    <span class="right">
+      <a class="btn-ghost" href={`${base}/data/llms.txt`} title="agent-readable index">llms.txt</a>
+      <a class="btn-ghost" href={`${base}/agents/`} title="agent endpoints">/atlas/*.json</a>
+      <ThemeToggle />
+      <span class="kbd">⌘</span><span class="kbd">K</span>
+    </span>
+  </header>
+
+  <div class="row" style="min-height: calc(100vh - 48px);">
+    <!-- left rail: TOC -->
+    <aside style="width: 240px; flex: none; border-right: 1px solid var(--ink-4); background: var(--paper-2); padding: 18px 12px;">
+      <div class="label" style="padding: 0 10px 8px;">contents</div>
+      <nav class="col gap-2">
+        {inv.chapters.map(c => (
+          <a
+            class={`toc-link ${c.id === chapter ? 'active' : ''}`}
+            href={`${base}/${c.id === '00' ? '' : c.id + '/'}`}
+          >
+            <span class="num">{c.id}</span>
+            <span>{c.title}</span>
+          </a>
+        ))}
+      </nav>
+      <hr class="rule" style="margin: 16px 8px;" />
+      <div class="label" style="padding: 0 10px 8px;">packages</div>
+      <nav class="col gap-2">
+        {inv.packages.map(p => (
+          <a class="toc-link" href={`${base}/pkg/${p.id.replace(/\//g, '--')}/`}>
+            <span class="num">·</span>
+            <span style="font-family:'JetBrains Mono', monospace; font-size:12px;">{p.id}</span>
+          </a>
+        ))}
+      </nav>
+    </aside>
+
+    <!-- main column -->
+    <main class="fill" style="min-width: 0;">
+      <slot />
+    </main>
+  </div>
+</div>
+
+<CmdK client:idle />
+</body>
+</html>

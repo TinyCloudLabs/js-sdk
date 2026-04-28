@@ -1,0 +1,26 @@
+---
+// src/components/ThemeToggle.astro — small island, vanilla JS, no React
+---
+<button class="btn-ghost" id="theme-toggle" type="button" aria-label="Toggle theme">
+  <span data-icon="night" style="display:none;">☾ night</span>
+  <span data-icon="day" style="display:none;">☀ day</span>
+</button>
+<script is:inline>
+(function () {
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  const sync = () => {
+    const cur = document.documentElement.getAttribute('data-theme') || 'night';
+    btn.querySelector('[data-icon="night"]').style.display = cur === 'night' ? 'inline' : 'none';
+    btn.querySelector('[data-icon="day"]').style.display   = cur === 'day'   ? 'inline' : 'none';
+  };
+  sync();
+  btn.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme') || 'night';
+    const next = cur === 'night' ? 'day' : 'night';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('atlas-theme', next); } catch {}
+    sync();
+  });
+})();
+</script>

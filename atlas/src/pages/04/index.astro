@@ -1,0 +1,255 @@
+---
+import Atlas from '@/layouts/Atlas.astro';
+import { getInventory, getPackage, getCommands, getState } from '@/lib/atlas';
+
+const inv = await getInventory();
+const ch = inv.chapters.find(c => c.id === '04')!;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+const sdkCore     = await getPackage('sdk-core');
+const sdkServices = await getPackage('sdk-services');
+const cli         = await getPackage('cli');
+const webSdk      = await getPackage('web-sdk');
+const nodeSdk     = await getPackage('node-sdk');
+
+const cmds  = await getCommands();
+const kvCmds = (cmds.commands ?? []).filter((c: any) => c.ns === 'tinycloud.kv');
+const state = await getState('session');
+
+const pkgHref = (id: string) => `${base}/pkg/${id.replace(/\//g, '--')}/`;
+
+// IKVService method facts (from packages/sdk-services/src/kv/IKVService.ts).
+const kvMethods = [
+  { name: 'get', sig: 'get<T>(key, opts?) → Result<KVResponse<T>>', why: 'fetch a stored value by key' },
+  { name: 'put', sig: 'put(key, value, opts?) → Result<KVResponse<void>>', why: 'store a value (objects auto-stringified)' },
+  { name: 'list', sig: 'list({prefix?}) → Result<KVListResponse>', why: 'enumerate keys under a prefix' },
+  { name: 'delete', sig: 'delete(key, opts?) → Result<void>', why: 'remove a key' },
+  { name: 'head', sig: 'head(key, opts?) → Result<KVResponse<void>>', why: 'inspect headers without downloading' },
+  { name: 'withPrefix', sig: 'withPrefix(p) → IPrefixedKVService', why: 'scope every op under a path' },
+];
+---
+<Atlas chapter="04" title={ch.title} crumb={`04 · ${ch.title}`}>
+  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
+    <div class="label">chapter 04 · {ch.read} · voice: {ch.voice}</div>
+    <h1 style="margin-top: 14px;">spaces &amp; <span class="squig">KV</span></h1>
+    <p>
+      A space is a unit of ownership. Every byte the SDK writes lives inside
+      one — owned by exactly one DID, identified by a deterministic URI, and
+      gated by a capability the user signed for. The KV API is the simplest
+      way in: a thin, prefix-aware key-value surface over each space. This
+      chapter is a field guide to both — what a space is, how it's named,
+      what hangs off it.
+    </p>
+
+    <h2>anatomy of a space URI</h2>
+    <p>
+      Space IDs are URI-shaped and self-describing. They name the chain, the
+      owner address, and a short label, separated by colons. Because the
+      shape is deterministic, any client that knows your address can compute
+      your public space ID without asking the server.
+    </p>
+
+    <div class="card" style="padding: 22px 24px; margin: 18px 0; font-family: 'JetBrains Mono', monospace;">
+      <div style="font-size: 16px; color: var(--ink); margin-bottom: 12px;">
+        <span style="color: var(--ink-3);">tinycloud:pkh:eip155:</span>
+        <span style="color: var(--accent);">1</span>
+        <span style="color: var(--ink-3);">:</span>
+        <span style="color: var(--accent);">0xd8dA…6045</span>
+        <span style="color: var(--ink-3);">:</span>
+        <span style="color: var(--accent);">public</span>
+      </div>
+      <div class="row gap-16" style="font-size: 11px; color: var(--ink-3); border-top: 1px dashed var(--ink-4); padding-top: 10px;">
+        <div style="flex: 1;">
+          <div class="label" style="margin-bottom: 4px;">scheme</div>
+          <code style="font-size: 12px;">tinycloud:pkh:eip155</code>
+        </div>
+        <div style="flex: 0 0 90px;">
+          <div class="label" style="margin-bottom: 4px;">chainId</div>
+          <code style="font-size: 12px;">1, 10, …</code>
+        </div>
+        <div style="flex: 1;">
+          <div class="label" style="margin-bottom: 4px;">owner address</div>
+          <code style="font-size: 12px;">0x…40 hex chars</code>
+        </div>
+        <div style="flex: 0 0 130px;">
+          <div class="label" style="margin-bottom: 4px;">name</div>
+          <code style="font-size: 12px;">default · public · …</code>
+        </div>
+      </div>
+    </div>
+
+    <p>
+      <code>parseSpaceUri()</code> in
+      <a class="pkg-link" href={pkgHref(sdkCore.id)}>{sdkCore.npm}</a>
+      accepts both the full URI (for delegated spaces) and a short name (for
+      your own). <code>makePublicSpaceId(address, chainId)</code> is the
+      escape hatch that produces the public URI without any session — handy
+      for read-only clients that just want to fetch a user's public profile.
+    </p>
+
+    <h2>owned vs delegated</h2>
+    <p>
+      Every space has exactly one owner DID. You own the space if its
+      address matches your wallet; otherwise you've been delegated access by
+      someone who does. The SDK draws no other distinction — owned and
+      delegated spaces present the same <code>ISpace</code> interface, and
+      <code>SpaceService.list()</code> returns them in one merged array.
+      What differs is provenance: owned spaces are created by you,
+      delegated spaces arrive via a UCAN granted to your session DID.
+    </p>
+
+    <div class="row gap-16" style="margin: 18px 0;">
+      <div class="card tinted" style="padding: 18px 20px; flex: 1;">
+        <div class="label" style="margin-bottom: 6px;">owned</div>
+        <p style="margin: 0; font-size: 14px;">
+          <code>sdk.space('default')</code><br/>
+          Resolves to <code style="font-size: 11px;">tinycloud:pkh:…:&lt;your-addr&gt;:default</code>.
+          Created lazily on first <code>signIn()</code> if
+          <code>autoCreateSpace</code> is on.
+        </p>
+      </div>
+      <div class="card tinted" style="padding: 18px 20px; flex: 1;">
+        <div class="label" style="margin-bottom: 6px;">delegated</div>
+        <p style="margin: 0; font-size: 14px;">
+          <code>sdk.space('tinycloud:pkh:eip155:1:0xabc…:photos')</code><br/>
+          Full URI required. Reachable only because a UCAN in your session's
+          ReCap names this space and an action you're invoking.
+        </p>
+      </div>
+    </div>
+
+    <h2>what hangs off a Space</h2>
+    <p>
+      <code>ISpace</code> is small on purpose — three sub-services and one
+      metadata call. Everything you do with a space goes through one of
+      these.
+    </p>
+
+    <div class="card" style="padding: 0; margin: 18px 0; overflow: hidden;">
+      <div class="row" style="background: var(--paper-3); padding: 8px 14px; border-bottom: 1px solid var(--ink-4); font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em;">
+        <div style="flex: 0 0 150px;">field</div>
+        <div style="flex: 0 0 200px;">type</div>
+        <div style="flex: 1;">what it does</div>
+      </div>
+      <div class="row" style="padding: 9px 14px; border-bottom: 1px solid var(--paper-3); font-size: 13px;">
+        <div style="flex: 0 0 150px; font-family: 'JetBrains Mono', monospace; color: var(--accent);">.kv</div>
+        <div style="flex: 0 0 200px; font-family: 'JetBrains Mono', monospace; color: var(--ink-2); font-size: 12px;">IKVService</div>
+        <div style="flex: 1; font-family: 'Outfit', sans-serif; color: var(--ink-2);">key-value ops, scoped to this space</div>
+      </div>
+      <div class="row" style="padding: 9px 14px; border-bottom: 1px solid var(--paper-3); font-size: 13px; background: var(--paper-2);">
+        <div style="flex: 0 0 150px; font-family: 'JetBrains Mono', monospace; color: var(--accent);">.delegations</div>
+        <div style="flex: 0 0 200px; font-family: 'JetBrains Mono', monospace; color: var(--ink-2); font-size: 12px;">ISpaceScopedDelegations</div>
+        <div style="flex: 1; font-family: 'Outfit', sans-serif; color: var(--ink-2);">grant / list / revoke UCANs in this space</div>
+      </div>
+      <div class="row" style="padding: 9px 14px; border-bottom: 1px solid var(--paper-3); font-size: 13px;">
+        <div style="flex: 0 0 150px; font-family: 'JetBrains Mono', monospace; color: var(--accent);">.sharing</div>
+        <div style="flex: 0 0 200px; font-family: 'JetBrains Mono', monospace; color: var(--ink-2); font-size: 12px;">ISpaceScopedSharing</div>
+        <div style="flex: 1; font-family: 'Outfit', sans-serif; color: var(--ink-2);">portable share links over a path</div>
+      </div>
+      <div class="row" style="padding: 9px 14px; font-size: 13px; background: var(--paper-2);">
+        <div style="flex: 0 0 150px; font-family: 'JetBrains Mono', monospace; color: var(--accent);">.info()</div>
+        <div style="flex: 0 0 200px; font-family: 'JetBrains Mono', monospace; color: var(--ink-2); font-size: 12px;">() → SpaceInfo</div>
+        <div style="flex: 1; font-family: 'Outfit', sans-serif; color: var(--ink-2);">metadata: ownership, created, etc.</div>
+      </div>
+    </div>
+
+    <h2>the KV API itself</h2>
+    <p>
+      KV lives in <a class="pkg-link" href={pkgHref(sdkServices.id)}>{sdkServices.npm}</a>
+      as <code>KVService</code>, declared via <code>IKVService</code>. The
+      shape is tiny — six methods, all returning a <code>Result&lt;T&gt;</code>
+      so failure is a value, not a throw. Every operation runs against the
+      space the service was scoped to; partitioning happens at <em>that</em>
+      level, not inside the service.
+    </p>
+
+    <div class="card" style="padding: 0; margin: 18px 0; overflow: hidden;">
+      <div class="row" style="background: var(--paper-3); padding: 8px 14px; border-bottom: 1px solid var(--ink-4); font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em;">
+        <div style="flex: 0 0 130px;">method</div>
+        <div style="flex: 1;">signature</div>
+        <div style="flex: 0 0 260px;">why</div>
+      </div>
+      {kvMethods.map((row, i) => (
+        <div class="row" style={`padding: 9px 14px; border-bottom: 1px solid var(--paper-3); font-size: 13px; ${i % 2 === 1 ? 'background: var(--paper-2);' : ''}`}>
+          <div style="flex: 0 0 130px; font-family: 'JetBrains Mono', monospace; color: var(--accent);">{row.name}</div>
+          <div style="flex: 1; font-family: 'JetBrains Mono', monospace; color: var(--ink-2); font-size: 12px;">{row.sig}</div>
+          <div style="flex: 0 0 260px; font-family: 'Outfit', sans-serif; color: var(--ink-2);">{row.why}</div>
+        </div>
+      ))}
+    </div>
+
+    <p>
+      <code>withPrefix('/app.example.com')</code> is how the SDK keeps two
+      apps in the same space from stomping each other — every call routes
+      under that path automatically, and a nested <code>withPrefix</code>
+      stacks. The same prefix is what the capability check inspects on the
+      server side.
+    </p>
+
+    <h2>where the capability check lives</h2>
+    <p>
+      KV does not authorize itself. Every call carries an authorization
+      header produced by <code>invoke(session, {'{ space, service, path, action }'})</code>
+      — that header is a UCAN proving the session has the
+      <code>tinycloud.kv/&lt;action&gt;</code> capability on this space at this
+      path. The kernel verifies it; the JS service just hands it along.
+    </p>
+    <p>
+      The set of capabilities a session is allowed to use was decided at
+      <code>signIn()</code>, when <code>prepareSession</code> wrote them
+      into the SIWE+ReCap (chapter <a class="pkg-link" href={`${base}/03/`}>03</a>).
+      The action namespace is uniform across surfaces — the same five verbs
+      appear in the CLI, the web SDK, and the node SDK.
+    </p>
+
+    <div class="card" style="padding: 0; margin: 18px 0; overflow: hidden;">
+      <div class="row" style="background: var(--paper-3); padding: 8px 14px; border-bottom: 1px solid var(--ink-4); font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em;">
+        <div style="flex: 0 0 200px;">capability</div>
+        <div style="flex: 1;">surfaces (cli · web · node)</div>
+      </div>
+      {kvCmds.map((c: any, i: number) => (
+        <div class="row" style={`padding: 9px 14px; border-bottom: 1px solid var(--paper-3); font-size: 13px; ${i % 2 === 1 ? 'background: var(--paper-2);' : ''}`}>
+          <div style="flex: 0 0 200px; font-family: 'JetBrains Mono', monospace; color: var(--accent);">{c.ns}/{c.action}</div>
+          <div style="flex: 1; font-family: 'JetBrains Mono', monospace; color: var(--ink-2); font-size: 12px;">{c.surface ?? '—'}</div>
+        </div>
+      ))}
+    </div>
+
+    <h2>operator surface — tc space</h2>
+    <p>
+      The <a class="pkg-link" href={pkgHref(cli.id)}>{cli.npm}</a> exposes
+      spaces directly. <code>tc space list</code> mirrors
+      <code>SpaceService.list()</code>; <code>tc space create &lt;name&gt;</code>
+      runs the same create-space flow the web SDK runs lazily; <code>tc
+      space info [id]</code> hits <code>.info()</code>; <code>tc space
+      switch &lt;name&gt;</code> rotates the active space in your CLI
+      profile. The point of having a CLI surface is that everything you can
+      do from a browser session is also a scriptable command.
+    </p>
+
+    <div class="callout" style="position: relative; max-width: none; margin: 18px 0;">
+      Heads-up — older docs called these "orbits" or "namespaces". The
+      runtime types are all <code>space</code> now; if you find a stray
+      <code>orbit</code> in code, that's drift worth filing.
+    </div>
+
+    <h3>data this chapter reads</h3>
+    <ul class="col gap-4">
+      <li class="mono">/atlas/data/inventory.json</li>
+      <li class="mono">/atlas/data/cmds.json</li>
+      <li class="mono">/atlas/data/state/session.json</li>
+      <li class="mono">/atlas/data/pkg/sdk-core.json</li>
+      <li class="mono">/atlas/data/pkg/sdk-services.json</li>
+      <li class="mono">/atlas/data/pkg/cli.json</li>
+    </ul>
+
+    <h3>where to read next</h3>
+    <p>
+      Chapter <a class="pkg-link" href={`${base}/05/`}>05</a> opens the
+      delegation system properly — how UCAN chains are minted, how ReCap
+      subset-checks decide whether a sub-delegation needs a fresh wallet
+      prompt, and how a delegated space ends up reachable in
+      <code>SpaceService.list()</code>.
+    </p>
+  </article>
+</Atlas>

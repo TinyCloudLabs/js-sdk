@@ -5,6 +5,7 @@ build
 .env.*
 .sessions
 /target
+/docs/atlas/
 .npmrc
 .turbo
 .svelte-kit

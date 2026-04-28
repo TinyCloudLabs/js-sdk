@@ -1,0 +1,47 @@
+{
+  "id": "session",
+  "states": [
+    "init",
+    "connected",
+    "authenticated",
+    "session_active",
+    "expired"
+  ],
+  "transitions": [
+    [
+      "init",
+      "connected",
+      "connect(wallet|privKey)"
+    ],
+    [
+      "connected",
+      "authenticated",
+      "signIn() · SIWE"
+    ],
+    [
+      "authenticated",
+      "session_active",
+      "session token bound"
+    ],
+    [
+      "session_active",
+      "init",
+      "signOut()"
+    ],
+    [
+      "session_active",
+      "expired",
+      "TTL elapsed"
+    ],
+    [
+      "expired",
+      "connected",
+      "rotate"
+    ],
+    [
+      "connected",
+      "init",
+      "disconnect()"
+    ]
+  ]
+}
