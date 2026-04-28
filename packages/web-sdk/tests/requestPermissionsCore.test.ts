@@ -24,7 +24,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const baseManifest: Manifest = {
-  id: "com.test.app",
+  app_id: "com.test.app",
   name: "Test App",
   icon: "https://example.com/icon.png",
   permissions: [
@@ -167,13 +167,13 @@ describe("requestPermissionsCore: approve", () => {
       ...additional,
     ]);
     // Other manifest fields pass through unchanged.
-    expect(writtenManifest?.id).toBe(baseManifest.id);
+    expect(writtenManifest?.app_id).toBe(baseManifest.app_id);
     expect(writtenManifest?.name).toBe(baseManifest.name);
   });
 
   test("handles a manifest with no pre-existing permissions array", async () => {
     const manifestNoPerms: Manifest = {
-      id: "com.test.app",
+      app_id: "com.test.app",
       name: "Test",
     };
     let written: Manifest | undefined;

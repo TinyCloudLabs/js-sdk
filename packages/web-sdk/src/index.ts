@@ -201,21 +201,30 @@ export {
   // Manifest shapes — PermissionEntry is what callers pass to delegateTo.
   type Manifest,
   type ManifestDefaults,
-  type ManifestDelegation,
+  type ComposeManifestOptions,
+  type ComposedManifestRequest,
+  type ManifestRegistryRecord,
   type PermissionEntry,
   type ResolvedCapabilities,
   type ResolvedDelegate,
   type ResourceCapability,
+  type SpaceAbilitiesMap,
+  ACCOUNT_REGISTRY_PATH,
+  ACCOUNT_REGISTRY_SPACE,
+  DEFAULT_MANIFEST_SPACE,
+  DEFAULT_MANIFEST_VERSION,
   // Errors raised by delegateTo / requestPermissions.
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,
   // Resolution + subset helpers for apps that want to compose manifests
   // at runtime.
+  composeManifestRequest,
   resolveManifest,
   validateManifest,
   loadManifest,
   isCapabilitySubset,
   expandActionShortNames,
   parseExpiry,
+  resourceCapabilitiesToSpaceAbilitiesMap,
 } from '@tinycloud/sdk-core';

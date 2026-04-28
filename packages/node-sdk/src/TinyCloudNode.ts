@@ -76,6 +76,9 @@ import {
   CreateDelegationWasmResult,
   UnsupportedFeatureError,
   makePublicSpaceId,
+  ACCOUNT_REGISTRY_SPACE,
+  type ComposedManifestRequest,
+  type ResolvedDelegate,
   // Capability-chain delegation
   type PermissionEntry,
   PermissionNotInManifestError,
@@ -159,7 +162,11 @@ export interface TinyCloudNodeConfig {
    * backwards compatibility with callers that pre-date the manifest
    * flow.
    */
-  manifest?: Manifest;
+  manifest?: Manifest | Manifest[];
+  /** Pre-composed manifest request. Takes precedence over `manifest`. */
+  capabilityRequest?: ComposedManifestRequest;
+  /** Include implicit account registry permissions when composing `manifest`. Default true. */
+  includeAccountRegistryPermissions?: boolean;
 }
 
 /**
@@ -395,6 +402,8 @@ export class TinyCloudNode {
       nonce: config.nonce,
       siweConfig: config.siweConfig,
       manifest: config.manifest,
+      capabilityRequest: config.capabilityRequest,
+      includeAccountRegistryPermissions: config.includeAccountRegistryPermissions,
     });
 
     this.tc = new TinyCloud(this.auth, {
@@ -409,7 +418,7 @@ export class TinyCloudNode {
    * layer (e.g. TinyCloudWeb.setManifest) so the manifest is kept
    * in sync across the stack.
    */
-  setManifest(manifest: Manifest | undefined): void {
+  setManifest(manifest: Manifest | Manifest[] | undefined): void {
     if (!this.auth) {
       // Session-only mode has no auth handler, so there's nothing to
       // update. The caller almost certainly wanted wallet mode — fail
@@ -418,15 +427,32 @@ export class TinyCloudNode {
         "setManifest requires wallet mode. Provide a signer or privateKey in the TinyCloudNode config.",
       );
     }
+    this.config.manifest = manifest;
+    this.config.capabilityRequest = undefined;
     this.auth.setManifest(manifest);
+  }
+
+  setCapabilityRequest(request: ComposedManifestRequest | undefined): void {
+    if (!this.auth) {
+      throw new Error(
+        "setCapabilityRequest requires wallet mode. Provide a signer or privateKey in the TinyCloudNode config.",
+      );
+    }
+    this.config.capabilityRequest = request;
+    this.config.manifest = request?.manifests;
+    this.auth.setCapabilityRequest(request);
   }
 
   /**
    * Return the manifest currently installed on the auth handler,
    * or `undefined` if none is set.
    */
-  get manifest(): Manifest | undefined {
+  get manifest(): Manifest | Manifest[] | undefined {
     return this.auth?.manifest;
+  }
+
+  get capabilityRequest(): ComposedManifestRequest | undefined {
+    return this.auth?.capabilityRequest;
   }
 
   /**
@@ -519,7 +545,43 @@ export class TinyCloudNode {
     // Initialize service context with session
     this.initializeServices();
 
+    await this.writeManifestRegistryRecords();
+
     this.notificationHandler.success("Successfully signed in");
+  }
+
+  private ownedSpaceId(name: string): string {
+    if (!this._address) {
+      throw new Error("Cannot resolve owned space before sign-in");
+    }
+    return this.wasmBindings.makeSpaceId(this._address, this._chainId, name);
+  }
+
+  private async writeManifestRegistryRecords(): Promise<void> {
+    const request = this.capabilityRequest;
+    if (!request || request.registryRecords.length === 0) {
+      return;
+    }
+    if (!this.auth || !this.signer) {
+      throw new Error("Manifest registry write requires wallet mode");
+    }
+
+    const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
+    await (this.auth as NodeUserAuthorization).hostOwnedSpace(accountSpaceId);
+
+    const accountKV = this.spaces.get(accountSpaceId).kv;
+    for (const record of request.registryRecords) {
+      const result = await accountKV.put(record.key, {
+        app_id: record.app_id,
+        manifests: record.manifests,
+        updated_at: new Date().toISOString(),
+      });
+      if (!result.ok) {
+        throw new Error(
+          `Failed to write manifest registry record ${record.key}: ${result.error.message}`,
+        );
+      }
+    }
   }
 
   /**
@@ -689,6 +751,9 @@ export class TinyCloudNode {
       spaceCreationHandler: this.config.spaceCreationHandler,
       nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
+      manifest: this.config.manifest,
+      capabilityRequest: this.config.capabilityRequest,
+      includeAccountRegistryPermissions: this.config.includeAccountRegistryPermissions,
     });
 
     // Create TinyCloud instance
@@ -737,6 +802,9 @@ export class TinyCloudNode {
       spaceCreationHandler: this.config.spaceCreationHandler,
       nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
+      manifest: this.config.manifest,
+      capabilityRequest: this.config.capabilityRequest,
+      includeAccountRegistryPermissions: this.config.includeAccountRegistryPermissions,
     });
 
     this.tc = new TinyCloud(this.auth, {
@@ -1783,6 +1851,49 @@ export class TinyCloudNode {
   }
 
   /**
+   * Materialize one manifest-declared delegation using the current session key.
+   * Delivery is intentionally out of band; callers decide how to transmit the
+   * returned UCAN to the delegate.
+   */
+  async materializeDelegation(
+    did: string,
+    request: ComposedManifestRequest | undefined = this.capabilityRequest,
+  ): Promise<DelegateToResult & { target: ResolvedDelegate }> {
+    if (!request) {
+      throw new Error(
+        "materializeDelegation requires a composed manifest request",
+      );
+    }
+    const target = request.delegationTargets.find((entry) => entry.did === did);
+    if (!target) {
+      throw new Error(`No manifest delegation target found for DID ${did}`);
+    }
+    const result = await this.delegateTo(target.did, target.permissions, {
+      expiry: target.expiryMs,
+    });
+    return { ...result, target };
+  }
+
+  /**
+   * Materialize every delegation target declared by the composed manifest
+   * request. This does not deliver the delegations anywhere.
+   */
+  async materializeDelegations(
+    request: ComposedManifestRequest | undefined = this.capabilityRequest,
+  ): Promise<Array<DelegateToResult & { target: ResolvedDelegate }>> {
+    if (!request) {
+      throw new Error(
+        "materializeDelegations requires a composed manifest request",
+      );
+    }
+    const out: Array<DelegateToResult & { target: ResolvedDelegate }> = [];
+    for (const target of request.delegationTargets) {
+      out.push(await this.materializeDelegation(target.did, request));
+    }
+    return out;
+  }
+
+  /**
    * Issue a delegation via the session-key UCAN WASM path.
    *
    * The caller has already verified every entry is derivable from
@@ -1810,13 +1921,11 @@ export class TinyCloudNode {
     }
 
     // Translate the manifest `space` field into the server-side
-    // spaceId. "default" resolves to the session's primary space;
-    // any other value is trusted as a raw space URI (matches how
-    // the rest of the node-sdk treats `spaceIdOverride`).
+    // spaceId. Full `tinycloud:` URIs pass through; short names are
+    // resolved against the current wallet.
     const resolvedSpaces = new Set<string>();
     for (const entry of entries) {
-      const spaceId =
-        entry.space === "default" ? session.spaceId : entry.space;
+      const spaceId = this.resolvePermissionSpace(entry.space, session);
       resolvedSpaces.add(spaceId);
     }
     if (resolvedSpaces.size !== 1) {
@@ -1924,6 +2033,26 @@ export class TinyCloudNode {
     };
   }
 
+  private resolvePermissionSpace(
+    space: string | undefined,
+    session: TinyCloudSession,
+  ): string {
+    if (space === undefined) {
+      return this.wasmBindings.makeSpaceId(
+        session.address,
+        session.chainId,
+        "applications",
+      );
+    }
+    if (space === "default") {
+      return session.spaceId;
+    }
+    if (space.startsWith("tinycloud:")) {
+      return space;
+    }
+    return this.wasmBindings.makeSpaceId(session.address, session.chainId, space);
+  }
+
   /**
    * Issue a delegation via the legacy wallet-signed SIWE path for a single
    * {@link PermissionEntry}. Shares the implementation with the public
@@ -1938,7 +2067,11 @@ export class TinyCloudNode {
     entry: PermissionEntry,
     expirationTime: Date,
   ): Promise<PortableDelegation> {
-    const spaceIdOverride = entry.space === "default" ? undefined : entry.space;
+    const session = this.auth?.tinyCloudSession;
+    const spaceIdOverride =
+      session === undefined || entry.space === "default"
+        ? undefined
+        : this.resolvePermissionSpace(entry.space, session);
     return this.createDelegationWalletPath({
       path: entry.path,
       actions: entry.actions,
@@ -2456,4 +2589,3 @@ export class TinyCloudNode {
     };
   }
 }
-

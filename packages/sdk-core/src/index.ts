@@ -294,22 +294,30 @@ export {
   // Types
   type Manifest,
   type ManifestDefaults,
-  type ManifestDelegation,
+  type ComposeManifestOptions,
+  type ComposedManifestRequest,
+  type ManifestRegistryRecord,
   type PermissionEntry,
   type ResolvedCapabilities,
   type ResolvedDelegate,
   type ResourceCapability,
+  type SpaceAbilitiesMap,
   // Errors
   ManifestValidationError,
   // Constants
+  ACCOUNT_REGISTRY_PATH,
+  ACCOUNT_REGISTRY_SPACE,
   DEFAULT_DEFAULTS,
   DEFAULT_EXPIRY,
+  DEFAULT_MANIFEST_SPACE,
+  DEFAULT_MANIFEST_VERSION,
   SERVICE_LONG_TO_SHORT,
   SERVICE_SHORT_TO_LONG,
   // Types
   type AbilitiesMap,
   // Functions
   applyPrefix,
+  composeManifestRequest,
   expandActionShortNames,
   loadManifest,
   manifestAbilitiesUnion,
@@ -317,6 +325,7 @@ export {
   parseExpiry,
   resolveManifest,
   resourceCapabilitiesToAbilitiesMap,
+  resourceCapabilitiesToSpaceAbilitiesMap,
   validateManifest,
 } from "./manifest";
 

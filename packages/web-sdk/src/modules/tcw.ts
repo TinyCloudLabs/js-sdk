@@ -40,6 +40,8 @@ import {
   ServiceSession,
   ISpaceCreationHandler,
   type Manifest,
+  type ComposedManifestRequest,
+  type ResolvedDelegate,
   type PermissionEntry,
   SignInOptions,
 } from "@tinycloud/sdk-core";
@@ -120,7 +122,11 @@ export interface Config extends ClientConfig {
    * {@link TinyCloudNode} so `signIn()` drives its SIWE recap from
    * it directly.
    */
-  manifest?: Manifest;
+  manifest?: Manifest | Manifest[];
+  /** Pre-composed manifest request. Takes precedence over `manifest`. */
+  capabilityRequest?: ComposedManifestRequest;
+  /** Include implicit account registry permissions when composing `manifest`. Default true. */
+  includeAccountRegistryPermissions?: boolean;
 }
 
 /**
@@ -219,7 +225,8 @@ export class TinyCloudWeb {
    * any post-construction updates onto the node so the next sign-in
    * picks them up.
    */
-  private _manifest?: Manifest;
+  private _manifest?: Manifest | Manifest[];
+  private _capabilityRequest?: ComposedManifestRequest;
 
   /**
    * Test hook — override the modal shower and sign-in function used by
@@ -242,6 +249,7 @@ export class TinyCloudWeb {
   constructor(config: Config = {}) {
     this.config = config;
     this._manifest = config.manifest;
+    this._capabilityRequest = config.capabilityRequest;
 
     // Initialize browser notification handler
     this.notificationHandler = new BrowserNotificationHandler(config.notifications);
@@ -283,6 +291,9 @@ export class TinyCloudWeb {
       // where `resolveManifest` + `manifestAbilitiesUnion` produce the
       // actual `abilities` map passed to `prepareSession`.
       manifest: this._manifest,
+      capabilityRequest: this._capabilityRequest,
+      includeAccountRegistryPermissions:
+        this.config.includeAccountRegistryPermissions,
     };
 
     // Wire up signer if available
@@ -459,13 +470,30 @@ export class TinyCloudWeb {
     return node.delegateTo(did, permissions, options);
   };
 
+  materializeDelegation = async (
+    did: string,
+    request?: ComposedManifestRequest,
+  ): Promise<DelegateToResult & { target: ResolvedDelegate }> => {
+    const node = await this.ensureNode();
+    return node.materializeDelegation(did, request);
+  };
+
+  materializeDelegations = async (
+    request?: ComposedManifestRequest,
+  ): Promise<Array<DelegateToResult & { target: ResolvedDelegate }>> => {
+    const node = await this.ensureNode();
+    return node.materializeDelegations(request);
+  };
+
   /**
    * Get the stored manifest (if any). Returns a shallow clone so callers
    * can't accidentally mutate our internal state.
    */
-  getManifest(): Manifest | undefined {
+  getManifest(): Manifest | Manifest[] | undefined {
     if (this._manifest === undefined) return undefined;
-    return { ...this._manifest };
+    return Array.isArray(this._manifest)
+      ? this._manifest.map((manifest) => ({ ...manifest }))
+      : { ...this._manifest };
   }
 
   /**
@@ -479,13 +507,22 @@ export class TinyCloudWeb {
    * yet (pre-init), the manifest is stored locally and forwarded
    * later inside `_init`.
    */
-  setManifest(manifest: Manifest): void {
+  setManifest(manifest: Manifest | Manifest[]): void {
     this._manifest = manifest;
+    this._capabilityRequest = undefined;
     // Forward eagerly if the node is already up. Pre-init, the
     // manifest rides into the constructor via `nodeConfig.manifest`
     // inside `_init`, which reads `this._manifest` at that time.
     if (this._node) {
       this._node.setManifest(manifest);
+    }
+  }
+
+  setCapabilityRequest(request: ComposedManifestRequest): void {
+    this._capabilityRequest = request;
+    this._manifest = request.manifests;
+    if (this._node) {
+      this._node.setCapabilityRequest(request);
     }
   }
 
@@ -512,7 +549,9 @@ export class TinyCloudWeb {
     // is unambiguous.
     validateAdditionalPermissions(additional);
 
-    const manifest = this._manifest;
+    const manifest = Array.isArray(this._manifest)
+      ? this._manifest[0]
+      : this._manifest;
     // Escalation requires a stored manifest because we need to
     // compose the expanded permission set from the current app's
     // declared permissions. Apps that signed in without a manifest
