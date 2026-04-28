@@ -221,14 +221,17 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     });
 
     const manifest: Manifest = {
-      id: "com.listen.app",
+      app_id: "com.listen.app",
       name: "Listen",
       // Standard tier defaults: kv/sql/capabilities under the
       // manifest prefix. No DuckDB. No hooks.
       defaults: true,
     };
 
-    const node = makeNodeWithSigner(wasm, { manifest });
+    const node = makeNodeWithSigner(wasm, {
+      manifest,
+      includeAccountRegistryPermissions: false,
+    });
     stubAuthNetworkCalls(node);
 
     const auth = (node as any).auth;
@@ -240,6 +243,9 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
 
     expect(prepareSessionSpy).toHaveBeenCalled();
     const cfg = (prepareSessionSpy as any).mock.calls[0][0];
+    expect(cfg.spaceId).toBe(
+      "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:applications",
+    );
 
     // Manifest standard tier produces kv + sql + capabilities entries,
     // each scoped to the manifest prefix path "com.listen.app/".
@@ -266,7 +272,48 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     });
   });
 
-  test("manifest with delegations → recap unions app caps + delegation caps", async () => {
+  test("manifest sign-in includes account registry permission by default", async () => {
+    const prepareSessionSpy = mock((cfg: any) => ({
+      siwe: "fake-siwe",
+      jwk: cfg.jwk,
+      spaceId: cfg.spaceId,
+      verificationMethod: "did:key:z6MkTestSession",
+    }));
+    const wasm = makeFakeWasmBindings({
+      prepareSession: prepareSessionSpy as any,
+    });
+
+    const node = makeNodeWithSigner(wasm, {
+      manifest: {
+        app_id: "com.listen.app",
+        name: "Listen",
+        defaults: false,
+      },
+    });
+    stubAuthNetworkCalls(node);
+
+    const auth = (node as any).auth;
+    try {
+      await auth.signIn();
+    } catch {
+      /* network failure expected */
+    }
+
+    const cfg = (prepareSessionSpy as any).mock.calls[0][0];
+    expect(cfg.spaceAbilities).toEqual({
+      "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account": {
+        kv: {
+          "applications/": [
+            "tinycloud.kv/get",
+            "tinycloud.kv/put",
+            "tinycloud.kv/list",
+          ],
+        },
+      },
+    });
+  });
+
+  test("multiple manifests → recap unions app caps + delegation caps", async () => {
     // This is the headline test for the listen use case: an app
     // declares its own permissions AND a backend delegation target,
     // and the resulting SIWE recap covers both so the session key
@@ -282,37 +329,37 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       prepareSession: prepareSessionSpy as any,
     });
 
-    const manifest: Manifest = {
-      id: "com.listen.app",
+    const appManifest: Manifest = {
+      app_id: "com.listen.app",
       name: "Listen",
       // App-side: only KV (turn off the broader defaults table).
       defaults: false,
       permissions: [
         {
           service: "tinycloud.kv",
-          space: "default",
           path: "/",
           actions: ["get", "put"],
         },
       ],
-      // Backend delegation: SQL access on a specific db file.
-      delegations: [
+    };
+    const backendManifest: Manifest = {
+      app_id: "com.listen.app",
+      name: "Listen Backend",
+      did: "did:pkh:eip155:1:0xBACKEND00000000000000000000000000000000",
+      defaults: false,
+      permissions: [
         {
-          to: "did:pkh:eip155:1:0xBACKEND00000000000000000000000000000000",
-          name: "Listen Backend",
-          permissions: [
-            {
-              service: "tinycloud.sql",
-              space: "default",
-              path: "data.sqlite",
-              actions: ["read", "write"],
-            },
-          ],
+          service: "tinycloud.sql",
+          path: "data.sqlite",
+          actions: ["read", "write"],
         },
       ],
     };
 
-    const node = makeNodeWithSigner(wasm, { manifest });
+    const node = makeNodeWithSigner(wasm, {
+      manifest: [appManifest, backendManifest],
+      includeAccountRegistryPermissions: false,
+    });
     stubAuthNetworkCalls(node);
 
     const auth = (node as any).auth;
@@ -360,7 +407,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     stubAuthNetworkCalls(node);
 
     node.setManifest({
-      id: "com.demo.app",
+      app_id: "com.demo.app",
       name: "Demo",
       defaults: false,
       permissions: [

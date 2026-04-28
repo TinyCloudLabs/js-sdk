@@ -11,6 +11,7 @@ import {
   DEFAULT_EXPIRY,
   ManifestValidationError,
   applyPrefix,
+  composeManifestRequest,
   expandActionShortNames,
   normalizeDefaults,
   parseExpiry,
@@ -134,7 +135,7 @@ describe("normalizeDefaults", () => {
 
 describe("validateManifest", () => {
   it("accepts a minimum-shape manifest", () => {
-    const m: Manifest = { id: "com.listen.app", name: "Listen" };
+    const m: Manifest = { app_id: "com.listen.app", name: "Listen" };
     expect(() => validateManifest(m)).not.toThrow();
   });
 
@@ -145,21 +146,21 @@ describe("validateManifest", () => {
   });
 
   it("throws on missing name", () => {
-    expect(() => validateManifest({ id: "com.listen.app" })).toThrow(
+    expect(() => validateManifest({ app_id: "com.listen.app" })).toThrow(
       ManifestValidationError
     );
   });
 
   it("throws on invalid top-level expiry", () => {
     expect(() =>
-      validateManifest({ id: "a.b.c", name: "x", expiry: "forever" })
+      validateManifest({ app_id: "a.b.c", name: "x", expiry: "forever" })
     ).toThrow(ManifestValidationError);
   });
 
   it("throws on permission entry with empty actions", () => {
     expect(() =>
       validateManifest({
-        id: "a.b.c",
+        app_id: "a.b.c",
         name: "x",
         permissions: [
           { service: "tinycloud.kv", space: "default", path: "/", actions: [] },
@@ -168,12 +169,12 @@ describe("validateManifest", () => {
     ).toThrow(ManifestValidationError);
   });
 
-  it("throws on delegation with missing `to`", () => {
+  it("throws on unsupported manifest version", () => {
     expect(() =>
       validateManifest({
-        id: "a.b.c",
+        manifest_version: 2,
+        app_id: "a.b.c",
         name: "x",
-        delegations: [{ permissions: [] }] as unknown,
       } as Manifest)
     ).toThrow(ManifestValidationError);
   });
@@ -184,10 +185,10 @@ describe("validateManifest", () => {
 // ---------------------------------------------------------------------------
 
 describe("resolveManifest — minimum manifest with defaults=true", () => {
-  const resolved = resolveManifest({ id: "com.listen.app", name: "Listen" });
+  const resolved = resolveManifest({ app_id: "com.listen.app", name: "Listen" });
 
   it("copies the id", () => {
-    expect(resolved.id).toBe("com.listen.app");
+    expect(resolved.app_id).toBe("com.listen.app");
   });
 
   it("defaults expiry to 30 days", () => {
@@ -196,6 +197,12 @@ describe("resolveManifest — minimum manifest with defaults=true", () => {
 
   it("defaults includePublicSpace to true", () => {
     expect(resolved.includePublicSpace).toBe(true);
+  });
+
+  it("defaults space to applications", () => {
+    expect(new Set(resolved.resources.map((r) => r.space))).toEqual(
+      new Set(["applications"])
+    );
   });
 
   it("includes the three standard default entries (kv, sql, capabilities)", () => {
@@ -235,7 +242,7 @@ describe("resolveManifest — minimum manifest with defaults=true", () => {
 describe("resolveManifest — defaults tiers", () => {
   it("false produces no default resources", () => {
     const resolved = resolveManifest({
-      id: "a.b.c",
+      app_id: "a.b.c",
       name: "x",
       defaults: false,
     });
@@ -244,7 +251,7 @@ describe("resolveManifest — defaults tiers", () => {
 
   it("admin includes sql/ddl and capabilities/admin", () => {
     const resolved = resolveManifest({
-      id: "a.b.c",
+      app_id: "a.b.c",
       name: "x",
       defaults: "admin",
     });
@@ -262,7 +269,7 @@ describe("resolveManifest — defaults tiers", () => {
 
   it("all includes DuckDB", () => {
     const resolved = resolveManifest({
-      id: "a.b.c",
+      app_id: "a.b.c",
       name: "x",
       defaults: "all",
     });
@@ -278,7 +285,7 @@ describe("resolveManifest — defaults tiers", () => {
 
   it("unknown defaults string silently falls back to true without throwing", () => {
     const resolved = resolveManifest({
-      id: "a.b.c",
+      app_id: "a.b.c",
       name: "x",
       defaults: "super-admin" as unknown as Manifest["defaults"],
     });
@@ -295,7 +302,7 @@ describe("resolveManifest — defaults tiers", () => {
 describe("resolveManifest — prefix semantics", () => {
   it("skipPrefix: true leaves the path untouched", () => {
     const resolved = resolveManifest({
-      id: "com.listen.app",
+      app_id: "com.listen.app",
       name: "x",
       defaults: false,
       permissions: [
@@ -313,7 +320,7 @@ describe("resolveManifest — prefix semantics", () => {
 
   it('prefix: "" disables prefix application globally', () => {
     const resolved = resolveManifest({
-      id: "com.listen.app",
+      app_id: "com.listen.app",
       name: "x",
       prefix: "",
       defaults: false,
@@ -331,7 +338,7 @@ describe("resolveManifest — prefix semantics", () => {
 
   it("explicit prefix overrides the id", () => {
     const resolved = resolveManifest({
-      id: "com.listen.app",
+      app_id: "com.listen.app",
       name: "x",
       prefix: "other.prefix",
       defaults: false,
@@ -347,53 +354,41 @@ describe("resolveManifest — prefix semantics", () => {
     expect(resolved.resources[0]?.path).toBe("other.prefix/data/");
   });
 
-  it("delegations inherit prefix just like top-level permissions", () => {
+  it("a manifest with did becomes a materializable delegate target", () => {
     const resolved = resolveManifest({
-      id: "com.listen.app",
+      app_id: "com.listen.app",
       name: "x",
+      did: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
       defaults: false,
-      delegations: [
+      permissions: [
         {
-          to: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
-          permissions: [
-            {
-              service: "tinycloud.sql",
-              space: "default",
-              path: "data.sqlite",
-              actions: ["read"],
-            },
-          ],
+          service: "tinycloud.sql",
+          path: "data.sqlite",
+          actions: ["read"],
         },
       ],
     });
     expect(resolved.additionalDelegates).toHaveLength(1);
     const delegate = resolved.additionalDelegates[0]!;
     expect(delegate.permissions[0]?.path).toBe("com.listen.app/data.sqlite");
+    expect(delegate.permissions[0]?.space).toBe("applications");
   });
 
-  it("delegations honor skipPrefix on individual permission entries", () => {
+  it("permissions honor skipPrefix on individual entries", () => {
     const resolved = resolveManifest({
-      id: "com.listen.app",
+      app_id: "com.listen.app",
       name: "x",
       defaults: false,
-      delegations: [
+      permissions: [
         {
-          to: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
-          permissions: [
-            {
-              service: "tinycloud.kv",
-              space: "default",
-              path: "shared/",
-              actions: ["get"],
-              skipPrefix: true,
-            },
-          ],
+          service: "tinycloud.kv",
+          path: "shared/",
+          actions: ["get"],
+          skipPrefix: true,
         },
       ],
     });
-    expect(resolved.additionalDelegates[0]?.permissions[0]?.path).toBe(
-      "shared/"
-    );
+    expect(resolved.resources[0]?.path).toBe("shared/");
   });
 });
 
@@ -404,7 +399,7 @@ describe("resolveManifest — prefix semantics", () => {
 describe("resolveManifest — expiry inheritance", () => {
   it("uses manifest expiry as the session default", () => {
     const resolved = resolveManifest({
-      id: "a.b.c",
+      app_id: "a.b.c",
       name: "x",
       expiry: "7d",
       defaults: false,
@@ -414,7 +409,7 @@ describe("resolveManifest — expiry inheritance", () => {
 
   it("per-permission expiry overrides manifest expiry", () => {
     const resolved = resolveManifest({
-      id: "a.b.c",
+      app_id: "a.b.c",
       name: "x",
       expiry: "7d",
       defaults: false,
@@ -431,24 +426,18 @@ describe("resolveManifest — expiry inheritance", () => {
     expect(resolved.resources[0]?.expiryMs).toBe(parseExpiry("1h"));
   });
 
-  it("delegation expiry overrides manifest expiry and is inherited by its permissions", () => {
+  it("manifest expiry is inherited by its delegate target", () => {
     const resolved = resolveManifest({
-      id: "a.b.c",
+      app_id: "a.b.c",
       name: "x",
-      expiry: "30d",
+      did: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+      expiry: "1h",
       defaults: false,
-      delegations: [
+      permissions: [
         {
-          to: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
-          expiry: "1h",
-          permissions: [
-            {
-              service: "tinycloud.kv",
-              space: "default",
-              path: "/",
-              actions: ["get"],
-            },
-          ],
+          service: "tinycloud.kv",
+          path: "/",
+          actions: ["get"],
         },
       ],
     });
@@ -464,51 +453,82 @@ describe("resolveManifest — expiry inheritance", () => {
 describe("resolveManifest — end-to-end composition", () => {
   it("matches the spec composition example", () => {
     const appManifest: Manifest = {
-      id: "com.listen.app",
+      app_id: "com.listen.app",
       name: "Listen",
       defaults: false,
       permissions: [
         {
           service: "tinycloud.sql",
-          space: "default",
           path: "data.sqlite",
           actions: ["read", "write"],
         },
       ],
     };
-    const composed: Manifest = {
-      ...appManifest,
-      delegations: [
+    const backendManifest: Manifest = {
+      app_id: "com.listen.app",
+      name: "backend",
+      did: "did:pkh:eip155:1:0x000000000000000000000000000000000000dead",
+      expiry: "7d",
+      defaults: false,
+      permissions: [
         {
-          to: "did:pkh:eip155:1:0x000000000000000000000000000000000000dead",
-          name: "backend",
-          expiry: "7d",
-          permissions: [
-            {
-              service: "tinycloud.sql",
-              space: "default",
-              path: "data.sqlite",
-              actions: ["read", "write"],
-            },
-          ],
+          service: "tinycloud.sql",
+          path: "data.sqlite",
+          actions: ["read", "write"],
         },
       ],
     };
 
-    const resolved = resolveManifest(composed);
-    expect(resolved.resources).toHaveLength(1);
-    expect(resolved.resources[0]?.path).toBe("com.listen.app/data.sqlite");
+    const request = composeManifestRequest([appManifest, backendManifest]);
+    expect(request.resources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          service: "tinycloud.sql",
+          space: "applications",
+          path: "com.listen.app/data.sqlite",
+          actions: ["tinycloud.sql/read", "tinycloud.sql/write"],
+        }),
+        expect.objectContaining({
+          service: "tinycloud.kv",
+          space: "account",
+          path: "applications/",
+          actions: [
+            "tinycloud.kv/get",
+            "tinycloud.kv/put",
+            "tinycloud.kv/list",
+          ],
+        }),
+      ])
+    );
 
-    expect(resolved.additionalDelegates).toHaveLength(1);
-    const delegate = resolved.additionalDelegates[0]!;
+    expect(request.delegationTargets).toHaveLength(1);
+    const delegate = request.delegationTargets[0]!;
     expect(delegate.did).toBe(
       "did:pkh:eip155:1:0x000000000000000000000000000000000000dead"
     );
     expect(delegate.expiryMs).toBe(parseExpiry("7d"));
     expect(delegate.permissions[0]?.path).toBe("com.listen.app/data.sqlite");
+    expect(delegate.permissions[0]?.space).toBe("applications");
     expect(delegate.permissions[0]?.actions).toEqual([
       "tinycloud.sql/read",
       "tinycloud.sql/write",
     ]);
+    expect(request.registryRecords).toEqual([
+      {
+        key: "applications/com.listen.app",
+        app_id: "com.listen.app",
+        manifests: [appManifest, backendManifest],
+      },
+    ]);
+  });
+
+  it("can omit implicit account registry permissions", () => {
+    const request = composeManifestRequest(
+      [{ app_id: "com.listen.app", name: "Listen", defaults: false }],
+      { includeAccountRegistryPermissions: false }
+    );
+
+    expect(request.resources.some((r) => r.space === "account")).toBe(false);
+    expect(request.registryRecords).toEqual([]);
   });
 });

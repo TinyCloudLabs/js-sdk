@@ -26,8 +26,8 @@ js-sys = "0.3.59"
 # tinycloud-sdk-rs = { path = "../../../tinycloud-node/tinycloud-sdk-rs" }
 # tinycloud-sdk-wasm = { path = "../../../tinycloud-node/tinycloud-sdk-wasm" }
 # For release, update rev after pushing tinycloud-node changes:
-tinycloud-sdk-rs = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", rev = "6f6fc8602eb94089c933bdab88a19e5ea6c92fd8" }
-tinycloud-sdk-wasm = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", rev = "6f6fc8602eb94089c933bdab88a19e5ea6c92fd8" }
+tinycloud-sdk-rs = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", rev = "20d08e8d4affeb55e1654b638925bbf2ed21ab30" }
+tinycloud-sdk-wasm = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", rev = "20d08e8d4affeb55e1654b638925bbf2ed21ab30" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.83"
 serde-wasm-bindgen = "0.6.5"

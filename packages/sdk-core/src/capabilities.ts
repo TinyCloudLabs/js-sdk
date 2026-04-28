@@ -15,6 +15,7 @@
  */
 
 import {
+  DEFAULT_MANIFEST_SPACE,
   type PermissionEntry,
   SERVICE_SHORT_TO_LONG,
   expandActionShortNames,
@@ -155,7 +156,10 @@ function canonicalizeEntryMatches(
   // Normalize both sides so callers passing short names (`"default"`) match
   // recap-parsed full URIs (`"tinycloud:pkh:eip155:1:0xd559...:default"`) and
   // vice versa. Idempotent for short names.
-  if (normalizeSpace(requested.space) !== normalizeSpace(granted.space)) {
+  if (
+    normalizeSpace(requested.space ?? DEFAULT_MANIFEST_SPACE) !==
+    normalizeSpace(granted.space ?? DEFAULT_MANIFEST_SPACE)
+  ) {
     return false;
   }
   if (!pathContains(granted.path, requested.path)) {
@@ -200,7 +204,7 @@ function pathContains(grantedPath: string, requestedPath: string): boolean {
 function cloneEntry(entry: PermissionEntry): PermissionEntry {
   return {
     service: entry.service,
-    space: entry.space,
+    ...(entry.space !== undefined ? { space: entry.space } : {}),
     path: entry.path,
     actions: [...entry.actions],
     ...(entry.skipPrefix !== undefined ? { skipPrefix: entry.skipPrefix } : {}),
@@ -285,7 +289,9 @@ export function parseRecapCapabilities(
   // Sort for determinism (callers do equality checks on arrays of entries
   // in tests; deterministic ordering keeps those stable).
   normalized.sort((a, b) => {
-    if (a.space !== b.space) return a.space < b.space ? -1 : 1;
+    const aSpace = a.space ?? DEFAULT_MANIFEST_SPACE;
+    const bSpace = b.space ?? DEFAULT_MANIFEST_SPACE;
+    if (aSpace !== bSpace) return aSpace < bSpace ? -1 : 1;
     if (a.service !== b.service) return a.service < b.service ? -1 : 1;
     if (a.path !== b.path) return a.path < b.path ? -1 : 1;
     return 0;

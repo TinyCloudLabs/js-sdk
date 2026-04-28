@@ -18,9 +18,12 @@ import {
   IWasmBindings,
   ISessionManager,
   Manifest,
+  ComposedManifestRequest,
   AbilitiesMap,
-  manifestAbilitiesUnion,
-  resolveManifest,
+  DEFAULT_MANIFEST_SPACE,
+  composeManifestRequest,
+  resourceCapabilitiesToAbilitiesMap,
+  resourceCapabilitiesToSpaceAbilitiesMap,
 } from "@tinycloud/sdk-core";
 import {
   SignStrategy,
@@ -87,7 +90,11 @@ export interface NodeUserAuthorizationConfig {
    * When omitted, `signIn` falls back to `defaultActions` for
    * backwards compatibility.
    */
-  manifest?: Manifest;
+  manifest?: Manifest | Manifest[];
+  /** Pre-composed manifest request. Takes precedence over `manifest`. */
+  capabilityRequest?: ComposedManifestRequest;
+  /** Include implicit account registry permissions when composing `manifest`. Default true. */
+  includeAccountRegistryPermissions?: boolean;
 }
 
 /**
@@ -144,7 +151,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * {@link signIn} to derive the session's granted capabilities instead
    * of falling back to {@link defaultActions}.
    */
-  private _manifest?: Manifest;
+  private _manifest?: Manifest | Manifest[];
+  private _capabilityRequest?: ComposedManifestRequest;
+  private readonly includeAccountRegistryPermissions: boolean;
 
   private sessionManager: ISessionManager;
   private extensions: Extension[] = [];
@@ -214,7 +223,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.enablePublicSpace = config.enablePublicSpace ?? true;
     this.nonce = config.nonce;
     this.siweConfig = config.siweConfig;
+    this.includeAccountRegistryPermissions =
+      config.includeAccountRegistryPermissions ?? true;
     this._manifest = config.manifest;
+    this._capabilityRequest = config.capabilityRequest;
 
     // Initialize session manager via WASM bindings
     this.sessionManager = this.wasm.createSessionManager();
@@ -226,16 +238,25 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * internals to surface the manifest for requestPermissions flows
    * without forcing the caller to track it separately.
    */
-  get manifest(): Manifest | undefined {
+  get manifest(): Manifest | Manifest[] | undefined {
     return this._manifest;
+  }
+
+  get capabilityRequest(): ComposedManifestRequest | undefined {
+    return this.getCapabilityRequest();
   }
 
   /**
    * Install or replace the stored manifest. Takes effect on the next
    * `signIn()` call — the current session (if any) is not touched.
    */
-  setManifest(manifest: Manifest | undefined): void {
+  setManifest(manifest: Manifest | Manifest[] | undefined): void {
     this._manifest = manifest;
+    this._capabilityRequest = undefined;
+  }
+
+  setCapabilityRequest(request: ComposedManifestRequest | undefined): void {
+    this._capabilityRequest = request;
   }
 
   /**
@@ -283,12 +304,68 @@ export class NodeUserAuthorization implements IUserAuthorization {
    *
    * @internal
    */
-  private resolveSignInAbilities(): AbilitiesMap {
-    if (this._manifest === undefined) {
-      return this.defaultActions;
+  private getCapabilityRequest(): ComposedManifestRequest | undefined {
+    if (this._capabilityRequest !== undefined) {
+      return this._capabilityRequest;
     }
-    const resolved = resolveManifest(this._manifest);
-    return manifestAbilitiesUnion(resolved);
+    if (this._manifest === undefined) {
+      return undefined;
+    }
+    this._capabilityRequest = composeManifestRequest(
+      Array.isArray(this._manifest) ? this._manifest : [this._manifest],
+      {
+        includeAccountRegistryPermissions:
+          this.includeAccountRegistryPermissions,
+      }
+    );
+    return this._capabilityRequest;
+  }
+
+  private resolveSpaceName(space: string, address: string, chainId: number): string {
+    if (space.startsWith("tinycloud:")) {
+      return space;
+    }
+    return this.wasm.makeSpaceId(address, chainId, space);
+  }
+
+  private resolveSignInCapabilities(
+    address: string,
+    chainId: number,
+  ): {
+    abilities: AbilitiesMap;
+    spaceId: string;
+    spaceAbilities?: Record<string, AbilitiesMap>;
+  } {
+    const request = this.getCapabilityRequest();
+    if (request === undefined) {
+      return {
+        abilities: this.defaultActions,
+        spaceId: this.wasm.makeSpaceId(address, chainId, this.spacePrefix),
+      };
+    }
+
+    const primarySpaceName =
+      request.resources.find((entry) => entry.space !== "account")?.space ??
+      DEFAULT_MANIFEST_SPACE;
+    const primarySpaceId = this.resolveSpaceName(
+      primarySpaceName,
+      address,
+      chainId,
+    );
+
+    const bySpace = resourceCapabilitiesToSpaceAbilitiesMap(request.resources);
+    const spaceAbilities: Record<string, AbilitiesMap> = {};
+    for (const [space, abilities] of Object.entries(bySpace)) {
+      spaceAbilities[this.resolveSpaceName(space, address, chainId)] = abilities;
+    }
+
+    return {
+      abilities:
+        spaceAbilities[primarySpaceId] ??
+        resourceCapabilitiesToAbilitiesMap([]),
+      spaceId: primarySpaceId,
+      spaceAbilities,
+    };
   }
 
   /**
@@ -392,6 +469,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * Used for lazy creation of additional spaces (e.g., public).
    */
   async hostPublicSpace(spaceId: string): Promise<boolean> {
+    return this.hostSpace(spaceId);
+  }
+
+  /**
+   * Create a specific owned space on the server via host delegation.
+   * Used by manifest registry setup for the account space.
+   */
+  async hostOwnedSpace(spaceId: string): Promise<boolean> {
     return this.hostSpace(spaceId);
   }
 
@@ -568,8 +653,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
     const jwk = JSON.parse(jwkString);
 
-    // Create space ID
-    const spaceId = this.wasm.makeSpaceId(address, chainId, this.spacePrefix);
+    const capabilityPlan = this.resolveSignInCapabilities(address, chainId);
+    const spaceId = capabilityPlan.spaceId;
 
     const now = new Date();
     const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
@@ -581,7 +666,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // delegation's permissions in the shape `prepareSession` accepts.
     // Otherwise it returns `defaultActions` unchanged (legacy path).
     const prepared = this.wasm.prepareSession({
-      abilities: this.resolveSignInAbilities(),
+      abilities: capabilityPlan.abilities,
+      ...(capabilityPlan.spaceAbilities !== undefined
+        ? { spaceAbilities: capabilityPlan.spaceAbilities }
+        : {}),
       address,
       chainId,
       domain: this.domain,
@@ -770,8 +858,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
     const jwk = JSON.parse(jwkString);
 
-    // Create space ID
-    const spaceId = this.wasm.makeSpaceId(address, chainId, this.spacePrefix);
+    const capabilityPlan = this.resolveSignInCapabilities(address, chainId);
+    const spaceId = capabilityPlan.spaceId;
 
     const now = new Date();
     const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
@@ -783,7 +871,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // delegation's permissions in the shape `prepareSession` accepts.
     // Otherwise it returns `defaultActions` unchanged (legacy path).
     const prepared = this.wasm.prepareSession({
-      abilities: this.resolveSignInAbilities(),
+      abilities: capabilityPlan.abilities,
+      ...(capabilityPlan.spaceAbilities !== undefined
+        ? { spaceAbilities: capabilityPlan.spaceAbilities }
+        : {}),
       address,
       chainId,
       domain: this.domain,

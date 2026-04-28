@@ -32,8 +32,8 @@ import ms from "ms";
 export interface PermissionEntry {
   /** Service namespace, e.g. "tinycloud.kv", "tinycloud.sql", "tinycloud.duckdb", "tinycloud.capabilities". */
   service: string;
-  /** "default" for the user's personal space, or a specific space id. */
-  space: string;
+  /** Space name or full space URI. Defaults to "applications" inside manifests. */
+  space?: string;
   /**
    * Service-specific path.
    * - tinycloud.kv: hierarchical prefix. "/" = all, "foo/" = prefix match, "foo" = exact key
@@ -55,24 +55,6 @@ export interface PermissionEntry {
 }
 
 /**
- * A pre-declared delegation that will be included in the main SIWE recap as
- * an additional audience.
- */
-export interface ManifestDelegation {
-  /** DID of the delegate (e.g. a backend's wallet DID). */
-  to: string;
-  /** Informational display name. Optional. */
-  name?: string;
-  /** Expiry override for this delegation, ms-format. Optional. */
-  expiry?: string;
-  /**
-   * Permissions to delegate. Same shape as the top-level `permissions`, and
-   * the manifest prefix is inherited identically (unless `skipPrefix: true`).
-   */
-  permissions: PermissionEntry[];
-}
-
-/**
  * The valid values for `Manifest.defaults`.
  *
  * - `false` → no auto-included permissions
@@ -90,22 +72,26 @@ export type ManifestDefaults = boolean | "admin" | "all";
  */
 export interface Manifest {
   /** Schema version. Optional, defaults to 1. */
-  version?: number;
-  /** Bundle identifier — reverse DNS. Required. */
-  id: string;
+  manifest_version?: 1;
+  /** Application identifier / namespace prefix. Required. */
+  app_id: string;
   /** Display name. Required. */
   name: string;
-  /** One-line description. Optional. */
+  /** Description of what the app or delegate does. Optional. */
   description?: string;
+  /** DID of this manifest's delegate target. Optional. Required only for delegation materialization. */
+  did?: string;
   /** URL to app icon. Optional. */
   icon?: string;
   /** App version string. Optional. */
   appVersion?: string;
   /** Default expiry for permissions. ms-format ("30d", "2h", "1y"). Default "30d". */
   expiry?: string;
+  /** Space name or full space URI. Optional, defaults to "applications". */
+  space?: string;
   /**
    * Path prefix auto-prepended to permission paths. Optional, defaults to
-   * `id`. Set to `""` to disable entirely. Individual permissions can opt
+   * `app_id`. Set to `""` to disable entirely. Individual permissions can opt
    * out with `skipPrefix: true`.
    */
   prefix?: string;
@@ -121,8 +107,6 @@ export interface Manifest {
    * DuckDB (opt-in), or `skipPrefix: true` entries.
    */
   permissions?: PermissionEntry[];
-  /** Pre-delegations to other DIDs at sign-in. */
-  delegations?: ManifestDelegation[];
 }
 
 /**
@@ -133,7 +117,7 @@ export interface Manifest {
 export interface ResourceCapability {
   /** Long-form service, e.g. "tinycloud.kv". */
   service: string;
-  /** Space id — "default" stays as-is here; the caller resolves it to a full SpaceId at sign-in time. */
+  /** Space name or URI. Short names are resolved to full SpaceIds at sign-in time. */
   space: string;
   /** Path with the manifest prefix applied (or skipped per `skipPrefix`). */
   path: string;
@@ -162,16 +146,49 @@ export interface ResolvedDelegate {
  * ready to drive the SIWE recap.
  */
 export interface ResolvedCapabilities {
-  /** Bundle identifier copied from manifest.id. */
-  id: string;
+  /** Application identifier copied from manifest.app_id. */
+  app_id: string;
+  /** Delegate DID copied from manifest.did, when present. */
+  did?: string;
+  /** Effective default space for this manifest. */
+  space: string;
   /** All session-key resources with paths fully resolved (prefix applied). */
   resources: ResourceCapability[];
   /** Default expiry for the session, in milliseconds. */
   expiryMs: number;
   /** Whether to include the public-space companion. */
   includePublicSpace: boolean;
-  /** Additional delegate targets with resolved paths. */
+  /** Delegate targets derived from manifests that declare `did`. */
   additionalDelegates: ResolvedDelegate[];
+}
+
+export interface ManifestRegistryRecord {
+  /** KV key inside the account space. */
+  key: string;
+  /** App id this record describes. */
+  app_id: string;
+  /** Latest manifest payloads composed for this app id. */
+  manifests: Manifest[];
+}
+
+export interface ComposeManifestOptions {
+  /** Include implicit account-space registry permissions. Default true. */
+  includeAccountRegistryPermissions?: boolean;
+}
+
+export interface ComposedManifestRequest {
+  /** Validated manifests that were composed. */
+  manifests: Manifest[];
+  /** Full permission union requested from the user in one SIWE. */
+  resources: ResourceCapability[];
+  /** Delegations that can be materialized after sign-in. */
+  delegationTargets: ResolvedDelegate[];
+  /** Account-space registry records to write after successful sign-in. */
+  registryRecords: ManifestRegistryRecord[];
+  /** Effective session expiry, using the longest composed manifest expiry. */
+  expiryMs: number;
+  /** Whether to include the public-space companion behavior. */
+  includePublicSpace: boolean;
 }
 
 /**
@@ -199,6 +216,18 @@ export const DEFAULT_EXPIRY = "30d";
  * Default `defaults` value when the manifest omits it. Spec: standard tier.
  */
 export const DEFAULT_DEFAULTS: ManifestDefaults = true;
+
+/** Default manifest schema version. */
+export const DEFAULT_MANIFEST_VERSION = 1;
+
+/** Default space for manifest-declared app data. */
+export const DEFAULT_MANIFEST_SPACE = "applications";
+
+/** Account-space name used for installed-application registry records. */
+export const ACCOUNT_REGISTRY_SPACE = "account";
+
+/** Account-space KV prefix used for installed-application registry records. */
+export const ACCOUNT_REGISTRY_PATH = "applications/";
 
 /**
  * Known services and their short-form (recap URI) names. The TinyCloud
@@ -235,19 +264,19 @@ const DEFAULT_STANDARD_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] =
   [
     {
       service: "tinycloud.kv",
-      space: "default",
+      space: DEFAULT_MANIFEST_SPACE,
       path: "/",
       actions: ["get", "put", "del", "list", "metadata"],
     },
     {
       service: "tinycloud.sql",
-      space: "default",
+      space: DEFAULT_MANIFEST_SPACE,
       path: "/",
       actions: ["read", "write"],
     },
     {
       service: "tinycloud.capabilities",
-      space: "default",
+      space: DEFAULT_MANIFEST_SPACE,
       path: "/",
       actions: ["read"],
     },
@@ -260,19 +289,19 @@ const DEFAULT_STANDARD_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] =
 const DEFAULT_ADMIN_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] = [
   {
     service: "tinycloud.kv",
-    space: "default",
+    space: DEFAULT_MANIFEST_SPACE,
     path: "/",
     actions: ["get", "put", "del", "list", "metadata"],
   },
   {
     service: "tinycloud.sql",
-    space: "default",
+    space: DEFAULT_MANIFEST_SPACE,
     path: "/",
     actions: ["read", "write", "ddl"],
   },
   {
     service: "tinycloud.capabilities",
-    space: "default",
+    space: DEFAULT_MANIFEST_SPACE,
     path: "/",
     actions: ["read", "admin"],
   },
@@ -287,25 +316,25 @@ const DEFAULT_ADMIN_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] = [
 const DEFAULT_ALL_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] = [
   {
     service: "tinycloud.kv",
-    space: "default",
+    space: DEFAULT_MANIFEST_SPACE,
     path: "/",
     actions: ["get", "put", "del", "list", "metadata"],
   },
   {
     service: "tinycloud.sql",
-    space: "default",
+    space: DEFAULT_MANIFEST_SPACE,
     path: "/",
     actions: ["read", "write", "ddl"],
   },
   {
     service: "tinycloud.duckdb",
-    space: "default",
+    space: DEFAULT_MANIFEST_SPACE,
     path: "/",
     actions: ["read", "write"],
   },
   {
     service: "tinycloud.capabilities",
-    space: "default",
+    space: DEFAULT_MANIFEST_SPACE,
     path: "/",
     actions: ["read", "admin"],
   },
@@ -424,11 +453,25 @@ export function validateManifest(input: unknown): Manifest {
     throw new ManifestValidationError("manifest must be an object");
   }
   const m = input as Manifest;
-  if (typeof m.id !== "string" || m.id.length === 0) {
-    throw new ManifestValidationError("manifest.id is required and must be a non-empty string");
+  if (
+    m.manifest_version !== undefined &&
+    m.manifest_version !== DEFAULT_MANIFEST_VERSION
+  ) {
+    throw new ManifestValidationError(
+      `manifest.manifest_version must be ${DEFAULT_MANIFEST_VERSION}`
+    );
+  }
+  if (typeof m.app_id !== "string" || m.app_id.length === 0) {
+    throw new ManifestValidationError("manifest.app_id is required and must be a non-empty string");
   }
   if (typeof m.name !== "string" || m.name.length === 0) {
     throw new ManifestValidationError("manifest.name is required and must be a non-empty string");
+  }
+  if (m.did !== undefined && (typeof m.did !== "string" || m.did.length === 0)) {
+    throw new ManifestValidationError("manifest.did must be a non-empty DID string");
+  }
+  if (m.space !== undefined && (typeof m.space !== "string" || m.space.length === 0)) {
+    throw new ManifestValidationError("manifest.space must be a non-empty string");
   }
   if (m.expiry !== undefined) {
     // Will throw with a clear error if invalid.
@@ -442,29 +485,6 @@ export function validateManifest(input: unknown): Manifest {
       validatePermissionEntry(p, `permissions[${i}]`)
     );
   }
-  if (m.delegations !== undefined) {
-    if (!Array.isArray(m.delegations)) {
-      throw new ManifestValidationError("manifest.delegations must be an array");
-    }
-    m.delegations.forEach((d, i) => {
-      if (typeof d?.to !== "string" || d.to.length === 0) {
-        throw new ManifestValidationError(
-          `delegations[${i}].to is required and must be a non-empty DID string`
-        );
-      }
-      if (d.expiry !== undefined) {
-        parseExpiry(d.expiry);
-      }
-      if (!Array.isArray(d.permissions)) {
-        throw new ManifestValidationError(
-          `delegations[${i}].permissions must be an array`
-        );
-      }
-      d.permissions.forEach((p, j) =>
-        validatePermissionEntry(p, `delegations[${i}].permissions[${j}]`)
-      );
-    });
-  }
   return m;
 }
 
@@ -476,8 +496,8 @@ function validatePermissionEntry(p: unknown, path: string): void {
   if (typeof entry.service !== "string" || entry.service.length === 0) {
     throw new ManifestValidationError(`${path}.service is required`);
   }
-  if (typeof entry.space !== "string" || entry.space.length === 0) {
-    throw new ManifestValidationError(`${path}.space is required`);
+  if (entry.space !== undefined && (typeof entry.space !== "string" || entry.space.length === 0)) {
+    throw new ManifestValidationError(`${path}.space must be a non-empty string`);
   }
   if (typeof entry.path !== "string") {
     throw new ManifestValidationError(
@@ -551,18 +571,19 @@ function defaultEntriesForTier(
  * expiries. Pure function — does no I/O.
  *
  * Resolution semantics (spec):
- * - `prefix` defaults to `id`; set to `""` to disable prefix application entirely.
+ * - `prefix` defaults to `app_id`; set to `""` to disable prefix application entirely.
+ * - `space` defaults to `applications`; per-permission `space` overrides it.
  * - `defaults` defaults to `true` (standard tier); unknown string values fall back to `true`.
  * - Per-entry expiry overrides per-delegation overrides manifest > `DEFAULT_EXPIRY`.
  * - Default entries use `skipPrefix: false` so they inherit the manifest prefix.
- * - Prefix inheritance applies identically to `permissions` and `delegations[*].permissions`.
  */
 export function resolveManifest(
   input: Manifest
 ): ResolvedCapabilities {
   const manifest = validateManifest(input);
 
-  const prefix = manifest.prefix !== undefined ? manifest.prefix : manifest.id;
+  const prefix = manifest.prefix !== undefined ? manifest.prefix : manifest.app_id;
+  const space = manifest.space ?? DEFAULT_MANIFEST_SPACE;
   const expiryMs = parseExpiry(manifest.expiry ?? DEFAULT_EXPIRY);
   const includePublicSpace = manifest.includePublicSpace ?? true;
   const tier = normalizeDefaults(manifest.defaults);
@@ -575,26 +596,25 @@ export function resolveManifest(
   const allEntries: PermissionEntry[] = [...defaultEntries, ...explicitEntries];
 
   const resources: ResourceCapability[] = allEntries.map((entry) =>
-    resolveEntry(entry, prefix, expiryMs)
+    resolveEntry(entry, prefix, expiryMs, space)
   );
 
-  const additionalDelegates: ResolvedDelegate[] = (
-    manifest.delegations ?? []
-  ).map((d) => ({
-    did: d.to,
-    name: d.name,
-    expiryMs: parseExpiry(d.expiry ?? manifest.expiry ?? DEFAULT_EXPIRY),
-    permissions: d.permissions.map((entry) =>
-      resolveEntry(
-        entry,
-        prefix,
-        parseExpiry(d.expiry ?? manifest.expiry ?? DEFAULT_EXPIRY)
-      )
-    ),
-  }));
+  const additionalDelegates: ResolvedDelegate[] =
+    manifest.did === undefined
+      ? []
+      : [
+          {
+            did: manifest.did,
+            name: manifest.name,
+            expiryMs,
+            permissions: resources.map(cloneResourceCapability),
+          },
+        ];
 
   return {
-    id: manifest.id,
+    app_id: manifest.app_id,
+    ...(manifest.did !== undefined ? { did: manifest.did } : {}),
+    space,
     resources,
     expiryMs,
     includePublicSpace,
@@ -609,7 +629,8 @@ export function resolveManifest(
 function resolveEntry(
   entry: PermissionEntry,
   prefix: string,
-  _inheritedExpiryMs: number
+  _inheritedExpiryMs: number,
+  inheritedSpace: string
 ): ResourceCapability {
   const resolvedPath = applyPrefix(
     prefix,
@@ -621,13 +642,135 @@ function resolveEntry(
     entry.expiry !== undefined ? parseExpiry(entry.expiry) : undefined;
   return {
     service: entry.service,
-    space: entry.space,
+    space: entry.space ?? inheritedSpace,
     path: resolvedPath,
     actions: resolvedActions,
     // Only populate `expiryMs` when the entry had its own expiry override.
     // When absent, callers use the parent (delegation or manifest) expiry
     // which is carried on ResolvedDelegate.expiryMs / ResolvedCapabilities.expiryMs.
     ...(entryExpiryMs !== undefined ? { expiryMs: entryExpiryMs } : {}),
+  };
+}
+
+function cloneResourceCapability(entry: ResourceCapability): ResourceCapability {
+  return {
+    service: entry.service,
+    space: entry.space,
+    path: entry.path,
+    actions: [...entry.actions],
+    ...(entry.expiryMs !== undefined ? { expiryMs: entry.expiryMs } : {}),
+  };
+}
+
+function clonePermissionEntry(entry: PermissionEntry): PermissionEntry {
+  return {
+    service: entry.service,
+    ...(entry.space !== undefined ? { space: entry.space } : {}),
+    path: entry.path,
+    actions: [...entry.actions],
+    ...(entry.skipPrefix !== undefined ? { skipPrefix: entry.skipPrefix } : {}),
+    ...(entry.expiry !== undefined ? { expiry: entry.expiry } : {}),
+  };
+}
+
+function dedupeResources(
+  resources: readonly ResourceCapability[]
+): ResourceCapability[] {
+  const byKey = new Map<string, ResourceCapability>();
+
+  for (const resource of resources) {
+    const key = `${resource.service}\u0000${resource.space}\u0000${resource.path}\u0000${resource.expiryMs ?? ""}`;
+    const existing = byKey.get(key);
+    if (existing === undefined) {
+      byKey.set(key, cloneResourceCapability(resource));
+      continue;
+    }
+
+    const seen = new Set(existing.actions);
+    for (const action of resource.actions) {
+      if (!seen.has(action)) {
+        existing.actions.push(action);
+        seen.add(action);
+      }
+    }
+  }
+
+  return [...byKey.values()];
+}
+
+function accountRegistryPermission(): ResourceCapability {
+  return {
+    service: "tinycloud.kv",
+    space: ACCOUNT_REGISTRY_SPACE,
+    path: ACCOUNT_REGISTRY_PATH,
+    actions: [
+      "tinycloud.kv/get",
+      "tinycloud.kv/put",
+      "tinycloud.kv/list",
+    ],
+  };
+}
+
+/**
+ * Compose one or more manifests into the single capability request that should
+ * be signed. Fetching manifests is intentionally out of band; callers pass the
+ * already-loaded manifest objects.
+ */
+export function composeManifestRequest(
+  inputs: readonly Manifest[],
+  options: ComposeManifestOptions = {}
+): ComposedManifestRequest {
+  if (!Array.isArray(inputs) || inputs.length === 0) {
+    throw new ManifestValidationError(
+      "composeManifestRequest requires at least one manifest"
+    );
+  }
+
+  const includeAccountRegistryPermissions =
+    options.includeAccountRegistryPermissions ?? true;
+  const manifests = inputs.map(validateManifest);
+  const resolved = manifests.map(resolveManifest);
+  const resources = resolved.flatMap((entry) => entry.resources);
+  const delegationTargets = resolved.flatMap((entry) =>
+    entry.additionalDelegates.map((delegate) => ({
+      ...delegate,
+      permissions: dedupeResources(delegate.permissions),
+    }))
+  );
+
+  if (includeAccountRegistryPermissions) {
+    resources.push(accountRegistryPermission());
+  }
+
+  const manifestsByAppId = new Map<string, Manifest[]>();
+  for (const manifest of manifests) {
+    const current = manifestsByAppId.get(manifest.app_id);
+    if (current === undefined) {
+      manifestsByAppId.set(manifest.app_id, [manifest]);
+    } else {
+      current.push(manifest);
+    }
+  }
+
+  const registryRecords: ManifestRegistryRecord[] =
+    includeAccountRegistryPermissions
+      ? [...manifestsByAppId.entries()].map(([app_id, appManifests]) => ({
+          key: `${ACCOUNT_REGISTRY_PATH}${app_id}`,
+          app_id,
+          manifests: appManifests.map((manifest) => ({
+            ...manifest,
+            permissions: manifest.permissions?.map(clonePermissionEntry),
+          })),
+        }))
+      : [];
+
+  return {
+    manifests,
+    resources: dedupeResources(resources),
+    delegationTargets,
+    registryRecords,
+    expiryMs: Math.max(...resolved.map((entry) => entry.expiryMs)),
+    includePublicSpace: resolved.some((entry) => entry.includePublicSpace),
   };
 }
 
@@ -654,6 +797,15 @@ function resolveEntry(
  * for both so one manifest drives both sides.
  */
 export type AbilitiesMap = Record<string, Record<string, string[]>>;
+
+/**
+ * Per-space abilities map accepted by the newer WASM session config:
+ *
+ * ```
+ * { [spaceIdOrName]: { [shortService]: { [path]: [fullUrnAction, ...] } } }
+ * ```
+ */
+export type SpaceAbilitiesMap = Record<string, AbilitiesMap>;
 
 /**
  * Convert a list of {@link ResourceCapability} entries (manifest
@@ -700,6 +852,31 @@ export function resourceCapabilitiesToAbilitiesMap(
         }
       }
     }
+  }
+  return out;
+}
+
+/**
+ * Group resolved capabilities by `space`, then convert each group into a WASM
+ * abilities map. Short space names are left as-is here; platform layers that
+ * know the wallet address and chain id turn them into full SpaceIds.
+ */
+export function resourceCapabilitiesToSpaceAbilitiesMap(
+  resources: readonly ResourceCapability[]
+): SpaceAbilitiesMap {
+  const grouped = new Map<string, ResourceCapability[]>();
+  for (const resource of resources) {
+    const entries = grouped.get(resource.space);
+    if (entries === undefined) {
+      grouped.set(resource.space, [resource]);
+    } else {
+      entries.push(resource);
+    }
+  }
+
+  const out: SpaceAbilitiesMap = {};
+  for (const [space, entries] of grouped.entries()) {
+    out[space] = resourceCapabilitiesToAbilitiesMap(entries);
   }
   return out;
 }
