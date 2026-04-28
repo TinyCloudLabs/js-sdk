@@ -19,6 +19,7 @@
   },
   "changesets": [
     "delegated-access-restorable",
+    "location-registry-resolver",
     "manifest-permission-descriptions",
     "manifest-v1-composition",
     "tinycloud-vfs-initial-release"

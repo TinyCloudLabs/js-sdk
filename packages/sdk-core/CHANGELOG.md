@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 2.2.0-beta.3
+
+### Minor Changes
+
+- 2305a65: Add TinyCloud location registry helpers for signed DID location records, multiaddr URL conversion, and priority-based cloud location resolution across explicit, blockchain, centralized registry, and fallback sources.
+
 ## 2.2.0-beta.1
 
 ### Patch Changes
