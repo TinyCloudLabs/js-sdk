@@ -1,0 +1,39 @@
+{
+  "items": [
+    {
+      "pkg": "sdk-core",
+      "kind": "addition",
+      "what": "new export: VaultPublicSpaceKVActions",
+      "where": "src/index.ts",
+      "since": "v2.0.2",
+      "regen": [
+        "pkg/sdk-core.json",
+        "cmds/index.map"
+      ]
+    },
+    {
+      "pkg": "node-sdk",
+      "kind": "rename",
+      "what": "TinyCloudNode.delegateTo() now accepts Manifest in addition to PermissionEntry[]",
+      "where": "src/TinyCloudNode.ts",
+      "since": "v2.0.3",
+      "regen": [
+        "flows/delegate-to.seq",
+        "pkg/node-sdk.json"
+      ]
+    },
+    {
+      "pkg": "sdk-services",
+      "kind": "stale",
+      "what": "DataVaultService.grant() touched but artifact not regenerated",
+      "where": "src/vault/DataVaultService.ts",
+      "since": "7d ago",
+      "regen": [
+        "pkg/sdk-services.json",
+        "flows/share-receive.seq"
+      ]
+    }
+  ],
+  "count": 3,
+  "since": "v2.0.3"
+}

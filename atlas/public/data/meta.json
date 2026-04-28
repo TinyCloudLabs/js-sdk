@@ -1,0 +1,26 @@
+{
+  "name": "TinyCloud SDK Atlas",
+  "ref": "4ac6d12",
+  "repo": "https://github.com/TinyCloudLabs/js-sdk",
+  "generator": "tc atlas rebuild",
+  "recipe": [
+    "1. Walk packages/* and read package.json + src/index.ts",
+    "2. Extract: modules, loc, exports, boundaries (from imports)",
+    "3. Merge with curated 'why' prose from atlas/curated/*.yaml",
+    "4. Detect drift by hashing package.json + src/index.ts",
+    "5. Emit /atlas/data/*.json files",
+    "6. Emit /atlas/llms.txt index for agents",
+    "7. Build the human site to /docs/atlas/"
+  ],
+  "inputs": [
+    "packages/*/package.json",
+    "packages/*/src/index.ts",
+    "atlas/curated/*.yaml"
+  ],
+  "outputs": [
+    "docs/atlas/",
+    "docs/atlas/data/inventory.json",
+    "docs/atlas/data/pkg/*.json",
+    "docs/atlas/data/llms.txt"
+  ]
+}

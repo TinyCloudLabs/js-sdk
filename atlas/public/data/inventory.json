@@ -1,0 +1,201 @@
+{
+  "$schema": "https://tinycloud.xyz/atlas/schema/inventory.v1.json",
+  "generated": {
+    "at": "2026-04-28T21:09:38.667Z",
+    "by": "tc atlas rebuild",
+    "recipe": "/atlas/data/meta.json"
+  },
+  "repo": {
+    "owner": "TinyCloudLabs",
+    "name": "js-sdk",
+    "ref": "atlas/scaffold",
+    "sha": "5e6a9e899d5bbb1c74a907acccb50e78bfa912f7",
+    "version": "0.0.1",
+    "builtAt": "2026-04-28",
+    "drift": 3
+  },
+  "packages": [
+    {
+      "id": "web-sdk",
+      "npm": "@tinycloud/web-sdk",
+      "kind": "sdk",
+      "side": "browser",
+      "ref": "/atlas/data/pkg/web-sdk.json"
+    },
+    {
+      "id": "node-sdk",
+      "npm": "@tinycloud/node-sdk",
+      "kind": "sdk",
+      "side": "node",
+      "ref": "/atlas/data/pkg/node-sdk.json"
+    },
+    {
+      "id": "sdk-core",
+      "npm": "@tinycloud/sdk-core",
+      "kind": "core",
+      "side": "iso",
+      "ref": "/atlas/data/pkg/sdk-core.json"
+    },
+    {
+      "id": "sdk-services",
+      "npm": "@tinycloud/sdk-services",
+      "kind": "services",
+      "side": "iso",
+      "ref": "/atlas/data/pkg/sdk-services.json"
+    },
+    {
+      "id": "sdk-rs",
+      "npm": "@tinycloud/sdk-rs",
+      "kind": "rust",
+      "side": "iso",
+      "ref": "/atlas/data/pkg/sdk-rs.json"
+    },
+    {
+      "id": "sdk-rs/web",
+      "npm": "@tinycloud/web-sdk-wasm",
+      "kind": "wasm",
+      "side": "browser",
+      "ref": "/atlas/data/pkg/sdk-rs__web.json"
+    },
+    {
+      "id": "sdk-rs/node",
+      "npm": "@tinycloud/node-sdk-wasm",
+      "kind": "wasm",
+      "side": "node",
+      "ref": "/atlas/data/pkg/sdk-rs__node.json"
+    },
+    {
+      "id": "cli",
+      "npm": "@tinycloud/cli",
+      "kind": "cli",
+      "side": "node",
+      "ref": "/atlas/data/pkg/cli.json"
+    },
+    {
+      "id": "vfs",
+      "npm": "@tinycloud/vfs",
+      "kind": "sdk",
+      "side": "node",
+      "ref": "/atlas/data/pkg/vfs.json"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "00",
+      "title": "Prologue · why this atlas exists",
+      "voice": "field guide",
+      "read": 2,
+      "active": false
+    },
+    {
+      "id": "01",
+      "title": "Three surfaces, one core",
+      "voice": "field guide",
+      "read": 4,
+      "active": false
+    },
+    {
+      "id": "02",
+      "title": "The WASM seam",
+      "voice": "eng memo",
+      "read": 5,
+      "active": false
+    },
+    {
+      "id": "03",
+      "title": "SIWE → session",
+      "voice": "tour",
+      "read": 6,
+      "active": true
+    },
+    {
+      "id": "04",
+      "title": "Spaces & KV",
+      "voice": "field guide",
+      "read": 5,
+      "active": false
+    },
+    {
+      "id": "05",
+      "title": "Delegation chains & ReCap",
+      "voice": "eng memo",
+      "read": 7,
+      "active": false
+    },
+    {
+      "id": "06",
+      "title": "Sharing — portable bundles",
+      "voice": "tour",
+      "read": 4,
+      "active": false
+    },
+    {
+      "id": "07",
+      "title": "Protocol version handshake",
+      "voice": "eng memo",
+      "read": 3,
+      "active": false
+    },
+    {
+      "id": "08",
+      "title": "Build topology — bun, turbo, wasm-pack",
+      "voice": "field guide",
+      "read": 4,
+      "active": false
+    },
+    {
+      "id": "09",
+      "title": "Drift & rebuild — keeping this honest",
+      "voice": "eng memo",
+      "read": 3,
+      "active": false
+    }
+  ],
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/atlas/data/inventory.json",
+      "desc": "full machine-readable index"
+    },
+    {
+      "method": "GET",
+      "path": "/atlas/data/pkg/<id>.json",
+      "desc": "single package facts (boundaries, exports, why)"
+    },
+    {
+      "method": "GET",
+      "path": "/atlas/data/flow/<id>.json",
+      "desc": "sequence diagram source"
+    },
+    {
+      "method": "GET",
+      "path": "/atlas/data/state/<id>.json",
+      "desc": "state machine source"
+    },
+    {
+      "method": "GET",
+      "path": "/atlas/data/cmds.json",
+      "desc": "command and service surface map"
+    },
+    {
+      "method": "GET",
+      "path": "/atlas/data/drift.json",
+      "desc": "what changed since last rebuild"
+    },
+    {
+      "method": "GET",
+      "path": "/atlas/data/artifacts.json",
+      "desc": "all atlas artifact files and freshness"
+    },
+    {
+      "method": "GET",
+      "path": "/atlas/data/meta.json",
+      "desc": "how this atlas was made"
+    },
+    {
+      "method": "GET",
+      "path": "/atlas/data/llms.txt",
+      "desc": "agent quickstart"
+    }
+  ]
+}

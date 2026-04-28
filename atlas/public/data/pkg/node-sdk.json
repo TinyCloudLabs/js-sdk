@@ -1,0 +1,45 @@
+{
+  "id": "node-sdk",
+  "npm": "@tinycloud/node-sdk",
+  "kind": "sdk",
+  "side": "node",
+  "modules": 21,
+  "loc": 6897,
+  "why": "Server entry. No wallet — uses a private key signer and file-backed session storage. Owns the delegation-chain authoring API.",
+  "boundaries": [
+    {
+      "id": "sdk-core",
+      "kind": "edge"
+    },
+    {
+      "id": "sdk-rs/node",
+      "kind": "edge"
+    }
+  ],
+  "exports": [
+    {
+      "name": "TinyCloudNode",
+      "kind": "export"
+    },
+    {
+      "name": "DelegatedAccess",
+      "kind": "export"
+    },
+    {
+      "name": "PrivateKeySigner",
+      "kind": "export"
+    },
+    {
+      "name": "FileSessionStorage",
+      "kind": "export"
+    },
+    {
+      "name": "serializeDelegation",
+      "kind": "export"
+    }
+  ],
+  "changed": 0,
+  "hasFsm": true,
+  "hasSeq": true,
+  "cmds": []
+}

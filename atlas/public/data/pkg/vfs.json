@@ -1,0 +1,41 @@
+{
+  "id": "vfs",
+  "npm": "@tinycloud/vfs",
+  "kind": "sdk",
+  "side": "node",
+  "modules": 11,
+  "loc": 2011,
+  "why": "Node virtual filesystem bridge. Adapts TinyCloud storage into the @platformatic/vfs provider shape, including synchronous file handles, path normalization, metadata, and worker-backed reads and writes.",
+  "boundaries": [
+    {
+      "id": "node-sdk",
+      "kind": "edge"
+    },
+    {
+      "id": "@platformatic/vfs",
+      "kind": "edge"
+    }
+  ],
+  "exports": [
+    {
+      "name": "TinyCloudVfsProvider",
+      "kind": "export"
+    },
+    {
+      "name": "createTinyCloudVfs",
+      "kind": "export"
+    },
+    {
+      "name": "createTinyCloudVfsFromNode",
+      "kind": "export"
+    },
+    {
+      "name": "createTinyCloudDelegatedVfs",
+      "kind": "export"
+    }
+  ],
+  "changed": 0,
+  "hasFsm": false,
+  "hasSeq": false,
+  "cmds": []
+}

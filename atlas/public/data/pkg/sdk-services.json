@@ -1,0 +1,49 @@
+{
+  "id": "sdk-services",
+  "npm": "@tinycloud/sdk-services",
+  "kind": "services",
+  "side": "iso",
+  "modules": 38,
+  "loc": 8851,
+  "why": "Concrete services bound to a TinyCloud node: KV, SQL, DuckDB, Hooks, Vault. All built on a shared ServiceContext + Result pattern.",
+  "boundaries": [
+    {
+      "id": "sdk-rs (via context)",
+      "kind": "edge"
+    }
+  ],
+  "exports": [
+    {
+      "name": "KVService",
+      "kind": "export"
+    },
+    {
+      "name": "PrefixedKVService",
+      "kind": "export"
+    },
+    {
+      "name": "SQLService",
+      "kind": "export"
+    },
+    {
+      "name": "DuckDbService",
+      "kind": "export"
+    },
+    {
+      "name": "HooksService",
+      "kind": "export"
+    },
+    {
+      "name": "DataVaultService",
+      "kind": "export"
+    },
+    {
+      "name": "ServiceContext",
+      "kind": "export"
+    }
+  ],
+  "changed": 0,
+  "hasFsm": false,
+  "hasSeq": true,
+  "cmds": []
+}

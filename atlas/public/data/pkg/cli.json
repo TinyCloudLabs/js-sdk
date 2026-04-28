@@ -1,0 +1,29 @@
+{
+  "id": "cli",
+  "npm": "@tinycloud/cli",
+  "kind": "cli",
+  "side": "node",
+  "modules": 31,
+  "loc": 3991,
+  "why": "Operator surface. Profiles, secrets, kv/sql/duckdb/vault commands, doctor, share, init, upgrade. Talks to node-sdk under the hood.",
+  "boundaries": [
+    {
+      "id": "node-sdk",
+      "kind": "edge"
+    },
+    {
+      "id": "sdk-core",
+      "kind": "edge"
+    }
+  ],
+  "exports": [
+    {
+      "name": "bin: tc",
+      "kind": "export"
+    }
+  ],
+  "changed": 0,
+  "hasFsm": false,
+  "hasSeq": false,
+  "cmds": []
+}

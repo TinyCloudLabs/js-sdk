@@ -1,0 +1,53 @@
+{
+  "id": "web-sdk",
+  "npm": "@tinycloud/web-sdk",
+  "kind": "sdk",
+  "side": "browser",
+  "modules": 47,
+  "loc": 7999,
+  "why": "Browser entry. Wires wallet signers, modal UI, and the WASM bundle into the platform-agnostic TinyCloud core.",
+  "boundaries": [
+    {
+      "id": "sdk-core",
+      "kind": "edge"
+    },
+    {
+      "id": "sdk-rs/web",
+      "kind": "edge"
+    },
+    {
+      "id": "ethers",
+      "kind": "edge"
+    },
+    {
+      "id": "siwe",
+      "kind": "edge"
+    }
+  ],
+  "exports": [
+    {
+      "name": "TinyCloudWeb",
+      "kind": "export"
+    },
+    {
+      "name": "BrowserWalletSigner",
+      "kind": "export"
+    },
+    {
+      "name": "BrowserSessionStorage",
+      "kind": "export"
+    },
+    {
+      "name": "BrowserWasmBindings",
+      "kind": "export"
+    },
+    {
+      "name": "createKVService",
+      "kind": "export"
+    }
+  ],
+  "changed": 0,
+  "hasFsm": true,
+  "hasSeq": true,
+  "cmds": []
+}

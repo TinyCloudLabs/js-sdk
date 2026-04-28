@@ -1,0 +1,45 @@
+{
+  "id": "sdk-rs",
+  "npm": "@tinycloud/sdk-rs",
+  "kind": "rust",
+  "side": "iso",
+  "modules": 10,
+  "loc": 987,
+  "why": "Rust crate. Owns Ed25519 session keys, SIWE+ReCap message building, UCAN delegation chain creation. Re-exports a subset of tinycloud-node's protocol crate. Compiled to two WASM targets.",
+  "boundaries": [
+    {
+      "id": "tinycloud-node (git)",
+      "kind": "edge"
+    }
+  ],
+  "exports": [
+    {
+      "name": "TCWSessionManager",
+      "kind": "export"
+    },
+    {
+      "name": "prepareSession",
+      "kind": "export"
+    },
+    {
+      "name": "completeSessionSetup",
+      "kind": "export"
+    },
+    {
+      "name": "createDelegation",
+      "kind": "export"
+    },
+    {
+      "name": "useDelegation",
+      "kind": "export"
+    },
+    {
+      "name": "invoke",
+      "kind": "export"
+    }
+  ],
+  "changed": 0,
+  "hasFsm": false,
+  "hasSeq": false,
+  "cmds": []
+}

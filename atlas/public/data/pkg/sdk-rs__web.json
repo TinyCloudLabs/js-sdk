@@ -1,0 +1,25 @@
+{
+  "id": "sdk-rs/web",
+  "npm": "@tinycloud/web-sdk-wasm",
+  "kind": "wasm",
+  "side": "browser",
+  "modules": 2,
+  "loc": 61,
+  "why": "wasm-bindgen output for browsers. ES modules, bundler-friendly.",
+  "boundaries": [
+    {
+      "id": "sdk-rs",
+      "kind": "edge"
+    }
+  ],
+  "exports": [
+    {
+      "name": "* (wasm-bindgen)",
+      "kind": "export"
+    }
+  ],
+  "changed": 0,
+  "hasFsm": false,
+  "hasSeq": false,
+  "cmds": []
+}

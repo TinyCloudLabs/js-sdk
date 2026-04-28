@@ -1,0 +1,25 @@
+{
+  "id": "sdk-rs/node",
+  "npm": "@tinycloud/node-sdk-wasm",
+  "kind": "wasm",
+  "side": "node",
+  "modules": 1,
+  "loc": 60,
+  "why": "wasm-bindgen output for Node.js. CJS + ESM, with Node shims.",
+  "boundaries": [
+    {
+      "id": "sdk-rs",
+      "kind": "edge"
+    }
+  ],
+  "exports": [
+    {
+      "name": "* (wasm-bindgen)",
+      "kind": "export"
+    }
+  ],
+  "changed": 0,
+  "hasFsm": false,
+  "hasSeq": false,
+  "cmds": []
+}

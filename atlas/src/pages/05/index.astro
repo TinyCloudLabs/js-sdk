@@ -1,0 +1,37 @@
+---
+import Atlas from '@/layouts/Atlas.astro';
+import { getInventory } from '@/lib/atlas';
+
+const inv = await getInventory();
+const ch = inv.chapters.find(c => c.id === '05');
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<Atlas chapter="05" title={ch?.title ?? 'delegation chains'} crumb={`05 · ${ch?.title ?? 'delegation chains'}`}>
+  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
+    <div class="label">chapter 05 · {ch?.read} · voice: {ch?.voice}</div>
+    <h1 style="margin-top: 14px;">{ch?.title ?? 'delegation chains'}</h1>
+
+    <div class="card tinted" style="padding: 22px; margin: 24px 0;">
+      <div class="label" style="margin-bottom: 6px;">stub — port from prototype</div>
+      <p style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 15px;">
+        This page is scaffolded but not yet ported. The reference design lives at
+        <code>screens/05-delegation.jsx</code> in the prototype project. Convert that JSX screen
+        into Astro markup using the same atoms (<code>.card</code>, <code>.pill</code>,
+        <code>.callout</code>, <code>.sticky</code>) — the CSS is identical.
+      </p>
+    </div>
+
+    <h3>data this chapter reads</h3>
+    <ul class="col gap-4">
+      <li class="mono">/atlas/data/inventory.json</li>
+      
+      
+      
+    </ul>
+
+    <h3>where to read next</h3>
+    <p>
+      Continue to <a class="pkg-link" href={`${base}/06/`}>chapter 06</a>.
+    </p>
+  </article>
+</Atlas>

@@ -1,0 +1,87 @@
+# TinyCloud JS SDK — Atlas
+
+A machine-readable map of github.com/TinyCloudLabs/js-sdk @ master, intended
+for both human readers and agents working in the codebase.
+
+> The repo is the truth. The atlas is the truth, *arranged*.
+
+## What's at /atlas/data/
+
+The atlas serves two audiences from one tree of files:
+
+- **Humans** read it as a website at https://tinycloudlabs.github.io/js-sdk/atlas/
+- **Agents** read the same facts as plain JSON, curl-able from /atlas/data/*.json
+
+Every page on the human site is regenerable from these JSON files,
+so they cannot drift apart for long.
+
+## Quick endpoints (for agents)
+
+| Endpoint                          | What it is                              |
+| --------------------------------- | --------------------------------------- |
+| /atlas/data/inventory.json        | Top-level index — packages + chapters   |
+| /atlas/data/pkg/<id>.json         | Single package: boundaries, exports, why |
+| /atlas/data/flow/<id>.json        | Sequence diagrams (steps array)         |
+| /atlas/data/state/<id>.json       | State machines (states + transitions)   |
+| /atlas/data/cmds.json             | Command/service surface map             |
+| /atlas/data/drift.json            | What changed since last rebuild         |
+| /atlas/data/artifacts.json        | All atlas artifact files + freshness    |
+| /atlas/data/meta.json             | How this atlas is regenerated (recipe)  |
+
+Package IDs with slashes (e.g. `sdk-rs/web`) are filename-encoded with
+`__` (double underscore): `/atlas/data/pkg/sdk-rs__web.json`.
+
+## Quickstart for agents
+
+    curl -s https://tinycloudlabs.github.io/js-sdk/atlas/data/inventory.json | jq .packages
+    curl -s https://tinycloudlabs.github.io/js-sdk/atlas/data/pkg/sdk-core.json | jq .exports
+    curl -s https://tinycloudlabs.github.io/js-sdk/atlas/data/drift.json | jq '.items | length'
+
+## How to read this in an agent context
+
+1. Start with `inventory.json` — it lists packages, chapters, and where
+   to find each one.
+2. For "what does package X do?", fetch `pkg/<id>.json` — it carries the
+   *why* (one paragraph, hand-curated) plus the structural facts (loc,
+   modules, exports, boundaries).
+3. For "how does flow Y work?", fetch `flow/<id>.json` — an array of
+   steps with from/to/msg.
+4. For "what's the command surface?", fetch `cmds.json`.
+5. For "is the atlas itself stale?", fetch `drift.json`. If it's
+   non-empty, the codebase has moved since the last rebuild.
+
+## Schema
+
+All endpoints are JSON. Top-level shape of inventory.json:
+
+    {
+      "$schema": "...",
+      "generated": { "at": ISO8601, "by": "tc atlas rebuild", "recipe": "/atlas/data/meta.json" },
+      "repo":      { "owner", "name", "ref", "sha", "version", "builtAt", "drift" },
+      "packages":  [{ "id", "npm", "kind", "side", "ref": "/atlas/data/pkg/<id>.json" }],
+      "chapters":  [{ "id", "title", "voice", "read" }],
+      "endpoints": [{ "method", "path", "desc" }]
+    }
+
+Per-package shape:
+
+    { "id", "npm", "kind", "side", "modules", "loc",
+      "why",       // hand-curated paragraph — the only prose we promise
+      "boundaries":[...], "exports":[...],
+      "changed", "hasFsm", "hasSeq", "cmds" }
+
+## Regenerating
+
+The atlas is rebuilt by walking `packages/*` for structural facts and
+merging them with hand-curated prose in `atlas/curated/*.yaml`. The
+recipe is at /atlas/data/meta.json. Run locally:
+
+    bun run atlas:rebuild
+
+After a rebuild, `drift.json` should be empty.
+
+## Source
+
+- Repo:   https://github.com/TinyCloudLabs/js-sdk
+- Atlas:  https://github.com/TinyCloudLabs/js-sdk/tree/master/atlas
+- Recipe: /atlas/data/meta.json

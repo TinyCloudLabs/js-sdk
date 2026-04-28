@@ -1,0 +1,54 @@
+{
+  "id": "sdk-core",
+  "npm": "@tinycloud/sdk-core",
+  "kind": "core",
+  "side": "iso",
+  "modules": 54,
+  "loc": 18383,
+  "why": "The platform-agnostic heart. Defines IUserAuthorization, ISigner, IWasmBindings, ISessionStorage. Owns Spaces, Delegations, Sharing, Manifest resolution, capability subset checks, protocol version handshake.",
+  "boundaries": [
+    {
+      "id": "sdk-services",
+      "kind": "edge"
+    }
+  ],
+  "exports": [
+    {
+      "name": "TinyCloud",
+      "kind": "export"
+    },
+    {
+      "name": "IUserAuthorization",
+      "kind": "export"
+    },
+    {
+      "name": "DelegationManager",
+      "kind": "export"
+    },
+    {
+      "name": "SharingService",
+      "kind": "export"
+    },
+    {
+      "name": "SpaceService",
+      "kind": "export"
+    },
+    {
+      "name": "CapabilityKeyRegistry",
+      "kind": "export"
+    },
+    {
+      "name": "resolveManifest",
+      "kind": "export"
+    },
+    {
+      "name": "checkNodeInfo",
+      "kind": "export"
+    }
+  ],
+  "changed": 0,
+  "hasFsm": true,
+  "hasSeq": true,
+  "cmds": [],
+  "central": true
+}
