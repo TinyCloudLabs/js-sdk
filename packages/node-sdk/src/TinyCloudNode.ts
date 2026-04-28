@@ -587,7 +587,7 @@ export class TinyCloudNode {
     }
 
     const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
-    await (this.auth as NodeUserAuthorization).hostOwnedSpace(accountSpaceId);
+    await this.ensureOwnedSpaceHosted(accountSpaceId);
 
     const accountKV = this.spaces.get(accountSpaceId).kv;
     for (const record of request.registryRecords) {
@@ -601,6 +601,49 @@ export class TinyCloudNode {
           `Failed to write manifest registry record ${record.key}: ${result.error.message}`,
         );
       }
+    }
+  }
+
+  private async ensureOwnedSpaceHosted(spaceId: string): Promise<void> {
+    if (!this.auth) {
+      throw new Error("Owned space hosting requires wallet mode");
+    }
+
+    const session = this.auth.tinyCloudSession;
+    if (!session) {
+      throw new Error("Owned space hosting requires an active session");
+    }
+
+    const host = this.hosts[0] ?? this.config.host;
+    if (!host) {
+      throw new Error("Owned space hosting requires a TinyCloud host");
+    }
+
+    const activation = await activateSessionWithHost(host, session.delegationHeader);
+    if (activation.success && !activation.skipped?.includes(spaceId)) {
+      return;
+    }
+
+    if (!activation.success && activation.status !== 404) {
+      throw new Error(
+        `Failed to check owned space ${spaceId}: ${activation.error ?? activation.status}`,
+      );
+    }
+
+    const created = await (this.auth as NodeUserAuthorization).hostOwnedSpace(spaceId);
+    if (!created) {
+      throw new Error(`Failed to create owned space: ${spaceId}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const retry = await activateSessionWithHost(host, session.delegationHeader);
+    if (!retry.success || retry.skipped?.includes(spaceId)) {
+      throw new Error(
+        `Failed to activate session after creating owned space ${spaceId}: ${
+          retry.error ?? "space was skipped"
+        }`,
+      );
     }
   }
 

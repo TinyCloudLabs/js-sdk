@@ -129,6 +129,27 @@ function makeNodeWithSigner(
   });
 }
 
+async function withFetchResponses(
+  responses: Response[],
+  fn: (fetchMock: any) => Promise<void>,
+): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const fetchMock = mock(async () => {
+    const response = responses.shift();
+    if (!response) {
+      throw new Error("unexpected fetch");
+    }
+    return response;
+  });
+
+  globalThis.fetch = fetchMock as any;
+  try {
+    await fn(fetchMock);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 /**
  * Stub out the post-prepareSession network calls so signIn can complete
  * without contacting a real server. We monkey-patch the inner auth
@@ -269,7 +290,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       "com.listen.app/": ["tinycloud.sql/read", "tinycloud.sql/write"],
     });
     expect(cfg.abilities.capabilities).toEqual({
-      "com.listen.app/": ["tinycloud.capabilities/read"],
+      "": ["tinycloud.capabilities/read"],
     });
   });
 
@@ -303,6 +324,9 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const cfg = (prepareSessionSpy as any).mock.calls[0][0];
     expect(cfg.spaceAbilities).toEqual({
       "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account": {
+        capabilities: {
+          "": ["tinycloud.capabilities/read"],
+        },
         kv: {
           "applications/": [
             "tinycloud.kv/get",
@@ -312,6 +336,61 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
         },
       },
     });
+  });
+
+  test("manifest registry write does not re-host existing account space", async () => {
+    const node = makeNodeWithSigner(makeFakeWasmBindings());
+    const auth = (node as any).auth;
+    auth._tinyCloudSession = {
+      delegationHeader: { Authorization: "Bearer fake" },
+    };
+    auth.hostOwnedSpace = mock(async () => true);
+
+    await withFetchResponses(
+      [
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await (node as any).ensureOwnedSpaceHosted(
+          "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account",
+        );
+      },
+    );
+
+    expect(auth.hostOwnedSpace).not.toHaveBeenCalled();
+  });
+
+  test("manifest registry write hosts account space only when activation skips it", async () => {
+    const accountSpaceId =
+      "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account";
+    const node = makeNodeWithSigner(makeFakeWasmBindings());
+    const auth = (node as any).auth;
+    auth._tinyCloudSession = {
+      delegationHeader: { Authorization: "Bearer fake" },
+    };
+    auth.hostOwnedSpace = mock(async () => true);
+
+    await withFetchResponses(
+      [
+        new Response(JSON.stringify({ activated: [], skipped: [accountSpaceId] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+        new Response(JSON.stringify({ activated: [accountSpaceId], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await (node as any).ensureOwnedSpaceHosted(accountSpaceId);
+      },
+    );
+
+    expect(auth.hostOwnedSpace).toHaveBeenCalledTimes(1);
+    expect(auth.hostOwnedSpace).toHaveBeenCalledWith(accountSpaceId);
   });
 
   test("multiple manifests → recap unions app caps + delegation caps", async () => {
@@ -375,11 +454,18 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
 
     // The recap union must contain BOTH services. KV from the app's
     // own permissions; SQL from the delegation's permissions.
-    expect(Object.keys(cfg.abilities).sort()).toEqual(["kv", "sql"]);
+    expect(Object.keys(cfg.abilities).sort()).toEqual([
+      "capabilities",
+      "kv",
+      "sql",
+    ]);
 
     // KV path inherits the manifest prefix.
     expect(cfg.abilities.kv).toEqual({
       "com.listen.app/": ["tinycloud.kv/get", "tinycloud.kv/put"],
+    });
+    expect(cfg.abilities.capabilities).toEqual({
+      "": ["tinycloud.capabilities/read"],
     });
 
     // SQL path also inherits the manifest prefix —
@@ -431,6 +517,9 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     expect(prepareSessionSpy).toHaveBeenCalled();
     const cfg = (prepareSessionSpy as any).mock.calls[0][0];
     expect(cfg.abilities).toEqual({
+      capabilities: {
+        "": ["tinycloud.capabilities/read"],
+      },
       kv: {
         "com.demo.app/config": ["tinycloud.kv/get"],
       },
