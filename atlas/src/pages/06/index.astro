@@ -1,37 +1,208 @@
 ---
 import Atlas from '@/layouts/Atlas.astro';
-import { getInventory } from '@/lib/atlas';
+import { getInventory, getAllPackages } from '@/lib/atlas';
 
 const inv = await getInventory();
-const ch = inv.chapters.find(c => c.id === '06');
+const pkgs = await getAllPackages();
+const ch = inv.chapters.find(c => c.id === '06')!;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
----
-<Atlas chapter="06" title={ch?.title ?? 'spaces & kv'} crumb={`06 · ${ch?.title ?? 'spaces & kv'}`}>
-  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
-    <div class="label">chapter 06 · {ch?.read} · voice: {ch?.voice}</div>
-    <h1 style="margin-top: 14px;">{ch?.title ?? 'spaces & kv'}</h1>
 
-    <div class="card tinted" style="padding: 22px; margin: 24px 0;">
-      <div class="label" style="margin-bottom: 6px;">stub — port from prototype</div>
-      <p style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 15px;">
-        This page is scaffolded but not yet ported. The reference design lives at
-        <code>screens/--TODO--.jsx</code> in the prototype project. Convert that JSX screen
-        into Astro markup using the same atoms (<code>.card</code>, <code>.pill</code>,
-        <code>.callout</code>, <code>.sticky</code>) — the CSS is identical.
+const sdkCore = pkgs.find(p => p.id === 'sdk-core')!;
+const webSdk  = pkgs.find(p => p.id === 'web-sdk')!;
+const nodeSdk = pkgs.find(p => p.id === 'node-sdk')!;
+const services = pkgs.find(p => p.id === 'sdk-services')!;
+---
+<Atlas chapter="06" title={ch.title} crumb={`06 · ${ch.title}`}>
+  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
+    <div class="label">chapter 06 · {ch.read} · voice: {ch.voice}</div>
+    <h1 style="margin-top: 14px;">sharing — <span class="squig">portable bundles</span></h1>
+
+    <p>
+      Imagine you've authored a delegation chain (chapter
+      <a class="pkg-link" href={`${base}/05/`}>05</a>): wallet to app,
+      app to recipient, scope narrowed at every step. Now you want to
+      hand it off — drop it in a chat, paste it into a URL, mail it.
+      The recipient should be able to act on it without setting up a
+      session of their own first. That's a <strong>share</strong>.
+    </p>
+
+    <p>
+      A v2 share is a single self-contained artifact: a freshly minted
+      ephemeral keypair, a delegation that authorizes that key, and the
+      host the data lives at — all encoded into one <code>tc1:</code>-prefixed
+      base64 string. Drop it into a URL, paste it into a chat, ship it
+      over a postcard. <code>SharingService</code> in
+      <a class="pkg-link" href={`${base}/pkg/sdk-core/`}>{sdkCore.npm}</a>
+      builds them; <a class="pkg-link" href={`${base}/pkg/web-sdk/`}>{webSdk.npm}</a>
+      and <a class="pkg-link" href={`${base}/pkg/node-sdk/`}>{nodeSdk.npm}</a>
+      expose the public APIs.
+    </p>
+
+    <h2>tour — what's inside the link</h2>
+
+    <div class="mermaid-wrap" style="margin: 24px 0; padding: 24px 24px 28px; position: relative;">
+      <span class="cap">share-bundle.svg</span>
+
+      <div class="mono" style="font-size: 12px; color: var(--ink-3); margin-bottom: 12px;">tc1:&lt;base64url&gt; …</div>
+
+      <div class="col gap-12">
+        <div class="card" style="padding: 12px 14px;">
+          <div class="label">key</div>
+          <div class="mono" style="font-size: 12px; margin-top: 4px;">jwk · ed25519 · { '{ kty, crv, x, d }' }</div>
+          <div style="font-size: 13px; color: var(--ink-2); margin-top: 6px;">
+            ephemeral. minted just for this share. <code>d</code> (the
+            secret half) is in the bundle — that's the whole point.
+          </div>
+        </div>
+
+        <div class="card" style="padding: 12px 14px;">
+          <div class="label">delegation</div>
+          <div class="mono" style="font-size: 12px; margin-top: 4px;">cid · authHeader · expiry · isRevoked</div>
+          <div style="font-size: 13px; color: var(--ink-2); margin-top: 6px;">
+            already signed. authorizes the key above to invoke a
+            specific service / space / path with a specific action set.
+            stored content-addressed by CID.
+          </div>
+        </div>
+
+        <div class="card" style="padding: 12px 14px;">
+          <div class="label">target</div>
+          <div class="mono" style="font-size: 12px; margin-top: 4px;">spaceId · path · host · keyDid</div>
+          <div style="font-size: 13px; color: var(--ink-2); margin-top: 6px;">
+            where to point the request and which space / prefix to scope it to.
+          </div>
+        </div>
+      </div>
+
+      <div class="callout" style="bottom: 18px; right: 24px; transform: rotate(-2deg); max-width: 200px;">
+        no node lookup needed.<br/>everything to invoke is in the bundle.
+      </div>
+    </div>
+
+    <h2>generate — the issuer side</h2>
+
+    <p>
+      The author calls <code>SharingService.generate({ '{ path, actions, expiry }' })</code>.
+      Internally, the service:
+    </p>
+
+    <ol style="font-family: 'Outfit', sans-serif; font-size: 15px; line-height: 1.7; padding-left: 24px;">
+      <li>mints a new <strong>share key</strong> (Ed25519, via the WASM seam).</li>
+      <li>signs a delegation from the current session key (or, when the share outlives the session, directly from the wallet via <code>onRootDelegationNeeded</code>) to the share key.</li>
+      <li>asks the node to register the delegation so it survives beyond the issuer's process.</li>
+      <li>encodes <code>{ '{ key, delegation, host, spaceId, path, keyDid }' }</code> as JSON, base64-urls it, and prepends <code>tc1:</code>.</li>
+      <li>returns a <code>ShareLink</code> with both the raw token and a fully composed URL.</li>
+    </ol>
+
+    <p>
+      The default expiry is 24 h; the default scope on read-only shares
+      is <code>tinycloud.kv/get</code> + <code>tinycloud.kv/metadata</code>.
+      Both are overridable.
+    </p>
+
+    <h2>receive — the recipient side</h2>
+
+    <p>
+      Two flavors. If the recipient is already a logged-in TinyCloud
+      user, <code>SharingService.receive(link)</code> ingests the
+      delegation into the user's <code>CapabilityKeyRegistry</code> at
+      priority 2 (below their own session key) and returns a pre-configured
+      KV service the caller can hit immediately. The ingested key sits
+      alongside the user's session — both are usable; selection is by
+      priority.
+    </p>
+
+    <p>
+      If the recipient has no session at all, the static
+      <code>TinyCloudWeb.receiveShare(link, key?)</code> path is the right
+      one. No <code>signIn</code>, no wallet, no IUserAuthorization.
+      It decodes the link, sets up a one-shot <code>ServiceSession</code>
+      from the bundle, registers the delegation with the host's
+      <code>/delegate</code> endpoint, and fetches the requested key.
+      It's a single function call, fully static.
+    </p>
+
+    <div class="card" style="padding: 14px 16px; margin: 16px 0; border-color: var(--accent);">
+      <div class="label" style="margin-bottom: 6px;">WASM init quirk</div>
+      <p style="margin: 0; font-size: 14px;">
+        <code>TinyCloudWeb.receiveShare</code> is a <em>static</em> method,
+        which means there's no constructor doing WASM bootstrap. It calls
+        <code>WasmInitializer.ensureInitialized()</code> at the top of the
+        function — necessary because <code>decodeShareLink</code> uses the
+        WASM bindings to validate the embedded delegation. If you've
+        never instantiated <code>TinyCloudWeb</code> in this page, this is
+        the line that triggers the wasm fetch.
       </p>
+    </div>
+
+    <h2>threat model — what a malicious share can do</h2>
+
+    <div class="row gap-16" style="margin: 16px 0;">
+      <div class="card tinted" style="flex:1; padding: 14px 16px;">
+        <div class="label" style="margin-bottom: 6px;">a malicious recipient</div>
+        <ul style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.6;">
+          <li>can do everything the delegation says they can — get, put, list, whatever was in <code>actions</code>.</li>
+          <li>can sub-delegate further if <code>disableSubDelegation</code> wasn't set.</li>
+          <li>can <em>not</em> escalate past the bundle's path/actions/expiry — the node enforces the same subset check on every invocation.</li>
+          <li>can leak the bundle. anyone holding the link is the recipient. treat shares like bearer tokens.</li>
+        </ul>
+      </div>
+      <div class="card tinted" style="flex:1; padding: 14px 16px;">
+        <div class="label" style="margin-bottom: 6px;">a malicious issuer</div>
+        <ul style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.6;">
+          <li>can only delegate from what they already hold. the chain they're sub-delegating from must subset-cover the share.</li>
+          <li>can revoke at any time — <code>revokeDelegation(cid)</code> on the node-sdk; the share's <code>isRevoked</code> check fails fast on receive.</li>
+          <li>cannot retroactively widen scope. issuing a new share doesn't change an old one.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>where the bundle lives in code</h2>
+
+    <div class="row gap-16" style="margin: 16px 0;">
+      <a href={`${base}/pkg/sdk-core/`} class="card" style="flex:1; padding: 14px 16px; text-decoration: none; color: var(--ink);">
+        <div class="label">implementation</div>
+        <div class="mono" style="margin: 4px 0; font-size: 13px;">{sdkCore.npm}</div>
+        <p style="margin: 0; font-size: 13px;">
+          <code>SharingService</code> + <code>SharingService.schema</code>.
+          {sdkCore.modules} modules · {sdkCore.loc.toLocaleString()} loc.
+          Owns encoding, decoding, expiry &amp; revocation checks, and the
+          ingestion-into-registry handoff.
+        </p>
+      </a>
+      <a href={`${base}/pkg/web-sdk/`} class="card" style="flex:1; padding: 14px 16px; text-decoration: none; color: var(--ink);">
+        <div class="label">browser surface</div>
+        <div class="mono" style="margin: 4px 0; font-size: 13px;">{webSdk.npm}</div>
+        <p style="margin: 0; font-size: 13px;">
+          <code>TinyCloudWeb.receiveShare</code> static method. Decodes,
+          fetches, returns. {webSdk.modules} modules · {webSdk.loc.toLocaleString()} loc.
+        </p>
+      </a>
+      <a href={`${base}/pkg/node-sdk/`} class="card" style="flex:1; padding: 14px 16px; text-decoration: none; color: var(--ink);">
+        <div class="label">server surface</div>
+        <div class="mono" style="margin: 4px 0; font-size: 13px;">{nodeSdk.npm}</div>
+        <p style="margin: 0; font-size: 13px;">
+          <code>delegate</code> &amp; <code>revokeDelegation</code> for
+          authoring; the same SharingService underneath.
+          {nodeSdk.modules} modules · {nodeSdk.loc.toLocaleString()} loc.
+        </p>
+      </a>
     </div>
 
     <h3>data this chapter reads</h3>
     <ul class="col gap-4">
       <li class="mono">/atlas/data/inventory.json</li>
-      
-      
-      
+      <li class="mono">/atlas/data/pkg/sdk-core.json</li>
+      <li class="mono">/atlas/data/pkg/web-sdk.json</li>
+      <li class="mono">/atlas/data/pkg/node-sdk.json</li>
+      <li class="mono">/atlas/data/pkg/sdk-services.json</li>
     </ul>
 
     <h3>where to read next</h3>
     <p>
-      Continue to <a class="pkg-link" href={`${base}/07/`}>chapter 07</a>.
+      Chapter <a class="pkg-link" href={`${base}/07/`}>07</a> turns the
+      camera the other way: how the SDK and the node agree they're
+      speaking the same protocol before any of these capabilities flow.
     </p>
   </article>
 </Atlas>
