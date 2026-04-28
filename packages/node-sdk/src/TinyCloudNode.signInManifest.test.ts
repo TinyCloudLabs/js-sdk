@@ -124,6 +124,7 @@ function makeNodeWithSigner(
   return new TinyCloudNode({
     wasmBindings: wasm,
     signer: fakeSigner as any,
+    host: "https://tinycloud.test",
     ...config,
   });
 }

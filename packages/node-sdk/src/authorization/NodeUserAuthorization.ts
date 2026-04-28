@@ -24,6 +24,7 @@ import {
   composeManifestRequest,
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
+  resolveTinyCloudHosts,
 } from "@tinycloud/sdk-core";
 import {
   SignStrategy,
@@ -59,8 +60,12 @@ export interface NodeUserAuthorizationConfig {
   autoCreateSpace?: boolean;
   /** Custom space creation handler. If provided, takes precedence over autoCreateSpace. */
   spaceCreationHandler?: ISpaceCreationHandler;
-  /** TinyCloud server endpoints (default: ["https://node.tinycloud.xyz"]) */
+  /** Explicit TinyCloud server endpoints. When omitted, signIn resolves the user's host. */
   tinycloudHosts?: string[];
+  /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
+  tinycloudRegistryUrl?: string | null;
+  /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
+  tinycloudFallbackHosts?: string[] | null;
   /** Whether to include public space capabilities in the session (default: true) */
   enablePublicSpace?: boolean;
   /** WASM bindings for cryptographic operations. Required. */
@@ -141,7 +146,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly sessionExpirationMs: number;
   private readonly autoCreateSpace: boolean;
   private readonly spaceCreationHandler?: ISpaceCreationHandler;
-  private readonly tinycloudHosts: string[];
+  private tinycloudHosts?: string[];
+  private readonly tinycloudRegistryUrl?: string | null;
+  private readonly tinycloudFallbackHosts?: string[] | null;
   private readonly enablePublicSpace: boolean;
   private readonly nonce?: string;
   private readonly siweConfig?: SiweConfig;
@@ -217,9 +224,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.sessionExpirationMs = config.sessionExpirationMs ?? 60 * 60 * 1000;
     this.autoCreateSpace = config.autoCreateSpace ?? false;
     this.spaceCreationHandler = config.spaceCreationHandler;
-    this.tinycloudHosts = config.tinycloudHosts ?? [
-      "https://node.tinycloud.xyz",
-    ];
+    this.tinycloudHosts = config.tinycloudHosts;
+    this.tinycloudRegistryUrl = config.tinycloudRegistryUrl;
+    this.tinycloudFallbackHosts = config.tinycloudFallbackHosts;
     this.enablePublicSpace = config.enablePublicSpace ?? true;
     this.nonce = config.nonce;
     this.siweConfig = config.siweConfig;
@@ -244,6 +251,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   get capabilityRequest(): ComposedManifestRequest | undefined {
     return this.getCapabilityRequest();
+  }
+
+  get hosts(): string[] {
+    return this.tinycloudHosts ? [...this.tinycloudHosts] : [];
   }
 
   /**
@@ -272,6 +283,33 @@ export class NodeUserAuthorization implements IUserAuthorization {
    */
   get tinyCloudSession(): TinyCloudSession | undefined {
     return this._tinyCloudSession;
+  }
+
+  private async resolveTinyCloudHostsForSignIn(
+    address: string,
+    chainId: number,
+  ): Promise<void> {
+    if (this.tinycloudHosts && this.tinycloudHosts.length > 0) {
+      return;
+    }
+
+    const subject = `did:pkh:eip155:${chainId}:${address}`;
+    const resolved = await resolveTinyCloudHosts(subject, {
+      registryUrl: this.tinycloudRegistryUrl,
+      fallbackHosts: this.tinycloudFallbackHosts,
+    });
+    this.tinycloudHosts = resolved.hosts;
+  }
+
+  private requireTinyCloudHosts(): string[] {
+    if (!this.tinycloudHosts || this.tinycloudHosts.length === 0) {
+      throw new Error("TinyCloud hosts have not been resolved. Call signIn() first.");
+    }
+    return this.tinycloudHosts;
+  }
+
+  private get primaryTinyCloudHost(): string {
+    return this.requireTinyCloudHosts()[0];
   }
 
   get nodeFeatures(): string[] {
@@ -438,7 +476,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       throw new Error("Must be signed in to host space");
     }
 
-    const host = this.tinycloudHosts[0];
+    const host = this.primaryTinyCloudHost;
     const spaceId = targetSpaceId ?? this._tinyCloudSession.spaceId;
 
     // Get peer ID from TinyCloud server
@@ -493,7 +531,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       throw new Error("Must be signed in to ensure space exists");
     }
 
-    const host = this.tinycloudHosts[0];
+    const host = this.primaryTinyCloudHost;
     const primarySpaceId = this._tinyCloudSession.spaceId;
 
     // Try to activate the session
@@ -642,6 +680,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const address = this.wasm.ensureEip55(this._address);
     const chainId = this._chainId;
 
+    await this.resolveTinyCloudHostsForSignIn(address, chainId);
+
     // Create a session key
     const keyId = `session-${Date.now()}`;
     this.sessionManager.renameSessionKeyId("default", keyId);
@@ -757,7 +797,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     // Verify SDK-node protocol compatibility and discover supported features
     const nodeInfo = await checkNodeInfo(
-      this.tinycloudHosts[0],
+      this.primaryTinyCloudHost,
       this.wasm.protocolVersion(),
     );
     this._nodeFeatures = nodeInfo.features;
@@ -928,6 +968,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const address = this.wasm.ensureEip55(await this.signer.getAddress());
     const chainId = await this.signer.getChainId();
 
+    await this.resolveTinyCloudHostsForSignIn(address, chainId);
+
     // Create client session (web-core compatible)
     const clientSession: ClientSession = {
       address,
@@ -996,7 +1038,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     // Verify SDK-node protocol compatibility and discover supported features
     const nodeInfo = await checkNodeInfo(
-      this.tinycloudHosts[0],
+      this.primaryTinyCloudHost,
       this.wasm.protocolVersion(),
     );
     this._nodeFeatures = nodeInfo.features;
