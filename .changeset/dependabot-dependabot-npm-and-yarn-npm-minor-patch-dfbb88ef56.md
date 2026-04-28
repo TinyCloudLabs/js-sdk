@@ -1,5 +1,5 @@
 ---
-"tinycloud-web-sdk": patch
+"@tinycloud/vfs": patch
 ---
 
-build(deps): bump the npm-minor-patch group with 2 updates
+Update `@platformatic/vfs` to 0.4.0 and refresh TypeScript dev dependencies used by the workspace builds.
