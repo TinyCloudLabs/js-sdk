@@ -329,6 +329,31 @@ export {
   validateManifest,
 } from "./manifest";
 
+// TinyCloud location registry helpers
+export {
+  CloudLocationResolutionError,
+  LocationRecordValidationError,
+  canonicalLocationPayload,
+  fetchLocationRecord,
+  httpUrlToMultiaddr,
+  locationPayloadForRecord,
+  multiaddrToHttpUrl,
+  resolveCloudLocation,
+  signLocationRecord,
+  validateLocationRecord,
+  validateLocationRecordPayload,
+  verifyLocationRecord,
+  type LocationCandidate,
+  type LocationCandidateInput,
+  type LocationRecord,
+  type LocationRecordPayload,
+  type LocationRecordSigner,
+  type LocationResolutionAttempt,
+  type LocationSource,
+  type ResolveCloudLocationOptions,
+  type ResolvedCloudLocation,
+} from "./location";
+
 // Capability subset checking and recap parsing
 export {
   // Errors
