@@ -1,0 +1,87 @@
+{
+  "generatedAt": "2026-04-28T21:33:15.693Z",
+  "count": 0,
+  "packages": [
+    {
+      "id": "web-sdk",
+      "prev_hash": "bd5b0070af9622b30701ea31d9cc6822c15c6ef80ea232bad84c15108a846b8c",
+      "hash": "bd5b0070af9622b30701ea31d9cc6822c15c6ef80ea232bad84c15108a846b8c",
+      "changed": false,
+      "kind": "none",
+      "exportsHash": "ea0365342f67a65cb39458523d4c96631a16f30252e8a7fe1517754d1f839d84",
+      "depsHash": "70feb9f1c66def42d800549d1b17fc52470be8d7b509b421c4d13ea73da47de4"
+    },
+    {
+      "id": "node-sdk",
+      "prev_hash": "0caeac28c3670a8b260256583781af6959334c35f52c77275adffc80aeaf6bfa",
+      "hash": "0caeac28c3670a8b260256583781af6959334c35f52c77275adffc80aeaf6bfa",
+      "changed": false,
+      "kind": "none",
+      "exportsHash": "9a51f4f4d29e657fe2059b1aaf29a872d427922c8d193f2c277deffddbca38a0",
+      "depsHash": "ec8407f33332d922d765c3e639e8004b4f36fa93b9fac9b3fcf1aa8825186066"
+    },
+    {
+      "id": "sdk-core",
+      "prev_hash": "cfa549ad0f2b04781daaf52c1b09a45dedf8ad72ac4338506b704d8c10322566",
+      "hash": "cfa549ad0f2b04781daaf52c1b09a45dedf8ad72ac4338506b704d8c10322566",
+      "changed": false,
+      "kind": "none",
+      "exportsHash": "b83e8ed11391adecbd80cdc1bb1ebb970e8d288a54b0e83319df94b6fbbf1aad",
+      "depsHash": "ea0eb68b098cde3d263106eb1daff3f5f9eff0e141300f47467fba7445ba5364"
+    },
+    {
+      "id": "sdk-services",
+      "prev_hash": "a5db22100b24a834a393f7578a60fa49baf7205bafc37f2328fb39b837e8c336",
+      "hash": "a5db22100b24a834a393f7578a60fa49baf7205bafc37f2328fb39b837e8c336",
+      "changed": false,
+      "kind": "none",
+      "exportsHash": "dff2280a8c7e723b6f4828d2955a055b82f090a11d446a8fa598f9ed8a39d3de",
+      "depsHash": "4cad7e4200a4d39156183674a3e1c4e1fec9c9df11d891cc61b07cfbbf109a61"
+    },
+    {
+      "id": "sdk-rs",
+      "prev_hash": "5951b2d23e9eb722dae2be4a198d362e307560adb16192b58aee0fd4af7b70f7",
+      "hash": "5951b2d23e9eb722dae2be4a198d362e307560adb16192b58aee0fd4af7b70f7",
+      "changed": false,
+      "kind": "none",
+      "exportsHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "depsHash": "12548169cd3846b71b3cd44705c5b2c748c3a73ad1fa1bb6adfdf565053e73b0"
+    },
+    {
+      "id": "sdk-rs/web",
+      "prev_hash": "a09e26a2735eae4950ed0b5521d217f2194b8fdff7f19a46308c30e77c0af7dd",
+      "hash": "a09e26a2735eae4950ed0b5521d217f2194b8fdff7f19a46308c30e77c0af7dd",
+      "changed": false,
+      "kind": "none",
+      "exportsHash": "b7fd2ca6d8bb42c47ef490839544f8686e94b5469c66d54745b76670212bf71d",
+      "depsHash": "12548169cd3846b71b3cd44705c5b2c748c3a73ad1fa1bb6adfdf565053e73b0"
+    },
+    {
+      "id": "sdk-rs/node",
+      "prev_hash": "5a3e16ead29938ba5f47b016ee952a0286c92b088cd03cae2ed6fff8aacf513a",
+      "hash": "5a3e16ead29938ba5f47b016ee952a0286c92b088cd03cae2ed6fff8aacf513a",
+      "changed": false,
+      "kind": "none",
+      "exportsHash": "dbcde63d53d0dfdebdafdf62d726a366ae2cd23064ea2cefbf95e82505a8a9d7",
+      "depsHash": "12548169cd3846b71b3cd44705c5b2c748c3a73ad1fa1bb6adfdf565053e73b0"
+    },
+    {
+      "id": "cli",
+      "prev_hash": "c8889a756220aa9363114cc32cf7d6cd16a2bd3688acfa5db2d7c8612abe4d0c",
+      "hash": "c8889a756220aa9363114cc32cf7d6cd16a2bd3688acfa5db2d7c8612abe4d0c",
+      "changed": false,
+      "kind": "none",
+      "exportsHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "depsHash": "4e60bf27cb66d0171c4f44b65cfdc1c01bebcc5dd463c4fd5bd95614e70bdf72"
+    },
+    {
+      "id": "vfs",
+      "prev_hash": "fdcae5c78b43786fc67dddbaaadacc587974c899abc2d2f089dc69152c9bfdfb",
+      "hash": "fdcae5c78b43786fc67dddbaaadacc587974c899abc2d2f089dc69152c9bfdfb",
+      "changed": false,
+      "kind": "none",
+      "exportsHash": "7fa2593a286377854e6c890480e77ea8aba2d91c4de70d6a54a01b1341fbf2bd",
+      "depsHash": "db63dc435337b5e84df2f007f5852cf26a3df516ab515e97ae425165f3aece96"
+    }
+  ]
+}

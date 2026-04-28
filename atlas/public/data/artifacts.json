@@ -1,0 +1,109 @@
+{
+  "items": [
+    {
+      "path": "atlas/data/inventory.json",
+      "kind": "index",
+      "bytes": 18420,
+      "age": "14m",
+      "status": "fresh"
+    },
+    {
+      "path": "atlas/data/pkg/web-sdk.json",
+      "kind": "package",
+      "bytes": 3120,
+      "age": "14m",
+      "status": "fresh"
+    },
+    {
+      "path": "atlas/data/pkg/node-sdk.json",
+      "kind": "package",
+      "bytes": 2880,
+      "age": "14m",
+      "status": "fresh"
+    },
+    {
+      "path": "atlas/data/pkg/sdk-core.json",
+      "kind": "package",
+      "bytes": 6210,
+      "age": "14m",
+      "status": "fresh"
+    },
+    {
+      "path": "atlas/data/pkg/sdk-services.json",
+      "kind": "package",
+      "bytes": 4900,
+      "age": "7d",
+      "status": "stale"
+    },
+    {
+      "path": "atlas/data/pkg/sdk-rs.json",
+      "kind": "package",
+      "bytes": 1840,
+      "age": "21d",
+      "status": "fresh"
+    },
+    {
+      "path": "atlas/data/flow/siwe-login.json",
+      "kind": "sequence",
+      "bytes": 2240,
+      "age": "14m",
+      "status": "fresh"
+    },
+    {
+      "path": "atlas/data/flow/kv-put.json",
+      "kind": "sequence",
+      "bytes": 1180,
+      "age": "14m",
+      "status": "fresh"
+    },
+    {
+      "path": "atlas/data/flow/delegate-to.json",
+      "kind": "sequence",
+      "bytes": 2640,
+      "age": "2d",
+      "status": "fresh"
+    },
+    {
+      "path": "atlas/data/flow/share-receive.json",
+      "kind": "sequence",
+      "bytes": 1820,
+      "age": "30d",
+      "status": "stale"
+    },
+    {
+      "path": "atlas/data/state/session.json",
+      "kind": "state",
+      "bytes": 980,
+      "age": "14m",
+      "status": "fresh"
+    },
+    {
+      "path": "atlas/data/state/space.json",
+      "kind": "state",
+      "bytes": 720,
+      "age": "30d",
+      "status": "stale"
+    },
+    {
+      "path": "atlas/data/cmds.json",
+      "kind": "service",
+      "bytes": 3210,
+      "age": "14m",
+      "status": "fresh"
+    },
+    {
+      "path": "atlas/data/deps/imports.dot",
+      "kind": "graph",
+      "bytes": 1640,
+      "age": "14m",
+      "status": "fresh"
+    },
+    {
+      "path": "atlas/data/build/topology.json",
+      "kind": "build",
+      "bytes": 2110,
+      "age": "14m",
+      "status": "fresh"
+    }
+  ]
+}

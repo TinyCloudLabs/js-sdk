@@ -1,0 +1,73 @@
+---
+import Atlas from '@/layouts/Atlas.astro';
+import { getAllPackages, getPackage, routeToPkgId } from '@/lib/atlas';
+
+export async function getStaticPaths() {
+  const pkgs = await getAllPackages();
+  return pkgs.map(p => ({ params: { pkg: p.id.replace(/\//g, '--') } }));
+}
+
+const { pkg: route } = Astro.params;
+const id = routeToPkgId(route!);
+const p = await getPackage(id);
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<Atlas chapter={p.kind === 'sdk-services' ? '04' : '01'} title={p.npm} crumb={`pkg / ${p.id}`}>
+  <article class="prose" style="padding: 48px 64px 80px; max-width: 1100px;">
+    <div class="row middle gap-12" style="margin-bottom: 8px;">
+      <span class={`pill kind-${p.kind}`}>{p.kind}</span>
+      <span class="pill faint">{p.side}</span>
+      <span class="pill">{p.modules} modules</span>
+      <span class="pill">{p.loc.toLocaleString()} loc</span>
+      {p.changed > 0 && <span class="pill accent">{p.changed} changed</span>}
+    </div>
+    <h1 style="margin: 8px 0 4px;">{p.id}</h1>
+    <div class="mono" style="color: var(--ink-3); font-size: 14px;">{p.npm}</div>
+
+    <h2>why this package exists</h2>
+    <p>{p.why}</p>
+
+    <div class="row gap-16" style="margin-top: 28px; align-items: flex-start;">
+      <section style="flex: 1; min-width: 0;">
+        <h3>boundaries</h3>
+        <ul class="col gap-2" style="padding-left: 0; list-style: none; margin: 8px 0;">
+          {p.boundaries.map(b => (
+            <li class="row middle gap-8" style="padding: 4px 0;">
+              <span class="pill faint" style="min-width: 60px; justify-content: center;">{b.kind}</span>
+              <span class="mono" style="font-size: 13px;">{b.id}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section style="flex: 1; min-width: 0;">
+        <h3>public exports</h3>
+        <ul class="col gap-2" style="padding-left: 0; list-style: none; margin: 8px 0;">
+          {p.exports.map(e => (
+            <li class="row middle gap-8" style="padding: 4px 0;">
+              <span class="pill" style="min-width: 60px; justify-content: center;">{e.kind}</span>
+              <span class="mono" style="font-size: 13px;">{e.name}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+
+    {p.cmds && p.cmds.length > 0 && (
+      <>
+        <h3>command surface</h3>
+        <div class="row wrap gap-6" style="margin-top: 8px;">
+          {p.cmds.map(c => <span class="pill mono">{c}</span>)}
+        </div>
+      </>
+    )}
+
+    <hr class="rule" style="margin: 36px 0 20px;" />
+    <div class="row between middle">
+      <a class="pkg-link" href={`${base}/data/pkg/${p.id.replace(/\//g, '__')}.json`} target="_blank">
+        ↳ raw json &nbsp; /atlas/data/pkg/{p.id.replace(/\//g, '__')}.json
+      </a>
+      <span class="label">curl-friendly. agent-readable. same facts.</span>
+    </div>
+  </article>
+</Atlas>

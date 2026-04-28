@@ -124,8 +124,30 @@ function makeNodeWithSigner(
   return new TinyCloudNode({
     wasmBindings: wasm,
     signer: fakeSigner as any,
+    host: "https://tinycloud.test",
     ...config,
   });
+}
+
+async function withFetchResponses(
+  responses: Response[],
+  fn: (fetchMock: any) => Promise<void>,
+): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const fetchMock = mock(async () => {
+    const response = responses.shift();
+    if (!response) {
+      throw new Error("unexpected fetch");
+    }
+    return response;
+  });
+
+  globalThis.fetch = fetchMock as any;
+  try {
+    await fn(fetchMock);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 /**
@@ -311,6 +333,61 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
         },
       },
     });
+  });
+
+  test("manifest registry write does not re-host existing account space", async () => {
+    const node = makeNodeWithSigner(makeFakeWasmBindings());
+    const auth = (node as any).auth;
+    auth._tinyCloudSession = {
+      delegationHeader: { Authorization: "Bearer fake" },
+    };
+    auth.hostOwnedSpace = mock(async () => true);
+
+    await withFetchResponses(
+      [
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await (node as any).ensureOwnedSpaceHosted(
+          "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account",
+        );
+      },
+    );
+
+    expect(auth.hostOwnedSpace).not.toHaveBeenCalled();
+  });
+
+  test("manifest registry write hosts account space only when activation skips it", async () => {
+    const accountSpaceId =
+      "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account";
+    const node = makeNodeWithSigner(makeFakeWasmBindings());
+    const auth = (node as any).auth;
+    auth._tinyCloudSession = {
+      delegationHeader: { Authorization: "Bearer fake" },
+    };
+    auth.hostOwnedSpace = mock(async () => true);
+
+    await withFetchResponses(
+      [
+        new Response(JSON.stringify({ activated: [], skipped: [accountSpaceId] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+        new Response(JSON.stringify({ activated: [accountSpaceId], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await (node as any).ensureOwnedSpaceHosted(accountSpaceId);
+      },
+    );
+
+    expect(auth.hostOwnedSpace).toHaveBeenCalledTimes(1);
+    expect(auth.hostOwnedSpace).toHaveBeenCalledWith(accountSpaceId);
   });
 
   test("multiple manifests → recap unions app caps + delegation caps", async () => {

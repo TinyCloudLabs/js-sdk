@@ -89,8 +89,12 @@ export interface Config extends ClientConfig {
   /** Prefix for space names when creating spaces */
   spacePrefix?: string;
 
-  /** TinyCloud server hosts (default: ['https://node.tinycloud.xyz']) */
+  /** Explicit TinyCloud server hosts. When omitted, signIn resolves the user's host. */
   tinycloudHosts?: string[];
+  /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
+  tinycloudRegistryUrl?: string | null;
+  /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
+  tinycloudFallbackHosts?: string[] | null;
 
   /** Whether to auto-create space on sign-in (default: true) */
   autoCreateSpace?: boolean;
@@ -276,7 +280,9 @@ export class TinyCloudWeb {
     await this.wasmBindings.ensureInitialized();
 
     const nodeConfig: TinyCloudNodeConfig = {
-      host: this.config.tinycloudHosts?.[0] ?? "https://node.tinycloud.xyz",
+      host: this.config.tinycloudHosts?.[0],
+      tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
+      tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
       domain: this.config.domain ?? (typeof window !== 'undefined' ? window.location.hostname : 'app.tinycloud.xyz'),
       prefix: this.config.spacePrefix,
       autoCreateSpace: this.config.autoCreateSpace ?? true,
@@ -359,6 +365,7 @@ export class TinyCloudWeb {
   get delegations(): DelegationManager { return this.node.delegationManager; }
   get capabilityRegistry(): ICapabilityKeyRegistry { return this.node.capabilityRegistry; }
   get spaceId(): string | undefined { return this._node?.spaceId; }
+  get hosts(): string[] { return this.node.hosts; }
 
   space(nameOrUri: string): ISpace { return this.spaces.get(nameOrUri); }
   get kvPrefix(): string { return this.config.kvPrefix || ""; }

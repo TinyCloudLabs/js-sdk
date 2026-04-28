@@ -1,0 +1,12 @@
+# Atlas build artifacts
+docs/
+
+# Astro
+.astro/
+dist/
+
+# Node
+node_modules/
+
+# Logs
+*.log

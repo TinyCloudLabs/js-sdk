@@ -1,0 +1,143 @@
+{
+  "id": "sdk-rs/node",
+  "npm": "@tinycloud/node-sdk-wasm",
+  "kind": "wasm",
+  "side": "node",
+  "modules": 1,
+  "loc": 60,
+  "why": "wasm-bindgen output for Node.js. CJS + ESM, with Node shims.",
+  "boundaries": [
+    {
+      "id": "sdk-rs",
+      "kind": "edge"
+    }
+  ],
+  "exports": [
+    {
+      "name": "completeSessionSetup",
+      "kind": "value"
+    },
+    {
+      "name": "createDelegation",
+      "kind": "value"
+    },
+    {
+      "name": "ensureEip55",
+      "kind": "value"
+    },
+    {
+      "name": "exportKey",
+      "kind": "value"
+    },
+    {
+      "name": "generateHostSIWEMessage",
+      "kind": "value"
+    },
+    {
+      "name": "HostConfig",
+      "kind": "type"
+    },
+    {
+      "name": "importKey",
+      "kind": "value"
+    },
+    {
+      "name": "importKeyFromEnvValue",
+      "kind": "value"
+    },
+    {
+      "name": "initPanicHook",
+      "kind": "value"
+    },
+    {
+      "name": "invoke",
+      "kind": "value"
+    },
+    {
+      "name": "invokeAny",
+      "kind": "value"
+    },
+    {
+      "name": "makeSpaceId",
+      "kind": "value"
+    },
+    {
+      "name": "parseRecapFromSiwe",
+      "kind": "value"
+    },
+    {
+      "name": "prepareSession",
+      "kind": "value"
+    },
+    {
+      "name": "protocolVersion",
+      "kind": "value"
+    },
+    {
+      "name": "Session",
+      "kind": "type"
+    },
+    {
+      "name": "SessionConfig",
+      "kind": "type"
+    },
+    {
+      "name": "signEthereumMessage",
+      "kind": "value"
+    },
+    {
+      "name": "signSecp256k1",
+      "kind": "value"
+    },
+    {
+      "name": "SiweConfig",
+      "kind": "type"
+    },
+    {
+      "name": "siweToDelegationHeaders",
+      "kind": "value"
+    },
+    {
+      "name": "TCWSessionManager",
+      "kind": "value"
+    },
+    {
+      "name": "vault_decrypt",
+      "kind": "value"
+    },
+    {
+      "name": "vault_derive_key",
+      "kind": "value"
+    },
+    {
+      "name": "vault_encrypt",
+      "kind": "value"
+    },
+    {
+      "name": "vault_random_bytes",
+      "kind": "value"
+    },
+    {
+      "name": "vault_sha256",
+      "kind": "value"
+    },
+    {
+      "name": "vault_x25519_dh",
+      "kind": "value"
+    },
+    {
+      "name": "vault_x25519_from_seed",
+      "kind": "value"
+    }
+  ],
+  "changed": 0,
+  "hasFsm": false,
+  "hasSeq": false,
+  "cmds": [],
+  "notable_exports": [
+    {
+      "name": "* (wasm-bindgen)",
+      "kind": "value"
+    }
+  ]
+}

@@ -62,7 +62,7 @@ jobs:
         run: |
           bun changeset version
           bun install
-          bun run build
+          bun run build:release
         env:
           BUILD_SETUP_ENABLED: true
 
@@ -157,7 +157,7 @@ jobs:
           bun install
 
       - name: Build
-        run: bun run build
+        run: bun run build:release
         env:
           BUILD_SETUP_ENABLED: true
 

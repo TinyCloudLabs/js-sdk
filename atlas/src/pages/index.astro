@@ -1,0 +1,73 @@
+---
+import Atlas from '@/layouts/Atlas.astro';
+import { getInventory } from '@/lib/atlas';
+
+const inv = await getInventory();
+const cover = inv.chapters[0];
+---
+<Atlas chapter="00" title={cover.title} crumb="prologue">
+  <div class="row">
+    <!-- left: editorial cover -->
+    <section style="flex: 1.6; padding: 64px 56px; min-width: 0;">
+      <div class="label">tinycloud · sdk atlas — generated {inv.generated.at.slice(0,10)}</div>
+      <h1 class="display" style="font-size: 72px; line-height: 1.02; margin: 22px 0 18px;">
+        a working <span class="squig">map</span><br />of the js-sdk
+      </h1>
+      <p style="font-family: 'Outfit', sans-serif; font-weight: 300; font-size: 19px; max-width: 56ch; line-height: 1.55; color: var(--ink-2); margin: 0 0 26px;">
+        Internals, not surface. The why behind each package, where the boundaries are,
+        and how a request crosses the wasm seam from <code>TinyCloudWeb</code> down to Rust.
+        The atlas exists to keep architects oriented and agents productive in a codebase
+        that keeps moving.
+      </p>
+
+      <div class="row gap-12 wrap" style="margin-bottom: 32px;">
+        <span class="pill solid">ref @ {inv.repo.sha.slice(0,7)}</span>
+        <span class="pill">v{inv.repo.version}</span>
+        <span class="pill faint">{inv.packages.length} packages</span>
+        <span class="pill accent">{inv.repo.drift} drift</span>
+      </div>
+
+      <h3 class="label" style="margin-top: 36px;">read in order</h3>
+      <ol class="col gap-2" style="list-style: none; padding: 0; margin: 12px 0 0; max-width: 540px;">
+        {inv.chapters.slice(1).map(c => (
+          <li>
+            <a class="toc-link" href={`${import.meta.env.BASE_URL.replace(/\/$/,'')}/${c.id}/`}>
+              <span class="num">{c.id}</span>
+              <span style="flex:1; font-size: 16px;">{c.title}</span>
+              <span class="pill faint">{c.read}</span>
+            </a>
+          </li>
+        ))}
+      </ol>
+    </section>
+
+    <!-- right: dossier card -->
+    <aside class="paper-grid" style="flex: 1; min-width: 0; padding: 64px 48px; border-left: 1px solid var(--ink-4); background: var(--paper-2);">
+      <div class="card tinted" style="padding: 22px;">
+        <div class="label">dossier</div>
+        <h2 class="display" style="margin: 8px 0 14px; font-size: 22px;">repo at a glance</h2>
+        <table style="width: 100%; font-family:'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-2); border-collapse: collapse;">
+          <tbody>
+            <tr><td style="padding: 4px 0; color: var(--ink-3);">repo</td><td style="text-align:right; color:var(--ink);">{inv.repo.owner}/{inv.repo.name}</td></tr>
+            <tr><td style="padding: 4px 0; color: var(--ink-3);">branch</td><td style="text-align:right; color:var(--ink);">{inv.repo.ref}</td></tr>
+            <tr><td style="padding: 4px 0; color: var(--ink-3);">sha</td><td style="text-align:right; color:var(--ink);">{inv.repo.sha.slice(0,12)}</td></tr>
+            <tr><td style="padding: 4px 0; color: var(--ink-3);">built</td><td style="text-align:right; color:var(--ink);">{inv.repo.builtAt}</td></tr>
+            <tr><td style="padding: 4px 0; color: var(--ink-3);">drift</td><td style="text-align:right; color:var(--accent);">{inv.repo.drift} item</td></tr>
+          </tbody>
+        </table>
+
+        <hr class="rule" style="margin: 18px 0;" />
+
+        <div class="label">for agents</div>
+        <pre style="font-family:'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-2); margin: 8px 0 0; white-space: pre-wrap;">curl /atlas/data/inventory.json
+curl /atlas/data/pkg/sdk-core.json
+cat /atlas/data/llms.txt</pre>
+      </div>
+
+      <div class="sticky" style="margin-top: 26px;">
+        the repo is the truth.<br />
+        the atlas is the truth, <em>arranged</em>.
+      </div>
+    </aside>
+  </div>
+</Atlas>

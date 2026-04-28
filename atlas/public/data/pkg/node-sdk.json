@@ -1,0 +1,874 @@
+{
+  "id": "node-sdk",
+  "npm": "@tinycloud/node-sdk",
+  "kind": "sdk",
+  "side": "node",
+  "modules": 21,
+  "loc": 6897,
+  "why": "Server entry. No wallet — uses a private key signer and file-backed session storage. Owns the delegation-chain authoring API.",
+  "boundaries": [
+    {
+      "id": "sdk-core",
+      "kind": "package",
+      "count": 61
+    },
+    {
+      "id": "bun:test",
+      "kind": "external",
+      "count": 5
+    },
+    {
+      "id": "events",
+      "kind": "external",
+      "count": 2
+    },
+    {
+      "id": "sdk-rs/node",
+      "kind": "package",
+      "count": 2
+    },
+    {
+      "id": "fs",
+      "kind": "external",
+      "count": 1
+    },
+    {
+      "id": "path",
+      "kind": "external",
+      "count": 1
+    },
+    {
+      "id": "sdk-services",
+      "kind": "package",
+      "count": 1
+    }
+  ],
+  "exports": [
+    {
+      "name": "ACCOUNT_REGISTRY_PATH",
+      "kind": "value"
+    },
+    {
+      "name": "ACCOUNT_REGISTRY_SPACE",
+      "kind": "value"
+    },
+    {
+      "name": "AutoApproveSpaceCreationHandler",
+      "kind": "value"
+    },
+    {
+      "name": "AutoRejectStrategy",
+      "kind": "type"
+    },
+    {
+      "name": "AutoSignStrategy",
+      "kind": "type"
+    },
+    {
+      "name": "BatchOptions",
+      "kind": "type"
+    },
+    {
+      "name": "BatchResponse",
+      "kind": "type"
+    },
+    {
+      "name": "buildSpaceUri",
+      "kind": "value"
+    },
+    {
+      "name": "CallbackStrategy",
+      "kind": "type"
+    },
+    {
+      "name": "CapabilityEntry",
+      "kind": "type"
+    },
+    {
+      "name": "CapabilityKeyRegistry",
+      "kind": "value"
+    },
+    {
+      "name": "CapabilityKeyRegistryErrorCode",
+      "kind": "type"
+    },
+    {
+      "name": "CapabilityKeyRegistryErrorCodes",
+      "kind": "value"
+    },
+    {
+      "name": "checkNodeInfo",
+      "kind": "value"
+    },
+    {
+      "name": "ClientSession",
+      "kind": "type"
+    },
+    {
+      "name": "ColumnInfo",
+      "kind": "type"
+    },
+    {
+      "name": "ComposedManifestRequest",
+      "kind": "type"
+    },
+    {
+      "name": "ComposeManifestOptions",
+      "kind": "type"
+    },
+    {
+      "name": "composeManifestRequest",
+      "kind": "value"
+    },
+    {
+      "name": "createCapabilityKeyRegistry",
+      "kind": "value"
+    },
+    {
+      "name": "CreateDelegationParams",
+      "kind": "type"
+    },
+    {
+      "name": "createSharingService",
+      "kind": "value"
+    },
+    {
+      "name": "createSpaceService",
+      "kind": "value"
+    },
+    {
+      "name": "createVaultCrypto",
+      "kind": "value"
+    },
+    {
+      "name": "createWasmKeyProvider",
+      "kind": "value"
+    },
+    {
+      "name": "DatabaseHandle",
+      "kind": "value"
+    },
+    {
+      "name": "DataVaultConfig",
+      "kind": "type"
+    },
+    {
+      "name": "DataVaultService",
+      "kind": "value"
+    },
+    {
+      "name": "DEFAULT_MANIFEST_SPACE",
+      "kind": "value"
+    },
+    {
+      "name": "DEFAULT_MANIFEST_VERSION",
+      "kind": "value"
+    },
+    {
+      "name": "defaultSignStrategy",
+      "kind": "value"
+    },
+    {
+      "name": "defaultSpaceCreationHandler",
+      "kind": "value"
+    },
+    {
+      "name": "DelegatedAccess",
+      "kind": "value"
+    },
+    {
+      "name": "DelegateToOptions",
+      "kind": "type"
+    },
+    {
+      "name": "DelegateToResult",
+      "kind": "type"
+    },
+    {
+      "name": "Delegation",
+      "kind": "type"
+    },
+    {
+      "name": "DelegationChain",
+      "kind": "type"
+    },
+    {
+      "name": "DelegationChainV2",
+      "kind": "type"
+    },
+    {
+      "name": "DelegationDirection",
+      "kind": "type"
+    },
+    {
+      "name": "DelegationError",
+      "kind": "type"
+    },
+    {
+      "name": "DelegationErrorCode",
+      "kind": "type"
+    },
+    {
+      "name": "DelegationErrorCodes",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationFilters",
+      "kind": "type"
+    },
+    {
+      "name": "DelegationManager",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationManagerConfig",
+      "kind": "type"
+    },
+    {
+      "name": "DelegationRecord",
+      "kind": "type"
+    },
+    {
+      "name": "DelegationResult",
+      "kind": "type"
+    },
+    {
+      "name": "deserializeDelegation",
+      "kind": "value"
+    },
+    {
+      "name": "DuckDbAction",
+      "kind": "value"
+    },
+    {
+      "name": "DuckDbActionType",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbBatchOptions",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbBatchResponse",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbDatabaseHandle",
+      "kind": "value"
+    },
+    {
+      "name": "DuckDbExecuteOptions",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbExecuteResponse",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbOptions",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbQueryOptions",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbQueryResponse",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbService",
+      "kind": "value"
+    },
+    {
+      "name": "DuckDbServiceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbStatement",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbValue",
+      "kind": "type"
+    },
+    {
+      "name": "EncodedShareData",
+      "kind": "type"
+    },
+    {
+      "name": "ExecuteOptions",
+      "kind": "type"
+    },
+    {
+      "name": "ExecuteResponse",
+      "kind": "type"
+    },
+    {
+      "name": "expandActionShortNames",
+      "kind": "value"
+    },
+    {
+      "name": "Extension",
+      "kind": "type"
+    },
+    {
+      "name": "FetchFunction",
+      "kind": "type"
+    },
+    {
+      "name": "FileSessionStorage",
+      "kind": "value"
+    },
+    {
+      "name": "GenerateShareParams",
+      "kind": "type"
+    },
+    {
+      "name": "HookEvent",
+      "kind": "type"
+    },
+    {
+      "name": "HookServiceName",
+      "kind": "type"
+    },
+    {
+      "name": "HooksService",
+      "kind": "value"
+    },
+    {
+      "name": "HooksServiceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "HookStreamEvent",
+      "kind": "type"
+    },
+    {
+      "name": "HookSubscription",
+      "kind": "type"
+    },
+    {
+      "name": "HookWebhookListOptions",
+      "kind": "type"
+    },
+    {
+      "name": "HookWebhookRecord",
+      "kind": "type"
+    },
+    {
+      "name": "HookWebhookRegistration",
+      "kind": "type"
+    },
+    {
+      "name": "HookWebhookScope",
+      "kind": "type"
+    },
+    {
+      "name": "HookWebhookUnregisterOptions",
+      "kind": "type"
+    },
+    {
+      "name": "ICapabilityKeyRegistry",
+      "kind": "type"
+    },
+    {
+      "name": "IDatabaseHandle",
+      "kind": "type"
+    },
+    {
+      "name": "IDataVaultService",
+      "kind": "type"
+    },
+    {
+      "name": "IDuckDbDatabaseHandle",
+      "kind": "type"
+    },
+    {
+      "name": "IDuckDbService",
+      "kind": "type"
+    },
+    {
+      "name": "IENSResolver",
+      "kind": "type"
+    },
+    {
+      "name": "IHooksService",
+      "kind": "type"
+    },
+    {
+      "name": "IKVService",
+      "kind": "type"
+    },
+    {
+      "name": "IngestOptions",
+      "kind": "type"
+    },
+    {
+      "name": "INotificationHandler",
+      "kind": "type"
+    },
+    {
+      "name": "InvokeFunction",
+      "kind": "type"
+    },
+    {
+      "name": "IPrefixedKVService",
+      "kind": "type"
+    },
+    {
+      "name": "isCapabilitySubset",
+      "kind": "value"
+    },
+    {
+      "name": "ISessionManager",
+      "kind": "type"
+    },
+    {
+      "name": "ISessionStorage",
+      "kind": "type"
+    },
+    {
+      "name": "ISharingService",
+      "kind": "type"
+    },
+    {
+      "name": "ISigner",
+      "kind": "type"
+    },
+    {
+      "name": "ISpace",
+      "kind": "type"
+    },
+    {
+      "name": "ISpaceCreationHandler",
+      "kind": "type"
+    },
+    {
+      "name": "ISpaceScopedDelegations",
+      "kind": "type"
+    },
+    {
+      "name": "ISpaceScopedSharing",
+      "kind": "type"
+    },
+    {
+      "name": "ISpaceService",
+      "kind": "type"
+    },
+    {
+      "name": "ISQLService",
+      "kind": "type"
+    },
+    {
+      "name": "IUserAuthorization",
+      "kind": "type"
+    },
+    {
+      "name": "IWasmBindings",
+      "kind": "type"
+    },
+    {
+      "name": "JWK",
+      "kind": "type"
+    },
+    {
+      "name": "KeyInfo",
+      "kind": "type"
+    },
+    {
+      "name": "KeyProvider",
+      "kind": "type"
+    },
+    {
+      "name": "KeyType",
+      "kind": "type"
+    },
+    {
+      "name": "KVResponse",
+      "kind": "type"
+    },
+    {
+      "name": "KVService",
+      "kind": "value"
+    },
+    {
+      "name": "KVServiceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "loadManifest",
+      "kind": "value"
+    },
+    {
+      "name": "makePublicSpaceId",
+      "kind": "value"
+    },
+    {
+      "name": "Manifest",
+      "kind": "type"
+    },
+    {
+      "name": "ManifestDefaults",
+      "kind": "type"
+    },
+    {
+      "name": "ManifestRegistryRecord",
+      "kind": "type"
+    },
+    {
+      "name": "ManifestValidationError",
+      "kind": "value"
+    },
+    {
+      "name": "MemorySessionStorage",
+      "kind": "value"
+    },
+    {
+      "name": "NodeEventEmitterStrategy",
+      "kind": "type"
+    },
+    {
+      "name": "NodeUserAuthorization",
+      "kind": "value"
+    },
+    {
+      "name": "NodeUserAuthorizationConfig",
+      "kind": "value"
+    },
+    {
+      "name": "NodeWasmBindings",
+      "kind": "value"
+    },
+    {
+      "name": "parseExpiry",
+      "kind": "value"
+    },
+    {
+      "name": "parseSpaceUri",
+      "kind": "value"
+    },
+    {
+      "name": "PermissionEntry",
+      "kind": "type"
+    },
+    {
+      "name": "PermissionNotInManifestError",
+      "kind": "value"
+    },
+    {
+      "name": "PersistedSessionData",
+      "kind": "type"
+    },
+    {
+      "name": "PortableDelegation",
+      "kind": "value"
+    },
+    {
+      "name": "PrefixedKVService",
+      "kind": "value"
+    },
+    {
+      "name": "PrivateKeySigner",
+      "kind": "value"
+    },
+    {
+      "name": "ProtocolMismatchError",
+      "kind": "value"
+    },
+    {
+      "name": "QueryOptions",
+      "kind": "type"
+    },
+    {
+      "name": "QueryResponse",
+      "kind": "type"
+    },
+    {
+      "name": "ReceiveOptions",
+      "kind": "type"
+    },
+    {
+      "name": "ResolvedCapabilities",
+      "kind": "type"
+    },
+    {
+      "name": "ResolvedDelegate",
+      "kind": "type"
+    },
+    {
+      "name": "resolveManifest",
+      "kind": "value"
+    },
+    {
+      "name": "resourceCapabilitiesToSpaceAbilitiesMap",
+      "kind": "value"
+    },
+    {
+      "name": "ResourceCapability",
+      "kind": "type"
+    },
+    {
+      "name": "RestorableSession",
+      "kind": "type"
+    },
+    {
+      "name": "SchemaInfo",
+      "kind": "type"
+    },
+    {
+      "name": "serializeDelegation",
+      "kind": "value"
+    },
+    {
+      "name": "ServiceContext",
+      "kind": "value"
+    },
+    {
+      "name": "ServiceContextConfig",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceSession",
+      "kind": "type"
+    },
+    {
+      "name": "SessionExpiredError",
+      "kind": "value"
+    },
+    {
+      "name": "ShareAccess",
+      "kind": "type"
+    },
+    {
+      "name": "ShareLink",
+      "kind": "type"
+    },
+    {
+      "name": "ShareLinkData",
+      "kind": "type"
+    },
+    {
+      "name": "ShareSchema",
+      "kind": "type"
+    },
+    {
+      "name": "SharingService",
+      "kind": "value"
+    },
+    {
+      "name": "SharingServiceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "SignCallback",
+      "kind": "type"
+    },
+    {
+      "name": "SignInOptions",
+      "kind": "type"
+    },
+    {
+      "name": "SignRequest",
+      "kind": "type"
+    },
+    {
+      "name": "SignResponse",
+      "kind": "type"
+    },
+    {
+      "name": "SignStrategy",
+      "kind": "type"
+    },
+    {
+      "name": "SilentNotificationHandler",
+      "kind": "value"
+    },
+    {
+      "name": "Space",
+      "kind": "value"
+    },
+    {
+      "name": "SpaceAbilitiesMap",
+      "kind": "type"
+    },
+    {
+      "name": "SpaceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "SpaceCreationContext",
+      "kind": "type"
+    },
+    {
+      "name": "SpaceErrorCode",
+      "kind": "type"
+    },
+    {
+      "name": "SpaceErrorCodes",
+      "kind": "value"
+    },
+    {
+      "name": "SpaceInfo",
+      "kind": "type"
+    },
+    {
+      "name": "SpaceOwnership",
+      "kind": "type"
+    },
+    {
+      "name": "SpaceService",
+      "kind": "value"
+    },
+    {
+      "name": "SpaceServiceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "SQLAction",
+      "kind": "value"
+    },
+    {
+      "name": "SQLActionType",
+      "kind": "type"
+    },
+    {
+      "name": "SQLService",
+      "kind": "value"
+    },
+    {
+      "name": "SQLServiceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "SqlStatement",
+      "kind": "type"
+    },
+    {
+      "name": "SqlValue",
+      "kind": "type"
+    },
+    {
+      "name": "StoredDelegationChain",
+      "kind": "type"
+    },
+    {
+      "name": "SubscribeOptions",
+      "kind": "type"
+    },
+    {
+      "name": "TableInfo",
+      "kind": "type"
+    },
+    {
+      "name": "TinyCloud",
+      "kind": "value"
+    },
+    {
+      "name": "TinyCloudConfig",
+      "kind": "type"
+    },
+    {
+      "name": "TinyCloudNode",
+      "kind": "value"
+    },
+    {
+      "name": "TinyCloudNodeConfig",
+      "kind": "value"
+    },
+    {
+      "name": "TinyCloudSession",
+      "kind": "type"
+    },
+    {
+      "name": "UnsupportedFeatureError",
+      "kind": "value"
+    },
+    {
+      "name": "validateManifest",
+      "kind": "value"
+    },
+    {
+      "name": "VaultCrypto",
+      "kind": "type"
+    },
+    {
+      "name": "VaultEntry",
+      "kind": "type"
+    },
+    {
+      "name": "VaultError",
+      "kind": "type"
+    },
+    {
+      "name": "VaultGetOptions",
+      "kind": "type"
+    },
+    {
+      "name": "VaultGrantOptions",
+      "kind": "type"
+    },
+    {
+      "name": "VaultHeaders",
+      "kind": "value"
+    },
+    {
+      "name": "VaultListOptions",
+      "kind": "type"
+    },
+    {
+      "name": "VaultPublicSpaceKVActions",
+      "kind": "value"
+    },
+    {
+      "name": "VaultPutOptions",
+      "kind": "type"
+    },
+    {
+      "name": "VersionCheckError",
+      "kind": "value"
+    },
+    {
+      "name": "ViewInfo",
+      "kind": "type"
+    },
+    {
+      "name": "WasmKeyProvider",
+      "kind": "value"
+    },
+    {
+      "name": "WasmKeyProviderConfig",
+      "kind": "value"
+    },
+    {
+      "name": "WasmVaultFunctions",
+      "kind": "type"
+    }
+  ],
+  "changed": 0,
+  "hasFsm": true,
+  "hasSeq": true,
+  "cmds": [],
+  "notable_exports": [
+    {
+      "name": "TinyCloudNode",
+      "kind": "value"
+    },
+    {
+      "name": "DelegatedAccess",
+      "kind": "value"
+    },
+    {
+      "name": "PrivateKeySigner",
+      "kind": "value"
+    },
+    {
+      "name": "FileSessionStorage",
+      "kind": "value"
+    },
+    {
+      "name": "serializeDelegation",
+      "kind": "value"
+    }
+  ]
+}
