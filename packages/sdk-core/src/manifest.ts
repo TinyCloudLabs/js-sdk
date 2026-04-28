@@ -61,7 +61,7 @@ export interface PermissionEntry {
  *
  * - `false` → no auto-included permissions
  * - `true` → standard tier (KV + SQL read/write + capabilities:read)
- * - `"admin"` → standard + SQL ddl + capabilities:admin
+ * - `"admin"` → standard + SQL ddl
  * - `"all"` → everything the SDK supports (including DuckDB)
  *
  * Unknown string values silently fall back to `true`. Values are normalized
@@ -261,36 +261,29 @@ export const SERVICE_LONG_TO_SHORT: Readonly<Record<string, string>> =
 /**
  * Default permission entries for the `true` / standard tier.
  *
- * `tinycloud.capabilities:read` is ALWAYS present in any non-false default
- * so delegation chains can be verified.
+ * `tinycloud.capabilities/read` is added separately for every requested
+ * space, without the app path prefix. That keeps capability introspection
+ * space-scoped instead of app-data scoped.
  */
-const DEFAULT_STANDARD_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] =
-  [
-    {
-      service: "tinycloud.kv",
-      space: DEFAULT_MANIFEST_SPACE,
-      path: "/",
-      actions: ["get", "put", "del", "list", "metadata"],
-    },
-    {
-      service: "tinycloud.sql",
-      space: DEFAULT_MANIFEST_SPACE,
-      path: "/",
-      actions: ["read", "write"],
-    },
-    {
-      service: "tinycloud.capabilities",
-      space: DEFAULT_MANIFEST_SPACE,
-      path: "/",
-      actions: ["read"],
-    },
-  ];
+const DEFAULT_STANDARD_ENTRIES: readonly PermissionEntry[] = [
+  {
+    service: "tinycloud.kv",
+    space: DEFAULT_MANIFEST_SPACE,
+    path: "/",
+    actions: ["get", "put", "del", "list", "metadata"],
+  },
+  {
+    service: "tinycloud.sql",
+    space: DEFAULT_MANIFEST_SPACE,
+    path: "/",
+    actions: ["read", "write"],
+  },
+];
 
 /**
- * Default permission entries for the `"admin"` tier: standard + sql/ddl +
- * capabilities/admin.
+ * Default permission entries for the `"admin"` tier: standard + sql/ddl.
  */
-const DEFAULT_ADMIN_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] = [
+const DEFAULT_ADMIN_ENTRIES: readonly PermissionEntry[] = [
   {
     service: "tinycloud.kv",
     space: DEFAULT_MANIFEST_SPACE,
@@ -303,12 +296,6 @@ const DEFAULT_ADMIN_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] = [
     path: "/",
     actions: ["read", "write", "ddl"],
   },
-  {
-    service: "tinycloud.capabilities",
-    space: DEFAULT_MANIFEST_SPACE,
-    path: "/",
-    actions: ["read", "admin"],
-  },
 ];
 
 /**
@@ -317,7 +304,7 @@ const DEFAULT_ADMIN_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] = [
  * DuckDB is opt-in and only appears in this tier or in explicit manifest
  * `permissions` entries.
  */
-const DEFAULT_ALL_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] = [
+const DEFAULT_ALL_ENTRIES: readonly PermissionEntry[] = [
   {
     service: "tinycloud.kv",
     space: DEFAULT_MANIFEST_SPACE,
@@ -335,12 +322,6 @@ const DEFAULT_ALL_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] = [
     space: DEFAULT_MANIFEST_SPACE,
     path: "/",
     actions: ["read", "write"],
-  },
-  {
-    service: "tinycloud.capabilities",
-    space: DEFAULT_MANIFEST_SPACE,
-    path: "/",
-    actions: ["read", "admin"],
   },
 ];
 
@@ -585,6 +566,7 @@ function defaultEntriesForTier(tier: ManifestDefaults): PermissionEntry[] {
     space: e.space,
     path: e.path,
     actions: [...e.actions],
+    ...(e.skipPrefix !== undefined ? { skipPrefix: e.skipPrefix } : {}),
   }));
 }
 
@@ -617,8 +599,8 @@ export function resolveManifest(input: Manifest): ResolvedCapabilities {
   // for the same (service, space, path) tuple override defaults.
   const allEntries: PermissionEntry[] = [...defaultEntries, ...explicitEntries];
 
-  const resources: ResourceCapability[] = allEntries.map((entry) =>
-    resolveEntry(entry, prefix, expiryMs, space),
+  const resources: ResourceCapability[] = withCapabilitiesReadForSpaces(
+    allEntries.map((entry) => resolveEntry(entry, prefix, expiryMs, space)),
   );
 
   const additionalDelegates: ResolvedDelegate[] =
@@ -737,6 +719,29 @@ function dedupeResources(
   return [...byKey.values()];
 }
 
+function capabilitiesReadPermission(space: string): ResourceCapability {
+  return {
+    service: "tinycloud.capabilities",
+    space,
+    path: "",
+    actions: ["tinycloud.capabilities/read"],
+  };
+}
+
+function withCapabilitiesReadForSpaces(
+  resources: readonly ResourceCapability[],
+): ResourceCapability[] {
+  if (resources.length === 0) {
+    return [];
+  }
+
+  const spaces = new Set(resources.map((resource) => resource.space));
+  return dedupeResources([
+    ...resources,
+    ...[...spaces].map(capabilitiesReadPermission),
+  ]);
+}
+
 function accountRegistryPermission(): ResourceCapability {
   return {
     service: "tinycloud.kv",
@@ -776,6 +781,8 @@ export function composeManifestRequest(
   if (includeAccountRegistryPermissions) {
     resources.push(accountRegistryPermission());
   }
+  const resourcesWithImplicitCapabilities =
+    withCapabilitiesReadForSpaces(resources);
 
   const manifestsByAppId = new Map<string, Manifest[]>();
   for (const manifest of manifests) {
@@ -801,7 +808,7 @@ export function composeManifestRequest(
 
   return {
     manifests,
-    resources: dedupeResources(resources),
+    resources: resourcesWithImplicitCapabilities,
     delegationTargets,
     registryRecords,
     expiryMs: Math.max(...resolved.map((entry) => entry.expiryMs)),

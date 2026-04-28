@@ -209,7 +209,7 @@ describe("resolveManifest — minimum manifest with defaults=true", () => {
     );
   });
 
-  it("includes the three standard default entries (kv, sql, capabilities)", () => {
+  it("includes standard defaults plus space-level capabilities read", () => {
     const services = new Set(resolved.resources.map((r) => r.service));
     expect(services.has("tinycloud.kv")).toBe(true);
     expect(services.has("tinycloud.sql")).toBe(true);
@@ -240,6 +240,8 @@ describe("resolveManifest — minimum manifest with defaults=true", () => {
       (r) => r.service === "tinycloud.capabilities",
     );
     expect(caps?.actions).toContain("tinycloud.capabilities/read");
+    expect(caps?.space).toBe("applications");
+    expect(caps?.path).toBe("");
   });
 });
 
@@ -253,7 +255,7 @@ describe("resolveManifest — defaults tiers", () => {
     expect(resolved.resources).toEqual([]);
   });
 
-  it("admin includes sql/ddl and capabilities/admin", () => {
+  it("admin includes sql/ddl and only implicit capabilities/read", () => {
     const resolved = resolveManifest({
       app_id: "a.b.c",
       name: "x",
@@ -264,7 +266,7 @@ describe("resolveManifest — defaults tiers", () => {
     const caps = resolved.resources.find(
       (r) => r.service === "tinycloud.capabilities",
     );
-    expect(caps?.actions).toContain("tinycloud.capabilities/admin");
+    expect(caps?.actions).toEqual(["tinycloud.capabilities/read"]);
     // DuckDB still opt-in.
     expect(
       resolved.resources.find((r) => r.service === "tinycloud.duckdb"),
@@ -296,6 +298,47 @@ describe("resolveManifest — defaults tiers", () => {
     // Standard tier, not admin or all.
     const sql = resolved.resources.find((r) => r.service === "tinycloud.sql");
     expect(sql?.actions).not.toContain("tinycloud.sql/ddl");
+  });
+
+  it("adds capabilities read for explicit permission spaces", () => {
+    const resolved = resolveManifest({
+      app_id: "a.b.c",
+      name: "x",
+      defaults: false,
+      permissions: [
+        {
+          service: "tinycloud.kv",
+          space: "applications",
+          path: "data/",
+          actions: ["get"],
+        },
+        {
+          service: "tinycloud.sql",
+          space: "analytics",
+          path: "events",
+          actions: ["read"],
+        },
+      ],
+    });
+
+    expect(
+      resolved.resources.filter(
+        (resource) => resource.service === "tinycloud.capabilities",
+      ),
+    ).toEqual([
+      {
+        service: "tinycloud.capabilities",
+        space: "applications",
+        path: "",
+        actions: ["tinycloud.capabilities/read"],
+      },
+      {
+        service: "tinycloud.capabilities",
+        space: "analytics",
+        path: "",
+        actions: ["tinycloud.capabilities/read"],
+      },
+    ]);
   });
 });
 
@@ -528,6 +571,18 @@ describe("resolveManifest — end-to-end composition", () => {
             "tinycloud.kv/put",
             "tinycloud.kv/list",
           ],
+        }),
+        expect.objectContaining({
+          service: "tinycloud.capabilities",
+          space: "applications",
+          path: "",
+          actions: ["tinycloud.capabilities/read"],
+        }),
+        expect.objectContaining({
+          service: "tinycloud.capabilities",
+          space: "account",
+          path: "",
+          actions: ["tinycloud.capabilities/read"],
         }),
       ]),
     );

@@ -290,7 +290,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       "com.listen.app/": ["tinycloud.sql/read", "tinycloud.sql/write"],
     });
     expect(cfg.abilities.capabilities).toEqual({
-      "com.listen.app/": ["tinycloud.capabilities/read"],
+      "": ["tinycloud.capabilities/read"],
     });
   });
 
@@ -324,6 +324,9 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const cfg = (prepareSessionSpy as any).mock.calls[0][0];
     expect(cfg.spaceAbilities).toEqual({
       "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account": {
+        capabilities: {
+          "": ["tinycloud.capabilities/read"],
+        },
         kv: {
           "applications/": [
             "tinycloud.kv/get",
@@ -451,11 +454,18 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
 
     // The recap union must contain BOTH services. KV from the app's
     // own permissions; SQL from the delegation's permissions.
-    expect(Object.keys(cfg.abilities).sort()).toEqual(["kv", "sql"]);
+    expect(Object.keys(cfg.abilities).sort()).toEqual([
+      "capabilities",
+      "kv",
+      "sql",
+    ]);
 
     // KV path inherits the manifest prefix.
     expect(cfg.abilities.kv).toEqual({
       "com.listen.app/": ["tinycloud.kv/get", "tinycloud.kv/put"],
+    });
+    expect(cfg.abilities.capabilities).toEqual({
+      "": ["tinycloud.capabilities/read"],
     });
 
     // SQL path also inherits the manifest prefix —
@@ -507,6 +517,9 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     expect(prepareSessionSpy).toHaveBeenCalled();
     const cfg = (prepareSessionSpy as any).mock.calls[0][0];
     expect(cfg.abilities).toEqual({
+      capabilities: {
+        "": ["tinycloud.capabilities/read"],
+      },
       kv: {
         "com.demo.app/config": ["tinycloud.kv/get"],
       },
