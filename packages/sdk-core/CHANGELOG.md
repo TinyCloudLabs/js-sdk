@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 2.2.0-beta.0
+
+### Minor Changes
+
+- 6561589: Add manifest v1 composition helpers, per-space capability requests, materialized manifest delegations, and the default account-space application registry grant.
+
 ## 2.1.0
 
 ### Minor Changes

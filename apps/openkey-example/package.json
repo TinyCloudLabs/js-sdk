@@ -1,6 +1,6 @@
 {
   "name": "tinycloud-openkey-example-app",
-  "version": "0.0.14",
+  "version": "0.0.15-beta.0",
   "private": true,
   "repository": {
     "url": "ssh://git@github.com:TinyCloudLabs/web-sdk.git"

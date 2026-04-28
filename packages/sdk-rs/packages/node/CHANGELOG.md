@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk-wasm
 
+## 1.7.3-beta.0
+
+### Patch Changes
+
+- 6561589: Add manifest v1 composition helpers, per-space capability requests, materialized manifest delegations, and the default account-space application registry grant.
+
 ## 1.7.2
 
 ### Patch Changes

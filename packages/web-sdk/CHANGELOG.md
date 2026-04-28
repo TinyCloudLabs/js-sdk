@@ -1,5 +1,18 @@
 # @tinycloudlabs/web-sdk
 
+## 2.2.0-beta.0
+
+### Minor Changes
+
+- 6561589: Add manifest v1 composition helpers, per-space capability requests, materialized manifest delegations, and the default account-space application registry grant.
+
+### Patch Changes
+
+- Updated dependencies [6561589]
+  - @tinycloud/sdk-core@2.2.0-beta.0
+  - @tinycloud/node-sdk@2.2.0-beta.0
+  - @tinycloud/web-sdk-wasm@1.7.3-beta.0
+
 ## 2.1.0
 
 ### Minor Changes
