@@ -1,5 +1,7 @@
 ---
 "@tinycloud/sdk-core": minor
+"@tinycloud/node-sdk": minor
+"@tinycloud/web-sdk": minor
 ---
 
-Add a default TinyCloud host resolver that uses registry discovery and hosted node fallback without app-level configuration.
+Add default TinyCloud host discovery and run it from sign-in when no explicit host is configured.
