@@ -8,42 +8,694 @@
   "why": "Concrete services bound to a TinyCloud node: KV, SQL, DuckDB, Hooks, Vault. All built on a shared ServiceContext + Result pattern.",
   "boundaries": [
     {
+      "id": "bun:test",
+      "kind": "external",
+      "count": 2
+    },
+    {
+      "id": "zod",
+      "kind": "external",
+      "count": 2
+    },
+    {
       "id": "sdk-rs (via context)",
       "kind": "edge"
     }
   ],
   "exports": [
     {
-      "name": "KVService",
-      "kind": "export"
+      "name": "abortedError",
+      "kind": "value"
     },
     {
-      "name": "PrefixedKVService",
-      "kind": "export"
+      "name": "authExpiredError",
+      "kind": "value"
     },
     {
-      "name": "SQLService",
-      "kind": "export"
+      "name": "authRequiredError",
+      "kind": "value"
     },
     {
-      "name": "DuckDbService",
-      "kind": "export"
+      "name": "authUnauthorizedError",
+      "kind": "value"
     },
     {
-      "name": "HooksService",
-      "kind": "export"
+      "name": "BaseService",
+      "kind": "value"
+    },
+    {
+      "name": "BaseServiceOptions",
+      "kind": "type"
+    },
+    {
+      "name": "BatchOptions",
+      "kind": "type"
+    },
+    {
+      "name": "BatchResponse",
+      "kind": "type"
+    },
+    {
+      "name": "ColumnInfo",
+      "kind": "type"
+    },
+    {
+      "name": "createKVResponseSchema",
+      "kind": "value"
+    },
+    {
+      "name": "createResultSchema",
+      "kind": "value"
+    },
+    {
+      "name": "createVaultCrypto",
+      "kind": "value"
+    },
+    {
+      "name": "DatabaseHandle",
+      "kind": "value"
+    },
+    {
+      "name": "DataVaultConfig",
+      "kind": "type"
     },
     {
       "name": "DataVaultService",
-      "kind": "export"
+      "kind": "value"
+    },
+    {
+      "name": "defaultRetryPolicy",
+      "kind": "value"
+    },
+    {
+      "name": "DuckDbAction",
+      "kind": "value"
+    },
+    {
+      "name": "DuckDbActionType",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbBatchOptions",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbBatchResponse",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbDatabaseHandle",
+      "kind": "value"
+    },
+    {
+      "name": "DuckDbExecuteOptions",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbExecuteResponse",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbOptions",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbQueryOptions",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbQueryResponse",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbService",
+      "kind": "value"
+    },
+    {
+      "name": "DuckDbServiceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbStatement",
+      "kind": "type"
+    },
+    {
+      "name": "DuckDbValue",
+      "kind": "type"
+    },
+    {
+      "name": "err",
+      "kind": "value"
+    },
+    {
+      "name": "ErrorCode",
+      "kind": "type"
+    },
+    {
+      "name": "ErrorCodes",
+      "kind": "value"
+    },
+    {
+      "name": "errorResult",
+      "kind": "value"
+    },
+    {
+      "name": "EventHandler",
+      "kind": "type"
+    },
+    {
+      "name": "ExecuteOptions",
+      "kind": "type"
+    },
+    {
+      "name": "ExecuteResponse",
+      "kind": "type"
+    },
+    {
+      "name": "FetchFunction",
+      "kind": "type"
+    },
+    {
+      "name": "FetchRequestInit",
+      "kind": "type"
+    },
+    {
+      "name": "FetchResponse",
+      "kind": "type"
+    },
+    {
+      "name": "GenericKVResponseSchema",
+      "kind": "value"
+    },
+    {
+      "name": "GenericKVResponseType",
+      "kind": "type"
+    },
+    {
+      "name": "GenericResultSchema",
+      "kind": "value"
+    },
+    {
+      "name": "HookEvent",
+      "kind": "type"
+    },
+    {
+      "name": "HookServiceName",
+      "kind": "type"
+    },
+    {
+      "name": "HooksService",
+      "kind": "value"
+    },
+    {
+      "name": "HooksServiceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "HookStreamEvent",
+      "kind": "type"
+    },
+    {
+      "name": "HookSubscription",
+      "kind": "type"
+    },
+    {
+      "name": "HookWebhookListOptions",
+      "kind": "type"
+    },
+    {
+      "name": "HookWebhookRecord",
+      "kind": "type"
+    },
+    {
+      "name": "HookWebhookRegistration",
+      "kind": "type"
+    },
+    {
+      "name": "HookWebhookScope",
+      "kind": "type"
+    },
+    {
+      "name": "HookWebhookUnregisterOptions",
+      "kind": "type"
+    },
+    {
+      "name": "IDatabaseHandle",
+      "kind": "type"
+    },
+    {
+      "name": "IDataVaultService",
+      "kind": "type"
+    },
+    {
+      "name": "IDuckDbDatabaseHandle",
+      "kind": "type"
+    },
+    {
+      "name": "IDuckDbService",
+      "kind": "type"
+    },
+    {
+      "name": "IHooksService",
+      "kind": "type"
+    },
+    {
+      "name": "IKVService",
+      "kind": "value"
+    },
+    {
+      "name": "InvocationFact",
+      "kind": "type"
+    },
+    {
+      "name": "InvocationFacts",
+      "kind": "type"
+    },
+    {
+      "name": "InvokeAnyEntry",
+      "kind": "type"
+    },
+    {
+      "name": "InvokeAnyFunction",
+      "kind": "type"
+    },
+    {
+      "name": "InvokeFunction",
+      "kind": "type"
+    },
+    {
+      "name": "IPrefixedKVService",
+      "kind": "type"
+    },
+    {
+      "name": "IService",
+      "kind": "type"
+    },
+    {
+      "name": "IServiceContext",
+      "kind": "type"
+    },
+    {
+      "name": "ISQLService",
+      "kind": "type"
+    },
+    {
+      "name": "KVAction",
+      "kind": "value"
+    },
+    {
+      "name": "KVActionType",
+      "kind": "type"
+    },
+    {
+      "name": "KVDeleteOptions",
+      "kind": "type"
+    },
+    {
+      "name": "KVGetOptions",
+      "kind": "type"
+    },
+    {
+      "name": "KVHeadOptions",
+      "kind": "type"
+    },
+    {
+      "name": "KVListOptions",
+      "kind": "type"
+    },
+    {
+      "name": "KVListResponse",
+      "kind": "type"
+    },
+    {
+      "name": "KVListResponseSchema",
+      "kind": "value"
+    },
+    {
+      "name": "KVListResponseType",
+      "kind": "type"
+    },
+    {
+      "name": "KVListResultSchema",
+      "kind": "value"
+    },
+    {
+      "name": "KVListResultType",
+      "kind": "type"
+    },
+    {
+      "name": "KVPutOptions",
+      "kind": "type"
+    },
+    {
+      "name": "KVResponse",
+      "kind": "type"
+    },
+    {
+      "name": "KVResponseHeaders",
+      "kind": "type"
+    },
+    {
+      "name": "KVResponseHeadersSchema",
+      "kind": "value"
+    },
+    {
+      "name": "KVResponseHeadersType",
+      "kind": "type"
+    },
+    {
+      "name": "KVService",
+      "kind": "value"
+    },
+    {
+      "name": "KVServiceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "networkError",
+      "kind": "value"
+    },
+    {
+      "name": "notFoundError",
+      "kind": "value"
+    },
+    {
+      "name": "ok",
+      "kind": "value"
+    },
+    {
+      "name": "parseAuthError",
+      "kind": "value"
+    },
+    {
+      "name": "permissionDeniedError",
+      "kind": "value"
+    },
+    {
+      "name": "PrefixedKVService",
+      "kind": "value"
+    },
+    {
+      "name": "QueryOptions",
+      "kind": "type"
+    },
+    {
+      "name": "QueryResponse",
+      "kind": "type"
+    },
+    {
+      "name": "QuotaConfig",
+      "kind": "type"
+    },
+    {
+      "name": "QuotaStatus",
+      "kind": "type"
+    },
+    {
+      "name": "Result",
+      "kind": "type"
+    },
+    {
+      "name": "RetryPolicy",
+      "kind": "type"
+    },
+    {
+      "name": "RetryPolicySchema",
+      "kind": "value"
+    },
+    {
+      "name": "RetryPolicyType",
+      "kind": "type"
+    },
+    {
+      "name": "SchemaInfo",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceConstructor",
+      "kind": "type"
     },
     {
       "name": "ServiceContext",
-      "kind": "export"
+      "kind": "value"
+    },
+    {
+      "name": "ServiceContextConfig",
+      "kind": "type"
+    },
+    {
+      "name": "serviceError",
+      "kind": "value"
+    },
+    {
+      "name": "ServiceError",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceErrorEvent",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceErrorEventSchema",
+      "kind": "value"
+    },
+    {
+      "name": "ServiceErrorEventType",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceErrorSchema",
+      "kind": "value"
+    },
+    {
+      "name": "ServiceErrorType",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceHeaders",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceRegistration",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceRequestEvent",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceRequestEventSchema",
+      "kind": "value"
+    },
+    {
+      "name": "ServiceRequestEventType",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceResponseEvent",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceResponseEventSchema",
+      "kind": "value"
+    },
+    {
+      "name": "ServiceResponseEventType",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceRetryEvent",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceRetryEventSchema",
+      "kind": "value"
+    },
+    {
+      "name": "ServiceRetryEventType",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceSession",
+      "kind": "type"
+    },
+    {
+      "name": "ServiceSessionSchema",
+      "kind": "value"
+    },
+    {
+      "name": "ServiceSessionType",
+      "kind": "type"
+    },
+    {
+      "name": "SQLAction",
+      "kind": "value"
+    },
+    {
+      "name": "SQLActionType",
+      "kind": "type"
+    },
+    {
+      "name": "SQLService",
+      "kind": "value"
+    },
+    {
+      "name": "SQLServiceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "SqlStatement",
+      "kind": "type"
+    },
+    {
+      "name": "SqlValue",
+      "kind": "type"
+    },
+    {
+      "name": "storageLimitReachedError",
+      "kind": "value"
+    },
+    {
+      "name": "storageQuotaExceededError",
+      "kind": "value"
+    },
+    {
+      "name": "StorageQuotaInfo",
+      "kind": "type"
+    },
+    {
+      "name": "SubscribeOptions",
+      "kind": "type"
+    },
+    {
+      "name": "TableInfo",
+      "kind": "type"
+    },
+    {
+      "name": "TelemetryEvents",
+      "kind": "value"
+    },
+    {
+      "name": "timeoutError",
+      "kind": "value"
+    },
+    {
+      "name": "TinyCloudQuota",
+      "kind": "value"
+    },
+    {
+      "name": "validateKVListResponse",
+      "kind": "value"
+    },
+    {
+      "name": "validateKVResponseHeaders",
+      "kind": "value"
+    },
+    {
+      "name": "validateRetryPolicy",
+      "kind": "value"
+    },
+    {
+      "name": "validateServiceError",
+      "kind": "value"
+    },
+    {
+      "name": "validateServiceRequestEvent",
+      "kind": "value"
+    },
+    {
+      "name": "validateServiceResponseEvent",
+      "kind": "value"
+    },
+    {
+      "name": "validateServiceSession",
+      "kind": "value"
+    },
+    {
+      "name": "ValidationError",
+      "kind": "type"
+    },
+    {
+      "name": "VaultCrypto",
+      "kind": "type"
+    },
+    {
+      "name": "VaultEntry",
+      "kind": "type"
+    },
+    {
+      "name": "VaultError",
+      "kind": "type"
+    },
+    {
+      "name": "VaultGetOptions",
+      "kind": "type"
+    },
+    {
+      "name": "VaultGrantOptions",
+      "kind": "type"
+    },
+    {
+      "name": "VaultHeaders",
+      "kind": "value"
+    },
+    {
+      "name": "VaultListOptions",
+      "kind": "type"
+    },
+    {
+      "name": "VaultPublicSpaceKVActions",
+      "kind": "value"
+    },
+    {
+      "name": "VaultPutOptions",
+      "kind": "type"
+    },
+    {
+      "name": "ViewInfo",
+      "kind": "type"
+    },
+    {
+      "name": "WasmVaultFunctions",
+      "kind": "type"
+    },
+    {
+      "name": "wrapError",
+      "kind": "value"
     }
   ],
   "changed": 0,
   "hasFsm": false,
   "hasSeq": true,
-  "cmds": []
+  "cmds": [],
+  "notable_exports": [
+    {
+      "name": "KVService",
+      "kind": "value"
+    },
+    {
+      "name": "PrefixedKVService",
+      "kind": "value"
+    },
+    {
+      "name": "SQLService",
+      "kind": "value"
+    },
+    {
+      "name": "DuckDbService",
+      "kind": "value"
+    },
+    {
+      "name": "HooksService",
+      "kind": "value"
+    },
+    {
+      "name": "DataVaultService",
+      "kind": "value"
+    },
+    {
+      "name": "ServiceContext",
+      "kind": "value"
+    }
+  ]
 }

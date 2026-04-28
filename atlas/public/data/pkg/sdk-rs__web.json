@@ -14,12 +14,26 @@
   ],
   "exports": [
     {
-      "name": "* (wasm-bindgen)",
-      "kind": "export"
+      "name": "initialized",
+      "kind": "value"
+    },
+    {
+      "name": "tcwSession",
+      "kind": "value"
+    },
+    {
+      "name": "tinycloud",
+      "kind": "value"
     }
   ],
   "changed": 0,
   "hasFsm": false,
   "hasSeq": false,
-  "cmds": []
+  "cmds": [],
+  "notable_exports": [
+    {
+      "name": "* (wasm-bindgen)",
+      "kind": "value"
+    }
+  ]
 }

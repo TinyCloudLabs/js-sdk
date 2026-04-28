@@ -9,15 +9,58 @@
   "boundaries": [
     {
       "id": "sdk-core",
-      "kind": "edge"
-    },
-    {
-      "id": "sdk-rs/web",
-      "kind": "edge"
+      "kind": "package",
+      "count": 25
     },
     {
       "id": "ethers",
-      "kind": "edge"
+      "kind": "external",
+      "count": 7
+    },
+    {
+      "id": "node-sdk",
+      "kind": "package",
+      "count": 4
+    },
+    {
+      "id": "sdk-rs/web",
+      "kind": "package",
+      "count": 4
+    },
+    {
+      "id": "zod",
+      "kind": "external",
+      "count": 3
+    },
+    {
+      "id": "@multiformats/multiaddr",
+      "kind": "external",
+      "count": 2
+    },
+    {
+      "id": "axios",
+      "kind": "external",
+      "count": 2
+    },
+    {
+      "id": "@multiformats/multiaddr-to-uri",
+      "kind": "external",
+      "count": 1
+    },
+    {
+      "id": "ethers/lib/utils",
+      "kind": "external",
+      "count": 1
+    },
+    {
+      "id": "sdk-services",
+      "kind": "package",
+      "count": 1
+    },
+    {
+      "id": "viem",
+      "kind": "external",
+      "count": 1
     },
     {
       "id": "siwe",
@@ -26,28 +69,934 @@
   ],
   "exports": [
     {
-      "name": "TinyCloudWeb",
-      "kind": "export"
+      "name": "ACCOUNT_REGISTRY_PATH",
+      "kind": "value"
     },
     {
-      "name": "BrowserWalletSigner",
-      "kind": "export"
+      "name": "ACCOUNT_REGISTRY_SPACE",
+      "kind": "value"
+    },
+    {
+      "name": "AlchemyProvider",
+      "kind": "type"
+    },
+    {
+      "name": "AlchemyProviderNetworks",
+      "kind": "value"
+    },
+    {
+      "name": "AlchemyProviderNetworksConst",
+      "kind": "value"
+    },
+    {
+      "name": "AlchemyProviderNetworksSchema",
+      "kind": "value"
+    },
+    {
+      "name": "AlchemyProviderSchema",
+      "kind": "value"
+    },
+    {
+      "name": "AnkrProvider",
+      "kind": "type"
+    },
+    {
+      "name": "AnkrProviderNetworks",
+      "kind": "value"
+    },
+    {
+      "name": "AnkrProviderNetworksConst",
+      "kind": "value"
+    },
+    {
+      "name": "AnkrProviderNetworksSchema",
+      "kind": "value"
+    },
+    {
+      "name": "AnkrProviderSchema",
+      "kind": "value"
+    },
+    {
+      "name": "AutoApproveSpaceCreationHandler",
+      "kind": "value"
+    },
+    {
+      "name": "AutoRejectStrategy",
+      "kind": "value"
+    },
+    {
+      "name": "AutoSignStrategy",
+      "kind": "value"
+    },
+    {
+      "name": "BrowserENSResolver",
+      "kind": "value"
+    },
+    {
+      "name": "BrowserNotificationHandler",
+      "kind": "value"
     },
     {
       "name": "BrowserSessionStorage",
-      "kind": "export"
+      "kind": "value"
+    },
+    {
+      "name": "BrowserWalletSigner",
+      "kind": "value"
     },
     {
       "name": "BrowserWasmBindings",
-      "kind": "export"
+      "kind": "value"
+    },
+    {
+      "name": "buildSpaceUri",
+      "kind": "value"
+    },
+    {
+      "name": "CallbackStrategy",
+      "kind": "value"
+    },
+    {
+      "name": "CapabilityEntry",
+      "kind": "value"
+    },
+    {
+      "name": "CapabilityKeyRegistry",
+      "kind": "value"
+    },
+    {
+      "name": "CapabilityKeyRegistryErrorCode",
+      "kind": "value"
+    },
+    {
+      "name": "CapabilityKeyRegistryErrorCodes",
+      "kind": "value"
+    },
+    {
+      "name": "checkNodeInfo",
+      "kind": "value"
+    },
+    {
+      "name": "ClientConfig",
+      "kind": "type"
+    },
+    {
+      "name": "ClientProviders",
+      "kind": "type"
+    },
+    {
+      "name": "ClientSession",
+      "kind": "value"
+    },
+    {
+      "name": "ClientSessionSchema",
+      "kind": "value"
+    },
+    {
+      "name": "CloudflareProvider",
+      "kind": "type"
+    },
+    {
+      "name": "CloudflareProviderSchema",
+      "kind": "value"
+    },
+    {
+      "name": "ComposedManifestRequest",
+      "kind": "type"
+    },
+    {
+      "name": "ComposeManifestOptions",
+      "kind": "type"
+    },
+    {
+      "name": "composeManifestRequest",
+      "kind": "value"
+    },
+    {
+      "name": "Config",
+      "kind": "value"
+    },
+    {
+      "name": "ConfigOverrides",
+      "kind": "type"
+    },
+    {
+      "name": "createCapabilityKeyRegistry",
+      "kind": "value"
+    },
+    {
+      "name": "CreateDelegationParams",
+      "kind": "value"
     },
     {
       "name": "createKVService",
-      "kind": "export"
+      "kind": "value"
+    },
+    {
+      "name": "createSharingService",
+      "kind": "value"
+    },
+    {
+      "name": "createSpaceService",
+      "kind": "value"
+    },
+    {
+      "name": "createVaultCrypto",
+      "kind": "value"
+    },
+    {
+      "name": "CustomProvider",
+      "kind": "type"
+    },
+    {
+      "name": "CustomProviderSchema",
+      "kind": "value"
+    },
+    {
+      "name": "DataVaultConfig",
+      "kind": "type"
+    },
+    {
+      "name": "DataVaultService",
+      "kind": "value"
+    },
+    {
+      "name": "DEFAULT_MANIFEST_SPACE",
+      "kind": "value"
+    },
+    {
+      "name": "DEFAULT_MANIFEST_VERSION",
+      "kind": "value"
+    },
+    {
+      "name": "defaultSignStrategy",
+      "kind": "value"
+    },
+    {
+      "name": "defaultSpaceCreationHandler",
+      "kind": "value"
+    },
+    {
+      "name": "defaultWebSpaceCreationHandler",
+      "kind": "value"
+    },
+    {
+      "name": "DelegatedAccess",
+      "kind": "value"
+    },
+    {
+      "name": "DelegateToOptions",
+      "kind": "type"
+    },
+    {
+      "name": "DelegateToResult",
+      "kind": "type"
+    },
+    {
+      "name": "Delegation",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationApiResponse",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationChain",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationChainV2",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationDirection",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationError",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationErrorCode",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationErrorCodes",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationFilters",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationManager",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationManagerConfig",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationRecord",
+      "kind": "value"
+    },
+    {
+      "name": "DelegationResult",
+      "kind": "value"
+    },
+    {
+      "name": "deserializeDelegation",
+      "kind": "value"
+    },
+    {
+      "name": "EncodedShareData",
+      "kind": "value"
+    },
+    {
+      "name": "EnsData",
+      "kind": "value"
+    },
+    {
+      "name": "EnsDataSchema",
+      "kind": "value"
+    },
+    {
+      "name": "EtherscanProvider",
+      "kind": "type"
+    },
+    {
+      "name": "EtherscanProviderNetworks",
+      "kind": "value"
+    },
+    {
+      "name": "EtherscanProviderNetworksConst",
+      "kind": "value"
+    },
+    {
+      "name": "EtherscanProviderNetworksSchema",
+      "kind": "value"
+    },
+    {
+      "name": "EtherscanProviderSchema",
+      "kind": "value"
+    },
+    {
+      "name": "EventEmitterStrategy",
+      "kind": "value"
+    },
+    {
+      "name": "expandActionShortNames",
+      "kind": "value"
+    },
+    {
+      "name": "Extension",
+      "kind": "value"
+    },
+    {
+      "name": "ExtraFields",
+      "kind": "type"
+    },
+    {
+      "name": "GenerateShareParams",
+      "kind": "value"
+    },
+    {
+      "name": "GenericProvider",
+      "kind": "type"
+    },
+    {
+      "name": "GenericProviderSchema",
+      "kind": "value"
+    },
+    {
+      "name": "getProvider",
+      "kind": "value"
+    },
+    {
+      "name": "HookEvent",
+      "kind": "type"
+    },
+    {
+      "name": "HooksService",
+      "kind": "value"
+    },
+    {
+      "name": "HooksServiceConfig",
+      "kind": "type"
+    },
+    {
+      "name": "HookStreamEvent",
+      "kind": "type"
+    },
+    {
+      "name": "HookSubscription",
+      "kind": "type"
+    },
+    {
+      "name": "ICapabilityKeyRegistry",
+      "kind": "value"
+    },
+    {
+      "name": "IConnected",
+      "kind": "type"
+    },
+    {
+      "name": "ICoreUserAuthorization",
+      "kind": "value"
+    },
+    {
+      "name": "IDataVaultService",
+      "kind": "type"
+    },
+    {
+      "name": "IHooksService",
+      "kind": "type"
+    },
+    {
+      "name": "IKVService",
+      "kind": "value"
+    },
+    {
+      "name": "InfuraProvider",
+      "kind": "type"
+    },
+    {
+      "name": "InfuraProviderNetworks",
+      "kind": "value"
+    },
+    {
+      "name": "InfuraProviderNetworksConst",
+      "kind": "value"
+    },
+    {
+      "name": "InfuraProviderNetworksSchema",
+      "kind": "value"
+    },
+    {
+      "name": "InfuraProviderProjectSettings",
+      "kind": "type"
+    },
+    {
+      "name": "InfuraProviderProjectSettingsSchema",
+      "kind": "value"
+    },
+    {
+      "name": "InfuraProviderSchema",
+      "kind": "value"
+    },
+    {
+      "name": "IngestOptions",
+      "kind": "value"
+    },
+    {
+      "name": "IPrefixedKVService",
+      "kind": "value"
+    },
+    {
+      "name": "isAlchemyProvider",
+      "kind": "value"
+    },
+    {
+      "name": "isAnkrProvider",
+      "kind": "value"
+    },
+    {
+      "name": "isCapabilitySubset",
+      "kind": "value"
+    },
+    {
+      "name": "isCloudflareProvider",
+      "kind": "value"
+    },
+    {
+      "name": "isCustomProvider",
+      "kind": "value"
+    },
+    {
+      "name": "ISessionStorage",
+      "kind": "value"
+    },
+    {
+      "name": "isEtherscanProvider",
+      "kind": "value"
+    },
+    {
+      "name": "ISharingService",
+      "kind": "value"
+    },
+    {
+      "name": "ISigner",
+      "kind": "value"
+    },
+    {
+      "name": "isInfuraProvider",
+      "kind": "value"
+    },
+    {
+      "name": "ISpace",
+      "kind": "value"
+    },
+    {
+      "name": "ISpaceCreationHandler",
+      "kind": "value"
+    },
+    {
+      "name": "ISpaceScopedDelegations",
+      "kind": "value"
+    },
+    {
+      "name": "ISpaceScopedSharing",
+      "kind": "value"
+    },
+    {
+      "name": "ISpaceService",
+      "kind": "value"
+    },
+    {
+      "name": "isPocketProvider",
+      "kind": "value"
+    },
+    {
+      "name": "isServerMiddlewareConfig",
+      "kind": "value"
+    },
+    {
+      "name": "JWK",
+      "kind": "value"
+    },
+    {
+      "name": "KeyInfo",
+      "kind": "value"
+    },
+    {
+      "name": "KeyType",
+      "kind": "value"
+    },
+    {
+      "name": "KVResponse",
+      "kind": "value"
+    },
+    {
+      "name": "KVService",
+      "kind": "value"
+    },
+    {
+      "name": "loadManifest",
+      "kind": "value"
+    },
+    {
+      "name": "makePublicSpaceId",
+      "kind": "value"
+    },
+    {
+      "name": "Manifest",
+      "kind": "type"
+    },
+    {
+      "name": "ManifestDefaults",
+      "kind": "type"
+    },
+    {
+      "name": "ManifestRegistryRecord",
+      "kind": "type"
+    },
+    {
+      "name": "ManifestValidationError",
+      "kind": "value"
+    },
+    {
+      "name": "ModalSpaceCreationHandler",
+      "kind": "value"
+    },
+    {
+      "name": "parseExpiry",
+      "kind": "value"
+    },
+    {
+      "name": "parseSpaceUri",
+      "kind": "value"
+    },
+    {
+      "name": "PartialSiweMessage",
+      "kind": "value"
+    },
+    {
+      "name": "PermissionEntry",
+      "kind": "type"
+    },
+    {
+      "name": "PermissionNotInManifestError",
+      "kind": "value"
+    },
+    {
+      "name": "PersistedSessionData",
+      "kind": "value"
+    },
+    {
+      "name": "PocketProvider",
+      "kind": "type"
+    },
+    {
+      "name": "PocketProviderNetworks",
+      "kind": "value"
+    },
+    {
+      "name": "PocketProviderNetworksConst",
+      "kind": "value"
+    },
+    {
+      "name": "PocketProviderNetworksSchema",
+      "kind": "value"
+    },
+    {
+      "name": "PocketProviderSchema",
+      "kind": "value"
+    },
+    {
+      "name": "PortableDelegation",
+      "kind": "value"
+    },
+    {
+      "name": "PrefixedKVService",
+      "kind": "value"
+    },
+    {
+      "name": "ProtocolMismatchError",
+      "kind": "value"
+    },
+    {
+      "name": "ProviderServer",
+      "kind": "type"
+    },
+    {
+      "name": "ProviderWeb3",
+      "kind": "type"
+    },
+    {
+      "name": "ReceiveOptions",
+      "kind": "value"
+    },
+    {
+      "name": "ResolvedCapabilities",
+      "kind": "type"
+    },
+    {
+      "name": "ResolvedDelegate",
+      "kind": "type"
+    },
+    {
+      "name": "resolveEns",
+      "kind": "value"
+    },
+    {
+      "name": "resolveManifest",
+      "kind": "value"
+    },
+    {
+      "name": "resourceCapabilitiesToSpaceAbilitiesMap",
+      "kind": "value"
+    },
+    {
+      "name": "ResourceCapability",
+      "kind": "type"
+    },
+    {
+      "name": "RouteConfig",
+      "kind": "type"
+    },
+    {
+      "name": "RouteConfigSchema",
+      "kind": "value"
+    },
+    {
+      "name": "RPCProvider",
+      "kind": "type"
+    },
+    {
+      "name": "RPCProviders",
+      "kind": "value"
+    },
+    {
+      "name": "RPCProviderSchema",
+      "kind": "value"
+    },
+    {
+      "name": "RPCProvidersConst",
+      "kind": "value"
+    },
+    {
+      "name": "RPCProvidersSchema",
+      "kind": "value"
+    },
+    {
+      "name": "serializeDelegation",
+      "kind": "value"
+    },
+    {
+      "name": "ServerHost",
+      "kind": "value"
+    },
+    {
+      "name": "ServerMiddlewareConfig",
+      "kind": "type"
+    },
+    {
+      "name": "ServerMiddlewareConfigSchema",
+      "kind": "value"
+    },
+    {
+      "name": "ServerRouteEndpointType",
+      "kind": "type"
+    },
+    {
+      "name": "ServerRouteEndpointTypeSchema",
+      "kind": "value"
+    },
+    {
+      "name": "ServerRouteNames",
+      "kind": "type"
+    },
+    {
+      "name": "ServerRouteNamesSchema",
+      "kind": "value"
+    },
+    {
+      "name": "ServerRoutes",
+      "kind": "type"
+    },
+    {
+      "name": "ServerRoutesSchema",
+      "kind": "value"
+    },
+    {
+      "name": "SessionExpiredError",
+      "kind": "value"
+    },
+    {
+      "name": "ShareAccess",
+      "kind": "value"
+    },
+    {
+      "name": "ShareLink",
+      "kind": "value"
+    },
+    {
+      "name": "ShareLinkData",
+      "kind": "value"
+    },
+    {
+      "name": "ShareReceiveResult",
+      "kind": "value"
+    },
+    {
+      "name": "ShareSchema",
+      "kind": "value"
+    },
+    {
+      "name": "SharingService",
+      "kind": "value"
+    },
+    {
+      "name": "SharingServiceConfig",
+      "kind": "value"
+    },
+    {
+      "name": "SignCallback",
+      "kind": "value"
+    },
+    {
+      "name": "SignInOptions",
+      "kind": "type"
+    },
+    {
+      "name": "SignRequest",
+      "kind": "value"
+    },
+    {
+      "name": "SignResponse",
+      "kind": "value"
+    },
+    {
+      "name": "SignStrategy",
+      "kind": "value"
+    },
+    {
+      "name": "SiweConfig",
+      "kind": "value"
+    },
+    {
+      "name": "SiweConfigSchema",
+      "kind": "value"
+    },
+    {
+      "name": "SiweMessage",
+      "kind": "value"
+    },
+    {
+      "name": "Space",
+      "kind": "value"
+    },
+    {
+      "name": "SpaceAbilitiesMap",
+      "kind": "type"
+    },
+    {
+      "name": "SpaceConfig",
+      "kind": "value"
+    },
+    {
+      "name": "SpaceCreationContext",
+      "kind": "value"
+    },
+    {
+      "name": "SpaceErrorCode",
+      "kind": "value"
+    },
+    {
+      "name": "SpaceErrorCodes",
+      "kind": "value"
+    },
+    {
+      "name": "SpaceInfo",
+      "kind": "value"
+    },
+    {
+      "name": "SpaceOwnership",
+      "kind": "value"
+    },
+    {
+      "name": "SpaceService",
+      "kind": "value"
+    },
+    {
+      "name": "SpaceServiceConfig",
+      "kind": "value"
+    },
+    {
+      "name": "StoredDelegationChain",
+      "kind": "value"
+    },
+    {
+      "name": "SubscribeOptions",
+      "kind": "type"
+    },
+    {
+      "name": "TinyCloud",
+      "kind": "value"
+    },
+    {
+      "name": "TinyCloudNode",
+      "kind": "value"
+    },
+    {
+      "name": "TinyCloudNodeConfig",
+      "kind": "value"
+    },
+    {
+      "name": "TinyCloudWeb",
+      "kind": "value"
+    },
+    {
+      "name": "UnsupportedFeatureError",
+      "kind": "value"
+    },
+    {
+      "name": "validateClientSession",
+      "kind": "value"
+    },
+    {
+      "name": "validateEnsData",
+      "kind": "value"
+    },
+    {
+      "name": "validateManifest",
+      "kind": "value"
+    },
+    {
+      "name": "validateRPCProvider",
+      "kind": "value"
+    },
+    {
+      "name": "validateServerRoutes",
+      "kind": "value"
+    },
+    {
+      "name": "ValidationError",
+      "kind": "type"
+    },
+    {
+      "name": "ValidationResult",
+      "kind": "type"
+    },
+    {
+      "name": "VaultCrypto",
+      "kind": "type"
+    },
+    {
+      "name": "VaultEntry",
+      "kind": "type"
+    },
+    {
+      "name": "VaultError",
+      "kind": "type"
+    },
+    {
+      "name": "VaultGetOptions",
+      "kind": "type"
+    },
+    {
+      "name": "VaultGrantOptions",
+      "kind": "type"
+    },
+    {
+      "name": "VaultHeaders",
+      "kind": "type"
+    },
+    {
+      "name": "VaultListOptions",
+      "kind": "type"
+    },
+    {
+      "name": "VaultPublicSpaceKVActions",
+      "kind": "value"
+    },
+    {
+      "name": "VaultPutOptions",
+      "kind": "type"
+    },
+    {
+      "name": "VersionCheckError",
+      "kind": "value"
+    },
+    {
+      "name": "WasmVaultFunctions",
+      "kind": "type"
     }
   ],
   "changed": 0,
   "hasFsm": true,
   "hasSeq": true,
-  "cmds": []
+  "cmds": [],
+  "notable_exports": [
+    {
+      "name": "TinyCloudWeb",
+      "kind": "value"
+    },
+    {
+      "name": "BrowserWalletSigner",
+      "kind": "value"
+    },
+    {
+      "name": "BrowserSessionStorage",
+      "kind": "value"
+    },
+    {
+      "name": "BrowserWasmBindings",
+      "kind": "value"
+    },
+    {
+      "name": "createKVService",
+      "kind": "value"
+    }
+  ]
 }

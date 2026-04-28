@@ -8,22 +8,99 @@
   "why": "Operator surface. Profiles, secrets, kv/sql/duckdb/vault commands, doctor, share, init, upgrade. Talks to node-sdk under the hood.",
   "boundaries": [
     {
+      "id": "commander",
+      "kind": "external",
+      "count": 17
+    },
+    {
+      "id": "node:fs/promises",
+      "kind": "node",
+      "count": 12
+    },
+    {
       "id": "node-sdk",
-      "kind": "edge"
+      "kind": "package",
+      "count": 5
+    },
+    {
+      "id": "node:path",
+      "kind": "node",
+      "count": 5
+    },
+    {
+      "id": "node:readline",
+      "kind": "node",
+      "count": 3
+    },
+    {
+      "id": "open",
+      "kind": "external",
+      "count": 2
+    },
+    {
+      "id": "chalk",
+      "kind": "external",
+      "count": 1
+    },
+    {
+      "id": "child_process",
+      "kind": "external",
+      "count": 1
+    },
+    {
+      "id": "fs",
+      "kind": "external",
+      "count": 1
+    },
+    {
+      "id": "node:child_process",
+      "kind": "node",
+      "count": 1
+    },
+    {
+      "id": "node:crypto",
+      "kind": "node",
+      "count": 1
+    },
+    {
+      "id": "node:fs",
+      "kind": "node",
+      "count": 1
+    },
+    {
+      "id": "node:http",
+      "kind": "node",
+      "count": 1
+    },
+    {
+      "id": "node:os",
+      "kind": "node",
+      "count": 1
+    },
+    {
+      "id": "ora",
+      "kind": "external",
+      "count": 1
+    },
+    {
+      "id": "sdk-rs/node",
+      "kind": "package",
+      "count": 1
     },
     {
       "id": "sdk-core",
       "kind": "edge"
     }
   ],
-  "exports": [
-    {
-      "name": "bin: tc",
-      "kind": "export"
-    }
-  ],
+  "exports": [],
   "changed": 0,
   "hasFsm": false,
   "hasSeq": false,
-  "cmds": []
+  "cmds": [],
+  "notable_exports": [
+    {
+      "name": "bin: tc",
+      "kind": "value"
+    }
+  ]
 }

@@ -12,34 +12,35 @@
       "kind": "edge"
     }
   ],
-  "exports": [
-    {
-      "name": "TCWSessionManager",
-      "kind": "export"
-    },
-    {
-      "name": "prepareSession",
-      "kind": "export"
-    },
-    {
-      "name": "completeSessionSetup",
-      "kind": "export"
-    },
-    {
-      "name": "createDelegation",
-      "kind": "export"
-    },
-    {
-      "name": "useDelegation",
-      "kind": "export"
-    },
-    {
-      "name": "invoke",
-      "kind": "export"
-    }
-  ],
+  "exports": [],
   "changed": 0,
   "hasFsm": false,
   "hasSeq": false,
-  "cmds": []
+  "cmds": [],
+  "notable_exports": [
+    {
+      "name": "TCWSessionManager",
+      "kind": "value"
+    },
+    {
+      "name": "prepareSession",
+      "kind": "value"
+    },
+    {
+      "name": "completeSessionSetup",
+      "kind": "value"
+    },
+    {
+      "name": "createDelegation",
+      "kind": "value"
+    },
+    {
+      "name": "useDelegation",
+      "kind": "value"
+    },
+    {
+      "name": "invoke",
+      "kind": "value"
+    }
+  ]
 }

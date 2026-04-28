@@ -8,34 +8,117 @@
   "why": "Node virtual filesystem bridge. Adapts TinyCloud storage into the @platformatic/vfs provider shape, including synchronous file handles, path normalization, metadata, and worker-backed reads and writes.",
   "boundaries": [
     {
-      "id": "node-sdk",
-      "kind": "edge"
+      "id": "@platformatic/vfs",
+      "kind": "external",
+      "count": 3
     },
     {
-      "id": "@platformatic/vfs",
-      "kind": "edge"
+      "id": "node:worker_threads",
+      "kind": "node",
+      "count": 3
+    },
+    {
+      "id": "node:buffer",
+      "kind": "node",
+      "count": 2
+    },
+    {
+      "id": "node:fs",
+      "kind": "node",
+      "count": 2
+    },
+    {
+      "id": "node:fs/promises",
+      "kind": "node",
+      "count": 2
+    },
+    {
+      "id": "node:path",
+      "kind": "node",
+      "count": 2
+    },
+    {
+      "id": "node-sdk",
+      "kind": "package",
+      "count": 1
+    },
+    {
+      "id": "node:module",
+      "kind": "node",
+      "count": 1
+    },
+    {
+      "id": "node:url",
+      "kind": "node",
+      "count": 1
     }
   ],
   "exports": [
     {
-      "name": "TinyCloudVfsProvider",
-      "kind": "export"
+      "name": "createTinyCloudDelegatedVfs",
+      "kind": "value"
+    },
+    {
+      "name": "CreateTinyCloudDelegatedVfsOptions",
+      "kind": "type"
+    },
+    {
+      "name": "CreateTinyCloudNodeVfsOptions",
+      "kind": "type"
     },
     {
       "name": "createTinyCloudVfs",
-      "kind": "export"
+      "kind": "value"
     },
     {
       "name": "createTinyCloudVfsFromNode",
-      "kind": "export"
+      "kind": "value"
     },
     {
-      "name": "createTinyCloudDelegatedVfs",
-      "kind": "export"
+      "name": "TinyCloudVfsMetadata",
+      "kind": "type"
+    },
+    {
+      "name": "TinyCloudVfsOptions",
+      "kind": "type"
+    },
+    {
+      "name": "TinyCloudVfsProvider",
+      "kind": "value"
+    },
+    {
+      "name": "TinyCloudVfsProviderOptions",
+      "kind": "type"
+    },
+    {
+      "name": "TinyCloudVfsSessionData",
+      "kind": "type"
+    },
+    {
+      "name": "TinyCloudVfsSource",
+      "kind": "type"
     }
   ],
   "changed": 0,
   "hasFsm": false,
   "hasSeq": false,
-  "cmds": []
+  "cmds": [],
+  "notable_exports": [
+    {
+      "name": "TinyCloudVfsProvider",
+      "kind": "value"
+    },
+    {
+      "name": "createTinyCloudVfs",
+      "kind": "value"
+    },
+    {
+      "name": "createTinyCloudVfsFromNode",
+      "kind": "value"
+    },
+    {
+      "name": "createTinyCloudDelegatedVfs",
+      "kind": "value"
+    }
+  ]
 }
