@@ -24,7 +24,7 @@
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
   "scripts": {
-    "build": "webpack --mode production --config webpack.config.cjs",
+    "build": "rimraf dist && webpack --mode production --config webpack.config.cjs",
     "dev": "webpack --watch --config webpack.config.cjs",
     "watch": "webpack --watch --config webpack.config.cjs",
     "doc": "bun run doc:extractor && bun run doc:documenter",

@@ -94,13 +94,19 @@ const baseConfig = {
   module: { rules },
   resolve: resolveConfig,
   optimization: {
+    splitChunks: false,
+    runtimeChunk: false,
     // Disable HMR and development optimizations in production
     ...(isProduction && {
       minimize: true,
       sideEffects: false,
     }),
   },
-  plugins,
+  plugins: [
+    ...plugins,
+    // Keep the package bundle self-contained for downstream bundlers like CRA.
+    new webpack.optimize.LimitChunkCountPlugin({ maxChunks: 1 }),
+  ],
   // Prevent webpack from injecting Node.js polyfills for global, __filename, __dirname
   node: false,
 };
