@@ -24,7 +24,15 @@ export interface LocationRecord extends LocationRecordPayload {
   signature: string;
 }
 
-export type LocationSource = "explicit" | "blockchain" | "centralized" | "fallback";
+export type LocationSource =
+  | "explicit"
+  | "blockchain"
+  | "centralized"
+  | "fallback";
+
+export const DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL =
+  "https://registry.tinycloud.xyz";
+export const DEFAULT_TINYCLOUD_FALLBACK_HOST = "https://node.tinycloud.xyz";
 
 export interface LocationCandidate {
   source: LocationSource;
@@ -58,6 +66,26 @@ export interface ResolveCloudLocationOptions {
   centralizedRegistryUrl?: string;
   /** Lowest-priority fallback location. */
   fallbackMultiaddrs?: string[];
+  /** Custom fetch implementation. Defaults to globalThis.fetch. */
+  fetch?: typeof fetch;
+  /** Verify centralized/blockchain record signatures. Default true. */
+  verifyRecords?: boolean;
+}
+
+export interface ResolvedTinyCloudHosts {
+  hosts: string[];
+  location: ResolvedCloudLocation;
+}
+
+export interface ResolveTinyCloudHostsOptions {
+  /** Highest-priority TinyCloud HTTP host URLs or multiaddrs supplied directly. */
+  explicitHosts?: string[];
+  /** Optional blockchain resolver adapter. */
+  blockchain?: ResolveCloudLocationOptions["blockchain"];
+  /** Centralized location registry URL. Default https://registry.tinycloud.xyz. */
+  registryUrl?: string | null;
+  /** Lowest-priority fallback HTTP host URLs or multiaddrs. Default hosted TinyCloud node. */
+  fallbackHosts?: string[] | null;
   /** Custom fetch implementation. Defaults to globalThis.fetch. */
   fetch?: typeof fetch;
   /** Verify centralized/blockchain record signatures. Default true. */
@@ -132,7 +160,9 @@ export async function signLocationRecord(
   const signature =
     signer.type === "did:pkh"
       ? await signer.signMessage(message)
-      : base64UrlEncode(await signer.signBytes(new TextEncoder().encode(message)));
+      : base64UrlEncode(
+          await signer.signBytes(new TextEncoder().encode(message)),
+        );
   return { ...payload, signature };
 }
 
@@ -153,7 +183,9 @@ export function validateLocationRecordPayload(
     typeof payload.updated_at !== "string" ||
     Number.isNaN(Date.parse(payload.updated_at))
   ) {
-    throw new LocationRecordValidationError("updated_at must be an ISO timestamp");
+    throw new LocationRecordValidationError(
+      "updated_at must be an ISO timestamp",
+    );
   }
   if (
     typeof payload.sequence !== "number" ||
@@ -178,7 +210,9 @@ export function validateLocationRecord(input: unknown): LocationRecord {
   const payload = validateLocationRecordPayload(input);
   const signature = (input as Partial<LocationRecord>).signature;
   if (typeof signature !== "string" || signature.length === 0) {
-    throw new LocationRecordValidationError("signature must be a non-empty string");
+    throw new LocationRecordValidationError(
+      "signature must be a non-empty string",
+    );
   }
   return { ...payload, signature };
 }
@@ -246,6 +280,32 @@ export async function resolveCloudLocation(
   };
 }
 
+export async function resolveTinyCloudHosts(
+  subject: string,
+  options: ResolveTinyCloudHostsOptions = {},
+): Promise<ResolvedTinyCloudHosts> {
+  const location = await resolveCloudLocation(subject, {
+    explicitMultiaddrs: hostsToMultiaddrs(options.explicitHosts),
+    blockchain: options.blockchain,
+    centralizedRegistryUrl:
+      options.registryUrl === null
+        ? undefined
+        : (options.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL),
+    fallbackMultiaddrs: hostsToMultiaddrs(
+      options.fallbackHosts === null
+        ? undefined
+        : (options.fallbackHosts ?? [DEFAULT_TINYCLOUD_FALLBACK_HOST]),
+    ),
+    fetch: options.fetch,
+    verifyRecords: options.verifyRecords,
+  });
+
+  return {
+    hosts: location.multiaddrs.map((addr) => multiaddrToHttpUrl(addr)),
+    location,
+  };
+}
+
 export function multiaddrToHttpUrl(input: string): string {
   const uri = multiaddrToUri(multiaddr(input));
   if (!uri.startsWith("http://") && !uri.startsWith("https://")) {
@@ -262,6 +322,15 @@ export function httpUrlToMultiaddr(input: string): string {
     throw new LocationRecordValidationError("URL must use http or https");
   }
   return uriToMultiaddr(url.toString()).toString();
+}
+
+function hostsToMultiaddrs(hosts: string[] | undefined): string[] | undefined {
+  if (hosts === undefined || hosts.length === 0) {
+    return undefined;
+  }
+  return hosts.map((host) =>
+    host.startsWith("/") ? host : httpUrlToMultiaddr(host),
+  );
 }
 
 async function resolveExplicit(
@@ -285,7 +354,12 @@ async function resolveBlockchain(
     if (!resolver) {
       return null;
     }
-    return toCandidate(subject, "blockchain", await resolver(subject), verifyRecords);
+    return toCandidate(
+      subject,
+      "blockchain",
+      await resolver(subject),
+      verifyRecords,
+    );
   });
 }
 
@@ -358,14 +432,18 @@ async function toCandidate(
       );
     }
     if (verifyRecord && !(await verifyLocationRecord(record))) {
-      throw new LocationRecordValidationError("location record signature is invalid");
+      throw new LocationRecordValidationError(
+        "location record signature is invalid",
+      );
     }
     return { source, multiaddrs: [...record.multiaddrs], record };
   }
 
   const candidateInput = input as { multiaddrs?: unknown; record?: unknown };
   if (!Array.isArray(candidateInput.multiaddrs)) {
-    throw new LocationRecordValidationError("candidate multiaddrs must be an array");
+    throw new LocationRecordValidationError(
+      "candidate multiaddrs must be an array",
+    );
   }
   validateMultiaddrs(candidateInput.multiaddrs);
   if (candidateInput.record !== undefined) {
@@ -376,7 +454,9 @@ async function toCandidate(
       );
     }
     if (verifyRecord && !(await verifyLocationRecord(record))) {
-      throw new LocationRecordValidationError("location record signature is invalid");
+      throw new LocationRecordValidationError(
+        "location record signature is invalid",
+      );
     }
     return { source, multiaddrs: [...candidateInput.multiaddrs], record };
   }
@@ -385,10 +465,14 @@ async function toCandidate(
 
 function validateSubject(subject: unknown): asserts subject is string {
   if (typeof subject !== "string" || subject.length === 0) {
-    throw new LocationRecordValidationError("subject must be a non-empty string");
+    throw new LocationRecordValidationError(
+      "subject must be a non-empty string",
+    );
   }
   if (!subject.startsWith("did:pkh:") && !subject.startsWith("did:key:")) {
-    throw new LocationRecordValidationError("subject must be did:pkh or did:key");
+    throw new LocationRecordValidationError(
+      "subject must be did:pkh or did:key",
+    );
   }
 }
 
@@ -444,18 +528,26 @@ function verifyDidKeySignature(
       "did:key signature must be a base64url Ed25519 signature",
     );
   }
-  return ed25519.verify(signatureBytes, new TextEncoder().encode(payload), publicKey);
+  return ed25519.verify(
+    signatureBytes,
+    new TextEncoder().encode(payload),
+    publicKey,
+  );
 }
 
 function ed25519PublicKeyFromDidKey(did: string): Uint8Array {
   const identifier = did.slice("did:key:".length);
   if (!identifier.startsWith("z")) {
-    throw new LocationRecordValidationError("did:key must use base58btc multibase");
+    throw new LocationRecordValidationError(
+      "did:key must use base58btc multibase",
+    );
   }
 
   const bytes = bases.base58btc.decode(identifier);
   if (bytes.length !== 34 || bytes[0] !== 0xed || bytes[1] !== 0x01) {
-    throw new LocationRecordValidationError("did:key must be an Ed25519 public key");
+    throw new LocationRecordValidationError(
+      "did:key must be an Ed25519 public key",
+    );
   }
 
   return bytes.slice(2);
