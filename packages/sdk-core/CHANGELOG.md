@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 2.2.0-beta.4
+
+### Minor Changes
+
+- 0401ff8: Add default TinyCloud host discovery and run it from sign-in when no explicit host is configured.
+
 ## 2.2.0-beta.3
 
 ### Minor Changes

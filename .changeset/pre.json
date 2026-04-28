@@ -18,6 +18,7 @@
     "@tinycloud/vfs": "0.0.0"
   },
   "changesets": [
+    "default-cloud-host-resolution",
     "delegated-access-restorable",
     "location-registry-resolver",
     "manifest-permission-descriptions",
