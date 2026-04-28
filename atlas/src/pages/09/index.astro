@@ -1,38 +1,215 @@
 ---
 import Atlas from '@/layouts/Atlas.astro';
-import { getInventory } from '@/lib/atlas';
+import { getInventory, getDrift, getMeta, getArtifacts } from '@/lib/atlas';
 
 const inv = await getInventory();
-const ch = inv.chapters.find(c => c.id === '09');
+const ch = inv.chapters.find(c => c.id === '09')!;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
----
-<Atlas chapter="09" title={ch?.title ?? 'drift & rebuild'} crumb={`09 · ${ch?.title ?? 'drift & rebuild'}`}>
-  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
-    <div class="label">chapter 09 · {ch?.read} · voice: {ch?.voice}</div>
-    <h1 style="margin-top: 14px;">{ch?.title ?? 'drift & rebuild'}</h1>
 
-    <div class="card tinted" style="padding: 22px; margin: 24px 0;">
-      <div class="label" style="margin-bottom: 6px;">stub — port from prototype</div>
-      <p style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 15px;">
-        This page is scaffolded but not yet ported. The reference design lives at
-        <code>screens/06-drift.jsx</code> in the prototype project. Convert that JSX screen
-        into Astro markup using the same atoms (<code>.card</code>, <code>.pill</code>,
-        <code>.callout</code>, <code>.sticky</code>) — the CSS is identical.
-      </p>
+// drift.json is currently a placeholder; a sibling teammate is wiring rebuild.mjs
+// to emit { generatedAt, count, packages: [...] } from per-package hash compares.
+const drift = await getDrift().catch(() => ({ items: [], count: 0 }));
+const meta = await getMeta().catch(() => null);
+const artifacts = await getArtifacts().catch(() => ({ items: [] }));
+
+const driftItems: any[] = drift?.items ?? [];
+const driftCount: number = drift?.count ?? inv.repo.drift ?? 0;
+const staleArtifacts = (artifacts?.items ?? []).filter((a: any) => a.status === 'stale');
+---
+<Atlas chapter="09" title={ch.title} crumb={`09 · ${ch.title}`}>
+  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
+    <div class="label">chapter 09 · {ch.read} · voice: {ch.voice}</div>
+    <h1 style="margin-top: 14px;">drift &amp; rebuild — <span class="squig">keeping atlas honest</span></h1>
+
+    <p>
+      The atlas lies the moment the repo moves and nobody re-runs it. That's the
+      whole problem this chapter solves. Every fact on every page is generated
+      from the source tree by <code>atlas/scripts/rebuild.mjs</code>; every
+      paragraph of opinion lives in a YAML overlay. When the two disagree, we
+      don't apologize — we surface the disagreement in <code>drift.json</code>,
+      flag it on the cover, and trust an engineer to fix the <em>YAML</em>, not
+      the JSON.
+    </p>
+
+    <div class="row gap-12 wrap" style="margin: 18px 0 8px;">
+      <span class="pill solid">{driftCount} drift items</span>
+      <span class="pill faint">last build {inv.generated.at.slice(0,10)}</span>
+      <span class="pill">{inv.repo.sha.slice(0,7)}</span>
+      {staleArtifacts.length > 0 && (
+        <span class="pill accent">{staleArtifacts.length} stale artifacts</span>
+      )}
     </div>
+
+    <h2>two layers, one source of truth</h2>
+    <p>
+      Each package has two artifacts the atlas cares about: a discovered fact
+      sheet (modules, loc, exports, boundaries — generated) and a curated
+      overlay (the one paragraph of <code>why:</code>, plus notable exports —
+      hand-written). The contract is simple: structural facts are never
+      hand-edited, prose is never auto-generated. They meet at
+      <code>public/data/pkg/&lt;id&gt;.json</code> and get bundled into the
+      static site verbatim.
+    </p>
+
+    <div class="card tinted" style="padding: 18px 20px; margin: 14px 0;">
+      <div class="label" style="margin-bottom: 8px;">the layering</div>
+      <pre class="mono" style="margin: 0; white-space: pre-wrap; font-size: 12px; color: var(--ink-2); line-height: 1.55;">{`packages/<id>/src/index.ts   ──┐
+packages/<id>/package.json    │  walked by rebuild.mjs   ┐
+                               ▶  → modules, loc,         │
+                               │     exports, boundaries  │   merged
+atlas/curated/<id>.yaml       ──┘                          ▶── into ──▶ public/data/pkg/<id>.json
+                                  (why, notable_exports,  │
+                                   hasFsm, hasSeq)        ┘`}</pre>
+    </div>
+
+    <h2>how rebuild.mjs detects drift</h2>
+    <p>
+      The generator hashes each package's <code>package.json</code> +
+      <code>src/index.ts</code> on every run and compares the digest against the
+      previous <code>inventory.json</code>. A change in either file flips that
+      package's <code>repo.drift</code> count. When a curated overlay still
+      references a hash that no longer matches what's on disk, that's a drift
+      entry — pushed to <code>drift.json</code> with the <em>regen</em> list of
+      artifacts that need to be regenerated to catch up.
+    </p>
+    <p>
+      The drift schema as it stands today (and as the sibling teammate is
+      wiring it forward) carries enough for an engineer to act: which package,
+      what kind of change (<code>addition</code>, <code>rename</code>,
+      <code>stale</code>), where it lives, and which artifacts will need to be
+      regenerated. The future shape adds <code>generatedAt</code> + a
+      <code>packages: [...]</code> roll-up so the cover can show the count
+      directly without re-walking.
+    </p>
+
+    {driftItems.length > 0 && (
+      <>
+        <h2>current drift — what's out of sync</h2>
+        <div class="col gap-12" style="margin: 14px 0;">
+          {driftItems.map((d: any) => (
+            <div class="card" style="padding: 16px 18px;">
+              <div class="row between" style="align-items: baseline; margin-bottom: 6px;">
+                <div class="row gap-8" style="align-items: baseline;">
+                  <span class="drift-dot"></span>
+                  <a class="pkg-link" href={`${base}/pkg/${d.pkg}/`}>{d.pkg}</a>
+                  <span class="pill faint">{d.kind}</span>
+                </div>
+                <span class="label">{d.since}</span>
+              </div>
+              <p style="margin: 4px 0 8px; font-size: 14px;">{d.what}</p>
+              <div class="label" style="margin-bottom: 4px;">where</div>
+              <code style="font-size: 12px;">{d.where}</code>
+              {d.regen?.length > 0 && (
+                <>
+                  <div class="label" style="margin: 10px 0 4px;">regen</div>
+                  <div class="row gap-6 wrap">
+                    {d.regen.map((r: string) => <span class="pill">{r}</span>)}
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      </>
+    )}
+
+    <h2>the nightly cron — drift even when nobody pushes</h2>
+    <p>
+      Drift can happen without a commit landing on the atlas branch — a
+      dependency bumps, a sibling worktree merges, a curated paragraph ages
+      out of accuracy. <code>.github/workflows/atlas.yml</code> handles that
+      with two triggers: a push trigger that fires on changes to
+      <code>atlas/**</code>, <code>packages/**</code>, or the workflow itself,
+      and a <code>schedule</code> cron at <code>0 6 * * *</code> (06:00 UTC daily)
+      that re-runs the same rebuild and republishes Pages even if nothing
+      committed.
+    </p>
+
+    <div class="card tinted" style="padding: 18px 20px; margin: 14px 0;">
+      <div class="label" style="margin-bottom: 8px;">.github/workflows/atlas.yml — the recipe in CI</div>
+      <pre class="mono" style="margin: 0; white-space: pre-wrap; font-size: 12px; color: var(--ink-2); line-height: 1.55;">{`on:
+  push:     { branches: [master], paths: [atlas/**, packages/**, .github/workflows/atlas.yml] }
+  schedule: [{ cron: "0 6 * * *" }]            # nightly drift refresh
+  workflow_dispatch:
+
+steps:
+  - uses: actions/checkout@v4 with: { fetch-depth: 0 }   # rebuild.mjs reads HEAD
+  - uses: oven-sh/setup-bun@v2 with: { bun-version: 1.2.0 }
+  - bun install --frozen-lockfile
+  - bun run atlas:rebuild     # walk packages/* → public/data/*.json
+  - bun run build             # static site → ../docs/atlas/
+  - upload-pages-artifact + deploy-pages`}</pre>
+    </div>
+
+    <h2>fixing drift — edit the YAML, not the JSON</h2>
+    <p>
+      When a drift entry shows up against your package, the move is always the
+      same: open <code>atlas/curated/&lt;pkg&gt;.yaml</code>, update the affected
+      field (<code>why</code>, <code>boundaries</code>, <code>notable_exports</code>),
+      run <code>bun run atlas:rebuild</code> locally, and verify the entry
+      disappears from <code>public/data/drift.json</code>. The JSON files are
+      derived state — editing them directly will be overwritten on the next
+      rebuild and the drift will come back the next morning at 06:00 UTC.
+    </p>
+
+    <div class="card" style="padding: 18px 20px; margin: 14px 0; border-color: var(--accent);">
+      <div class="label" style="margin-bottom: 6px; color: var(--accent);">the fix loop</div>
+      <ol style="padding-left: 20px; margin: 0;">
+        <li>read the drift entry — it names the package and the regen artifacts</li>
+        <li>edit <code>atlas/curated/&lt;pkg&gt;.yaml</code> to match what the source actually does now</li>
+        <li><code>bun run atlas:rebuild</code> — confirm the entry is gone</li>
+        <li><code>bun run atlas:build</code> — sanity-check the rendered chapter</li>
+        <li>commit both the YAML and the regenerated JSON together</li>
+      </ol>
+    </div>
+
+    <h2>the agent's view — drift is curl-able</h2>
+    <p>
+      Agents read the same drift the humans do. <code>/atlas/data/drift.json</code>
+      is a static file in the deployed site, refreshed nightly. An agent
+      auditing the SDK can pull it directly to decide whether the structural
+      claims in a package's chapter are still trustworthy, and which artifacts
+      to regenerate before continuing.
+    </p>
+
+    <div class="card tinted" style="padding: 18px 20px; margin: 14px 0;">
+      <div class="label" style="margin-bottom: 8px;">for agents</div>
+      <pre class="mono" style="margin: 0; font-size: 12px; color: var(--ink-2); line-height: 1.55;">{`curl -s https://tinycloudlabs.github.io/js-sdk/atlas/data/drift.json | jq '.count, .items[].pkg'
+curl -s https://tinycloudlabs.github.io/js-sdk/atlas/data/meta.json   | jq '.recipe'
+curl -s https://tinycloudlabs.github.io/js-sdk/atlas/data/inventory.json | jq '.repo.drift'`}</pre>
+    </div>
+
+    {meta?.recipe && (
+      <>
+        <h2>the recipe, recorded</h2>
+        <p>
+          <code>meta.json</code> is the atlas's self-description — the exact
+          steps <code>rebuild.mjs</code> takes, the inputs it reads, the
+          outputs it emits. It's served alongside the data so an agent (or a
+          future maintainer) can reconstruct the pipeline without reading the
+          script.
+        </p>
+        <ol style="padding-left: 22px; margin: 6px 0 14px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-2);">
+          {meta.recipe.map((step: string) => <li style="margin: 2px 0;">{step}</li>)}
+        </ol>
+      </>
+    )}
 
     <h3>data this chapter reads</h3>
     <ul class="col gap-4">
       <li class="mono">/atlas/data/inventory.json</li>
-      
-      
       <li class="mono">/atlas/data/drift.json</li>
+      <li class="mono">/atlas/data/meta.json</li>
       <li class="mono">/atlas/data/artifacts.json</li>
+      <li class="mono">atlas/scripts/rebuild.mjs (generator)</li>
+      <li class="mono">.github/workflows/atlas.yml (cron + push)</li>
     </ul>
 
     <h3>where to read next</h3>
     <p>
-      End of the line. Try <a class="pkg-link" href={`${base}/agents/`}>agent endpoints</a> or any package in the left rail.
+      End of the line. Back to the <a class="pkg-link" href={`${base}/`}>cover</a>,
+      or jump to the <a class="pkg-link" href={`${base}/agents/`}>agent endpoints</a>
+      reference if you want to see the full <code>/atlas/data/*.json</code> surface.
     </p>
   </article>
 </Atlas>
