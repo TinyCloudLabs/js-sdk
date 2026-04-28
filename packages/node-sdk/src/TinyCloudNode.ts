@@ -116,8 +116,12 @@ export interface TinyCloudNodeConfig {
   privateKey?: string;
   /** Custom signer implementation. If provided, takes precedence over privateKey. */
   signer?: ISigner;
-  /** TinyCloud server URL (default: "https://node.tinycloud.xyz") */
+  /** Explicit TinyCloud server URL. When omitted, signIn resolves the user's host. */
   host?: string;
+  /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
+  tinycloudRegistryUrl?: string | null;
+  /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
+  tinycloudFallbackHosts?: string[] | null;
   /** Space prefix for this user's space. Optional - only needed for signIn() */
   prefix?: string;
   /** Domain for SIWE messages (default: derived from host) */
@@ -222,6 +226,7 @@ export class TinyCloudNode {
   }
 
   private config: TinyCloudNodeConfig;
+  private readonly explicitHost?: string;
   private signer: ISigner | null = null;
   private auth: NodeUserAuthorization | null = null;
   private tc: TinyCloud | null = null;
@@ -287,6 +292,8 @@ export class TinyCloudNode {
    * ```
    */
   constructor(config: TinyCloudNodeConfig = {}) {
+    this.explicitHost = config.host;
+
     // Store config with default host
     this.config = {
       ...config,
@@ -385,8 +392,6 @@ export class TinyCloudNode {
    * @internal
    */
   private setupAuth(config: TinyCloudNodeConfig): void {
-    const host = this.config.host!;
-
     this.auth = new NodeUserAuthorization({
       signer: this.signer!,
       signStrategy: { type: "auto-sign" },
@@ -395,7 +400,9 @@ export class TinyCloudNode {
       domain: this.siweDomain,
       spacePrefix: config.prefix,
       sessionExpirationMs: config.sessionExpirationMs ?? 60 * 60 * 1000,
-      tinycloudHosts: [host],
+      tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
+      tinycloudRegistryUrl: config.tinycloudRegistryUrl,
+      tinycloudFallbackHosts: config.tinycloudFallbackHosts,
       autoCreateSpace: config.autoCreateSpace,
       enablePublicSpace: config.enablePublicSpace ?? true,
       spaceCreationHandler: config.spaceCreationHandler,
@@ -409,6 +416,13 @@ export class TinyCloudNode {
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.wasmBindings.invokeAny,
     });
+  }
+
+  private syncResolvedHostFromAuth(): void {
+    const host = this.auth?.hosts[0];
+    if (host) {
+      this.config.host = host;
+    }
   }
 
   /**
@@ -453,6 +467,11 @@ export class TinyCloudNode {
 
   get capabilityRequest(): ComposedManifestRequest | undefined {
     return this.auth?.capabilityRequest;
+  }
+
+  get hosts(): string[] {
+    const authHosts = this.auth?.hosts ?? [];
+    return authHosts.length > 0 ? authHosts : [this.config.host!];
   }
 
   /**
@@ -541,6 +560,7 @@ export class TinyCloudNode {
     this._serviceContext = undefined;
 
     await this.tc.signIn(options);
+    this.syncResolvedHostFromAuth();
 
     // Initialize service context with session
     this.initializeServices();
@@ -725,7 +745,6 @@ export class TinyCloudNode {
     }
 
     const prefix = options?.prefix ?? "default";
-    const host = this.config.host!;
 
     // Create signer from private key
     if (!TinyCloudNode.nodeDefaults) {
@@ -745,7 +764,9 @@ export class TinyCloudNode {
       domain: this.siweDomain,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? 60 * 60 * 1000,
-      tinycloudHosts: [host],
+      tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
+      tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
+      tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
       autoCreateSpace: this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: this.config.spaceCreationHandler,
@@ -784,7 +805,6 @@ export class TinyCloudNode {
     }
 
     const prefix = options?.prefix ?? "default";
-    const host = this.config.host!;
 
     this.signer = signer;
 
@@ -796,7 +816,9 @@ export class TinyCloudNode {
       domain: this.siweDomain,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? 60 * 60 * 1000,
-      tinycloudHosts: [host],
+      tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
+      tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
+      tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
       autoCreateSpace: this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: this.config.spaceCreationHandler,

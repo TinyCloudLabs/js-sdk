@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import {
+  DEFAULT_TINYCLOUD_FALLBACK_HOST,
+  DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
   type IWasmBindings,
   type ISessionManager,
   type ISigner,
@@ -180,4 +182,51 @@ test("NodeUserAuthorization.signIn lets a per-call nonce override siweConfig.non
   expect(captured[0]?.nonce).toBe("call-nonce");
   expect(captured[0]?.nonce).not.toBe("constructor-nonce");
   expect(signedMessages[0]).toContain("Nonce: call-nonce");
+});
+
+test("NodeUserAuthorization.signIn resolves TinyCloud hosts when none are explicit", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const signedMessages: string[] = [];
+  const requests: string[] = [];
+  const originalFetch = globalThis.fetch;
+  (globalThis as any).__originalFetch = originalFetch;
+  globalThis.fetch = async (input: any, init?: any) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.startsWith(`${DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL}/v1/locations/`)) {
+      return new Response("{}", { status: 404 });
+    }
+    if (url.endsWith("/info")) {
+      return new Response(
+        JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return new Response(JSON.stringify({ activated: ["space"], skipped: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const auth = new NodeUserAuthorization({
+    signer: createSigner(signedMessages),
+    wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    sessionStorage: new MemorySessionStorage(),
+    siweConfig: { nonce: "constructor-nonce" },
+  });
+
+  await auth.signIn();
+
+  expect(auth.hosts).toEqual([DEFAULT_TINYCLOUD_FALLBACK_HOST]);
+  expect(requests).toContain(
+    `${DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL}/v1/locations/${encodeURIComponent(
+      "did:pkh:eip155:1:0x1234567890abcdef1234567890abcdef12345678",
+    )}`,
+  );
+  expect(requests).toContain(`${DEFAULT_TINYCLOUD_FALLBACK_HOST}/info`);
 });

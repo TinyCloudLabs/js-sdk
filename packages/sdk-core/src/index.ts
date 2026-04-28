@@ -332,6 +332,8 @@ export {
 // TinyCloud location registry helpers
 export {
   CloudLocationResolutionError,
+  DEFAULT_TINYCLOUD_FALLBACK_HOST,
+  DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
   LocationRecordValidationError,
   canonicalLocationPayload,
   fetchLocationRecord,
@@ -339,6 +341,7 @@ export {
   locationPayloadForRecord,
   multiaddrToHttpUrl,
   resolveCloudLocation,
+  resolveTinyCloudHosts,
   signLocationRecord,
   validateLocationRecord,
   validateLocationRecordPayload,
@@ -351,7 +354,9 @@ export {
   type LocationResolutionAttempt,
   type LocationSource,
   type ResolveCloudLocationOptions,
+  type ResolveTinyCloudHostsOptions,
   type ResolvedCloudLocation,
+  type ResolvedTinyCloudHosts,
 } from "./location";
 
 // Capability subset checking and recap parsing
