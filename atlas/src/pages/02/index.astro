@@ -1,37 +1,223 @@
 ---
 import Atlas from '@/layouts/Atlas.astro';
-import { getInventory } from '@/lib/atlas';
+import { getInventory, getAllPackages, getPackage } from '@/lib/atlas';
 
 const inv = await getInventory();
-const ch = inv.chapters.find(c => c.id === '02');
+const pkgs = await getAllPackages();
+const ch = inv.chapters.find(c => c.id === '02')!;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
----
-<Atlas chapter="02" title={ch?.title ?? 'the wasm seam'} crumb={`02 · ${ch?.title ?? 'the wasm seam'}`}>
-  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
-    <div class="label">chapter 02 · {ch?.read} · voice: {ch?.voice}</div>
-    <h1 style="margin-top: 14px;">{ch?.title ?? 'the wasm seam'}</h1>
 
-    <div class="card tinted" style="padding: 22px; margin: 24px 0;">
-      <div class="label" style="margin-bottom: 6px;">stub — port from prototype</div>
-      <p style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 15px;">
-        This page is scaffolded but not yet ported. The reference design lives at
-        <code>screens/02-wasm.jsx</code> in the prototype project. Convert that JSX screen
-        into Astro markup using the same atoms (<code>.card</code>, <code>.pill</code>,
-        <code>.callout</code>, <code>.sticky</code>) — the CSS is identical.
-      </p>
+const sdkCore  = await getPackage('sdk-core');
+const sdkRs    = await getPackage('sdk-rs');
+const rsWeb    = await getPackage('sdk-rs/web');
+const rsNode   = await getPackage('sdk-rs/node');
+const webSdk   = await getPackage('web-sdk');
+const nodeSdk  = await getPackage('node-sdk');
+
+const pkgHref = (id: string) => `${base}/pkg/${id.replace(/\//g, '--')}/`;
+
+// Functions/types crossing the seam (from packages/sdk-core/src/wasm.ts).
+const seamSurface = [
+  { name: 'invoke', shape: '(session, action) → headers', why: 'authorize one capability call' },
+  { name: 'invokeAny', shape: '(session, entries[], facts?) → headers', why: 'multi-capability auth in one header' },
+  { name: 'prepareSession', shape: '({abilities, address, chainId, domain, jwk, …}) → { siwe, … }', why: 'build the SIWE+ReCap to sign' },
+  { name: 'completeSessionSetup', shape: '({…prepared, signature}) → Session', why: 'turn signature into a UCAN delegation' },
+  { name: 'createDelegation', shape: '(session, delegateDID, spaceId, abilities, ttl) → UCAN', why: 'mint a sub-delegation' },
+  { name: 'parseRecapFromSiwe', shape: '(siwe) → WasmRecapEntry[]', why: 'inspect existing capabilities' },
+  { name: 'makeSpaceId', shape: '(address, chainId, prefix) → spaceId', why: 'derive the canonical space URI' },
+  { name: 'ensureEip55', shape: '(address) → checksummed', why: 'normalize the address Rust expects' },
+  { name: 'protocolVersion', shape: '() → number', why: 'check kernel/server compatibility' },
+  { name: 'vault_*', shape: 'AEAD + X25519 + sha256 + RNG', why: 'crypto primitives the JS side never reimplements' },
+  { name: 'createSessionManager', shape: '() → ISessionManager', why: 'factory for the Ed25519 keystore' },
+];
+---
+<Atlas chapter="02" title={ch.title} crumb={`02 · ${ch.title}`}>
+  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
+    <div class="label">chapter 02 · {ch.read} · voice: {ch.voice}</div>
+    <h1 style="margin-top: 14px;">the wasm <span class="squig">seam</span></h1>
+    <p>
+      Every TS package in this repo eventually calls into Rust. The interface
+      it agrees to is <code>IWasmBindings</code> — declared once in
+      <a class="pkg-link" href={pkgHref(sdkCore.id)}>{sdkCore.npm}</a>
+      (<code>src/wasm.ts</code>), implemented twice: once for the browser and
+      once for Node. Everything that crosses this seam is either a JS-friendly
+      type, a function that returns one, or raw <code>Uint8Array</code> for
+      crypto primitives. There are no shared classes — the boundary is value
+      types only.
+    </p>
+
+    <h2>two implementations, one interface</h2>
+
+    <div class="mermaid-wrap" style="margin: 24px 0; height: 380px; position: relative;">
+      <span class="cap">seam.svg</span>
+
+      <!-- TS callers row -->
+      <div class="row gap-16" style="position: absolute; top: 32px; left: 32px; right: 32px;">
+        <a href={pkgHref(webSdk.id)} class="gnode" style={{ position:'relative', flex:1, top:0, left:0 }}>
+          <div class="name">{webSdk.npm}</div>
+          <div class="meta">{webSdk.modules} mod · {webSdk.loc.toLocaleString()} loc</div>
+        </a>
+        <a href={pkgHref(sdkCore.id)} class="gnode" style={{ position:'relative', flex:1, top:0, left:0, background:'var(--accent)', color:'var(--paper)', borderColor:'var(--accent)' }}>
+          <div class="name">{sdkCore.npm}</div>
+          <div class="meta" style="color: rgba(255,255,255,0.85);">defines IWasmBindings</div>
+        </a>
+        <a href={pkgHref(nodeSdk.id)} class="gnode" style={{ position:'relative', flex:1, top:0, left:0 }}>
+          <div class="name">{nodeSdk.npm}</div>
+          <div class="meta">{nodeSdk.modules} mod · {nodeSdk.loc.toLocaleString()} loc</div>
+        </a>
+      </div>
+
+      <!-- arrows down -->
+      <svg style="position: absolute; top: 110px; left: 0; right: 0; width: 100%; height: 60px;">
+        <defs>
+          <marker id="ah-02" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)" />
+          </marker>
+        </defs>
+        <line x1="16.7%" y1="0" x2="16.7%" y2="50" stroke="var(--accent)" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ah-02)" />
+        <line x1="83.3%" y1="0" x2="83.3%" y2="50" stroke="var(--accent)" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ah-02)" />
+      </svg>
+
+      <!-- adapter row -->
+      <div class="row gap-16" style="position: absolute; top: 180px; left: 32px; right: 32px;">
+        <a href={pkgHref(webSdk.id)} class="gnode" style={{ position:'relative', flex:1, top:0, left:0 }}>
+          <div class="name">BrowserWasmBindings</div>
+          <div class="meta">web-sdk/src/adapters · async ensureInitialized()</div>
+        </a>
+        <div style="flex:1"></div>
+        <a href={pkgHref(nodeSdk.id)} class="gnode" style={{ position:'relative', flex:1, top:0, left:0 }}>
+          <div class="name">NodeWasmBindings</div>
+          <div class="meta">node-sdk/src · sync, panic hook on init</div>
+        </a>
+      </div>
+
+      <!-- arrows down to wasm -->
+      <svg style="position: absolute; top: 250px; left: 0; right: 0; width: 100%; height: 60px;">
+        <line x1="16.7%" y1="0" x2="16.7%" y2="50" stroke="var(--ink-3)" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ah-02)" />
+        <line x1="83.3%" y1="0" x2="83.3%" y2="50" stroke="var(--ink-3)" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ah-02)" />
+      </svg>
+
+      <!-- wasm row -->
+      <div class="row gap-16" style="position: absolute; top: 320px; left: 32px; right: 32px;">
+        <a href={pkgHref(rsWeb.id)} class="gnode" style={{ position:'relative', flex:1, top:0, left:0, background:'var(--ink)', color:'var(--paper)', borderColor:'var(--ink)' }}>
+          <div class="name">{rsWeb.npm}</div>
+          <div class="meta" style="color: rgba(255,255,255,0.65);">target: web · ESM</div>
+        </a>
+        <a href={pkgHref(sdkRs.id)} class="gnode" style={{ position:'relative', flex:1, top:0, left:0, background:'var(--accent)', color:'var(--paper)', borderColor:'var(--accent)' }}>
+          <div class="name">{sdkRs.npm}</div>
+          <div class="meta" style="color: rgba(255,255,255,0.85);">single Rust crate · {sdkRs.loc.toLocaleString()} loc</div>
+        </a>
+        <a href={pkgHref(rsNode.id)} class="gnode" style={{ position:'relative', flex:1, top:0, left:0, background:'var(--ink)', color:'var(--paper)', borderColor:'var(--ink)' }}>
+          <div class="name">{rsNode.npm}</div>
+          <div class="meta" style="color: rgba(255,255,255,0.65);">target: nodejs · CJS</div>
+        </a>
+      </div>
+
+      <div class="callout" style="top: 200px; left: 50%; transform: translateX(-50%) rotate(-1.5deg); max-width: 240px; text-align: center;">
+        same crate, two <code>wasm-pack --target</code> outputs.
+      </div>
     </div>
+
+    <h2>what crosses the seam</h2>
+    <p>
+      The contract is small — eleven groups of functions, all declared in
+      <code>sdk-core/src/wasm.ts</code>. Anything not in this list does not
+      cross. JS-side types like <code>SiweConfig</code> live in
+      <code>client-types.ts</code>; the Rust side reconstructs them from the
+      bag-of-fields the wasm-bindgen serializer hands across.
+    </p>
+
+    <div class="card" style="padding: 0; margin: 18px 0; overflow: hidden;">
+      <div class="row" style="background: var(--paper-3); padding: 8px 14px; border-bottom: 1px solid var(--ink-4); font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em;">
+        <div style="flex: 0 0 200px;">function</div>
+        <div style="flex: 1;">shape across the seam</div>
+        <div style="flex: 0 0 220px;">why it has to be wasm</div>
+      </div>
+      {seamSurface.map((row, i) => (
+        <div class="row" style={`padding: 9px 14px; border-bottom: 1px solid var(--paper-3); font-size: 13px; ${i % 2 === 1 ? 'background: var(--paper-2);' : ''}`}>
+          <div style="flex: 0 0 200px; font-family: 'JetBrains Mono', monospace; color: var(--accent);">{row.name}</div>
+          <div style="flex: 1; font-family: 'JetBrains Mono', monospace; color: var(--ink-2); font-size: 12px;">{row.shape}</div>
+          <div style="flex: 0 0 220px; font-family: 'Outfit', sans-serif; color: var(--ink-2);">{row.why}</div>
+        </div>
+      ))}
+    </div>
+
+    <h2>why two wasm targets</h2>
+    <p>
+      One Rust crate, two builds. The split is enforced by Cargo features —
+      <code>browser</code> turns on <code>web-sys</code>, <code>getrandom/js</code>,
+      and <code>rand/wasm-bindgen</code>; <code>nodejs</code> turns on
+      <code>k256</code>, <code>sha3</code>, and <code>base64</code> for
+      Node-only Ethereum signing helpers. The build script lives at the root
+      of <a class="pkg-link" href={pkgHref(sdkRs.id)}>{sdkRs.npm}</a> and runs
+      <code>wasm-pack</code> twice:
+    </p>
+
+    <div class="card tinted" style="padding: 16px 18px; margin: 14px 0; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; line-height: 1.6;">
+      <div>$ wasm-pack build --target web    --features browser  → <span style="color: var(--accent);">{rsWeb.npm}</span></div>
+      <div>$ wasm-pack build --target nodejs --features nodejs   → <span style="color: var(--accent);">{rsNode.npm}</span></div>
+    </div>
+
+    <p>
+      The two outputs ship as separate npm packages. The browser build is an
+      ES module the bundler treats like any other dependency; the Node build
+      is a CJS module that <code>require()</code>s a synchronous
+      <code>.wasm</code> file from disk. They expose the same Rust symbols, so
+      the two adapters in TS look almost identical — only the import path and
+      the init lifecycle differ.
+    </p>
+
+    <h2>init lifecycle</h2>
+    <p>
+      Node WASM is synchronous: <code>require()</code> resolves the
+      <code>.wasm</code> on disk, instantiation is blocking, and every
+      function is callable immediately. <code>NodeWasmBindings</code>
+      reflects this — its constructor just calls <code>initPanicHook()</code>
+      once and assigns method references. There's no <code>ensureInitialized</code>.
+    </p>
+    <p>
+      Browser WASM is async — <code>fetch</code> + <code>WebAssembly.instantiate</code>
+      return a promise. <a class="pkg-link" href={pkgHref(rsWeb.id)}>{rsWeb.npm}</a>
+      exports an <code>initialized: Promise&lt;void&gt;</code> that callers
+      must await before invoking anything. <code>BrowserWasmBindings.ensureInitialized()</code>
+      awaits that promise, then assigns <code>globalThis.tinycloudModule</code>
+      so the legacy module-style helpers (<code>invoke</code>,
+      <code>prepareSession</code>) can dispatch through a global.
+    </p>
+
+    <div class="callout accent" style="position: relative; margin: 18px 0; max-width: none;">
+      The <code>ensureInitialized?</code> method is optional on the interface
+      precisely because Node doesn't need it. Callers that want to be
+      portable always await it; callers in Node-only paths can skip it.
+    </div>
+
+    <h2>version coupling</h2>
+    <p>
+      <a class="pkg-link" href={pkgHref(sdkRs.id)}>{sdkRs.npm}</a> pulls
+      <code>tinycloud-sdk-rs</code> and <code>tinycloud-sdk-wasm</code> from
+      the <code>tinycloud-node</code> repo by git rev. The chosen rev is
+      pinned in <code>Cargo.toml</code>. <code>protocolVersion()</code> is
+      the JS-visible escape valve: it returns the kernel's protocol number,
+      and <code>checkNodeInfo</code> in <a class="pkg-link" href={pkgHref(sdkCore.id)}>{sdkCore.npm}</a>
+      compares it to the running node's number on first use. A mismatch is
+      surfaced as a thrown error, not a silent retry.
+    </p>
 
     <h3>data this chapter reads</h3>
     <ul class="col gap-4">
       <li class="mono">/atlas/data/inventory.json</li>
-      
-      
-      
+      <li class="mono">/atlas/data/pkg/sdk-core.json</li>
+      <li class="mono">/atlas/data/pkg/sdk-rs.json</li>
+      <li class="mono">/atlas/data/pkg/sdk-rs__web.json</li>
+      <li class="mono">/atlas/data/pkg/sdk-rs__node.json</li>
     </ul>
 
     <h3>where to read next</h3>
     <p>
-      Continue to <a class="pkg-link" href={`${base}/03/`}>chapter 03</a>.
+      Chapter <a class="pkg-link" href={`${base}/03/`}>03</a> walks the SIWE
+      sign-in flow end to end — it's the first time most consumers actually
+      cross this seam, via <code>prepareSession</code> and
+      <code>completeSessionSetup</code>.
     </p>
   </article>
 </Atlas>
