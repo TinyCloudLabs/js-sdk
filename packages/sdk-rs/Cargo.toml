@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-browser = ["web-sys", "getrandom/js", "rand/wasm-bindgen"]
+browser = ["web-sys", "getrandom/js"]
 nodejs = ["k256", "sha3", "base64"]
 
 [dependencies]
@@ -35,7 +35,6 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4.34"
 
 # Random number generation (features enabled per-target)
-rand = "0.7"
 getrandom = "0.2"
 
 # Browser-only (optional)
