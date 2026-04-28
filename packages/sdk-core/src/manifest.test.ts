@@ -40,7 +40,7 @@ describe("parseExpiry", () => {
 
   it("throws on garbage input", () => {
     expect(() => parseExpiry("not-a-duration")).toThrow(
-      ManifestValidationError
+      ManifestValidationError,
     );
   });
 
@@ -63,14 +63,15 @@ describe("expandActionShortNames", () => {
 
   it("passes already-expanded URNs through unchanged", () => {
     expect(
-      expandActionShortNames("tinycloud.kv", ["tinycloud.kv/get", "list"])
+      expandActionShortNames("tinycloud.kv", ["tinycloud.kv/get", "list"]),
     ).toEqual(["tinycloud.kv/get", "tinycloud.kv/list"]);
   });
 
   it("handles arbitrary services", () => {
-    expect(
-      expandActionShortNames("tinycloud.sql", ["read", "ddl"])
-    ).toEqual(["tinycloud.sql/read", "tinycloud.sql/ddl"]);
+    expect(expandActionShortNames("tinycloud.sql", ["read", "ddl"])).toEqual([
+      "tinycloud.sql/read",
+      "tinycloud.sql/ddl",
+    ]);
   });
 });
 
@@ -81,14 +82,14 @@ describe("expandActionShortNames", () => {
 describe("applyPrefix", () => {
   it("joins prefix and path with a slash when path has no leading slash", () => {
     expect(applyPrefix("com.listen.app", "data.sqlite", false)).toBe(
-      "com.listen.app/data.sqlite"
+      "com.listen.app/data.sqlite",
     );
   });
 
   it("keeps the leading slash when path starts with /", () => {
     expect(applyPrefix("com.listen.app", "/", false)).toBe("com.listen.app/");
     expect(applyPrefix("com.listen.app", "/nested/", false)).toBe(
-      "com.listen.app/nested/"
+      "com.listen.app/nested/",
     );
   });
 
@@ -141,19 +142,19 @@ describe("validateManifest", () => {
 
   it("throws on missing id", () => {
     expect(() => validateManifest({ name: "Listen" })).toThrow(
-      ManifestValidationError
+      ManifestValidationError,
     );
   });
 
   it("throws on missing name", () => {
     expect(() => validateManifest({ app_id: "com.listen.app" })).toThrow(
-      ManifestValidationError
+      ManifestValidationError,
     );
   });
 
   it("throws on invalid top-level expiry", () => {
     expect(() =>
-      validateManifest({ app_id: "a.b.c", name: "x", expiry: "forever" })
+      validateManifest({ app_id: "a.b.c", name: "x", expiry: "forever" }),
     ).toThrow(ManifestValidationError);
   });
 
@@ -165,7 +166,7 @@ describe("validateManifest", () => {
         permissions: [
           { service: "tinycloud.kv", space: "default", path: "/", actions: [] },
         ],
-      })
+      }),
     ).toThrow(ManifestValidationError);
   });
 
@@ -175,7 +176,7 @@ describe("validateManifest", () => {
         manifest_version: 2,
         app_id: "a.b.c",
         name: "x",
-      } as Manifest)
+      } as Manifest),
     ).toThrow(ManifestValidationError);
   });
 });
@@ -185,7 +186,10 @@ describe("validateManifest", () => {
 // ---------------------------------------------------------------------------
 
 describe("resolveManifest — minimum manifest with defaults=true", () => {
-  const resolved = resolveManifest({ app_id: "com.listen.app", name: "Listen" });
+  const resolved = resolveManifest({
+    app_id: "com.listen.app",
+    name: "Listen",
+  });
 
   it("copies the id", () => {
     expect(resolved.app_id).toBe("com.listen.app");
@@ -201,7 +205,7 @@ describe("resolveManifest — minimum manifest with defaults=true", () => {
 
   it("defaults space to applications", () => {
     expect(new Set(resolved.resources.map((r) => r.space))).toEqual(
-      new Set(["applications"])
+      new Set(["applications"]),
     );
   });
 
@@ -233,7 +237,7 @@ describe("resolveManifest — minimum manifest with defaults=true", () => {
 
   it("always includes capabilities:read in any non-false default", () => {
     const caps = resolved.resources.find(
-      (r) => r.service === "tinycloud.capabilities"
+      (r) => r.service === "tinycloud.capabilities",
     );
     expect(caps?.actions).toContain("tinycloud.capabilities/read");
   });
@@ -258,12 +262,12 @@ describe("resolveManifest — defaults tiers", () => {
     const sql = resolved.resources.find((r) => r.service === "tinycloud.sql");
     expect(sql?.actions).toContain("tinycloud.sql/ddl");
     const caps = resolved.resources.find(
-      (r) => r.service === "tinycloud.capabilities"
+      (r) => r.service === "tinycloud.capabilities",
     );
     expect(caps?.actions).toContain("tinycloud.capabilities/admin");
     // DuckDB still opt-in.
     expect(
-      resolved.resources.find((r) => r.service === "tinycloud.duckdb")
+      resolved.resources.find((r) => r.service === "tinycloud.duckdb"),
     ).toBeUndefined();
   });
 
@@ -274,7 +278,7 @@ describe("resolveManifest — defaults tiers", () => {
       defaults: "all",
     });
     const duckdb = resolved.resources.find(
-      (r) => r.service === "tinycloud.duckdb"
+      (r) => r.service === "tinycloud.duckdb",
     );
     expect(duckdb).toBeDefined();
     expect(duckdb?.actions).toEqual([
@@ -390,6 +394,30 @@ describe("resolveManifest — prefix semantics", () => {
     });
     expect(resolved.resources[0]?.path).toBe("shared/");
   });
+
+  it("preserves per-permission descriptions on resolved resources and delegates", () => {
+    const resolved = resolveManifest({
+      app_id: "com.listen.app",
+      name: "x",
+      did: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+      defaults: false,
+      permissions: [
+        {
+          service: "tinycloud.sql",
+          path: "data.sqlite",
+          actions: ["read"],
+          description: "Read conversation rows for transcript sync.",
+        },
+      ],
+    });
+
+    expect(resolved.resources[0]?.description).toBe(
+      "Read conversation rows for transcript sync.",
+    );
+    expect(resolved.additionalDelegates[0]?.permissions[0]?.description).toBe(
+      "Read conversation rows for transcript sync.",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -461,6 +489,7 @@ describe("resolveManifest — end-to-end composition", () => {
           service: "tinycloud.sql",
           path: "data.sqlite",
           actions: ["read", "write"],
+          description: "Read and write app conversation data.",
         },
       ],
     };
@@ -475,6 +504,7 @@ describe("resolveManifest — end-to-end composition", () => {
           service: "tinycloud.sql",
           path: "data.sqlite",
           actions: ["read", "write"],
+          description: "Read and write app conversation data.",
         },
       ],
     };
@@ -487,6 +517,7 @@ describe("resolveManifest — end-to-end composition", () => {
           space: "applications",
           path: "com.listen.app/data.sqlite",
           actions: ["tinycloud.sql/read", "tinycloud.sql/write"],
+          description: "Read and write app conversation data.",
         }),
         expect.objectContaining({
           service: "tinycloud.kv",
@@ -498,13 +529,13 @@ describe("resolveManifest — end-to-end composition", () => {
             "tinycloud.kv/list",
           ],
         }),
-      ])
+      ]),
     );
 
     expect(request.delegationTargets).toHaveLength(1);
     const delegate = request.delegationTargets[0]!;
     expect(delegate.did).toBe(
-      "did:pkh:eip155:1:0x000000000000000000000000000000000000dead"
+      "did:pkh:eip155:1:0x000000000000000000000000000000000000dead",
     );
     expect(delegate.expiryMs).toBe(parseExpiry("7d"));
     expect(delegate.permissions[0]?.path).toBe("com.listen.app/data.sqlite");
@@ -513,6 +544,9 @@ describe("resolveManifest — end-to-end composition", () => {
       "tinycloud.sql/read",
       "tinycloud.sql/write",
     ]);
+    expect(delegate.permissions[0]?.description).toBe(
+      "Read and write app conversation data.",
+    );
     expect(request.registryRecords).toEqual([
       {
         key: "applications/com.listen.app",
@@ -525,7 +559,7 @@ describe("resolveManifest — end-to-end composition", () => {
   it("can omit implicit account registry permissions", () => {
     const request = composeManifestRequest(
       [{ app_id: "com.listen.app", name: "Listen", defaults: false }],
-      { includeAccountRegistryPermissions: false }
+      { includeAccountRegistryPermissions: false },
     );
 
     expect(request.resources.some((r) => r.space === "account")).toBe(false);
