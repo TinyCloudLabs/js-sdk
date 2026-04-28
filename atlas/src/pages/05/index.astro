@@ -1,37 +1,228 @@
 ---
 import Atlas from '@/layouts/Atlas.astro';
-import { getInventory } from '@/lib/atlas';
+import { getInventory, getAllPackages } from '@/lib/atlas';
 
 const inv = await getInventory();
-const ch = inv.chapters.find(c => c.id === '05');
+const pkgs = await getAllPackages();
+const ch = inv.chapters.find(c => c.id === '05')!;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
----
-<Atlas chapter="05" title={ch?.title ?? 'delegation chains'} crumb={`05 · ${ch?.title ?? 'delegation chains'}`}>
-  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
-    <div class="label">chapter 05 · {ch?.read} · voice: {ch?.voice}</div>
-    <h1 style="margin-top: 14px;">{ch?.title ?? 'delegation chains'}</h1>
 
-    <div class="card tinted" style="padding: 22px; margin: 24px 0;">
-      <div class="label" style="margin-bottom: 6px;">stub — port from prototype</div>
-      <p style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 15px;">
-        This page is scaffolded but not yet ported. The reference design lives at
-        <code>screens/05-delegation.jsx</code> in the prototype project. Convert that JSX screen
-        into Astro markup using the same atoms (<code>.card</code>, <code>.pill</code>,
-        <code>.callout</code>, <code>.sticky</code>) — the CSS is identical.
+const sdkCore  = pkgs.find(p => p.id === 'sdk-core')!;
+const sdkRs    = pkgs.find(p => p.id === 'sdk-rs')!;
+const services = pkgs.find(p => p.id === 'sdk-services')!;
+const nodeSdk  = pkgs.find(p => p.id === 'node-sdk')!;
+const webSdk   = pkgs.find(p => p.id === 'web-sdk')!;
+
+// Three concrete capability frames for the chain diagram.
+const chain = [
+  {
+    label: 'root · wallet → app',
+    space: 'default',
+    path: '/',
+    actions: ['kv/*', 'sql/*', 'capabilities/*'],
+    note: 'signed by the wallet at SIWE time. covers everything the app declared in its manifest.',
+  },
+  {
+    label: 'mid · app → backend',
+    space: 'default',
+    path: 'reports/',
+    actions: ['kv/get', 'kv/put'],
+    note: 'subset. narrower path. fewer actions. signed by the app session key.',
+  },
+  {
+    label: 'leaf · backend → worker',
+    space: 'default',
+    path: 'reports/2026-Q2/',
+    actions: ['kv/get'],
+    note: 'subset of subset. read-only, single quarter.',
+  },
+];
+---
+<Atlas chapter="05" title={ch.title} crumb={`05 · ${ch.title}`}>
+  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
+    <div class="label">chapter 05 · {ch.read} · voice: {ch.voice}</div>
+    <h1 style="margin-top: 14px;">delegation chains <span class="squig">&amp; ReCap</span></h1>
+
+    <p>
+      A TinyCloud delegation is a UCAN-shaped credential that says
+      <em>this DID may invoke these actions on these resources, until this
+      time, with permission to redelegate (or not).</em> Chains are how
+      authority flows: a wallet signs the root, the app session key signs
+      a narrower child, the backend signs a narrower grandchild — and
+      every link must be a strict subset of its parent.
+    </p>
+
+    <p>
+      The chain itself is encoded inside a SIWE message as a
+      <code>recap</code> resource — a base64url-encoded URN block tucked
+      after the <code>Resources:</code> header. <code>parseRecapFromSiwe</code>
+      (Rust, exposed through the <a class="pkg-link" href={`${base}/pkg/sdk-rs/`}>{sdkRs.npm}</a>
+      WASM seam) extracts the entries; <code>isCapabilitySubset</code> in
+      <a class="pkg-link" href={`${base}/pkg/sdk-core/`}>{sdkCore.npm}</a>
+      decides whether a fresh delegation request can be derived from
+      what the session already holds.
+    </p>
+
+    <h2>a three-link chain, drawn</h2>
+
+    <div class="mermaid-wrap" style="margin: 24px 0; height: 380px; position: relative;">
+      <span class="cap">delegation-chain.svg</span>
+
+      {chain.map((link, i) => (
+        <div style={`position:absolute; top:${28 + i * 110}px; left:32px; right:32px;`}>
+          <div class="row gap-12 middle">
+            <span class="pin" style="position:relative;">{i + 1}</span>
+            <div class="card" style="flex:1; padding: 10px 14px;">
+              <div class="row between middle" style="margin-bottom: 4px;">
+                <div class="mono" style="font-size: 12px; color: var(--ink);">{link.label}</div>
+                <div class="row gap-6">
+                  <span class="pill mono">space={link.space}</span>
+                  <span class="pill mono">path={link.path}</span>
+                </div>
+              </div>
+              <div class="row gap-6 wrap" style="margin-top: 4px;">
+                {link.actions.map(a => <span class="pill kind-core mono">{a}</span>)}
+              </div>
+              <div class="label" style="margin-top: 8px; text-transform:none; letter-spacing: 0; font-family: 'Outfit', sans-serif; font-size: 12px; color: var(--ink-3);">{link.note}</div>
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <!-- subset arrow on the right -->
+      <svg style="position:absolute; top:40px; right:8px; width:24px; height:300px;">
+        <defs>
+          <marker id="ah-sub" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)" />
+          </marker>
+        </defs>
+        <line x1="12" y1="0" x2="12" y2="290" stroke="var(--accent)" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ah-sub)" />
+      </svg>
+
+      <div class="callout" style="top: 110px; right: 36px; transform: rotate(2deg); max-width: 160px;">
+        each link ⊆ its parent. <br/>strictly. no exceptions.
+      </div>
+    </div>
+
+    <h2>what a capability is, exactly</h2>
+    <p>
+      A {sdkCore.npm} <code>PermissionEntry</code> is a four-tuple:
+      service, space, path, and a set of action URNs. The service is the
+      long-form namespace (<code>tinycloud.kv</code>, <code>tinycloud.sql</code>,
+      <code>tinycloud.duckdb</code>, <code>tinycloud.capabilities</code>).
+      The space is the storage container (a short name like
+      <code>default</code> or a full <code>tinycloud:pkh:eip155:…:name</code>
+      URI; the SDK normalizes both forms before comparing). The path is
+      service-specific — a key prefix for KV, a database name for SQL.
+      Actions are full URNs like <code>tinycloud.kv/get</code>.
+    </p>
+
+    <div class="card tinted" style="padding: 18px 20px; margin: 16px 0;">
+      <div class="label" style="margin-bottom: 6px;">subset rules — verbatim from <code>capabilities.ts</code></div>
+      <ul class="col gap-4" style="margin: 0; padding-left: 20px; font-family: 'Outfit', sans-serif; font-size: 14px;">
+        <li><strong>service</strong> — exact match.</li>
+        <li><strong>space</strong> — exact match after normalization (full URI vs short name collapse to the trailing segment).</li>
+        <li><strong>path</strong> — if granted ends in <code>/</code> it's a prefix; otherwise it's exact.</li>
+        <li><strong>actions</strong> — every URN in <code>requested.actions</code> must appear in <code>granted.actions</code>.</li>
+        <li>any requested entry without a matching grant goes into <code>missing[]</code>; non-empty <code>missing</code> means non-subset, period.</li>
+      </ul>
+    </div>
+
+    <h2>where the chain lives in code</h2>
+
+    <div class="row gap-16" style="margin: 16px 0;">
+      <a href={`${base}/pkg/sdk-rs/`} class="card" style="flex:1; padding: 14px 16px; text-decoration: none; color: var(--ink);">
+        <div class="label">rust kernel</div>
+        <div class="mono" style="margin: 4px 0; font-size: 13px;">{sdkRs.npm}</div>
+        <p style="margin: 0; font-size: 13px;">
+          <code>createDelegation</code>, <code>useDelegation</code>,
+          <code>parseRecapFromSiwe</code>. {sdkRs.modules} modules ·
+          {sdkRs.loc.toLocaleString()} loc. Built on the
+          <code>tinycloud_sdk_rs</code> auth crate (re-exported from
+          tinycloud-node).
+        </p>
+      </a>
+      <a href={`${base}/pkg/sdk-core/`} class="card" style="flex:1; padding: 14px 16px; text-decoration: none; color: var(--ink);">
+        <div class="label">subset checker</div>
+        <div class="mono" style="margin: 4px 0; font-size: 13px;">{sdkCore.npm}</div>
+        <p style="margin: 0; font-size: 13px;">
+          <code>isCapabilitySubset</code>, <code>parseRecapCapabilities</code>,
+          <code>DelegationManager</code>, <code>resolveManifest</code>.
+          {sdkCore.modules} modules · {sdkCore.loc.toLocaleString()} loc.
+          Decides whether a request needs a wallet prompt or can ride the
+          existing session.
+        </p>
+      </a>
+    </div>
+
+    <div class="row gap-16" style="margin: 16px 0;">
+      <a href={`${base}/pkg/sdk-services/`} class="card" style="flex:1; padding: 14px 16px; text-decoration: none; color: var(--ink);">
+        <div class="label">capability registry</div>
+        <div class="mono" style="margin: 4px 0; font-size: 13px;">{services.npm}</div>
+        <p style="margin: 0; font-size: 13px;">
+          {services.why} The registry tracks which key (session, ingested,
+          ephemeral) holds which capabilities, with priority ordering so
+          the right key is selected for each invocation.
+        </p>
+      </a>
+      <a href={`${base}/pkg/node-sdk/`} class="card" style="flex:1; padding: 14px 16px; text-decoration: none; color: var(--ink);">
+        <div class="label">authoring surface</div>
+        <div class="mono" style="margin: 4px 0; font-size: 13px;">{nodeSdk.npm}</div>
+        <p style="margin: 0; font-size: 13px;">
+          <code>createDelegation()</code> &amp; <code>delegateTo()</code>
+          on <code>TinyCloudNode</code>. The node-side surface owns
+          chain authoring; the wallet-prompt fallback only fires when the
+          requested scope isn't already covered by the active session.
+        </p>
+      </a>
+    </div>
+
+    <h2>verifying a chain end-to-end</h2>
+    <p>
+      Verification happens in two places. The signing side
+      (<code>createDelegation</code> in {sdkRs.npm}) checks that the
+      proposed child entries are derivable from the parent SIWE's recap
+      capabilities — if not, it refuses to sign. The serving side (the
+      tinycloud node) re-runs the same subset check on every invocation
+      against the proof the SDK ships in the <code>Authorization</code>
+      header. Both sides use the same Rust crate, so there's no drift
+      between what the SDK promises and what the node enforces.
+    </p>
+
+    <p>
+      The fast path through <code>delegateTo</code> in {nodeSdk.npm}
+      hands {sdkCore.npm}'s subset checker the parsed recap capabilities
+      from the current session and the requested entries. Subset → it
+      builds a UCAN over the session key (no wallet). Non-subset → it
+      throws <code>PermissionNotInManifestError</code> with the missing
+      entries, and the legacy wallet path takes over.
+    </p>
+
+    <div class="card" style="padding: 14px 16px; margin: 16px 0; border-color: var(--accent);">
+      <div class="label" style="margin-bottom: 6px;">the silent rule</div>
+      <p style="margin: 0; font-size: 14px;">
+        <code>disableSubDelegation</code> in <code>createDelegation()</code>
+        truncates the chain at the recipient. The recipient may
+        <em>invoke</em> but cannot mint a child. Use this for credentials
+        that should not propagate beyond a single trusted edge.
       </p>
     </div>
 
     <h3>data this chapter reads</h3>
     <ul class="col gap-4">
       <li class="mono">/atlas/data/inventory.json</li>
-      
-      
-      
+      <li class="mono">/atlas/data/pkg/sdk-core.json</li>
+      <li class="mono">/atlas/data/pkg/sdk-rs.json</li>
+      <li class="mono">/atlas/data/pkg/sdk-services.json</li>
+      <li class="mono">/atlas/data/pkg/node-sdk.json</li>
+      <li class="mono">/atlas/data/pkg/web-sdk.json</li>
     </ul>
 
     <h3>where to read next</h3>
     <p>
-      Continue to <a class="pkg-link" href={`${base}/06/`}>chapter 06</a>.
+      Chapter <a class="pkg-link" href={`${base}/06/`}>06</a> takes a
+      whole chain, packages it into a single shareable bundle, and walks
+      through what a recipient can — and cannot — do with it.
     </p>
   </article>
 </Atlas>

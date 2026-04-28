@@ -1,37 +1,189 @@
 ---
 import Atlas from '@/layouts/Atlas.astro';
-import { getInventory } from '@/lib/atlas';
+import { getInventory, getAllPackages } from '@/lib/atlas';
 
 const inv = await getInventory();
-const ch = inv.chapters.find(c => c.id === '07');
+const pkgs = await getAllPackages();
+const ch = inv.chapters.find(c => c.id === '07')!;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
----
-<Atlas chapter="07" title={ch?.title ?? 'sharing & receive'} crumb={`07 · ${ch?.title ?? 'sharing & receive'}`}>
-  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
-    <div class="label">chapter 07 · {ch?.read} · voice: {ch?.voice}</div>
-    <h1 style="margin-top: 14px;">{ch?.title ?? 'sharing & receive'}</h1>
 
-    <div class="card tinted" style="padding: 22px; margin: 24px 0;">
-      <div class="label" style="margin-bottom: 6px;">stub — port from prototype</div>
-      <p style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 15px;">
-        This page is scaffolded but not yet ported. The reference design lives at
-        <code>screens/--TODO--.jsx</code> in the prototype project. Convert that JSX screen
-        into Astro markup using the same atoms (<code>.card</code>, <code>.pill</code>,
-        <code>.callout</code>, <code>.sticky</code>) — the CSS is identical.
+const sdkCore = pkgs.find(p => p.id === 'sdk-core')!;
+const sdkRs   = pkgs.find(p => p.id === 'sdk-rs')!;
+const nodeSdk = pkgs.find(p => p.id === 'node-sdk')!;
+const webSdk  = pkgs.find(p => p.id === 'web-sdk')!;
+---
+<Atlas chapter="07" title={ch.title} crumb={`07 · ${ch.title}`}>
+  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
+    <div class="label">chapter 07 · {ch.read} · voice: {ch.voice}</div>
+    <h1 style="margin-top: 14px;">protocol <span class="squig">version handshake</span></h1>
+
+    <p>
+      The SDK and the tinycloud node are versioned independently — the
+      SDK ships on npm at <code>{inv.repo.version}</code>, the node ships
+      a Rust binary on its own cadence. They have to agree on a wire
+      protocol before a session is worth anything. That agreement is one
+      integer.
+    </p>
+
+    <p>
+      <code>checkNodeInfo</code> in
+      <a class="pkg-link" href={`${base}/pkg/sdk-core/`}>{sdkCore.npm}</a>
+      is the handshake. It runs at sign-in time, inside
+      <code>NodeUserAuthorization</code> on the node-sdk side and the
+      equivalent on the web-sdk side, before any session is built.
+    </p>
+
+    <h2>the wire</h2>
+
+    <div class="mermaid-wrap" style="margin: 24px 0; padding: 24px; position: relative;">
+      <span class="cap">handshake.svg</span>
+
+      <div class="row gap-16 between" style="align-items: flex-start;">
+        <div class="card" style="flex: 1; padding: 14px 16px;">
+          <div class="label">SDK</div>
+          <div class="mono" style="font-size: 12px; margin-top: 6px;">wasm.protocolVersion()</div>
+          <div style="font-size: 13px; color: var(--ink-2); margin-top: 8px;">
+            Rust kernel exposes the integer through the WASM seam. The
+            JS-side bindings (<code>BrowserWasmBindings</code>,
+            <code>NodeWasmBindings</code>) re-export it as
+            <code>protocolVersion()</code>.
+          </div>
+        </div>
+
+        <div style="padding-top: 40px; min-width: 180px;">
+          <div class="mono" style="font-size: 11px; color: var(--ink-3); text-align: center;">GET /info</div>
+          <svg width="180" height="40">
+            <defs>
+              <marker id="ah-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)" />
+              </marker>
+              <marker id="ah-l" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M10,0 L0,5 L10,10 z" fill="var(--accent)" />
+              </marker>
+            </defs>
+            <line x1="10" y1="14" x2="170" y2="14" stroke="var(--accent)" stroke-width="1.4" marker-end="url(#ah-r)" />
+            <line x1="170" y1="28" x2="10" y2="28" stroke="var(--accent)" stroke-width="1.4" marker-end="url(#ah-l)" />
+          </svg>
+          <div class="mono" style="font-size: 11px; color: var(--ink-3); text-align: center;">{ '{ protocol, version, features, quota_url }' }</div>
+        </div>
+
+        <div class="card" style="flex: 1; padding: 14px 16px;">
+          <div class="label">node</div>
+          <div class="mono" style="font-size: 12px; margin-top: 6px;">/info endpoint</div>
+          <div style="font-size: 13px; color: var(--ink-2); margin-top: 8px;">
+            Plain JSON. <code>protocol</code> is the integer the SDK has
+            to match. <code>version</code> is the human-readable node
+            version. <code>features</code> is a string array of optional
+            capabilities. <code>quota_url</code> tells the SDK where to
+            point users for upgrade flows.
+          </div>
+        </div>
+      </div>
+
+      <div class="callout" style="bottom: 14px; right: 18px; transform: rotate(1.5deg); max-width: 220px;">
+        equality. not range. not semver. integer equality.
+      </div>
+    </div>
+
+    <h2>what <code>checkNodeInfo</code> does</h2>
+
+    <ol style="font-family: 'Outfit', sans-serif; font-size: 15px; line-height: 1.7; padding-left: 24px;">
+      <li><code>fetch(host + "/info")</code> with a 5 s <code>AbortSignal.timeout</code>. Network failure → <code>VersionCheckError</code>.</li>
+      <li>Non-2xx response → <code>VersionCheckError</code>. There's no graceful skip — the SDK refuses to operate against an unreachable node.</li>
+      <li>Compare <code>sdkProtocol !== data.protocol</code>. Strict integer mismatch → <code>ProtocolMismatchError</code> with both numbers, the node version, and the host. The error message tells the caller which side needs to update.</li>
+      <li>Return <code>{ '{ features, quotaUrl }' }</code>. The features array is later consulted by <code>UnsupportedFeatureError</code> sites that want to advertise gracefully when a feature isn't supported.</li>
+    </ol>
+
+    <h2>where it gets called</h2>
+
+    <p>
+      <code>NodeUserAuthorization</code> calls <code>checkNodeInfo(this.tinycloudHosts[0], this.wasm.protocolVersion())</code>
+      twice during sign-in: once when establishing the session, and once
+      when re-activating a host. Same on the web side. The pattern is:
+      build the integer from the kernel, hand it to the resolver, fail
+      hard on mismatch.
+    </p>
+
+    <div class="row gap-16" style="margin: 16px 0;">
+      <a href={`${base}/pkg/sdk-core/`} class="card" style="flex:1; padding: 14px 16px; text-decoration: none; color: var(--ink);">
+        <div class="label">resolver</div>
+        <div class="mono" style="margin: 4px 0; font-size: 13px;">{sdkCore.npm}</div>
+        <p style="margin: 0; font-size: 13px;">
+          <code>checkNodeInfo()</code>, <code>ProtocolMismatchError</code>,
+          <code>VersionCheckError</code>, <code>UnsupportedFeatureError</code>,
+          and the <code>NodeInfo</code> shape. {sdkCore.modules} modules ·
+          {sdkCore.loc.toLocaleString()} loc.
+        </p>
+      </a>
+      <a href={`${base}/pkg/sdk-rs/`} class="card" style="flex:1; padding: 14px 16px; text-decoration: none; color: var(--ink);">
+        <div class="label">version source</div>
+        <div class="mono" style="margin: 4px 0; font-size: 13px;">{sdkRs.npm}</div>
+        <p style="margin: 0; font-size: 13px;">
+          The <code>protocolVersion</code> WASM export. Single integer
+          baked into the Rust crate at compile time, surfaced through
+          both web and node WASM packages.
+        </p>
+      </a>
+    </div>
+
+    <h2>what happens on mismatch</h2>
+
+    <div class="card" style="padding: 14px 16px; margin: 16px 0; border-color: var(--accent);">
+      <div class="label" style="margin-bottom: 6px;">no graceful fallback</div>
+      <p style="margin: 0; font-size: 14px;">
+        <code>ProtocolMismatchError</code> throws. It does not warn, it
+        does not feature-flag down, it does not retry against an older
+        endpoint. <code>sdkProtocol &lt; nodeProtocol</code> → message tells
+        the caller to update the SDK.
+        <code>sdkProtocol &gt; nodeProtocol</code> → message tells the operator
+        to update the node. The error carries both integers, the
+        node version string, and the host so callers can surface a
+        useful upgrade prompt.
       </p>
     </div>
+
+    <p>
+      Optional features are the soft-edged half. A node advertises them
+      in <code>features[]</code>; the SDK calls
+      <code>UnsupportedFeatureError</code> at use sites when the feature
+      it wants isn't in the list. That error includes the available set
+      so the caller can tell users what the node <em>does</em> support
+      instead of just what it doesn't.
+    </p>
+
+    <h2>rolling out a new protocol version</h2>
+
+    <p>
+      The contract is: bump <code>protocolVersion</code> in the Rust
+      crate <em>and</em> in tinycloud-node, in lockstep, and only when
+      the wire format actually changes. Additive features go through the
+      <code>features</code> array, not the protocol integer, so older
+      SDKs keep working against newer nodes for non-breaking work.
+    </p>
+
+    <p>
+      Operationally: a node operator who upgrades the node before the
+      SDKs in the wild are updated will see clients fail with
+      <code>ProtocolMismatchError</code> until they update. That's the
+      design — it's louder than silent corruption, and the error message
+      is explicit about who needs to act.
+    </p>
 
     <h3>data this chapter reads</h3>
     <ul class="col gap-4">
       <li class="mono">/atlas/data/inventory.json</li>
-      
-      
-      
+      <li class="mono">/atlas/data/pkg/sdk-core.json</li>
+      <li class="mono">/atlas/data/pkg/sdk-rs.json</li>
+      <li class="mono">/atlas/data/pkg/web-sdk.json</li>
+      <li class="mono">/atlas/data/pkg/node-sdk.json</li>
     </ul>
 
     <h3>where to read next</h3>
     <p>
-      Continue to <a class="pkg-link" href={`${base}/08/`}>chapter 08</a>.
+      Chapter <a class="pkg-link" href={`${base}/08/`}>08</a> drops down
+      to the build topology — bun workspaces, turbo pipelines, and how
+      <code>wasm-pack</code> produces the kernel that powers everything
+      you've read so far.
     </p>
   </article>
 </Atlas>
