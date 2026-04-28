@@ -1,5 +1,13 @@
 # @tinycloud/vfs
 
+## 0.1.0-beta.6
+
+### Patch Changes
+
+- ce05b92: Update `@platformatic/vfs` to 0.4.0 and refresh TypeScript dev dependencies used by the workspace builds.
+- Updated dependencies [9ab4644]
+  - @tinycloud/node-sdk@2.2.0-beta.5
+
 ## 0.1.0-beta.5
 
 ### Patch Changes

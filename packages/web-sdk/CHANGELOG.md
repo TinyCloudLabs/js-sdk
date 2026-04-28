@@ -1,5 +1,15 @@
 # @tinycloudlabs/web-sdk
 
+## 2.2.0-beta.5
+
+### Patch Changes
+
+- 9ab4644: Check whether the manifest account registry space already exists before hosting it during sign-in, avoiding repeated account-space host prompts.
+- Updated dependencies [9ab4644]
+- Updated dependencies [9dc2e8c]
+  - @tinycloud/node-sdk@2.2.0-beta.5
+  - @tinycloud/web-sdk-wasm@1.7.3-beta.1
+
 ## 2.2.0-beta.4
 
 ### Minor Changes

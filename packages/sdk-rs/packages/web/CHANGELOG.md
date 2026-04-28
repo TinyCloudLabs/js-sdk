@@ -1,5 +1,11 @@
 # @tinycloudlabs/web-sdk-wasm
 
+## 1.7.3-beta.1
+
+### Patch Changes
+
+- 9dc2e8c: Refresh Rust patch/minor dependencies used to build the TinyCloud WASM wrappers.
+
 ## 1.7.3-beta.0
 
 ### Patch Changes

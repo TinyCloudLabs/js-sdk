@@ -18,8 +18,11 @@
     "@tinycloud/vfs": "0.0.0"
   },
   "changesets": [
+    "account-registry-space-detection",
     "default-cloud-host-resolution",
     "delegated-access-restorable",
+    "dependabot-dependabot-cargo-rust-minor-patch-91c3c252fa",
+    "dependabot-dependabot-npm-and-yarn-npm-minor-patch-dfbb88ef56",
     "location-registry-resolver",
     "manifest-permission-descriptions",
     "manifest-v1-composition",
