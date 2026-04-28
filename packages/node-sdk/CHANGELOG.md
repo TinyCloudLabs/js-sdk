@@ -1,5 +1,12 @@
 # @tinycloudlabs/node-sdk
 
+## 2.2.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies [de4d662]
+  - @tinycloud/sdk-core@2.2.0-beta.1
+
 ## 2.2.0-beta.0
 
 ### Minor Changes

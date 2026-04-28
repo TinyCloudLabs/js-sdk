@@ -18,6 +18,7 @@
     "@tinycloud/vfs": "0.0.0"
   },
   "changesets": [
+    "manifest-permission-descriptions",
     "manifest-v1-composition",
     "tinycloud-vfs-initial-release"
   ]

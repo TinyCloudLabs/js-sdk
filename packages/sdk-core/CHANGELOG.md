@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 2.2.0-beta.1
+
+### Patch Changes
+
+- de4d662: Expose and preserve optional manifest permission descriptions in resolved capability metadata.
+
 ## 2.2.0-beta.0
 
 ### Minor Changes
