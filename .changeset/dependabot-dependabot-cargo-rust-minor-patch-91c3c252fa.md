@@ -1,5 +1,6 @@
 ---
-"tinycloud-web-sdk": patch
+"@tinycloud/node-sdk-wasm": patch
+"@tinycloud/web-sdk-wasm": patch
 ---
 
-build(deps): bump the rust-minor-patch group with 7 updates
+Refresh Rust patch/minor dependencies used to build the TinyCloud WASM wrappers.
