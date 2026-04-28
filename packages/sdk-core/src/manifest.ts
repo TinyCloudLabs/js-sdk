@@ -52,6 +52,8 @@ export interface PermissionEntry {
   skipPrefix?: boolean;
   /** Per-entry expiry override, ms-format. */
   expiry?: string;
+  /** User/agent-facing context for why this permission is requested. */
+  description?: string;
 }
 
 /**
@@ -125,6 +127,8 @@ export interface ResourceCapability {
   actions: string[];
   /** Per-entry expiry override in milliseconds. */
   expiryMs?: number;
+  /** User/agent-facing context copied from the source permission entry. */
+  description?: string;
 }
 
 /**
@@ -250,8 +254,8 @@ export const SERVICE_SHORT_TO_LONG: Readonly<Record<string, string>> =
 export const SERVICE_LONG_TO_SHORT: Readonly<Record<string, string>> =
   Object.freeze(
     Object.fromEntries(
-      Object.entries(SERVICE_SHORT_TO_LONG).map(([s, l]) => [l, s])
-    )
+      Object.entries(SERVICE_SHORT_TO_LONG).map(([s, l]) => [l, s]),
+    ),
   );
 
 /**
@@ -354,17 +358,15 @@ const DEFAULT_ALL_ENTRIES: readonly Omit<PermissionEntry, "skipPrefix">[] = [
 export function parseExpiry(duration: string): number {
   if (typeof duration !== "string" || duration.length === 0) {
     throw new ManifestValidationError(
-      `expiry must be a non-empty duration string (got ${JSON.stringify(duration)})`
+      `expiry must be a non-empty duration string (got ${JSON.stringify(duration)})`,
     );
   }
   // `ms` returns `undefined` for unparseable input and can return a number
   // or a string depending on the call signature; cast explicitly.
-  const parsed = (ms as unknown as (v: string) => number | undefined)(
-    duration
-  );
+  const parsed = (ms as unknown as (v: string) => number | undefined)(duration);
   if (typeof parsed !== "number" || !Number.isFinite(parsed) || parsed <= 0) {
     throw new ManifestValidationError(
-      `invalid expiry duration: ${JSON.stringify(duration)}`
+      `invalid expiry duration: ${JSON.stringify(duration)}`,
     );
   }
   return parsed;
@@ -382,7 +384,7 @@ export function parseExpiry(duration: string): number {
  */
 export function expandActionShortNames(
   service: string,
-  actions: readonly string[]
+  actions: readonly string[],
 ): string[] {
   return actions.map((a) => {
     if (a.includes("/")) {
@@ -404,7 +406,7 @@ export function expandActionShortNames(
 export function applyPrefix(
   prefix: string,
   path: string,
-  skipPrefix: boolean
+  skipPrefix: boolean,
 ): string {
   if (skipPrefix) {
     return path;
@@ -428,16 +430,18 @@ export function applyPrefix(
  * validation.
  */
 export async function loadManifest(url: string): Promise<Manifest> {
-  const fetchFn: typeof fetch | undefined = (globalThis as { fetch?: typeof fetch }).fetch;
+  const fetchFn: typeof fetch | undefined = (
+    globalThis as { fetch?: typeof fetch }
+  ).fetch;
   if (typeof fetchFn !== "function") {
     throw new ManifestValidationError(
-      "loadManifest requires a global fetch; pass the manifest object directly on runtimes without fetch"
+      "loadManifest requires a global fetch; pass the manifest object directly on runtimes without fetch",
     );
   }
   const res = await fetchFn(url);
   if (!res.ok) {
     throw new ManifestValidationError(
-      `failed to fetch manifest from ${url}: HTTP ${res.status}`
+      `failed to fetch manifest from ${url}: HTTP ${res.status}`,
     );
   }
   const json = (await res.json()) as unknown;
@@ -458,20 +462,34 @@ export function validateManifest(input: unknown): Manifest {
     m.manifest_version !== DEFAULT_MANIFEST_VERSION
   ) {
     throw new ManifestValidationError(
-      `manifest.manifest_version must be ${DEFAULT_MANIFEST_VERSION}`
+      `manifest.manifest_version must be ${DEFAULT_MANIFEST_VERSION}`,
     );
   }
   if (typeof m.app_id !== "string" || m.app_id.length === 0) {
-    throw new ManifestValidationError("manifest.app_id is required and must be a non-empty string");
+    throw new ManifestValidationError(
+      "manifest.app_id is required and must be a non-empty string",
+    );
   }
   if (typeof m.name !== "string" || m.name.length === 0) {
-    throw new ManifestValidationError("manifest.name is required and must be a non-empty string");
+    throw new ManifestValidationError(
+      "manifest.name is required and must be a non-empty string",
+    );
   }
-  if (m.did !== undefined && (typeof m.did !== "string" || m.did.length === 0)) {
-    throw new ManifestValidationError("manifest.did must be a non-empty DID string");
+  if (
+    m.did !== undefined &&
+    (typeof m.did !== "string" || m.did.length === 0)
+  ) {
+    throw new ManifestValidationError(
+      "manifest.did must be a non-empty DID string",
+    );
   }
-  if (m.space !== undefined && (typeof m.space !== "string" || m.space.length === 0)) {
-    throw new ManifestValidationError("manifest.space must be a non-empty string");
+  if (
+    m.space !== undefined &&
+    (typeof m.space !== "string" || m.space.length === 0)
+  ) {
+    throw new ManifestValidationError(
+      "manifest.space must be a non-empty string",
+    );
   }
   if (m.expiry !== undefined) {
     // Will throw with a clear error if invalid.
@@ -479,10 +497,12 @@ export function validateManifest(input: unknown): Manifest {
   }
   if (m.permissions !== undefined) {
     if (!Array.isArray(m.permissions)) {
-      throw new ManifestValidationError("manifest.permissions must be an array");
+      throw new ManifestValidationError(
+        "manifest.permissions must be an array",
+      );
     }
     m.permissions.forEach((p, i) =>
-      validatePermissionEntry(p, `permissions[${i}]`)
+      validatePermissionEntry(p, `permissions[${i}]`),
     );
   }
   return m;
@@ -496,17 +516,22 @@ function validatePermissionEntry(p: unknown, path: string): void {
   if (typeof entry.service !== "string" || entry.service.length === 0) {
     throw new ManifestValidationError(`${path}.service is required`);
   }
-  if (entry.space !== undefined && (typeof entry.space !== "string" || entry.space.length === 0)) {
-    throw new ManifestValidationError(`${path}.space must be a non-empty string`);
+  if (
+    entry.space !== undefined &&
+    (typeof entry.space !== "string" || entry.space.length === 0)
+  ) {
+    throw new ManifestValidationError(
+      `${path}.space must be a non-empty string`,
+    );
   }
   if (typeof entry.path !== "string") {
     throw new ManifestValidationError(
-      `${path}.path is required (use "" or "/" for root)`
+      `${path}.path is required (use "" or "/" for root)`,
     );
   }
   if (!Array.isArray(entry.actions) || entry.actions.length === 0) {
     throw new ManifestValidationError(
-      `${path}.actions must be a non-empty array`
+      `${path}.actions must be a non-empty array`,
     );
   }
   if (entry.expiry !== undefined) {
@@ -520,7 +545,7 @@ function validatePermissionEntry(p: unknown, path: string): void {
  * Boolean values pass through.
  */
 export function normalizeDefaults(
-  value: Manifest["defaults"] | undefined
+  value: Manifest["defaults"] | undefined,
 ): ManifestDefaults {
   if (value === undefined) {
     return DEFAULT_DEFAULTS;
@@ -545,9 +570,7 @@ export function normalizeDefaults(
  * Return the default permission entries for the given tier. Entries are
  * deep-cloned so callers can mutate them without affecting the constants.
  */
-function defaultEntriesForTier(
-  tier: ManifestDefaults
-): PermissionEntry[] {
+function defaultEntriesForTier(tier: ManifestDefaults): PermissionEntry[] {
   if (tier === false) {
     return [];
   }
@@ -577,12 +600,11 @@ function defaultEntriesForTier(
  * - Per-entry expiry overrides per-delegation overrides manifest > `DEFAULT_EXPIRY`.
  * - Default entries use `skipPrefix: false` so they inherit the manifest prefix.
  */
-export function resolveManifest(
-  input: Manifest
-): ResolvedCapabilities {
+export function resolveManifest(input: Manifest): ResolvedCapabilities {
   const manifest = validateManifest(input);
 
-  const prefix = manifest.prefix !== undefined ? manifest.prefix : manifest.app_id;
+  const prefix =
+    manifest.prefix !== undefined ? manifest.prefix : manifest.app_id;
   const space = manifest.space ?? DEFAULT_MANIFEST_SPACE;
   const expiryMs = parseExpiry(manifest.expiry ?? DEFAULT_EXPIRY);
   const includePublicSpace = manifest.includePublicSpace ?? true;
@@ -596,7 +618,7 @@ export function resolveManifest(
   const allEntries: PermissionEntry[] = [...defaultEntries, ...explicitEntries];
 
   const resources: ResourceCapability[] = allEntries.map((entry) =>
-    resolveEntry(entry, prefix, expiryMs, space)
+    resolveEntry(entry, prefix, expiryMs, space),
   );
 
   const additionalDelegates: ResolvedDelegate[] =
@@ -630,12 +652,12 @@ function resolveEntry(
   entry: PermissionEntry,
   prefix: string,
   _inheritedExpiryMs: number,
-  inheritedSpace: string
+  inheritedSpace: string,
 ): ResourceCapability {
   const resolvedPath = applyPrefix(
     prefix,
     entry.path,
-    entry.skipPrefix === true
+    entry.skipPrefix === true,
   );
   const resolvedActions = expandActionShortNames(entry.service, entry.actions);
   const entryExpiryMs =
@@ -649,16 +671,24 @@ function resolveEntry(
     // When absent, callers use the parent (delegation or manifest) expiry
     // which is carried on ResolvedDelegate.expiryMs / ResolvedCapabilities.expiryMs.
     ...(entryExpiryMs !== undefined ? { expiryMs: entryExpiryMs } : {}),
+    ...(entry.description !== undefined
+      ? { description: entry.description }
+      : {}),
   };
 }
 
-function cloneResourceCapability(entry: ResourceCapability): ResourceCapability {
+function cloneResourceCapability(
+  entry: ResourceCapability,
+): ResourceCapability {
   return {
     service: entry.service,
     space: entry.space,
     path: entry.path,
     actions: [...entry.actions],
     ...(entry.expiryMs !== undefined ? { expiryMs: entry.expiryMs } : {}),
+    ...(entry.description !== undefined
+      ? { description: entry.description }
+      : {}),
   };
 }
 
@@ -670,11 +700,14 @@ function clonePermissionEntry(entry: PermissionEntry): PermissionEntry {
     actions: [...entry.actions],
     ...(entry.skipPrefix !== undefined ? { skipPrefix: entry.skipPrefix } : {}),
     ...(entry.expiry !== undefined ? { expiry: entry.expiry } : {}),
+    ...(entry.description !== undefined
+      ? { description: entry.description }
+      : {}),
   };
 }
 
 function dedupeResources(
-  resources: readonly ResourceCapability[]
+  resources: readonly ResourceCapability[],
 ): ResourceCapability[] {
   const byKey = new Map<string, ResourceCapability>();
 
@@ -693,6 +726,12 @@ function dedupeResources(
         seen.add(action);
       }
     }
+    if (
+      existing.description === undefined &&
+      resource.description !== undefined
+    ) {
+      existing.description = resource.description;
+    }
   }
 
   return [...byKey.values()];
@@ -703,11 +742,7 @@ function accountRegistryPermission(): ResourceCapability {
     service: "tinycloud.kv",
     space: ACCOUNT_REGISTRY_SPACE,
     path: ACCOUNT_REGISTRY_PATH,
-    actions: [
-      "tinycloud.kv/get",
-      "tinycloud.kv/put",
-      "tinycloud.kv/list",
-    ],
+    actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
   };
 }
 
@@ -718,11 +753,11 @@ function accountRegistryPermission(): ResourceCapability {
  */
 export function composeManifestRequest(
   inputs: readonly Manifest[],
-  options: ComposeManifestOptions = {}
+  options: ComposeManifestOptions = {},
 ): ComposedManifestRequest {
   if (!Array.isArray(inputs) || inputs.length === 0) {
     throw new ManifestValidationError(
-      "composeManifestRequest requires at least one manifest"
+      "composeManifestRequest requires at least one manifest",
     );
   }
 
@@ -735,7 +770,7 @@ export function composeManifestRequest(
     entry.additionalDelegates.map((delegate) => ({
       ...delegate,
       permissions: dedupeResources(delegate.permissions),
-    }))
+    })),
   );
 
   if (includeAccountRegistryPermissions) {
@@ -824,14 +859,14 @@ export type SpaceAbilitiesMap = Record<string, AbilitiesMap>;
  * normalize before calling.
  */
 export function resourceCapabilitiesToAbilitiesMap(
-  resources: readonly ResourceCapability[]
+  resources: readonly ResourceCapability[],
 ): AbilitiesMap {
   const out: AbilitiesMap = {};
   for (const r of resources) {
     const shortService = SERVICE_LONG_TO_SHORT[r.service];
     if (shortService === undefined) {
       throw new ManifestValidationError(
-        `unknown service '${r.service}' — no short-form mapping. Known services: ${Object.keys(SERVICE_LONG_TO_SHORT).join(", ")}`
+        `unknown service '${r.service}' — no short-form mapping. Known services: ${Object.keys(SERVICE_LONG_TO_SHORT).join(", ")}`,
       );
     }
     if (out[shortService] === undefined) {
@@ -862,7 +897,7 @@ export function resourceCapabilitiesToAbilitiesMap(
  * know the wallet address and chain id turn them into full SpaceIds.
  */
 export function resourceCapabilitiesToSpaceAbilitiesMap(
-  resources: readonly ResourceCapability[]
+  resources: readonly ResourceCapability[],
 ): SpaceAbilitiesMap {
   const grouped = new Map<string, ResourceCapability[]>();
   for (const resource of resources) {
@@ -902,7 +937,7 @@ export function resourceCapabilitiesToSpaceAbilitiesMap(
  * them repeated.
  */
 export function manifestAbilitiesUnion(
-  resolved: ResolvedCapabilities
+  resolved: ResolvedCapabilities,
 ): AbilitiesMap {
   const all: ResourceCapability[] = [...resolved.resources];
   for (const delegate of resolved.additionalDelegates) {
