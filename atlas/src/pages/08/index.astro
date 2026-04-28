@@ -1,37 +1,272 @@
 ---
 import Atlas from '@/layouts/Atlas.astro';
-import { getInventory } from '@/lib/atlas';
+import { getInventory, getAllPackages } from '@/lib/atlas';
 
 const inv = await getInventory();
-const ch = inv.chapters.find(c => c.id === '08');
+const pkgs = await getAllPackages();
+const ch = inv.chapters.find(c => c.id === '08')!;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
----
-<Atlas chapter="08" title={ch?.title ?? 'protocol handshake'} crumb={`08 · ${ch?.title ?? 'protocol handshake'}`}>
-  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
-    <div class="label">chapter 08 · {ch?.read} · voice: {ch?.voice}</div>
-    <h1 style="margin-top: 14px;">{ch?.title ?? 'protocol handshake'}</h1>
 
-    <div class="card tinted" style="padding: 22px; margin: 24px 0;">
-      <div class="label" style="margin-bottom: 6px;">stub — port from prototype</div>
-      <p style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 15px;">
-        This page is scaffolded but not yet ported. The reference design lives at
-        <code>screens/--TODO--.jsx</code> in the prototype project. Convert that JSX screen
-        into Astro markup using the same atoms (<code>.card</code>, <code>.pill</code>,
-        <code>.callout</code>, <code>.sticky</code>) — the CSS is identical.
+// Group packages by build-tool lane for the topology table.
+const wasmTargets = pkgs.filter(p => p.kind === 'wasm');
+const tsPackages  = pkgs.filter(p => p.kind === 'sdk' || p.kind === 'core' || p.kind === 'services' || p.kind === 'cli');
+const rustCrate   = pkgs.find(p => p.id === 'sdk-rs');
+
+// Real numbers from package.json + inventory.
+const workspaceGlobs = 11;            // packages/web-sdk, sdk-core, sdk-services, sdk-rs, sdk-rs/packages/web, sdk-rs/packages/node, node-sdk, vfs, cli, apps/*, tests/*
+const explicitPackages = 9;           // pkgs in inventory.json
+const apps = 5;                       // apps/{node-demo,openkey-example,openkey-vite,opinion-agent,web-sdk-example}
+const testWorkspaces = 6;             // tests/{browser,cli,esm-compat,node-sdk,sdk-services,vfs-node}
+const totalWorkspaces = explicitPackages + apps + testWorkspaces;
+---
+<Atlas chapter="08" title={ch.title} crumb={`08 · ${ch.title}`}>
+  <article class="prose" style="padding: 56px 64px; max-width: 1100px;">
+    <div class="label">chapter 08 · {ch.read} · voice: {ch.voice}</div>
+    <h1 style="margin-top: 14px;">build topology — <span class="squig">bun, turbo, wasm-pack</span></h1>
+    <p>
+      The js-sdk repo is a bun workspace orchestrated by <code>turbo</code>, with a
+      Rust crate that compiles to two <code>wasm-pack</code> targets. Three tools,
+      one DAG, exactly one place each artifact lands. This chapter walks the
+      pipeline from <code>git clone</code> to a publishable <code>dist/</code>.
+    </p>
+
+    <div class="row gap-12 wrap" style="margin: 18px 0 8px;">
+      <span class="pill solid">{totalWorkspaces} workspaces</span>
+      <span class="pill">{explicitPackages} packages</span>
+      <span class="pill faint">{apps} apps</span>
+      <span class="pill faint">{testWorkspaces} test suites</span>
+      <span class="pill accent">2 wasm targets</span>
+    </div>
+
+    <h2>why three tools and not one</h2>
+    <p>
+      <code>bun</code> is the package manager and JS/TS runner. It installs
+      workspaces, runs scripts fast, and resolves <code>workspace:*</code>
+      protocol references between local packages — so <code>@tinycloud/web-sdk</code>'s
+      dependency on <code>@tinycloud/sdk-core</code> never goes through the registry
+      during development.
+    </p>
+    <p>
+      <code>turbo</code> sits on top, reading <code>turbo.json</code> to schedule
+      tasks across workspaces with a content-addressable cache. The cache is
+      what makes a fresh <code>build</code> on a clean machine cheap when
+      sources haven't changed: turbo signs the inputs, looks up the prior
+      <code>dist/</code>, and replays it. Remote cache is enabled (see
+      <code>remoteCache.teamId</code> in <code>turbo.json</code>) — CI shares
+      hits with anyone who pulls the cache token.
+    </p>
+    <p>
+      <code>wasm-pack</code> is invoked twice from <code>packages/sdk-rs</code> — once
+      with <code>--target web</code> for browsers and once with <code>--target nodejs</code>
+      for Node. Same Cargo crate, two ABI shapes. The outputs land in
+      <code>packages/sdk-rs/web-sdk-wasm/</code> and
+      <code>packages/sdk-rs/node-sdk-wasm/</code>, and are then re-packaged by
+      the two <code>@tinycloud/*-sdk-wasm</code> workspaces into proper npm modules.
+    </p>
+
+    <h2>the dependency DAG</h2>
+    <div class="mermaid-wrap" style="margin: 18px 0; height: 520px; position: relative;">
+      <span class="cap">build-dag.svg · turbo --filter resolves bottom-up</span>
+
+      <!-- Layer 0: rust crate -->
+      <div class="row gap-16 center" style="position: absolute; top: 36px; left: 32px; right: 32px; justify-content: center;">
+        <div class="gnode" style="position:relative; flex:0 0 auto; top:0; left:0; background:var(--ink); color:var(--paper); border-color:var(--ink);">
+          <div class="name">packages/sdk-rs</div>
+          <div class="meta" style="color: rgba(255,255,255,0.7);">cargo · 1 crate · {rustCrate?.loc.toLocaleString() ?? '—'} loc</div>
+        </div>
+      </div>
+
+      <!-- arrows down -->
+      <svg style="position: absolute; top: 90px; left: 0; right: 0; width: 100%; height: 60px;">
+        <defs>
+          <marker id="ah8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)" />
+          </marker>
+        </defs>
+        <line x1="35%" y1="0" x2="30%" y2="55" stroke="var(--accent)" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ah8)" />
+        <line x1="65%" y1="0" x2="70%" y2="55" stroke="var(--accent)" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ah8)" />
+      </svg>
+
+      <!-- Layer 1: wasm-pack outputs -->
+      <div class="row gap-16 center" style="position: absolute; top: 160px; left: 32px; right: 32px; justify-content: space-around;">
+        {wasmTargets.map(p => (
+          <a href={`${base}/pkg/${p.id.replace(/\//g,'--')}/`}
+             class="gnode" style={{ position:'relative', flex:'0 0 38%', top:0, left:0, background:'rgba(69,115,185,0.18)', borderColor:'var(--accent-2)' }}>
+            <div class="name">{p.npm}</div>
+            <div class="meta">wasm-pack --target {p.side === 'browser' ? 'web' : 'nodejs'}</div>
+          </a>
+        ))}
+      </div>
+
+      <!-- arrows down -->
+      <svg style="position: absolute; top: 220px; left: 0; right: 0; width: 100%; height: 70px;">
+        <line x1="30%" y1="0" x2="22%" y2="65" stroke="var(--ink-3)" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ah8)" />
+        <line x1="70%" y1="0" x2="58%" y2="65" stroke="var(--ink-3)" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ah8)" />
+        <line x1="70%" y1="0" x2="78%" y2="65" stroke="var(--ink-3)" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ah8)" />
+        <line x1="50%" y1="0" x2="50%" y2="65" stroke="var(--ink-3)" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ah8)" />
+      </svg>
+
+      <!-- Layer 2: sdk-core (pivot) -->
+      <div class="row gap-16 center" style="position: absolute; top: 300px; left: 32px; right: 32px; justify-content: center;">
+        <a href={`${base}/pkg/sdk-core/`}
+           class="gnode" style="position:relative; flex:0 0 auto; top:0; left:0; background:var(--accent); color:var(--paper); border-color:var(--accent);">
+          <div class="name">@tinycloud/sdk-core</div>
+          <div class="meta" style="color: rgba(255,255,255,0.85);">tsup · pure ts</div>
+        </a>
+        <a href={`${base}/pkg/sdk-services/`}
+           class="gnode" style="position:relative; flex:0 0 auto; top:0; left:0; background:var(--accent); color:var(--paper); border-color:var(--accent);">
+          <div class="name">@tinycloud/sdk-services</div>
+          <div class="meta" style="color: rgba(255,255,255,0.85);">tsup · pure ts</div>
+        </a>
+      </div>
+
+      <!-- arrows down -->
+      <svg style="position: absolute; top: 360px; left: 0; right: 0; width: 100%; height: 70px;">
+        <line x1="30%" y1="0" x2="20%" y2="65" stroke="var(--accent)" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ah8)" />
+        <line x1="50%" y1="0" x2="48%" y2="65" stroke="var(--accent)" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ah8)" />
+        <line x1="65%" y1="0" x2="78%" y2="65" stroke="var(--accent)" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ah8)" />
+      </svg>
+
+      <!-- Layer 3: surfaces -->
+      <div class="row gap-16 center" style="position: absolute; top: 440px; left: 32px; right: 32px; justify-content: space-around;">
+        <a href={`${base}/pkg/web-sdk/`} class="gnode" style="position:relative; flex:1; top:0; left:0;">
+          <div class="name">@tinycloud/web-sdk</div>
+          <div class="meta">webpack · browser bundle</div>
+        </a>
+        <a href={`${base}/pkg/node-sdk/`} class="gnode" style="position:relative; flex:1; top:0; left:0;">
+          <div class="name">@tinycloud/node-sdk</div>
+          <div class="meta">tsup · esm + cjs</div>
+        </a>
+        <a href={`${base}/pkg/cli/`} class="gnode" style="position:relative; flex:1; top:0; left:0;">
+          <div class="name">@tinycloud/cli</div>
+          <div class="meta">tsup · bin → tc</div>
+        </a>
+      </div>
+
+      <div class="callout" style="top: 200px; right: 16px; transform: rotate(2deg); max-width: 180px;">
+        the seam — <br/>everything below the wasm row is plain typescript.
+      </div>
+    </div>
+
+    <h2>the two wasm-pack targets</h2>
+    <p>
+      Both invocations live in <code>packages/sdk-rs/package.json</code> and run from
+      a single Cargo manifest. The difference is the <code>--target</code> flag and
+      a feature gate so the crate compiles only the bindings each runtime can use.
+    </p>
+
+    <div class="card tinted" style="padding: 18px 20px; margin: 14px 0;">
+      <div class="label" style="margin-bottom: 8px;">packages/sdk-rs/package.json — wasm-pack scripts</div>
+      <pre class="mono" style="margin: 0; white-space: pre-wrap; font-size: 12px; color: var(--ink-2); line-height: 1.55;">{`"build:wasm:web":  wasm-pack build --release --target web    --out-dir web-sdk-wasm  --features browser
+"build:wasm:node": wasm-pack build --release --target nodejs --out-dir node-sdk-wasm --features nodejs`}</pre>
+    </div>
+
+    <p>
+      The <code>web</code> target produces ES modules with <code>import.meta.url</code>-relative
+      <code>.wasm</code> loading — that's what browsers and modern bundlers expect.
+      The <code>nodejs</code> target produces CommonJS that loads the wasm via
+      <code>fs.readFileSync</code>, which is what Node and the CLI need at startup.
+      Each output gets re-packaged by a thin sibling workspace
+      (<code>packages/sdk-rs/packages/web</code> and <code>.../node</code>) that
+      adds <code>package.json</code>, type rollups, and (for node) a
+      <code>prebuild</code> step that copies the wasm bytes into <code>src/wasm/</code>
+      so <code>tsup</code> can pick them up.
+    </p>
+
+    <h2>turbo pipeline — what runs when</h2>
+    <p>
+      <code>turbo.json</code> declares a small pipeline. The shape that matters:
+      <code>build</code> dependsOn <code>^build</code> (every workspace's deps build
+      first), <code>test</code> dependsOn <code>build</code>, and <code>build:wasm</code>
+      depends on a one-time <code>setup</code> task that's keyed to <code>Cargo.toml</code>
+      and <code>package.json</code> so it only re-runs when toolchains shift.
+    </p>
+
+    <div class="card tinted" style="padding: 18px 20px; margin: 14px 0;">
+      <div class="label" style="margin-bottom: 8px;">turbo.json — task chain</div>
+      <pre class="mono" style="margin: 0; white-space: pre-wrap; font-size: 12px; color: var(--ink-2); line-height: 1.55;">{`setup       → keyed by Cargo.toml + package.json, caches .turbo/setup-cache
+build:wasm  → dependsOn [setup],   outputs web-sdk-wasm/**, node-sdk-wasm/**
+bundle      → dependsOn [build:wasm], outputs dist/**
+build       → dependsOn [^build],  outputs dist/**, build/**, web-sdk-wasm/**
+test        → dependsOn [build],   outputs coverage/**
+doc         → dependsOn [build]
+release     → dependsOn [build, test, lint]`}</pre>
+    </div>
+
+    <p>
+      The <code>:build</code> vs <code>dev</code> story is the same shape as turbo
+      everywhere: <code>build</code> writes to <code>dist/</code> with caching on,
+      <code>dev</code> sets <code>cache: false</code> and <code>persistent: true</code>
+      so each workspace's watcher stays alive across the workspace tree.
+      <code>turbo dev --filter=./apps/web-sdk-example</code> is the practical entry
+      point for a UI-led loop — turbo brings up every dependency's watcher in
+      topological order and tears them all down on Ctrl-C.
+    </p>
+
+    <h2>where artifacts land</h2>
+    <table style="width: 100%; font-family:'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-2); border-collapse: collapse; margin: 14px 0;">
+      <thead>
+        <tr style="border-bottom: 1px solid var(--ink-4);">
+          <th style="text-align:left; padding: 6px 0; color: var(--ink-3); font-weight: 500;">workspace</th>
+          <th style="text-align:left; padding: 6px 0; color: var(--ink-3); font-weight: 500;">tool</th>
+          <th style="text-align:left; padding: 6px 0; color: var(--ink-3); font-weight: 500;">output</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td style="padding: 4px 0;">packages/sdk-rs</td><td>cargo + wasm-pack</td><td>web-sdk-wasm/, node-sdk-wasm/</td></tr>
+        <tr><td style="padding: 4px 0;">packages/sdk-rs/packages/web</td><td>rollup</td><td>dist/index.js + .wasm</td></tr>
+        <tr><td style="padding: 4px 0;">packages/sdk-rs/packages/node</td><td>tsc + cp</td><td>dist/wasm/*.wasm, dist/wasm/index.cjs</td></tr>
+        <tr><td style="padding: 4px 0;">packages/sdk-core</td><td>tsup</td><td>dist/index.{`{js,cjs,d.ts}`}</td></tr>
+        <tr><td style="padding: 4px 0;">packages/sdk-services</td><td>tsup</td><td>dist/index.* + dist/{`{kv,sql}`}/</td></tr>
+        <tr><td style="padding: 4px 0;">packages/web-sdk</td><td>webpack</td><td>dist/index.{`{mjs,cjs,d.ts}`}</td></tr>
+        <tr><td style="padding: 4px 0;">packages/node-sdk</td><td>tsup</td><td>dist/index.* + dist/core.*</td></tr>
+        <tr><td style="padding: 4px 0;">packages/cli</td><td>tsup</td><td>dist/index.js + bin/tc</td></tr>
+      </tbody>
+    </table>
+
+    <h2>cold install bootstrap</h2>
+    <p>
+      Starting from a fresh clone, the path to a buildable tree is:
+    </p>
+    <ol style="padding-left: 22px; margin: 6px 0 14px;">
+      <li><code>bun install</code> — resolves all {totalWorkspaces} workspaces, links
+        <code>workspace:*</code> deps, runs no scripts.</li>
+      <li><code>bun --cwd packages/sdk-rs run setup</code> — runs <code>scripts/setup-rust.sh</code>
+        once to ensure the rust toolchain + wasm-pack are present.</li>
+      <li><code>bun run build</code> — turbo walks the DAG: sdk-rs wasm-pack first,
+        then the two <code>*-sdk-wasm</code> packages, then sdk-core / sdk-services,
+        then web-sdk / node-sdk / cli in parallel.</li>
+    </ol>
+    <p>
+      <code>bun run clean</code> at the root drops every <code>dist/</code>,
+      every <code>node_modules/</code>, the wasm output dirs, and the rust
+      <code>target/</code> — full reset. <code>bun run demo:build</code> and
+      <code>bun run node-demo</code> are <code>turbo --filter</code> shortcuts for
+      bringing up just the example apps with their transitive deps.
+    </p>
+
+    <div class="card" style="padding: 18px 20px; margin: 14px 0; border-color: var(--accent);">
+      <div class="label" style="margin-bottom: 6px; color: var(--accent);">why this matters for the atlas</div>
+      <p style="margin: 0;">
+        Every node in the DAG is also a node in the atlas. The build edges and the
+        inventory edges should agree — and when they don't, that's
+        <a class="pkg-link" href={`${base}/09/`}>chapter 09</a>.
       </p>
     </div>
 
     <h3>data this chapter reads</h3>
     <ul class="col gap-4">
       <li class="mono">/atlas/data/inventory.json</li>
-      
-      
-      
+      <li class="mono">package.json (root) — workspaces, scripts</li>
+      <li class="mono">turbo.json — task pipeline</li>
+      <li class="mono">packages/sdk-rs/package.json — wasm-pack invocations</li>
     </ul>
 
     <h3>where to read next</h3>
     <p>
-      Continue to <a class="pkg-link" href={`${base}/09/`}>chapter 09</a>.
+      Chapter <a class="pkg-link" href={`${base}/09/`}>09</a> closes the loop —
+      how the atlas detects when its own picture of this DAG has drifted from
+      reality, and what an engineer does when it has.
     </p>
   </article>
 </Atlas>
