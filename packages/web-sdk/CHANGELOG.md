@@ -1,5 +1,14 @@
 # @tinycloudlabs/web-sdk
 
+## 2.2.0-beta.6
+
+### Patch Changes
+
+- b9a24b5: Add implicit space-level `tinycloud.capabilities/read` grants for every space touched by a manifest request.
+- Updated dependencies [b9a24b5]
+  - @tinycloud/sdk-core@2.2.0-beta.6
+  - @tinycloud/node-sdk@2.2.0-beta.6
+
 ## 2.2.0-beta.5
 
 ### Patch Changes

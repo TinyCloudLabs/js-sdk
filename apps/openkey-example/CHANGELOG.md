@@ -1,5 +1,12 @@
 # tinycloud-openkey-example-app
 
+## 0.0.15-beta.6
+
+### Patch Changes
+
+- Updated dependencies [b9a24b5]
+  - @tinycloud/web-sdk@2.2.0-beta.6
+
 ## 0.0.15-beta.5
 
 ### Patch Changes
