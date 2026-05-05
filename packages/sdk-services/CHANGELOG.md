@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-services
 
+## 2.2.0-beta.10
+
+### Minor Changes
+
+- 35212bb: Add canonical scoped secret support. Manifest `secrets` entries now accept object specs with `scope` and optional `name`, and `tc.secrets` supports scoped `get`, `put`, `delete`, and `list` calls using the canonical `secrets/scoped/<scope>/<NAME>` vault layout.
+
 ## 2.2.0-beta.7
 
 ### Minor Changes
