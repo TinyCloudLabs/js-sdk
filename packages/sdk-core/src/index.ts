@@ -319,12 +319,15 @@ export {
   DEFAULT_MANIFEST_VERSION,
   SERVICE_LONG_TO_SHORT,
   SERVICE_SHORT_TO_LONG,
+  VAULT_PERMISSION_SERVICE,
   // Types
   type AbilitiesMap,
   // Functions
   applyPrefix,
   composeManifestRequest,
   expandActionShortNames,
+  expandPermissionEntries,
+  expandPermissionEntry,
   loadManifest,
   manifestAbilitiesUnion,
   normalizeDefaults,

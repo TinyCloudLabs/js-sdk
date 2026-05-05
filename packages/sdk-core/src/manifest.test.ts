@@ -13,6 +13,7 @@ import {
   applyPrefix,
   composeManifestRequest,
   expandActionShortNames,
+  expandPermissionEntries,
   normalizeDefaults,
   parseExpiry,
   resolveManifest,
@@ -72,6 +73,73 @@ describe("expandActionShortNames", () => {
     expect(expandActionShortNames("tinycloud.sql", ["read", "ddl"])).toEqual([
       "tinycloud.sql/read",
       "tinycloud.sql/ddl",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// expandPermissionEntries
+// ---------------------------------------------------------------------------
+
+describe("expandPermissionEntries", () => {
+  it("expands tinycloud.vault entries into backing KV permissions", () => {
+    expect(
+      expandPermissionEntries([
+        {
+          service: "tinycloud.vault",
+          space: "secrets",
+          path: "secrets/ANTHROPIC_API_KEY",
+          actions: ["read", "write", "delete"],
+        },
+      ]),
+    ).toEqual([
+      {
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "keys/secrets/ANTHROPIC_API_KEY",
+        actions: [
+          "tinycloud.kv/get",
+          "tinycloud.kv/put",
+          "tinycloud.kv/del",
+        ],
+        skipPrefix: true,
+      },
+      {
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: [
+          "tinycloud.kv/get",
+          "tinycloud.kv/put",
+          "tinycloud.kv/del",
+        ],
+        skipPrefix: true,
+      },
+    ]);
+  });
+
+  it("maps vault list/head/metadata to the encrypted value resource", () => {
+    expect(
+      expandPermissionEntries([
+        {
+          service: "tinycloud.vault",
+          space: "default",
+          path: "profiles/",
+          actions: ["list", "head", "metadata"],
+        },
+      ]),
+    ).toEqual([
+      {
+        service: "tinycloud.kv",
+        space: "default",
+        path: "vault/profiles/",
+        actions: [
+          "tinycloud.kv/list",
+          "tinycloud.kv/get",
+          "tinycloud.kv/metadata",
+        ],
+        skipPrefix: true,
+      },
     ]);
   });
 });
@@ -441,6 +509,78 @@ describe("resolveManifest — secrets shorthand", () => {
         },
       },
     });
+  });
+});
+
+describe("resolveManifest — vault shorthand", () => {
+  it("compiles tinycloud.vault manifest permissions into KV resources", () => {
+    const resolved = resolveManifest({
+      app_id: "com.listen.app",
+      name: "Listen",
+      defaults: false,
+      permissions: [
+        {
+          service: "tinycloud.vault",
+          space: "secrets",
+          path: "secrets/ANTHROPIC_API_KEY",
+          actions: ["read", "write"],
+          skipPrefix: true,
+        },
+      ],
+    });
+
+    expect(resolved.resources).toEqual(
+      expect.arrayContaining([
+        {
+          service: "tinycloud.kv",
+          space: "secrets",
+          path: "keys/secrets/ANTHROPIC_API_KEY",
+          actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+        },
+        {
+          service: "tinycloud.kv",
+          space: "secrets",
+          path: "vault/secrets/ANTHROPIC_API_KEY",
+          actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+        },
+        {
+          service: "tinycloud.capabilities",
+          space: "secrets",
+          path: "",
+          actions: ["tinycloud.capabilities/read"],
+        },
+      ]),
+    );
+  });
+
+  it("applies the manifest prefix before expanding vault storage paths", () => {
+    const resolved = resolveManifest({
+      app_id: "com.listen.app",
+      name: "Listen",
+      defaults: false,
+      permissions: [
+        {
+          service: "tinycloud.vault",
+          path: "profiles/current",
+          actions: ["read"],
+        },
+      ],
+    });
+
+    expect(resolved.resources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          service: "tinycloud.kv",
+          path: "keys/com.listen.app/profiles/current",
+          actions: ["tinycloud.kv/get"],
+        }),
+        expect.objectContaining({
+          service: "tinycloud.kv",
+          path: "vault/com.listen.app/profiles/current",
+          actions: ["tinycloud.kv/get"],
+        }),
+      ]),
+    );
   });
 });
 

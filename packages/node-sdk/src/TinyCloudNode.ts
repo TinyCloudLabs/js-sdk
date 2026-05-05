@@ -89,7 +89,7 @@ import {
   type PermissionEntry,
   PermissionNotInManifestError,
   SessionExpiredError,
-  expandActionShortNames,
+  expandPermissionEntries as expandPermissionEntriesCore,
   isCapabilitySubset,
   parseRecapCapabilities,
   // Manifest-driven sign-in
@@ -2128,10 +2128,7 @@ export class TinyCloudNode {
     //    for every entry so the subset check and downstream WASM call
     //    both see canonical form. This also deep-copies the entries so
     //    we don't mutate caller-owned data.
-    const expandedEntries: PermissionEntry[] = permissions.map((entry) => ({
-      ...entry,
-      actions: expandActionShortNames(entry.service, entry.actions),
-    }));
+    const expandedEntries = this.expandPermissionEntries(permissions);
 
     // 4. Compute expiration. `options.expiry` overrides the default 1h.
     //    ms-format ("7d") or raw millisecond count both accepted. Cap
@@ -2474,10 +2471,7 @@ export class TinyCloudNode {
   private expandPermissionEntries(
     permissions: PermissionEntry[],
   ): PermissionEntry[] {
-    return permissions.map((entry) => ({
-      ...entry,
-      actions: expandActionShortNames(entry.service, entry.actions),
-    }));
+    return expandPermissionEntriesCore(permissions);
   }
 
   private shortServiceName(service: string): string {
