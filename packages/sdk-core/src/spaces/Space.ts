@@ -7,7 +7,12 @@
  * @packageDocumentation
  */
 
-import type { IKVService, Result, ServiceError } from "@tinycloud/sdk-services";
+import type {
+  IDataVaultService,
+  IKVService,
+  Result,
+  ServiceError,
+} from "@tinycloud/sdk-services";
 import type { SpaceInfo } from "../delegations/types";
 
 /**
@@ -85,6 +90,11 @@ export interface ISpace {
   readonly kv: IKVService;
 
   /**
+   * Data Vault operations scoped to this space.
+   */
+  readonly vault: IDataVaultService;
+
+  /**
    * Delegation operations scoped to this space.
    */
   readonly delegations: ISpaceScopedDelegations;
@@ -118,6 +128,11 @@ export interface SpaceConfig {
    * Factory function to create a space-scoped KV service.
    */
   createKV: (spaceId: string) => IKVService;
+
+  /**
+   * Factory function to create a space-scoped Data Vault service.
+   */
+  createVault: (spaceId: string) => IDataVaultService;
 
   /**
    * Factory function to create space-scoped delegations.
@@ -161,6 +176,7 @@ export class Space implements ISpace {
   private readonly _id: string;
   private readonly _name: string;
   private readonly _kv: IKVService;
+  private readonly _vault: IDataVaultService;
   private readonly _delegations: ISpaceScopedDelegations;
   private readonly _sharing: ISpaceScopedSharing;
   private readonly _getInfo: (spaceId: string) => Promise<Result<SpaceInfo, ServiceError>>;
@@ -174,6 +190,7 @@ export class Space implements ISpace {
     this._id = config.id;
     this._name = config.name;
     this._kv = config.createKV(config.id);
+    this._vault = config.createVault(config.id);
     this._delegations = config.createDelegations(config.id);
     this._sharing = config.createSharing(config.id);
     this._getInfo = config.getInfo;
@@ -198,6 +215,13 @@ export class Space implements ISpace {
    */
   get kv(): IKVService {
     return this._kv;
+  }
+
+  /**
+   * Data Vault operations scoped to this space.
+   */
+  get vault(): IDataVaultService {
+    return this._vault;
   }
 
   /**

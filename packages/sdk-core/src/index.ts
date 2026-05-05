@@ -169,6 +169,11 @@ export {
   type VaultGrantOptions,
   type VaultEntry,
   type VaultError,
+  // Secrets Service
+  SecretsService,
+  type ISecretsService,
+  type SecretPayload,
+  type SecretsError,
 } from "@tinycloud/sdk-services";
 
 // Space utilities
@@ -294,6 +299,7 @@ export {
   // Types
   type Manifest,
   type ManifestDefaults,
+  type ManifestSecretActions,
   type ComposeManifestOptions,
   type ComposedManifestRequest,
   type ManifestRegistryRecord,

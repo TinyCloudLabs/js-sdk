@@ -56,6 +56,16 @@ export interface PermissionEntry {
   description?: string;
 }
 
+export type ManifestSecretActions =
+  | true
+  | string
+  | string[]
+  | {
+      actions?: string | string[];
+      expiry?: string;
+      description?: string;
+    };
+
 /**
  * The valid values for `Manifest.defaults`.
  *
@@ -109,6 +119,11 @@ export interface Manifest {
    * DuckDB (opt-in), or `skipPrefix: true` entries.
    */
   permissions?: PermissionEntry[];
+  /**
+   * Secret name shorthand. Entries resolve to encrypted vault KV resources in
+   * the `secrets` space.
+   */
+  secrets?: Record<string, ManifestSecretActions>;
 }
 
 /**
@@ -232,6 +247,9 @@ export const ACCOUNT_REGISTRY_SPACE = "account";
 
 /** Account-space KV prefix used for installed-application registry records. */
 export const ACCOUNT_REGISTRY_PATH = "applications/";
+
+const SECRETS_SPACE = "secrets";
+const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
 /**
  * Known services and their short-form (recap URI) names. The TinyCloud
@@ -486,7 +504,45 @@ export function validateManifest(input: unknown): Manifest {
       validatePermissionEntry(p, `permissions[${i}]`),
     );
   }
+  if (m.secrets !== undefined) {
+    validateManifestSecrets(m.secrets);
+  }
   return m;
+}
+
+function validateManifestSecrets(secrets: unknown): void {
+  if (secrets === null || typeof secrets !== "object" || Array.isArray(secrets)) {
+    throw new ManifestValidationError("manifest.secrets must be an object");
+  }
+
+  for (const [name, spec] of Object.entries(secrets)) {
+    if (!SECRET_NAME_RE.test(name)) {
+      throw new ManifestValidationError(
+        `manifest.secrets.${name} must match ${SECRET_NAME_RE.source}`,
+      );
+    }
+    const actions = secretActionsFromSpec(name, spec as ManifestSecretActions);
+    if (actions.length === 0) {
+      throw new ManifestValidationError(
+        `manifest.secrets.${name} actions must be non-empty`,
+      );
+    }
+    for (const action of actions) {
+      if (typeof action !== "string" || action.length === 0) {
+        throw new ManifestValidationError(
+          `manifest.secrets.${name} actions must be non-empty strings`,
+        );
+      }
+    }
+    if (
+      spec !== null &&
+      typeof spec === "object" &&
+      !Array.isArray(spec) &&
+      (spec as { expiry?: unknown }).expiry !== undefined
+    ) {
+      parseExpiry((spec as { expiry: string }).expiry);
+    }
+  }
 }
 
 function validatePermissionEntry(p: unknown, path: string): void {
@@ -594,10 +650,15 @@ export function resolveManifest(input: Manifest): ResolvedCapabilities {
 
   const defaultEntries = defaultEntriesForTier(tier);
   const explicitEntries = manifest.permissions ?? [];
+  const secretEntries = secretEntriesForManifest(manifest.secrets);
 
   // Merge order: defaults first, then explicit entries, so explicit entries
   // for the same (service, space, path) tuple override defaults.
-  const allEntries: PermissionEntry[] = [...defaultEntries, ...explicitEntries];
+  const allEntries: PermissionEntry[] = [
+    ...defaultEntries,
+    ...explicitEntries,
+    ...secretEntries,
+  ];
 
   const resources: ResourceCapability[] = withCapabilitiesReadForSpaces(
     allEntries.map((entry) => resolveEntry(entry, prefix, expiryMs, space)),
@@ -624,6 +685,120 @@ export function resolveManifest(input: Manifest): ResolvedCapabilities {
     includePublicSpace,
     additionalDelegates,
   };
+}
+
+function normalizeSecretActions(actions: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (action: string) => {
+    if (!seen.has(action)) {
+      out.push(action);
+      seen.add(action);
+    }
+  };
+
+  for (const action of actions) {
+    if (action === "read") {
+      add("get");
+      continue;
+    }
+    if (action === "write") {
+      add("put");
+      continue;
+    }
+    if (action === "delete") {
+      add("del");
+      continue;
+    }
+    if (
+      action === "get" ||
+      action === "put" ||
+      action === "del" ||
+      action === "list" ||
+      action === "metadata"
+    ) {
+      add(action);
+      continue;
+    }
+    if (
+      action === "tinycloud.kv/get" ||
+      action === "tinycloud.kv/put" ||
+      action === "tinycloud.kv/del" ||
+      action === "tinycloud.kv/list" ||
+      action === "tinycloud.kv/metadata"
+    ) {
+      add(action);
+      continue;
+    }
+    throw new ManifestValidationError(
+      `unknown secret action ${JSON.stringify(action)}; expected read, write, delete, list, or metadata`,
+    );
+  }
+
+  return out;
+}
+
+function secretActionsFromSpec(
+  name: string,
+  spec: ManifestSecretActions,
+): string[] {
+  if (spec === true) {
+    return ["read"];
+  }
+  if (typeof spec === "string") {
+    return [spec];
+  }
+  if (Array.isArray(spec)) {
+    return spec;
+  }
+  if (spec === null || typeof spec !== "object") {
+    throw new ManifestValidationError(
+      `manifest.secrets.${name} must be true, a string action, an actions array, or an object`,
+    );
+  }
+  if (spec.actions === undefined) {
+    return ["read"];
+  }
+  if (typeof spec.actions === "string") {
+    return [spec.actions];
+  }
+  if (Array.isArray(spec.actions)) {
+    return spec.actions;
+  }
+  throw new ManifestValidationError(
+    `manifest.secrets.${name}.actions must be a string or array`,
+  );
+}
+
+function secretEntriesForManifest(
+  secrets: Manifest["secrets"] | undefined,
+): PermissionEntry[] {
+  if (secrets === undefined) {
+    return [];
+  }
+
+  const entries: PermissionEntry[] = [];
+  for (const [name, spec] of Object.entries(secrets)) {
+    const actions = secretActionsFromSpec(name, spec);
+    const extra: { expiry?: string; description?: string } =
+      spec !== true && typeof spec === "object" && !Array.isArray(spec)
+        ? spec
+        : {};
+    for (const base of ["keys", "vault"]) {
+      entries.push({
+        service: "tinycloud.kv",
+        space: SECRETS_SPACE,
+        path: `${base}/secrets/${name}`,
+        actions: normalizeSecretActions(actions),
+        skipPrefix: true,
+        ...(extra.expiry !== undefined ? { expiry: extra.expiry } : {}),
+        ...(extra.description !== undefined
+          ? { description: extra.description }
+          : {}),
+      });
+    }
+  }
+  return entries;
 }
 
 /**

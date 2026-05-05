@@ -21,6 +21,7 @@ import {
   ISQLService,
   IDuckDbService,
   IDataVaultService,
+  ISecretsService,
   ISpaceService,
   ISpace,
   ISharingService,
@@ -50,6 +51,7 @@ import {
   requestPermissionsCore,
   validateAdditionalPermissions,
 } from "./requestPermissionsCore";
+import { WebSecretsService } from "./WebSecretsService";
 import type { providers } from "ethers";
 
 import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
@@ -212,6 +214,7 @@ export class TinyCloudWeb {
 
   /** Browser wallet signer */
   private walletSigner?: BrowserWalletSigner;
+  private _secrets?: ISecretsService;
 
   /** Promise that resolves when WASM + node are ready */
   private _initPromise: Promise<void>;
@@ -360,6 +363,16 @@ export class TinyCloudWeb {
   get duckdb(): IDuckDbService { return this.node.duckdb; }
   get hooks(): IHooksService { return this.node.hooks; }
   get vault(): IDataVaultService { return this.node.vault; }
+  get secrets(): ISecretsService {
+    if (!this._secrets) {
+      this._secrets = new WebSecretsService({
+        getService: () => this.node.secrets,
+        getManifest: () => this._manifest,
+        requestPermissions: (additional) => this.requestPermissions(additional),
+      });
+    }
+    return this._secrets;
+  }
   get spaces(): ISpaceService { return this.node.spaces; }
   get sharing(): ISharingService { return this.node.sharing; }
   get delegations(): DelegationManager { return this.node.delegationManager; }

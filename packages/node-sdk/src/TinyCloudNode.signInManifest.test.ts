@@ -338,6 +338,54 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     });
   });
 
+  test("manifest secrets shorthand is scoped to the secrets space", async () => {
+    const prepareSessionSpy = mock((cfg: any) => ({
+      siwe: "fake-siwe",
+      jwk: cfg.jwk,
+      spaceId: cfg.spaceId,
+      verificationMethod: "did:key:z6MkTestSession",
+    }));
+    const wasm = makeFakeWasmBindings({
+      prepareSession: prepareSessionSpy as any,
+    });
+
+    const node = makeNodeWithSigner(wasm, {
+      includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "com.listen.app",
+        name: "Listen",
+        defaults: false,
+        secrets: {
+          ANTHROPIC_API_KEY: true,
+        },
+      },
+    });
+    stubAuthNetworkCalls(node);
+
+    const auth = (node as any).auth;
+    try {
+      await auth.signIn();
+    } catch {
+      /* network failure expected */
+    }
+
+    const cfg = (prepareSessionSpy as any).mock.calls[0][0];
+    expect(cfg.spaceAbilities).toEqual({
+      "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets": {
+        capabilities: {
+          "": ["tinycloud.capabilities/read"],
+        },
+        kv: {
+          "keys/secrets/ANTHROPIC_API_KEY": ["tinycloud.kv/get"],
+          "vault/secrets/ANTHROPIC_API_KEY": ["tinycloud.kv/get"],
+        },
+      },
+    });
+    expect(cfg.spaceId).toBe(
+      "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets",
+    );
+  });
+
   test("manifest registry write does not re-host existing account space", async () => {
     const node = makeNodeWithSigner(makeFakeWasmBindings());
     const auth = (node as any).auth;

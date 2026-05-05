@@ -16,6 +16,7 @@ import {
   normalizeDefaults,
   parseExpiry,
   resolveManifest,
+  resourceCapabilitiesToSpaceAbilitiesMap,
   validateManifest,
   type Manifest,
   type PermissionEntry,
@@ -179,6 +180,19 @@ describe("validateManifest", () => {
       } as Manifest),
     ).toThrow(ManifestValidationError);
   });
+
+  it("throws on invalid secret names", () => {
+    expect(() =>
+      validateManifest({
+        app_id: "a.b.c",
+        name: "x",
+        defaults: false,
+        secrets: {
+          anthropic_api_key: ["read"],
+        },
+      }),
+    ).toThrow(ManifestValidationError);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -339,6 +353,94 @@ describe("resolveManifest — defaults tiers", () => {
         actions: ["tinycloud.capabilities/read"],
       },
     ]);
+  });
+});
+
+describe("resolveManifest — secrets shorthand", () => {
+  it("defaults secrets to read permissions in the secrets space", () => {
+    const resolved = resolveManifest({
+      app_id: "com.listen.app",
+      name: "Listen",
+      defaults: false,
+      secrets: {
+        ANTHROPIC_API_KEY: true,
+      },
+    });
+
+    expect(resolved.resources).toEqual(
+      expect.arrayContaining([
+        {
+          service: "tinycloud.kv",
+          space: "secrets",
+          path: "keys/secrets/ANTHROPIC_API_KEY",
+          actions: ["tinycloud.kv/get"],
+        },
+        {
+          service: "tinycloud.kv",
+          space: "secrets",
+          path: "vault/secrets/ANTHROPIC_API_KEY",
+          actions: ["tinycloud.kv/get"],
+        },
+        {
+          service: "tinycloud.capabilities",
+          space: "secrets",
+          path: "",
+          actions: ["tinycloud.capabilities/read"],
+        },
+      ]),
+    );
+  });
+
+  it("supports object form and preserves per-secret metadata", () => {
+    const resolved = resolveManifest({
+      app_id: "com.listen.app",
+      name: "Listen",
+      defaults: false,
+      secrets: {
+        ANTHROPIC_API_KEY: {
+          expiry: "7d",
+          description: "Call Anthropic.",
+        },
+      },
+    });
+
+    const secretResource = resolved.resources.find(
+      (resource) => resource.path === "vault/secrets/ANTHROPIC_API_KEY",
+    );
+    expect(secretResource?.actions).toEqual(["tinycloud.kv/get"]);
+    expect(secretResource?.expiryMs).toBe(parseExpiry("7d"));
+    expect(secretResource?.description).toBe("Call Anthropic.");
+  });
+
+  it("groups secret capabilities into the secrets space abilities map", () => {
+    const resolved = resolveManifest({
+      app_id: "com.listen.app",
+      name: "Listen",
+      defaults: false,
+      secrets: {
+        ANTHROPIC_API_KEY: ["read", "write", "delete"],
+      },
+    });
+
+    expect(resourceCapabilitiesToSpaceAbilitiesMap(resolved.resources)).toEqual({
+      secrets: {
+        capabilities: {
+          "": ["tinycloud.capabilities/read"],
+        },
+        kv: {
+          "keys/secrets/ANTHROPIC_API_KEY": [
+            "tinycloud.kv/get",
+            "tinycloud.kv/put",
+            "tinycloud.kv/del",
+          ],
+          "vault/secrets/ANTHROPIC_API_KEY": [
+            "tinycloud.kv/get",
+            "tinycloud.kv/put",
+            "tinycloud.kv/del",
+          ],
+        },
+      },
+    });
   });
 });
 

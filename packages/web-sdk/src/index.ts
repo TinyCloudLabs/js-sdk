@@ -164,6 +164,7 @@ export {
   DataVaultService,
   VaultPublicSpaceKVActions,
   createVaultCrypto,
+  SecretsService,
   type WasmVaultFunctions,
   type VaultHeaders,
   type IDataVaultService,
@@ -175,6 +176,9 @@ export {
   type VaultGrantOptions,
   type VaultEntry,
   type VaultError,
+  type ISecretsService,
+  type SecretPayload,
+  type SecretsError,
 } from '@tinycloud/sdk-core';
 
 // Adapter for web-sdk
@@ -201,6 +205,7 @@ export {
   // Manifest shapes — PermissionEntry is what callers pass to delegateTo.
   type Manifest,
   type ManifestDefaults,
+  type ManifestSecretActions,
   type ComposeManifestOptions,
   type ComposedManifestRequest,
   type ManifestRegistryRecord,

@@ -107,6 +107,7 @@ export {
   type PermissionEntry,
   type Manifest,
   type ManifestDefaults,
+  type ManifestSecretActions,
   type ComposeManifestOptions,
   type ComposedManifestRequest,
   type ManifestRegistryRecord,
@@ -207,9 +208,10 @@ export {
   VaultHeaders,
   VaultPublicSpaceKVActions,
   createVaultCrypto,
+  SecretsService,
 } from "@tinycloud/sdk-core";
 
-// Re-export Vault service types
+// Re-export Vault and Secrets service types
 export type {
   IDataVaultService,
   VaultCrypto,
@@ -221,6 +223,9 @@ export type {
   VaultGrantOptions,
   VaultEntry,
   VaultError,
+  ISecretsService,
+  SecretPayload,
+  SecretsError,
 } from "@tinycloud/sdk-core";
 
 // Re-export Hooks service values
