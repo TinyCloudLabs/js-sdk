@@ -27,6 +27,7 @@
     "manifest-capabilities-read-default",
     "manifest-permission-descriptions",
     "manifest-v1-composition",
+    "runtime-permission-delegations",
     "secrets-wrapper",
     "tinycloud-vfs-initial-release"
   ]

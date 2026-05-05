@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk
 
+## 2.2.0-beta.8
+
+### Minor Changes
+
+- 8367cef: Store approved runtime permissions as narrow portable delegations and route matching invocations through them instead of expanding the app manifest and re-signing the whole session. `delegateTo()` can now derive from an installed runtime delegation, web permission requests return any created runtime delegations, and the secrets wrapper can use the SDK's connected signer when unlocking the backing vault.
+
 ## 2.2.0-beta.7
 
 ### Minor Changes

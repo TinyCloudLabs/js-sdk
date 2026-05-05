@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/vfs",
-  "version": "0.1.0-beta.8",
+  "version": "0.1.0-beta.9",
   "description": "TinyCloud Virtual File System for Node.js",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@platformatic/vfs": "^0.4.0",
-    "@tinycloud/node-sdk": "2.2.0-beta.7"
+    "@tinycloud/node-sdk": "2.2.0-beta.8"
   },
   "devDependencies": {
     "@types/node": "^20",
