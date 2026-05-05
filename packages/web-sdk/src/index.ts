@@ -186,18 +186,19 @@ export { createKVService } from './modules/Storage/tinycloud/KVServiceAdapter';
 
 // Delegation Transport Types (re-exported from node-sdk for compatibility)
 export {
-  PortableDelegation,
   DelegatedAccess,
   serializeDelegation,
   deserializeDelegation,
 } from '@tinycloud/node-sdk/core';
+export type { PortableDelegation } from '@tinycloud/node-sdk/core';
 
 // TinyCloudNode re-export (for advanced usage)
 export {
   TinyCloudNode,
-  TinyCloudNodeConfig,
+  type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,
+  type RuntimePermissionGrantOptions,
 } from '@tinycloud/node-sdk/core';
 
 // Capability-chain delegation types and errors (spec: .claude/specs/capability-chain.md)

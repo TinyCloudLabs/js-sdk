@@ -8,11 +8,7 @@
 
 import { describe, expect, mock, test } from "bun:test";
 
-import type {
-  ClientSession,
-  Manifest,
-  PermissionEntry,
-} from "@tinycloud/sdk-core";
+import type { Manifest, PermissionEntry } from "@tinycloud/sdk-core";
 
 import {
   requestPermissionsCore,
@@ -46,17 +42,6 @@ const additional: PermissionEntry[] = [
   },
 ];
 
-function fakeSession(): ClientSession {
-  return {
-    address: "0x0000000000000000000000000000000000000001",
-    walletAddress: "0x0000000000000000000000000000000000000001",
-    chainId: 1,
-    sessionKey: "default",
-    siwe: "fake-siwe",
-    signature: "0xfake",
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -83,25 +68,19 @@ describe("validateAdditionalPermissions", () => {
 // ---------------------------------------------------------------------------
 
 describe("requestPermissionsCore: decline", () => {
-  test("returns { approved: false } and does not sign out / sign in", async () => {
+  test("returns { approved: false } and does not grant permissions", async () => {
     const showModal = mock(() => Promise.resolve({ approved: false }));
-    const signOut = mock(() => Promise.resolve());
-    const signIn = mock(() => Promise.resolve(fakeSession()));
-    const writeManifest = mock(() => {});
+    const grantPermissions = mock(() => Promise.resolve());
 
     const result = await requestPermissionsCore(additional, {
       manifest: baseManifest,
       showModal: showModal as any,
-      signOut,
-      signIn,
-      writeManifest,
+      grantPermissions,
     });
 
     expect(result).toEqual({ approved: false });
     expect(showModal).toHaveBeenCalledTimes(1);
-    expect(signOut).not.toHaveBeenCalled();
-    expect(signIn).not.toHaveBeenCalled();
-    expect(writeManifest).not.toHaveBeenCalled();
+    expect(grantPermissions).not.toHaveBeenCalled();
   });
 
   test("passes the manifest name + icon + additional to the modal", async () => {
@@ -114,9 +93,7 @@ describe("requestPermissionsCore: decline", () => {
     await requestPermissionsCore(additional, {
       manifest: baseManifest,
       showModal: showModal as any,
-      signOut: async () => {},
-      signIn: async () => fakeSession(),
-      writeManifest: () => {},
+      grantPermissions: async () => {},
     });
 
     expect(seenOpts.appName).toBe("Test App");
@@ -130,10 +107,9 @@ describe("requestPermissionsCore: decline", () => {
 // ---------------------------------------------------------------------------
 
 describe("requestPermissionsCore: approve", () => {
-  test("composes expanded manifest, signs out, signs in, returns session", async () => {
+  test("stores approved runtime permissions", async () => {
     const order: string[] = [];
-    const newSession = fakeSession();
-    let writtenManifest: Manifest | undefined;
+    let granted: PermissionEntry[] | undefined;
 
     const result = await requestPermissionsCore(additional, {
       manifest: baseManifest,
@@ -141,67 +117,58 @@ describe("requestPermissionsCore: approve", () => {
         order.push("modal");
         return { approved: true };
       },
-      signOut: async () => {
-        order.push("signOut");
-      },
-      signIn: async () => {
-        order.push("signIn");
-        return newSession;
-      },
-      writeManifest: (next) => {
-        order.push("writeManifest");
-        writtenManifest = next;
+      grantPermissions: async (next) => {
+        order.push("grantPermissions");
+        granted = next;
       },
     });
 
-    expect(result).toEqual({ approved: true, session: newSession });
-
-    // Order: modal → writeManifest → signOut → signIn. writeManifest
-    // must come before signOut so a Phase 5 signIn refactor that reads
-    // `_manifest` at the start of signIn sees the composed manifest.
-    expect(order).toEqual(["modal", "writeManifest", "signOut", "signIn"]);
-
-    // Composed manifest contains the original + additional entries.
-    expect(writtenManifest?.permissions).toEqual([
-      ...(baseManifest.permissions ?? []),
-      ...additional,
-    ]);
-    // Other manifest fields pass through unchanged.
-    expect(writtenManifest?.app_id).toBe(baseManifest.app_id);
-    expect(writtenManifest?.name).toBe(baseManifest.name);
+    expect(result).toEqual({ approved: true });
+    expect(order).toEqual(["modal", "grantPermissions"]);
+    expect(granted).toEqual(additional);
   });
 
-  test("handles a manifest with no pre-existing permissions array", async () => {
+  test("returns runtime delegations from the grant step", async () => {
+    const delegation = { cid: "runtime-cid" } as any;
+
+    const result = await requestPermissionsCore(additional, {
+      manifest: baseManifest,
+      showModal: async () => ({ approved: true }),
+      grantPermissions: async () => [delegation],
+    });
+
+    expect(result).toEqual({
+      approved: true,
+      delegations: [delegation],
+    });
+  });
+
+  test("does not mutate a manifest with no pre-existing permissions array", async () => {
     const manifestNoPerms: Manifest = {
       app_id: "com.test.app",
       name: "Test",
     };
-    let written: Manifest | undefined;
+    const grantPermissions = mock(async () => {});
 
     await requestPermissionsCore(additional, {
       manifest: manifestNoPerms,
       showModal: async () => ({ approved: true }),
-      signOut: async () => {},
-      signIn: async () => fakeSession(),
-      writeManifest: (next) => {
-        written = next;
-      },
+      grantPermissions,
     });
 
-    expect(written?.permissions).toEqual(additional);
+    expect(manifestNoPerms.permissions).toBeUndefined();
+    expect(grantPermissions).toHaveBeenCalledWith(additional);
   });
 
-  test("propagates signIn errors without swallowing", async () => {
-    const err = new Error("signIn failed");
+  test("propagates grant errors without swallowing", async () => {
+    const err = new Error("grant failed");
     await expect(
       requestPermissionsCore(additional, {
         manifest: baseManifest,
         showModal: async () => ({ approved: true }),
-        signOut: async () => {},
-        signIn: async () => {
+        grantPermissions: async () => {
           throw err;
         },
-        writeManifest: () => {},
       }),
     ).rejects.toBe(err);
   });
@@ -218,9 +185,7 @@ describe("requestPermissionsCore: validation", () => {
       requestPermissionsCore([], {
         manifest: baseManifest,
         showModal: showModal as any,
-        signOut: async () => {},
-        signIn: async () => fakeSession(),
-        writeManifest: () => {},
+        grantPermissions: async () => {},
       }),
     ).rejects.toThrow(/non-empty/);
     expect(showModal).not.toHaveBeenCalled();

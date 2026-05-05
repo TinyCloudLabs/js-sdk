@@ -97,9 +97,10 @@ export type {
 // High-level API
 export {
   TinyCloudNode,
-  TinyCloudNodeConfig,
+  type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,
+  type RuntimePermissionGrantOptions,
 } from "./TinyCloudNode";
 
 // Capability-chain primitives (spec: .claude/specs/capability-chain.md).
@@ -139,10 +140,10 @@ export { NodeWasmBindings } from "./NodeWasmBindings";
 export { DelegatedAccess } from "./DelegatedAccess";
 export type { RestorableSession } from "./DelegatedAccess";
 export {
-  PortableDelegation,
   serializeDelegation,
   deserializeDelegation,
 } from "./delegation";
+export type { PortableDelegation } from "./delegation";
 
 // Re-export KV service values
 export { KVService, PrefixedKVService } from "@tinycloud/sdk-core";
