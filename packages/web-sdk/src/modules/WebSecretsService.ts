@@ -38,12 +38,12 @@ function secretsError(
   };
 }
 
-function actionUrn(action: "put" | "del"): string {
-  return `tinycloud.kv/${action}`;
+function displayActionUrn(action: "put" | "del"): string {
+  return action === "put" ? "tinycloud.vault/write" : "tinycloud.vault/delete";
 }
 
-function secretResourcePath(base: "keys" | "vault", name: string): string {
-  return `${base}/${SECRET_PREFIX}${name}`;
+function kvActionUrn(action: "put" | "del"): string {
+  return `tinycloud.kv/${action}`;
 }
 
 function secretPermissionEntries(
@@ -52,20 +52,17 @@ function secretPermissionEntries(
 ): PermissionEntry[] {
   return [
     {
-      service: "tinycloud.kv",
+      service: "tinycloud.vault",
       space: SECRETS_SPACE,
-      path: secretResourcePath("keys", name),
-      actions: [action],
-      skipPrefix: true,
-    },
-    {
-      service: "tinycloud.kv",
-      space: SECRETS_SPACE,
-      path: secretResourcePath("vault", name),
-      actions: [action],
+      path: `${SECRET_PREFIX}${name}`,
+      actions: [action === "put" ? "write" : "delete"],
       skipPrefix: true,
     },
   ];
+}
+
+function secretResourcePath(base: "keys" | "vault", name: string): string {
+  return `${base}/${SECRET_PREFIX}${name}`;
 }
 
 function isSecretsSpace(space: string): boolean {
@@ -156,7 +153,7 @@ export class WebSecretsService implements ISecretsService {
       if (!result.approved) {
         return secretsError(
           ErrorCodes.PERMISSION_DENIED,
-          `Permission request for ${actionUrn(action)} on ${name} was declined.`,
+          `Permission request for ${displayActionUrn(action)} on ${name} was declined.`,
         );
       }
       return this.restoreUnlockAfterEscalation();
@@ -165,7 +162,7 @@ export class WebSecretsService implements ISecretsService {
         ErrorCodes.PERMISSION_DENIED,
         error instanceof Error
           ? error.message
-          : `Permission request for ${actionUrn(action)} on ${name} failed.`,
+          : `Permission request for ${displayActionUrn(action)} on ${name} failed.`,
         error instanceof Error ? error : undefined,
       );
     }
@@ -187,7 +184,7 @@ export class WebSecretsService implements ISecretsService {
     }
 
     const manifests = Array.isArray(manifest) ? manifest : [manifest];
-    const requiredAction = actionUrn(action);
+    const requiredAction = kvActionUrn(action);
     return manifests.some((entry) => {
       const resolved = resolveManifest(entry);
       return (["keys", "vault"] as const).every((base) =>

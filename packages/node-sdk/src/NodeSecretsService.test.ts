@@ -64,17 +64,10 @@ describe("NodeSecretsService", () => {
     expect(result.ok).toBe(true);
     expect(grantPermissions).toHaveBeenCalledWith([
       {
-        service: "tinycloud.kv",
+        service: "tinycloud.vault",
         space: "secrets",
-        path: "keys/secrets/ANTHROPIC_API_KEY",
-        actions: ["put"],
-        skipPrefix: true,
-      },
-      {
-        service: "tinycloud.kv",
-        space: "secrets",
-        path: "vault/secrets/ANTHROPIC_API_KEY",
-        actions: ["put"],
+        path: "secrets/ANTHROPIC_API_KEY",
+        actions: ["write"],
         skipPrefix: true,
       },
     ] satisfies PermissionEntry[]);
@@ -156,7 +149,7 @@ describe("NodeSecretsService", () => {
         code: ErrorCodes.PERMISSION_DENIED,
         service: "secrets",
         message:
-          "Cannot autosign tinycloud.kv/put for ANTHROPIC_API_KEY; TinyCloudNode needs wallet mode with a signer or privateKey.",
+          "Cannot autosign tinycloud.vault/write for ANTHROPIC_API_KEY; TinyCloudNode needs wallet mode with a signer or privateKey.",
       },
     });
     expect(base.put).not.toHaveBeenCalled();

@@ -188,6 +188,87 @@ describe("TinyCloudNode runtime permission delegations", () => {
     );
   });
 
+  test("expands vault shorthand before storing runtime delegation operations", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const secretsSpaceId = `tinycloud:pkh:eip155:1:${address}:secrets`;
+    const permission: PermissionEntry = {
+      service: "tinycloud.vault",
+      space: "secrets",
+      path: "secrets/ANTHROPIC_API_KEY",
+      actions: ["write"],
+    };
+
+    await withActivatedDelegations(async () => {
+      const delegations = await node.grantRuntimePermissions([permission]);
+      expect(delegations).toHaveLength(1);
+      expect(delegations[0].resources).toEqual([
+        {
+          service: "kv",
+          space: secretsSpaceId,
+          path: "keys/secrets/ANTHROPIC_API_KEY",
+          actions: ["tinycloud.kv/put"],
+        },
+        {
+          service: "kv",
+          space: secretsSpaceId,
+          path: "vault/secrets/ANTHROPIC_API_KEY",
+          actions: ["tinycloud.kv/put"],
+        },
+      ]);
+    });
+
+    expect(node.hasRuntimePermissions([permission])).toBe(true);
+    const prepareSession = (node as any).wasmBindings.prepareSession;
+    expect(prepareSession.mock.calls[0][0].abilities).toEqual({
+      kv: {
+        "keys/secrets/ANTHROPIC_API_KEY": ["tinycloud.kv/put"],
+        "vault/secrets/ANTHROPIC_API_KEY": ["tinycloud.kv/put"],
+      },
+    });
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: secretsSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeWithRuntimePermissions(
+      fallback,
+      "kv",
+      "keys/secrets/ANTHROPIC_API_KEY",
+      "tinycloud.kv/put",
+    );
+    expect(invoke.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "runtime-token",
+    );
+
+    (node as any).invokeWithRuntimePermissions(
+      fallback,
+      "kv",
+      "vault/secrets/ANTHROPIC_API_KEY",
+      "tinycloud.kv/put",
+    );
+    expect(invoke.mock.calls[1][0].delegationHeader.Authorization).toBe(
+      "runtime-token",
+    );
+
+    (node as any).invokeWithRuntimePermissions(
+      fallback,
+      "kv",
+      "vault/secrets/ANTHROPIC_API_KEY",
+      "tinycloud.kv/del",
+    );
+    expect(invoke.mock.calls[2][0].delegationHeader.Authorization).toBe(
+      "base-token",
+    );
+  });
+
   test("delegateTo can derive from a stored runtime delegation", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,

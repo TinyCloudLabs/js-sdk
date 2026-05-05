@@ -96,6 +96,7 @@ export {
   ACCOUNT_REGISTRY_SPACE,
   DEFAULT_MANIFEST_SPACE,
   DEFAULT_MANIFEST_VERSION,
+  VAULT_PERMISSION_SERVICE,
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,
@@ -105,6 +106,8 @@ export {
   loadManifest,
   isCapabilitySubset,
   expandActionShortNames,
+  expandPermissionEntries,
+  expandPermissionEntry,
   parseExpiry,
   resourceCapabilitiesToSpaceAbilitiesMap,
 } from "@tinycloud/sdk-core";

@@ -26,8 +26,9 @@ import ms from "ms";
  * in their `manifest.json` and the shape we compare against when performing
  * the capability-subset derivability check in the delegation flow.
  *
- * `service` uses the long form (e.g. `"tinycloud.kv"`, `"tinycloud.sql"`)
- * which matches the ability-namespace half of the full action URN.
+ * `service` uses the long form (e.g. `"tinycloud.kv"`, `"tinycloud.sql"`).
+ * `"tinycloud.vault"` is an SDK-only shorthand that expands to the KV
+ * resources the vault service uses; it is never encoded as a recap service.
  */
 export interface PermissionEntry {
   /** Service namespace, e.g. "tinycloud.kv", "tinycloud.sql", "tinycloud.duckdb", "tinycloud.capabilities". */
@@ -251,6 +252,16 @@ export const ACCOUNT_REGISTRY_PATH = "applications/";
 const SECRETS_SPACE = "secrets";
 const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
+/** SDK-only permission service for encrypted vault resources. */
+export const VAULT_PERMISSION_SERVICE = "tinycloud.vault";
+
+type VaultKVBase = "keys" | "vault";
+
+interface VaultActionExpansion {
+  bases: readonly VaultKVBase[];
+  action: string;
+}
+
 /**
  * Known services and their short-form (recap URI) names. The TinyCloud
  * node encodes the recap resource URI with the short service name, while
@@ -392,6 +403,39 @@ export function expandActionShortNames(
     }
     return `${service}/${a}`;
   });
+}
+
+/**
+ * Expand SDK virtual permission services into concrete recap-capable services.
+ *
+ * Today this handles `"tinycloud.vault"`, which is backed by KV resources:
+ * - read/get: `keys/<path>` + `vault/<path>` with `tinycloud.kv/get`
+ * - write/put: `keys/<path>` + `vault/<path>` with `tinycloud.kv/put`
+ * - delete/del: `keys/<path>` + `vault/<path>` with `tinycloud.kv/del`
+ * - list: `vault/<path>` with `tinycloud.kv/list`
+ * - head: `vault/<path>` with `tinycloud.kv/get`
+ * - metadata: `vault/<path>` with `tinycloud.kv/metadata`
+ */
+export function expandPermissionEntry(entry: PermissionEntry): PermissionEntry[] {
+  if (entry.service !== VAULT_PERMISSION_SERVICE) {
+    return [
+      {
+        ...entry,
+        actions: expandActionShortNames(entry.service, entry.actions),
+      },
+    ];
+  }
+
+  return expandVaultPermissionEntry(entry);
+}
+
+/**
+ * Expand a list of permission entries using {@link expandPermissionEntry}.
+ */
+export function expandPermissionEntries(
+  entries: readonly PermissionEntry[],
+): PermissionEntry[] {
+  return entries.flatMap(expandPermissionEntry);
 }
 
 /**
@@ -571,6 +615,16 @@ function validatePermissionEntry(p: unknown, path: string): void {
       `${path}.actions must be a non-empty array`,
     );
   }
+  for (const action of entry.actions) {
+    if (typeof action !== "string" || action.length === 0) {
+      throw new ManifestValidationError(
+        `${path}.actions must contain non-empty strings`,
+      );
+    }
+    if (entry.service === VAULT_PERMISSION_SERVICE) {
+      vaultActionExpansion(action);
+    }
+  }
   if (entry.expiry !== undefined) {
     parseExpiry(entry.expiry);
   }
@@ -661,7 +715,7 @@ export function resolveManifest(input: Manifest): ResolvedCapabilities {
   ];
 
   const resources: ResourceCapability[] = withCapabilitiesReadForSpaces(
-    allEntries.map((entry) => resolveEntry(entry, prefix, expiryMs, space)),
+    allEntries.flatMap((entry) => resolveEntry(entry, prefix, expiryMs, space)),
   );
 
   const additionalDelegates: ResolvedDelegate[] =
@@ -810,20 +864,24 @@ function resolveEntry(
   prefix: string,
   _inheritedExpiryMs: number,
   inheritedSpace: string,
-): ResourceCapability {
+): ResourceCapability[] {
   const resolvedPath = applyPrefix(
     prefix,
     entry.path,
     entry.skipPrefix === true,
   );
-  const resolvedActions = expandActionShortNames(entry.service, entry.actions);
   const entryExpiryMs =
     entry.expiry !== undefined ? parseExpiry(entry.expiry) : undefined;
-  return {
-    service: entry.service,
+  return expandPermissionEntry({
+    ...entry,
     space: entry.space ?? inheritedSpace,
     path: resolvedPath,
-    actions: resolvedActions,
+    skipPrefix: true,
+  }).map((expanded) => ({
+    service: expanded.service,
+    space: expanded.space ?? inheritedSpace,
+    path: expanded.path,
+    actions: expanded.actions,
     // Only populate `expiryMs` when the entry had its own expiry override.
     // When absent, callers use the parent (delegation or manifest) expiry
     // which is carried on ResolvedDelegate.expiryMs / ResolvedCapabilities.expiryMs.
@@ -831,7 +889,76 @@ function resolveEntry(
     ...(entry.description !== undefined
       ? { description: entry.description }
       : {}),
-  };
+  }));
+}
+
+function expandVaultPermissionEntry(entry: PermissionEntry): PermissionEntry[] {
+  const byBase = new Map<VaultKVBase, string[]>();
+
+  for (const action of entry.actions) {
+    const expansion = vaultActionExpansion(action);
+    for (const base of expansion.bases) {
+      const actions = byBase.get(base) ?? [];
+      if (!actions.includes(expansion.action)) {
+        actions.push(expansion.action);
+      }
+      byBase.set(base, actions);
+    }
+  }
+
+  return [...byBase.entries()].map(([base, actions]) => ({
+    ...entry,
+    service: "tinycloud.kv",
+    path: vaultKVPath(base, entry.path),
+    actions,
+    skipPrefix: true,
+  }));
+}
+
+function vaultActionExpansion(action: string): VaultActionExpansion {
+  const normalized = normalizeVaultAction(action);
+  if (normalized === "read" || normalized === "get") {
+    return { bases: ["keys", "vault"], action: "tinycloud.kv/get" };
+  }
+  if (normalized === "write" || normalized === "put") {
+    return { bases: ["keys", "vault"], action: "tinycloud.kv/put" };
+  }
+  if (normalized === "delete" || normalized === "del") {
+    return { bases: ["keys", "vault"], action: "tinycloud.kv/del" };
+  }
+  if (normalized === "list") {
+    return { bases: ["vault"], action: "tinycloud.kv/list" };
+  }
+  if (normalized === "head") {
+    return { bases: ["vault"], action: "tinycloud.kv/get" };
+  }
+  if (normalized === "metadata") {
+    return { bases: ["vault"], action: "tinycloud.kv/metadata" };
+  }
+
+  throw new ManifestValidationError(
+    `unknown vault action ${JSON.stringify(action)}; expected read, write, delete, get, put, del, list, head, or metadata`,
+  );
+}
+
+function normalizeVaultAction(action: string): string {
+  if (action.startsWith(`${VAULT_PERMISSION_SERVICE}/`)) {
+    return action.slice(`${VAULT_PERMISSION_SERVICE}/`.length);
+  }
+  if (action.startsWith("tinycloud.kv/")) {
+    return action.slice("tinycloud.kv/".length);
+  }
+  if (action.includes("/")) {
+    throw new ManifestValidationError(
+      `unknown vault action ${JSON.stringify(action)}; expected a tinycloud.vault or tinycloud.kv action`,
+    );
+  }
+  return action;
+}
+
+function vaultKVPath(base: VaultKVBase, path: string): string {
+  const normalized = path.startsWith("/") ? path.slice(1) : path;
+  return `${base}/${normalized}`;
 }
 
 function cloneResourceCapability(
