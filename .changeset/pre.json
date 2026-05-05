@@ -29,6 +29,7 @@
     "manifest-v1-composition",
     "runtime-permission-delegations",
     "secrets-wrapper",
-    "tinycloud-vfs-initial-release"
+    "tinycloud-vfs-initial-release",
+    "vault-permission-shorthand"
   ]
 }

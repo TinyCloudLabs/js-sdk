@@ -1,5 +1,17 @@
 # @tinycloudlabs/web-sdk
 
+## 2.2.0-beta.9
+
+### Minor Changes
+
+- 78ef7eb: Add `tinycloud.vault` as an SDK permission shorthand that expands to the backing KV permissions used by encrypted vault operations, including runtime permission escalation.
+
+### Patch Changes
+
+- Updated dependencies [78ef7eb]
+  - @tinycloud/sdk-core@2.2.0-beta.9
+  - @tinycloud/node-sdk@2.2.0-beta.9
+
 ## 2.2.0-beta.8
 
 ### Minor Changes
