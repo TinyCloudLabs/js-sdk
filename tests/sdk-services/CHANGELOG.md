@@ -1,5 +1,12 @@
 # @tinycloudlabs/sdk-services-test
 
+## 8.0.0-beta.0
+
+### Patch Changes
+
+- Updated dependencies [46f126a]
+  - @tinycloud/sdk-services@2.2.0-beta.7
+
 ## 7.0.0
 
 ### Patch Changes

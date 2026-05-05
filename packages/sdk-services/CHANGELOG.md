@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-services
 
+## 2.2.0-beta.7
+
+### Minor Changes
+
+- 46f126a: Add manifest `secrets` declarations and SDK helpers backed by the secrets space vault, including read-default permissions and write/delete escalation.
+
 ## 2.1.0
 
 ### Minor Changes

@@ -1,5 +1,16 @@
 # @tinycloudlabs/sdk-core
 
+## 2.2.0-beta.7
+
+### Minor Changes
+
+- 46f126a: Add manifest `secrets` declarations and SDK helpers backed by the secrets space vault, including read-default permissions and write/delete escalation.
+
+### Patch Changes
+
+- Updated dependencies [46f126a]
+  - @tinycloud/sdk-services@2.2.0-beta.7
+
 ## 2.2.0-beta.6
 
 ### Patch Changes
