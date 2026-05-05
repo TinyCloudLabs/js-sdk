@@ -9,6 +9,7 @@
  */
 
 import type {
+  IDataVaultService,
   IKVService,
   Result,
   ServiceError,
@@ -107,6 +108,8 @@ export interface SpaceServiceConfig {
   capabilityRegistry?: ICapabilityKeyRegistry;
   /** Factory function to create a space-scoped KV service */
   createKVService?: (spaceId: string) => IKVService;
+  /** Factory function to create a space-scoped Data Vault service */
+  createVaultService?: (spaceId: string) => IDataVaultService;
   /** User's PKH DID (derived from address or provided explicitly) */
   userDid?: string;
   /** Optional SharingService for v2 sharing links (client-side) */
@@ -349,6 +352,7 @@ export class SpaceService implements ISpaceService {
   private fetchFn: FetchFunction;
   private capabilityRegistry?: ICapabilityKeyRegistry;
   private createKVServiceFn?: (spaceId: string) => IKVService;
+  private createVaultServiceFn?: (spaceId: string) => IDataVaultService;
   private _userDid?: string;
   private sharingService?: ISharingService;
   private createDelegationFn?: CreateDelegationFunction;
@@ -374,6 +378,7 @@ export class SpaceService implements ISpaceService {
     this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.capabilityRegistry = config.capabilityRegistry;
     this.createKVServiceFn = config.createKVService;
+    this.createVaultServiceFn = config.createVaultService;
     this._userDid = config.userDid;
     this.sharingService = config.sharingService;
     this.createDelegationFn = config.createDelegation;
@@ -389,6 +394,7 @@ export class SpaceService implements ISpaceService {
     if (config.fetch) this.fetchFn = config.fetch;
     if (config.capabilityRegistry) this.capabilityRegistry = config.capabilityRegistry;
     if (config.createKVService) this.createKVServiceFn = config.createKVService;
+    if (config.createVaultService) this.createVaultServiceFn = config.createVaultService;
     if (config.userDid !== undefined) this._userDid = config.userDid;
     if (config.sharingService) this.sharingService = config.sharingService;
     if (config.createDelegation) this.createDelegationFn = config.createDelegation;
@@ -738,6 +744,7 @@ export class SpaceService implements ISpaceService {
       id: spaceId,
       name,
       createKV: this.createSpaceScopedKV.bind(this),
+      createVault: this.createSpaceScopedVault.bind(this),
       createDelegations: this.createSpaceScopedDelegations.bind(this),
       createSharing: this.createSpaceScopedSharing.bind(this),
       getInfo: this.getSpaceInfo.bind(this),
@@ -899,6 +906,23 @@ export class SpaceService implements ISpaceService {
       get: () => {
         throw new Error(
           "KV service factory not configured. Provide createKVService in SpaceServiceConfig."
+        );
+      },
+    });
+  }
+
+  /**
+   * Create a space-scoped Data Vault service.
+   */
+  private createSpaceScopedVault(spaceId: string): IDataVaultService {
+    if (this.createVaultServiceFn) {
+      return this.createVaultServiceFn(spaceId);
+    }
+
+    return new Proxy({} as IDataVaultService, {
+      get: () => {
+        throw new Error(
+          "Vault service factory not configured. Provide createVaultService in SpaceServiceConfig."
         );
       },
     });

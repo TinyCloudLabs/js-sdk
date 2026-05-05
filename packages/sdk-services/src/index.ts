@@ -237,3 +237,10 @@ export type {
   VaultEntry,
   VaultError,
 } from "./vault";
+
+export { SecretsService } from "./secrets";
+export type {
+  ISecretsService,
+  SecretPayload,
+  SecretsError,
+} from "./secrets";

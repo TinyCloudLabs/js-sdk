@@ -44,6 +44,8 @@ import {
   HooksService,
   DataVaultService,
   IDataVaultService,
+  SecretsService,
+  ISecretsService,
   IHooksService,
   createVaultCrypto,
   ServiceSession,
@@ -61,6 +63,7 @@ import {
   DelegationManager,
   SpaceService,
   ISpaceService,
+  ISpace,
   CapabilityKeyRegistry,
   ICapabilityKeyRegistry,
   SharingService,
@@ -103,6 +106,7 @@ import {
   resolveExpiryMs,
   extractSiweExpiration,
 } from "./delegateToHelpers";
+import { NodeSecretsService } from "./NodeSecretsService";
 
 /** Default TinyCloud host */
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
@@ -240,6 +244,8 @@ export class TinyCloudNode {
   private _duckdb?: DuckDbService;
   private _hooks?: HooksService;
   private _vault?: DataVaultService;
+  private _baseSecrets?: ISecretsService;
+  private _secrets?: ISecretsService;
   /** Cached public KV with proper delegation (set by ensurePublicSpace) */
   private _publicKV?: KVService;
 
@@ -557,6 +563,10 @@ export class TinyCloudNode {
     this._sql = undefined;
     this._duckdb = undefined;
     this._hooks = undefined;
+    this._vault = undefined;
+    this._baseSecrets = undefined;
+    this._secrets = undefined;
+    this._spaceService = undefined;
     this._serviceContext = undefined;
 
     await this.tc.signIn(options);
@@ -673,6 +683,10 @@ export class TinyCloudNode {
     this._sql = undefined;
     this._duckdb = undefined;
     this._hooks = undefined;
+    this._vault = undefined;
+    this._baseSecrets = undefined;
+    this._secrets = undefined;
+    this._spaceService = undefined;
     this._serviceContext = undefined;
 
     if (sessionData.address) {
@@ -720,36 +734,7 @@ export class TinyCloudNode {
     this._serviceContext.setSession(serviceSession);
 
     // Create and register Vault service (matches initializeServices behavior)
-    const wasm = this.wasmBindings;
-    const vaultCrypto = createVaultCrypto({
-      vault_encrypt: wasm.vault_encrypt, vault_decrypt: wasm.vault_decrypt, vault_derive_key: wasm.vault_derive_key,
-      vault_x25519_from_seed: wasm.vault_x25519_from_seed, vault_x25519_dh: wasm.vault_x25519_dh,
-      vault_random_bytes: wasm.vault_random_bytes, vault_sha256: wasm.vault_sha256,
-    });
-    const self = this;
-    this._vault = new DataVaultService({
-      spaceId: sessionData.spaceId,
-      crypto: vaultCrypto,
-      tc: {
-        kv: this._kv!,
-        ensurePublicSpace: async () => {
-          try {
-            await self.ensurePublicSpace();
-            return { ok: true as const, data: undefined };
-          } catch (error) {
-            return { ok: false as const, error: { code: "STORAGE_ERROR", message: error instanceof Error ? error.message : String(error), service: "vault" } };
-          }
-        },
-        get publicKV() { return self._publicKV ?? self.tc!.publicKV; },
-        readPublicSpace: <T>(host: string, spaceId: string, key: string) =>
-          TinyCloud.readPublicSpace<T>(host, spaceId, key),
-        makePublicSpaceId: TinyCloud.makePublicSpaceId,
-        did: this.did,
-        address: sessionData.address ?? this._address ?? "",
-        chainId: sessionData.chainId ?? this._chainId,
-        hosts: [this.config.host!],
-      },
-    });
+    this._vault = this.createVaultService(sessionData.spaceId, this._kv!);
     this._vault.initialize(this._serviceContext);
     this._serviceContext.registerService('vault', this._vault);
 
@@ -935,6 +920,32 @@ export class TinyCloudNode {
     (this.tc!.serviceContext as ServiceContext).setSession(serviceSession);
 
     // Create and register Vault service
+    this._vault = this.createVaultService(session.spaceId, this._kv!);
+    this._vault.initialize(this._serviceContext);
+    this._serviceContext.registerService('vault', this._vault);
+
+    // Initialize v2 services
+    this.initializeV2Services(serviceSession);
+  }
+
+  private createSpaceScopedKVService(spaceId: string): KVService {
+    const kvService = new KVService({});
+    if (this._serviceContext) {
+      const spaceScopedContext = new ServiceContext({
+        invoke: this._serviceContext.invoke,
+        fetch: this._serviceContext.fetch,
+        hosts: this._serviceContext.hosts,
+      });
+      const session = this._serviceContext.session;
+      if (session) {
+        spaceScopedContext.setSession({ ...session, spaceId });
+      }
+      kvService.initialize(spaceScopedContext);
+    }
+    return kvService;
+  }
+
+  private createVaultService(spaceId: string, kv: IKVService): DataVaultService {
     const wasm = this.wasmBindings;
     const vaultCrypto = createVaultCrypto({
       vault_encrypt: wasm.vault_encrypt, vault_decrypt: wasm.vault_decrypt, vault_derive_key: wasm.vault_derive_key,
@@ -942,11 +953,11 @@ export class TinyCloudNode {
       vault_random_bytes: wasm.vault_random_bytes, vault_sha256: wasm.vault_sha256,
     });
     const self = this;
-    this._vault = new DataVaultService({
-      spaceId: session.spaceId,
+    return new DataVaultService({
+      spaceId,
       crypto: vaultCrypto,
       tc: {
-        kv: this._kv!,
+        kv,
         ensurePublicSpace: async () => {
           try {
             await self.ensurePublicSpace();
@@ -956,20 +967,15 @@ export class TinyCloudNode {
           }
         },
         get publicKV() { return self._publicKV ?? self.tc!.publicKV; },
-        readPublicSpace: <T>(host: string, spaceId: string, key: string) =>
-          TinyCloud.readPublicSpace<T>(host, spaceId, key),
+        readPublicSpace: <T>(host: string, targetSpaceId: string, key: string) =>
+          TinyCloud.readPublicSpace<T>(host, targetSpaceId, key),
         makePublicSpaceId: TinyCloud.makePublicSpaceId,
         did: this.did,
-        address: this._address!,
+        address: this._address ?? "",
         chainId: this._chainId,
         hosts: [this.config.host!],
       },
     });
-    this._vault.initialize(this._serviceContext);
-    this._serviceContext.registerService('vault', this._vault);
-
-    // Initialize v2 services
-    this.initializeV2Services(serviceSession);
   }
 
   /**
@@ -1077,21 +1083,15 @@ export class TinyCloudNode {
       capabilityRegistry: this._capabilityRegistry,
       userDid: this.did,
       createKVService: (spaceId: string) => {
-        // Create a new KV service scoped to the specified space
-        const kvService = new KVService({});
+        return this.createSpaceScopedKVService(spaceId);
+      },
+      createVaultService: (spaceId: string) => {
+        const kvService = this.createSpaceScopedKVService(spaceId);
+        const vaultService = this.createVaultService(spaceId, kvService);
         if (this._serviceContext) {
-          const spaceScopedContext = new ServiceContext({
-            invoke: this._serviceContext.invoke,
-            fetch: this._serviceContext.fetch,
-            hosts: this._serviceContext.hosts,
-          });
-          const session = this._serviceContext.session;
-          if (session) {
-            spaceScopedContext.setSession({ ...session, spaceId });
-          }
-          kvService.initialize(spaceScopedContext);
+          vaultService.initialize(this._serviceContext);
         }
-        return kvService;
+        return vaultService;
       },
       // Enable space.delegations.create() via SIWE-based delegation
       createDelegation: async (params) => {
@@ -1378,6 +1378,35 @@ export class TinyCloudNode {
   }
 
   /**
+   * App-facing secrets API backed by the `secrets` space vault.
+   */
+  get secrets(): ISecretsService {
+    if (!this._spaceService) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+    if (!this._secrets) {
+      this._secrets = new NodeSecretsService({
+        getService: () => this.getBaseSecrets(),
+        getManifest: () => this.manifest,
+        setManifest: (manifest) => this.setManifest(manifest),
+        signIn: () => this.signIn(),
+        canEscalate: () => this.signer !== undefined && this.tc !== undefined,
+      });
+    }
+    return this._secrets;
+  }
+
+  private getBaseSecrets(): ISecretsService {
+    if (!this._spaceService) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+    if (!this._baseSecrets) {
+      this._baseSecrets = new SecretsService(() => this.space("secrets").vault);
+    }
+    return this._baseSecrets;
+  }
+
+  /**
    * Hooks write stream subscription API.
    */
   get hooks(): IHooksService {
@@ -1526,6 +1555,13 @@ export class TinyCloudNode {
    */
   get spaceService(): ISpaceService {
     return this.spaces;
+  }
+
+  /**
+   * Get a Space object by short name or full URI.
+   */
+  space(nameOrUri: string): ISpace {
+    return this.spaces.get(nameOrUri);
   }
 
   /**

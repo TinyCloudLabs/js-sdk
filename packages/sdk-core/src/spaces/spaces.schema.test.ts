@@ -23,6 +23,7 @@ const validSpaceConfig = {
   id: "tinycloud:pkh:eip155:1:0x1234567890123456789012345678901234567890:default",
   name: "default",
   createKV: mockFunction,
+  createVault: mockFunction,
   createDelegations: mockFunction,
   createSharing: mockFunction,
   getInfo: mockAsyncFunction,
@@ -35,6 +36,7 @@ const validSpaceServiceConfig = {
   fetch: mockFunction,
   capabilityRegistry: {},
   createKVService: mockFunction,
+  createVaultService: mockFunction,
   userDid: "did:pkh:eip155:1:0x1234567890123456789012345678901234567890",
   sharingService: {},
   createDelegation: mockAsyncFunction,
@@ -75,6 +77,7 @@ describe("SpaceConfigSchema", () => {
       const data = {
         ...validSpaceConfig,
         createKV: (spaceId: string) => ({ spaceId }),
+        createVault: (spaceId: string) => ({ spaceId }),
         createDelegations: (spaceId: string) => ({ spaceId }),
         createSharing: (spaceId: string) => ({ spaceId }),
         getInfo: async (spaceId: string) => ({ ok: true, data: { id: spaceId } }),
@@ -106,6 +109,13 @@ describe("SpaceConfigSchema", () => {
       expect(result.success).toBe(false);
     });
 
+    it("rejects missing createVault factory", () => {
+      const data = { ...validSpaceConfig };
+      delete (data as Record<string, unknown>).createVault;
+      const result = SpaceConfigSchema.safeParse(data);
+      expect(result.success).toBe(false);
+    });
+
     it("rejects missing createDelegations factory", () => {
       const data = { ...validSpaceConfig };
       delete (data as Record<string, unknown>).createDelegations;
@@ -129,6 +139,12 @@ describe("SpaceConfigSchema", () => {
 
     it("rejects non-function createKV", () => {
       const data = { ...validSpaceConfig, createKV: "not a function" };
+      const result = SpaceConfigSchema.safeParse(data);
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects non-function createVault", () => {
+      const data = { ...validSpaceConfig, createVault: "not a function" };
       const result = SpaceConfigSchema.safeParse(data);
       expect(result.success).toBe(false);
     });
