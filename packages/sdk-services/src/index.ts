@@ -238,9 +238,16 @@ export type {
   VaultError,
 } from "./vault";
 
-export { SecretsService } from "./secrets";
+export {
+  SecretsService,
+  SECRET_NAME_RE,
+  canonicalizeSecretScope,
+  resolveSecretPath,
+} from "./secrets";
 export type {
   ISecretsService,
   SecretPayload,
   SecretsError,
+  ResolvedSecretPath,
+  SecretScopeOptions,
 } from "./secrets";

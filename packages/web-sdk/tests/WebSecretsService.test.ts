@@ -80,6 +80,43 @@ describe("WebSecretsService", () => {
     expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret");
   });
 
+  it("requests scoped write permission before putting a scoped secret", async () => {
+    const base = makeBaseSecrets();
+    const requested: PermissionEntry[][] = [];
+    const secrets = new WebSecretsService({
+      getService: () => base,
+      getManifest: readOnlyManifest,
+      requestPermissions: async (additional) => {
+        requested.push(additional);
+        return { approved: true };
+      },
+    });
+
+    const result = await secrets.put(
+      "ANTHROPIC_API_KEY",
+      "secret",
+      { scope: "Food Tracker" },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(requested).toEqual([
+      [
+        {
+          service: "tinycloud.vault",
+          space: "secrets",
+          path: "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+          actions: ["write"],
+          skipPrefix: true,
+        },
+      ],
+    ]);
+    expect(base.put).toHaveBeenCalledWith(
+      "ANTHROPIC_API_KEY",
+      "secret",
+      { scope: "Food Tracker" },
+    );
+  });
+
   it("skips escalation when the manifest already includes the mutation action", async () => {
     const base = makeBaseSecrets();
     const requestPermissions = mock(async () => ({ approved: true }));
@@ -99,6 +136,39 @@ describe("WebSecretsService", () => {
     expect(result.ok).toBe(true);
     expect(requestPermissions).not.toHaveBeenCalled();
     expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret");
+  });
+
+  it("skips escalation when the manifest includes the scoped mutation action", async () => {
+    const base = makeBaseSecrets();
+    const requestPermissions = mock(async () => ({ approved: true }));
+    const secrets = new WebSecretsService({
+      getService: () => base,
+      getManifest: () => ({
+        ...readOnlyManifest(),
+        secrets: {
+          FOOD_TRACKER_ANTHROPIC_API_KEY: {
+            scope: "food-tracker",
+            name: "ANTHROPIC_API_KEY",
+            actions: ["read", "write"],
+          },
+        },
+      }),
+      requestPermissions,
+    });
+
+    const result = await secrets.put(
+      "ANTHROPIC_API_KEY",
+      "secret",
+      { scope: "food-tracker" },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(requestPermissions).not.toHaveBeenCalled();
+    expect(base.put).toHaveBeenCalledWith(
+      "ANTHROPIC_API_KEY",
+      "secret",
+      { scope: "food-tracker" },
+    );
   });
 
   it("re-unlocks after approved escalation when already unlocked", async () => {

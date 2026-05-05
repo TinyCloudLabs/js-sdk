@@ -175,7 +175,16 @@ export type {
 } from "@tinycloud/sdk-core";
 
 // Re-export Vault and Secrets service values
-export { DataVaultService, VaultHeaders, VaultPublicSpaceKVActions, createVaultCrypto, SecretsService } from "@tinycloud/sdk-core";
+export {
+  DataVaultService,
+  VaultHeaders,
+  VaultPublicSpaceKVActions,
+  createVaultCrypto,
+  SecretsService,
+  SECRET_NAME_RE,
+  canonicalizeSecretScope,
+  resolveSecretPath,
+} from "@tinycloud/sdk-core";
 
 // Re-export Vault and Secrets service types
 export type {
@@ -192,6 +201,8 @@ export type {
   ISecretsService,
   SecretPayload,
   SecretsError,
+  ResolvedSecretPath,
+  SecretScopeOptions,
 } from "@tinycloud/sdk-core";
 
 // Re-export v2 Delegation service values

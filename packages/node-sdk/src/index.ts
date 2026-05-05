@@ -213,6 +213,9 @@ export {
   VaultPublicSpaceKVActions,
   createVaultCrypto,
   SecretsService,
+  SECRET_NAME_RE,
+  canonicalizeSecretScope,
+  resolveSecretPath,
 } from "@tinycloud/sdk-core";
 
 // Re-export Vault and Secrets service types
@@ -230,6 +233,8 @@ export type {
   ISecretsService,
   SecretPayload,
   SecretsError,
+  ResolvedSecretPath,
+  SecretScopeOptions,
 } from "@tinycloud/sdk-core";
 
 // Re-export Hooks service values

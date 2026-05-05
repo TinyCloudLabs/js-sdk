@@ -116,6 +116,31 @@ describe("SecretsService", () => {
     expect(vault.delete).toHaveBeenCalledWith("secrets/ANTHROPIC_API_KEY");
   });
 
+  it("maps scoped operations to canonical scoped vault keys", async () => {
+    const vault = new MockVault();
+    const secrets = new SecretsService(vault);
+
+    const options = { scope: "Food Tracker" };
+    const putResult = await secrets.put("ANTHROPIC_API_KEY", "secret", options);
+    expect(putResult.ok).toBe(true);
+    expect(vault.put).toHaveBeenCalledWith(
+      "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+      expect.objectContaining({ value: "secret" }),
+    );
+
+    const getResult = await secrets.get("ANTHROPIC_API_KEY", options);
+    expect(getResult).toEqual({ ok: true, data: "stored-value" });
+    expect(vault.get).toHaveBeenCalledWith(
+      "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+    );
+
+    const deleteResult = await secrets.delete("ANTHROPIC_API_KEY", options);
+    expect(deleteResult.ok).toBe(true);
+    expect(vault.delete).toHaveBeenCalledWith(
+      "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+    );
+  });
+
   it("validates env-style names before calling the vault", async () => {
     const vault = new MockVault();
     const secrets = new SecretsService(vault);
@@ -137,6 +162,29 @@ describe("SecretsService", () => {
       prefix: "secrets/",
       removePrefix: true,
     });
+  });
+
+  it("lists only valid secret names under a scoped prefix", async () => {
+    const vault = new MockVault();
+    const secrets = new SecretsService(vault);
+
+    const result = await secrets.list({ scope: "Food Tracker" });
+
+    expect(result).toEqual({ ok: true, data: ["ANTHROPIC_API_KEY"] });
+    expect(vault.list).toHaveBeenCalledWith({
+      prefix: "secrets/scoped/food-tracker/",
+      removePrefix: true,
+    });
+  });
+
+  it("rejects reserved explicit scopes", async () => {
+    const vault = new MockVault();
+    const secrets = new SecretsService(vault);
+
+    const result = await secrets.get("ANTHROPIC_API_KEY", { scope: "default" });
+
+    expect(result.ok).toBe(false);
+    expect(vault.get).not.toHaveBeenCalled();
   });
 
   it("forwards lock state to the backing vault", async () => {

@@ -171,9 +171,14 @@ export {
   type VaultError,
   // Secrets Service
   SecretsService,
+  SECRET_NAME_RE,
+  canonicalizeSecretScope,
+  resolveSecretPath,
   type ISecretsService,
   type SecretPayload,
   type SecretsError,
+  type ResolvedSecretPath,
+  type SecretScopeOptions,
 } from "@tinycloud/sdk-services";
 
 // Space utilities
