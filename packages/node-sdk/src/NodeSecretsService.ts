@@ -1,17 +1,17 @@
 import {
   ErrorCodes,
+  resolveSecretPath,
   resolveManifest,
   type IDataVaultService,
   type ISecretsService,
   type Manifest,
   type PermissionEntry,
   type Result,
+  type SecretScopeOptions,
   type ServiceError,
   type VaultError,
 } from "@tinycloud/sdk-core";
 
-const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
-const SECRET_PREFIX = "secrets/";
 const SECRETS_SPACE = "secrets";
 
 function ok(): Result<void, ServiceError> {
@@ -42,23 +42,25 @@ function kvActionUrn(action: "put" | "del"): string {
   return `tinycloud.kv/${action}`;
 }
 
+function vaultMutationAction(action: "put" | "del"): "write" | "delete" {
+  return action === "put" ? "write" : "delete";
+}
+
 function secretPermissionEntries(
   name: string,
+  options: SecretScopeOptions | undefined,
   action: "put" | "del",
 ): PermissionEntry[] {
+  const secretPath = resolveSecretPath(name, options);
   return [
     {
       service: "tinycloud.vault",
       space: SECRETS_SPACE,
-      path: `${SECRET_PREFIX}${name}`,
-      actions: [action === "put" ? "write" : "delete"],
+      path: secretPath.vaultKey,
+      actions: [vaultMutationAction(action)],
       skipPrefix: true,
     },
   ];
-}
-
-function secretResourcePath(base: "keys" | "vault", name: string): string {
-  return `${base}/${SECRET_PREFIX}${name}`;
 }
 
 function isSecretsSpace(space: string): boolean {
@@ -104,24 +106,39 @@ export class NodeSecretsService implements ISecretsService {
     this.service.lock();
   }
 
-  get(name: string): ReturnType<ISecretsService["get"]> {
-    return this.service.get(name);
+  get(name: string, options?: SecretScopeOptions): ReturnType<ISecretsService["get"]> {
+    return options === undefined
+      ? this.service.get(name)
+      : this.service.get(name, options);
   }
 
-  async put(name: string, value: string): ReturnType<ISecretsService["put"]> {
-    const permission = await this.ensureMutationPermission(name, "put");
+  async put(
+    name: string,
+    value: string,
+    options?: SecretScopeOptions,
+  ): ReturnType<ISecretsService["put"]> {
+    const permission = await this.ensureMutationPermission(name, options, "put");
     if (!permission.ok) return permission;
-    return this.service.put(name, value);
+    return options === undefined
+      ? this.service.put(name, value)
+      : this.service.put(name, value, options);
   }
 
-  async delete(name: string): ReturnType<ISecretsService["delete"]> {
-    const permission = await this.ensureMutationPermission(name, "del");
+  async delete(
+    name: string,
+    options?: SecretScopeOptions,
+  ): ReturnType<ISecretsService["delete"]> {
+    const permission = await this.ensureMutationPermission(name, options, "del");
     if (!permission.ok) return permission;
-    return this.service.delete(name);
+    return options === undefined
+      ? this.service.delete(name)
+      : this.service.delete(name, options);
   }
 
-  list(): ReturnType<ISecretsService["list"]> {
-    return this.service.list();
+  list(options?: SecretScopeOptions): ReturnType<ISecretsService["list"]> {
+    return options === undefined
+      ? this.service.list()
+      : this.service.list(options);
   }
 
   private get service(): ISecretsService {
@@ -130,16 +147,21 @@ export class NodeSecretsService implements ISecretsService {
 
   private async ensureMutationPermission(
     name: string,
+    options: SecretScopeOptions | undefined,
     action: "put" | "del",
   ): Promise<Result<void, ServiceError | VaultError>> {
-    if (!SECRET_NAME_RE.test(name)) {
+    let permissionEntries: PermissionEntry[];
+    try {
+      permissionEntries = secretPermissionEntries(name, options, action);
+    } catch (error) {
       return secretsError(
         ErrorCodes.INVALID_INPUT,
-        `Invalid secret name ${JSON.stringify(name)}. Secret names must match ${SECRET_NAME_RE.source}.`,
+        error instanceof Error ? error.message : String(error),
+        error instanceof Error ? error : undefined,
       );
     }
 
-    if (this.hasMutationPermission(name, action)) {
+    if (this.hasMutationPermission(name, options, action)) {
       return ok();
     }
 
@@ -151,7 +173,7 @@ export class NodeSecretsService implements ISecretsService {
     }
 
     try {
-      await this.config.grantPermissions(secretPermissionEntries(name, action));
+      await this.config.grantPermissions(permissionEntries);
       return this.restoreUnlockAfterEscalation();
     } catch (error) {
       return secretsError(
@@ -173,7 +195,11 @@ export class NodeSecretsService implements ISecretsService {
     return this.service.unlock(this.unlockSigner);
   }
 
-  private hasMutationPermission(name: string, action: "put" | "del"): boolean {
+  private hasMutationPermission(
+    name: string,
+    options: SecretScopeOptions | undefined,
+    action: "put" | "del",
+  ): boolean {
     const manifest = this.config.getManifest();
     if (manifest === undefined) {
       return false;
@@ -181,6 +207,7 @@ export class NodeSecretsService implements ISecretsService {
 
     const manifests = Array.isArray(manifest) ? manifest : [manifest];
     const requiredAction = kvActionUrn(action);
+    const secretPath = resolveSecretPath(name, options);
     return manifests.some((entry) => {
       const resolved = resolveManifest(entry);
       return (["keys", "vault"] as const).every((base) =>
@@ -188,7 +215,7 @@ export class NodeSecretsService implements ISecretsService {
           (resource) =>
             resource.service === "tinycloud.kv" &&
             isSecretsSpace(resource.space) &&
-            resource.path === secretResourcePath(base, name) &&
+            resource.path === secretPath.permissionPaths[base] &&
             resource.actions.includes(requiredAction),
         ),
       );

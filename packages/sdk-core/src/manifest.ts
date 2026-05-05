@@ -16,6 +16,7 @@
  */
 
 import ms from "ms";
+import { resolveSecretPath, SECRET_NAME_RE } from "@tinycloud/sdk-services";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -62,6 +63,10 @@ export type ManifestSecretActions =
   | string
   | string[]
   | {
+      /** Actual vault secret name. Defaults to the manifest object key. */
+      name?: string;
+      /** Optional scoped secret namespace. Omit for global secrets. */
+      scope?: string;
       actions?: string | string[];
       expiry?: string;
       description?: string;
@@ -250,7 +255,6 @@ export const ACCOUNT_REGISTRY_SPACE = "account";
 export const ACCOUNT_REGISTRY_PATH = "applications/";
 
 const SECRETS_SPACE = "secrets";
-const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
 /** SDK-only permission service for encrypted vault resources. */
 export const VAULT_PERMISSION_SERVICE = "tinycloud.vault";
@@ -565,6 +569,16 @@ function validateManifestSecrets(secrets: unknown): void {
         `manifest.secrets.${name} must match ${SECRET_NAME_RE.source}`,
       );
     }
+    try {
+      resolveSecretPath(
+        secretNameFromSpec(name, spec as ManifestSecretActions),
+        { scope: secretScopeFromSpec(spec as ManifestSecretActions) },
+      );
+    } catch (error) {
+      throw new ManifestValidationError(
+        `manifest.secrets.${name}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const actions = secretActionsFromSpec(name, spec as ManifestSecretActions);
     if (actions.length === 0) {
       throw new ManifestValidationError(
@@ -792,6 +806,25 @@ function normalizeSecretActions(actions: readonly string[]): string[] {
   return out;
 }
 
+function secretNameFromSpec(
+  fallbackName: string,
+  spec: ManifestSecretActions,
+): string {
+  if (spec !== null && typeof spec === "object" && !Array.isArray(spec)) {
+    return spec.name ?? fallbackName;
+  }
+  return fallbackName;
+}
+
+function secretScopeFromSpec(
+  spec: ManifestSecretActions,
+): string | undefined {
+  if (spec !== null && typeof spec === "object" && !Array.isArray(spec)) {
+    return spec.scope;
+  }
+  return undefined;
+}
+
 function secretActionsFromSpec(
   name: string,
   spec: ManifestSecretActions,
@@ -834,23 +867,25 @@ function secretEntriesForManifest(
   const entries: PermissionEntry[] = [];
   for (const [name, spec] of Object.entries(secrets)) {
     const actions = secretActionsFromSpec(name, spec);
+    const secretPath = resolveSecretPath(
+      secretNameFromSpec(name, spec),
+      { scope: secretScopeFromSpec(spec) },
+    );
     const extra: { expiry?: string; description?: string } =
       spec !== true && typeof spec === "object" && !Array.isArray(spec)
         ? spec
         : {};
-    for (const base of ["keys", "vault"]) {
-      entries.push({
-        service: "tinycloud.kv",
-        space: SECRETS_SPACE,
-        path: `${base}/secrets/${name}`,
-        actions: normalizeSecretActions(actions),
-        skipPrefix: true,
-        ...(extra.expiry !== undefined ? { expiry: extra.expiry } : {}),
-        ...(extra.description !== undefined
-          ? { description: extra.description }
-          : {}),
-      });
-    }
+    entries.push({
+      service: VAULT_PERMISSION_SERVICE,
+      space: SECRETS_SPACE,
+      path: secretPath.vaultKey,
+      actions: normalizeSecretActions(actions),
+      skipPrefix: true,
+      ...(extra.expiry !== undefined ? { expiry: extra.expiry } : {}),
+      ...(extra.description !== undefined
+        ? { description: extra.description }
+        : {}),
+    });
   }
   return entries;
 }

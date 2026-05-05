@@ -165,6 +165,9 @@ export {
   VaultPublicSpaceKVActions,
   createVaultCrypto,
   SecretsService,
+  SECRET_NAME_RE,
+  canonicalizeSecretScope,
+  resolveSecretPath,
   type WasmVaultFunctions,
   type VaultHeaders,
   type IDataVaultService,
@@ -179,6 +182,8 @@ export {
   type ISecretsService,
   type SecretPayload,
   type SecretsError,
+  type ResolvedSecretPath,
+  type SecretScopeOptions,
 } from '@tinycloud/sdk-core';
 
 // Adapter for web-sdk

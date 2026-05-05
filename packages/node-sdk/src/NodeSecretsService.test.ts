@@ -74,6 +74,39 @@ describe("NodeSecretsService", () => {
     expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret");
   });
 
+  it("grants scoped write permission before putting a scoped secret", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: readOnlyManifest,
+      grantPermissions,
+      canEscalate: () => true,
+    });
+
+    const result = await secrets.put(
+      "ANTHROPIC_API_KEY",
+      "secret",
+      { scope: "Food Tracker" },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(grantPermissions).toHaveBeenCalledWith([
+      {
+        service: "tinycloud.vault",
+        space: "secrets",
+        path: "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+        actions: ["write"],
+        skipPrefix: true,
+      },
+    ] satisfies PermissionEntry[]);
+    expect(base.put).toHaveBeenCalledWith(
+      "ANTHROPIC_API_KEY",
+      "secret",
+      { scope: "Food Tracker" },
+    );
+  });
+
   it("skips autosign when the manifest already includes the mutation action", async () => {
     const base = makeBaseSecrets();
     const grantPermissions = mock(async () => {});
@@ -94,6 +127,38 @@ describe("NodeSecretsService", () => {
     expect(result.ok).toBe(true);
     expect(grantPermissions).not.toHaveBeenCalled();
     expect(base.delete).toHaveBeenCalledWith("ANTHROPIC_API_KEY");
+  });
+
+  it("skips autosign when the manifest includes the scoped mutation action", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: () => ({
+        ...readOnlyManifest(),
+        secrets: {
+          FOOD_TRACKER_ANTHROPIC_API_KEY: {
+            scope: "food-tracker",
+            name: "ANTHROPIC_API_KEY",
+            actions: ["read", "delete"],
+          },
+        },
+      }),
+      grantPermissions,
+      canEscalate: () => true,
+    });
+
+    const result = await secrets.delete(
+      "ANTHROPIC_API_KEY",
+      { scope: "food-tracker" },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(grantPermissions).not.toHaveBeenCalled();
+    expect(base.delete).toHaveBeenCalledWith(
+      "ANTHROPIC_API_KEY",
+      { scope: "food-tracker" },
+    );
   });
 
   it("re-unlocks after autosign when already unlocked", async () => {

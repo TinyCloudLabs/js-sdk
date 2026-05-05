@@ -480,6 +480,77 @@ describe("resolveManifest — secrets shorthand", () => {
     expect(secretResource?.description).toBe("Call Anthropic.");
   });
 
+  it("supports scoped object form and defaults name to the manifest key", () => {
+    const resolved = resolveManifest({
+      app_id: "com.listen.app",
+      name: "Listen",
+      defaults: false,
+      secrets: {
+        ANTHROPIC_API_KEY: {
+          scope: "Food Tracker",
+        },
+      },
+    });
+
+    expect(resolved.resources).toEqual(
+      expect.arrayContaining([
+        {
+          service: "tinycloud.kv",
+          space: "secrets",
+          path: "keys/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+          actions: ["tinycloud.kv/get"],
+        },
+        {
+          service: "tinycloud.kv",
+          space: "secrets",
+          path: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+          actions: ["tinycloud.kv/get"],
+        },
+      ]),
+    );
+  });
+
+  it("supports scoped aliases with an explicit vault secret name", () => {
+    const resolved = resolveManifest({
+      app_id: "com.listen.app",
+      name: "Listen",
+      defaults: false,
+      secrets: {
+        FOOD_TRACKER_ANTHROPIC_API_KEY: {
+          scope: "food-tracker",
+          name: "ANTHROPIC_API_KEY",
+          actions: ["read", "write"],
+        },
+      },
+    });
+
+    expect(resourceCapabilitiesToSpaceAbilitiesMap(resolved.resources).secrets.kv).toEqual({
+      "keys/secrets/scoped/food-tracker/ANTHROPIC_API_KEY": [
+        "tinycloud.kv/get",
+        "tinycloud.kv/put",
+      ],
+      "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY": [
+        "tinycloud.kv/get",
+        "tinycloud.kv/put",
+      ],
+    });
+  });
+
+  it("rejects reserved explicit secret scopes", () => {
+    expect(() =>
+      resolveManifest({
+        app_id: "com.listen.app",
+        name: "Listen",
+        defaults: false,
+        secrets: {
+          ANTHROPIC_API_KEY: {
+            scope: "global",
+          },
+        },
+      }),
+    ).toThrow(/reserved/);
+  });
+
   it("groups secret capabilities into the secrets space abilities map", () => {
     const resolved = resolveManifest({
       app_id: "com.listen.app",
