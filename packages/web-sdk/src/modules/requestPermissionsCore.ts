@@ -2,7 +2,7 @@
  * Pure core of the `TinyCloudWeb.requestPermissions` escalation flow.
  *
  * Exposed as a standalone function so unit tests can exercise the
- * control flow (validation → modal → compose → signOut → signIn) without
+ * control flow (validation → modal → grant) without
  * instantiating the full `TinyCloudWeb` class (which wants a real WASM
  * binding and browser wallet signer).
  *
@@ -11,11 +11,8 @@
  * @packageDocumentation
  */
 
-import type {
-  ClientSession,
-  Manifest,
-  PermissionEntry,
-} from "@tinycloud/sdk-core";
+import type { Manifest, PermissionEntry } from "@tinycloud/sdk-core";
+import type { PortableDelegation } from "@tinycloud/node-sdk/core";
 
 export interface RequestPermissionsCoreDeps {
   /** Current stored manifest. Must be defined — caller validates first. */
@@ -30,26 +27,15 @@ export interface RequestPermissionsCoreDeps {
     appIcon?: string;
     additional: PermissionEntry[];
   }) => Promise<{ approved: boolean }>;
-  /**
-   * Tear down the SDK-side session state. Wallet stays connected.
-   */
-  signOut: () => Promise<void>;
-  /**
-   * Run a fresh sign-in with the composed manifest already stored on
-   * the caller. Returns the new client session on success.
-   */
-  signIn: () => Promise<ClientSession>;
-  /**
-   * Write-through hook so the caller can update its stored manifest
-   * before the new sign-in runs. Called once, with the composed manifest,
-   * only on the approve path.
-   */
-  writeManifest: (next: Manifest) => void;
+  /** Store approved permissions as runtime delegations. */
+  grantPermissions: (
+    additional: PermissionEntry[],
+  ) => Promise<readonly PortableDelegation[] | void>;
 }
 
 export interface RequestPermissionsCoreResult {
   approved: boolean;
-  session?: ClientSession;
+  delegations?: readonly PortableDelegation[];
 }
 
 /**
@@ -87,18 +73,9 @@ export async function requestPermissionsCore(
     return { approved: false };
   }
 
-  // Union existing permissions with the newly-approved entries. We don't
-  // deduplicate — downstream `resolveManifest` merges entries
-  // deterministically and the server builds a single recap from the
-  // resolved list.
-  const composedManifest: Manifest = {
-    ...deps.manifest,
-    permissions: [...(deps.manifest.permissions ?? []), ...additional],
-  };
-  deps.writeManifest(composedManifest);
+  const delegations = await deps.grantPermissions(additional);
 
-  await deps.signOut();
-  const session = await deps.signIn();
-
-  return { approved: true, session };
+  return Array.isArray(delegations)
+    ? { approved: true, delegations }
+    : { approved: true };
 }

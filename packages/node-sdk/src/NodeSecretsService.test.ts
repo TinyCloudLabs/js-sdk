@@ -35,66 +35,55 @@ function readOnlyManifest(): Manifest {
 describe("NodeSecretsService", () => {
   it("does not autosign reads", async () => {
     const base = makeBaseSecrets();
-    const signIn = mock(async () => {});
+    const grantPermissions = mock(async () => {});
     const secrets = new NodeSecretsService({
       getService: () => base,
       getManifest: readOnlyManifest,
-      setManifest: mock(() => {}),
-      signIn,
+      grantPermissions,
       canEscalate: () => true,
     });
 
     const result = await secrets.get("ANTHROPIC_API_KEY");
 
     expect(result).toEqual({ ok: true, data: "stored" });
-    expect(signIn).not.toHaveBeenCalled();
+    expect(grantPermissions).not.toHaveBeenCalled();
   });
 
-  it("autosigns write permission before putting a read-only manifest secret", async () => {
+  it("grants write permission before putting a read-only manifest secret", async () => {
     const base = makeBaseSecrets();
-    let manifest = readOnlyManifest();
-    const setManifest = mock((next: Manifest | Manifest[]) => {
-      manifest = Array.isArray(next) ? next[0] : next;
-    });
-    const signIn = mock(async () => {});
+    const grantPermissions = mock(async () => {});
     const secrets = new NodeSecretsService({
       getService: () => base,
-      getManifest: () => manifest,
-      setManifest,
-      signIn,
+      getManifest: readOnlyManifest,
+      grantPermissions,
       canEscalate: () => true,
     });
 
     const result = await secrets.put("ANTHROPIC_API_KEY", "secret");
 
     expect(result.ok).toBe(true);
-    expect(setManifest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        permissions: [
-          {
-            service: "tinycloud.kv",
-            space: "secrets",
-            path: "keys/secrets/ANTHROPIC_API_KEY",
-            actions: ["put"],
-            skipPrefix: true,
-          },
-          {
-            service: "tinycloud.kv",
-            space: "secrets",
-            path: "vault/secrets/ANTHROPIC_API_KEY",
-            actions: ["put"],
-            skipPrefix: true,
-          },
-        ] satisfies PermissionEntry[],
-      }),
-    );
-    expect(signIn).toHaveBeenCalledTimes(1);
+    expect(grantPermissions).toHaveBeenCalledWith([
+      {
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "keys/secrets/ANTHROPIC_API_KEY",
+        actions: ["put"],
+        skipPrefix: true,
+      },
+      {
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["put"],
+        skipPrefix: true,
+      },
+    ] satisfies PermissionEntry[]);
     expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret");
   });
 
   it("skips autosign when the manifest already includes the mutation action", async () => {
     const base = makeBaseSecrets();
-    const signIn = mock(async () => {});
+    const grantPermissions = mock(async () => {});
     const secrets = new NodeSecretsService({
       getService: () => base,
       getManifest: () => ({
@@ -103,15 +92,14 @@ describe("NodeSecretsService", () => {
           ANTHROPIC_API_KEY: ["read", "delete"],
         },
       }),
-      setManifest: mock(() => {}),
-      signIn,
+      grantPermissions,
       canEscalate: () => true,
     });
 
     const result = await secrets.delete("ANTHROPIC_API_KEY");
 
     expect(result.ok).toBe(true);
-    expect(signIn).not.toHaveBeenCalled();
+    expect(grantPermissions).not.toHaveBeenCalled();
     expect(base.delete).toHaveBeenCalledWith("ANTHROPIC_API_KEY");
   });
 
@@ -121,8 +109,7 @@ describe("NodeSecretsService", () => {
     const secrets = new NodeSecretsService({
       getService: () => base,
       getManifest: readOnlyManifest,
-      setManifest: mock(() => {}),
-      signIn: mock(async () => {}),
+      grantPermissions: mock(async () => {}),
       canEscalate: () => true,
     });
 
@@ -135,13 +122,29 @@ describe("NodeSecretsService", () => {
     expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret");
   });
 
+  it("uses the configured signer when unlock is called without one", async () => {
+    const base = makeBaseSecrets();
+    const signer = { signMessage: async () => "0xsig" };
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: readOnlyManifest,
+      grantPermissions: mock(async () => {}),
+      canEscalate: () => true,
+      getUnlockSigner: () => signer,
+    });
+
+    const result = await secrets.unlock();
+
+    expect(result.ok).toBe(true);
+    expect(base.unlock).toHaveBeenCalledWith(signer);
+  });
+
   it("returns a permission error when autosign is unavailable", async () => {
     const base = makeBaseSecrets();
     const secrets = new NodeSecretsService({
       getService: () => base,
       getManifest: readOnlyManifest,
-      setManifest: mock(() => {}),
-      signIn: mock(async () => {}),
+      grantPermissions: mock(async () => {}),
       canEscalate: () => false,
     });
 

@@ -68,32 +68,12 @@ function isSecretsSpace(space: string): boolean {
   return space === SECRETS_SPACE || space.endsWith(`:${SECRETS_SPACE}`);
 }
 
-function composeEscalatedManifest(
-  manifest: Manifest | Manifest[],
-  additional: PermissionEntry[],
-): Manifest | Manifest[] {
-  if (Array.isArray(manifest)) {
-    const [primary, ...rest] = manifest;
-    return [
-      {
-        ...primary,
-        permissions: [...(primary.permissions ?? []), ...additional],
-      },
-      ...rest,
-    ];
-  }
-  return {
-    ...manifest,
-    permissions: [...(manifest.permissions ?? []), ...additional],
-  };
-}
-
 export interface NodeSecretsServiceConfig {
   getService: () => ISecretsService;
   getManifest: () => Manifest | Manifest[] | undefined;
-  setManifest: (manifest: Manifest | Manifest[]) => void;
-  signIn: () => Promise<void>;
+  grantPermissions: (additional: PermissionEntry[]) => Promise<unknown>;
   canEscalate: () => boolean;
+  getUnlockSigner?: () => unknown;
 }
 
 export class NodeSecretsService implements ISecretsService {
@@ -111,10 +91,11 @@ export class NodeSecretsService implements ISecretsService {
   }
 
   async unlock(signer?: unknown): Promise<Result<void, VaultError>> {
-    if (signer !== undefined) {
-      this.unlockSigner = signer;
+    const effectiveSigner = signer ?? this.config.getUnlockSigner?.();
+    if (effectiveSigner !== undefined) {
+      this.unlockSigner = effectiveSigner;
     }
-    const result = await this.service.unlock(signer);
+    const result = await this.service.unlock(effectiveSigner);
     if (result.ok) {
       this.shouldRestoreUnlock = true;
     }
@@ -172,22 +153,8 @@ export class NodeSecretsService implements ISecretsService {
       );
     }
 
-    const manifest = this.config.getManifest();
-    if (manifest === undefined) {
-      return secretsError(
-        ErrorCodes.PERMISSION_DENIED,
-        `Cannot autosign ${actionUrn(action)} for ${name}; set a manifest before mutating secrets.`,
-      );
-    }
-
     try {
-      this.config.setManifest(
-        composeEscalatedManifest(
-          manifest,
-          secretPermissionEntries(name, action),
-        ),
-      );
-      await this.config.signIn();
+      await this.config.grantPermissions(secretPermissionEntries(name, action));
       return this.restoreUnlockAfterEscalation();
     } catch (error) {
       return secretsError(

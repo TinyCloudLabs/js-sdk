@@ -3,9 +3,8 @@
  *
  * Web Component that shows the user a list of additional capabilities an
  * app wants to request on top of the currently-signed session. Used by
- * `TinyCloudWeb.requestPermissions` as the confirmation step before we
- * tear down the current session and run a fresh signIn with an expanded
- * manifest.
+ * `TinyCloudWeb.requestPermissions` as the confirmation step before the
+ * SDK installs a scoped runtime permission delegation.
  *
  * Matches the `SpaceCreationModal` pattern: a Web Component with a shadow
  * DOM, returning a completion promise via `getCompletionPromise()`. The
@@ -97,7 +96,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
 
             <div class="modal-body">
               <p class="modal-description">
-                Approving will sign you out of your current session and start a new one with the expanded permissions.
+                Approving adds a scoped runtime permission for this session. You will stay signed in.
               </p>
               <ul class="permission-list">${entriesHtml}</ul>
             </div>

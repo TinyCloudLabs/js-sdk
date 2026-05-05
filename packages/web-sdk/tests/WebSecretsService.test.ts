@@ -126,6 +126,22 @@ describe("WebSecretsService", () => {
     expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret");
   });
 
+  it("uses the configured signer when unlock is called without one", async () => {
+    const base = makeBaseSecrets();
+    const signer = { signMessage: async () => "0xsig" };
+    const secrets = new WebSecretsService({
+      getService: () => base,
+      getManifest: readOnlyManifest,
+      requestPermissions: async () => ({ approved: true }),
+      getUnlockSigner: () => signer,
+    });
+
+    const result = await secrets.unlock();
+
+    expect(result.ok).toBe(true);
+    expect(base.unlock).toHaveBeenCalledWith(signer);
+  });
+
   it("returns a permission error when delete escalation is declined", async () => {
     const base = makeBaseSecrets();
     const secrets = new WebSecretsService({

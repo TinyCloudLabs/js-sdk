@@ -122,11 +122,9 @@ export interface Config extends ClientConfig {
    * the session-key UCAN path (no wallet prompt).
    *
    * When provided, {@link TinyCloudWeb.requestPermissions} uses the
-   * manifest's `name` and `icon` to title the permission modal and
-   * composes escalation requests against the manifest's existing
-   * permission set. The manifest is forwarded into the underlying
-   * {@link TinyCloudNode} so `signIn()` drives its SIWE recap from
-   * it directly.
+   * manifest's `name` and `icon` to title the permission modal. The
+   * manifest is forwarded into the underlying {@link TinyCloudNode}
+   * so `signIn()` drives its SIWE recap from it directly.
    */
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
@@ -136,13 +134,14 @@ export interface Config extends ClientConfig {
 }
 
 /**
- * Result of {@link TinyCloudWeb.requestPermissions}. Populated with the
- * fresh session on approve; empty on decline so callers can branch on
- * `approved` without dereferencing a stale session.
+ * Result of {@link TinyCloudWeb.requestPermissions}. On approve, `session`
+ * is the current session that received the runtime permission delegation.
+ * On decline, `session` is omitted so callers can branch on `approved`.
  */
 export interface RequestPermissionsResult {
   approved: boolean;
   session?: ClientSession;
+  delegations?: readonly PortableDelegation[];
 }
 
 // Share Link Utilities (static, no auth required)
@@ -225,12 +224,11 @@ export class TinyCloudWeb {
   /**
    * App manifest stored from config (or updated via `setManifest`).
    *
-   * `requestPermissions` reads this for the modal title/icon and for
-   * composing an expanded manifest on approve. `_init` forwards this
-   * value into the underlying {@link TinyCloudNode} so `signIn()`
-   * drives its SIWE recap from the manifest. `setManifest` mirrors
-   * any post-construction updates onto the node so the next sign-in
-   * picks them up.
+   * `requestPermissions` reads this for the modal title/icon. `_init`
+   * forwards this value into the underlying {@link TinyCloudNode} so
+   * `signIn()` drives its SIWE recap from the manifest. `setManifest`
+   * mirrors any post-construction updates onto the node so the next
+   * sign-in picks them up.
    */
   private _manifest?: Manifest | Manifest[];
   private _capabilityRequest?: ComposedManifestRequest;
@@ -249,8 +247,10 @@ export class TinyCloudWeb {
       appIcon?: string;
       additional: PermissionEntry[];
     }) => Promise<{ approved: boolean }>;
-    signIn?: () => Promise<ClientSession>;
-    signOut?: () => Promise<void>;
+    hasRuntimePermissions?: (additional: PermissionEntry[]) => boolean;
+    grantPermissions?: (
+      additional: PermissionEntry[],
+    ) => Promise<readonly PortableDelegation[] | void>;
   };
 
   constructor(config: Config = {}) {
@@ -369,6 +369,7 @@ export class TinyCloudWeb {
         getService: () => this.node.secrets,
         getManifest: () => this._manifest,
         requestPermissions: (additional) => this.requestPermissions(additional),
+        getUnlockSigner: () => this.walletSigner,
       });
     }
     return this._secrets;
@@ -548,18 +549,15 @@ export class TinyCloudWeb {
 
   /**
    * Request additional permissions on top of the currently-signed
-   * session. Shows a confirmation modal; on approve, signs out the
-   * current session (without disconnecting the wallet) and runs a fresh
-   * `signIn` with the composed manifest. On decline, returns
-   * `{ approved: false }` with no state changes.
+   * session. Shows a confirmation modal; on approve, stores a narrow
+   * runtime delegation that matching service calls can use. On decline,
+   * returns `{ approved: false }` with no state changes.
    *
    * Spec: `.claude/specs/capability-chain.md` §requestPermissions.
    *
-   * On approve, this composes the expanded manifest, signs out the
-   * current session, and calls `signIn()` — which now drives its
-   * SIWE recap from `this._manifest` directly, so the fresh session
-   * is signed with the expanded capability set in a single wallet
-   * prompt.
+   * On approve, this does not mutate the manifest or force a new sign-in.
+   * The underlying node creates a secondary delegation to the current
+   * session key and records it in the invocation permission map.
    */
   async requestPermissions(
     additional: PermissionEntry[],
@@ -572,35 +570,52 @@ export class TinyCloudWeb {
     const manifest = Array.isArray(this._manifest)
       ? this._manifest[0]
       : this._manifest;
-    // Escalation requires a stored manifest because we need to
-    // compose the expanded permission set from the current app's
-    // declared permissions. Apps that signed in without a manifest
-    // must set one via `setManifest` before escalating.
+    // Escalation requires a stored manifest so the confirmation modal can
+    // identify the app asking for additional permissions. Apps that signed
+    // in without a manifest must set one via `setManifest` before escalating.
     if (manifest === undefined) {
       throw new Error(
         "requestPermissions requires a stored manifest. Pass `manifest` in the TinyCloudWeb config or call setManifest() before requesting escalation.",
       );
     }
 
-    // Delegate to the pure core with injected dependencies. Test hooks
-    // override any or all of them; production defaults wire to the real
-    // modal manager and the class's own signOut/signIn methods.
-    //
-    // `writeManifest` mirrors the updated manifest onto BOTH `_manifest`
-    // and the underlying node so the subsequent `signIn()` call picks
-    // it up automatically. Updating only `_manifest` would leave the
-    // node still configured with the pre-escalation manifest, and the
-    // new sign-in would grant the old capability set.
-    return requestPermissionsCore(additional, {
+    const node = await this.ensureNode();
+    const hasRuntimePermissions =
+      this._testHooks?.hasRuntimePermissions ?? ((requested) =>
+        node.hasRuntimePermissions(requested));
+    if (hasRuntimePermissions(additional)) {
+      const delegations = node.getRuntimePermissionDelegations(additional);
+      return delegations.length > 0
+        ? { approved: true, session: this.session(), delegations }
+        : { approved: true, session: this.session() };
+    }
+
+    const result = await requestPermissionsCore(additional, {
       manifest,
       showModal: this._testHooks?.showModal ?? showPermissionRequestModal,
-      signOut: this._testHooks?.signOut ?? (() => this.signOut()),
-      signIn: this._testHooks?.signIn ?? (() => this.signIn()),
-      writeManifest: (next) => {
-        this._manifest = next;
-        this._node?.setManifest(next);
-      },
+      grantPermissions: this._testHooks?.grantPermissions ??
+        ((approved) => node.grantRuntimePermissions(approved)),
     });
+    return result.approved
+      ? {
+          approved: true,
+          session: this.session(),
+          ...(result.delegations !== undefined
+            ? { delegations: result.delegations }
+            : {}),
+        }
+      : result;
+  }
+
+  getRuntimePermissionDelegations(
+    permissions?: PermissionEntry[],
+  ): readonly PortableDelegation[] {
+    return this.node.getRuntimePermissionDelegations(permissions);
+  }
+
+  async useRuntimeDelegation(delegation: PortableDelegation): Promise<void> {
+    const node = await this.ensureNode();
+    await node.useRuntimeDelegation(delegation);
   }
 
   async useDelegation(delegation: PortableDelegation): Promise<DelegatedAccess> {

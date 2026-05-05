@@ -12,7 +12,7 @@ import type { VaultError } from "@tinycloud/sdk-core";
 
 type RequestPermissions = (
   additional: PermissionEntry[],
-) => Promise<{ approved: boolean }>;
+) => Promise<{ approved: boolean; delegations?: readonly unknown[] }>;
 
 const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 const SECRET_PREFIX = "secrets/";
@@ -76,6 +76,7 @@ export interface WebSecretsServiceConfig {
   getService: () => ISecretsService;
   getManifest: () => Manifest | Manifest[] | undefined;
   requestPermissions: RequestPermissions;
+  getUnlockSigner?: () => unknown;
 }
 
 export class WebSecretsService implements ISecretsService {
@@ -93,10 +94,11 @@ export class WebSecretsService implements ISecretsService {
   }
 
   async unlock(signer?: unknown): Promise<Result<void, VaultError>> {
-    if (signer !== undefined) {
-      this.unlockSigner = signer;
+    const effectiveSigner = signer ?? this.config.getUnlockSigner?.();
+    if (effectiveSigner !== undefined) {
+      this.unlockSigner = effectiveSigner;
     }
-    const result = await this.service.unlock(signer);
+    const result = await this.service.unlock(effectiveSigner);
     if (result.ok) {
       this.shouldRestoreUnlock = true;
     }

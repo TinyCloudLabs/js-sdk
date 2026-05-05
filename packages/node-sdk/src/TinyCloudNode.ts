@@ -52,6 +52,8 @@ import {
   ServiceContext,
   ISessionStorage,
   ISigner,
+  type InvokeAnyFunction,
+  type InvokeFunction,
   INotificationHandler,
   SilentNotificationHandler,
   IENSResolver,
@@ -77,6 +79,7 @@ import {
   DelegationResult,
   CreateDelegationWasmParams,
   CreateDelegationWasmResult,
+  type DelegatedResource,
   UnsupportedFeatureError,
   makePublicSpaceId,
   ACCOUNT_REGISTRY_SPACE,
@@ -209,6 +212,28 @@ export interface DelegateToResult {
 }
 
 /**
+ * Options for runtime permission escalation.
+ */
+export interface RuntimePermissionGrantOptions {
+  /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
+  expiry?: string | number;
+}
+
+interface RuntimePermissionOperation {
+  spaceId: string;
+  service: string;
+  path: string;
+  action: string;
+}
+
+interface RuntimePermissionGrant {
+  session: ServiceSession;
+  delegation: PortableDelegation;
+  operations: RuntimePermissionOperation[];
+  expiresAt: Date;
+}
+
+/**
  * High-level TinyCloud API for Node.js environments.
  *
  * Each user creates their own TinyCloudNode instance with their private key.
@@ -264,6 +289,7 @@ export class TinyCloudNode {
   // These are initialized after signIn()
   private _delegationManager?: DelegationManager;
   private _spaceService?: SpaceService;
+  private runtimePermissionGrants: RuntimePermissionGrant[] = [];
 
   private get nodeFeatures(): string[] {
     return this.auth?.nodeFeatures ?? [];
@@ -273,6 +299,41 @@ export class TinyCloudNode {
   private get siweDomain(): string {
     return this.config.domain ?? 'app.tinycloud.xyz';
   }
+
+  private readonly invokeWithRuntimePermissions: InvokeFunction = (
+    session,
+    service,
+    path,
+    action,
+    facts,
+  ) => {
+    return this.wasmBindings.invoke(
+      this.selectInvocationSession(session, service, path, action),
+      service,
+      path,
+      action,
+      facts,
+    );
+  };
+
+  private readonly invokeAnyWithRuntimePermissions: InvokeAnyFunction = (
+    session,
+    entries,
+    facts,
+  ) => {
+    if (!this.wasmBindings.invokeAny) {
+      throw new Error("WASM binding does not support invokeAny");
+    }
+    const grant = this.findGrantForOperations(
+      entries.map((entry) => ({
+        spaceId: entry.spaceId,
+        service: this.invocationServiceName(entry.service),
+        path: entry.path,
+        action: entry.action,
+      })),
+    );
+    return this.wasmBindings.invokeAny(grant?.session ?? session, entries, facts);
+  };
 
   /**
    * Create a new TinyCloudNode instance.
@@ -355,7 +416,7 @@ export class TinyCloudNode {
     this._sharingService = new SharingService({
       hosts: [this.config.host!],
       // session: undefined - not needed for receive()
-      invoke: this.wasmBindings.invoke,
+      invoke: this.invokeWithRuntimePermissions,
       fetch: globalThis.fetch.bind(globalThis),
       keyProvider: this._keyProvider,
       registry: this._capabilityRegistry,
@@ -420,7 +481,7 @@ export class TinyCloudNode {
     });
 
     this.tc = new TinyCloud(this.auth, {
-      invokeAny: this.wasmBindings.invokeAny,
+      invokeAny: this.invokeAnyWithRuntimePermissions,
     });
   }
 
@@ -568,6 +629,7 @@ export class TinyCloudNode {
     this._secrets = undefined;
     this._spaceService = undefined;
     this._serviceContext = undefined;
+    this.runtimePermissionGrants = [];
 
     await this.tc.signIn(options);
     this.syncResolvedHostFromAuth();
@@ -688,6 +750,7 @@ export class TinyCloudNode {
     this._secrets = undefined;
     this._spaceService = undefined;
     this._serviceContext = undefined;
+    this.runtimePermissionGrants = [];
 
     if (sessionData.address) {
       this._address = sessionData.address;
@@ -698,8 +761,8 @@ export class TinyCloudNode {
 
     // Create service context
     this._serviceContext = new ServiceContext({
-      invoke: this.wasmBindings.invoke,
-      invokeAny: this.wasmBindings.invokeAny,
+      invoke: this.invokeWithRuntimePermissions,
+      invokeAny: this.invokeAnyWithRuntimePermissions,
       fetch: globalThis.fetch.bind(globalThis),
       hosts: [this.config.host!],
     });
@@ -807,7 +870,7 @@ export class TinyCloudNode {
 
     // Create TinyCloud instance
     this.tc = new TinyCloud(this.auth, {
-      invokeAny: this.wasmBindings.invokeAny,
+      invokeAny: this.invokeAnyWithRuntimePermissions,
     });
 
     // Update config with prefix
@@ -858,7 +921,7 @@ export class TinyCloudNode {
     });
 
     this.tc = new TinyCloud(this.auth, {
-      invokeAny: this.wasmBindings.invokeAny,
+      invokeAny: this.invokeAnyWithRuntimePermissions,
     });
     this.config.prefix = prefix;
   }
@@ -874,12 +937,12 @@ export class TinyCloudNode {
     }
 
     // Initialize TinyCloud core services (needed for publicKV, ensurePublicSpace)
-    this.tc!.initializeServices(this.wasmBindings.invoke, [this.config.host!]);
+    this.tc!.initializeServices(this.invokeWithRuntimePermissions, [this.config.host!]);
 
     // Create service context
     this._serviceContext = new ServiceContext({
-      invoke: this.wasmBindings.invoke,
-      invokeAny: this.wasmBindings.invokeAny,
+      invoke: this.invokeWithRuntimePermissions,
+      invokeAny: this.invokeAnyWithRuntimePermissions,
       fetch: globalThis.fetch.bind(globalThis),
       hosts: [this.config.host!],
     });
@@ -1070,7 +1133,7 @@ export class TinyCloudNode {
     this._delegationManager = new DelegationManager({
       hosts: [this.config.host!],
       session: serviceSession,
-      invoke: this.wasmBindings.invoke,
+      invoke: this.invokeWithRuntimePermissions,
       fetch: globalThis.fetch.bind(globalThis),
     });
 
@@ -1388,9 +1451,9 @@ export class TinyCloudNode {
       this._secrets = new NodeSecretsService({
         getService: () => this.getBaseSecrets(),
         getManifest: () => this.manifest,
-        setManifest: (manifest) => this.setManifest(manifest),
-        signIn: () => this.signIn(),
+        grantPermissions: (additional) => this.grantRuntimePermissions(additional),
         canEscalate: () => this.signer !== undefined && this.tc !== undefined,
+        getUnlockSigner: () => this.signer ?? undefined,
       });
     }
     return this._secrets;
@@ -1484,6 +1547,196 @@ export class TinyCloudNode {
         return entry?.delegation;
       },
     };
+  }
+
+  /**
+   * Check whether the current session or an approved runtime delegation covers
+   * every requested permission.
+   */
+  hasRuntimePermissions(permissions: PermissionEntry[]): boolean {
+    const session = this.auth?.tinyCloudSession;
+    if (!session || !Array.isArray(permissions) || permissions.length === 0) {
+      return false;
+    }
+
+    const expanded = this.expandPermissionEntries(permissions);
+    if (this.sessionCoversPermissionEntries(session, expanded)) {
+      return true;
+    }
+
+    return this.findRuntimeGrantsForPermissionEntries(expanded, session).length > 0;
+  }
+
+  /**
+   * Return installed runtime permission delegations. When `permissions` is
+   * provided, only delegations currently covering those permissions are
+   * returned. Base-session manifest permissions are not represented here.
+   */
+  getRuntimePermissionDelegations(
+    permissions?: PermissionEntry[],
+  ): PortableDelegation[] {
+    this.pruneExpiredRuntimePermissionGrants();
+    if (permissions === undefined) {
+      return this.runtimePermissionGrants.map((grant) => grant.delegation);
+    }
+
+    const session = this.auth?.tinyCloudSession;
+    if (!session || !Array.isArray(permissions) || permissions.length === 0) {
+      return [];
+    }
+    const expanded = this.expandPermissionEntries(permissions);
+    return this.findRuntimeGrantsForPermissionEntries(expanded, session).map(
+      (grant) => grant.delegation,
+    );
+  }
+
+  /**
+   * Install a portable runtime permission delegation into this SDK instance so
+   * matching service calls and downstream `delegateTo()` calls can use it.
+   */
+  async useRuntimeDelegation(delegation: PortableDelegation): Promise<void> {
+    const session = this.auth?.tinyCloudSession;
+    if (!session) {
+      throw new SessionExpiredError(new Date(0));
+    }
+    if (delegation.expiry.getTime() <= Date.now()) {
+      throw new SessionExpiredError(delegation.expiry);
+    }
+
+    const expectedDids = new Set([session.verificationMethod, this.sessionDid]);
+    if (!expectedDids.has(delegation.delegateDID)) {
+      throw new Error(
+        `Runtime delegation targets ${delegation.delegateDID} but this session key is ${session.verificationMethod}.`,
+      );
+    }
+
+    const targetHost = delegation.host ?? this.config.host!;
+    const activateResult = await activateSessionWithHost(
+      targetHost,
+      delegation.delegationHeader,
+    );
+    if (!activateResult.success) {
+      throw new Error(
+        `Failed to activate runtime permission delegation: ${activateResult.error}`,
+      );
+    }
+
+    this.runtimePermissionGrants = this.runtimePermissionGrants.filter(
+      (grant) => grant.delegation.cid !== delegation.cid,
+    );
+    this.runtimePermissionGrants.push(
+      this.runtimeGrantFromDelegation(delegation, session),
+    );
+  }
+
+  /**
+   * Store additional permissions as narrow delegations to the current session
+   * key. Future service invocations automatically use a stored delegation when
+   * its `(space, service, path, action)` covers the request.
+   */
+  async grantRuntimePermissions(
+    permissions: PermissionEntry[],
+    options?: RuntimePermissionGrantOptions,
+  ): Promise<PortableDelegation[]> {
+    if (!Array.isArray(permissions) || permissions.length === 0) {
+      throw new Error("grantRuntimePermissions requires a non-empty permissions array");
+    }
+    const session = this.auth?.tinyCloudSession;
+    if (!session) {
+      throw new SessionExpiredError(new Date(0));
+    }
+
+    const sessionExpiry = extractSiweExpiration(session.siwe);
+    if (sessionExpiry !== undefined) {
+      const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;
+      if (sessionExpiry.getTime() <= Date.now() + marginMs) {
+        throw new SessionExpiredError(sessionExpiry);
+      }
+    }
+
+    const expanded = this.expandPermissionEntries(permissions);
+    if (this.sessionCoversPermissionEntries(session, expanded)) {
+      return [];
+    }
+
+    const existingGrants = this.findRuntimeGrantsForPermissionEntries(expanded, session);
+    if (existingGrants.length > 0) {
+      return existingGrants.map((grant) => grant.delegation);
+    }
+    if (!this.signer) {
+      throw new Error(
+        "grantRuntimePermissions requires wallet mode with a signer or privateKey.",
+      );
+    }
+
+    const bySpace = new Map<string, PermissionEntry[]>();
+    for (const entry of expanded) {
+      const spaceId = this.resolvePermissionSpace(entry.space, session);
+      const current = bySpace.get(spaceId) ?? [];
+      current.push(entry);
+      bySpace.set(spaceId, current);
+    }
+
+    const now = new Date();
+    const requestedExpiryMs = resolveExpiryMs(options?.expiry);
+    let expiresAt = new Date(now.getTime() + requestedExpiryMs);
+    if (sessionExpiry !== undefined && sessionExpiry < expiresAt) {
+      expiresAt = sessionExpiry;
+    }
+
+    const delegations: PortableDelegation[] = [];
+    for (const [spaceId, entries] of bySpace) {
+      const abilities = this.permissionsToAbilities(entries);
+      const prepared = this.wasmBindings.prepareSession({
+        abilities,
+        address: this.wasmBindings.ensureEip55(session.address),
+        chainId: session.chainId,
+        domain: this.siweDomain,
+        issuedAt: now.toISOString(),
+        expirationTime: expiresAt.toISOString(),
+        spaceId,
+        jwk: session.jwk,
+      });
+
+      const signature = await this.signer.signMessage(prepared.siwe);
+      const delegatedSession = this.wasmBindings.completeSessionSetup({
+        ...prepared,
+        signature,
+      });
+
+      const activateResult = await activateSessionWithHost(
+        this.config.host!,
+        delegatedSession.delegationHeader,
+      );
+      if (!activateResult.success) {
+        throw new Error(
+          `Failed to activate runtime permission delegation: ${activateResult.error}`,
+        );
+      }
+
+      const delegation = this.runtimeDelegationFromSession(
+        delegatedSession,
+        entries,
+        spaceId,
+        session,
+        expiresAt,
+      );
+      this.runtimePermissionGrants.push({
+        session: {
+          delegationHeader: delegatedSession.delegationHeader,
+          delegationCid: delegatedSession.delegationCid,
+          spaceId,
+          verificationMethod: session.verificationMethod,
+          jwk: session.jwk,
+        },
+        delegation,
+        operations: this.permissionOperations(entries, spaceId),
+        expiresAt,
+      });
+      delegations.push(delegation);
+    }
+
+    return delegations;
   }
 
   /**
@@ -1701,7 +1954,7 @@ export class TinyCloudNode {
     if (this._serviceContext) {
       const publicKV = new KVService({ prefix: "" });
       const publicContext = new ServiceContext({
-        invoke: this.wasmBindings.invoke,
+        invoke: this.invokeWithRuntimePermissions,
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
       });
@@ -1809,8 +2062,9 @@ export class TinyCloudNode {
    * Issue a delegation using the capability-chain flow.
    *
    * When every requested permission is a subset of the current
-   * session's recap, the delegation is signed by the session key via
-   * WASM — no wallet prompt. When at least one is NOT derivable, a
+   * session's recap, or of one installed runtime permission delegation,
+   * the delegation is signed by the session key via WASM — no wallet
+   * prompt. When at least one is NOT derivable, a
    * {@link PermissionNotInManifestError} is raised (carrying the
    * missing entries) so the caller can trigger an escalation flow
    * (e.g. `TinyCloudWeb.requestPermissions`). Passing
@@ -1933,6 +2187,26 @@ export class TinyCloudNode {
     const { subset, missing } = isCapabilitySubset(expandedEntries, granted);
 
     if (!subset) {
+      const runtimeGrant = this.findGrantForOperations(
+        this.permissionEntriesToOperations(expandedEntries, session),
+      );
+      if (runtimeGrant) {
+        const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;
+        if (runtimeGrant.expiresAt.getTime() <= Date.now() + marginMs) {
+          throw new SessionExpiredError(runtimeGrant.expiresAt);
+        }
+        const runtimeExpiration =
+          runtimeGrant.expiresAt < effectiveExpiration
+            ? runtimeGrant.expiresAt
+            : effectiveExpiration;
+        const delegation = await this.createDelegationViaRuntimeGrant(
+          did,
+          expandedEntries,
+          runtimeExpiration,
+          runtimeGrant,
+        );
+        return { delegation, prompted: false };
+      }
       throw new PermissionNotInManifestError(missing, granted);
     }
 
@@ -2134,6 +2408,49 @@ export class TinyCloudNode {
     };
   }
 
+  private async createDelegationViaRuntimeGrant(
+    did: string,
+    entries: PermissionEntry[],
+    expirationTime: Date,
+    grant: RuntimePermissionGrant,
+  ): Promise<PortableDelegation> {
+    const result = this.createDelegationWrapper({
+      session: grant.session,
+      delegateDID: did,
+      spaceId: grant.session.spaceId,
+      abilities: this.permissionsToAbilities(entries),
+      expirationSecs: Math.floor(expirationTime.getTime() / 1000),
+    });
+
+    const primary = result.resources[0];
+    const delegationHeader = { Authorization: result.delegation };
+    const targetHost = grant.delegation.host ?? this.config.host!;
+    const activateResult = await activateSessionWithHost(
+      targetHost,
+      delegationHeader,
+    );
+    if (!activateResult.success) {
+      throw new Error(
+        `Failed to activate delegation with host: ${activateResult.error}`,
+      );
+    }
+
+    return {
+      cid: result.cid,
+      delegationHeader,
+      spaceId: grant.session.spaceId,
+      path: primary.path,
+      actions: primary.actions,
+      resources: result.resources,
+      disableSubDelegation: false,
+      expiry: result.expiry,
+      delegateDID: did,
+      ownerAddress: grant.delegation.ownerAddress,
+      chainId: grant.delegation.chainId,
+      host: targetHost,
+    };
+  }
+
   private resolvePermissionSpace(
     space: string | undefined,
     session: TinyCloudSession,
@@ -2152,6 +2469,298 @@ export class TinyCloudNode {
       return space;
     }
     return this.wasmBindings.makeSpaceId(session.address, session.chainId, space);
+  }
+
+  private expandPermissionEntries(
+    permissions: PermissionEntry[],
+  ): PermissionEntry[] {
+    return permissions.map((entry) => ({
+      ...entry,
+      actions: expandActionShortNames(entry.service, entry.actions),
+    }));
+  }
+
+  private shortServiceName(service: string): string {
+    const short = SERVICE_LONG_TO_SHORT[service];
+    if (short === undefined) {
+      throw new Error(
+        `unknown service '${service}' — no short-form mapping`,
+      );
+    }
+    return short;
+  }
+
+  private permissionsToAbilities(entries: PermissionEntry[]): AbilitiesMap {
+    const abilities: AbilitiesMap = {};
+    for (const entry of entries) {
+      const service = this.shortServiceName(entry.service);
+      abilities[service] ??= {};
+      const existing = abilities[service][entry.path] ?? [];
+      const seen = new Set(existing);
+      for (const action of entry.actions) {
+        if (!seen.has(action)) {
+          existing.push(action);
+          seen.add(action);
+        }
+      }
+      abilities[service][entry.path] = existing;
+    }
+    return abilities;
+  }
+
+  private permissionOperations(
+    entries: PermissionEntry[],
+    spaceId: string,
+  ): RuntimePermissionOperation[] {
+    return entries.flatMap((entry) => {
+      const service = this.shortServiceName(entry.service);
+      return entry.actions.map((action) => ({
+        spaceId,
+        service,
+        path: entry.path,
+        action,
+      }));
+    });
+  }
+
+  private sessionCoversPermissionEntries(
+    session: TinyCloudSession,
+    entries: PermissionEntry[],
+  ): boolean {
+    try {
+      const granted = parseRecapCapabilities(
+        (siwe: string) => this.wasmBindings.parseRecapFromSiwe(siwe),
+        session.siwe,
+      );
+      return isCapabilitySubset(entries, granted).subset;
+    } catch {
+      return false;
+    }
+  }
+
+  private permissionEntriesToOperations(
+    entries: PermissionEntry[],
+    session: TinyCloudSession,
+  ): RuntimePermissionOperation[] {
+    return entries.flatMap((entry) => {
+      const spaceId = this.resolvePermissionSpace(entry.space, session);
+      const service = this.shortServiceName(entry.service);
+      return entry.actions.map((action) => ({
+        spaceId,
+        service,
+        path: entry.path,
+        action,
+      }));
+    });
+  }
+
+  private findRuntimeGrantsForPermissionEntries(
+    entries: PermissionEntry[],
+    session: TinyCloudSession,
+  ): RuntimePermissionGrant[] {
+    const grants: RuntimePermissionGrant[] = [];
+    const operations = this.permissionEntriesToOperations(entries, session);
+    if (operations.length === 0) {
+      return grants;
+    }
+
+    for (const operation of operations) {
+      const grant = this.findGrantForOperation(operation);
+      if (!grant) {
+        return [];
+      }
+      if (!grants.includes(grant)) {
+        grants.push(grant);
+      }
+    }
+    return grants;
+  }
+
+  private runtimeDelegationFromSession(
+    delegatedSession: {
+      delegationHeader: { Authorization: string };
+      delegationCid: string;
+    },
+    entries: PermissionEntry[],
+    spaceId: string,
+    session: TinyCloudSession,
+    expiresAt: Date,
+  ): PortableDelegation {
+    const resources = this.delegatedResourcesForEntries(entries, spaceId);
+    const primary = resources[0];
+    return {
+      cid: delegatedSession.delegationCid,
+      delegationHeader: delegatedSession.delegationHeader,
+      spaceId,
+      path: primary.path,
+      actions: primary.actions,
+      resources,
+      disableSubDelegation: false,
+      expiry: expiresAt,
+      delegateDID: session.verificationMethod,
+      ownerAddress: session.address,
+      chainId: session.chainId,
+      host: this.config.host,
+    };
+  }
+
+  private runtimeGrantFromDelegation(
+    delegation: PortableDelegation,
+    session: TinyCloudSession,
+  ): RuntimePermissionGrant {
+    const operations = this.operationsFromDelegation(delegation);
+    return {
+      session: {
+        delegationHeader: delegation.delegationHeader,
+        delegationCid: delegation.cid,
+        spaceId: delegation.spaceId,
+        verificationMethod: session.verificationMethod,
+        jwk: session.jwk,
+      },
+      delegation,
+      operations,
+      expiresAt: delegation.expiry,
+    };
+  }
+
+  private delegatedResourcesForEntries(
+    entries: PermissionEntry[],
+    spaceId: string,
+  ): DelegatedResource[] {
+    return entries.map((entry) => ({
+      service: this.shortServiceName(entry.service),
+      space: spaceId,
+      path: entry.path,
+      actions: [...entry.actions],
+    }));
+  }
+
+  private operationsFromDelegation(
+    delegation: PortableDelegation,
+  ): RuntimePermissionOperation[] {
+    const resources =
+      delegation.resources !== undefined && delegation.resources.length > 0
+        ? delegation.resources
+        : this.flatDelegationResources(delegation);
+
+    return resources.flatMap((resource) =>
+      resource.actions.map((action) => ({
+        spaceId: resource.space,
+        service: this.invocationServiceName(resource.service),
+        path: resource.path,
+        action,
+      })),
+    );
+  }
+
+  private flatDelegationResources(
+    delegation: PortableDelegation,
+  ): DelegatedResource[] {
+    const byService = new Map<string, string[]>();
+    for (const action of delegation.actions) {
+      const service = this.shortServiceName(action.split("/")[0]);
+      const actions = byService.get(service) ?? [];
+      actions.push(action);
+      byService.set(service, actions);
+    }
+    return [...byService.entries()].map(([service, actions]) => ({
+      service,
+      space: delegation.spaceId,
+      path: delegation.path,
+      actions,
+    }));
+  }
+
+  private selectInvocationSession(
+    fallback: ServiceSession,
+    service: string,
+    path: string,
+    action: string,
+  ): ServiceSession {
+    const grant = this.findGrantForOperation({
+      spaceId: fallback.spaceId,
+      service: this.invocationServiceName(service),
+      path,
+      action,
+    });
+    return grant?.session ?? fallback;
+  }
+
+  private findGrantForOperations(
+    operations: RuntimePermissionOperation[],
+  ): RuntimePermissionGrant | undefined {
+    if (operations.length === 0) {
+      return undefined;
+    }
+    this.pruneExpiredRuntimePermissionGrants();
+    return this.runtimePermissionGrants.find((grant) => {
+      return operations.every((operation) =>
+        grant.operations.some((granted) =>
+          this.operationCovers(granted, operation),
+        ),
+      );
+    });
+  }
+
+  private findGrantForOperation(
+    operation: RuntimePermissionOperation,
+  ): RuntimePermissionGrant | undefined {
+    return this.findGrantForOperations([operation]);
+  }
+
+  private pruneExpiredRuntimePermissionGrants(): void {
+    const now = Date.now();
+    this.runtimePermissionGrants = this.runtimePermissionGrants.filter(
+      (grant) => grant.expiresAt.getTime() > now,
+    );
+  }
+
+  private operationCovers(
+    granted: RuntimePermissionOperation,
+    requested: RuntimePermissionOperation,
+  ): boolean {
+    return granted.spaceId === requested.spaceId &&
+      granted.service === requested.service &&
+      this.actionContains(granted.action, requested.action) &&
+      this.pathContains(granted.path, requested.path);
+  }
+
+  private actionContains(grantedAction: string, requestedAction: string): boolean {
+    if (grantedAction === requestedAction) {
+      return true;
+    }
+    if (grantedAction.endsWith("/*")) {
+      const prefix = grantedAction.slice(0, -2);
+      return requestedAction.startsWith(`${prefix}/`);
+    }
+    return false;
+  }
+
+  private invocationServiceName(service: string): string {
+    return service.startsWith("tinycloud.")
+      ? this.shortServiceName(service)
+      : service;
+  }
+
+  private pathContains(grantedPath: string, requestedPath: string): boolean {
+    if (grantedPath === "" || grantedPath === "/") {
+      return true;
+    }
+    if (grantedPath.endsWith("/**")) {
+      return requestedPath.startsWith(grantedPath.slice(0, -3));
+    }
+    if (grantedPath.endsWith("/*")) {
+      const prefix = grantedPath.slice(0, -2);
+      if (!requestedPath.startsWith(prefix)) {
+        return false;
+      }
+      const remainder = requestedPath.slice(prefix.length);
+      return !remainder.includes("/") || remainder === "/";
+    }
+    if (grantedPath.endsWith("/")) {
+      return requestedPath.startsWith(grantedPath);
+    }
+    return grantedPath === requestedPath;
   }
 
   /**
