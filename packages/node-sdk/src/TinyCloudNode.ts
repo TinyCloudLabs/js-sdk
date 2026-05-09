@@ -1416,6 +1416,36 @@ export class TinyCloudNode {
   }
 
   /**
+   * Get an SQL service scoped to a specific space.
+   *
+   * Mirrors {@link SpaceService}'s per-space KV factory: clones the active
+   * service context and overrides its session's spaceId so that subsequent
+   * `sql/<dbName>/<action>` invocations route to that space. Useful when
+   * the caller already holds a delegation covering the target space (e.g.
+   * via {@link grantRuntimePermissions} or {@link useRuntimeDelegation})
+   * but the SDK's per-space SQL surface isn't otherwise exposed.
+   *
+   * Does NOT auto-create the space.
+   *
+   * @param spaceId - Full space URI (`tinycloud:pkh:eip155:<chain>:<addr>:<name>`).
+   */
+  sqlForSpace(spaceId: string): ISQLService {
+    if (!this._serviceContext || !this._serviceContext.session) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+
+    const sql = new SQLService({});
+    const spaceScopedContext = new ServiceContext({
+      invoke: this._serviceContext.invoke,
+      fetch: this._serviceContext.fetch,
+      hosts: this._serviceContext.hosts,
+    });
+    spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
+    sql.initialize(spaceScopedContext);
+    return sql;
+  }
+
+  /**
    * DuckDB database operations on this user's space.
    */
   get duckdb(): IDuckDbService {
