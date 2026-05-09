@@ -16,7 +16,7 @@ import {
   listDirs,
 } from "./storage.js";
 import type { GlobalConfig, ProfileConfig, CLIContext } from "./types.js";
-import { CLIError } from "../output/errors.js";
+import { CLIError, setActiveProfileName } from "../output/errors.js";
 
 export class ProfileManager {
   // ── Initialization ──────────────────────────────────────────────────
@@ -205,6 +205,8 @@ export class ProfileManager {
       process.env.TC_HOST ??
       profileHost ??
       DEFAULT_HOST;
+
+    setActiveProfileName(profile);
 
     return {
       profile,

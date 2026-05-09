@@ -24,6 +24,7 @@ import {
   DelegationManagerConfig,
   DelegationApiResponse,
 } from "./types";
+import { EXPIRY } from "../expiry";
 
 /**
  * Delegation action constants.
@@ -220,7 +221,7 @@ export class DelegationManager {
         spaceId: this.session.spaceId,
         path: params.path,
         actions: params.actions,
-        expiry: params.expiry ?? new Date(Date.now() + 24 * 60 * 60 * 1000),
+        expiry: params.expiry ?? new Date(Date.now() + EXPIRY.SHARE_MS),
         isRevoked: false,
         allowSubDelegation: !(params.disableSubDelegation ?? false),
         createdAt: new Date(),

@@ -233,7 +233,12 @@ export class ManifestValidationError extends Error {
 
 /**
  * Default expiry when neither the manifest, delegation, nor permission
- * specifies one. Spec: 30 days.
+ * specifies one. APP tier — see `expiry.ts`. Spec: 30 days.
+ *
+ * Kept as an ms-format string because the manifest schema stores expiry
+ * as a string and the parser is shared between this default and
+ * caller-provided values; converting `EXPIRY.APP_MS` back to a string
+ * here would duplicate that same `30d` literal in another form.
  */
 export const DEFAULT_EXPIRY = "30d";
 

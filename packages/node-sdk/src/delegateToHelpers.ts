@@ -13,6 +13,7 @@ import {
   type PermissionEntry,
   parseExpiry,
   SiweMessage,
+  EXPIRY,
 } from "@tinycloud/sdk-core";
 
 /**
@@ -63,18 +64,26 @@ export function legacyParamsToPermissionEntries(
 }
 
 /**
+ * Default lifetime for a delegation when no explicit expiry is provided.
+ * Sourced from the SESSION tier — runtime grants are always capped at the
+ * parent session's expiry, so they can't usefully be longer than SESSION
+ * even if a caller asks. See `@tinycloud/sdk-core/expiry.ts`.
+ */
+export const DEFAULT_DELEGATION_EXPIRY_MS = EXPIRY.SESSION_MS;
+
+/**
  * Resolve the `expiry` option of {@link DelegateToOptions} into a concrete
- * millisecond duration from now. Default is 1 hour to match the existing
- * `createDelegation` behaviour.
+ * millisecond duration from now. Default is {@link DEFAULT_DELEGATION_EXPIRY_MS}
+ * (7 days).
  *
  * Accepts:
- *  - `undefined` → 1 hour
+ *  - `undefined` → {@link DEFAULT_DELEGATION_EXPIRY_MS}
  *  - `number` → raw milliseconds (must be positive + finite)
  *  - `string` → parsed via {@link parseExpiry} (ms-format, e.g. `"7d"`)
  */
 export function resolveExpiryMs(expiry: string | number | undefined): number {
   if (expiry === undefined) {
-    return 60 * 60 * 1000;
+    return DEFAULT_DELEGATION_EXPIRY_MS;
   }
   if (typeof expiry === "number") {
     if (!Number.isFinite(expiry) || expiry <= 0) {

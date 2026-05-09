@@ -97,6 +97,7 @@ import {
   type AbilitiesMap,
   resourceCapabilitiesToAbilitiesMap,
   SERVICE_LONG_TO_SHORT,
+  EXPIRY,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
@@ -113,6 +114,14 @@ import { NodeSecretsService } from "./NodeSecretsService";
 
 /** Default TinyCloud host */
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
+
+/**
+ * Default lifetime of a SIWE session when {@link TinyCloudNodeConfig.sessionExpirationMs}
+ * is not set. Sourced from the shared SESSION tier so all sign-in code
+ * paths land on the same number — see `@tinycloud/sdk-core/expiry.ts`
+ * for the tier rationale.
+ */
+const DEFAULT_SESSION_EXPIRATION_MS = EXPIRY.SESSION_MS;
 
 /**
  * Configuration for TinyCloudNode.
@@ -466,7 +475,7 @@ export class TinyCloudNode {
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: config.prefix,
-      sessionExpirationMs: config.sessionExpirationMs ?? 60 * 60 * 1000,
+      sessionExpirationMs: config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: config.tinycloudFallbackHosts,
@@ -854,7 +863,7 @@ export class TinyCloudNode {
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: prefix,
-      sessionExpirationMs: this.config.sessionExpirationMs ?? 60 * 60 * 1000,
+      sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
@@ -906,7 +915,7 @@ export class TinyCloudNode {
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: prefix,
-      sessionExpirationMs: this.config.sessionExpirationMs ?? 60 * 60 * 1000,
+      sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
@@ -1226,7 +1235,7 @@ export class TinyCloudNode {
    */
   private getSessionExpiry(): Date {
     // Default to 1 hour from now if not explicitly set
-    const expirationMs = this.config.sessionExpirationMs ?? 60 * 60 * 1000;
+    const expirationMs = this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS;
     return new Date(Date.now() + expirationMs);
   }
 
@@ -1413,6 +1422,36 @@ export class TinyCloudNode {
       throw new Error("Not signed in. Call signIn() first.");
     }
     return this._sql;
+  }
+
+  /**
+   * Get an SQL service scoped to a specific space.
+   *
+   * Mirrors {@link SpaceService}'s per-space KV factory: clones the active
+   * service context and overrides its session's spaceId so that subsequent
+   * `sql/<dbName>/<action>` invocations route to that space. Useful when
+   * the caller already holds a delegation covering the target space (e.g.
+   * via {@link grantRuntimePermissions} or {@link useRuntimeDelegation})
+   * but the SDK's per-space SQL surface isn't otherwise exposed.
+   *
+   * Does NOT auto-create the space.
+   *
+   * @param spaceId - Full space URI (`tinycloud:pkh:eip155:<chain>:<addr>:<name>`).
+   */
+  sqlForSpace(spaceId: string): ISQLService {
+    if (!this._serviceContext || !this._serviceContext.session) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+
+    const sql = new SQLService({});
+    const spaceScopedContext = new ServiceContext({
+      invoke: this._serviceContext.invoke,
+      fetch: this._serviceContext.fetch,
+      hosts: this._serviceContext.hosts,
+    });
+    spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
+    sql.initialize(spaceScopedContext);
+    return sql;
   }
 
   /**
@@ -1897,7 +1936,10 @@ export class TinyCloudNode {
     ];
     const abilities = { kv: { "": kvActions } };
     const now = new Date();
-    const expiryMs = 60 * 60 * 1000;
+    // EPHEMERAL tier — this sub-delegation is auto-derived from the
+    // session and re-issued whenever the SDK touches the public space,
+    // so a short lifetime bounds replay without forcing user re-prompts.
+    const expiryMs = EXPIRY.EPHEMERAL_MS;
     const expirationTime = new Date(now.getTime() + expiryMs);
 
     const prepared = this.wasmBindings.prepareSession({
