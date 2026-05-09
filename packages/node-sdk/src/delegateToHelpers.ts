@@ -13,6 +13,7 @@ import {
   type PermissionEntry,
   parseExpiry,
   SiweMessage,
+  EXPIRY,
 } from "@tinycloud/sdk-core";
 
 /**
@@ -64,12 +65,11 @@ export function legacyParamsToPermissionEntries(
 
 /**
  * Default lifetime for a delegation when no explicit expiry is provided.
- * Tuned for agent workflows where a CLI invocation is just one hop in a
- * longer task and re-prompting the user every hour for caps they already
- * approved was the dominant friction. Capped at the parent session's
- * expiry by callers (`grantRuntimePermissions`, `delegateTo`).
+ * Sourced from the SESSION tier — runtime grants are always capped at the
+ * parent session's expiry, so they can't usefully be longer than SESSION
+ * even if a caller asks. See `@tinycloud/sdk-core/expiry.ts`.
  */
-export const DEFAULT_DELEGATION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
+export const DEFAULT_DELEGATION_EXPIRY_MS = EXPIRY.SESSION_MS;
 
 /**
  * Resolve the `expiry` option of {@link DelegateToOptions} into a concrete

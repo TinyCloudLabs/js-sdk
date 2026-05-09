@@ -88,9 +88,10 @@ function inferShortServiceFromActionUrns(
 const DEFAULT_READ_ACTIONS = ["tinycloud.kv/get", "tinycloud.kv/metadata"];
 
 /**
- * Default expiry for sharing links (24 hours).
+ * Default expiry for share links — SHARE tier (see ../expiry.ts).
  */
-const DEFAULT_EXPIRY_MS = 24 * 60 * 60 * 1000;
+import { EXPIRY } from "../expiry";
+const DEFAULT_EXPIRY_MS = EXPIRY.SHARE_MS;
 
 /**
  * Prefix for the base64 schema.

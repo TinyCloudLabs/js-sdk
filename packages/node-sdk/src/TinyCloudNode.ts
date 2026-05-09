@@ -97,6 +97,7 @@ import {
   type AbilitiesMap,
   resourceCapabilitiesToAbilitiesMap,
   SERVICE_LONG_TO_SHORT,
+  EXPIRY,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
@@ -116,11 +117,11 @@ const DEFAULT_HOST = "https://node.tinycloud.xyz";
 
 /**
  * Default lifetime of a SIWE session when {@link TinyCloudNodeConfig.sessionExpirationMs}
- * is not set. Bumped from 1 hour to 7 days so that runtime permission grants
- * (which cap their own expiry at the parent session's expiry) can actually
- * live for the multi-day windows agent workflows want without a re-sign.
+ * is not set. Sourced from the shared SESSION tier so all sign-in code
+ * paths land on the same number — see `@tinycloud/sdk-core/expiry.ts`
+ * for the tier rationale.
  */
-const DEFAULT_SESSION_EXPIRATION_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_SESSION_EXPIRATION_MS = EXPIRY.SESSION_MS;
 
 /**
  * Configuration for TinyCloudNode.
@@ -1935,7 +1936,10 @@ export class TinyCloudNode {
     ];
     const abilities = { kv: { "": kvActions } };
     const now = new Date();
-    const expiryMs = 60 * 60 * 1000;
+    // EPHEMERAL tier — this sub-delegation is auto-derived from the
+    // session and re-issued whenever the SDK touches the public space,
+    // so a short lifetime bounds replay without forcing user re-prompts.
+    const expiryMs = EXPIRY.EPHEMERAL_MS;
     const expirationTime = new Date(now.getTime() + expiryMs);
 
     const prepared = this.wasmBindings.prepareSession({

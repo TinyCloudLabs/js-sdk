@@ -386,3 +386,7 @@ export {
   type SubsetCheckResult,
   type WasmRecapEntry,
 } from "./capabilities";
+
+// Default lifetimes for delegation flows. See `expiry.ts` for the
+// "pick a tier, not a number" rationale.
+export { EXPIRY, type ExpiryTier } from "./expiry";

@@ -25,6 +25,7 @@ import {
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
   resolveTinyCloudHosts,
+  EXPIRY,
 } from "@tinycloud/sdk-core";
 import {
   SignStrategy,
@@ -221,7 +222,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         ],
       },
     };
-    this.sessionExpirationMs = config.sessionExpirationMs ?? 60 * 60 * 1000;
+    this.sessionExpirationMs = config.sessionExpirationMs ?? EXPIRY.SESSION_MS;
     this.autoCreateSpace = config.autoCreateSpace ?? false;
     this.spaceCreationHandler = config.spaceCreationHandler;
     this.tinycloudHosts = config.tinycloudHosts;

@@ -42,6 +42,7 @@ import {
   validateServerSpaceInfoResponse,
   type ServerDelegationsResponse,
 } from "./spaces.schema.js";
+import { EXPIRY } from "../expiry";
 
 // =============================================================================
 // Service Name and Error Codes
@@ -304,7 +305,7 @@ function transformServerDelegations(
       spaceId,
       path,
       actions,
-      expiry: info.expiry ? new Date(info.expiry) : new Date(Date.now() + 24 * 60 * 60 * 1000),
+      expiry: info.expiry ? new Date(info.expiry) : new Date(Date.now() + EXPIRY.SHARE_MS),
       isRevoked: false,
       createdAt: info.issued_at ? new Date(info.issued_at) : undefined,
       parentCid: firstStringParent,
