@@ -63,18 +63,27 @@ export function legacyParamsToPermissionEntries(
 }
 
 /**
+ * Default lifetime for a delegation when no explicit expiry is provided.
+ * Tuned for agent workflows where a CLI invocation is just one hop in a
+ * longer task and re-prompting the user every hour for caps they already
+ * approved was the dominant friction. Capped at the parent session's
+ * expiry by callers (`grantRuntimePermissions`, `delegateTo`).
+ */
+export const DEFAULT_DELEGATION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
  * Resolve the `expiry` option of {@link DelegateToOptions} into a concrete
- * millisecond duration from now. Default is 1 hour to match the existing
- * `createDelegation` behaviour.
+ * millisecond duration from now. Default is {@link DEFAULT_DELEGATION_EXPIRY_MS}
+ * (7 days).
  *
  * Accepts:
- *  - `undefined` → 1 hour
+ *  - `undefined` → {@link DEFAULT_DELEGATION_EXPIRY_MS}
  *  - `number` → raw milliseconds (must be positive + finite)
  *  - `string` → parsed via {@link parseExpiry} (ms-format, e.g. `"7d"`)
  */
 export function resolveExpiryMs(expiry: string | number | undefined): number {
   if (expiry === undefined) {
-    return 60 * 60 * 1000;
+    return DEFAULT_DELEGATION_EXPIRY_MS;
   }
   if (typeof expiry === "number") {
     if (!Number.isFinite(expiry) || expiry <= 0) {

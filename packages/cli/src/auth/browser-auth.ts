@@ -22,6 +22,13 @@ interface AuthFlowOptions {
    * module stays free of profile lookups.
    */
   openkeyHost?: string;
+  /**
+   * Lifetime hint for the resulting delegation. Encoded into the
+   * `/delegate?expiry=<value>` URL parameter so OpenKey can sign for the
+   * requested window instead of its hardcoded default. Forwarded as-is —
+   * OpenKey does the parsing and clamping server-side.
+   */
+  expiry?: string | number;
 }
 
 /**
@@ -68,6 +75,9 @@ function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?: strin
       "permissions",
       Buffer.from(JSON.stringify({ permissions: options.permissions })).toString("base64url"),
     );
+  }
+  if (options.expiry !== undefined) {
+    params.set("expiry", String(options.expiry));
   }
   const base = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
   return `${base}/delegate?${params.toString()}`;

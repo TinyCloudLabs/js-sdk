@@ -637,6 +637,9 @@ function buildAuthUrl(did, options = {}) {
       Buffer.from(JSON.stringify({ permissions: options.permissions })).toString("base64url")
     );
   }
+  if (options.expiry !== void 0) {
+    params.set("expiry", String(options.expiry));
+  }
   const base = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
   return `${base}/delegate?${params.toString()}`;
 }
@@ -1279,7 +1282,10 @@ function registerAuthCommand(program2) {
     "Capability spec: tinycloud.<service>:<space>:<path>:<actions-csv> (repeatable)",
     (value, previous) => [...previous, value],
     []
-  ).option("--permission <file>", 'JSON permission request: { "permissions": PermissionEntry[] }').option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON").option("--yes", "Skip local-key TTY confirmation", false).action(async (options, cmd) => {
+  ).option("--permission <file>", 'JSON permission request: { "permissions": PermissionEntry[] }').option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON").option(
+    "--expiry <duration>",
+    `Lifetime of the granted delegation. ms-format string (e.g. "7d", "30m") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.`
+  ).option("--yes", "Skip local-key TTY confirmation", false).action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -1306,12 +1312,14 @@ function registerAuthCommand(program2) {
         const delegationCids2 = [];
         let expiry2;
         const openkeyHost = resolveOpenKeyHost(profile);
+        const expiryOption2 = parseExpiryOption(options.expiry);
         for (const group of groupPermissionsBySpace(requested)) {
           const delegationData = await startAuthFlow(profile.did, {
             jwk: key,
             host: ctx.host,
             permissions: group,
-            openkeyHost
+            openkeyHost,
+            expiry: expiryOption2
           });
           const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
           const stored = storedAdditionalDelegation(delegation, group);
@@ -1347,7 +1355,11 @@ function registerAuthCommand(program2) {
         );
       }
       void session;
-      const delegations = await node.grantRuntimePermissions(requested);
+      const expiryOption = parseExpiryOption(options.expiry);
+      const delegations = await node.grantRuntimePermissions(
+        requested,
+        expiryOption !== void 0 ? { expiry: expiryOption } : void 0
+      );
       const delegationCids = [];
       let expiry;
       for (const delegation of delegations) {
@@ -1508,6 +1520,24 @@ function isDangerousPermission(permission) {
   return permission.actions.some(
     (action) => action.includes("*") || action.endsWith("/write") || action.endsWith("/admin") || action.endsWith("/ddl") || action.endsWith("/del")
   );
+}
+function parseExpiryOption(raw) {
+  if (raw === void 0 || raw === null) return void 0;
+  if (typeof raw !== "string" || raw.length === 0) {
+    throw new CLIError(
+      "INVALID_EXPIRY",
+      `--expiry must be a string (e.g. "7d", "30m") or a millisecond integer.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  if (/^\d+$/.test(raw.trim())) {
+    const ms = Number(raw.trim());
+    if (!Number.isFinite(ms) || ms <= 0) {
+      throw new CLIError("INVALID_EXPIRY", `--expiry must be a positive integer when numeric.`, ExitCode.USAGE_ERROR);
+    }
+    return ms;
+  }
+  return raw;
 }
 function groupPermissionsBySpace(permissions) {
   const groups = /* @__PURE__ */ new Map();

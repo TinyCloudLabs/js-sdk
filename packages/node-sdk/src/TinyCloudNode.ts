@@ -115,6 +115,14 @@ import { NodeSecretsService } from "./NodeSecretsService";
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
 
 /**
+ * Default lifetime of a SIWE session when {@link TinyCloudNodeConfig.sessionExpirationMs}
+ * is not set. Bumped from 1 hour to 7 days so that runtime permission grants
+ * (which cap their own expiry at the parent session's expiry) can actually
+ * live for the multi-day windows agent workflows want without a re-sign.
+ */
+const DEFAULT_SESSION_EXPIRATION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
  * Configuration for TinyCloudNode.
  * All fields are optional - TinyCloudNode can work with zero configuration.
  */
@@ -466,7 +474,7 @@ export class TinyCloudNode {
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: config.prefix,
-      sessionExpirationMs: config.sessionExpirationMs ?? 60 * 60 * 1000,
+      sessionExpirationMs: config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: config.tinycloudFallbackHosts,
@@ -854,7 +862,7 @@ export class TinyCloudNode {
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: prefix,
-      sessionExpirationMs: this.config.sessionExpirationMs ?? 60 * 60 * 1000,
+      sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
@@ -906,7 +914,7 @@ export class TinyCloudNode {
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: prefix,
-      sessionExpirationMs: this.config.sessionExpirationMs ?? 60 * 60 * 1000,
+      sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
@@ -1226,7 +1234,7 @@ export class TinyCloudNode {
    */
   private getSessionExpiry(): Date {
     // Default to 1 hour from now if not explicitly set
-    const expirationMs = this.config.sessionExpirationMs ?? 60 * 60 * 1000;
+    const expirationMs = this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS;
     return new Date(Date.now() + expirationMs);
   }
 

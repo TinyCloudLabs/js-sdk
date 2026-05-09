@@ -184,6 +184,10 @@ export function registerAuthCommand(program: Command): void {
     )
     .option("--permission <file>", "JSON permission request: { \"permissions\": PermissionEntry[] }")
     .option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON")
+    .option(
+      "--expiry <duration>",
+      "Lifetime of the granted delegation. ms-format string (e.g. \"7d\", \"30m\") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.",
+    )
     .option("--yes", "Skip local-key TTY confirmation", false)
     .action(async (options, cmd) => {
       try {
@@ -219,12 +223,14 @@ export function registerAuthCommand(program: Command): void {
           const delegationCids: string[] = [];
           let expiry: string | undefined;
           const openkeyHost = resolveOpenKeyHost(profile);
+          const expiryOption = parseExpiryOption(options.expiry);
           for (const group of groupPermissionsBySpace(requested)) {
             const delegationData = await startAuthFlow(profile.did, {
               jwk: key,
               host: ctx.host,
               permissions: group,
               openkeyHost,
+              expiry: expiryOption,
             });
             const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
             const stored = storedAdditionalDelegation(delegation, group);
@@ -265,7 +271,11 @@ export function registerAuthCommand(program: Command): void {
         // Local-key flow: master's grantRuntimePermissions handles signing
         // through the SDK's wallet-mode signer, groups by space, and skips
         // anything already covered by the session or an existing grant.
-        const delegations = await node.grantRuntimePermissions(requested);
+        const expiryOption = parseExpiryOption(options.expiry);
+        const delegations = await node.grantRuntimePermissions(
+          requested,
+          expiryOption !== undefined ? { expiry: expiryOption } : undefined,
+        );
         const delegationCids: string[] = [];
         let expiry: string | undefined;
         for (const delegation of delegations) {
@@ -465,6 +475,35 @@ function isDangerousPermission(permission: PermissionEntry): boolean {
     action.endsWith("/ddl") ||
     action.endsWith("/del"),
   );
+}
+
+/**
+ * Parse the `--expiry` flag into either a ms-format string ("7d", "30m") or
+ * raw milliseconds. Returns undefined for missing input so the caller falls
+ * back to the SDK's DEFAULT_DELEGATION_EXPIRY_MS.
+ *
+ * Pure-numeric strings are coerced to numbers so a shell-quoted ms count
+ * (`--expiry 86400000`) works, but anything that contains a unit suffix
+ * (`"7d"`, `"30m"`) is forwarded as-is to parseExpiry which understands
+ * the ms-format vocabulary.
+ */
+function parseExpiryOption(raw: unknown): string | number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string" || raw.length === 0) {
+    throw new CLIError(
+      "INVALID_EXPIRY",
+      `--expiry must be a string (e.g. "7d", "30m") or a millisecond integer.`,
+      ExitCode.USAGE_ERROR,
+    );
+  }
+  if (/^\d+$/.test(raw.trim())) {
+    const ms = Number(raw.trim());
+    if (!Number.isFinite(ms) || ms <= 0) {
+      throw new CLIError("INVALID_EXPIRY", `--expiry must be a positive integer when numeric.`, ExitCode.USAGE_ERROR);
+    }
+    return ms;
+  }
+  return raw;
 }
 
 function groupPermissionsBySpace(permissions: PermissionEntry[]): PermissionEntry[][] {
