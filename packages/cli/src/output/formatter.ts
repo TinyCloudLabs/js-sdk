@@ -5,15 +5,22 @@ export function outputJson(data: unknown): void {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
 }
 
-export function outputError(code: string, message: string): void {
+export function outputError(code: string, message: string, hint?: string): void {
   if (isInteractive()) {
     process.stderr.write(
       `${theme.error("✗")} ${theme.label(code)}: ${message}\n`
     );
+    if (hint) {
+      for (const line of hint.split("\n")) {
+        process.stderr.write(`  ${theme.hint(line)}\n`);
+      }
+    }
   } else {
-    process.stderr.write(
-      JSON.stringify({ error: { code, message } }, null, 2) + "\n"
-    );
+    const payload: { error: { code: string; message: string; hint?: string } } = {
+      error: { code, message },
+    };
+    if (hint) payload.error.hint = hint;
+    process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
 }
 

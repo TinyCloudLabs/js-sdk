@@ -1,6 +1,10 @@
 // src/index.ts
-import { readFileSync as readFileSync2 } from "fs";
+import { readFileSync as readFileSync3 } from "fs";
 import { Command } from "commander";
+
+// src/output/errors.ts
+import { readFileSync, readdirSync } from "fs";
+import { join as join2 } from "path";
 
 // src/config/constants.ts
 import { homedir } from "os";
@@ -9,6 +13,7 @@ var CONFIG_DIR = join(homedir(), ".tinycloud");
 var PROFILES_DIR = join(CONFIG_DIR, "profiles");
 var CONFIG_FILE = join(CONFIG_DIR, "config.json");
 var DEFAULT_HOST = "https://node.tinycloud.xyz";
+var DEFAULT_OPENKEY_HOST = "https://openkey.so";
 var DEFAULT_PROFILE = "default";
 var DEFAULT_CHAIN_ID = 1;
 var ExitCode = {
@@ -56,16 +61,24 @@ var theme = {
 function outputJson(data) {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
 }
-function outputError(code, message) {
+function outputError(code, message, hint) {
   if (isInteractive()) {
     process.stderr.write(
       `${theme.error("\u2717")} ${theme.label(code)}: ${message}
 `
     );
+    if (hint) {
+      for (const line of hint.split("\n")) {
+        process.stderr.write(`  ${theme.hint(line)}
+`);
+      }
+    }
   } else {
-    process.stderr.write(
-      JSON.stringify({ error: { code, message } }, null, 2) + "\n"
-    );
+    const payload = {
+      error: { code, message }
+    };
+    if (hint) payload.error.hint = hint;
+    process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
 }
 function isInteractive() {
@@ -130,11 +143,16 @@ function formatTimeAgo(date) {
 }
 
 // src/output/errors.ts
+var activeProfileName;
+function setActiveProfileName(name) {
+  activeProfileName = name;
+}
 var CLIError = class extends Error {
-  constructor(code, message, exitCode = ExitCode.ERROR) {
+  constructor(code, message, exitCode = ExitCode.ERROR, metadata) {
     super(message);
     this.code = code;
     this.exitCode = exitCode;
+    this.metadata = metadata;
     this.name = "CLIError";
   }
 };
@@ -157,8 +175,75 @@ function wrapError(error) {
 }
 function handleError(error) {
   const cliError = wrapError(error);
-  outputError(cliError.code, cliError.message);
+  const hint = buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
+  outputError(cliError.code, cliError.message, hint);
   process.exit(cliError.exitCode);
+}
+function buildAuthHint(error) {
+  const resource = error.metadata?.resource;
+  const requiredAction = error.metadata?.requiredAction;
+  if (typeof resource !== "string" || typeof requiredAction !== "string") {
+    return void 0;
+  }
+  const spec = capSpecFromAuthMeta(resource, requiredAction);
+  if (!spec) return void 0;
+  return [
+    "The active session is missing a TinyCloud capability.",
+    `Request it with: tc auth request --cap "${spec}"`,
+    "Then retry the original command."
+  ].join("\n");
+}
+function capSpecFromAuthMeta(resource, action) {
+  const slash = resource.indexOf("/");
+  if (slash <= 0 || slash === resource.length - 1) return void 0;
+  const spaceUri = resource.slice(0, slash);
+  const rest = resource.slice(slash + 1);
+  const nextSlash = rest.indexOf("/");
+  if (nextSlash <= 0) return void 0;
+  const serviceShort = rest.slice(0, nextSlash);
+  const path = rest.slice(nextSlash + 1);
+  const actionName = action.includes("/") ? action.slice(action.indexOf("/") + 1) : action;
+  const spaceName = spaceUri.startsWith("tinycloud:") ? spaceUri.slice(spaceUri.lastIndexOf(":") + 1) : spaceUri;
+  return `tinycloud.${serviceShort}:${spaceName}:${path}:${actionName}`;
+}
+function buildNetworkHint() {
+  const readHost = (name) => {
+    try {
+      const raw = readFileSync(join2(PROFILES_DIR, name, "profile.json"), "utf8");
+      return JSON.parse(raw).host;
+    } catch {
+      return void 0;
+    }
+  };
+  let activeName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
+  if (!activeProfileName) {
+    try {
+      const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
+      activeName = process.env.TC_PROFILE ?? cfg.defaultProfile ?? DEFAULT_PROFILE;
+    } catch {
+    }
+  }
+  let names;
+  try {
+    names = readdirSync(PROFILES_DIR);
+  } catch {
+    return void 0;
+  }
+  const activeHost = readHost(activeName);
+  const others = names.filter((n) => n !== activeName).map((n) => ({ name: n, host: readHost(n) })).filter((p) => Boolean(p.host));
+  const lines = [];
+  lines.push(activeHost ? `Active profile "${activeName}" \u2192 ${activeHost}` : `Active profile "${activeName}"`);
+  if (others.length === 0) {
+    lines.push(`No other profiles configured. Run \`tc profile create <name>\` or \`tc init\`.`);
+  } else {
+    lines.push(`Switch to a reachable profile:`);
+    const longest = Math.max(...others.map((p) => p.name.length));
+    for (const { name, host } of others) {
+      lines.push(`  tc profile switch ${name.padEnd(longest)}   # ${host}`);
+    }
+  }
+  lines.push(`Or override per-command with --host or TC_HOST.`);
+  return lines.join("\n");
 }
 
 // src/output/taglines.ts
@@ -253,7 +338,7 @@ function emitBanner(version2) {
 }
 
 // src/config/profiles.ts
-import { join as join2 } from "path";
+import { join as join3 } from "path";
 import { rm as rm2 } from "fs/promises";
 
 // src/config/storage.ts
@@ -337,7 +422,7 @@ var ProfileManager = class _ProfileManager {
    * Throws CLIError if the profile doesn't exist.
    */
   static async getProfile(name) {
-    const profilePath = join2(PROFILES_DIR, name, "profile.json");
+    const profilePath = join3(PROFILES_DIR, name, "profile.json");
     const profile = await readJson(profilePath);
     if (!profile) {
       throw new CLIError(
@@ -351,15 +436,15 @@ var ProfileManager = class _ProfileManager {
    * Saves a profile config, creating the profile directory if needed.
    */
   static async setProfile(name, data) {
-    const profileDir = join2(PROFILES_DIR, name);
+    const profileDir = join3(PROFILES_DIR, name);
     await ensureDir(profileDir);
-    await writeJson(join2(profileDir, "profile.json"), data);
+    await writeJson(join3(profileDir, "profile.json"), data);
   }
   /**
    * Returns true if a profile directory exists.
    */
   static async profileExists(name) {
-    return fileExists(join2(PROFILES_DIR, name, "profile.json"));
+    return fileExists(join3(PROFILES_DIR, name, "profile.json"));
   }
   /**
    * Returns an array of profile directory names.
@@ -379,7 +464,7 @@ var ProfileManager = class _ProfileManager {
         `Cannot delete the default profile "${name}". Change the default first with \`tc profile default <other>\`.`
       );
     }
-    const profileDir = join2(PROFILES_DIR, name);
+    const profileDir = join3(PROFILES_DIR, name);
     await removeDir(profileDir);
   }
   // ── Key management ──────────────────────────────────────────────────
@@ -387,36 +472,36 @@ var ProfileManager = class _ProfileManager {
    * Returns the parsed JWK for a profile, or null if no key exists.
    */
   static async getKey(name) {
-    return readJson(join2(PROFILES_DIR, name, "key.json"));
+    return readJson(join3(PROFILES_DIR, name, "key.json"));
   }
   /**
    * Saves a JWK key for a profile.
    */
   static async setKey(name, jwk) {
-    const profileDir = join2(PROFILES_DIR, name);
+    const profileDir = join3(PROFILES_DIR, name);
     await ensureDir(profileDir);
-    await writeJson(join2(profileDir, "key.json"), jwk);
+    await writeJson(join3(profileDir, "key.json"), jwk);
   }
   // ── Session management ──────────────────────────────────────────────
   /**
    * Returns the parsed session for a profile, or null if none exists.
    */
   static async getSession(name) {
-    return readJson(join2(PROFILES_DIR, name, "session.json"));
+    return readJson(join3(PROFILES_DIR, name, "session.json"));
   }
   /**
    * Saves session data for a profile.
    */
   static async setSession(name, session) {
-    const profileDir = join2(PROFILES_DIR, name);
+    const profileDir = join3(PROFILES_DIR, name);
     await ensureDir(profileDir);
-    await writeJson(join2(profileDir, "session.json"), session);
+    await writeJson(join3(profileDir, "session.json"), session);
   }
   /**
    * Removes the session file for a profile.
    */
   static async clearSession(name) {
-    const sessionPath = join2(PROFILES_DIR, name, "session.json");
+    const sessionPath = join3(PROFILES_DIR, name, "session.json");
     try {
       await rm2(sessionPath);
     } catch (err) {
@@ -430,7 +515,7 @@ var ProfileManager = class _ProfileManager {
    * Returns the path to the profile's cache directory, creating it if needed.
    */
   static async getCacheDir(name) {
-    const cacheDir = join2(PROFILES_DIR, name, "cache");
+    const cacheDir = join3(PROFILES_DIR, name, "cache");
     await ensureDir(cacheDir);
     return cacheDir;
   }
@@ -451,6 +536,7 @@ var ProfileManager = class _ProfileManager {
     } catch {
     }
     const host = options.host ?? process.env.TC_HOST ?? profileHost ?? DEFAULT_HOST;
+    setActiveProfileName(profile);
     return {
       profile,
       host,
@@ -518,7 +604,6 @@ async function localKeySignIn(options) {
 // src/auth/browser-auth.ts
 import { createServer } from "http";
 import { createInterface } from "readline";
-var OPENKEY_BASE = "https://openkey.so";
 async function startAuthFlow(did, options = {}) {
   if (options.paste) {
     return pasteFlow(did, options);
@@ -546,7 +631,14 @@ function buildAuthUrl(did, options = {}) {
   if (options.host) {
     params.set("host", options.host);
   }
-  return `${OPENKEY_BASE}/delegate?${params.toString()}`;
+  if (options.permissions?.length) {
+    params.set(
+      "permissions",
+      Buffer.from(JSON.stringify({ permissions: options.permissions })).toString("base64url")
+    );
+  }
+  const base = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
+  return `${base}/delegate?${params.toString()}`;
 }
 async function callbackFlow(did, options = {}) {
   return new Promise((resolve3, reject) => {
@@ -749,6 +841,334 @@ function registerInitCommand(program2) {
 
 // src/commands/auth.ts
 import { createInterface as createInterface2 } from "readline";
+
+// src/lib/sdk.ts
+import { TinyCloudNode } from "@tinycloud/node-sdk";
+
+// src/lib/permissions.ts
+import { appendFile, readFile as readFile2 } from "fs/promises";
+import { join as join4 } from "path";
+import {
+  expandActionShortNames,
+  isCapabilitySubset,
+  resolveManifest
+} from "@tinycloud/node-sdk";
+
+// src/lib/space.ts
+function resolveAddress(profile, session) {
+  const sessAddr = session?.address;
+  if (typeof sessAddr === "string" && sessAddr.length > 0) return sessAddr;
+  if (profile.address) return profile.address;
+  if (profile.primaryDid) {
+    const match = profile.primaryDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
+    if (match) return match[1];
+  }
+  throw new CLIError(
+    "ADDRESS_UNKNOWN",
+    `Cannot determine Ethereum address for profile "${profile.name}". Run \`tc auth login\` to refresh the session.`,
+    ExitCode.AUTH_REQUIRED
+  );
+}
+function resolveChainId(profile, session) {
+  const sessChain = session?.chainId;
+  if (typeof sessChain === "number" && Number.isFinite(sessChain)) return sessChain;
+  return profile.chainId;
+}
+async function resolveSpaceUri(input, profileName) {
+  if (!input) return void 0;
+  if (input.startsWith("tinycloud:")) return input;
+  if (!/^[A-Za-z0-9_-]+$/.test(input)) {
+    throw new CLIError(
+      "INVALID_SPACE",
+      `Invalid --space "${input}". Use a short name ([A-Za-z0-9_-]) or a full tinycloud:... URI.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  const profile = await ProfileManager.getProfile(profileName);
+  const session = await ProfileManager.getSession(profileName);
+  const address = resolveAddress(profile, session);
+  const chainId = resolveChainId(profile, session);
+  return `tinycloud:pkh:eip155:${chainId}:${address}:${input}`;
+}
+
+// src/lib/permissions.ts
+function additionalDelegationsPath(profile) {
+  return join4(PROFILES_DIR, profile, "additional-delegations.json");
+}
+function grantHistoryPath(profile) {
+  return join4(PROFILES_DIR, profile, "auth-grants.jsonl");
+}
+async function loadAdditionalDelegations(profile) {
+  const raw = await readJson(
+    additionalDelegationsPath(profile)
+  );
+  return Array.isArray(raw) ? raw : [];
+}
+async function saveAdditionalDelegations(profile, entries) {
+  const profileDir = join4(PROFILES_DIR, profile);
+  await ensureDir(profileDir);
+  await writeJson(additionalDelegationsPath(profile), entries);
+}
+async function appendAdditionalDelegation(profile, entry) {
+  const existing = await loadAdditionalDelegations(profile);
+  const next = existing.filter((item) => item.delegation.cid !== entry.delegation.cid);
+  next.push(entry);
+  await saveAdditionalDelegations(profile, next);
+}
+async function replayAdditionalDelegations(node, profile) {
+  const entries = await loadAdditionalDelegations(profile);
+  for (const entry of entries) {
+    const expiry = entry.delegation.expiry instanceof Date ? entry.delegation.expiry : new Date(entry.delegation.expiry);
+    if (expiry.getTime() <= Date.now()) continue;
+    try {
+      await node.useRuntimeDelegation({ ...entry.delegation, expiry });
+    } catch {
+    }
+  }
+}
+function storedAdditionalDelegation(delegation, permissions) {
+  return { delegation, permissions };
+}
+async function appendGrantHistory(profile, entry) {
+  const profileDir = join4(PROFILES_DIR, profile);
+  await ensureDir(profileDir);
+  const line = JSON.stringify({
+    ts: (/* @__PURE__ */ new Date()).toISOString(),
+    profile,
+    ...entry
+  }) + "\n";
+  await appendFile(grantHistoryPath(profile), line, "utf8");
+}
+async function readGrantHistory(profile) {
+  const path = grantHistoryPath(profile);
+  if (!await fileExists(path)) return [];
+  const raw = await readFile2(path, "utf8");
+  return raw.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
+}
+async function parseCapSpec(spec, profile) {
+  const firstColon = spec.indexOf(":");
+  const lastColon = spec.lastIndexOf(":");
+  if (firstColon <= 0 || lastColon <= firstColon) {
+    throw new CLIError(
+      "INVALID_CAP",
+      `Invalid --cap "${spec}". Expected tinycloud.<service>:<space>:<path>:<actions-csv>.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  const service = normalizeService(spec.slice(0, firstColon));
+  const actionsCsv = spec.slice(lastColon + 1);
+  const spaceAndPath = spec.slice(firstColon + 1, lastColon);
+  const { space, path } = splitSpaceAndPath(spaceAndPath);
+  const resolvedSpace = await resolveSpaceUri(space, profile) ?? space;
+  const actions = expandActionShortNames(
+    service,
+    actionsCsv.split(",").map((action) => action.trim()).filter(Boolean)
+  );
+  if (actions.length === 0) {
+    throw new CLIError("INVALID_CAP", `Capability "${spec}" has no actions.`, ExitCode.USAGE_ERROR);
+  }
+  return { service, space: resolvedSpace, path, actions };
+}
+async function loadPermissionRequest(source, profile) {
+  const raw = JSON.parse(await readFile2(source, "utf8"));
+  if (!Array.isArray(raw.permissions)) {
+    throw new CLIError(
+      "INVALID_PERMISSION_REQUEST",
+      `Permission request ${source} must contain { "permissions": [...] }.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return resolvePermissionSpaces(raw.permissions, profile);
+}
+async function loadManifestPermissions(source, profile) {
+  const raw = await loadManifestText(source);
+  const manifest = JSON.parse(raw);
+  if (typeof manifest.id === "string") {
+    const resolved = resolveManifest(manifest);
+    return resolvePermissionSpaces(resolved.resources, profile);
+  }
+  if (typeof manifest.app_id === "string") {
+    const permissions = (manifest.permissions ?? []).filter((entry) => entry !== null && typeof entry === "object").map((entry) => {
+      const service = normalizeService(String(entry.service ?? ""));
+      const path = String(entry.path ?? "");
+      const skipPrefix = entry.skipPrefix === true;
+      const resolvedPath = skipPrefix ? path : prefixAppManifestPath(path, manifest.app_id);
+      return {
+        service,
+        space: String(manifest.space ?? "applications"),
+        path: resolvedPath,
+        actions: expandActionShortNames(
+          service,
+          Array.isArray(entry.actions) ? entry.actions.map(String) : []
+        )
+      };
+    });
+    return resolvePermissionSpaces(permissions, profile);
+  }
+  throw new CLIError(
+    "INVALID_MANIFEST",
+    'Manifest must contain either SDK field "id" or app manifest field "app_id".',
+    ExitCode.USAGE_ERROR
+  );
+}
+function permissionsFromDelegation(delegation) {
+  if (delegation.resources?.length) {
+    return delegation.resources.map((resource) => ({
+      service: resource.service.startsWith("tinycloud.") ? resource.service : `tinycloud.${resource.service}`,
+      space: resource.space,
+      path: resource.path,
+      actions: [...resource.actions]
+    }));
+  }
+  return [{
+    service: serviceFromActions(delegation.actions),
+    space: delegation.spaceId,
+    path: delegation.path,
+    actions: [...delegation.actions]
+  }];
+}
+function compactPermission(permission) {
+  const service = permission.service;
+  const space = permission.space.startsWith("tinycloud:") ? permission.space.slice(permission.space.lastIndexOf(":") + 1) : permission.space;
+  const actions = permission.actions.map((action) => action.startsWith(`${service}/`) ? action.slice(service.length + 1) : action).join(",");
+  return `${service}:${space}:${permission.path}:${actions}`;
+}
+async function resolvePermissionSpaces(entries, profile) {
+  const resolved = [];
+  for (const entry of entries) {
+    const service = normalizeService(entry.service);
+    resolved.push({
+      ...entry,
+      service,
+      space: await resolveSpaceUri(entry.space, profile) ?? entry.space,
+      actions: expandActionShortNames(service, entry.actions)
+    });
+  }
+  return resolved;
+}
+async function loadManifestText(source) {
+  if (source.startsWith("base64:")) {
+    return Buffer.from(source.slice("base64:".length), "base64").toString("utf8");
+  }
+  if (await fileExists(source)) {
+    return readFile2(source, "utf8");
+  }
+  try {
+    const decoded = Buffer.from(source, "base64").toString("utf8");
+    JSON.parse(decoded);
+    return decoded;
+  } catch {
+    return readFile2(source, "utf8");
+  }
+}
+function normalizeService(service) {
+  if (!service) {
+    throw new CLIError("INVALID_CAP", "Capability service is required.", ExitCode.USAGE_ERROR);
+  }
+  return service.startsWith("tinycloud.") ? service : `tinycloud.${service}`;
+}
+function splitSpaceAndPath(input) {
+  if (input.startsWith("tinycloud:")) {
+    const parts = input.split(":");
+    if (parts.length < 7) {
+      throw new CLIError(
+        "INVALID_CAP",
+        `Full tinycloud space specs must include a path after the space URI.`,
+        ExitCode.USAGE_ERROR
+      );
+    }
+    return {
+      space: parts.slice(0, 6).join(":"),
+      path: parts.slice(6).join(":")
+    };
+  }
+  const colon = input.indexOf(":");
+  if (colon <= 0) {
+    throw new CLIError(
+      "INVALID_CAP",
+      `Capability must include both space and path.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return {
+    space: input.slice(0, colon),
+    path: input.slice(colon + 1)
+  };
+}
+function prefixAppManifestPath(path, appId) {
+  const slash = path.indexOf("/");
+  if (slash === -1) return `${appId}/${path}`;
+  return `${path.slice(0, slash)}/${appId}/${path.slice(slash + 1)}`;
+}
+function serviceFromActions(actions) {
+  const first = actions[0] ?? "tinycloud.unknown/read";
+  return first.includes("/") ? first.slice(0, first.indexOf("/")) : "tinycloud.unknown";
+}
+
+// src/lib/sdk.ts
+async function createSDKInstance(ctx, options) {
+  const profile = await ProfileManager.getProfile(ctx.profile);
+  const session = await ProfileManager.getSession(ctx.profile);
+  const key = await ProfileManager.getKey(ctx.profile);
+  const effectivePrivateKey = options?.privateKey ?? profile.privateKey;
+  if (!key && !effectivePrivateKey) {
+    throw new CLIError(
+      "AUTH_REQUIRED",
+      `No key found for profile "${ctx.profile}". Run \`tc init\` first.`,
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  if (profile.authMethod === "local" && effectivePrivateKey) {
+    const node2 = new TinyCloudNode({
+      host: ctx.host,
+      privateKey: effectivePrivateKey
+    });
+    await node2.signIn();
+    await replayAdditionalDelegations(node2, ctx.profile);
+    return node2;
+  }
+  const node = new TinyCloudNode({
+    host: ctx.host,
+    privateKey: options?.privateKey
+  });
+  if (options?.privateKey) {
+    await node.signIn();
+  } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
+    await node.restoreSession({
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      spaceId: session.spaceId,
+      jwk: session.jwk ?? key,
+      verificationMethod: session.verificationMethod ?? profile.did,
+      address: session.address,
+      chainId: session.chainId,
+      siwe: session.siwe,
+      signature: session.signature
+    });
+  }
+  await replayAdditionalDelegations(node, ctx.profile);
+  return node;
+}
+async function ensureAuthenticated(ctx, options) {
+  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+  if (profile?.authMethod === "local" && profile.privateKey) {
+    return createSDKInstance(ctx, { privateKey: profile.privateKey });
+  }
+  const session = await ProfileManager.getSession(ctx.profile);
+  if (!session) {
+    throw new CLIError(
+      "AUTH_REQUIRED",
+      `Not authenticated. Run \`tc auth login\` or \`tc init\` first.`,
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  return createSDKInstance(ctx, options);
+}
+
+// src/commands/auth.ts
+function resolveOpenKeyHost(profile) {
+  return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
+}
 async function promptAuthMethod() {
   if (!isInteractive()) {
     return "local";
@@ -854,6 +1274,168 @@ function registerAuthCommand(program2) {
       handleError(error);
     }
   });
+  auth.command("request").description("Request additional TinyCloud permissions for the active session").option(
+    "--cap <spec>",
+    "Capability spec: tinycloud.<service>:<space>:<path>:<actions-csv> (repeatable)",
+    (value, previous) => [...previous, value],
+    []
+  ).option("--permission <file>", 'JSON permission request: { "permissions": PermissionEntry[] }').option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON").option("--yes", "Skip local-key TTY confirmation", false).action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const profile = await ProfileManager.getProfile(ctx.profile);
+      const session = await ProfileManager.getSession(ctx.profile);
+      const requested = await collectRequestedPermissions(options, ctx.profile);
+      if (requested.length === 0) {
+        throw new CLIError(
+          "NO_CAPS_REQUESTED",
+          "Provide at least one --cap, --permission, or --manifest.",
+          ExitCode.USAGE_ERROR
+        );
+      }
+      const node = await ensureAuthenticated(ctx);
+      if (node.hasRuntimePermissions(requested)) {
+        outputJson({ changed: false, missing: [], added: [] });
+        return;
+      }
+      if (profile.authMethod === "openkey") {
+        const key = await ProfileManager.getKey(ctx.profile);
+        if (!key) {
+          throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`tc init\` first.`, ExitCode.AUTH_REQUIRED);
+        }
+        const delegationCids2 = [];
+        let expiry2;
+        const openkeyHost = resolveOpenKeyHost(profile);
+        for (const group of groupPermissionsBySpace(requested)) {
+          const delegationData = await startAuthFlow(profile.did, {
+            jwk: key,
+            host: ctx.host,
+            permissions: group,
+            openkeyHost
+          });
+          const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
+          const stored = storedAdditionalDelegation(delegation, group);
+          await appendAdditionalDelegation(ctx.profile, stored);
+          await node.useRuntimeDelegation(delegation);
+          delegationCids2.push(delegation.cid);
+          expiry2 = delegation.expiry.toISOString();
+          await appendGrantHistory(ctx.profile, {
+            addedCaps: group,
+            source: options.manifest ? "manifest" : "cli",
+            delegationCid: delegation.cid,
+            expiry: expiry2
+          });
+        }
+        outputJson({
+          changed: delegationCids2.length > 0,
+          added: requested,
+          delegationCid: delegationCids2[0],
+          delegationCids: delegationCids2,
+          expiry: expiry2
+        });
+        return;
+      }
+      if (isInteractive()) {
+        if (!options.yes) {
+          await confirmPermissionRequest(requested);
+        }
+      } else if (!options.yes) {
+        throw new CLIError(
+          "CONFIRMATION_REQUIRED",
+          "Local-key permission requests in non-interactive mode require --yes.",
+          ExitCode.USAGE_ERROR
+        );
+      }
+      void session;
+      const delegations = await node.grantRuntimePermissions(requested);
+      const delegationCids = [];
+      let expiry;
+      for (const delegation of delegations) {
+        const covering = permissionsFromDelegation(delegation);
+        const stored = storedAdditionalDelegation(delegation, covering);
+        await appendAdditionalDelegation(ctx.profile, stored);
+        delegationCids.push(delegation.cid);
+        expiry = delegation.expiry.toISOString();
+        await appendGrantHistory(ctx.profile, {
+          addedCaps: covering,
+          source: options.manifest ? "manifest" : "cli",
+          delegationCid: delegation.cid,
+          expiry
+        });
+      }
+      if (delegationCids.length === 0) {
+        outputJson({ changed: false, missing: [], added: [] });
+        return;
+      }
+      outputJson({
+        changed: true,
+        added: requested,
+        delegationCid: delegationCids[0],
+        delegationCids,
+        expiry
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  auth.command("caps").description("Show granted capabilities for the active session").option("--diff <spec>", "Show missing capabilities for a spec").option("--history", "Show recent permission grants").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      if (options.history) {
+        const history = (await readGrantHistory(ctx.profile)).slice(-20);
+        if (shouldOutputJson()) {
+          outputJson({ grants: history });
+        } else if (history.length === 0) {
+          process.stdout.write(theme.muted("No grant history.") + "\n");
+        } else {
+          process.stdout.write(formatTable(
+            ["time", "source", "delegation", "caps"],
+            history.map((entry) => [
+              entry.ts,
+              entry.source,
+              entry.delegationCid ?? "",
+              entry.addedCaps.map(compactPermission).join("; ")
+            ])
+          ) + "\n");
+        }
+        return;
+      }
+      const node = await ensureAuthenticated(ctx);
+      const runtimeDelegations = node.getRuntimePermissionDelegations();
+      const granted = runtimeDelegations.flatMap(permissionsFromDelegation);
+      if (options.diff) {
+        const requested = [await parseCapSpec(options.diff, ctx.profile)];
+        const covered = node.hasRuntimePermissions(requested);
+        outputJson({
+          requested,
+          changed: !covered,
+          covered,
+          // `missing` retained for backwards-compatible callers.
+          missing: covered ? [] : requested
+        });
+        return;
+      }
+      const appended = await loadAdditionalDelegations(ctx.profile);
+      if (shouldOutputJson()) {
+        outputJson({ granted, appendedDelegations: appended.length });
+      } else if (granted.length === 0) {
+        process.stdout.write(theme.muted("No appended runtime delegations on this profile.") + "\n");
+      } else {
+        process.stdout.write(formatTable(
+          ["service", "space", "path", "actions"],
+          granted.map((entry) => [
+            entry.service,
+            entry.space,
+            entry.path,
+            entry.actions.join(", ")
+          ])
+        ) + "\n");
+      }
+    } catch (error) {
+      handleError(error);
+    }
+  });
   auth.command("whoami").description("Show identity information").action(async (_options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -887,6 +1469,93 @@ function registerAuthCommand(program2) {
       handleError(error);
     }
   });
+}
+async function collectRequestedPermissions(options, profile) {
+  const permissions = [];
+  for (const spec of options.cap ?? []) {
+    permissions.push(await parseCapSpec(spec, profile));
+  }
+  if (options.permission) {
+    permissions.push(...await loadPermissionRequest(options.permission, profile));
+  }
+  if (options.manifest) {
+    permissions.push(...await loadManifestPermissions(options.manifest, profile));
+  }
+  return permissions;
+}
+async function confirmPermissionRequest(permissions) {
+  process.stderr.write("\n" + theme.heading("Additional Permissions") + "\n");
+  for (const permission of permissions) {
+    const dangerous = isDangerousPermission(permission);
+    const line = `  ${compactPermission(permission)}`;
+    process.stderr.write((dangerous ? theme.warn(line) : theme.value(line)) + "\n");
+  }
+  process.stderr.write("\n");
+  const rl = createInterface2({
+    input: process.stdin,
+    output: process.stderr
+  });
+  const answer = await new Promise((resolve3) => {
+    rl.question("Approve local-key delegation? [y/N] ", resolve3);
+  });
+  rl.close();
+  if (!/^y(es)?$/i.test(answer.trim())) {
+    throw new CLIError("REQUEST_CANCELLED", "Permission request cancelled.", ExitCode.ERROR);
+  }
+}
+function isDangerousPermission(permission) {
+  if (permission.path === "" || permission.path === "/") return true;
+  return permission.actions.some(
+    (action) => action.includes("*") || action.endsWith("/write") || action.endsWith("/admin") || action.endsWith("/ddl") || action.endsWith("/del")
+  );
+}
+function groupPermissionsBySpace(permissions) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const permission of permissions) {
+    const group = groups.get(permission.space) ?? [];
+    group.push(permission);
+    groups.set(permission.space, group);
+  }
+  return Array.from(groups.values());
+}
+function portableFromOpenKeyDelegation(data, permissions, host) {
+  const primary = permissions[0];
+  const returnedSpace = String(data.spaceId ?? primary.space);
+  const expectedSpaces = new Set(permissions.map((permission) => permission.space));
+  if (expectedSpaces.size !== 1 || !expectedSpaces.has(returnedSpace)) {
+    throw new CLIError(
+      "OPENKEY_SCOPE_MISMATCH",
+      `OpenKey returned delegation for ${returnedSpace}, expected ${Array.from(expectedSpaces).join(", ")}.`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const expiry = inferDelegationExpiry(data);
+  return {
+    cid: String(data.delegationCid),
+    delegationHeader: data.delegationHeader,
+    spaceId: returnedSpace,
+    path: primary.path,
+    actions: primary.actions,
+    resources: permissions.map((permission) => ({
+      service: permission.service.startsWith("tinycloud.") ? permission.service.slice("tinycloud.".length) : permission.service,
+      space: permission.space,
+      path: permission.path,
+      actions: [...permission.actions]
+    })),
+    expiry,
+    delegateDID: String(data.verificationMethod),
+    ownerAddress: String(data.address ?? ""),
+    chainId: typeof data.chainId === "number" ? data.chainId : DEFAULT_CHAIN_ID,
+    host
+  };
+}
+function inferDelegationExpiry(data) {
+  const direct = data.expiry ?? data.expiresAt;
+  if (typeof direct === "string") {
+    const parsed = new Date(direct);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return new Date(Date.now() + 60 * 60 * 1e3);
 }
 async function handleLocalAuth(profileName, host) {
   const profile = await ProfileManager.getProfile(profileName).catch(() => null);
@@ -965,7 +1634,8 @@ async function handleOpenKeyAuth(profileName, host, paste) {
   const delegationData = await startAuthFlow(profile.did, {
     paste,
     jwk: key,
-    host
+    host,
+    openkeyHost: resolveOpenKeyHost(profile)
   });
   await ProfileManager.setSession(profileName, delegationData);
   const updatedProfile = {
@@ -987,67 +1657,8 @@ async function handleOpenKeyAuth(profileName, host, paste) {
 }
 
 // src/commands/kv.ts
-import { readFile as readFile2 } from "fs/promises";
+import { readFile as readFile3 } from "fs/promises";
 import { writeFile as writeFile2 } from "fs/promises";
-
-// src/lib/sdk.ts
-import { TinyCloudNode } from "@tinycloud/node-sdk";
-async function createSDKInstance(ctx, options) {
-  const profile = await ProfileManager.getProfile(ctx.profile);
-  const session = await ProfileManager.getSession(ctx.profile);
-  const key = await ProfileManager.getKey(ctx.profile);
-  const effectivePrivateKey = options?.privateKey ?? profile.privateKey;
-  if (!key && !effectivePrivateKey) {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      `No key found for profile "${ctx.profile}". Run \`tc init\` first.`,
-      ExitCode.AUTH_REQUIRED
-    );
-  }
-  if (profile.authMethod === "local" && effectivePrivateKey) {
-    const node2 = new TinyCloudNode({
-      host: ctx.host,
-      privateKey: effectivePrivateKey
-    });
-    await node2.signIn();
-    return node2;
-  }
-  const node = new TinyCloudNode({
-    host: ctx.host,
-    privateKey: options?.privateKey
-  });
-  if (options?.privateKey) {
-    await node.signIn();
-  } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-    await node.restoreSession({
-      delegationHeader: session.delegationHeader,
-      delegationCid: session.delegationCid,
-      spaceId: session.spaceId,
-      jwk: session.jwk ?? key,
-      verificationMethod: session.verificationMethod ?? profile.did,
-      address: session.address,
-      chainId: session.chainId
-    });
-  }
-  return node;
-}
-async function ensureAuthenticated(ctx, options) {
-  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
-  if (profile?.authMethod === "local" && profile.privateKey) {
-    return createSDKInstance(ctx, { privateKey: profile.privateKey });
-  }
-  const session = await ProfileManager.getSession(ctx.profile);
-  if (!session) {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      `Not authenticated. Run \`tc auth login\` or \`tc init\` first.`,
-      ExitCode.AUTH_REQUIRED
-    );
-  }
-  return createSDKInstance(ctx, options);
-}
-
-// src/commands/kv.ts
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -1110,7 +1721,7 @@ function registerKvCommand(program2) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = await readFile2(options.file);
+        putValue = await readFile3(options.file);
       } else if (options.stdin) {
         putValue = await readStdin();
       } else {
@@ -1823,7 +2434,7 @@ complete -c tc -l quiet -s q -d "Suppress non-essential output"
 }
 
 // src/commands/vault.ts
-import { readFile as readFile3 } from "fs/promises";
+import { readFile as readFile4 } from "fs/promises";
 import { writeFile as writeFile3 } from "fs/promises";
 import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
 async function readStdin2() {
@@ -1881,7 +2492,7 @@ function registerVaultCommand(program2) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile3(options.file));
+        putValue = new Uint8Array(await readFile4(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin2());
       } else {
@@ -1996,7 +2607,7 @@ function registerVaultCommand(program2) {
 }
 
 // src/commands/secrets.ts
-import { readFile as readFile4 } from "fs/promises";
+import { readFile as readFile5 } from "fs/promises";
 import { writeFile as writeFile4 } from "fs/promises";
 import { PrivateKeySigner as PrivateKeySigner3 } from "@tinycloud/node-sdk";
 var SECRETS_PREFIX = "secrets/";
@@ -2123,7 +2734,7 @@ function registerSecretsCommand(program2) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        secretValue = await readFile4(options.file, "utf-8");
+        secretValue = await readFile5(options.file, "utf-8");
       } else if (options.stdin) {
         secretValue = (await readStdin3()).toString("utf-8");
       } else {
@@ -2172,7 +2783,7 @@ function registerSecretsCommand(program2) {
 }
 
 // src/commands/vars.ts
-import { readFile as readFile5 } from "fs/promises";
+import { readFile as readFile6 } from "fs/promises";
 import { writeFile as writeFile5 } from "fs/promises";
 var VARIABLES_PREFIX = "variables/";
 async function readStdin4() {
@@ -2273,7 +2884,7 @@ function registerVarsCommand(program2) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile5(options.file, "utf-8");
+        varValue = await readFile6(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin4()).toString("utf-8");
       } else {
@@ -2421,35 +3032,45 @@ function registerDoctorCommand(program2) {
 // src/commands/sql.ts
 import { writeFile as writeFile6 } from "fs/promises";
 import { resolve } from "path";
+async function dbHandle(node, dbName, spaceInput, profileName) {
+  const spaceUri = await resolveSpaceUri(spaceInput, profileName);
+  const sql = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
+  return sql.db(dbName);
+}
 function registerSqlCommand(program2) {
   const sql = program2.command("sql").description("SQLite database operations for your TinyCloud space").addHelpText("after", `
 
 TinyCloud SQL gives each space isolated SQLite databases. Use the default
-database for simple apps, or pass --db to target a named database.
+database for simple apps, or pass --db to target a named database. Pass
+--space to target a non-primary space (e.g. the manifest "applications" space).
 
 Common workflows:
   $ tc sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
   $ tc sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
   $ tc sql query "SELECT id, body FROM notes ORDER BY id"
   $ tc sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
+  $ tc sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
   $ tc sql export --db analytics --output analytics.db
 
 Commands:
   query     Read rows with SELECT statements
   execute   Run writes and schema changes such as INSERT, UPDATE, DELETE, CREATE, DROP
   export    Download the raw SQLite database file
+  copy      Copy rows between databases (optionally across spaces)
 
 Tips:
   - SQL strings should usually be quoted so your shell passes them as one argument.
   - --params accepts a JSON array and binds values to ? placeholders.
+  - --space accepts a short name ("applications") or full URI ("tinycloud:pkh:eip155:1:0x...:applications").
   - Add --json for scripting-friendly output.
 `);
-  sql.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
+  sql.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
   $ tc sql query "SELECT * FROM notes ORDER BY id"
   $ tc sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
   $ tc sql query "SELECT count(*) AS total FROM events" --db analytics --json
+  $ tc sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
 
 Output:
   Human output is formatted as a table. Piped output or --json returns
@@ -2460,12 +3081,13 @@ Output:
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
       const params = options.params ? JSON.parse(options.params) : void 0;
+      const handle = await dbHandle(node, options.db, options.space, ctx.profile);
       const result = await withSpinner(
         "Running query...",
-        () => node.sql.db(options.db).query(sqlStr, params)
+        () => handle.query(sqlStr, params)
       );
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR, result.error.meta);
       }
       const { columns, rows, rowCount } = result.data;
       if (shouldOutputJson()) {
@@ -2486,13 +3108,14 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       handleError(error);
     }
   });
-  sql.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
+  sql.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
   $ tc sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
   $ tc sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
   $ tc sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
   $ tc sql execute "DROP TABLE old_notes" --db archive
+  $ tc sql execute "DELETE FROM conversation WHERE id = ?" --space applications --db xyz.tinycloud.listen/conversations --params '["abc"]'
 
 Output:
   Returns JSON with the changed row count and last inserted row id when available.
@@ -2502,12 +3125,13 @@ Output:
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
       const params = options.params ? JSON.parse(options.params) : void 0;
+      const handle = await dbHandle(node, options.db, options.space, ctx.profile);
       const result = await withSpinner(
         "Executing statement...",
-        () => node.sql.db(options.db).execute(sqlStr, params)
+        () => handle.execute(sqlStr, params)
       );
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR, result.error.meta);
       }
       outputJson({
         changes: result.data.changes,
@@ -2517,11 +3141,12 @@ Output:
       handleError(error);
     }
   });
-  sql.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
+  sql.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
 
 Examples:
   $ tc sql export
   $ tc sql export --db analytics --output analytics.db
+  $ tc sql export --space applications --db xyz.tinycloud.listen/conversations --output listen.db
 
 Output:
   Writes the database file locally and returns JSON with the path and size.
@@ -2530,12 +3155,13 @@ Output:
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
+      const handle = await dbHandle(node, options.db, options.space, ctx.profile);
       const result = await withSpinner(
         "Exporting database...",
-        () => node.sql.db(options.db).export()
+        () => handle.export()
       );
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR, result.error.meta);
       }
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
@@ -2550,10 +3176,126 @@ Output:
       handleError(error);
     }
   });
+  sql.command("copy").description("Copy rows between SQL databases (optionally across spaces)").requiredOption("--from-db <name>", "Source database name").requiredOption("--to-db <name>", "Destination database name").option("--from-space <name|uri>", "Source space (defaults to primary)").option("--to-space <name|uri>", "Destination space (defaults to primary)").option("--table <name...>", "Restrict copy to specific tables (repeat or comma-separated)").option("--dry-run", "Print the plan without writing", false).addHelpText("after", `
+
+Examples:
+  $ tc sql copy --from-db com.tinycloud.conversation-sync/conversations \\
+                --to-db xyz.tinycloud.listen/conversations \\
+                --space applications --dry-run
+  $ tc sql copy --from-space applications --from-db com.foo/data \\
+                --to-space applications --to-db com.bar/data \\
+                --table conversation --table participant
+
+Notes:
+  - Refuses to run when (resolved space, db) is identical for source and destination.
+  - Does NOT create destination tables. Run the target app once (or use \`tc sql execute\`)
+    to materialize the schema before copying.
+  - One row at a time; suitable for small/medium datasets. Large copies should
+    use \`tc sql export\` + bulk import.
+  - Authorization: the active session/delegation must cover sql/read on source
+    AND sql/write on destination. Otherwise the relevant operation will fail.
+`).action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const fromSpaceInput = options.fromSpace ?? options.space;
+      const toSpaceInput = options.toSpace ?? options.space;
+      const fromSpaceUri = await resolveSpaceUri(fromSpaceInput, ctx.profile) ?? "<primary>";
+      const toSpaceUri = await resolveSpaceUri(toSpaceInput, ctx.profile) ?? "<primary>";
+      if (fromSpaceUri === toSpaceUri && options.fromDb === options.toDb) {
+        throw new CLIError(
+          "SELF_COPY",
+          `Refusing to copy: source and destination resolve to the same (space, db) \u2014 ${fromSpaceUri} / ${options.fromDb}.`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      const fromHandle = await dbHandle(node, options.fromDb, fromSpaceInput, ctx.profile);
+      const toHandle = await dbHandle(node, options.toDb, toSpaceInput, ctx.profile);
+      let tables;
+      if (options.table && options.table.length > 0) {
+        tables = options.table.flatMap((t) => t.split(",").map((s) => s.trim()).filter(Boolean));
+      } else {
+        const listing = await fromHandle.query(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        );
+        if (!listing.ok) {
+          throw new CLIError(listing.error.code, `Cannot list source tables: ${listing.error.message}`, ExitCode.ERROR, listing.error.meta);
+        }
+        tables = listing.data.rows.map((r) => String(r[0]));
+      }
+      if (tables.length === 0) {
+        throw new CLIError(
+          "EMPTY_PLAN",
+          `No tables to copy. Use --table to specify tables, or check that the source database has user tables.`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      const plan = [];
+      for (const table of tables) {
+        const safe = quoteIdent(table);
+        const countResult = await fromHandle.query(`SELECT count(*) AS n FROM ${safe}`);
+        if (!countResult.ok) {
+          throw new CLIError(
+            countResult.error.code,
+            `Cannot count rows in source table "${table}": ${countResult.error.message}`,
+            ExitCode.ERROR,
+            countResult.error.meta
+          );
+        }
+        const rows = Number(countResult.data.rows[0]?.[0] ?? 0);
+        plan.push({ table, rows, copied: 0, skipped: 0 });
+      }
+      if (options.dryRun) {
+        outputJson({
+          dryRun: true,
+          from: { space: fromSpaceUri, db: options.fromDb },
+          to: { space: toSpaceUri, db: options.toDb },
+          tables: plan.map((p) => ({ table: p.table, rows: p.rows }))
+        });
+        return;
+      }
+      for (const entry of plan) {
+        const safe = quoteIdent(entry.table);
+        const fetched = await fromHandle.query(`SELECT * FROM ${safe}`);
+        if (!fetched.ok) {
+          throw new CLIError(fetched.error.code, `Failed to read "${entry.table}": ${fetched.error.message}`, ExitCode.ERROR, fetched.error.meta);
+        }
+        const columns = fetched.data.columns;
+        const rows = fetched.data.rows;
+        if (rows.length === 0) continue;
+        const colList = columns.map(quoteIdent).join(", ");
+        const placeholders = columns.map(() => "?").join(", ");
+        const insertSql = `INSERT INTO ${safe} (${colList}) VALUES (${placeholders})`;
+        for (const row of rows) {
+          const writeResult = await toHandle.execute(insertSql, row);
+          if (!writeResult.ok) {
+            throw new CLIError(
+              writeResult.error.code,
+              `Insert into "${entry.table}" failed after ${entry.copied} row(s): ${writeResult.error.message}`,
+              ExitCode.ERROR,
+              writeResult.error.meta
+            );
+          }
+          entry.copied += writeResult.data.changes ?? 1;
+        }
+      }
+      outputJson({
+        from: { space: fromSpaceUri, db: options.fromDb },
+        to: { space: toSpaceUri, db: options.toDb },
+        tables: plan.map((p) => ({ table: p.table, rowsRead: p.rows, rowsWritten: p.copied }))
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+function quoteIdent(name) {
+  return `"${name.replace(/"/g, '""')}"`;
 }
 
 // src/commands/duckdb.ts
-import { readFile as readFile6, writeFile as writeFile7 } from "fs/promises";
+import { readFile as readFile7, writeFile as writeFile7 } from "fs/promises";
 import { resolve as resolve2 } from "path";
 function registerDuckdbCommand(program2) {
   const duckdb = program2.command("duckdb").description("DuckDB database operations");
@@ -2683,7 +3425,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
       const filePath = resolve2(file);
-      const bytes = new Uint8Array(await readFile6(filePath));
+      const bytes = new Uint8Array(await readFile7(filePath));
       const result = await withSpinner(
         "Importing database...",
         () => node.duckdb.db(options.db).import(bytes)
@@ -2703,13 +3445,142 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
   });
 }
 
+// src/commands/manifest.ts
+import { readFile as readFile8 } from "fs/promises";
+var DEFAULT_APP_SPACE = "applications";
+function registerManifestCommand(program2) {
+  const manifest = program2.command("manifest").description("Inspect TinyCloud app manifests");
+  manifest.command("resolve <source>").description("Resolve a manifest file or URL to its effective space, paths, and DB basenames").addHelpText("after", `
+
+Examples:
+  $ tc manifest resolve ./manifest.json
+  $ tc manifest resolve https://app.example.com/manifest.json --json
+
+What it shows:
+  - app_id, name, manifest_version
+  - effective space name (default: "applications") and full space URI for the active profile
+  - per-permission: service, fully-qualified path, actions
+  - inferred SQL database basenames for sql/<db>/... paths
+
+This command is read-only and does NOT contact the node \u2014 it just resolves
+the manifest against the active profile's address/chain so you know which
+\`--space\` and \`--db\` values to pass to other tc commands.
+`).action(async (source, _options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const raw = await loadManifestSource(source);
+      const parsed = JSON.parse(raw);
+      if (!parsed.app_id) {
+        throw new CLIError(
+          "INVALID_MANIFEST",
+          `Manifest is missing required field "app_id".`,
+          ExitCode.ERROR
+        );
+      }
+      await ensureAuthenticated(ctx);
+      const spaceName = parsed.space ?? DEFAULT_APP_SPACE;
+      const spaceUri = await resolveSpaceUri(spaceName, ctx.profile);
+      const permissions = (parsed.permissions ?? []).map((p) => {
+        const resolvedPath = p.skipPrefix ? p.path : prefixWithAppId(p.path, parsed.app_id);
+        return {
+          service: p.service,
+          path: resolvedPath,
+          actions: p.actions,
+          sqlDb: extractSqlDbName(resolvedPath)
+        };
+      });
+      const sqlDbs = unique(
+        permissions.map((p) => p.sqlDb).filter((db) => Boolean(db))
+      );
+      const summary = {
+        source,
+        app_id: parsed.app_id,
+        name: parsed.name,
+        manifest_version: parsed.manifest_version,
+        space: {
+          name: spaceName,
+          uri: spaceUri
+        },
+        permissions,
+        sqlDatabases: sqlDbs
+      };
+      if (shouldOutputJson()) {
+        outputJson(summary);
+        return;
+      }
+      process.stdout.write(`${theme.heading("Manifest")}: ${theme.value(parsed.app_id)}`);
+      if (parsed.name) process.stdout.write(theme.muted(` (${parsed.name})`));
+      process.stdout.write("\n");
+      process.stdout.write(`${theme.label("Space")}: ${theme.value(spaceName)}
+`);
+      if (spaceUri) {
+        process.stdout.write(`${theme.label("Space URI")}: ${theme.value(spaceUri)}
+`);
+      }
+      if (sqlDbs.length > 0) {
+        process.stdout.write(`
+${theme.heading("SQL databases")}
+`);
+        for (const db of sqlDbs) {
+          process.stdout.write(`  ${theme.value(db)}
+`);
+        }
+        process.stdout.write(theme.muted(`
+Use with: tc sql query --space ${spaceName} --db <db> "..."
+`));
+      }
+      if (permissions.length > 0) {
+        process.stdout.write(`
+${theme.heading("Permissions")}
+`);
+        const rows = permissions.map((p) => [p.service, p.path, p.actions.join(", ")]);
+        process.stdout.write(formatTable(["service", "path", "actions"], rows) + "\n");
+      }
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+async function loadManifestSource(source) {
+  if (/^https?:\/\//i.test(source)) {
+    const response = await fetch(source);
+    if (!response.ok) {
+      throw new CLIError(
+        "MANIFEST_FETCH_FAILED",
+        `Failed to fetch manifest from ${source}: ${response.status} ${response.statusText}`,
+        ExitCode.NETWORK_ERROR
+      );
+    }
+    return response.text();
+  }
+  return readFile8(source, "utf8");
+}
+function prefixWithAppId(path, appId) {
+  const slash = path.indexOf("/");
+  if (slash === -1) return `${appId}/${path}`;
+  const head = path.slice(0, slash);
+  const tail = path.slice(slash + 1);
+  return `${head}/${appId}/${tail}`;
+}
+function extractSqlDbName(path) {
+  if (!path.startsWith("sql/")) return void 0;
+  const rest = path.slice(4);
+  const segments = rest.split("/");
+  if (segments.length < 2) return rest;
+  return segments.slice(0, -1).join("/");
+}
+function unique(arr) {
+  return Array.from(new Set(arr));
+}
+
 // src/commands/upgrade.ts
 import { execSync as execSync2 } from "child_process";
-import { readFileSync } from "fs";
+import { readFileSync as readFileSync2 } from "fs";
 var PACKAGE_NAME = "@tinycloud/cli";
 function getCurrentVersion() {
   const pkg = JSON.parse(
-    readFileSync(new URL("../package.json", import.meta.url), "utf-8")
+    readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
   );
   return pkg.version;
 }
@@ -2773,7 +3644,7 @@ function registerUpgradeCommand(program2) {
 
 // src/index.ts
 var { version } = JSON.parse(
-  readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
+  readFileSync3(new URL("../package.json", import.meta.url), "utf-8")
 );
 var program = new Command();
 program.name("tc").description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output");
@@ -2818,6 +3689,7 @@ registerVarsCommand(program);
 registerDoctorCommand(program);
 registerSqlCommand(program);
 registerDuckdbCommand(program);
+registerManifestCommand(program);
 registerUpgradeCommand(program);
 program.addHelpText("afterAll", () => {
   if (!process.stdout.isTTY) return "";

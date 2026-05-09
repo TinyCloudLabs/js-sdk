@@ -1,14 +1,27 @@
+import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isInteractive } from "../output/formatter.js";
 import { createInterface } from "node:readline";
-
-const OPENKEY_BASE = "https://openkey.so";
+import { DEFAULT_OPENKEY_HOST } from "../config/constants.js";
 
 interface DelegationData {
   delegationHeader: { Authorization: string };
   delegationCid: string;
   spaceId: string;
   [key: string]: unknown;
+}
+
+interface AuthFlowOptions {
+  paste?: boolean;
+  jwk?: object;
+  host?: string;
+  permissions?: PermissionEntry[];
+  /**
+   * OpenKey base URL. Resolution order in callers: TC_OPENKEY_HOST env →
+   * profile.openkeyHost → DEFAULT_OPENKEY_HOST. Threaded explicitly so this
+   * module stays free of profile lookups.
+   */
+  openkeyHost?: string;
 }
 
 /**
@@ -18,7 +31,7 @@ interface DelegationData {
  */
 export async function startAuthFlow(
   did: string,
-  options: { paste?: boolean; jwk?: object; host?: string } = {}
+  options: AuthFlowOptions = {}
 ): Promise<DelegationData> {
   if (options.paste) {
     return pasteFlow(did, options);
@@ -36,7 +49,7 @@ export async function startAuthFlow(
   }
 }
 
-function buildAuthUrl(did: string, options: { jwk?: object; host?: string; callback?: string } = {}): string {
+function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?: string } = {}): string {
   const params = new URLSearchParams();
   params.set("did", did);
   if (options.callback) {
@@ -50,10 +63,17 @@ function buildAuthUrl(did: string, options: { jwk?: object; host?: string; callb
   if (options.host) {
     params.set("host", options.host);
   }
-  return `${OPENKEY_BASE}/delegate?${params.toString()}`;
+  if (options.permissions?.length) {
+    params.set(
+      "permissions",
+      Buffer.from(JSON.stringify({ permissions: options.permissions })).toString("base64url"),
+    );
+  }
+  const base = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
+  return `${base}/delegate?${params.toString()}`;
 }
 
-async function callbackFlow(did: string, options: { jwk?: object; host?: string } = {}): Promise<DelegationData> {
+async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise<DelegationData> {
   return new Promise((resolve, reject) => {
     let timeout: ReturnType<typeof setTimeout>;
     let settled = false;
@@ -169,7 +189,7 @@ async function callbackFlow(did: string, options: { jwk?: object; host?: string 
   });
 }
 
-async function pasteFlow(did: string, options: { jwk?: object; host?: string } = {}): Promise<DelegationData> {
+async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<DelegationData> {
   const authUrl = buildAuthUrl(did, options);
 
   console.error(`\nOpen this URL in a browser to authenticate:\n`);

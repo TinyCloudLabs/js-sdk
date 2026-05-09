@@ -24,6 +24,7 @@ import { registerVarsCommand } from "./commands/vars.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerSqlCommand } from "./commands/sql.js";
 import { registerDuckdbCommand } from "./commands/duckdb.js";
+import { registerManifestCommand } from "./commands/manifest.js";
 import { registerUpgradeCommand } from "./commands/upgrade.js";
 
 const program = new Command();
@@ -85,6 +86,7 @@ registerVarsCommand(program);
 registerDoctorCommand(program);
 registerSqlCommand(program);
 registerDuckdbCommand(program);
+registerManifestCommand(program);
 registerUpgradeCommand(program);
 
 program.addHelpText("afterAll", () => {

@@ -107,11 +107,31 @@ tc profile list
 tc kv list --profile staging
 ```
 
+### Pointing a profile at a self-hosted OpenKey
+
+OpenKey-backed profiles default to `https://openkey.so`. To use a self-hosted
+or local OpenKey (for testing accounts, CI, or a portless dev loop), edit the
+profile JSON directly:
+
+```bash
+# ~/.tinycloud/profiles/<profile>/profile.json
+{
+  "name": "staging",
+  ...
+  "openkeyHost": "https://openkey.localhost"
+}
+```
+
+`tc auth login --method openkey` and `tc auth request` honor this for the
+profile. Set `TC_OPENKEY_HOST` to override per invocation without editing the
+file.
+
 ## Environment
 
 | Variable | Description |
 |----------|-------------|
 | `TC_HIDE_BANNER` | Set to `1` to suppress the startup banner |
+| `TC_OPENKEY_HOST` | Override the active profile's OpenKey base URL for this invocation. |
 
 ## Development
 

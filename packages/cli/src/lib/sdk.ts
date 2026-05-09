@@ -3,6 +3,7 @@ import { ProfileManager } from "../config/profiles.js";
 import type { CLIContext } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
+import { replayAdditionalDelegations } from "./permissions.js";
 
 /**
  * Create a TinyCloudNode instance from the current CLI context.
@@ -39,6 +40,7 @@ export async function createSDKInstance(
     });
 
     await node.signIn();
+    await replayAdditionalDelegations(node, ctx.profile);
     return node;
   }
 
@@ -61,9 +63,12 @@ export async function createSDKInstance(
       verificationMethod: (session.verificationMethod as string) ?? profile.did,
       address: session.address as string | undefined,
       chainId: session.chainId as number | undefined,
+      siwe: session.siwe as string | undefined,
+      signature: session.signature as string | undefined,
     });
   }
 
+  await replayAdditionalDelegations(node, ctx.profile);
   return node;
 }
 
