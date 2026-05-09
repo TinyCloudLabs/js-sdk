@@ -1,5 +1,72 @@
 # @tinycloud/cli
 
+## 0.5.0-beta.11
+
+### Minor Changes
+
+- 9ff4b34: CLI: agent-friendly permission management and cross-space SQL.
+  - `tc auth request` requests additional runtime permissions via the SDK's
+    `grantRuntimePermissions` flow. Accepts `--cap <spec>`, `--permission <file>`,
+    or `--manifest <fileOrBase64>`. OpenKey path forwards the requested entries
+    through the `/delegate` URL so the consent UI shows what's being asked for.
+  - `tc auth caps` lists appended runtime delegations and their granted
+    capabilities. `--diff <spec>` reports whether the active session covers a
+    capability without granting it. `--history` shows the audit log.
+  - `tc manifest resolve <fileOrUrl>` is a read-only diagnostic that prints the
+    effective space URI, capability paths, and SQL database basenames for an
+    app manifest.
+  - `tc sql query|execute|export --space <name|uri>` routes through a
+    per-space SQL service so non-primary-space data is reachable. Backed by a
+    new `TinyCloudNode.sqlForSpace(spaceId)` helper that mirrors the per-space
+    KV factory pattern.
+  - `tc sql copy --from-space S --from-db D --to-space S2 --to-db D2 [--table T...] [--dry-run]`
+    copies rows between databases (optionally across spaces). Refuses self-copy.
+  - AUTH_UNAUTHORIZED errors emit a copy-pasteable
+    `tc auth request --cap "..."` hint derived from the unauthorized resource
+    and required action.
+  - NETWORK_ERROR emits a hint listing alternate profiles and their hosts when
+    the active profile's host is unreachable.
+  - `ProfileConfig.openkeyHost` (or `TC_OPENKEY_HOST` env var) overrides the
+    OpenKey base URL per profile, enabling self-hosted or local OpenKey
+    deployments for testing accounts. Default unchanged.
+  - Persists appended runtime delegations alongside the existing session in
+    `~/.tinycloud/profiles/<p>/additional-delegations.json` and replays them
+    via `useRuntimeDelegation()` on next CLI invocation. Grants logged to
+    `auth-grants.jsonl`.
+
+  node-sdk: adds `TinyCloudNode.sqlForSpace(spaceId): ISQLService` so callers
+  that already hold a delegation covering a non-primary space can issue SQL
+  queries without restoring a fresh session.
+
+- 9ff4b34: Default delegation lifetime bumped to 7 days; default session lifetime
+  bumped to 7 days; CLI gains `tc auth request --expiry`.
+
+  Why: 1-hour grants forced agent workflows to re-prompt the user for caps
+  they had already approved on every CLI invocation past the first hour.
+  The session itself defaulted to 1 hour too, so even an explicit
+  `--expiry 30d` couldn't outlive its parent. Both defaults moved to 7
+  days so the common agent loop runs unattended for a week.
+  - `delegateToHelpers.resolveExpiryMs(undefined)` now returns
+    `DEFAULT_DELEGATION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000`.
+  - `TinyCloudNodeConfig.sessionExpirationMs` default is now
+    `DEFAULT_SESSION_EXPIRATION_MS = 7 * 24 * 60 * 60 * 1000`. Existing
+    callers passing an explicit value are unaffected. Wallet-mode SIWE
+    sessions cap at 1 hour by protocol — that limit is independent of
+    this default.
+  - `tc auth request --expiry <duration>` accepts a ms-format string
+    (`"7d"`, `"30m"`) or raw millisecond integer. Forwarded to
+    `node.grantRuntimePermissions(permissions, { expiry })` for the
+    local-key path and encoded into the OpenKey `/delegate?expiry=...`
+    URL parameter for the OpenKey path. OpenKey-side support landed
+    separately in TinyCloudLabs/openkey.
+
+### Patch Changes
+
+- Updated dependencies [9ff4b34]
+- Updated dependencies [9ff4b34]
+- Updated dependencies [9ff4b34]
+  - @tinycloud/node-sdk@2.2.0-beta.11
+
 ## 0.4.8-beta.10
 
 ### Patch Changes
