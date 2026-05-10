@@ -286,6 +286,24 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this._tinyCloudSession;
   }
 
+  /**
+   * Rehydrate the auth-layer session from previously-persisted delegation
+   * data. Used by {@link TinyCloudNode.restoreSession} so that downstream
+   * surfaces that read from `tinyCloudSession` (notably
+   * `grantRuntimePermissions`, which extracts the SIWE expiry from it) work
+   * without re-running the full sign-in flow.
+   *
+   * Caller must supply the same fields that `signIn` would have written —
+   * `siwe` is the load-bearing one because `extractSiweExpiration` returns
+   * undefined for missing SIWEs and the SDK then treats the session as
+   * expired-at-epoch-zero.
+   */
+  setRestoredTinyCloudSession(session: TinyCloudSession): void {
+    this._tinyCloudSession = session;
+    this._address = session.address;
+    this._chainId = session.chainId;
+  }
+
   private async resolveTinyCloudHostsForSignIn(
     address: string,
     chainId: number,

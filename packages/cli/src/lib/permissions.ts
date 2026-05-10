@@ -84,10 +84,13 @@ export async function replayAdditionalDelegations(
     if (expiry.getTime() <= Date.now()) continue;
     try {
       await node.useRuntimeDelegation({ ...entry.delegation, expiry });
-    } catch {
+    } catch (err) {
       // A stored delegation can be invalid for several benign reasons (host
       // unreachable, key rotated). Don't fail the whole CLI invocation —
       // the user can re-run `tc auth request` to refresh the grant.
+      if (process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write(`[replay] skipping ${entry.delegation.cid}: ${(err as Error).message}\n`);
+      }
     }
   }
 }
