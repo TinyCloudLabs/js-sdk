@@ -300,6 +300,14 @@ export class TinyCloudNode {
   private _spaceService?: SpaceService;
   private runtimePermissionGrants: RuntimePermissionGrant[] = [];
 
+  /**
+   * TinyCloudSession captured by {@link restoreSession} when there's no
+   * auth-layer signer available (session-only mode used by OpenKey-backed
+   * CLI restores, public-space replays, …). Read by
+   * {@link currentTinyCloudSession} as a fallback for `auth.tinyCloudSession`.
+   */
+  private _restoredTcSession?: TinyCloudSession;
+
   private get nodeFeatures(): string[] {
     return this.auth?.nodeFeatures ?? [];
   }
@@ -745,6 +753,21 @@ export class TinyCloudNode {
     verificationMethod: string;
     address?: string;
     chainId?: number;
+    /**
+     * The SIWE message that authorized this session. Required for
+     * downstream operations that need the session's expiry (e.g.
+     * {@link grantRuntimePermissions}). When omitted the SDK can still
+     * invoke services with the existing delegation, but anything that
+     * reads `auth.tinyCloudSession.siwe` will treat the session as
+     * expired-at-epoch-zero.
+     */
+    siwe?: string;
+    /**
+     * The wallet/OpenKey signature over `siwe`. Optional because the
+     * runtime doesn't re-verify it — it's persisted alongside the SIWE
+     * for callers that need to round-trip the full session shape.
+     */
+    signature?: string;
   }): Promise<void> {
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
@@ -812,6 +835,44 @@ export class TinyCloudNode {
 
     // Initialize v2 services
     this.initializeV2Services(serviceSession);
+
+    // Rehydrate a TinyCloudSession on whatever surface is available. In
+    // wallet mode the auth layer holds it; in session-only mode (OpenKey,
+    // public-space restore, …) `this.auth` is null and we fall back to
+    // `_restoredTcSession` on the node itself. Both surfaces are read by
+    // {@link currentTinyCloudSession} so callers don't have to care.
+    //
+    // Required for `useRuntimeDelegation` / `hasRuntimePermissions` /
+    // `getRuntimePermissionDelegations` to work after a session restore —
+    // without this they bail with `SessionExpiredError(new Date(0))`.
+    if (sessionData.siwe && sessionData.address && sessionData.chainId) {
+      const tcSession: TinyCloudSession = {
+        address: sessionData.address,
+        chainId: sessionData.chainId,
+        sessionKey: JSON.stringify(sessionData.jwk),
+        spaceId: sessionData.spaceId,
+        delegationCid: sessionData.delegationCid,
+        delegationHeader: sessionData.delegationHeader,
+        verificationMethod: sessionData.verificationMethod,
+        jwk: sessionData.jwk as { [k: string]: unknown },
+        siwe: sessionData.siwe,
+        signature: sessionData.signature ?? "",
+      };
+      if (this.auth) {
+        this.auth.setRestoredTinyCloudSession(tcSession);
+      } else {
+        this._restoredTcSession = tcSession;
+      }
+    }
+  }
+
+  /**
+   * Resolve the currently-active TinyCloudSession, preferring the auth
+   * layer's value (wallet mode) and falling back to the node-level
+   * rehydration set by {@link restoreSession} (session-only mode).
+   */
+  private currentTinyCloudSession(): TinyCloudSession | undefined {
+    return this.auth?.tinyCloudSession ?? this._restoredTcSession;
   }
 
   /**
@@ -1593,7 +1654,7 @@ export class TinyCloudNode {
    * every requested permission.
    */
   hasRuntimePermissions(permissions: PermissionEntry[]): boolean {
-    const session = this.auth?.tinyCloudSession;
+    const session = this.currentTinyCloudSession();
     if (!session || !Array.isArray(permissions) || permissions.length === 0) {
       return false;
     }
@@ -1619,7 +1680,7 @@ export class TinyCloudNode {
       return this.runtimePermissionGrants.map((grant) => grant.delegation);
     }
 
-    const session = this.auth?.tinyCloudSession;
+    const session = this.currentTinyCloudSession();
     if (!session || !Array.isArray(permissions) || permissions.length === 0) {
       return [];
     }
@@ -1634,7 +1695,7 @@ export class TinyCloudNode {
    * matching service calls and downstream `delegateTo()` calls can use it.
    */
   async useRuntimeDelegation(delegation: PortableDelegation): Promise<void> {
-    const session = this.auth?.tinyCloudSession;
+    const session = this.currentTinyCloudSession();
     if (!session) {
       throw new SessionExpiredError(new Date(0));
     }
@@ -1680,7 +1741,7 @@ export class TinyCloudNode {
     if (!Array.isArray(permissions) || permissions.length === 0) {
       throw new Error("grantRuntimePermissions requires a non-empty permissions array");
     }
-    const session = this.auth?.tinyCloudSession;
+    const session = this.currentTinyCloudSession();
     if (!session) {
       throw new SessionExpiredError(new Date(0));
     }

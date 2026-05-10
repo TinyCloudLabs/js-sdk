@@ -925,7 +925,11 @@ async function replayAdditionalDelegations(node, profile) {
     if (expiry.getTime() <= Date.now()) continue;
     try {
       await node.useRuntimeDelegation({ ...entry.delegation, expiry });
-    } catch {
+    } catch (err) {
+      if (process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write(`[replay] skipping ${entry.delegation.cid}: ${err.message}
+`);
+      }
     }
   }
 }
