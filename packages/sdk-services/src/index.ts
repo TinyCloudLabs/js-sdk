@@ -147,6 +147,7 @@ export { KVService, PrefixedKVService, IKVService, KVAction } from "./kv";
 export type {
   IPrefixedKVService,
   KVServiceConfig,
+  KVReadMode,
   KVGetOptions,
   KVPutOptions,
   KVListOptions,
@@ -163,6 +164,7 @@ export { SQLService, DatabaseHandle, SQLAction } from "./sql";
 export type { ISQLService, IDatabaseHandle } from "./sql";
 export type {
   SQLServiceConfig,
+  SQLReadMode,
   QueryOptions,
   ExecuteOptions,
   BatchOptions,

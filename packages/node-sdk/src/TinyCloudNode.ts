@@ -36,8 +36,10 @@ import {
   TinyCloudSession,
   activateSessionWithHost,
   KVService,
+  type KVServiceConfig,
   IKVService,
   SQLService,
+  type SQLServiceConfig,
   ISQLService,
   DuckDbService,
   IDuckDbService,
@@ -99,10 +101,27 @@ import {
   SERVICE_LONG_TO_SHORT,
   EXPIRY,
 } from "@tinycloud/sdk-core";
-import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import {
+  NodeUserAuthorization,
+  type NodeUserAuthorizationConfig,
+} from "./authorization/NodeUserAuthorization";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import { PortableDelegation } from "./delegation";
+import {
+  notifyReplication as notifyReplicationTransport,
+  reconcileKvReplication as reconcileKvReplicationTransport,
+  reconcileSqlReplication as reconcileSqlReplicationTransport,
+} from "./replication";
+import type {
+  ReplicationNotifyRequest,
+  ReplicationNotifyResponse,
+  ReplicationKvReconcileRequest,
+  ReplicationKvReconcileResponse,
+  ReplicationSqlReconcileRequest,
+  ReplicationSqlReconcileResponse,
+  ReplicationPullSessions,
+} from "./replication";
 import { DelegatedAccess } from "./DelegatedAccess";
 import { WasmKeyProvider } from "./keys/WasmKeyProvider";
 import {
@@ -114,6 +133,8 @@ import { NodeSecretsService } from "./NodeSecretsService";
 
 /** Default TinyCloud host */
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
+
+type AbilityMap = NonNullable<NodeUserAuthorizationConfig["defaultActions"]>;
 
 /**
  * Default lifetime of a SIWE session when {@link TinyCloudNodeConfig.sessionExpirationMs}
@@ -187,6 +208,64 @@ export interface TinyCloudNodeConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Include implicit account registry permissions when composing `manifest`. Default true. */
   includeAccountRegistryPermissions?: boolean;
+  /** Optional default actions to grant on sign-in sessions. */
+  defaultActions?: NodeUserAuthorizationConfig["defaultActions"];
+  /** Optional KV service config used for all KV services created by this node wrapper. */
+  kvConfig?: KVServiceConfig;
+  /** Optional SQL service config used for all SQL services created by this node wrapper. */
+  sqlConfig?: SQLServiceConfig;
+}
+
+export interface TinyCloudKVReplicationScope {
+  service: "kv";
+  prefix: string;
+}
+
+export interface TinyCloudAuthReplicationScope {
+  service: "auth";
+}
+
+export interface TinyCloudSqlReplicationScope {
+  service: "sql";
+  dbName: string;
+}
+
+export type TinyCloudReplicationScope =
+  | TinyCloudAuthReplicationScope
+  | TinyCloudKVReplicationScope
+  | TinyCloudSqlReplicationScope;
+
+export interface OpenReplicationSessionParams {
+  host?: string;
+  scope: TinyCloudReplicationScope;
+  spaceIdOverride?: string;
+}
+
+export interface TinyCloudReplicationSession {
+  host: string;
+  scope: TinyCloudReplicationScope;
+  delegationHeader: { Authorization: string };
+  supportingDelegations: string[];
+  delegationCid: string;
+  spaceId: string;
+  verificationMethod: string;
+  expiresAt: Date;
+}
+
+export type OpenReplicationSessionResult = TinyCloudReplicationSession;
+
+function buildReplicationScopeResource(scope: TinyCloudReplicationScope): string {
+  if (scope.service === "auth") {
+    return "auth";
+  }
+
+  if (scope.service === "kv") {
+    const normalizedPrefix = scope.prefix.replace(/^\/+/, "").replace(/\/+$/, "");
+    return normalizedPrefix.length > 0 ? `kv/${normalizedPrefix}` : "kv";
+  }
+
+  const normalizedDbName = scope.dbName.replace(/^\/+/, "").replace(/\/+$/, "");
+  return `sql/${normalizedDbName}`;
 }
 
 /**
@@ -310,6 +389,28 @@ export class TinyCloudNode {
 
   private get nodeFeatures(): string[] {
     return this.auth?.nodeFeatures ?? [];
+  }
+
+  private get kvServiceConfig(): KVServiceConfig {
+    return this.config.kvConfig ?? {};
+  }
+
+  private createKVService(config: KVServiceConfig = {}): KVService {
+    return new KVService({
+      ...this.kvServiceConfig,
+      ...config,
+    });
+  }
+
+  private get sqlServiceConfig(): SQLServiceConfig {
+    return this.config.sqlConfig ?? {};
+  }
+
+  private createSQLService(config: SQLServiceConfig = {}): SQLService {
+    return new SQLService({
+      ...this.sqlServiceConfig,
+      ...config,
+    });
   }
 
   /** SIWE domain — uses config override or defaults to app.tinycloud.xyz */
@@ -442,7 +543,7 @@ export class TinyCloudNode {
         // Use pathPrefix as the KV service prefix for sharing links
         // Strip trailing slash to match DelegatedAccess behavior
         const prefix = config.pathPrefix?.replace(/\/$/, '');
-        const kvService = new KVService({ prefix });
+        const kvService = this.createKVService({ prefix });
         // Create a new service context for the KV service
         const kvContext = new ServiceContext({
           invoke: config.invoke,
@@ -487,6 +588,7 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: config.tinycloudFallbackHosts,
+      defaultActions: config.defaultActions,
       autoCreateSpace: config.autoCreateSpace,
       enablePublicSpace: config.enablePublicSpace ?? true,
       spaceCreationHandler: config.spaceCreationHandler,
@@ -499,6 +601,14 @@ export class TinyCloudNode {
 
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
+      serviceConfigs: this.config.kvConfig
+        ? {
+            kv: this.config.kvConfig,
+            ...(this.config.sqlConfig ? { sql: this.config.sqlConfig } : {}),
+          }
+        : this.config.sqlConfig
+          ? { sql: this.config.sqlConfig }
+          : undefined,
     });
   }
 
@@ -614,6 +724,98 @@ export class TinyCloudNode {
    */
   get session(): TinyCloudSession | undefined {
     return this.auth?.tinyCloudSession;
+  }
+
+  async openReplicationSession(
+    params: OpenReplicationSessionParams
+  ): Promise<TinyCloudReplicationSession> {
+    if (!this.signer) {
+      throw new Error(
+        "Cannot openReplicationSession() in session-only mode. Requires wallet mode."
+      );
+    }
+
+    const session = this.session;
+    if (!session) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+
+    const host = (params.host ?? this.config.host)?.replace(/\/$/, "");
+    if (!host) {
+      throw new Error("Replication session host is required.");
+    }
+
+    const scope = params.scope;
+    const spaceId = params.spaceIdOverride ?? session.spaceId;
+    const resource = buildReplicationScopeResource(scope);
+    const abilities: AbilityMap = {
+      space: {
+        [resource]: ["tinycloud.space/sync"],
+      },
+    };
+
+    const now = new Date();
+    const expirationTime = new Date(
+      now.getTime() + (this.config.sessionExpirationMs ?? 60 * 60 * 1000)
+    );
+
+    const prepared = this.wasmBindings.prepareSession({
+      abilities,
+      address: this.wasmBindings.ensureEip55(session.address),
+      chainId: session.chainId,
+      domain: this.siweDomain,
+      issuedAt: now.toISOString(),
+      expirationTime: expirationTime.toISOString(),
+      spaceId,
+      jwk: session.jwk,
+      parents: [session.delegationCid],
+    });
+
+    const signature = await this.signer.signMessage(prepared.siwe);
+    const scopedSession = this.wasmBindings.completeSessionSetup({
+      ...prepared,
+      signature,
+    });
+
+    return {
+      host,
+      scope,
+      delegationHeader: scopedSession.delegationHeader,
+      supportingDelegations: [session.delegationHeader.Authorization],
+      delegationCid: scopedSession.delegationCid,
+      spaceId,
+      verificationMethod: session.verificationMethod,
+      expiresAt: expirationTime,
+    };
+  }
+
+  async notifyReplication(
+    session: TinyCloudReplicationSession,
+    request: ReplicationNotifyRequest
+  ): Promise<ReplicationNotifyResponse> {
+    return notifyReplicationTransport(session, request);
+  }
+
+  async reconcileKvFromPeer(
+    sessions: ReplicationPullSessions,
+    request: ReplicationKvReconcileRequest
+  ): Promise<ReplicationKvReconcileResponse> {
+    return reconcileKvReplicationTransport(
+      sessions.target,
+      sessions.peer,
+      request
+    );
+  }
+
+  async reconcileSqlFromPeer(
+    sessions: ReplicationPullSessions,
+    request: ReplicationSqlReconcileRequest
+  ): Promise<ReplicationSqlReconcileResponse> {
+    return reconcileSqlReplicationTransport(
+      sessions.target,
+      sessions.peer,
+      request
+    );
   }
 
   /**
@@ -800,12 +1002,12 @@ export class TinyCloudNode {
     });
 
     // Create and register KV service
-    this._kv = new KVService({});
+    this._kv = this.createKVService();
     this._kv.initialize(this._serviceContext);
     this._serviceContext.registerService('kv', this._kv);
 
     // Create and register SQL service
-    this._sql = new SQLService({});
+    this._sql = this.createSQLService();
     this._sql.initialize(this._serviceContext);
     this._serviceContext.registerService('sql', this._sql);
 
@@ -936,11 +1138,20 @@ export class TinyCloudNode {
       manifest: this.config.manifest,
       capabilityRequest: this.config.capabilityRequest,
       includeAccountRegistryPermissions: this.config.includeAccountRegistryPermissions,
+      defaultActions: this.config.defaultActions,
     });
 
     // Create TinyCloud instance
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
+      serviceConfigs: this.config.kvConfig
+        ? {
+            kv: this.config.kvConfig,
+            ...(this.config.sqlConfig ? { sql: this.config.sqlConfig } : {}),
+          }
+        : this.config.sqlConfig
+          ? { sql: this.config.sqlConfig }
+          : undefined,
     });
 
     // Update config with prefix
@@ -988,10 +1199,19 @@ export class TinyCloudNode {
       manifest: this.config.manifest,
       capabilityRequest: this.config.capabilityRequest,
       includeAccountRegistryPermissions: this.config.includeAccountRegistryPermissions,
+      defaultActions: this.config.defaultActions,
     });
 
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
+      serviceConfigs: this.config.kvConfig
+        ? {
+            kv: this.config.kvConfig,
+            ...(this.config.sqlConfig ? { sql: this.config.sqlConfig } : {}),
+          }
+        : this.config.sqlConfig
+          ? { sql: this.config.sqlConfig }
+          : undefined,
     });
     this.config.prefix = prefix;
   }
@@ -1018,14 +1238,14 @@ export class TinyCloudNode {
     });
 
     // Create and register KV service
-    this._kv = new KVService({});
+    this._kv = this.createKVService();
     this._kv.initialize(this._serviceContext);
     this._serviceContext.registerService('kv', this._kv);
 
     // Create and register SQL service (if supported)
     const features = this.nodeFeatures;
     if (features.length === 0 || features.includes("sql")) {
-      this._sql = new SQLService({});
+      this._sql = this.createSQLService();
       this._sql.initialize(this._serviceContext);
       this._serviceContext.registerService('sql', this._sql);
     }
@@ -1062,7 +1282,7 @@ export class TinyCloudNode {
   }
 
   private createSpaceScopedKVService(spaceId: string): KVService {
-    const kvService = new KVService({});
+    const kvService = this.createKVService();
     if (this._serviceContext) {
       const spaceScopedContext = new ServiceContext({
         invoke: this._serviceContext.invoke,
@@ -2055,7 +2275,7 @@ export class TinyCloudNode {
 
     // Cache a properly authorized public KV service using the new delegation
     if (this._serviceContext) {
-      const publicKV = new KVService({ prefix: "" });
+      const publicKV = this.createKVService({ prefix: "" });
       const publicContext = new ServiceContext({
         invoke: this.invokeWithRuntimePermissions,
         fetch: this._serviceContext.fetch,
@@ -2118,14 +2338,78 @@ export class TinyCloudNode {
     return this.delegationManager.create(params);
   }
 
-  /**
-   * Revoke a delegation using the v2 DelegationManager.
-   *
-   * @param cid - The CID of the delegation to revoke
-   * @returns Result indicating success or failure
-   */
   async revokeDelegation(cid: string): Promise<DelegationResult<void>> {
-    return this.delegationManager.revoke(cid);
+    if (!this.signer) {
+      return {
+        ok: false,
+        error: {
+          code: "NOT_INITIALIZED",
+          message:
+            "Cannot revokeDelegation() in session-only mode. Requires wallet mode.",
+          service: "delegation",
+        },
+      };
+    }
+
+    const session = this.auth?.tinyCloudSession;
+    if (!session) {
+      return {
+        ok: false,
+        error: {
+          code: "NOT_INITIALIZED",
+          message: "Not signed in. Call signIn() first.",
+          service: "delegation",
+        },
+      };
+    }
+
+    try {
+      const issuedAt = new Date().toISOString();
+      const nonce = crypto.randomUUID().replace(/-/g, "");
+      const siwe = [
+        `${this.siweDomain} wants you to sign in with your Ethereum account:`,
+        this.wasmBindings.ensureEip55(session.address),
+        "",
+        "",
+        `URI: ucan:${cid}`,
+        "Version: 1",
+        `Chain ID: ${session.chainId}`,
+        `Nonce: ${nonce}`,
+        `Issued At: ${issuedAt}`,
+      ].join("\n");
+      const signature = await this.signer.signMessage(siwe);
+
+      const response = await globalThis.fetch(`${this.config.host!}/revoke`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ siwe, signature }),
+      });
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: {
+            code: "NETWORK_ERROR",
+            message: `Failed to revoke delegation: ${response.status} - ${await response.text()}`,
+            service: "delegation",
+          },
+        };
+      }
+
+      this._capabilityRegistry.revokeDelegation(cid);
+      return { ok: true, data: undefined };
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: "NETWORK_ERROR",
+          message: `Network error revoking delegation: ${String(error)}`,
+          service: "delegation",
+        },
+      };
+    }
   }
 
   /**
@@ -3176,7 +3460,14 @@ export class TinyCloudNode {
       // Track received delegation in registry
       this.trackReceivedDelegation(delegation, this.sessionKeyJwk as unknown as JWK);
 
-      return new DelegatedAccess(session, delegation, targetHost, this.wasmBindings.invoke);
+      return new DelegatedAccess(
+        session,
+        delegation,
+        targetHost,
+        this.wasmBindings.invoke,
+        this.kvServiceConfig,
+        this.sqlServiceConfig
+      );
     }
 
     // Wallet mode: create a SIWE sub-delegation
@@ -3262,7 +3553,14 @@ export class TinyCloudNode {
     // Track received delegation in registry
     this.trackReceivedDelegation(delegation, jwk as unknown as JWK);
 
-    return new DelegatedAccess(session, delegation, targetHost, this.wasmBindings.invoke);
+    return new DelegatedAccess(
+      session,
+      delegation,
+      targetHost,
+      this.wasmBindings.invoke,
+      this.kvServiceConfig,
+      this.sqlServiceConfig
+    );
   }
 
   /**

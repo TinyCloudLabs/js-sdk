@@ -14,8 +14,9 @@ export { PrefixedKVService, IPrefixedKVService } from "./PrefixedKVService";
 export { IKVService } from "./IKVService";
 
 // Types
-export {
+export type {
   KVServiceConfig,
+  KVReadMode,
   KVGetOptions,
   KVPutOptions,
   KVListOptions,
@@ -24,6 +25,6 @@ export {
   KVResponse,
   KVListResponse,
   KVResponseHeaders,
-  KVAction,
   KVActionType,
 } from "./types";
+export { KVAction } from "./types";

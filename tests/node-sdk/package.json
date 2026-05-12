@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
+    "test:replication": "bun test replication/",
     "test:sql": "bun test sql/",
     "test:duckdb": "bun test duckdb/"
   },

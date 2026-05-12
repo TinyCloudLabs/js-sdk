@@ -4,8 +4,10 @@ import {
   IKVService,
   HooksService,
   IHooksService,
+  type KVServiceConfig,
   SQLService,
   ISQLService,
+  type SQLServiceConfig,
   DuckDbService,
   IDuckDbService,
   ServiceSession,
@@ -57,6 +59,8 @@ export class DelegatedAccess {
     delegation: PortableDelegation,
     host: string,
     invoke: InvokeFunction,
+    kvConfig: KVServiceConfig = {},
+    sqlConfig: SQLServiceConfig = {},
   ) {
     this.session = session;
     this._delegation = delegation;
@@ -72,12 +76,15 @@ export class DelegatedAccess {
     // Create and initialize KV service with path prefix from delegation
     // Strip trailing slash to avoid double-slash in paths
     const prefix = this._delegation.path.replace(/\/$/, '');
-    this._kv = new KVService({ prefix });
+    this._kv = new KVService({
+      ...kvConfig,
+      prefix,
+    });
     this._kv.initialize(this._serviceContext);
     this._serviceContext.registerService('kv', this._kv);
 
     // Create and initialize SQL service with same delegation context
-    this._sql = new SQLService({});
+    this._sql = new SQLService({ ...sqlConfig });
     this._sql.initialize(this._serviceContext);
     this._serviceContext.registerService('sql', this._sql);
 

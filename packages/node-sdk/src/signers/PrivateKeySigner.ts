@@ -59,18 +59,8 @@ export class PrivateKeySigner implements ISigner {
    */
   private deriveAddress(): string {
     try {
-      // Derive public key from private key using secp256k1
-      const { keccak256 } = require("ethers/lib/utils");
-      const { SigningKey } = require("ethers/lib/utils");
-
-      const signingKey = new SigningKey("0x" + this.privateKeyHex);
-      const publicKey = signingKey.publicKey;
-      // Remove '0x04' prefix (uncompressed point indicator)
-      const pubKeyWithoutPrefix = publicKey.slice(4);
-      const hash = keccak256("0x" + pubKeyWithoutPrefix);
-      // Take last 20 bytes
-      const address = "0x" + hash.slice(-40);
-      return ensureEip55(address);
+      const { Wallet } = require("ethers");
+      return ensureEip55(new Wallet("0x" + this.privateKeyHex).address);
     } catch {
       // Fallback: use dummy address for testing
       return "0x" + this.privateKeyHex.slice(0, 40);
@@ -94,7 +84,7 @@ export class PrivateKeySigner implements ISigner {
     const messageStr =
       typeof message === "string"
         ? message
-        : Buffer.from(message as ArrayLike<number>).toString("utf-8");
+        : Buffer.from(Uint8Array.from(message)).toString("utf-8");
 
     // Use WASM to sign with Ethereum personal_sign format
     // WASM now accepts hex-encoded private key directly
