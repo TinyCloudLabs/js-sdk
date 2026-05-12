@@ -15,6 +15,8 @@ import {
   TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,
+  type ISessionStorage,
+  type PersistedSessionData,
 } from "@tinycloud/node-sdk/core";
 import {
   IKVService,
@@ -51,6 +53,10 @@ import {
   requestPermissionsCore,
   validateAdditionalPermissions,
 } from "./requestPermissionsCore";
+import {
+  clientSessionFromPersisted,
+  restoreDataFromPersisted,
+} from "./browserSessionPersistence";
 import { WebSecretsService } from "./WebSecretsService";
 import type { providers } from "ethers";
 
@@ -58,6 +64,10 @@ import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
 import { BrowserNotificationHandler } from "../adapters/BrowserNotificationHandler";
 import { BrowserWasmBindings } from "../adapters/BrowserWasmBindings";
 import { BrowserENSResolver } from "../adapters/BrowserENSResolver";
+import {
+  BrowserSessionStorage,
+  type BrowserSessionLoadResult,
+} from "../adapters/BrowserSessionStorage";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
 import {
   ModalSpaceCreationHandler,
@@ -107,6 +117,13 @@ export interface Config extends ClientConfig {
   /** Session expiration time in milliseconds (default: 1 hour) */
   sessionExpirationMs?: number;
 
+  /** Persist browser sessions so signIn() can restore before prompting. Default true. */
+  persistSession?: boolean;
+  /** Custom session storage implementation. */
+  sessionStorage?: ISessionStorage;
+  /** Browser storage key prefix for isolating apps/environments. */
+  sessionStorageKeyPrefix?: string;
+
   /** SIWE domain (default: window.location.hostname in browser, app.tinycloud.xyz otherwise) */
   domain?: string;
 
@@ -142,6 +159,24 @@ export interface RequestPermissionsResult {
   approved: boolean;
   session?: ClientSession;
   delegations?: readonly PortableDelegation[];
+}
+
+export type SessionRestoreStatus =
+  | "idle"
+  | "disabled"
+  | "restoring"
+  | "restored"
+  | "missing"
+  | "expired"
+  | "corrupt"
+  | "storage-unavailable"
+  | "restore-failed"
+  | "logging-in";
+
+export interface SessionRestoreResult {
+  status: Exclude<SessionRestoreStatus, "idle" | "restoring" | "logging-in">;
+  session?: ClientSession;
+  error?: Error;
 }
 
 // Share Link Utilities (static, no auth required)
@@ -213,6 +248,8 @@ export class TinyCloudWeb {
 
   /** Browser wallet signer */
   private walletSigner?: BrowserWalletSigner;
+  private sessionStorage?: ISessionStorage;
+  private _sessionRestoreStatus: SessionRestoreStatus = "idle";
   private _secrets?: ISecretsService;
 
   /** Promise that resolves when WASM + node are ready */
@@ -264,6 +301,14 @@ export class TinyCloudWeb {
     // Create browser WASM bindings
     this.wasmBindings = new BrowserWasmBindings();
 
+    if (config.persistSession !== false) {
+      this.sessionStorage =
+        config.sessionStorage ??
+        new BrowserSessionStorage({
+          keyPrefix: config.sessionStorageKeyPrefix,
+        });
+    }
+
     // Set up browser wallet signer if provider given
     const providerDriver = config.provider ?? config.providers?.web3?.driver;
     if (providerDriver) {
@@ -290,6 +335,7 @@ export class TinyCloudWeb {
       prefix: this.config.spacePrefix,
       autoCreateSpace: this.config.autoCreateSpace ?? true,
       sessionExpirationMs: this.config.sessionExpirationMs,
+      sessionStorage: this.sessionStorage,
       notificationHandler: this.notificationHandler,
       wasmBindings: this.wasmBindings,
       nonce: this.config.nonce,
@@ -380,6 +426,7 @@ export class TinyCloudWeb {
   get capabilityRegistry(): ICapabilityKeyRegistry { return this.node.capabilityRegistry; }
   get spaceId(): string | undefined { return this._node?.spaceId; }
   get hosts(): string[] { return this.node.hosts; }
+  get sessionRestoreStatus(): SessionRestoreStatus { return this._sessionRestoreStatus; }
 
   space(nameOrUri: string): ISpace { return this.spaces.get(nameOrUri); }
   get kvPrefix(): string { return this.config.kvPrefix || ""; }
@@ -388,7 +435,78 @@ export class TinyCloudWeb {
   // Auth Methods (delegate to TinyCloudNode)
   // ===========================================================================
 
+  private async resolveRestoreAddress(address?: string): Promise<string | undefined> {
+    if (address) return address;
+    if (this._node?.address) return this._node.address;
+    return this.walletSigner?.getConnectedAddress();
+  }
+
+  private async loadPersistedSession(
+    address: string,
+  ): Promise<BrowserSessionLoadResult> {
+    if (!this.sessionStorage) return { status: "storage-unavailable", data: null };
+    if ("loadWithStatus" in this.sessionStorage) {
+      return (this.sessionStorage as BrowserSessionStorage).loadWithStatus(address);
+    }
+
+    const data = await this.sessionStorage.load(address);
+    return data
+      ? { status: "loaded", data }
+      : { status: "missing", data: null };
+  }
+
+  async restoreSession(address?: string): Promise<SessionRestoreResult> {
+    if (!this.sessionStorage) {
+      this._sessionRestoreStatus = "disabled";
+      return { status: "disabled" };
+    }
+
+    const restoreAddress = await this.resolveRestoreAddress(address);
+    if (!restoreAddress) {
+      this._sessionRestoreStatus = "missing";
+      return { status: "missing" };
+    }
+
+    this._sessionRestoreStatus = "restoring";
+    const loaded = await this.loadPersistedSession(restoreAddress);
+    if (loaded.status !== "loaded") {
+      this._sessionRestoreStatus = loaded.status;
+      return { status: loaded.status };
+    }
+
+    try {
+      const node = await this.ensureNode();
+      await node.restoreSession(restoreDataFromPersisted(loaded.data));
+      this._sessionRestoreStatus = "restored";
+      return {
+        status: "restored",
+        session: clientSessionFromPersisted(loaded.data),
+      };
+    } catch (err) {
+      await this.sessionStorage.clear(restoreAddress);
+      this._sessionRestoreStatus = "restore-failed";
+      return {
+        status: "restore-failed",
+        error: err instanceof Error ? err : new Error(String(err)),
+      };
+    }
+  }
+
+  async clearPersistedSession(address?: string): Promise<void> {
+    if (!this.sessionStorage) return;
+    const restoreAddress = await this.resolveRestoreAddress(address);
+    if (restoreAddress) {
+      await this.sessionStorage.clear(restoreAddress);
+    }
+  }
+
   signIn = async (options?: SignInOptions): Promise<ClientSession> => {
+    const restored = await this.restoreSession();
+    if (restored.status === "restored" && restored.session) {
+      return restored.session;
+    }
+
+    this._sessionRestoreStatus = "logging-in";
     const node = await this.ensureNode();
     await node.signIn(options);
     const session = node.session;
@@ -404,6 +522,7 @@ export class TinyCloudWeb {
   };
 
   signOut = async (): Promise<void> => {
+    await this.clearPersistedSession();
     this.notificationHandler.cleanup?.();
   };
 

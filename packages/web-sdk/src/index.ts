@@ -1,5 +1,11 @@
 // Main class and config
-export { TinyCloudWeb, Config, ShareReceiveResult } from './modules/tcw';
+export {
+  TinyCloudWeb,
+  Config,
+  ShareReceiveResult,
+  SessionRestoreResult,
+  SessionRestoreStatus,
+} from './modules/tcw';
 
 // Browser Adapters
 export {
@@ -8,6 +14,11 @@ export {
   BrowserENSResolver,
   BrowserNotificationHandler,
   BrowserWasmBindings,
+} from './adapters';
+export type {
+  BrowserSessionLoadResult,
+  BrowserSessionLoadStatus,
+  BrowserSessionStorageOptions,
 } from './adapters';
 
 // Auth module (browser-specific strategies)
