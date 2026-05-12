@@ -31,6 +31,18 @@ export class BrowserWalletSigner implements ISigner {
     return this.cachedAddress;
   }
 
+  async getConnectedAddress(): Promise<string | undefined> {
+    if (this.cachedAddress) return this.cachedAddress;
+
+    const accounts = await this.provider.send("eth_accounts", []);
+    const address = Array.isArray(accounts) ? accounts[0] : undefined;
+    if (typeof address === "string" && address.length > 0) {
+      this.cachedAddress = address;
+      return address;
+    }
+    return undefined;
+  }
+
   async getChainId(): Promise<number> {
     if (!this.cachedChainId) {
       this.cachedChainId = await this.signer.getChainId();
