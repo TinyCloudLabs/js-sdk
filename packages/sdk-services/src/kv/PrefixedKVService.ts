@@ -36,8 +36,10 @@ import {
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
+  KVCreateSignedReadUrlOptions,
   KVResponse,
   KVListResponse,
+  KVSignedReadUrlResponse,
 } from "./types";
 
 /**
@@ -152,6 +154,20 @@ export interface IPrefixedKVService {
   head(key: string, options?: Omit<KVHeadOptions, 'prefix'>): Promise<Result<KVResponse<void>>>;
 
   /**
+   * Create a short-lived signed URL for reading a KV object.
+   *
+   * The key is automatically prefixed with this service's prefix.
+   *
+   * @param key - The key to expose via a signed read URL (will be prefixed)
+   * @param options - Optional signed URL configuration
+   * @returns Result with URL and expiry metadata
+   */
+  createSignedReadUrl(
+    key: string,
+    options?: Omit<KVCreateSignedReadUrlOptions, 'prefix'>
+  ): Promise<Result<KVSignedReadUrlResponse>>;
+
+  /**
    * Create a nested prefix-scoped view.
    *
    * The subPrefix is appended to the current prefix.
@@ -192,6 +208,11 @@ interface IKVServiceLike {
   delete(key: string, options?: KVDeleteOptions): Promise<Result<void>>;
 
   head(key: string, options?: KVHeadOptions): Promise<Result<KVResponse<void>>>;
+
+  createSignedReadUrl(
+    key: string,
+    options?: KVCreateSignedReadUrlOptions
+  ): Promise<Result<KVSignedReadUrlResponse>>;
 }
 
 /**
@@ -322,6 +343,17 @@ export class PrefixedKVService implements IPrefixedKVService {
   ): Promise<Result<KVResponse<void>>> {
     const fullKey = this.getFullKey(key);
     return this._kv.head(fullKey, { ...options, prefix: '' });
+  }
+
+  /**
+   * Create a short-lived signed URL for reading a KV object.
+   */
+  async createSignedReadUrl(
+    key: string,
+    options?: Omit<KVCreateSignedReadUrlOptions, 'prefix'>
+  ): Promise<Result<KVSignedReadUrlResponse>> {
+    const fullKey = this.getFullKey(key);
+    return this._kv.createSignedReadUrl(fullKey, { ...options, prefix: '' });
   }
 
   /**

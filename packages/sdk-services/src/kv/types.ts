@@ -164,6 +164,54 @@ export interface KVHeadOptions {
 }
 
 /**
+ * Default lifetime for signed KV read URLs when a caller omits expiresInSeconds.
+ * SDK duration defaults are stored in milliseconds; createSignedReadUrl converts
+ * this to the node endpoint's ttl_seconds field.
+ *
+ * Keep this in sync with EXPIRY.SIGNED_READ_URL_MS in @tinycloud/sdk-core.
+ * sdk-services cannot import sdk-core because sdk-core depends on sdk-services.
+ */
+export const DEFAULT_SIGNED_READ_URL_EXPIRY_MS = 5 * 60 * 1000;
+
+/**
+ * Options for creating a signed KV read URL.
+ */
+export interface KVCreateSignedReadUrlOptions {
+  /**
+   * Override the default prefix for this operation.
+   */
+  prefix?: string;
+
+  /**
+   * Requested URL lifetime in seconds.
+   * Defaults to {@link DEFAULT_SIGNED_READ_URL_EXPIRY_MS} converted to seconds.
+   * The node may cap this by its configured maximum, the invocation expiry,
+   * or the parent delegation expiry.
+   */
+  expiresInSeconds?: number;
+
+  /**
+   * Optional blake3 content hash to bind the signed URL to a specific object.
+   */
+  contentHash?: string;
+
+  /**
+   * Optional ETag to bind the signed URL to a specific object version.
+   */
+  etag?: string;
+
+  /**
+   * Custom timeout for this operation in milliseconds.
+   */
+  timeout?: number;
+
+  /**
+   * Custom abort signal for this operation.
+   */
+  signal?: AbortSignal;
+}
+
+/**
  * Response headers from KV operations.
  */
 export interface KVResponseHeaders {
@@ -221,6 +269,31 @@ export interface KVListResponse {
    * Array of keys matching the list criteria.
    */
   keys: string[];
+}
+
+/**
+ * Response from signed KV read URL creation.
+ */
+export interface KVSignedReadUrlResponse {
+  /**
+   * Absolute URL suitable for passing to external readers.
+   */
+  url: string;
+
+  /**
+   * Opaque URL returned by tinycloud-node, usually relative to the node host.
+   */
+  relativeUrl: string;
+
+  /**
+   * Opaque signed KV ticket identifier.
+   */
+  ticketId: string;
+
+  /**
+   * Expiry timestamp as returned by tinycloud-node.
+   */
+  expiresAt: string;
 }
 
 /**

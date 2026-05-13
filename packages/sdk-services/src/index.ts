@@ -143,7 +143,13 @@ export type {
 } from "./base/index";
 
 // KV service
-export { KVService, PrefixedKVService, IKVService, KVAction } from "./kv";
+export {
+  DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
+  KVService,
+  PrefixedKVService,
+  IKVService,
+  KVAction,
+} from "./kv";
 export type {
   IPrefixedKVService,
   KVServiceConfig,
@@ -152,8 +158,10 @@ export type {
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
+  KVCreateSignedReadUrlOptions,
   KVResponse,
   KVListResponse,
+  KVSignedReadUrlResponse,
   KVResponseHeaders,
   KVActionType,
 } from "./kv";

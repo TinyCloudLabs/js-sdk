@@ -27,6 +27,15 @@
 const EPHEMERAL_MS = 60 * 60 * 1000; // 1 hour
 
 /**
+ * Short-lived bearer URLs for direct KV reads. Anyone holding the URL can
+ * read the object until expiry, so the default is deliberately shorter than
+ * delegation-style tiers. Callers can request a different TTL per URL.
+ *
+ * Use for: KV signed read URLs.
+ */
+const SIGNED_READ_URL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
  * The user's currently-active sign-in session. Recovery is trivial
  * (re-sign-in). Length tracks how long the user/agent is expected to
  * be working without re-prompt.
@@ -66,10 +75,13 @@ const MAX_MS = 10 * 365 * 24 * 60 * 60 * 1000; // 10 years
 
 export const EXPIRY = {
   EPHEMERAL_MS,
+  SIGNED_READ_URL_MS,
   SESSION_MS,
   SHARE_MS,
   APP_MS,
   MAX_MS,
 } as const;
+
+export const DEFAULT_SIGNED_READ_URL_EXPIRY_MS = EXPIRY.SIGNED_READ_URL_MS;
 
 export type ExpiryTier = keyof typeof EXPIRY;

@@ -14,8 +14,10 @@ import {
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
+  KVCreateSignedReadUrlOptions,
   KVResponse,
   KVListResponse,
+  KVSignedReadUrlResponse,
 } from "./types";
 
 /**
@@ -138,6 +140,24 @@ export interface IKVService extends IService {
    * ```
    */
   head(key: string, options?: KVHeadOptions): Promise<Result<KVResponse<void>>>;
+
+  /**
+   * Create a short-lived signed URL for reading a KV object.
+   *
+   * The request is authorized with the current session's `tinycloud.kv/get`
+   * capability for the resolved key path. The returned `url` is absolute and
+   * can be passed to external services that need bearer read access.
+   *
+   * Requires tinycloud-node with the `/signed/kv` endpoint from TC-1368.
+   *
+   * @param key - The key to expose via a signed read URL
+   * @param options - Optional signed URL configuration
+   * @returns Result with URL and expiry metadata
+   */
+  createSignedReadUrl(
+    key: string,
+    options?: KVCreateSignedReadUrlOptions
+  ): Promise<Result<KVSignedReadUrlResponse>>;
 
   /**
    * Create a prefix-scoped view of this KV service.

@@ -16,17 +16,26 @@ import type {
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
+  KVCreateSignedReadUrlOptions,
   KVResponse,
   KVListResponse,
   KVResponseHeaders,
+  KVSignedReadUrlResponse,
 } from "@tinycloud/sdk-services";
-import { ok, err, ErrorCodes, serviceError, PrefixedKVService } from "@tinycloud/sdk-services";
+import {
+  DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
+  ok,
+  err,
+  ErrorCodes,
+  serviceError,
+  PrefixedKVService,
+} from "@tinycloud/sdk-services";
 
 /**
  * Recorded operation for assertions.
  */
 export interface RecordedOperation {
-  type: "get" | "put" | "list" | "delete" | "head";
+  type: "get" | "put" | "list" | "delete" | "head" | "createSignedReadUrl";
   key?: string;
   value?: unknown;
   options?: unknown;
@@ -54,7 +63,7 @@ export interface ErrorInjection {
   /** Error message */
   message: string;
   /** Operation types to inject error on */
-  operations?: Array<"get" | "put" | "list" | "delete" | "head">;
+  operations?: RecordedOperation["type"][];
   /** Number of times to inject (undefined = always) */
   count?: number;
 }
@@ -306,6 +315,38 @@ export class MockKVService implements IKVService {
     return ok({
       data: undefined as void,
       headers: this.createHeaders(stored),
+    });
+  }
+
+  async createSignedReadUrl(
+    key: string,
+    options?: KVCreateSignedReadUrlOptions
+  ): Promise<Result<KVSignedReadUrlResponse>> {
+    this.recordOperation("createSignedReadUrl", key, undefined, options);
+
+    const fullKey = this.getFullKey(key, options?.prefix);
+    const injectedError = this.checkErrorInjection(fullKey, "createSignedReadUrl");
+    if (injectedError) {
+      return err(injectedError);
+    }
+
+    await this.simulateLatency();
+
+    if (options?.signal?.aborted) {
+      return err(serviceError(ErrorCodes.ABORTED, "Request aborted", "kv"));
+    }
+
+    const ticketId = `mock-${encodeURIComponent(fullKey)}`;
+    const relativeUrl = `/signed/kv/${ticketId}`;
+    const expiresInSeconds =
+      options?.expiresInSeconds ??
+      Math.ceil(DEFAULT_SIGNED_READ_URL_EXPIRY_MS / 1000);
+
+    return ok({
+      url: `https://mock.tinycloud.test${relativeUrl}`,
+      relativeUrl,
+      ticketId,
+      expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
     });
   }
 

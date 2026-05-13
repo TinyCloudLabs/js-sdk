@@ -82,8 +82,10 @@ export {
   type KVListOptions,
   type KVDeleteOptions,
   type KVHeadOptions,
+  type KVCreateSignedReadUrlOptions,
   type KVResponse,
   type KVListResponse,
+  type KVSignedReadUrlResponse,
   type KVResponseHeaders,
   // Result pattern
   type Result,
@@ -389,4 +391,8 @@ export {
 
 // Default lifetimes for delegation flows. See `expiry.ts` for the
 // "pick a tier, not a number" rationale.
-export { EXPIRY, type ExpiryTier } from "./expiry";
+export {
+  DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
+  EXPIRY,
+  type ExpiryTier,
+} from "./expiry";

@@ -13,6 +13,7 @@ import {
   ErrorCodes,
   serviceError,
   FetchResponse,
+  ServiceHeaders,
 } from "../types";
 import {
   authRequiredError,
@@ -25,17 +26,26 @@ import {
 import { IKVService } from "./IKVService";
 import { PrefixedKVService, IPrefixedKVService } from "./PrefixedKVService";
 import {
+  DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVServiceConfig,
   KVGetOptions,
   KVPutOptions,
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
+  KVCreateSignedReadUrlOptions,
   KVResponse,
   KVListResponse,
   KVResponseHeaders,
+  KVSignedReadUrlResponse,
   KVAction,
 } from "./types";
+
+interface SignedKvUrlNodeResponse {
+  url: string;
+  ticketId: string;
+  expiresAt: string;
+}
 
 /**
  * KV service implementation.
@@ -161,6 +171,17 @@ export class KVService extends BaseService implements IKVService {
     return this.context.hosts[0];
   }
 
+  private withJsonContentType(headers: ServiceHeaders): ServiceHeaders {
+    if (Array.isArray(headers)) {
+      return [...headers, ["content-type", "application/json"]];
+    }
+
+    return {
+      ...headers,
+      "content-type": "application/json",
+    };
+  }
+
   /**
    * Execute an invoke operation.
    *
@@ -248,6 +269,65 @@ export class KVService extends BaseService implements IKVService {
     } catch {
       return text as unknown as T;
     }
+  }
+
+  private async createSignedReadUrlError(
+    response: FetchResponse,
+    key: string
+  ): Promise<Result<never>> {
+    let errorText = response.statusText;
+    try {
+      const text = await response.text();
+      if (text) {
+        errorText = text;
+      }
+    } catch {
+      // Ignore secondary body read failure.
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      const { resource, action } = parseAuthError(errorText);
+      return err(authUnauthorizedError("kv", errorText, {
+        status: response.status,
+        ...(action && { requiredAction: action }),
+        ...(resource && { resource }),
+      }));
+    }
+
+    const code =
+      response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR;
+    return err(
+      serviceError(
+        code,
+        `Failed to create signed read URL for key "${key}": ${response.status} - ${errorText}`,
+        "kv",
+        { meta: { status: response.status, statusText: response.statusText } }
+      )
+    );
+  }
+
+  private normalizeSignedReadUrlResponse(
+    data: unknown
+  ): KVSignedReadUrlResponse | undefined {
+    if (!data || typeof data !== "object") {
+      return undefined;
+    }
+
+    const response = data as Partial<SignedKvUrlNodeResponse>;
+    if (
+      typeof response.url !== "string" ||
+      typeof response.ticketId !== "string" ||
+      typeof response.expiresAt !== "string"
+    ) {
+      return undefined;
+    }
+
+    return {
+      url: new URL(response.url, this.host).toString(),
+      relativeUrl: response.url,
+      ticketId: response.ticketId,
+      expiresAt: response.expiresAt,
+    };
   }
 
   /**
@@ -572,6 +652,80 @@ export class KVService extends BaseService implements IKVService {
           data: undefined as void,
           headers: this.createResponseHeaders(response.headers),
         });
+      } catch (error) {
+        return err(wrapError("kv", error));
+      }
+    });
+  }
+
+  /**
+   * Create a short-lived signed URL for reading a KV object.
+   */
+  async createSignedReadUrl(
+    key: string,
+    options?: KVCreateSignedReadUrlOptions
+  ): Promise<Result<KVSignedReadUrlResponse>> {
+    return this.withTelemetry("createSignedReadUrl", key, async () => {
+      if (!this.requireAuth()) {
+        return err(authRequiredError("kv"));
+      }
+
+      const path = this.getFullPath(key, options?.prefix);
+      const session = this.context.session!;
+      const headers = this.context.invoke(
+        session,
+        "kv",
+        path,
+        KVAction.GET
+      );
+
+      const body: {
+        space: string;
+        path: string;
+        ttl_seconds: number;
+        content_hash?: string;
+        etag?: string;
+      } = {
+        space: session.spaceId,
+        path,
+        ttl_seconds:
+          options?.expiresInSeconds ??
+          Math.ceil(DEFAULT_SIGNED_READ_URL_EXPIRY_MS / 1000),
+      };
+
+      if (options?.contentHash !== undefined) {
+        body.content_hash = options.contentHash;
+      }
+      if (options?.etag !== undefined) {
+        body.etag = options.etag;
+      }
+
+      try {
+        const response = await this.context.fetch(`${this.host}/signed/kv`, {
+          method: "POST",
+          headers: this.withJsonContentType(headers),
+          body: JSON.stringify(body),
+          signal: this.combineSignals(options?.signal),
+        });
+
+        if (!response.ok) {
+          return this.createSignedReadUrlError(response, key);
+        }
+
+        const signedUrl = this.normalizeSignedReadUrlResponse(
+          await response.json()
+        );
+        if (!signedUrl) {
+          return err(
+            serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              "Signed read URL response did not include url, ticketId, and expiresAt",
+              "kv"
+            )
+          );
+        }
+
+        return ok(signedUrl);
       } catch (error) {
         return err(wrapError("kv", error));
       }
