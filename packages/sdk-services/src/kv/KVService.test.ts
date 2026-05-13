@@ -7,7 +7,10 @@ import type {
 } from "../types";
 import { ErrorCodes } from "../types";
 import { KVService } from "./KVService";
-import { KVAction } from "./types";
+import {
+  DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
+  KVAction,
+} from "./types";
 
 function response(
   ok: boolean,
@@ -171,6 +174,30 @@ describe("KVService.createSignedReadUrl", () => {
     expect(JSON.parse(requestInit?.body as string)).toMatchObject({
       path: "/audio/conv-1/recording",
       ttl_seconds: 120,
+    });
+  });
+
+  test("uses the default signed read URL expiry when omitted", async () => {
+    let requestInit: FetchRequestInit | undefined;
+
+    const service = new KVService({});
+    service.initialize(
+      createContext(async (_url, init) => {
+        requestInit = init;
+        return response(true, 200, {
+          url: "/signed/kv/ticket-default",
+          ticketId: "ticket-default",
+          expiresAt: "2026-05-13T12:00:00Z",
+        });
+      })
+    );
+
+    const result = await service.createSignedReadUrl("audio/conv-1/recording");
+
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(requestInit?.body as string)).toMatchObject({
+      path: "audio/conv-1/recording",
+      ttl_seconds: DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
     });
   });
 

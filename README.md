@@ -71,7 +71,10 @@ npm install @tinycloud/node-sdk
 ```
 
 ```typescript
-import { TinyCloudNode } from '@tinycloud/node-sdk';
+import {
+  DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
+  TinyCloudNode,
+} from '@tinycloud/node-sdk';
 
 const tc = new TinyCloudNode({
   privateKey: process.env.PRIVATE_KEY,
@@ -87,7 +90,7 @@ const result = await tc.kv.get('myKey');
 // Signed KV read URL for short-lived external reads.
 // Requires tinycloud-node with the TC-1368 /signed/kv endpoint.
 const signedAudio = await tc.kv.createSignedReadUrl('audio/meeting-1/recording', {
-  expiresInSeconds: 300,
+  expiresInSeconds: DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
 });
 if (signedAudio.ok) {
   console.log(signedAudio.data.url);

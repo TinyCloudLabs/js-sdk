@@ -149,7 +149,11 @@ export {
 export type { PortableDelegation } from "./delegation";
 
 // Re-export KV service values
-export { KVService, PrefixedKVService } from "@tinycloud/sdk-core";
+export {
+  DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
+  KVService,
+  PrefixedKVService,
+} from "@tinycloud/sdk-core";
 
 // Re-export KV service types
 export type {

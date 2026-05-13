@@ -164,6 +164,11 @@ export interface KVHeadOptions {
 }
 
 /**
+ * Default lifetime for signed KV read URLs when a caller omits expiresInSeconds.
+ */
+export const DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS = 300;
+
+/**
  * Options for creating a signed KV read URL.
  */
 export interface KVCreateSignedReadUrlOptions {
@@ -174,6 +179,7 @@ export interface KVCreateSignedReadUrlOptions {
 
   /**
    * Requested URL lifetime in seconds.
+   * Defaults to DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS.
    * The node may cap this by its configured maximum, the invocation expiry,
    * or the parent delegation expiry.
    */

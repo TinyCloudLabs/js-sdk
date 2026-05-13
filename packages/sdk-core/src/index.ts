@@ -74,6 +74,7 @@ export {
   // KV Service
   KVService,
   PrefixedKVService,
+  DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
   type IKVService,
   type IPrefixedKVService,
   type KVServiceConfig,
