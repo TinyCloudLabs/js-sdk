@@ -26,7 +26,7 @@ import {
 import { IKVService } from "./IKVService";
 import { PrefixedKVService, IPrefixedKVService } from "./PrefixedKVService";
 import {
-  DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
+  DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVServiceConfig,
   KVGetOptions,
   KVPutOptions,
@@ -689,7 +689,8 @@ export class KVService extends BaseService implements IKVService {
         space: session.spaceId,
         path,
         ttl_seconds:
-          options?.expiresInSeconds ?? DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
+          options?.expiresInSeconds ??
+          Math.ceil(DEFAULT_SIGNED_READ_URL_EXPIRY_MS / 1000),
       };
 
       if (options?.contentHash !== undefined) {

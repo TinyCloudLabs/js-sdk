@@ -15,7 +15,7 @@ export { IKVService } from "./IKVService";
 
 // Types
 export {
-  DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
+  DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVServiceConfig,
   KVGetOptions,
   KVPutOptions,

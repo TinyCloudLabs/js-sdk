@@ -165,8 +165,13 @@ export interface KVHeadOptions {
 
 /**
  * Default lifetime for signed KV read URLs when a caller omits expiresInSeconds.
+ * SDK duration defaults are stored in milliseconds; createSignedReadUrl converts
+ * this to the node endpoint's ttl_seconds field.
+ *
+ * Keep this in sync with EXPIRY.SIGNED_READ_URL_MS in @tinycloud/sdk-core.
+ * sdk-services cannot import sdk-core because sdk-core depends on sdk-services.
  */
-export const DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS = 300;
+export const DEFAULT_SIGNED_READ_URL_EXPIRY_MS = 5 * 60 * 1000;
 
 /**
  * Options for creating a signed KV read URL.
@@ -179,7 +184,7 @@ export interface KVCreateSignedReadUrlOptions {
 
   /**
    * Requested URL lifetime in seconds.
-   * Defaults to DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS.
+   * Defaults to {@link DEFAULT_SIGNED_READ_URL_EXPIRY_MS} converted to seconds.
    * The node may cap this by its configured maximum, the invocation expiry,
    * or the parent delegation expiry.
    */

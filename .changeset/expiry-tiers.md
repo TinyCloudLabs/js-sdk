@@ -7,9 +7,10 @@ Introduce `EXPIRY` tiers as the single source of truth for default
 delegation lifetimes. Pick a tier, not a number, when adding a new
 delegation surface.
 
-The five tiers, exported from `@tinycloud/sdk-core`:
+The delegation tiers and signed URL TTL, exported from `@tinycloud/sdk-core`:
 
 - `EXPIRY.EPHEMERAL_MS` (1h) — auto-refreshable, never user-visible.
+- `EXPIRY.SIGNED_READ_URL_MS` (5m) — short-lived bearer KV read URLs.
 - `EXPIRY.SESSION_MS` (7d) — sign-in sessions and runtime grants
   (capped by session anyway).
 - `EXPIRY.SHARE_MS` (7d) — share links and ad-hoc third-party

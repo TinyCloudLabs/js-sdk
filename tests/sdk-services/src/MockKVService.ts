@@ -23,7 +23,7 @@ import type {
   KVSignedReadUrlResponse,
 } from "@tinycloud/sdk-services";
 import {
-  DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
+  DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   ok,
   err,
   ErrorCodes,
@@ -339,7 +339,8 @@ export class MockKVService implements IKVService {
     const ticketId = `mock-${encodeURIComponent(fullKey)}`;
     const relativeUrl = `/signed/kv/${ticketId}`;
     const expiresInSeconds =
-      options?.expiresInSeconds ?? DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS;
+      options?.expiresInSeconds ??
+      Math.ceil(DEFAULT_SIGNED_READ_URL_EXPIRY_MS / 1000);
 
     return ok({
       url: `https://mock.tinycloud.test${relativeUrl}`,

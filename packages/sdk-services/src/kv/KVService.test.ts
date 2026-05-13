@@ -8,7 +8,7 @@ import type {
 import { ErrorCodes } from "../types";
 import { KVService } from "./KVService";
 import {
-  DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
+  DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVAction,
 } from "./types";
 
@@ -197,7 +197,7 @@ describe("KVService.createSignedReadUrl", () => {
     expect(result.ok).toBe(true);
     expect(JSON.parse(requestInit?.body as string)).toMatchObject({
       path: "audio/conv-1/recording",
-      ttl_seconds: DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
+      ttl_seconds: Math.ceil(DEFAULT_SIGNED_READ_URL_EXPIRY_MS / 1000),
     });
   });
 

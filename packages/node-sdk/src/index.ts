@@ -150,7 +150,7 @@ export type { PortableDelegation } from "./delegation";
 
 // Re-export KV service values
 export {
-  DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
+  DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVService,
   PrefixedKVService,
 } from "@tinycloud/sdk-core";

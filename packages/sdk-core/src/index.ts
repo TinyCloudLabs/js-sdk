@@ -74,7 +74,6 @@ export {
   // KV Service
   KVService,
   PrefixedKVService,
-  DEFAULT_SIGNED_READ_URL_EXPIRES_IN_SECONDS,
   type IKVService,
   type IPrefixedKVService,
   type KVServiceConfig,
@@ -392,4 +391,8 @@ export {
 
 // Default lifetimes for delegation flows. See `expiry.ts` for the
 // "pick a tier, not a number" rationale.
-export { EXPIRY, type ExpiryTier } from "./expiry";
+export {
+  DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
+  EXPIRY,
+  type ExpiryTier,
+} from "./expiry";
