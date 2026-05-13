@@ -82,8 +82,10 @@ export {
   type KVListOptions,
   type KVDeleteOptions,
   type KVHeadOptions,
+  type KVCreateSignedReadUrlOptions,
   type KVResponse,
   type KVListResponse,
+  type KVSignedReadUrlResponse,
   type KVResponseHeaders,
   // Result pattern
   type Result,

@@ -152,8 +152,10 @@ export type {
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
+  KVCreateSignedReadUrlOptions,
   KVResponse,
   KVListResponse,
+  KVSignedReadUrlResponse,
   KVResponseHeaders,
   KVActionType,
 } from "./kv";

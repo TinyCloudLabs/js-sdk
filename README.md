@@ -84,6 +84,15 @@ await tc.signIn();
 await tc.kv.put('myKey', { hello: 'world' });
 const result = await tc.kv.get('myKey');
 
+// Signed KV read URL for short-lived external reads.
+// Requires tinycloud-node with the TC-1368 /signed/kv endpoint.
+const signedAudio = await tc.kv.createSignedReadUrl('audio/meeting-1/recording', {
+  expiresInSeconds: 300,
+});
+if (signedAudio.ok) {
+  console.log(signedAudio.data.url);
+}
+
 // Delegations
 const delegation = await tc.createDelegation({
   delegateDID: 'did:pkh:eip155:1:0x...',
