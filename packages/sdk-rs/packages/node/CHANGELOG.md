@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk-wasm
 
+## 1.7.3-beta.2
+
+### Patch Changes
+
+- 0e049d7: build(deps): bump tokio from 1.52.1 to 1.52.2 in the rust-minor-patch group
+
 ## 1.7.3-beta.1
 
 ### Patch Changes

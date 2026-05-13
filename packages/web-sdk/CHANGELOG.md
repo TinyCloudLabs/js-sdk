@@ -1,5 +1,25 @@
 # @tinycloudlabs/web-sdk
 
+## 2.2.0-beta.12
+
+### Minor Changes
+
+- 51b6f51: TC-1365: add browser session persistence/restoration for `TinyCloudWeb`.
+
+  The web SDK now uses `BrowserSessionStorage` by default, validates persisted
+  session data before writing it, reports restore status, rejects expired or
+  corrupt stored sessions, and attempts to restore a valid session in
+  `signIn()` before falling back to wallet login.
+
+### Patch Changes
+
+- Updated dependencies [0e049d7]
+- Updated dependencies [010ee0f]
+- Updated dependencies [f43143d]
+  - @tinycloud/web-sdk-wasm@1.7.3-beta.2
+  - @tinycloud/node-sdk@2.2.0-beta.12
+  - @tinycloud/sdk-core@2.2.0-beta.12
+
 ## 2.2.0-beta.11
 
 ### Patch Changes

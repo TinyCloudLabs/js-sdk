@@ -1,5 +1,64 @@
 # @tinycloudlabs/node-sdk
 
+## 2.2.0-beta.12
+
+### Minor Changes
+
+- 010ee0f: Fix `restoreSession` so runtime-permission-grant operations work after
+  session restore (notably the OpenKey-backed CLI path).
+
+  `TinyCloudNode.restoreSession` populated `_serviceContext.session` (the
+  `ServiceSession` used by service invokers) but never set
+  `auth.tinyCloudSession` (the richer `TinyCloudSession` that surfaces the
+  SIWE recap, address, chain, etc.). Methods that read from the latter —
+  `hasRuntimePermissions`, `getRuntimePermissionDelegations`,
+  `useRuntimeDelegation`, `grantRuntimePermissions` — therefore threw
+  `SessionExpiredError(new Date(0))` immediately after every restore.
+
+  Symptoms:
+  - `tc auth request --cap …` fails with `Session expired at 1970-01-01T00:00:00.000Z`
+  - Persisted runtime delegations replayed via `useRuntimeDelegation` are
+    rejected, so `tc auth caps` reports `granted: []` even when
+    `additional-delegations.json` has live entries.
+
+  Changes:
+  - `restoreSession` now accepts optional `siwe` and `signature` fields.
+  - When `siwe` + `address` + `chainId` are provided, a full
+    `TinyCloudSession` is rehydrated. In wallet mode it lands on
+    `auth.tinyCloudSession` via the new
+    `NodeUserAuthorization.setRestoredTinyCloudSession`. In session-only
+    mode (no auth layer — typical for OpenKey-restored CLIs) it lands on
+    a new `TinyCloudNode._restoredTcSession` field.
+  - A new private `currentTinyCloudSession()` helper resolves the active
+    session from either surface. The four runtime-permission readers
+    (`hasRuntimePermissions`, `getRuntimePermissionDelegations`,
+    `useRuntimeDelegation`, `grantRuntimePermissions`) now consult it.
+
+  CLI side (`@tinycloud/cli`): `replayAdditionalDelegations` exposes a
+  `TC_DEBUG_REPLAY=1` env switch that prints which stored delegations
+  fail to install and why. Useful for diagnosing future restore-related
+  issues.
+
+  Backwards compatible: `restoreSession`'s new parameters are optional;
+  old callers continue to work, they just don't get runtime-grant
+  support until they pass `siwe`. The CLI was already passing `siwe` —
+  the SDK was just dropping it.
+
+- f43143d: TC-1372: add `kv.createSignedReadUrl()` for minting short-lived signed KV read URLs through tinycloud-node's `/signed/kv` endpoint.
+
+  The method signs a normal `tinycloud.kv/get` invocation for the resolved key path, posts the signed URL request to tinycloud-node, and returns an absolute URL plus the opaque ticket id and expiry metadata. Requires tinycloud-node with the TC-1368 signed KV URL API.
+
+  The default signed read URL expiry is defined in `sdk-core` as
+  `EXPIRY.SIGNED_READ_URL_MS` and exposed as
+  `DEFAULT_SIGNED_READ_URL_EXPIRY_MS`.
+
+### Patch Changes
+
+- Updated dependencies [0e049d7]
+- Updated dependencies [f43143d]
+  - @tinycloud/node-sdk-wasm@1.7.3-beta.2
+  - @tinycloud/sdk-core@2.2.0-beta.12
+
 ## 2.2.0-beta.11
 
 ### Minor Changes

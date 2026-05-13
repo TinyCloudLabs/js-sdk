@@ -22,6 +22,7 @@
     "cli-tc-auth-request-tooling",
     "default-cloud-host-resolution",
     "delegated-access-restorable",
+    "dependabot-dependabot-cargo-rust-minor-patch-6abb98af4c",
     "dependabot-dependabot-cargo-rust-minor-patch-91c3c252fa",
     "dependabot-dependabot-npm-and-yarn-npm-minor-patch-dfbb88ef56",
     "expiry-tiers",
@@ -30,9 +31,12 @@
     "manifest-capabilities-read-default",
     "manifest-permission-descriptions",
     "manifest-v1-composition",
+    "restore-session-rehydrate-tcsession",
     "runtime-permission-delegations",
     "scoped-secrets",
     "secrets-wrapper",
+    "tc-1365-browser-session-restore",
+    "tc-1372-signed-kv-read-urls",
     "tinycloud-vfs-initial-release",
     "vault-permission-shorthand"
   ]
