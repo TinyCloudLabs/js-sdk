@@ -306,22 +306,15 @@ describe("resolveManifest — minimum manifest with defaults=true", () => {
     expect(kv?.path).toBe("com.listen.app/");
   });
 
-  it("expands read-only action short names to full URNs", () => {
+  it("expands action short names to full URNs", () => {
     const kv = resolved.resources.find((r) => r.service === "tinycloud.kv");
     expect(kv?.actions).toEqual([
       "tinycloud.kv/get",
+      "tinycloud.kv/put",
+      "tinycloud.kv/del",
       "tinycloud.kv/list",
       "tinycloud.kv/metadata",
     ]);
-  });
-
-  it("does not include write actions in the standard tier", () => {
-    const kv = resolved.resources.find((r) => r.service === "tinycloud.kv");
-    const sql = resolved.resources.find((r) => r.service === "tinycloud.sql");
-
-    expect(kv?.actions).not.toContain("tinycloud.kv/put");
-    expect(kv?.actions).not.toContain("tinycloud.kv/del");
-    expect(sql?.actions).toEqual(["tinycloud.sql/read"]);
   });
 
   it("always includes capabilities:read in any non-false default", () => {
@@ -387,7 +380,6 @@ describe("resolveManifest — defaults tiers", () => {
     // Standard tier, not admin or all.
     const sql = resolved.resources.find((r) => r.service === "tinycloud.sql");
     expect(sql?.actions).not.toContain("tinycloud.sql/ddl");
-    expect(sql?.actions).not.toContain("tinycloud.sql/write");
   });
 
   it("adds capabilities read for explicit permission spaces", () => {
@@ -433,13 +425,13 @@ describe("resolveManifest — defaults tiers", () => {
 });
 
 describe("resolveManifest — secrets shorthand", () => {
-  it("defaults secrets to read permissions in the secrets space", () => {
+  it("supports explicit read-only secrets in the secrets space", () => {
     const resolved = resolveManifest({
       app_id: "com.listen.app",
       name: "Listen",
       defaults: false,
       secrets: {
-        ANTHROPIC_API_KEY: true,
+        ANTHROPIC_API_KEY: ["read"],
       },
     });
 

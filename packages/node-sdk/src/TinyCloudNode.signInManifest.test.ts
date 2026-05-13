@@ -245,7 +245,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const manifest: Manifest = {
       app_id: "com.listen.app",
       name: "Listen",
-      // Read-only standard tier defaults: kv/sql/capabilities under the
+      // Standard tier defaults: kv/sql/capabilities under the
       // manifest prefix. No DuckDB. No hooks.
       defaults: true,
     };
@@ -280,12 +280,14 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     expect(cfg.abilities.kv).toEqual({
       "com.listen.app/": [
         "tinycloud.kv/get",
+        "tinycloud.kv/put",
+        "tinycloud.kv/del",
         "tinycloud.kv/list",
         "tinycloud.kv/metadata",
       ],
     });
     expect(cfg.abilities.sql).toEqual({
-      "com.listen.app/": ["tinycloud.sql/read"],
+      "com.listen.app/": ["tinycloud.sql/read", "tinycloud.sql/write"],
     });
     expect(cfg.abilities.capabilities).toEqual({
       "": ["tinycloud.capabilities/read"],
@@ -354,7 +356,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
         name: "Listen",
         defaults: false,
         secrets: {
-          ANTHROPIC_API_KEY: true,
+          ANTHROPIC_API_KEY: ["read"],
         },
       },
     });

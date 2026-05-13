@@ -76,8 +76,8 @@ export type ManifestSecretActions =
  * The valid values for `Manifest.defaults`.
  *
  * - `false` → no auto-included permissions
- * - `true` → standard tier (KV + SQL read + capabilities:read)
- * - `"admin"` → KV read/write + SQL read/write/ddl + capabilities:read
+ * - `true` → standard tier (KV + SQL read/write + capabilities:read)
+ * - `"admin"` → standard + SQL ddl
  * - `"all"` → everything the SDK supports (including DuckDB)
  *
  * Unknown string values silently fall back to `true`. Values are normalized
@@ -308,19 +308,18 @@ const DEFAULT_STANDARD_ENTRIES: readonly PermissionEntry[] = [
     service: "tinycloud.kv",
     space: DEFAULT_MANIFEST_SPACE,
     path: "/",
-    actions: ["get", "list", "metadata"],
+    actions: ["get", "put", "del", "list", "metadata"],
   },
   {
     service: "tinycloud.sql",
     space: DEFAULT_MANIFEST_SPACE,
     path: "/",
-    actions: ["read"],
+    actions: ["read", "write"],
   },
 ];
 
 /**
- * Default permission entries for the `"admin"` tier: KV read/write + SQL
- * read/write/ddl.
+ * Default permission entries for the `"admin"` tier: standard + sql/ddl.
  */
 const DEFAULT_ADMIN_ENTRIES: readonly PermissionEntry[] = [
   {
