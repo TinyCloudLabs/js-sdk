@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { checkServerHealth, createClient, TEST_KEY } from "../setup";
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
+import type { DuckDbStatement } from "@tinycloud/sdk-services";
 
 const DB = `sdk_test_pivot_${Date.now()}`;
 
@@ -15,23 +16,25 @@ describe("DuckDB PIVOT", () => {
 
     // Create EAV schema
     const db = alice.duckdb.db(DB);
-    await db.execute(`CREATE TABLE objects (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL)`);
-    await db.execute(`CREATE TABLE fields (id INTEGER PRIMARY KEY, object_id INTEGER, name VARCHAR NOT NULL, field_type VARCHAR DEFAULT 'text')`);
-    await db.execute(`CREATE TABLE entries (id INTEGER PRIMARY KEY, object_id INTEGER, created_at TIMESTAMP DEFAULT current_timestamp)`);
-    await db.execute(`CREATE TABLE entry_fields (entry_id INTEGER, field_id INTEGER, value VARCHAR, PRIMARY KEY(entry_id, field_id))`);
+    const setupStatements: DuckDbStatement[] = [
+      { sql: `CREATE TABLE objects (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL)` },
+      { sql: `CREATE TABLE fields (id INTEGER PRIMARY KEY, object_id INTEGER, name VARCHAR NOT NULL, field_type VARCHAR DEFAULT 'text')` },
+      { sql: `CREATE TABLE entries (id INTEGER PRIMARY KEY, object_id INTEGER, created_at TIMESTAMP DEFAULT current_timestamp)` },
+      { sql: `CREATE TABLE entry_fields (entry_id INTEGER, field_id INTEGER, value VARCHAR, PRIMARY KEY(entry_id, field_id))` },
 
-    // Seed people object
-    await db.execute(`INSERT INTO objects VALUES (1, 'People')`);
-    await db.execute(`INSERT INTO fields VALUES (1, 1, 'Full Name', 'text')`);
-    await db.execute(`INSERT INTO fields VALUES (2, 1, 'Email', 'text')`);
-    await db.execute(`INSERT INTO fields VALUES (3, 1, 'Phone', 'text')`);
-    await db.execute(`INSERT INTO fields VALUES (4, 1, 'Status', 'text')`);
+      // Seed people object
+      { sql: `INSERT INTO objects VALUES (1, 'People')` },
+      { sql: `INSERT INTO fields VALUES (1, 1, 'Full Name', 'text')` },
+      { sql: `INSERT INTO fields VALUES (2, 1, 'Email', 'text')` },
+      { sql: `INSERT INTO fields VALUES (3, 1, 'Phone', 'text')` },
+      { sql: `INSERT INTO fields VALUES (4, 1, 'Status', 'text')` },
 
-    // Seed task object
-    await db.execute(`INSERT INTO objects VALUES (2, 'Tasks')`);
-    await db.execute(`INSERT INTO fields VALUES (5, 2, 'Title', 'text')`);
-    await db.execute(`INSERT INTO fields VALUES (6, 2, 'Status', 'text')`);
-    await db.execute(`INSERT INTO fields VALUES (7, 2, 'Priority', 'text')`);
+      // Seed task object
+      { sql: `INSERT INTO objects VALUES (2, 'Tasks')` },
+      { sql: `INSERT INTO fields VALUES (5, 2, 'Title', 'text')` },
+      { sql: `INSERT INTO fields VALUES (6, 2, 'Status', 'text')` },
+      { sql: `INSERT INTO fields VALUES (7, 2, 'Priority', 'text')` },
+    ];
 
     // Seed 10 people entries
     const people = [
@@ -49,16 +52,20 @@ describe("DuckDB PIVOT", () => {
 
     for (let i = 0; i < people.length; i++) {
       const entryId = i + 1;
-      await db.execute(`INSERT INTO entries VALUES (${entryId}, 1, current_timestamp)`);
       const [name, email, phone, status] = people[i];
-      await db.execute(`INSERT INTO entry_fields VALUES (${entryId}, 1, '${name}')`);
-      await db.execute(`INSERT INTO entry_fields VALUES (${entryId}, 2, '${email}')`);
+      setupStatements.push(
+        { sql: `INSERT INTO entries VALUES (?, 1, current_timestamp)`, params: [entryId] },
+        { sql: `INSERT INTO entry_fields VALUES (?, 1, ?)`, params: [entryId, name] },
+        { sql: `INSERT INTO entry_fields VALUES (?, 2, ?)`, params: [entryId, email] },
+      );
       if (phone) {
-        await db.execute(`INSERT INTO entry_fields VALUES (${entryId}, 3, '${phone}')`);
+        setupStatements.push({ sql: `INSERT INTO entry_fields VALUES (?, 3, ?)`, params: [entryId, phone] });
       }
-      await db.execute(`INSERT INTO entry_fields VALUES (${entryId}, 4, '${status}')`);
+      setupStatements.push({ sql: `INSERT INTO entry_fields VALUES (?, 4, ?)`, params: [entryId, status] });
     }
 
+    const setupResult = await db.batch(setupStatements);
+    expect(setupResult.ok).toBe(true);
     console.log("[Setup] EAV schema seeded with 10 people entries");
   });
 
