@@ -152,6 +152,16 @@ function base64Decode(str: string): Uint8Array {
   return bytes;
 }
 
+function isUnlockSigner(
+  signer: unknown
+): signer is { signMessage(message: string): Promise<string> } {
+  return (
+    typeof signer === "object" &&
+    signer !== null &&
+    typeof (signer as { signMessage?: unknown }).signMessage === "function"
+  );
+}
+
 function defaultVaultMessage(input: VaultErrorInput): string {
   switch (input.code) {
     case "DECRYPTION_FAILED": return input.message ?? "Decryption failed";
@@ -219,6 +229,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
   } | null = null;
   private _isUnlocked = false;
   private vaultConfig: DataVaultServiceConfig;
+  private unlockInFlight: Promise<Result<void, VaultError>> | null = null;
 
   /**
    * Create a new DataVaultService instance.
@@ -296,7 +307,20 @@ export class DataVaultService extends BaseService implements IDataVaultService {
   async unlock(
     signer?: { signMessage(message: string): Promise<string> } | unknown
   ): Promise<Result<void, VaultError>> {
-    return this.withTelemetry("unlock", undefined, async () => {
+    const unlockSigner = isUnlockSigner(signer) ? signer : undefined;
+    if (
+      this._isUnlocked &&
+      this.masterKey &&
+      (this.encryptionIdentity || !unlockSigner)
+    ) {
+      return { ok: true, data: undefined };
+    }
+
+    if (this.unlockInFlight) {
+      return this.unlockInFlight;
+    }
+
+    this.unlockInFlight = this.withTelemetry("unlock", undefined, async () => {
       const spaceId = this.vaultConfig.spaceId;
       const versionConfig = VaultVersionConfig[CURRENT_VAULT_VERSION];
       const masterCacheKey = `vault-master:${spaceId}`;
@@ -306,27 +330,30 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         // -----------------------------------------------------------------
         // Step 1: Master signature → master key
         // -----------------------------------------------------------------
-        let masterSigBytes = await loadCachedSignature(masterCacheKey);
+        if (!this.masterKey) {
+          let masterSigBytes = await loadCachedSignature(masterCacheKey);
 
-        if (!masterSigBytes) {
-          if (!signer) {
-            return vaultError({
-              code: "VAULT_LOCKED",
-              message: "Signer is required when no cached master signature exists",
-            });
+          if (!masterSigBytes) {
+            if (!unlockSigner) {
+              return vaultError({
+                code: "VAULT_LOCKED",
+                message: "Signer is required when no cached master signature exists",
+              });
+            }
+            const sig = await unlockSigner.signMessage(
+              versionConfig.masterMessage(spaceId)
+            );
+            masterSigBytes = toBytes(sig);
+            await cacheSignature(masterCacheKey, masterSigBytes);
           }
-          const s = signer as { signMessage(message: string): Promise<string> };
-          const sig = await s.signMessage(versionConfig.masterMessage(spaceId));
-          masterSigBytes = toBytes(sig);
-          await cacheSignature(masterCacheKey, masterSigBytes);
-        }
 
-        // Derive master key: deriveKey(sigBytes, sha256(spaceId), "vault-master")
-        this.masterKey = this.crypto.deriveKey(
-          masterSigBytes,
-          this.crypto.sha256(toBytes(spaceId)),
-          toBytes("vault-master")
-        );
+          // Derive master key: deriveKey(sigBytes, sha256(spaceId), "vault-master")
+          this.masterKey = this.crypto.deriveKey(
+            masterSigBytes,
+            this.crypto.sha256(toBytes(spaceId)),
+            toBytes("vault-master")
+          );
+        }
 
         // -----------------------------------------------------------------
         // Step 2: Identity — check public space first, then sign if needed
@@ -357,15 +384,16 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           let identitySigBytes = await loadCachedSignature(identityCacheKey);
 
           if (!identitySigBytes) {
-            if (!signer) {
+            if (!unlockSigner) {
               // No signer available — skip identity derivation.
               // Vault still works for get/put (only needs master key).
               this.encryptionIdentity = null;
               this._isUnlocked = true;
               return ok(undefined);
             }
-            const s = signer as { signMessage(message: string): Promise<string> };
-            const sig = await s.signMessage(versionConfig.identityMessage);
+            const sig = await unlockSigner.signMessage(
+              versionConfig.identityMessage
+            );
             identitySigBytes = toBytes(sig);
             await cacheSignature(identityCacheKey, identitySigBytes);
           }
@@ -403,6 +431,12 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         });
       }
     }) as Promise<Result<void, VaultError>>;
+
+    try {
+      return await this.unlockInFlight;
+    } finally {
+      this.unlockInFlight = null;
+    }
   }
 
   /**
