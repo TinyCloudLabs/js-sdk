@@ -37,6 +37,7 @@
     "secrets-wrapper",
     "tc-1365-browser-session-restore",
     "tc-1372-signed-kv-read-urls",
+    "tc-1392-vault-unlock-dedupe",
     "tinycloud-vfs-initial-release",
     "vault-permission-shorthand"
   ]

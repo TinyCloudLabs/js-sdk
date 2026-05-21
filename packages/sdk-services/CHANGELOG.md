@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-services
 
+## 2.2.0-beta.13
+
+### Patch Changes
+
+- 976b3c7: Deduplicate in-flight vault unlocks and reuse in-memory vault key material so repeated OpenKey-backed unlock paths do not trigger duplicate signer prompts.
+
 ## 2.2.0-beta.12
 
 ### Minor Changes
