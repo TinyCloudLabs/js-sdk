@@ -23,8 +23,8 @@ hex = "0.4.3"
 iri-string = "0.7.12"
 js-sys = "0.3.59"
 # Depends on TinyCloudLabs/tinycloud-node#66.
-tinycloud-sdk-rs = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", rev = "34c1e2be86cbeb25f1394e922e531a30f293538a" }
-tinycloud-sdk-wasm = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", rev = "34c1e2be86cbeb25f1394e922e531a30f293538a" }
+tinycloud-sdk-rs = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", rev = "1f141fb498a0818e6e188b08663a098161017b37" }
+tinycloud-sdk-wasm = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", rev = "1f141fb498a0818e6e188b08663a098161017b37" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.149"
 serde-wasm-bindgen = "0.6.5"

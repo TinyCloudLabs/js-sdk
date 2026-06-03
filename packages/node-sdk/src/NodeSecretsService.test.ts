@@ -33,7 +33,7 @@ function readOnlyManifest(): Manifest {
 }
 
 describe("NodeSecretsService", () => {
-  it("does not autosign reads", async () => {
+  it("requests read and decrypt permissions before getting a secret", async () => {
     const base = makeBaseSecrets();
     const grantPermissions = mock(async () => {});
     const secrets = new NodeSecretsService({
@@ -41,12 +41,29 @@ describe("NodeSecretsService", () => {
       getManifest: readOnlyManifest,
       grantPermissions,
       canEscalate: () => true,
+      getEncryptionNetworkId: () =>
+        "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
     });
 
     const result = await secrets.get("ANTHROPIC_API_KEY");
 
     expect(result).toEqual({ ok: true, data: "stored" });
-    expect(grantPermissions).not.toHaveBeenCalled();
+    expect(grantPermissions).toHaveBeenCalledWith([
+      {
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["get"],
+        skipPrefix: true,
+      },
+      {
+        service: "tinycloud.encryption",
+        space: "encryption",
+        path: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+        actions: ["decrypt"],
+        skipPrefix: true,
+      },
+    ] satisfies PermissionEntry[]);
   });
 
   it("grants write permission before putting a read-only manifest secret", async () => {
@@ -64,10 +81,10 @@ describe("NodeSecretsService", () => {
     expect(result.ok).toBe(true);
     expect(grantPermissions).toHaveBeenCalledWith([
       {
-        service: "tinycloud.vault",
+        service: "tinycloud.kv",
         space: "secrets",
-        path: "secrets/ANTHROPIC_API_KEY",
-        actions: ["write"],
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["put"],
         skipPrefix: true,
       },
     ] satisfies PermissionEntry[]);
@@ -93,10 +110,10 @@ describe("NodeSecretsService", () => {
     expect(result.ok).toBe(true);
     expect(grantPermissions).toHaveBeenCalledWith([
       {
-        service: "tinycloud.vault",
+        service: "tinycloud.kv",
         space: "secrets",
-        path: "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
-        actions: ["write"],
+        path: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+        actions: ["put"],
         skipPrefix: true,
       },
     ] satisfies PermissionEntry[]);
@@ -129,6 +146,34 @@ describe("NodeSecretsService", () => {
     expect(base.delete).toHaveBeenCalledWith("ANTHROPIC_API_KEY");
   });
 
+  it("skips autosign when the active session already includes the mutation action", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const hasPermissions = mock(() => true);
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: () => undefined,
+      hasPermissions,
+      grantPermissions,
+      canEscalate: () => false,
+    });
+
+    const result = await secrets.put("ANTHROPIC_API_KEY", "secret");
+
+    expect(result.ok).toBe(true);
+    expect(hasPermissions).toHaveBeenCalledWith([
+      {
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["put"],
+        skipPrefix: true,
+      },
+    ] satisfies PermissionEntry[]);
+    expect(grantPermissions).not.toHaveBeenCalled();
+    expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret");
+  });
+
   it("skips autosign when the manifest includes the scoped mutation action", async () => {
     const base = makeBaseSecrets();
     const grantPermissions = mock(async () => {});
@@ -159,6 +204,30 @@ describe("NodeSecretsService", () => {
       "ANTHROPIC_API_KEY",
       { scope: "food-tracker" },
     );
+  });
+
+  it("requests list permission before listing scoped secrets", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: readOnlyManifest,
+      grantPermissions,
+      canEscalate: () => true,
+    });
+
+    const result = await secrets.list({ scope: "Food Tracker" });
+
+    expect(result).toEqual({ ok: true, data: ["ANTHROPIC_API_KEY"] });
+    expect(grantPermissions).toHaveBeenCalledWith([
+      {
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/scoped/food-tracker/",
+        actions: ["list"],
+        skipPrefix: true,
+      },
+    ] satisfies PermissionEntry[]);
   });
 
   it("re-unlocks after autosign when already unlocked", async () => {
@@ -214,7 +283,7 @@ describe("NodeSecretsService", () => {
         code: ErrorCodes.PERMISSION_DENIED,
         service: "secrets",
         message:
-          "Cannot autosign tinycloud.vault/write for ANTHROPIC_API_KEY; TinyCloudNode needs wallet mode with a signer or privateKey.",
+          "Cannot autosign tinycloud.kv/put for ANTHROPIC_API_KEY; TinyCloudNode needs wallet mode with a signer or privateKey.",
       },
     });
     expect(base.put).not.toHaveBeenCalled();

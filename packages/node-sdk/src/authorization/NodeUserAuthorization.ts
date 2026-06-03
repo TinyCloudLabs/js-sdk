@@ -386,6 +386,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this.wasm.makeSpaceId(address, chainId, space);
   }
 
+  private defaultEncryptionNetworkId(address: string, chainId: number): string {
+    return `urn:tinycloud:encryption:did:pkh:eip155:${chainId}:${address}:default`;
+  }
+
   private resolveSignInCapabilities(
     address: string,
     chainId: number,
@@ -397,9 +401,31 @@ export class NodeUserAuthorization implements IUserAuthorization {
   } {
     const request = this.getCapabilityRequest();
     if (request === undefined) {
+      const defaultNetworkId = this.defaultEncryptionNetworkId(address, chainId);
+      const secretsSpaceId = this.wasm.makeSpaceId(address, chainId, "secrets");
       return {
         abilities: this.defaultActions,
         spaceId: this.wasm.makeSpaceId(address, chainId, this.spacePrefix),
+        spaceAbilities: {
+          [secretsSpaceId]: {
+            kv: {
+              "vault/secrets/": [
+                "tinycloud.kv/get",
+                "tinycloud.kv/put",
+                "tinycloud.kv/del",
+                "tinycloud.kv/list",
+                "tinycloud.kv/metadata",
+              ],
+            },
+          },
+        },
+        rawAbilities: {
+          [defaultNetworkId]: [
+            "tinycloud.encryption/decrypt",
+            "tinycloud.encryption/network.create",
+            "tinycloud.encryption/network.revoke",
+          ],
+        },
       };
     }
 

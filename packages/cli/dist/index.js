@@ -2643,8 +2643,6 @@ function registerVaultCommand(program2) {
 // src/commands/secrets.ts
 import { readFile as readFile5 } from "fs/promises";
 import { writeFile as writeFile4 } from "fs/promises";
-import { PrivateKeySigner as PrivateKeySigner3 } from "@tinycloud/node-sdk";
-var SECRETS_PREFIX = "secrets/";
 async function readStdin3() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -2652,33 +2650,55 @@ async function readStdin3() {
   }
   return Buffer.concat(chunks);
 }
-function resolvePrivateKey2(options) {
-  const key = options.privateKey || process.env.TC_PRIVATE_KEY;
-  if (!key) {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      "Private key required. Use --private-key <hex> or set TC_PRIVATE_KEY env var.",
-      ExitCode.AUTH_REQUIRED
-    );
-  }
-  return key;
-}
-async function unlockVault2(node, privateKey) {
-  const signer = new PrivateKeySigner3(privateKey);
-  const result = await node.vault.unlock(signer);
-  if (result && !result.ok) {
-    throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-  }
+function authOptions(options) {
+  const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
+  return privateKey ? { privateKey } : void 0;
 }
 function registerSecretsCommand(program2) {
   const secrets = program2.command("secrets").description("Encrypted secrets management");
+  const network = secrets.command("network").description("Manage the default secrets encryption network");
+  network.command("show").description("Show the default secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const networkId = node.getDefaultEncryptionNetworkId();
+      const descriptor = await withSpinner(
+        "Fetching encryption network...",
+        () => node.getEncryptionNetwork(networkId)
+      );
+      outputJson({
+        networkId,
+        exists: descriptor !== null,
+        ...descriptor ? { descriptor } : {}
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  network.command("init").description("Create the default secrets encryption network if needed").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const descriptor = await withSpinner(
+        "Ensuring encryption network...",
+        () => node.ensureEncryptionNetwork()
+      );
+      outputJson({
+        networkId: descriptor.networkId,
+        state: descriptor.state,
+        descriptor
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
   secrets.command("list").description("List secrets").option("--space <spaceId>", "Space to list secrets from (for delegated access)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey2(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      await withSpinner("Unlocking vault...", () => unlockVault2(node, privateKey));
+      const node = await ensureAuthenticated(ctx, authOptions(options));
       if (options.space) {
         throw new CLIError(
           "NOT_IMPLEMENTED",
@@ -2686,15 +2706,11 @@ function registerSecretsCommand(program2) {
           ExitCode.ERROR
         );
       }
-      const result = await withSpinner("Listing secrets...", () => node.vault.list({ prefix: SECRETS_PREFIX }));
+      const result = await withSpinner("Listing secrets...", () => node.secrets.list());
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }
-      const keys = result.data.data ?? result.data;
-      const keyList = Array.isArray(keys) ? keys : [];
-      const secretNames = keyList.map(
-        (k) => typeof k === "string" && k.startsWith(SECRETS_PREFIX) ? k.slice(SECRETS_PREFIX.length) : k
-      );
+      const secretNames = Array.isArray(result.data) ? result.data : [];
       outputJson({
         secrets: secretNames,
         count: secretNames.length,
@@ -2708,36 +2724,15 @@ function registerSecretsCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey2(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      await withSpinner("Unlocking vault...", () => unlockVault2(node, privateKey));
-      const vaultKey = `${SECRETS_PREFIX}${name}`;
-      const result = await withSpinner(`Getting secret ${name}...`, () => node.vault.get(vaultKey));
+      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const result = await withSpinner(`Getting secret ${name}...`, () => node.secrets.get(name));
       if (!result.ok) {
-        if (result.error.code === "NOT_FOUND") {
+        if (result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND") {
           throw new CLIError("NOT_FOUND", `Secret "${name}" not found`, ExitCode.NOT_FOUND);
         }
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }
-      const data = result.data.data ?? result.data;
-      let value;
-      if (typeof data === "string") {
-        try {
-          const parsed = JSON.parse(data);
-          value = parsed.value;
-        } catch {
-          value = data;
-        }
-      } else if (data instanceof Uint8Array) {
-        try {
-          const parsed = JSON.parse(Buffer.from(data).toString("utf-8"));
-          value = parsed.value;
-        } catch {
-          value = Buffer.from(data).toString("utf-8");
-        }
-      } else {
-        value = data.value ?? data;
-      }
+      const value = String(result.data);
       if (options.output) {
         await writeFile4(options.output, value);
         outputJson({ name, written: options.output });
@@ -2756,9 +2751,7 @@ function registerSecretsCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey2(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      await withSpinner("Unlocking vault...", () => unlockVault2(node, privateKey));
+      const node = await ensureAuthenticated(ctx, authOptions(options));
       let secretValue;
       const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
       if (sources.length === 0) {
@@ -2774,12 +2767,11 @@ function registerSecretsCommand(program2) {
       } else {
         secretValue = value;
       }
-      const payload = JSON.stringify({
-        value: secretValue,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString()
-      });
-      const vaultKey = `${SECRETS_PREFIX}${name}`;
-      const result = await withSpinner(`Storing secret ${name}...`, () => node.vault.put(vaultKey, payload));
+      await withSpinner(
+        "Ensuring encryption network...",
+        () => node.ensureEncryptionNetwork()
+      );
+      const result = await withSpinner(`Storing secret ${name}...`, () => node.secrets.put(name, secretValue));
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }
@@ -2792,11 +2784,8 @@ function registerSecretsCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey2(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      await withSpinner("Unlocking vault...", () => unlockVault2(node, privateKey));
-      const vaultKey = `${SECRETS_PREFIX}${name}`;
-      const result = await withSpinner(`Deleting secret ${name}...`, () => node.vault.delete(vaultKey));
+      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const result = await withSpinner(`Deleting secret ${name}...`, () => node.secrets.delete(name));
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }
@@ -2827,7 +2816,7 @@ async function readStdin4() {
   }
   return Buffer.concat(chunks);
 }
-function resolvePrivateKey3(options) {
+function resolvePrivateKey2(options) {
   const key = options.privateKey || process.env.TC_PRIVATE_KEY;
   if (!key) {
     throw new CLIError(
@@ -2844,7 +2833,7 @@ function registerVarsCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey3(options);
+      const privateKey = resolvePrivateKey2(options);
       const node = await ensureAuthenticated(ctx, { privateKey });
       const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
       const result = await withSpinner("Listing variables...", () => prefixedKv.list());
@@ -2865,7 +2854,7 @@ function registerVarsCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey3(options);
+      const privateKey = resolvePrivateKey2(options);
       const node = await ensureAuthenticated(ctx, { privateKey });
       const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
       const result = await withSpinner(`Getting variable ${name}...`, () => prefixedKv.get(name));
@@ -2907,7 +2896,7 @@ function registerVarsCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey3(options);
+      const privateKey = resolvePrivateKey2(options);
       const node = await ensureAuthenticated(ctx, { privateKey });
       let varValue;
       const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
@@ -2942,7 +2931,7 @@ function registerVarsCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey3(options);
+      const privateKey = resolvePrivateKey2(options);
       const node = await ensureAuthenticated(ctx, { privateKey });
       const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
       const result = await withSpinner(`Deleting variable ${name}...`, () => prefixedKv.delete(name));

@@ -250,6 +250,7 @@ export {
   SecretsService,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
+  resolveSecretListPrefix,
   resolveSecretPath,
 } from "./secrets";
 export type {

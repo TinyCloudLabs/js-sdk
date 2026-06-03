@@ -75,3 +75,12 @@ export function resolveSecretPath(
     },
   };
 }
+
+export function resolveSecretListPrefix(
+  options: SecretScopeOptions = {},
+): string {
+  const scope = canonicalizeSecretScope(options.scope);
+  return scope === undefined
+    ? "vault/secrets/"
+    : `vault/secrets/scoped/${scope}/`;
+}

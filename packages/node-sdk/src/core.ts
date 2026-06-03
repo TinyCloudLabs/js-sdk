@@ -189,6 +189,7 @@ export {
   SecretsService,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
+  resolveSecretListPrefix,
   resolveSecretPath,
 } from "@tinycloud/sdk-core";
 

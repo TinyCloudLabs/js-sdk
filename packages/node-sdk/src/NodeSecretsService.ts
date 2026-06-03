@@ -1,5 +1,6 @@
 import {
   ErrorCodes,
+  resolveSecretListPrefix,
   resolveSecretPath,
   resolveManifest,
   type IDataVaultService,
@@ -13,6 +14,9 @@ import {
 } from "@tinycloud/sdk-core";
 
 const SECRETS_SPACE = "secrets";
+const ENCRYPTION_SPACE = "encryption";
+
+type SecretAction = "get" | "put" | "del" | "list";
 
 function ok(): Result<void, ServiceError> {
   return { ok: true, data: undefined };
@@ -34,44 +38,63 @@ function secretsError(
   };
 }
 
-function displayActionUrn(action: "put" | "del"): string {
-  return action === "put" ? "tinycloud.vault/write" : "tinycloud.vault/delete";
+function displayActionUrn(action: SecretAction): string {
+  switch (action) {
+    case "get":
+      return "tinycloud.kv/get";
+    case "put":
+      return "tinycloud.kv/put";
+    case "del":
+      return "tinycloud.kv/del";
+    case "list":
+      return "tinycloud.kv/list";
+  }
 }
 
-function kvActionUrn(action: "put" | "del"): string {
-  return `tinycloud.kv/${action}`;
-}
-
-function vaultMutationAction(action: "put" | "del"): "write" | "delete" {
-  return action === "put" ? "write" : "delete";
+function secretActionName(action: SecretAction): "get" | "put" | "del" | "list" {
+  return action;
 }
 
 function secretPermissionEntries(
   name: string,
   options: SecretScopeOptions | undefined,
-  action: "put" | "del",
+  action: SecretAction,
+  encryptionNetworkId?: string,
 ): PermissionEntry[] {
-  const secretPath = resolveSecretPath(name, options);
-  return [
-    {
-      service: "tinycloud.vault",
-      space: SECRETS_SPACE,
-      path: secretPath.vaultKey,
-      actions: [vaultMutationAction(action)],
-      skipPrefix: true,
-    },
-  ];
-}
+  const entries: PermissionEntry[] = [];
+  const path =
+    action === "list"
+      ? resolveSecretListPrefix(options)
+      : resolveSecretPath(name, options).permissionPaths.vault;
 
-function isSecretsSpace(space: string): boolean {
-  return space === SECRETS_SPACE || space.endsWith(`:${SECRETS_SPACE}`);
+  entries.push({
+    service: "tinycloud.kv",
+    space: SECRETS_SPACE,
+    path,
+    actions: [secretActionName(action)],
+    skipPrefix: true,
+  });
+
+  if (action === "get" && encryptionNetworkId !== undefined) {
+    entries.push({
+      service: "tinycloud.encryption",
+      space: ENCRYPTION_SPACE,
+      path: encryptionNetworkId,
+      actions: ["decrypt"],
+      skipPrefix: true,
+    });
+  }
+
+  return entries;
 }
 
 export interface NodeSecretsServiceConfig {
   getService: () => ISecretsService;
   getManifest: () => Manifest | Manifest[] | undefined;
+  hasPermissions?: (permissions: PermissionEntry[]) => boolean;
   grantPermissions: (additional: PermissionEntry[]) => Promise<unknown>;
   canEscalate: () => boolean;
+  getEncryptionNetworkId?: () => string;
   getUnlockSigner?: () => unknown;
 }
 
@@ -106,7 +129,9 @@ export class NodeSecretsService implements ISecretsService {
     this.service.lock();
   }
 
-  get(name: string, options?: SecretScopeOptions): ReturnType<ISecretsService["get"]> {
+  async get(name: string, options?: SecretScopeOptions): ReturnType<ISecretsService["get"]> {
+    const permission = await this.ensurePermission(name, options, "get");
+    if (!permission.ok) return permission;
     return options === undefined
       ? this.service.get(name)
       : this.service.get(name, options);
@@ -117,7 +142,7 @@ export class NodeSecretsService implements ISecretsService {
     value: string,
     options?: SecretScopeOptions,
   ): ReturnType<ISecretsService["put"]> {
-    const permission = await this.ensureMutationPermission(name, options, "put");
+    const permission = await this.ensurePermission(name, options, "put");
     if (!permission.ok) return permission;
     return options === undefined
       ? this.service.put(name, value)
@@ -128,14 +153,16 @@ export class NodeSecretsService implements ISecretsService {
     name: string,
     options?: SecretScopeOptions,
   ): ReturnType<ISecretsService["delete"]> {
-    const permission = await this.ensureMutationPermission(name, options, "del");
+    const permission = await this.ensurePermission(name, options, "del");
     if (!permission.ok) return permission;
     return options === undefined
       ? this.service.delete(name)
       : this.service.delete(name, options);
   }
 
-  list(options?: SecretScopeOptions): ReturnType<ISecretsService["list"]> {
+  async list(options?: SecretScopeOptions): ReturnType<ISecretsService["list"]> {
+    const permission = await this.ensurePermission("", options, "list");
+    if (!permission.ok) return permission;
     return options === undefined
       ? this.service.list()
       : this.service.list(options);
@@ -145,14 +172,20 @@ export class NodeSecretsService implements ISecretsService {
     return this.config.getService();
   }
 
-  private async ensureMutationPermission(
+  private async ensurePermission(
     name: string,
     options: SecretScopeOptions | undefined,
-    action: "put" | "del",
+    action: SecretAction,
   ): Promise<Result<void, ServiceError | VaultError>> {
+    const target = name || "secrets";
     let permissionEntries: PermissionEntry[];
     try {
-      permissionEntries = secretPermissionEntries(name, options, action);
+      permissionEntries = secretPermissionEntries(
+        name,
+        options,
+        action,
+        action === "get" ? this.config.getEncryptionNetworkId?.() : undefined,
+      );
     } catch (error) {
       return secretsError(
         ErrorCodes.INVALID_INPUT,
@@ -161,14 +194,14 @@ export class NodeSecretsService implements ISecretsService {
       );
     }
 
-    if (this.hasMutationPermission(name, options, action)) {
+    if (this.hasPermission(permissionEntries)) {
       return ok();
     }
 
     if (!this.config.canEscalate()) {
       return secretsError(
         ErrorCodes.PERMISSION_DENIED,
-        `Cannot autosign ${displayActionUrn(action)} for ${name}; TinyCloudNode needs wallet mode with a signer or privateKey.`,
+        `Cannot autosign ${displayActionUrn(action)} for ${target}; TinyCloudNode needs wallet mode with a signer or privateKey.`,
       );
     }
 
@@ -180,7 +213,7 @@ export class NodeSecretsService implements ISecretsService {
         ErrorCodes.PERMISSION_DENIED,
         error instanceof Error
           ? error.message
-          : `Autosign escalation for ${displayActionUrn(action)} on ${name} failed.`,
+          : `Autosign escalation for ${displayActionUrn(action)} on ${target} failed.`,
         error instanceof Error ? error : undefined,
       );
     }
@@ -195,30 +228,35 @@ export class NodeSecretsService implements ISecretsService {
     return this.service.unlock(this.unlockSigner);
   }
 
-  private hasMutationPermission(
-    name: string,
-    options: SecretScopeOptions | undefined,
-    action: "put" | "del",
+  private hasPermission(
+    permissionEntries: PermissionEntry[],
   ): boolean {
+    if (this.config.hasPermissions?.(permissionEntries)) {
+      return true;
+    }
+
     const manifest = this.config.getManifest();
     if (manifest === undefined) {
       return false;
     }
 
     const manifests = Array.isArray(manifest) ? manifest : [manifest];
-    const requiredAction = kvActionUrn(action);
-    const secretPath = resolveSecretPath(name, options);
-    return manifests.some((entry) => {
-      const resolved = resolveManifest(entry);
-      return (["keys", "vault"] as const).every((base) =>
-        resolved.resources.some(
+    return permissionEntries.every((entry) =>
+      manifests.some((candidate) => {
+        const resolved = resolveManifest(candidate);
+        return resolved.resources.some(
           (resource) =>
-            resource.service === "tinycloud.kv" &&
-            isSecretsSpace(resource.space) &&
-            resource.path === secretPath.permissionPaths[base] &&
-            resource.actions.includes(requiredAction),
-        ),
-      );
-    });
+            resource.service === entry.service &&
+            resource.space === entry.space &&
+            resource.path === entry.path &&
+            resource.actions.includes(
+              entry.service === "tinycloud.encryption"
+                ? "tinycloud.encryption/decrypt"
+                : `tinycloud.kv/${entry.actions[0]}`,
+            ),
+        );
+      }),
+    );
   }
+
 }
