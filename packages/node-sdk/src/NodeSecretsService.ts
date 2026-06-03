@@ -2,6 +2,7 @@ import {
   ErrorCodes,
   resolveSecretListPrefix,
   resolveSecretPath,
+  expandPermissionEntries,
   resolveManifest,
   type IDataVaultService,
   type ISecretsService,
@@ -14,8 +15,6 @@ import {
 } from "@tinycloud/sdk-core";
 
 const SECRETS_SPACE = "secrets";
-const ENCRYPTION_SPACE = "encryption";
-
 type SecretAction = "get" | "put" | "del" | "list";
 
 function ok(): Result<void, ServiceError> {
@@ -78,7 +77,6 @@ function secretPermissionEntries(
   if (action === "get" && encryptionNetworkId !== undefined) {
     entries.push({
       service: "tinycloud.encryption",
-      space: ENCRYPTION_SPACE,
       path: encryptionNetworkId,
       actions: ["decrypt"],
       skipPrefix: true,
@@ -241,7 +239,8 @@ export class NodeSecretsService implements ISecretsService {
     }
 
     const manifests = Array.isArray(manifest) ? manifest : [manifest];
-    return permissionEntries.every((entry) =>
+    const requestedEntries = expandPermissionEntries(permissionEntries);
+    return requestedEntries.every((entry) =>
       manifests.some((candidate) => {
         const resolved = resolveManifest(candidate);
         return resolved.resources.some(
@@ -249,11 +248,7 @@ export class NodeSecretsService implements ISecretsService {
             resource.service === entry.service &&
             resource.space === entry.space &&
             resource.path === entry.path &&
-            resource.actions.includes(
-              entry.service === "tinycloud.encryption"
-                ? "tinycloud.encryption/decrypt"
-                : `tinycloud.kv/${entry.actions[0]}`,
-            ),
+            entry.actions.every((action) => resource.actions.includes(action)),
         );
       }),
     );

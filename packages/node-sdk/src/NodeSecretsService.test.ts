@@ -58,7 +58,6 @@ describe("NodeSecretsService", () => {
       },
       {
         service: "tinycloud.encryption",
-        space: "encryption",
         path: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
         actions: ["decrypt"],
         skipPrefix: true,

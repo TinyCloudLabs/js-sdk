@@ -423,7 +423,6 @@ export class NodeUserAuthorization implements IUserAuthorization {
           [defaultNetworkId]: [
             "tinycloud.encryption/decrypt",
             "tinycloud.encryption/network.create",
-            "tinycloud.encryption/network.revoke",
           ],
         },
       };

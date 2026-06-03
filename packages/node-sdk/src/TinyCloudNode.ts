@@ -89,6 +89,7 @@ import {
   type ResolvedDelegate,
   // Capability-chain delegation
   type PermissionEntry,
+  ENCRYPTION_PERMISSION_SERVICE,
   PermissionNotInManifestError,
   SessionExpiredError,
   expandPermissionEntries as expandPermissionEntriesCore,
@@ -2158,12 +2159,22 @@ export class TinyCloudNode {
       );
     }
 
+    const rawEntries = expanded.filter((entry) =>
+      this.isEncryptionPermissionEntry(entry)
+    );
+    const spaceEntries = expanded.filter((entry) =>
+      !this.isEncryptionPermissionEntry(entry)
+    );
+
     const bySpace = new Map<string, PermissionEntry[]>();
-    for (const entry of expanded) {
+    for (const entry of spaceEntries) {
       const spaceId = this.resolvePermissionSpace(entry.space, session);
       const current = bySpace.get(spaceId) ?? [];
       current.push(entry);
       bySpace.set(spaceId, current);
+    }
+    if (bySpace.size === 0 && rawEntries.length > 0) {
+      bySpace.set(session.spaceId, []);
     }
 
     const now = new Date();
@@ -2174,10 +2185,19 @@ export class TinyCloudNode {
     }
 
     const delegations: PortableDelegation[] = [];
+    let rawEntriesAttached = false;
     for (const [spaceId, entries] of bySpace) {
+      const rawForDelegation = !rawEntriesAttached ? rawEntries : [];
+      if (rawForDelegation.length > 0) {
+        rawEntriesAttached = true;
+      }
+      const delegatedEntries = [...entries, ...rawForDelegation];
       const abilities = this.permissionsToAbilities(entries);
       const prepared = this.wasmBindings.prepareSession({
         abilities,
+        ...(rawForDelegation.length > 0
+          ? { rawAbilities: this.permissionsToRawAbilities(rawForDelegation) }
+          : {}),
         address: this.wasmBindings.ensureEip55(session.address),
         chainId: session.chainId,
         domain: this.siweDomain,
@@ -2205,7 +2225,7 @@ export class TinyCloudNode {
 
       const delegation = this.runtimeDelegationFromSession(
         delegatedSession,
-        entries,
+        delegatedEntries,
         spaceId,
         session,
         expiresAt,
@@ -2219,7 +2239,7 @@ export class TinyCloudNode {
           jwk: session.jwk,
         },
         delegation,
-        operations: this.permissionOperations(entries, spaceId),
+        operations: this.permissionOperations(delegatedEntries, spaceId),
         expiresAt,
       });
       delegations.push(delegation);
@@ -2764,11 +2784,8 @@ export class TinyCloudNode {
    * the current session; we build one multi-resource abilities map
    * and emit one signed UCAN covering them all.
    *
-   * All entries must share the same target space (the UCAN is
-   * scoped to a single space). If they don't, this throws — mixing
-   * spaces in a single delegation is not supported by the underlying
-   * Rust create_delegation call and the resulting UCAN would be
-   * under-specified.
+   * Non-encryption entries must share the same target space. Encryption
+   * entries are raw network URNs and do not participate in space grouping.
    *
    * @internal
    */
@@ -2784,24 +2801,31 @@ export class TinyCloudNode {
       );
     }
 
-    // Translate the manifest `space` field into the server-side
-    // spaceId. Full `tinycloud:` URIs pass through; short names are
-    // resolved against the current wallet.
+    // Translate non-raw manifest `space` fields into the server-side
+    // spaceId. Encryption entries target raw network URNs, not spaces.
     const resolvedSpaces = new Set<string>();
     for (const entry of entries) {
+      if (this.isEncryptionPermissionEntry(entry)) {
+        continue;
+      }
       const spaceId = this.resolvePermissionSpace(entry.space, session);
       resolvedSpaces.add(spaceId);
     }
-    if (resolvedSpaces.size !== 1) {
+    if (resolvedSpaces.size > 1) {
       throw new Error(
         `delegateTo: all permission entries must target the same space, got ${resolvedSpaces.size}: ${JSON.stringify([...resolvedSpaces])}`,
       );
     }
-    const spaceId = [...resolvedSpaces][0];
+    const spaceId = resolvedSpaces.size === 1
+      ? [...resolvedSpaces][0]
+      : session.spaceId;
 
     // Convert entries to the WASM abilities shape. Each entry's
     // `service` is the long form (e.g. "tinycloud.kv") which we
-    // translate to the short form keyed by the abilities map.
+    // translate to the short form keyed by the abilities map. Raw
+    // encryption network entries stay in this map because the Rust
+    // create_delegation boundary special-cases network URNs into raw
+    // resources while preserving the legacy spaceId parameter.
     // Multiple entries on the same (service, path) merge and dedupe
     // their action lists — unusual in practice (the subset check
     // should have pruned dupes already) but cheap and safe.
@@ -2994,6 +3018,32 @@ export class TinyCloudNode {
     return abilities;
   }
 
+  private isEncryptionPermissionEntry(entry: PermissionEntry): boolean {
+    return entry.service === ENCRYPTION_PERMISSION_SERVICE &&
+      entry.path.startsWith("urn:tinycloud:encryption:");
+  }
+
+  private permissionsToRawAbilities(
+    entries: PermissionEntry[],
+  ): Record<string, string[]> {
+    const rawAbilities: Record<string, string[]> = {};
+    for (const entry of entries) {
+      if (!this.isEncryptionPermissionEntry(entry)) {
+        continue;
+      }
+      const existing = rawAbilities[entry.path] ?? [];
+      const seen = new Set(existing);
+      for (const action of entry.actions) {
+        if (!seen.has(action)) {
+          existing.push(action);
+          seen.add(action);
+        }
+      }
+      rawAbilities[entry.path] = existing;
+    }
+    return rawAbilities;
+  }
+
   private permissionOperations(
     entries: PermissionEntry[],
     spaceId: string,
@@ -3141,7 +3191,7 @@ export class TinyCloudNode {
   ): DelegatedResource[] {
     return entries.map((entry) => ({
       service: this.shortServiceName(entry.service),
-      space: spaceId,
+      space: this.isEncryptionPermissionEntry(entry) ? "encryption" : spaceId,
       path: entry.path,
       actions: [...entry.actions],
     }));

@@ -234,7 +234,7 @@ describe("encryption live node-sdk integration", () => {
         {
           service: "tinycloud.encryption",
           path: networkId,
-          actions: ["network.create", "network.revoke", "decrypt"],
+          actions: ["network.create", "decrypt"],
         },
       ],
     };

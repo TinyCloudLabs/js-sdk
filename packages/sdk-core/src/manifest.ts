@@ -295,10 +295,10 @@ export const SERVICE_SHORT_TO_LONG: Readonly<Record<string, string>> =
  * The `path` field is the literal networkId; `actions` are
  * `["decrypt"]` (expanded to `["tinycloud.encryption/decrypt"]`).
  *
- * The `space` field on encryption permissions is informational only
- * and defaults to `"encryption"` so the manifest layer can keep
- * grouping by space without forcing the networkId to masquerade as a
- * space.
+ * Apps should omit `space` for encryption permissions. The SDK may emit
+ * an internal `"encryption"` compatibility label after expansion so the
+ * older `PermissionEntry`/`ResourceCapability` shape can still carry the
+ * raw network URN through subset checks.
  */
 export const ENCRYPTION_PERMISSION_SERVICE = "tinycloud.encryption";
 
@@ -470,9 +470,10 @@ export function expandPermissionEntry(entry: PermissionEntry): PermissionEntry[]
  * - `actions` must be `decrypt`, `network.create`, or `network.revoke`
  *   (or their already-expanded `tinycloud.encryption/*` forms).
  *
- * The returned entry uses `space = "encryption"` so manifest grouping
- * does not collapse it into the app's data space, and `skipPrefix`
- * is forced to `true` so the prefix application step is a no-op.
+ * The returned entry uses an internal `space = "encryption"` compatibility
+ * label so old manifest grouping code does not collapse it into the app's
+ * data space, and `skipPrefix` is forced to `true` so the prefix application
+ * step is a no-op.
  */
 function expandEncryptionPermissionEntry(
   entry: PermissionEntry,
