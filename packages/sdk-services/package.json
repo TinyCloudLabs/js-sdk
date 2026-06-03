@@ -23,6 +23,11 @@
       "types": "./dist/sql/index.d.ts",
       "import": "./dist/sql/index.js",
       "require": "./dist/sql/index.cjs"
+    },
+    "./encryption": {
+      "types": "./dist/encryption/index.d.ts",
+      "import": "./dist/encryption/index.js",
+      "require": "./dist/encryption/index.cjs"
     }
   },
   "files": [

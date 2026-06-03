@@ -173,6 +173,8 @@ export interface InvokeAnyEntry {
   service: string;
   path: string;
   action: string;
+  /** Optional raw resource URI. When set, WASM signs this URI directly. */
+  resource?: string;
 }
 
 /**

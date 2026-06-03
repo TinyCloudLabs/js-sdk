@@ -4,6 +4,22 @@
  * Type definitions for the Data Vault (encrypted KV) service operations.
  */
 
+import type {
+  DecryptCapabilityProof,
+  IEncryptionService,
+} from "../encryption";
+
+export interface VaultNetworkEncryptionConfig {
+  /** Default encryption network used for inline vault envelopes. */
+  networkId: string;
+  /** TinyCloud encryption module used for local encrypt and node-mediated decrypt. */
+  service: IEncryptionService;
+  /** Proof material presented to the encryption module for decrypt requests. */
+  decryptCapabilityProof?:
+    | DecryptCapabilityProof
+    | (() => DecryptCapabilityProof | Promise<DecryptCapabilityProof>);
+}
+
 /**
  * Configuration for DataVaultService.
  */
@@ -12,6 +28,8 @@ export interface DataVaultConfig {
   spaceId: string;
   /** Key rotation policy */
   keyRotation?: "per-write" | "per-key"; // default: "per-write"
+  /** Network-envelope encryption mode. When set, vault.unlock/key grants are not used. */
+  encryption?: VaultNetworkEncryptionConfig;
 }
 
 /**

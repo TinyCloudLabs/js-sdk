@@ -264,7 +264,7 @@ const SECRETS_SPACE = "secrets";
 /** SDK-only permission service for encrypted vault resources. */
 export const VAULT_PERMISSION_SERVICE = "tinycloud.vault";
 
-type VaultKVBase = "keys" | "vault";
+type VaultKVBase = "vault";
 
 interface VaultActionExpansion {
   bases: readonly VaultKVBase[];
@@ -284,7 +284,26 @@ export const SERVICE_SHORT_TO_LONG: Readonly<Record<string, string>> =
     duckdb: "tinycloud.duckdb",
     capabilities: "tinycloud.capabilities",
     hooks: "tinycloud.hooks",
+    encryption: "tinycloud.encryption",
   });
+
+/**
+ * Manifest service identifier for TinyCloud encryption network grants.
+ *
+ * Encryption permissions live on a network id URN
+ * (`urn:tinycloud:encryption:<principal>:<network>`), not on a space.
+ * The `path` field is the literal networkId; `actions` are
+ * `["decrypt"]` (expanded to `["tinycloud.encryption/decrypt"]`).
+ *
+ * The `space` field on encryption permissions is informational only
+ * and defaults to `"encryption"` so the manifest layer can keep
+ * grouping by space without forcing the networkId to masquerade as a
+ * space.
+ */
+export const ENCRYPTION_PERMISSION_SERVICE = "tinycloud.encryption";
+
+/** Synthetic space label used by encryption manifest entries. */
+export const ENCRYPTION_MANIFEST_SPACE = "encryption";
 
 /**
  * Inverse of {@link SERVICE_SHORT_TO_LONG}.
@@ -417,15 +436,19 @@ export function expandActionShortNames(
 /**
  * Expand SDK virtual permission services into concrete recap-capable services.
  *
- * Today this handles `"tinycloud.vault"`, which is backed by KV resources:
- * - read/get: `keys/<path>` + `vault/<path>` with `tinycloud.kv/get`
- * - write/put: `keys/<path>` + `vault/<path>` with `tinycloud.kv/put`
- * - delete/del: `keys/<path>` + `vault/<path>` with `tinycloud.kv/del`
+ * Today this handles `"tinycloud.vault"`, which is backed by inline
+ * network-encrypted KV records:
+ * - read/get: `vault/<path>` with `tinycloud.kv/get`
+ * - write/put: `vault/<path>` with `tinycloud.kv/put`
+ * - delete/del: `vault/<path>` with `tinycloud.kv/del`
  * - list: `vault/<path>` with `tinycloud.kv/list`
  * - head: `vault/<path>` with `tinycloud.kv/get`
  * - metadata: `vault/<path>` with `tinycloud.kv/metadata`
  */
 export function expandPermissionEntry(entry: PermissionEntry): PermissionEntry[] {
+  if (entry.service === ENCRYPTION_PERMISSION_SERVICE) {
+    return expandEncryptionPermissionEntry(entry);
+  }
   if (entry.service !== VAULT_PERMISSION_SERVICE) {
     return [
       {
@@ -436,6 +459,88 @@ export function expandPermissionEntry(entry: PermissionEntry): PermissionEntry[]
   }
 
   return expandVaultPermissionEntry(entry);
+}
+
+/**
+ * Expand a `tinycloud.encryption` manifest entry.
+ *
+ * - `path` MUST be a networkId URN (`urn:tinycloud:encryption:...`).
+ *   The manifest prefix is always skipped — network ids are top-level
+ *   principal-owned resources, not space-scoped paths.
+ * - `actions` must be `decrypt`, `network.create`, or `network.revoke`
+ *   (or their already-expanded `tinycloud.encryption/*` forms).
+ *
+ * The returned entry uses `space = "encryption"` so manifest grouping
+ * does not collapse it into the app's data space, and `skipPrefix`
+ * is forced to `true` so the prefix application step is a no-op.
+ */
+function expandEncryptionPermissionEntry(
+  entry: PermissionEntry,
+): PermissionEntry[] {
+  if (
+    typeof entry.path !== "string" ||
+    !entry.path.startsWith("urn:tinycloud:encryption:")
+  ) {
+    throw new ManifestValidationError(
+      `tinycloud.encryption entries require path to be a networkId URN ` +
+        `(got ${JSON.stringify(entry.path)})`,
+    );
+  }
+  const normalizedActions: string[] = [];
+  for (const action of entry.actions) {
+    if (action === "decrypt" || action === "tinycloud.encryption/decrypt") {
+      normalizedActions.push("tinycloud.encryption/decrypt");
+      continue;
+    }
+    if (
+      action === "network.create" ||
+      action === "tinycloud.encryption/network.create"
+    ) {
+      normalizedActions.push("tinycloud.encryption/network.create");
+      continue;
+    }
+    if (
+      action === "network.revoke" ||
+      action === "tinycloud.encryption/network.revoke"
+    ) {
+      normalizedActions.push("tinycloud.encryption/network.revoke");
+      continue;
+    }
+    if (action.includes("/")) {
+      throw new ManifestValidationError(
+        `unknown encryption action ${JSON.stringify(action)}; expected decrypt, network.create, or network.revoke`,
+      );
+    }
+    throw new ManifestValidationError(
+      `unknown encryption action ${JSON.stringify(action)}; expected decrypt, network.create, or network.revoke`,
+    );
+  }
+  // Dedupe while preserving order
+  const dedupedActions: string[] = [];
+  const seen = new Set<string>();
+  for (const a of normalizedActions) {
+    if (!seen.has(a)) {
+      dedupedActions.push(a);
+      seen.add(a);
+    }
+  }
+  // Encryption resources are network-scoped, not space-scoped. We
+  // always emit the synthetic "encryption" space label so manifest
+  // grouping can deal with it uniformly without collapsing the
+  // networkId URN into an app data space.
+  return [
+    {
+      service: ENCRYPTION_PERMISSION_SERVICE,
+      space: ENCRYPTION_MANIFEST_SPACE,
+      path: entry.path,
+      actions: dedupedActions,
+      skipPrefix: true,
+      ...(entry.expiry !== undefined ? { expiry: entry.expiry } : {}),
+      ...(entry.description !== undefined
+        ? { description: entry.description }
+        : {}),
+    },
+  ];
 }
 
 /**
@@ -905,11 +1010,13 @@ function resolveEntry(
   _inheritedExpiryMs: number,
   inheritedSpace: string,
 ): ResourceCapability[] {
-  const resolvedPath = applyPrefix(
-    prefix,
-    entry.path,
-    entry.skipPrefix === true,
-  );
+  // Encryption permissions reference a networkId URN as their resource
+  // — the manifest prefix is meaningless against a top-level
+  // principal-owned resource and would corrupt the URN. Always skip.
+  const skipPrefixForEntry =
+    entry.skipPrefix === true ||
+    entry.service === ENCRYPTION_PERMISSION_SERVICE;
+  const resolvedPath = applyPrefix(prefix, entry.path, skipPrefixForEntry);
   const entryExpiryMs =
     entry.expiry !== undefined ? parseExpiry(entry.expiry) : undefined;
   return expandPermissionEntry({
@@ -958,13 +1065,13 @@ function expandVaultPermissionEntry(entry: PermissionEntry): PermissionEntry[] {
 function vaultActionExpansion(action: string): VaultActionExpansion {
   const normalized = normalizeVaultAction(action);
   if (normalized === "read" || normalized === "get") {
-    return { bases: ["keys", "vault"], action: "tinycloud.kv/get" };
+    return { bases: ["vault"], action: "tinycloud.kv/get" };
   }
   if (normalized === "write" || normalized === "put") {
-    return { bases: ["keys", "vault"], action: "tinycloud.kv/put" };
+    return { bases: ["vault"], action: "tinycloud.kv/put" };
   }
   if (normalized === "delete" || normalized === "del") {
-    return { bases: ["keys", "vault"], action: "tinycloud.kv/del" };
+    return { bases: ["vault"], action: "tinycloud.kv/del" };
   }
   if (normalized === "list") {
     return { bases: ["vault"], action: "tinycloud.kv/list" };
@@ -1077,7 +1184,11 @@ function withCapabilitiesReadForSpaces(
     return [];
   }
 
-  const spaces = new Set(resources.map((resource) => resource.space));
+  const spaces = new Set(
+    resources
+      .filter((resource) => resource.service !== ENCRYPTION_PERMISSION_SERVICE)
+      .map((resource) => resource.space),
+  );
   return dedupeResources([
     ...resources,
     ...[...spaces].map(capabilitiesReadPermission),

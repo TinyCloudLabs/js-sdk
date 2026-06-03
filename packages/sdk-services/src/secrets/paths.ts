@@ -16,9 +16,8 @@ export interface ResolvedSecretPath {
   scope?: string;
   /** Key passed to the data vault service. */
   vaultKey: string;
-  /** KV permission paths that back the encrypted vault entry. */
+  /** KV permission path that backs the encrypted vault entry. */
   permissionPaths: {
-    keys: string;
     vault: string;
   };
 }
@@ -72,7 +71,6 @@ export function resolveSecretPath(
     ...(scope !== undefined ? { scope } : {}),
     vaultKey,
     permissionPaths: {
-      keys: `keys/${vaultKey}`,
       vault: `vault/${vaultKey}`,
     },
   };
