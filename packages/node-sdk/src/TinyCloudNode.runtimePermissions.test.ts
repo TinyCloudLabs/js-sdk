@@ -340,4 +340,114 @@ describe("TinyCloudNode runtime permission delegations", () => {
 
     expect(node.hasRuntimePermissions([permission])).toBe(true);
   });
+
+  test("uses a runtime decrypt grant for raw network invocations", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const networkId = node.getDefaultEncryptionNetworkId();
+    const permission: PermissionEntry = {
+      service: "tinycloud.encryption",
+      space: "encryption",
+      path: networkId,
+      actions: ["tinycloud.encryption/decrypt"],
+    };
+
+    await withActivatedDelegations(async () => {
+      await node.grantRuntimePermissions([permission]);
+    });
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: "tinycloud:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F:default",
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeAnyWithRuntimePermissions(
+      fallback,
+      [
+        {
+          resource: networkId,
+          service: "encryption",
+          path: networkId,
+          action: "tinycloud.encryption/decrypt",
+        },
+      ],
+      [{}],
+    );
+
+    const invokeAny = (node as any).wasmBindings.invokeAny;
+    expect(invokeAny.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "runtime-token",
+    );
+  });
+
+  test("useDelegation installs encryption delegations as raw runtime grants", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const networkId = node.getDefaultEncryptionNetworkId();
+    const encryptionSpaceId = `tinycloud:pkh:eip155:1:${address}:encryption`;
+    const delegation = {
+      cid: "owner-decrypt-cid",
+      delegationHeader: { Authorization: "owner-decrypt-token" },
+      spaceId: encryptionSpaceId,
+      path: networkId,
+      actions: ["tinycloud.encryption/decrypt"],
+      resources: [
+        {
+          service: "encryption",
+          space: encryptionSpaceId,
+          path: networkId,
+          actions: ["tinycloud.encryption/decrypt"],
+        },
+      ],
+      disableSubDelegation: false,
+      expiry: new Date(Date.now() + 3600_000),
+      delegateDID: "did:key:default",
+      ownerAddress: address,
+      chainId: 1,
+      host: "https://tinycloud.test",
+    };
+
+    await withActivatedDelegations(async () => {
+      await node.useDelegation(delegation as any);
+    });
+
+    const prepareSession = (node as any).wasmBindings.prepareSession;
+    expect(prepareSession.mock.calls[0][0].rawAbilities).toEqual({
+      [networkId]: ["tinycloud.encryption/decrypt"],
+    });
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: encryptionSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeAnyWithRuntimePermissions(
+      fallback,
+      [
+        {
+          resource: networkId,
+          service: "encryption",
+          path: networkId,
+          action: "tinycloud.encryption/decrypt",
+        },
+      ],
+      [{}],
+    );
+
+    const invokeAny = (node as any).wasmBindings.invokeAny;
+    expect(invokeAny.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "runtime-token",
+    );
+  });
 });
