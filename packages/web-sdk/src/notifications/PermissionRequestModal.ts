@@ -117,7 +117,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
 
   private renderEntry(entry: PermissionEntry): string {
     const service = escapeHtml(entry.service);
-    const space = escapeHtml(entry.space);
+    const space = escapeHtml(permissionScopeLabel(entry));
     const path = escapeHtml(entry.path === "" ? "/" : entry.path);
     const actions = entry.actions
       .map((a) => `<code class="action">${escapeHtml(a)}</code>`)
@@ -324,6 +324,15 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
     this.options.onDismiss?.();
     this.hide();
   }
+}
+
+function permissionScopeLabel(entry: PermissionEntry): string {
+  if (entry.space !== undefined && entry.space !== "") {
+    return entry.space;
+  }
+  return entry.service === "tinycloud.encryption"
+    ? "network-scoped"
+    : "unscoped";
 }
 
 // HTML escaping helpers. Kept local so the modal file has no cross-package

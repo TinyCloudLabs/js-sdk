@@ -165,6 +165,26 @@ describe("TinyCloudPermissionRequestModal", () => {
     expect(modal.shadowRoot.innerHTML).toContain("tinycloud.kv/get");
   });
 
+  test("renders network-scoped encryption permissions without a space", async () => {
+    const Modal = await loadModal();
+    const modal = new Modal({
+      ...sampleOptions,
+      additional: [
+        {
+          service: "tinycloud.encryption",
+          path: "urn:tinycloud:encryption:did:pkh:eip155:1:0xabc:default",
+          actions: ["tinycloud.encryption/network.create"],
+        },
+      ],
+    });
+
+    expect(modal.shadowRoot.innerHTML).toContain("tinycloud.encryption");
+    expect(modal.shadowRoot.innerHTML).toContain("network-scoped");
+    expect(modal.shadowRoot.innerHTML).toContain(
+      "tinycloud.encryption/network.create",
+    );
+  });
+
   test("approve resolves with { approved: true }", async () => {
     const Modal = await loadModal();
     const modal = new Modal(sampleOptions);
