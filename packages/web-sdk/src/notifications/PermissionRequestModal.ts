@@ -96,7 +96,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
 
             <div class="modal-body">
               <p class="modal-description">
-                Approving adds a scoped runtime permission for this session. You will stay signed in.
+                You are granting this app scoped permission for the capabilities and resources listed below. The grant applies to this session.
               </p>
               <ul class="permission-list">${entriesHtml}</ul>
             </div>
@@ -116,20 +116,55 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
   }
 
   private renderEntry(entry: PermissionEntry): string {
-    const service = escapeHtml(entry.service);
-    const space = escapeHtml(permissionScopeLabel(entry));
-    const path = escapeHtml(entry.path === "" ? "/" : entry.path);
-    const actions = entry.actions
-      .map((a) => `<code class="action">${escapeHtml(a)}</code>`)
-      .join(" ");
+    const serviceName = serviceDisplayName(entry.service);
+    const scopeLabel = permissionScopeLabel(entry);
+    const resource = entry.path === "" ? "/" : entry.path;
+    const actionDetails = entry.actions.map((action) =>
+      describeAction(entry, action),
+    );
+    const capabilities = actionDetails
+      .map((detail) => `
+        <li class="capability-item">
+          <code class="action">${escapeHtml(detail.displayAction)}</code>
+          <div class="capability-copy">
+            <div class="capability-title">${escapeHtml(detail.title)}</div>
+            <div class="capability-description">${escapeHtml(detail.description)}</div>
+          </div>
+        </li>
+      `)
+      .join("");
+    const dictionaryRows = [
+      ["Service", entry.service],
+      ["Scope", scopeLabel],
+      ["Resource", resource],
+      [
+        "Actions",
+        actionDetails.map((detail) => detail.canonicalAction).join(", "),
+      ],
+    ]
+      .map(([label, value]) => `
+        <div class="dictionary-row">
+          <dt>${escapeHtml(label)}</dt>
+          <dd>${escapeHtml(value)}</dd>
+        </div>
+      `)
+      .join("");
+
     return `
       <li class="permission-entry">
         <div class="entry-head">
-          <span class="entry-service">${service}</span>
-          <span class="entry-space">${space}</span>
+          <span class="entry-service">${escapeHtml(serviceName)}</span>
+          <span class="entry-space">${escapeHtml(scopeLabel)}</span>
         </div>
-        <div class="entry-path">${path}</div>
-        <div class="entry-actions">${actions}</div>
+        <p class="entry-summary">${escapeHtml(permissionScopeSummary(entry))}</p>
+        <div class="capability-section">
+          <div class="section-label">Requested capabilities</div>
+          <ul class="capability-list">${capabilities}</ul>
+        </div>
+        <div class="dictionary-section">
+          <div class="section-label">Permission details</div>
+          <dl class="permission-dictionary">${dictionaryRows}</dl>
+        </div>
       </li>
     `;
   }
@@ -211,28 +246,73 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
       .permission-entry {
         background: var(--modal-secondary);
         border: 1px solid var(--modal-border);
-        border-radius: 10px; padding: 12px 14px;
+        border-radius: 10px; padding: 14px;
       }
       .entry-head {
         display: flex; justify-content: space-between; align-items: center;
         font-size: 13px; margin-bottom: 6px;
+        gap: 12px;
       }
       .entry-service { font-weight: 600; color: var(--modal-foreground); }
       .entry-space {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", monospace;
         font-size: 11px; color: var(--modal-muted);
+        white-space: nowrap;
       }
-      .entry-path {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", monospace;
-        font-size: 12px; color: var(--modal-muted); margin-bottom: 8px;
-        word-break: break-all;
+      .entry-summary {
+        font-size: 13px; line-height: 1.45; color: var(--modal-muted);
+        margin: 0 0 12px 0;
       }
-      .entry-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+      .capability-section,
+      .dictionary-section { margin-top: 12px; }
+      .section-label {
+        font-size: 11px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.04em; color: var(--modal-muted);
+        margin-bottom: 8px;
+      }
+      .capability-list {
+        list-style: none; padding: 0; margin: 0;
+        display: flex; flex-direction: column; gap: 8px;
+      }
+      .capability-item {
+        display: grid; grid-template-columns: minmax(92px, max-content) 1fr;
+        gap: 10px; align-items: start;
+      }
       .action {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", monospace;
-        font-size: 11px; padding: 2px 8px;
+        font-size: 11px; padding: 3px 8px;
         background: var(--modal-bg); border: 1px solid var(--modal-border);
         border-radius: 6px; color: var(--modal-foreground);
+        word-break: break-word;
+      }
+      .capability-title {
+        font-size: 13px; font-weight: 600; color: var(--modal-foreground);
+        line-height: 1.35;
+      }
+      .capability-description {
+        font-size: 12px; line-height: 1.45; color: var(--modal-muted);
+        margin-top: 2px;
+      }
+      .permission-dictionary {
+        margin: 0; padding: 0;
+        border: 1px solid var(--modal-border);
+        border-radius: 8px; overflow: hidden;
+      }
+      .dictionary-row {
+        display: grid; grid-template-columns: 86px 1fr;
+        border-top: 1px solid var(--modal-border);
+      }
+      .dictionary-row:first-child { border-top: 0; }
+      .dictionary-row dt,
+      .dictionary-row dd {
+        margin: 0; padding: 8px 10px; font-size: 12px; line-height: 1.4;
+      }
+      .dictionary-row dt {
+        color: var(--modal-muted); background: var(--modal-bg);
+      }
+      .dictionary-row dd {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", monospace;
+        color: var(--modal-foreground); word-break: break-all;
       }
       .modal-actions {
         padding: 0 24px 24px 24px;
@@ -265,6 +345,11 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         .modal-body { padding: 16px 20px; }
         .modal-actions { padding: 0 20px 20px 20px; flex-direction: column-reverse; }
         .modal-button { width: 100%; }
+        .entry-head { align-items: flex-start; flex-direction: column; }
+        .entry-space { white-space: normal; }
+        .capability-item { grid-template-columns: 1fr; gap: 6px; }
+        .dictionary-row { grid-template-columns: 1fr; }
+        .dictionary-row dd { padding-top: 0; }
       }
     `;
   }
@@ -326,6 +411,188 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
   }
 }
 
+interface CapabilityDescription {
+  title: string;
+  description: string;
+}
+
+const SERVICE_LABELS: Record<string, string> = {
+  "tinycloud.encryption": "Encryption network permission",
+  "tinycloud.kv": "Key-value storage permission",
+  "tinycloud.sql": "SQL storage permission",
+  "tinycloud.duckdb": "DuckDB storage permission",
+  "tinycloud.capabilities": "Capability registry permission",
+  "tinycloud.hooks": "Hook permission",
+};
+
+const CAPABILITY_DESCRIPTIONS: Record<string, CapabilityDescription> = {
+  "tinycloud.encryption/decrypt": {
+    title: "Decrypt data keys for this network",
+    description:
+      "Allows this app to ask a TinyCloud node to unwrap encrypted data keys for data encrypted to this network. The app still needs separate data-read permission to fetch encrypted records.",
+  },
+  "tinycloud.encryption/network.create": {
+    title: "Create an encryption network",
+    description:
+      "Allows this app to create or initialize an encryption network that data can be encrypted to. The network key is managed by TinyCloud nodes and used later for delegated decrypt requests.",
+  },
+  "tinycloud.encryption/network.revoke": {
+    title: "Revoke an encryption network",
+    description:
+      "Allows this app to revoke or disable an encryption network so future decrypt requests for that network are denied.",
+  },
+  "tinycloud.kv/get": {
+    title: "Read key-value data",
+    description:
+      "Allows this app to read values at the selected key or key prefix in the requested space.",
+  },
+  "tinycloud.kv/put": {
+    title: "Write key-value data",
+    description:
+      "Allows this app to create or replace values at the selected key or key prefix in the requested space.",
+  },
+  "tinycloud.kv/del": {
+    title: "Delete key-value data",
+    description:
+      "Allows this app to remove values at the selected key or key prefix in the requested space.",
+  },
+  "tinycloud.kv/list": {
+    title: "List key-value entries",
+    description:
+      "Allows this app to list keys under the selected key-value prefix in the requested space.",
+  },
+  "tinycloud.kv/metadata": {
+    title: "Read key-value metadata",
+    description:
+      "Allows this app to inspect metadata for keys without necessarily reading the stored value.",
+  },
+  "tinycloud.sql/read": {
+    title: "Read SQL data",
+    description:
+      "Allows this app to read rows and query results from the selected SQL database in the requested space.",
+  },
+  "tinycloud.sql/write": {
+    title: "Write SQL data",
+    description:
+      "Allows this app to insert, update, or delete rows in the selected SQL database.",
+  },
+  "tinycloud.sql/ddl": {
+    title: "Change SQL schema",
+    description:
+      "Allows this app to create, alter, or drop SQL tables, indexes, and schema objects.",
+  },
+  "tinycloud.sql/admin": {
+    title: "Administer SQL storage",
+    description:
+      "Allows this app to perform administrative SQL operations for the selected database.",
+  },
+  "tinycloud.sql/select": {
+    title: "Select SQL rows",
+    description:
+      "Allows this app to run SELECT queries against the selected SQL database.",
+  },
+  "tinycloud.sql/insert": {
+    title: "Insert SQL rows",
+    description:
+      "Allows this app to insert rows into the selected SQL database.",
+  },
+  "tinycloud.sql/update": {
+    title: "Update SQL rows",
+    description:
+      "Allows this app to update rows in the selected SQL database.",
+  },
+  "tinycloud.sql/delete": {
+    title: "Delete SQL rows",
+    description:
+      "Allows this app to delete rows from the selected SQL database.",
+  },
+  "tinycloud.sql/execute": {
+    title: "Execute SQL statements",
+    description:
+      "Allows this app to execute SQL statements against the selected database.",
+  },
+  "tinycloud.sql/export": {
+    title: "Export SQL data",
+    description:
+      "Allows this app to export data from the selected SQL database.",
+  },
+  "tinycloud.sql/*": {
+    title: "Full SQL access",
+    description:
+      "Allows this app to read, write, administer, and export the selected SQL database.",
+  },
+  "tinycloud.duckdb/read": {
+    title: "Read DuckDB data",
+    description:
+      "Allows this app to read data and query results from the selected DuckDB database.",
+  },
+  "tinycloud.duckdb/write": {
+    title: "Write DuckDB data",
+    description:
+      "Allows this app to write data to the selected DuckDB database.",
+  },
+  "tinycloud.duckdb/admin": {
+    title: "Administer DuckDB storage",
+    description:
+      "Allows this app to perform administrative operations for the selected DuckDB database.",
+  },
+  "tinycloud.duckdb/describe": {
+    title: "Describe DuckDB data",
+    description:
+      "Allows this app to inspect tables, columns, and metadata in the selected DuckDB database.",
+  },
+  "tinycloud.duckdb/export": {
+    title: "Export DuckDB data",
+    description:
+      "Allows this app to export data from the selected DuckDB database.",
+  },
+  "tinycloud.duckdb/import": {
+    title: "Import DuckDB data",
+    description:
+      "Allows this app to import data into the selected DuckDB database.",
+  },
+  "tinycloud.duckdb/execute": {
+    title: "Execute DuckDB statements",
+    description:
+      "Allows this app to execute statements against the selected DuckDB database.",
+  },
+  "tinycloud.duckdb/*": {
+    title: "Full DuckDB access",
+    description:
+      "Allows this app to read, write, administer, import, export, and execute statements on the selected DuckDB database.",
+  },
+  "tinycloud.capabilities/read": {
+    title: "Read delegated capabilities",
+    description:
+      "Allows this app to read capability and delegation records for the selected scope.",
+  },
+  "tinycloud.hooks/subscribe": {
+    title: "Subscribe to hooks",
+    description:
+      "Allows this app to receive hook events for the selected hook scope.",
+  },
+  "tinycloud.hooks/register": {
+    title: "Register hooks",
+    description:
+      "Allows this app to register hook handlers for the selected hook scope.",
+  },
+  "tinycloud.hooks/list": {
+    title: "List hooks",
+    description:
+      "Allows this app to list registered hooks for the selected hook scope.",
+  },
+  "tinycloud.hooks/unregister": {
+    title: "Unregister hooks",
+    description:
+      "Allows this app to remove registered hook handlers for the selected hook scope.",
+  },
+};
+
+interface ActionDetail extends CapabilityDescription {
+  canonicalAction: string;
+  displayAction: string;
+}
+
 function permissionScopeLabel(entry: PermissionEntry): string {
   if (entry.space !== undefined && entry.space !== "") {
     return entry.space;
@@ -333,6 +600,137 @@ function permissionScopeLabel(entry: PermissionEntry): string {
   return entry.service === "tinycloud.encryption"
     ? "network-scoped"
     : "unscoped";
+}
+
+function serviceDisplayName(service: string): string {
+  return SERVICE_LABELS[service] ?? `${service} permission`;
+}
+
+function permissionScopeSummary(entry: PermissionEntry): string {
+  if (entry.service === "tinycloud.encryption") {
+    return "This permission applies to an encryption network, not a TinyCloud data space.";
+  }
+  const scope = permissionScopeLabel(entry);
+  return `This permission applies to the ${scope} TinyCloud space and the resource path shown below.`;
+}
+
+function describeAction(entry: PermissionEntry, action: string): ActionDetail {
+  const canonicalAction = canonicalizeAction(entry.service, action);
+  const displayAction = displayActionName(entry.service, action);
+  const description =
+    contextualCapabilityDescription(entry, canonicalAction) ??
+    CAPABILITY_DESCRIPTIONS[canonicalAction] ??
+    fallbackCapabilityDescription(entry.service, displayAction);
+  return {
+    canonicalAction,
+    displayAction,
+    ...description,
+  };
+}
+
+function contextualCapabilityDescription(
+  entry: PermissionEntry,
+  canonicalAction: string,
+): CapabilityDescription | undefined {
+  if (entry.service !== "tinycloud.kv" || entry.space !== "secrets") {
+    return undefined;
+  }
+
+  const secret = describeSecretPath(entry.path);
+  if (secret === undefined) {
+    return undefined;
+  }
+
+  switch (canonicalAction) {
+    case "tinycloud.kv/get":
+      return {
+        title: "Read an encrypted secret",
+        description:
+          `Allows this app to read the encrypted secret record for ${secret}. Decrypting it still requires encryption-network decrypt permission.`,
+      };
+    case "tinycloud.kv/put":
+      return {
+        title: "Write a secret",
+        description:
+          `Allows this app to create or update the encrypted secret record for ${secret}.`,
+      };
+    case "tinycloud.kv/del":
+      return {
+        title: "Delete a secret",
+        description:
+          `Allows this app to remove the encrypted secret record for ${secret}.`,
+      };
+    case "tinycloud.kv/list":
+      return {
+        title: "List secrets",
+        description:
+          `Allows this app to list encrypted secret records under ${secret}.`,
+      };
+    case "tinycloud.kv/metadata":
+      return {
+        title: "Read secret metadata",
+        description:
+          `Allows this app to inspect metadata for encrypted secret records under ${secret}.`,
+      };
+    default:
+      return undefined;
+  }
+}
+
+function describeSecretPath(path: string): string | undefined {
+  const prefix = "vault/secrets/";
+  if (path === "vault/secrets") {
+    return "all secrets";
+  }
+  if (!path.startsWith(prefix)) {
+    return undefined;
+  }
+
+  const rest = path.slice(prefix.length);
+  if (rest === "") {
+    return "all secrets";
+  }
+
+  const scopedPrefix = "scoped/";
+  if (rest.startsWith(scopedPrefix)) {
+    const [scope, ...nameParts] = rest.slice(scopedPrefix.length).split("/");
+    const name = nameParts.join("/");
+    if (scope !== "" && name !== "") {
+      return `the scoped secret ${name} in ${scope}`;
+    }
+  }
+
+  return `the secret ${rest}`;
+}
+
+function canonicalizeAction(service: string, action: string): string {
+  if (action.includes("/")) {
+    return action;
+  }
+  if (action.startsWith(`${service}.`)) {
+    return `${service}/${action.slice(service.length + 1)}`;
+  }
+  return `${service}/${action}`;
+}
+
+function displayActionName(service: string, action: string): string {
+  if (action.startsWith(`${service}/`)) {
+    return action.slice(service.length + 1);
+  }
+  if (action.startsWith(`${service}.`)) {
+    return action.slice(service.length + 1);
+  }
+  return action;
+}
+
+function fallbackCapabilityDescription(
+  service: string,
+  action: string,
+): CapabilityDescription {
+  return {
+    title: `Use ${serviceDisplayName(service).replace(/ permission$/, "")}`,
+    description: `Allows this app to perform ${action} on the resource shown below.`,
+  };
 }
 
 // HTML escaping helpers. Kept local so the modal file has no cross-package

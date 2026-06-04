@@ -163,6 +163,29 @@ describe("TinyCloudPermissionRequestModal", () => {
     expect(modal.shadowRoot.innerHTML).toContain("Example App");
     expect(modal.shadowRoot.innerHTML).toContain("tinycloud.kv");
     expect(modal.shadowRoot.innerHTML).toContain("tinycloud.kv/get");
+    expect(modal.shadowRoot.innerHTML).toContain("Read key-value data");
+    expect(modal.shadowRoot.innerHTML).toContain("Permission details");
+    expect(modal.shadowRoot.innerHTML).toContain("You are granting this app");
+  });
+
+  test("describes secret writes as secret permissions", async () => {
+    const Modal = await loadModal();
+    const modal = new Modal({
+      ...sampleOptions,
+      additional: [
+        {
+          service: "tinycloud.kv",
+          space: "secrets",
+          path: "vault/secrets/FIREFLIES_API_KEY",
+          actions: ["put"],
+        },
+      ],
+    });
+
+    expect(modal.shadowRoot.innerHTML).toContain("Write a secret");
+    expect(modal.shadowRoot.innerHTML).toContain("FIREFLIES_API_KEY");
+    expect(modal.shadowRoot.innerHTML).toContain("tinycloud.kv/put");
+    expect(modal.shadowRoot.innerHTML).toContain("Permission details");
   });
 
   test("renders network-scoped encryption permissions without a space", async () => {
@@ -173,16 +196,21 @@ describe("TinyCloudPermissionRequestModal", () => {
         {
           service: "tinycloud.encryption",
           path: "urn:tinycloud:encryption:did:pkh:eip155:1:0xabc:default",
-          actions: ["tinycloud.encryption/network.create"],
+          actions: ["network.create"],
         },
       ],
     });
 
     expect(modal.shadowRoot.innerHTML).toContain("tinycloud.encryption");
     expect(modal.shadowRoot.innerHTML).toContain("network-scoped");
+    expect(modal.shadowRoot.innerHTML).toContain("Create an encryption network");
+    expect(modal.shadowRoot.innerHTML).toContain(
+      "Allows this app to create or initialize an encryption network",
+    );
     expect(modal.shadowRoot.innerHTML).toContain(
       "tinycloud.encryption/network.create",
     );
+    expect(modal.shadowRoot.innerHTML).toContain("network.create");
   });
 
   test("approve resolves with { approved: true }", async () => {
@@ -254,5 +282,6 @@ describe("TinyCloudPermissionRequestModal", () => {
     expect(modal.shadowRoot.innerHTML).toContain("tinycloud.kv");
     expect(modal.shadowRoot.innerHTML).toContain("tinycloud.sql");
     expect(modal.shadowRoot.innerHTML).toContain("tinycloud.sql/read");
+    expect(modal.shadowRoot.innerHTML).toContain("Read SQL data");
   });
 });
