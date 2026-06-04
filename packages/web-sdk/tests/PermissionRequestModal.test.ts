@@ -164,8 +164,8 @@ describe("TinyCloudPermissionRequestModal", () => {
     expect(modal.shadowRoot.innerHTML).toContain("tinycloud.kv");
     expect(modal.shadowRoot.innerHTML).toContain("tinycloud.kv/get");
     expect(modal.shadowRoot.innerHTML).toContain("Read key-value data");
-    expect(modal.shadowRoot.innerHTML).toContain("Permission details");
-    expect(modal.shadowRoot.innerHTML).toContain("You are granting this app");
+    expect(modal.shadowRoot.innerHTML).toContain("Show technical details");
+    expect(modal.shadowRoot.innerHTML).toContain("This app is asking you");
   });
 
   test("describes secret writes as secret permissions", async () => {
@@ -183,9 +183,10 @@ describe("TinyCloudPermissionRequestModal", () => {
     });
 
     expect(modal.shadowRoot.innerHTML).toContain("Write a secret");
+    expect(modal.shadowRoot.innerHTML).toContain("Permission");
     expect(modal.shadowRoot.innerHTML).toContain("FIREFLIES_API_KEY");
     expect(modal.shadowRoot.innerHTML).toContain("tinycloud.kv/put");
-    expect(modal.shadowRoot.innerHTML).toContain("Permission details");
+    expect(modal.shadowRoot.innerHTML).toContain("Show technical details");
   });
 
   test("renders network-scoped encryption permissions without a space", async () => {

@@ -96,7 +96,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
 
             <div class="modal-body">
               <p class="modal-description">
-                You are granting this app scoped permission for the capabilities and resources listed below. The grant applies to this session.
+                This app is asking you to grant scoped permission. Review what it will be allowed to do before approving.
               </p>
               <ul class="permission-list">${entriesHtml}</ul>
             </div>
@@ -116,7 +116,6 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
   }
 
   private renderEntry(entry: PermissionEntry): string {
-    const serviceName = serviceDisplayName(entry.service);
     const scopeLabel = permissionScopeLabel(entry);
     const resource = entry.path === "" ? "/" : entry.path;
     const actionDetails = entry.actions.map((action) =>
@@ -124,12 +123,12 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
     );
     const capabilities = actionDetails
       .map((detail) => `
-        <li class="capability-item">
-          <code class="action">${escapeHtml(detail.displayAction)}</code>
-          <div class="capability-copy">
-            <div class="capability-title">${escapeHtml(detail.title)}</div>
-            <div class="capability-description">${escapeHtml(detail.description)}</div>
+        <li class="permission-summary-item">
+          <div class="permission-summary-row">
+            <span class="permission-summary-label">Permission</span>
+            <strong class="permission-summary-title">${escapeHtml(detail.title)}</strong>
           </div>
+          <p class="permission-summary-description">${escapeHtml(detail.description)}</p>
         </li>
       `)
       .join("");
@@ -152,19 +151,12 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
 
     return `
       <li class="permission-entry">
-        <div class="entry-head">
-          <span class="entry-service">${escapeHtml(serviceName)}</span>
-          <span class="entry-space">${escapeHtml(scopeLabel)}</span>
-        </div>
-        <p class="entry-summary">${escapeHtml(permissionScopeSummary(entry))}</p>
-        <div class="capability-section">
-          <div class="section-label">Requested capabilities</div>
-          <ul class="capability-list">${capabilities}</ul>
-        </div>
-        <div class="dictionary-section">
-          <div class="section-label">Permission details</div>
+        <ul class="permission-summary-list">${capabilities}</ul>
+        <details class="technical-details">
+          <summary>Show technical details</summary>
+          <p class="entry-summary">${escapeHtml(permissionScopeSummary(entry))}</p>
           <dl class="permission-dictionary">${dictionaryRows}</dl>
-        </div>
+        </details>
       </li>
     `;
   }
@@ -248,51 +240,43 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         border: 1px solid var(--modal-border);
         border-radius: 10px; padding: 14px;
       }
-      .entry-head {
-        display: flex; justify-content: space-between; align-items: center;
-        font-size: 13px; margin-bottom: 6px;
-        gap: 12px;
-      }
-      .entry-service { font-weight: 600; color: var(--modal-foreground); }
-      .entry-space {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", monospace;
-        font-size: 11px; color: var(--modal-muted);
-        white-space: nowrap;
-      }
       .entry-summary {
         font-size: 13px; line-height: 1.45; color: var(--modal-muted);
-        margin: 0 0 12px 0;
+        margin: 10px 0;
       }
-      .capability-section,
-      .dictionary-section { margin-top: 12px; }
-      .section-label {
-        font-size: 11px; font-weight: 600; text-transform: uppercase;
-        letter-spacing: 0.04em; color: var(--modal-muted);
-        margin-bottom: 8px;
-      }
-      .capability-list {
+      .permission-summary-list {
         list-style: none; padding: 0; margin: 0;
-        display: flex; flex-direction: column; gap: 8px;
+        display: flex; flex-direction: column; gap: 10px;
       }
-      .capability-item {
-        display: grid; grid-template-columns: minmax(92px, max-content) 1fr;
-        gap: 10px; align-items: start;
+      .permission-summary-item {
+        display: flex; flex-direction: column; gap: 6px;
       }
-      .action {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", monospace;
-        font-size: 11px; padding: 3px 8px;
-        background: var(--modal-bg); border: 1px solid var(--modal-border);
-        border-radius: 6px; color: var(--modal-foreground);
-        word-break: break-word;
+      .permission-summary-row {
+        display: grid; grid-template-columns: 88px 1fr;
+        gap: 10px; align-items: baseline;
       }
-      .capability-title {
-        font-size: 13px; font-weight: 600; color: var(--modal-foreground);
+      .permission-summary-label {
+        font-size: 12px; color: var(--modal-muted);
+      }
+      .permission-summary-title {
+        font-size: 15px; font-weight: 600; color: var(--modal-foreground);
         line-height: 1.35;
       }
-      .capability-description {
-        font-size: 12px; line-height: 1.45; color: var(--modal-muted);
-        margin-top: 2px;
+      .permission-summary-description {
+        font-size: 13px; line-height: 1.45; color: var(--modal-muted);
+        margin: 0;
       }
+      .technical-details {
+        margin-top: 12px;
+        border-top: 1px solid var(--modal-border);
+        padding-top: 10px;
+      }
+      .technical-details summary {
+        cursor: pointer; color: var(--modal-muted); font-size: 12px;
+        user-select: none;
+      }
+      .technical-details summary:hover { color: var(--modal-foreground); }
+      .technical-details[open] summary { margin-bottom: 8px; }
       .permission-dictionary {
         margin: 0; padding: 0;
         border: 1px solid var(--modal-border);
@@ -345,9 +329,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         .modal-body { padding: 16px 20px; }
         .modal-actions { padding: 0 20px 20px 20px; flex-direction: column-reverse; }
         .modal-button { width: 100%; }
-        .entry-head { align-items: flex-start; flex-direction: column; }
-        .entry-space { white-space: normal; }
-        .capability-item { grid-template-columns: 1fr; gap: 6px; }
+        .permission-summary-row { grid-template-columns: 1fr; gap: 3px; }
         .dictionary-row { grid-template-columns: 1fr; }
         .dictionary-row dd { padding-top: 0; }
       }
