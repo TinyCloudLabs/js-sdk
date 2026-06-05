@@ -22,6 +22,8 @@ export interface IWasmBindings {
   invoke: InvokeFunction;
   /** Invoke multiple TinyCloud capabilities in one authorization header */
   invokeAny?: InvokeAnyFunction;
+  /** Compute a CID for signed invocation bytes. */
+  computeCid?: (data: Uint8Array, codec: bigint) => string;
   /** Prepare a session (generate session key, build SIWE message) */
   prepareSession: (params: any) => any;
   /** Complete session setup (create delegation) */

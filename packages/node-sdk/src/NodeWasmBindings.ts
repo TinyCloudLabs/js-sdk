@@ -10,6 +10,7 @@
 import {
   invoke,
   invokeAny,
+  computeCid,
   prepareSession,
   completeSessionSetup,
   ensureEip55,
@@ -50,6 +51,7 @@ export class NodeWasmBindings implements IWasmBindings {
 
   invoke = invoke;
   invokeAny = invokeAny;
+  computeCid = computeCid;
   prepareSession = prepareSession;
   completeSessionSetup = completeSessionSetup;
   ensureEip55 = ensureEip55;

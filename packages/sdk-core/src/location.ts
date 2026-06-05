@@ -535,6 +535,15 @@ function verifyDidKeySignature(
   );
 }
 
+export function verifyDidKeyEd25519Signature(
+  did: string,
+  payload: Uint8Array,
+  signature: Uint8Array,
+): boolean {
+  const publicKey = ed25519PublicKeyFromDidKey(did);
+  return ed25519.verify(signature, payload, publicKey);
+}
+
 function ed25519PublicKeyFromDidKey(did: string): Uint8Array {
   const identifier = did.slice("did:key:".length);
   if (!identifier.startsWith("z")) {
@@ -544,13 +553,15 @@ function ed25519PublicKeyFromDidKey(did: string): Uint8Array {
   }
 
   const bytes = bases.base58btc.decode(identifier);
-  if (bytes.length !== 34 || bytes[0] !== 0xed || bytes[1] !== 0x01) {
-    throw new LocationRecordValidationError(
-      "did:key must be an Ed25519 public key",
-    );
+  if (bytes.length === 34 && bytes[0] === 0xed && bytes[1] === 0x01) {
+    return bytes.slice(2);
   }
-
-  return bytes.slice(2);
+  if (bytes.length === 33 && bytes[0] === 0xed) {
+    return bytes.slice(1);
+  }
+  throw new LocationRecordValidationError(
+    "did:key must be an Ed25519 public key",
+  );
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {

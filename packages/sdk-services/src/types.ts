@@ -162,17 +162,22 @@ export type InvokeFunction = (
   service: string,
   path: string,
   action: string,
-  facts?: InvocationFacts
+  facts?: InvocationFacts,
 ) => ServiceHeaders;
 
 /**
  * Multi-resource invocation entry.
  */
 export interface InvokeAnyEntry {
-  spaceId: string;
+  /**
+   * Legacy space-scoped resource. Optional when `resource` is provided.
+   */
+  spaceId?: string;
   service: string;
   path: string;
   action: string;
+  /** Optional raw resource URI. When set, WASM signs this URI directly. */
+  resource?: string;
 }
 
 /**
@@ -182,7 +187,7 @@ export interface InvokeAnyEntry {
 export type InvokeAnyFunction = (
   session: ServiceSession,
   entries: InvokeAnyEntry[],
-  facts?: InvocationFacts
+  facts?: InvocationFacts,
 ) => ServiceHeaders;
 
 /**
@@ -218,7 +223,7 @@ export interface FetchResponse {
  */
 export type FetchFunction = (
   url: string,
-  init?: FetchRequestInit
+  init?: FetchRequestInit,
 ) => Promise<FetchResponse>;
 
 // =============================================================================
@@ -398,7 +403,7 @@ export function serviceError(
   code: string,
   message: string,
   service: string,
-  options?: { cause?: Error; meta?: Record<string, unknown> }
+  options?: { cause?: Error; meta?: Record<string, unknown> },
 ): ServiceError {
   return {
     code,

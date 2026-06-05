@@ -142,10 +142,7 @@ export { NodeWasmBindings } from "./NodeWasmBindings";
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";
 export type { RestorableSession } from "./DelegatedAccess";
-export {
-  serializeDelegation,
-  deserializeDelegation,
-} from "./delegation";
+export { serializeDelegation, deserializeDelegation } from "./delegation";
 export type { PortableDelegation } from "./delegation";
 
 // Re-export KV service values
@@ -221,6 +218,7 @@ export {
   SecretsService,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
+  resolveSecretListPrefix,
   resolveSecretPath,
 } from "@tinycloud/sdk-core";
 
@@ -241,6 +239,86 @@ export type {
   SecretsError,
   ResolvedSecretPath,
   SecretScopeOptions,
+} from "@tinycloud/sdk-core";
+
+// Re-export encryption service values and helpers
+export {
+  EncryptionService,
+  parseNetworkId,
+  buildNetworkId,
+  isNetworkId,
+  networkDiscoveryKey,
+  NetworkIdError,
+  ENCRYPTION_NETWORK_URN_PREFIX,
+  NETWORK_NAME_PATTERN,
+  canonicalizeEncryptionJson,
+  canonicalHashHex,
+  hexEncode,
+  hexDecode,
+  encryptionBase64Encode,
+  encryptionBase64Decode,
+  encryptionUtf8Encode,
+  encryptionUtf8Decode,
+  encryptToNetwork,
+  decryptEnvelopeWithKey,
+  validateEnvelope,
+  generateRandomReceiverKey,
+  deriveSignedReceiverKey,
+  buildCanonicalDecryptRequest,
+  buildDecryptFacts,
+  buildDecryptAttenuation,
+  buildDecryptInvocation,
+  checkDecryptInvocationInput,
+  verifyDecryptResponse,
+  canonicalSignedResponse,
+  openWrappedKey,
+  discoverNetwork,
+  ensureNetworkUsableForDecrypt,
+  DEFAULT_ENCRYPTION_ALG,
+  ENVELOPE_VERSION,
+  DEFAULT_KEY_VERSION,
+  DECRYPT_FACT_TYPE,
+  DECRYPT_RESULT_TYPE,
+  DECRYPT_ACTION,
+  ENCRYPTION_SERVICE,
+  ENCRYPTION_SERVICE_SHORT,
+  encryptionError,
+} from "@tinycloud/sdk-core";
+export type {
+  IEncryptionService,
+  EncryptionServiceConfig,
+  DecryptTransport,
+  EncryptToNetworkOptions,
+  DecryptEnvelopeOptions,
+  ParsedNetworkId,
+  BuildDecryptInvocationInput,
+  BuiltDecryptInvocation,
+  CanonicalJson,
+  DecryptCapabilityProof,
+  DecryptInvocationFact,
+  DecryptInvocationSigner,
+  DecryptRequestBody,
+  DecryptResponseBody,
+  EncryptionCrypto,
+  EncryptionError,
+  EncryptionErrorInput,
+  InlineEncryptedEnvelope,
+  NetworkDescriptor,
+  ReceiverKeyPair,
+  ReceiverKeySigner,
+  EncryptToNetworkInput,
+  EncryptToNetworkResult,
+  CanonicalDecryptRequest,
+  BuildCanonicalDecryptRequestInput,
+  BuildDecryptFactsInput,
+  RandomReceiverKeyInput,
+  SignedReceiverKeyInput,
+  VerifyDecryptResponseInput,
+  DiscoverNetworkInput,
+  DiscoveredNetwork,
+  DiscoverySource,
+  NodeDescriptorFetcher,
+  WellKnownDescriptorFetcher,
 } from "@tinycloud/sdk-core";
 
 // Re-export Hooks service values

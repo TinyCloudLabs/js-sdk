@@ -39,15 +39,11 @@ function secretsError(
 }
 
 function displayActionUrn(action: "put" | "del"): string {
-  return action === "put" ? "tinycloud.vault/write" : "tinycloud.vault/delete";
+  return action === "put" ? "tinycloud.kv/put" : "tinycloud.kv/del";
 }
 
 function kvActionUrn(action: "put" | "del"): string {
   return `tinycloud.kv/${action}`;
-}
-
-function vaultMutationAction(action: "put" | "del"): "write" | "delete" {
-  return action === "put" ? "write" : "delete";
 }
 
 function secretPermissionEntries(
@@ -58,17 +54,13 @@ function secretPermissionEntries(
   const secretPath = resolveSecretPath(name, options);
   return [
     {
-      service: "tinycloud.vault",
+      service: "tinycloud.kv",
       space: SECRETS_SPACE,
-      path: secretPath.vaultKey,
-      actions: [vaultMutationAction(action)],
+      path: secretPath.permissionPaths.vault,
+      actions: [action],
       skipPrefix: true,
     },
   ];
-}
-
-function isSecretsSpace(space: string): boolean {
-  return space === SECRETS_SPACE || space.endsWith(`:${SECRETS_SPACE}`);
 }
 
 export interface WebSecretsServiceConfig {
@@ -214,14 +206,12 @@ export class WebSecretsService implements ISecretsService {
     const secretPath = resolveSecretPath(name, options);
     return manifests.some((entry) => {
       const resolved = resolveManifest(entry);
-      return (["keys", "vault"] as const).every((base) =>
-        resolved.resources.some(
-          (resource) =>
-            resource.service === "tinycloud.kv" &&
-            isSecretsSpace(resource.space) &&
-            resource.path === secretPath.permissionPaths[base] &&
-            resource.actions.includes(requiredAction),
-        ),
+      return resolved.resources.some(
+        (resource) =>
+          resource.service === "tinycloud.kv" &&
+          resource.space === SECRETS_SPACE &&
+          resource.path === secretPath.permissionPaths.vault &&
+          resource.actions.includes(requiredAction),
       );
     });
   }

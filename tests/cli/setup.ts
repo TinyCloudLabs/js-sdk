@@ -83,6 +83,8 @@ export async function setupCliProfile(): Promise<TinyCloudNode> {
       verificationMethod: session.verificationMethod,
       address: session.address,
       chainId: session.chainId,
+      siwe: session.siwe,
+      signature: session.signature,
     }, null, 2),
   );
 

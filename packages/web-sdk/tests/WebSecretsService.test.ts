@@ -69,10 +69,10 @@ describe("WebSecretsService", () => {
     expect(requested).toEqual([
       [
         {
-          service: "tinycloud.vault",
+          service: "tinycloud.kv",
           space: "secrets",
-          path: "secrets/ANTHROPIC_API_KEY",
-          actions: ["write"],
+          path: "vault/secrets/ANTHROPIC_API_KEY",
+          actions: ["put"],
           skipPrefix: true,
         },
       ],
@@ -102,10 +102,10 @@ describe("WebSecretsService", () => {
     expect(requested).toEqual([
       [
         {
-          service: "tinycloud.vault",
+          service: "tinycloud.kv",
           space: "secrets",
-          path: "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
-          actions: ["write"],
+          path: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+          actions: ["put"],
           skipPrefix: true,
         },
       ],
@@ -221,7 +221,7 @@ describe("WebSecretsService", () => {
         code: ErrorCodes.PERMISSION_DENIED,
         service: "secrets",
         message:
-          "Permission request for tinycloud.vault/delete on ANTHROPIC_API_KEY was declined.",
+          "Permission request for tinycloud.kv/del on ANTHROPIC_API_KEY was declined.",
       },
     });
     expect(base.delete).not.toHaveBeenCalled();

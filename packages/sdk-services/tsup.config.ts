@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/kv/index.ts', 'src/sql/index.ts'],
+  entry: ['src/index.ts', 'src/kv/index.ts', 'src/sql/index.ts', 'src/encryption/index.ts'],
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,

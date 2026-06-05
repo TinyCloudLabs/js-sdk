@@ -96,17 +96,6 @@ describe("expandPermissionEntries", () => {
       {
         service: "tinycloud.kv",
         space: "secrets",
-        path: "keys/secrets/ANTHROPIC_API_KEY",
-        actions: [
-          "tinycloud.kv/get",
-          "tinycloud.kv/put",
-          "tinycloud.kv/del",
-        ],
-        skipPrefix: true,
-      },
-      {
-        service: "tinycloud.kv",
-        space: "secrets",
         path: "vault/secrets/ANTHROPIC_API_KEY",
         actions: [
           "tinycloud.kv/get",
@@ -440,12 +429,6 @@ describe("resolveManifest — secrets shorthand", () => {
         {
           service: "tinycloud.kv",
           space: "secrets",
-          path: "keys/secrets/ANTHROPIC_API_KEY",
-          actions: ["tinycloud.kv/get"],
-        },
-        {
-          service: "tinycloud.kv",
-          space: "secrets",
           path: "vault/secrets/ANTHROPIC_API_KEY",
           actions: ["tinycloud.kv/get"],
         },
@@ -497,12 +480,6 @@ describe("resolveManifest — secrets shorthand", () => {
         {
           service: "tinycloud.kv",
           space: "secrets",
-          path: "keys/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
-          actions: ["tinycloud.kv/get"],
-        },
-        {
-          service: "tinycloud.kv",
-          space: "secrets",
           path: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
           actions: ["tinycloud.kv/get"],
         },
@@ -525,10 +502,6 @@ describe("resolveManifest — secrets shorthand", () => {
     });
 
     expect(resourceCapabilitiesToSpaceAbilitiesMap(resolved.resources).secrets.kv).toEqual({
-      "keys/secrets/scoped/food-tracker/ANTHROPIC_API_KEY": [
-        "tinycloud.kv/get",
-        "tinycloud.kv/put",
-      ],
       "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY": [
         "tinycloud.kv/get",
         "tinycloud.kv/put",
@@ -567,11 +540,6 @@ describe("resolveManifest — secrets shorthand", () => {
           "": ["tinycloud.capabilities/read"],
         },
         kv: {
-          "keys/secrets/ANTHROPIC_API_KEY": [
-            "tinycloud.kv/get",
-            "tinycloud.kv/put",
-            "tinycloud.kv/del",
-          ],
           "vault/secrets/ANTHROPIC_API_KEY": [
             "tinycloud.kv/get",
             "tinycloud.kv/put",
@@ -605,12 +573,6 @@ describe("resolveManifest — vault shorthand", () => {
         {
           service: "tinycloud.kv",
           space: "secrets",
-          path: "keys/secrets/ANTHROPIC_API_KEY",
-          actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
-        },
-        {
-          service: "tinycloud.kv",
-          space: "secrets",
           path: "vault/secrets/ANTHROPIC_API_KEY",
           actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
         },
@@ -640,11 +602,6 @@ describe("resolveManifest — vault shorthand", () => {
 
     expect(resolved.resources).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          service: "tinycloud.kv",
-          path: "keys/com.listen.app/profiles/current",
-          actions: ["tinycloud.kv/get"],
-        }),
         expect.objectContaining({
           service: "tinycloud.kv",
           path: "vault/com.listen.app/profiles/current",

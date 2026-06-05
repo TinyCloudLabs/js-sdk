@@ -21,6 +21,7 @@ import {
   ComposedManifestRequest,
   AbilitiesMap,
   DEFAULT_MANIFEST_SPACE,
+  ENCRYPTION_PERMISSION_SERVICE,
   composeManifestRequest,
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
@@ -385,6 +386,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this.wasm.makeSpaceId(address, chainId, space);
   }
 
+  private defaultEncryptionNetworkId(address: string, chainId: number): string {
+    return `urn:tinycloud:encryption:did:pkh:eip155:${chainId}:${address}:default`;
+  }
+
   private resolveSignInCapabilities(
     address: string,
     chainId: number,
@@ -392,17 +397,59 @@ export class NodeUserAuthorization implements IUserAuthorization {
     abilities: AbilitiesMap;
     spaceId: string;
     spaceAbilities?: Record<string, AbilitiesMap>;
+    rawAbilities?: Record<string, string[]>;
   } {
     const request = this.getCapabilityRequest();
     if (request === undefined) {
+      const defaultNetworkId = this.defaultEncryptionNetworkId(address, chainId);
+      const secretsSpaceId = this.wasm.makeSpaceId(address, chainId, "secrets");
       return {
         abilities: this.defaultActions,
         spaceId: this.wasm.makeSpaceId(address, chainId, this.spacePrefix),
+        spaceAbilities: {
+          [secretsSpaceId]: {
+            kv: {
+              "vault/secrets/": [
+                "tinycloud.kv/get",
+                "tinycloud.kv/put",
+                "tinycloud.kv/del",
+                "tinycloud.kv/list",
+                "tinycloud.kv/metadata",
+              ],
+            },
+          },
+        },
+        rawAbilities: {
+          [defaultNetworkId]: [
+            "tinycloud.encryption/decrypt",
+            "tinycloud.encryption/network.create",
+          ],
+        },
       };
     }
 
+    const rawAbilities: Record<string, string[]> = {};
+    const spaceResources = request.resources.filter((entry) => {
+      if (entry.service !== ENCRYPTION_PERMISSION_SERVICE) {
+        return true;
+      }
+      const existing = rawAbilities[entry.path];
+      if (existing === undefined) {
+        rawAbilities[entry.path] = [...entry.actions];
+      } else {
+        const seen = new Set(existing);
+        for (const action of entry.actions) {
+          if (!seen.has(action)) {
+            existing.push(action);
+            seen.add(action);
+          }
+        }
+      }
+      return false;
+    });
+
     const primarySpaceName =
-      request.resources.find((entry) => entry.space !== "account")?.space ??
+      spaceResources.find((entry) => entry.space !== "account")?.space ??
       DEFAULT_MANIFEST_SPACE;
     const primarySpaceId = this.resolveSpaceName(
       primarySpaceName,
@@ -410,7 +457,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       chainId,
     );
 
-    const bySpace = resourceCapabilitiesToSpaceAbilitiesMap(request.resources);
+    const bySpace = resourceCapabilitiesToSpaceAbilitiesMap(spaceResources);
     const spaceAbilities: Record<string, AbilitiesMap> = {};
     for (const [space, abilities] of Object.entries(bySpace)) {
       spaceAbilities[this.resolveSpaceName(space, address, chainId)] = abilities;
@@ -422,6 +469,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
         resourceCapabilitiesToAbilitiesMap([]),
       spaceId: primarySpaceId,
       spaceAbilities,
+      rawAbilities:
+        Object.keys(rawAbilities).length > 0 ? rawAbilities : undefined,
     };
   }
 
@@ -729,6 +778,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
       ...(capabilityPlan.spaceAbilities !== undefined
         ? { spaceAbilities: capabilityPlan.spaceAbilities }
         : {}),
+      ...(capabilityPlan.rawAbilities !== undefined
+        ? { rawAbilities: capabilityPlan.rawAbilities }
+        : {}),
       address,
       chainId,
       domain: this.domain,
@@ -933,6 +985,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
       abilities: capabilityPlan.abilities,
       ...(capabilityPlan.spaceAbilities !== undefined
         ? { spaceAbilities: capabilityPlan.spaceAbilities }
+        : {}),
+      ...(capabilityPlan.rawAbilities !== undefined
+        ? { rawAbilities: capabilityPlan.rawAbilities }
         : {}),
       address,
       chainId,

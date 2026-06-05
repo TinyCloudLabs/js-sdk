@@ -20,6 +20,7 @@ export namespace tinycloud {
   export import siweToDelegationHeaders = lib.siweToDelegationHeaders;
   export import invoke = lib.invoke;
   export import invokeAny = lib.invokeAny;
+  export import computeCid = lib.computeCid;
   export import makeSpaceId = lib.makeSpaceId;
   export import prepareSession = lib.prepareSession;
   export import Session = lib.Session;

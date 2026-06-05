@@ -29,6 +29,7 @@ import {
   ISharingService,
   ICapabilityKeyRegistry,
   IHooksService,
+  IEncryptionService,
   DelegationManager,
   Delegation,
   CreateDelegationParams,
@@ -46,6 +47,7 @@ import {
   type ComposedManifestRequest,
   type ResolvedDelegate,
   type PermissionEntry,
+  type NetworkDescriptor,
   SignInOptions,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
@@ -408,6 +410,7 @@ export class TinyCloudWeb {
   get sql(): ISQLService { return this.node.sql; }
   get duckdb(): IDuckDbService { return this.node.duckdb; }
   get hooks(): IHooksService { return this.node.hooks; }
+  get encryption(): IEncryptionService { return this.node.encryption; }
   get vault(): IDataVaultService { return this.node.vault; }
   get secrets(): ISecretsService {
     if (!this._secrets) {
@@ -430,6 +433,27 @@ export class TinyCloudWeb {
 
   space(nameOrUri: string): ISpace { return this.spaces.get(nameOrUri); }
   get kvPrefix(): string { return this.config.kvPrefix || ""; }
+
+  async getEncryptionNetwork(
+    nameOrNetworkId = "default",
+  ): Promise<NetworkDescriptor | null> {
+    const node = await this.ensureNode();
+    return node.getEncryptionNetwork(nameOrNetworkId);
+  }
+
+  async createEncryptionNetwork(
+    name = "default",
+  ): Promise<NetworkDescriptor> {
+    const node = await this.ensureNode();
+    return node.createEncryptionNetwork(name);
+  }
+
+  async ensureEncryptionNetwork(
+    name = "default",
+  ): Promise<NetworkDescriptor> {
+    const node = await this.ensureNode();
+    return node.ensureEncryptionNetwork(name);
+  }
 
   // ===========================================================================
   // Auth Methods (delegate to TinyCloudNode)
@@ -598,8 +622,6 @@ export class TinyCloudWeb {
    *
    * Pass `{ forceWalletSign: true }` to bypass the derivability check and
    * always use the wallet-signed SIWE path.
-   *
-   * Current limitation: exactly one {@link PermissionEntry} per call.
    */
   delegateTo = async (
     did: string,

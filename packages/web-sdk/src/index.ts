@@ -5,7 +5,7 @@ export {
   ShareReceiveResult,
   SessionRestoreResult,
   SessionRestoreStatus,
-} from './modules/tcw';
+} from "./modules/tcw";
 
 // Browser Adapters
 export {
@@ -14,18 +14,18 @@ export {
   BrowserENSResolver,
   BrowserNotificationHandler,
   BrowserWasmBindings,
-} from './adapters';
+} from "./adapters";
 export type {
   BrowserSessionLoadResult,
   BrowserSessionLoadStatus,
   BrowserSessionStorageOptions,
-} from './adapters';
+} from "./adapters";
 
 // Auth module (browser-specific strategies)
 export {
   ModalSpaceCreationHandler,
   defaultWebSpaceCreationHandler,
-} from './authorization';
+} from "./authorization";
 
 // Re-export sdk-core authorization types used by the new auth module
 export {
@@ -42,10 +42,10 @@ export {
   SpaceCreationContext,
   AutoApproveSpaceCreationHandler,
   defaultSpaceCreationHandler,
-} from '@tinycloud/sdk-core';
+} from "@tinycloud/sdk-core";
 
 // Re-exports from providers (browser/Web3-specific, formerly in web-core)
-export * from './providers';
+export * from "./providers";
 
 // Re-exports from sdk-core (platform-agnostic types)
 export {
@@ -68,8 +68,8 @@ export {
   IUserAuthorization as ICoreUserAuthorization,
   PersistedSessionData,
   PartialSiweMessage,
-} from '@tinycloud/sdk-core';
-export type { SignInOptions } from '@tinycloud/sdk-core';
+} from "@tinycloud/sdk-core";
+export type { SignInOptions } from "@tinycloud/sdk-core";
 
 // Re-export KV service types for direct usage
 export {
@@ -78,12 +78,10 @@ export {
   KVResponse,
   PrefixedKVService,
   IPrefixedKVService,
-} from '@tinycloud/sdk-core';
+} from "@tinycloud/sdk-core";
 
 // Hooks service
-export {
-  HooksService,
-} from '@tinycloud/sdk-core';
+export { HooksService } from "@tinycloud/sdk-core";
 export type {
   IHooksService,
   HookSubscription,
@@ -91,7 +89,7 @@ export type {
   HookStreamEvent,
   SubscribeOptions,
   HooksServiceConfig,
-} from '@tinycloud/sdk-core';
+} from "@tinycloud/sdk-core";
 
 // Re-export delegation types and services from sdk-core
 export {
@@ -131,7 +129,7 @@ export {
   ShareLinkData,
   IngestOptions,
   GenerateShareParams,
-} from '@tinycloud/sdk-core';
+} from "@tinycloud/sdk-core";
 
 // Re-export CapabilityKeyRegistry from sdk-core
 export {
@@ -141,7 +139,7 @@ export {
   StoredDelegationChain,
   CapabilityKeyRegistryErrorCodes,
   CapabilityKeyRegistryErrorCode,
-} from '@tinycloud/sdk-core';
+} from "@tinycloud/sdk-core";
 
 // Re-export SpaceService from sdk-core
 export {
@@ -160,7 +158,7 @@ export {
   SpaceConfig,
   ISpaceScopedDelegations,
   ISpaceScopedSharing,
-} from '@tinycloud/sdk-core';
+} from "@tinycloud/sdk-core";
 
 // Protocol version checking
 export {
@@ -168,7 +166,7 @@ export {
   VersionCheckError,
   UnsupportedFeatureError,
   checkNodeInfo,
-} from '@tinycloud/sdk-core';
+} from "@tinycloud/sdk-core";
 
 // Re-export Vault service types from sdk-core
 export {
@@ -178,6 +176,7 @@ export {
   SecretsService,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
+  resolveSecretListPrefix,
   resolveSecretPath,
   type WasmVaultFunctions,
   type VaultHeaders,
@@ -195,18 +194,98 @@ export {
   type SecretsError,
   type ResolvedSecretPath,
   type SecretScopeOptions,
-} from '@tinycloud/sdk-core';
+} from "@tinycloud/sdk-core";
+
+// Re-export encryption service types and helpers from sdk-core
+export {
+  EncryptionService,
+  parseNetworkId,
+  buildNetworkId,
+  isNetworkId,
+  networkDiscoveryKey,
+  NetworkIdError,
+  ENCRYPTION_NETWORK_URN_PREFIX,
+  NETWORK_NAME_PATTERN,
+  canonicalizeEncryptionJson,
+  canonicalHashHex,
+  hexEncode,
+  hexDecode,
+  encryptionBase64Encode,
+  encryptionBase64Decode,
+  encryptionUtf8Encode,
+  encryptionUtf8Decode,
+  encryptToNetwork,
+  decryptEnvelopeWithKey,
+  validateEnvelope,
+  generateRandomReceiverKey,
+  deriveSignedReceiverKey,
+  buildCanonicalDecryptRequest,
+  buildDecryptFacts,
+  buildDecryptAttenuation,
+  buildDecryptInvocation,
+  checkDecryptInvocationInput,
+  verifyDecryptResponse,
+  canonicalSignedResponse,
+  openWrappedKey,
+  discoverNetwork,
+  ensureNetworkUsableForDecrypt,
+  DEFAULT_ENCRYPTION_ALG,
+  ENVELOPE_VERSION,
+  DEFAULT_KEY_VERSION,
+  DECRYPT_FACT_TYPE,
+  DECRYPT_RESULT_TYPE,
+  DECRYPT_ACTION,
+  ENCRYPTION_SERVICE,
+  ENCRYPTION_SERVICE_SHORT,
+  encryptionError,
+} from "@tinycloud/sdk-core";
+export type {
+  IEncryptionService,
+  EncryptionServiceConfig,
+  DecryptTransport,
+  EncryptToNetworkOptions,
+  DecryptEnvelopeOptions,
+  ParsedNetworkId,
+  BuildDecryptInvocationInput,
+  BuiltDecryptInvocation,
+  CanonicalJson,
+  DecryptCapabilityProof,
+  DecryptInvocationFact,
+  DecryptInvocationSigner,
+  DecryptRequestBody,
+  DecryptResponseBody,
+  EncryptionCrypto,
+  EncryptionError,
+  EncryptionErrorInput,
+  InlineEncryptedEnvelope,
+  NetworkDescriptor,
+  ReceiverKeyPair,
+  ReceiverKeySigner,
+  EncryptToNetworkInput,
+  EncryptToNetworkResult,
+  CanonicalDecryptRequest,
+  BuildCanonicalDecryptRequestInput,
+  BuildDecryptFactsInput,
+  RandomReceiverKeyInput,
+  SignedReceiverKeyInput,
+  VerifyDecryptResponseInput,
+  DiscoverNetworkInput,
+  DiscoveredNetwork,
+  DiscoverySource,
+  NodeDescriptorFetcher,
+  WellKnownDescriptorFetcher,
+} from "@tinycloud/sdk-core";
 
 // Adapter for web-sdk
-export { createKVService } from './modules/Storage/tinycloud/KVServiceAdapter';
+export { createKVService } from "./modules/Storage/tinycloud/KVServiceAdapter";
 
 // Delegation Transport Types (re-exported from node-sdk for compatibility)
 export {
   DelegatedAccess,
   serializeDelegation,
   deserializeDelegation,
-} from '@tinycloud/node-sdk/core';
-export type { PortableDelegation } from '@tinycloud/node-sdk/core';
+} from "@tinycloud/node-sdk/core";
+export type { PortableDelegation } from "@tinycloud/node-sdk/core";
 
 // TinyCloudNode re-export (for advanced usage)
 export {
@@ -215,7 +294,7 @@ export {
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
-} from '@tinycloud/node-sdk/core';
+} from "@tinycloud/node-sdk/core";
 
 // Capability-chain delegation types and errors (spec: .claude/specs/capability-chain.md)
 export {
@@ -252,4 +331,4 @@ export {
   expandPermissionEntry,
   parseExpiry,
   resourceCapabilitiesToSpaceAbilitiesMap,
-} from '@tinycloud/sdk-core';
+} from "@tinycloud/sdk-core";

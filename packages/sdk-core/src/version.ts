@@ -49,6 +49,7 @@ export class UnsupportedFeatureError extends Error {
 
 export interface NodeInfo {
   features: string[];
+  nodeId?: string;
   quotaUrl?: string;
 }
 
@@ -74,6 +75,7 @@ export async function checkNodeInfo(
     protocol: number;
     version: string;
     features: string[];
+    nodeId?: string;
     quota_url?: string;
   };
 
@@ -88,6 +90,7 @@ export async function checkNodeInfo(
 
   return {
     features: data.features ?? [],
+    nodeId: data.nodeId,
     quotaUrl: data.quota_url,
   };
 }

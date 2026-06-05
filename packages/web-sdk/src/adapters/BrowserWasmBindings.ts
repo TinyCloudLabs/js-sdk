@@ -18,6 +18,7 @@ export class BrowserWasmBindings implements IWasmBindings {
   get invokeAny() { return invokeAny; }
   get prepareSession() { return prepareSession; }
   get completeSessionSetup() { return completeSessionSetup; }
+  computeCid(data: Uint8Array, codec: bigint): string { return tinycloud.computeCid(data, codec); }
 
   ensureEip55(address: string): string { return tinycloud.ensureEip55(address); }
   makeSpaceId(address: string, chainId: number, prefix: string): string {

@@ -44,8 +44,10 @@ import {
   HooksService,
   DataVaultService,
   IDataVaultService,
+  EncryptionService,
   SecretsService,
   ISecretsService,
+  IEncryptionService,
   IHooksService,
   createVaultCrypto,
   ServiceSession,
@@ -87,6 +89,7 @@ import {
   type ResolvedDelegate,
   // Capability-chain delegation
   type PermissionEntry,
+  ENCRYPTION_PERMISSION_SERVICE,
   PermissionNotInManifestError,
   SessionExpiredError,
   expandPermissionEntries as expandPermissionEntriesCore,
@@ -98,6 +101,16 @@ import {
   resourceCapabilitiesToAbilitiesMap,
   SERVICE_LONG_TO_SHORT,
   EXPIRY,
+  canonicalHashHex,
+  canonicalizeEncryptionJson,
+  verifyDidKeyEd25519Signature,
+  type BuildDecryptInvocationInput,
+  type BuiltDecryptInvocation,
+  type CanonicalJson,
+  type DecryptResponseBody,
+  type DecryptTransport,
+  type EncryptionCrypto,
+  type NetworkDescriptor,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
@@ -114,6 +127,10 @@ import { NodeSecretsService } from "./NodeSecretsService";
 
 /** Default TinyCloud host */
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
+const DEFAULT_ENCRYPTION_NETWORK_NAME = "default";
+const NETWORK_CREATE_ACTION = "tinycloud.encryption/network.create";
+const DECRYPT_ACTION = "tinycloud.encryption/decrypt";
+const NETWORK_ADMIN_TYPE = "tinycloud.encryption.network-admin/v1";
 
 /**
  * Default lifetime of a SIWE session when {@link TinyCloudNodeConfig.sessionExpirationMs}
@@ -229,7 +246,8 @@ export interface RuntimePermissionGrantOptions {
 }
 
 interface RuntimePermissionOperation {
-  spaceId: string;
+  spaceId?: string;
+  resource?: string;
   service: string;
   path: string;
   action: string;
@@ -240,6 +258,104 @@ interface RuntimePermissionGrant {
   delegation: PortableDelegation;
   operations: RuntimePermissionOperation[];
   expiresAt: Date;
+}
+
+type CanonicalizableEncryptionJson = CanonicalJson;
+type NetworkInvocationFact = object;
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  let output = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i];
+    const b = bytes[i + 1];
+    const c = bytes[i + 2];
+    const triplet = (a << 16) | ((b ?? 0) << 8) | (c ?? 0);
+    output += alphabet[(triplet >> 18) & 63];
+    output += alphabet[(triplet >> 12) & 63];
+    if (i + 1 < bytes.length) output += alphabet[(triplet >> 6) & 63];
+    if (i + 2 < bytes.length) output += alphabet[triplet & 63];
+  }
+  return output;
+}
+
+function base64UrlDecode(value: string): Uint8Array {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const bytes: number[] = [];
+  let buffer = 0;
+  let bits = 0;
+  for (const char of value) {
+    const index = alphabet.indexOf(char);
+    if (index < 0) {
+      throw new Error("invalid base64url input");
+    }
+    buffer = (buffer << 6) | index;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >> bits) & 0xff);
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+async function signJwtInputWithJwk(
+  signingInput: string,
+  jwk: object,
+): Promise<Uint8Array> {
+  const bytes = new TextEncoder().encode(signingInput);
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) {
+      throw new Error("WebCrypto subtle API is unavailable");
+    }
+    const key = await subtle.importKey(
+      "jwk",
+      jwk as any,
+      { name: "Ed25519" },
+      false,
+      ["sign"],
+    );
+    return new Uint8Array(await subtle.sign({ name: "Ed25519" }, key, bytes));
+  } catch {
+    const nodeCrypto = await import("node:crypto");
+    const key = nodeCrypto.createPrivateKey({ key: jwk as any, format: "jwk" });
+    return new Uint8Array(nodeCrypto.sign(null, Buffer.from(bytes), key));
+  }
+}
+
+async function rewriteInvocationAudience(
+  authorization: string,
+  audience: string,
+  jwk: object,
+): Promise<string> {
+  const [headerPart, payloadPart] = authorization.split(".");
+  if (!headerPart || !payloadPart) {
+    throw new Error("invalid invocation authorization");
+  }
+  const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerPart)));
+  const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadPart)));
+  payload.aud = audience;
+  const signingInput = `${base64UrlEncode(
+    new TextEncoder().encode(JSON.stringify(header)),
+  )}.${base64UrlEncode(new TextEncoder().encode(JSON.stringify(payload)))}`;
+  const signature = await signJwtInputWithJwk(signingInput, jwk);
+  return `${signingInput}.${base64UrlEncode(signature)}`;
+}
+
+function authorizationHeader(headers: Record<string, string> | [string, string][]): string {
+  if (Array.isArray(headers)) {
+    const entry = headers.find(([name]) => name.toLowerCase() === "authorization");
+    if (!entry) {
+      throw new Error("network invocation did not include an Authorization header");
+    }
+    return entry[1];
+  }
+  const value = headers.Authorization ?? headers.authorization;
+  if (!value) {
+    throw new Error("network invocation did not include an Authorization header");
+  }
+  return value;
 }
 
 /**
@@ -278,6 +394,7 @@ export class TinyCloudNode {
   private _duckdb?: DuckDbService;
   private _hooks?: HooksService;
   private _vault?: DataVaultService;
+  private _encryption?: EncryptionService;
   private _baseSecrets?: ISecretsService;
   private _secrets?: ISecretsService;
   /** Cached public KV with proper delegation (set by ensurePublicSpace) */
@@ -342,12 +459,10 @@ export class TinyCloudNode {
       throw new Error("WASM binding does not support invokeAny");
     }
     const grant = this.findGrantForOperations(
-      entries.map((entry) => ({
-        spaceId: entry.spaceId,
-        service: this.invocationServiceName(entry.service),
-        path: entry.path,
-        action: entry.action,
-      })),
+      entries.flatMap((entry) => {
+        const operation = this.operationFromInvokeAnyEntry(entry);
+        return operation ? [operation] : [];
+      }),
     );
     return this.wasmBindings.invokeAny(grant?.session ?? session, entries, facts);
   };
@@ -642,6 +757,7 @@ export class TinyCloudNode {
     this._duckdb = undefined;
     this._hooks = undefined;
     this._vault = undefined;
+    this._encryption = undefined;
     this._baseSecrets = undefined;
     this._secrets = undefined;
     this._spaceService = undefined;
@@ -653,6 +769,10 @@ export class TinyCloudNode {
 
     // Initialize service context with session
     this.initializeServices();
+
+    if (this.config.manifest === undefined && this.config.capabilityRequest === undefined) {
+      await this.ensureOwnedSpaceHosted(this.ownedSpaceId("secrets"));
+    }
 
     await this.writeManifestRegistryRecords();
 
@@ -778,6 +898,7 @@ export class TinyCloudNode {
     this._duckdb = undefined;
     this._hooks = undefined;
     this._vault = undefined;
+    this._encryption = undefined;
     this._baseSecrets = undefined;
     this._secrets = undefined;
     this._spaceService = undefined;
@@ -1001,7 +1122,7 @@ export class TinyCloudNode {
    * @internal
    */
   private initializeServices(): void {
-    const session = this.auth?.tinyCloudSession;
+    const session = this.currentTinyCloudSession();
     if (!session) {
       return;
     }
@@ -1078,6 +1199,179 @@ export class TinyCloudNode {
     return kvService;
   }
 
+  getDefaultEncryptionNetworkId(name = DEFAULT_ENCRYPTION_NETWORK_NAME): string {
+    return `urn:tinycloud:encryption:${this.did}:${name}`;
+  }
+
+  private requireServiceSession(): ServiceSession {
+    const session = this._serviceContext?.session;
+    if (!session) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+    return session;
+  }
+
+  private createEncryptionCrypto(): EncryptionCrypto {
+    const wasm = this.wasmBindings;
+    const columnEncrypt = (key: Uint8Array, plaintext: Uint8Array): Uint8Array => {
+      const encrypted = wasm.vault_encrypt(key, plaintext);
+      const out = new Uint8Array(1 + encrypted.length);
+      out[0] = 0x01;
+      out.set(encrypted, 1);
+      return out;
+    };
+    const columnDecrypt = (key: Uint8Array, blob: Uint8Array): Uint8Array => {
+      if (blob[0] !== 0x01) {
+        return blob;
+      }
+      return wasm.vault_decrypt(key, blob.slice(1));
+    };
+    return {
+      sha256: (data) => wasm.vault_sha256(data),
+      randomBytes: (length) => wasm.vault_random_bytes(length),
+      x25519FromSeed: (seed) => wasm.vault_x25519_from_seed(seed),
+      x25519Dh: (privateKey, publicKey) =>
+        wasm.vault_x25519_dh(privateKey, publicKey),
+      authEncrypt: (key, plaintext) => wasm.vault_encrypt(key, plaintext),
+      authDecrypt: (key, ciphertext) => wasm.vault_decrypt(key, ciphertext),
+      sealToNetworkKey: (networkPublicKey, symmetricKey) => {
+        const seed = wasm.vault_random_bytes(32);
+        const ephemeral = wasm.vault_x25519_from_seed(seed);
+        const shared = wasm.vault_x25519_dh(
+          ephemeral.privateKey,
+          networkPublicKey,
+        );
+        const encrypted = columnEncrypt(shared, symmetricKey);
+        const out = new Uint8Array(ephemeral.publicKey.length + encrypted.length);
+        out.set(ephemeral.publicKey, 0);
+        out.set(encrypted, ephemeral.publicKey.length);
+        return out;
+      },
+      openWithReceiverKey: (receiverPrivateKey, wrappedKey) => {
+        const peerPublic = wrappedKey.slice(0, 32);
+        const ciphertext = wrappedKey.slice(32);
+        const shared = wasm.vault_x25519_dh(receiverPrivateKey, peerPublic);
+        return columnDecrypt(shared, ciphertext);
+      },
+      verifyNodeSignature: (nodeId, message, signature) =>
+        verifyDidKeyEd25519Signature(nodeId, message, signature),
+    };
+  }
+
+  private async fetchNodeId(): Promise<string> {
+    const response = await fetch(`${this.config.host}/info`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch node info: HTTP ${response.status}`);
+    }
+    const info = (await response.json()) as { nodeId?: unknown };
+    if (typeof info.nodeId !== "string" || info.nodeId.length === 0) {
+      throw new Error("Node /info response did not include nodeId");
+    }
+    return info.nodeId;
+  }
+
+  private async signRawNetworkAuthorization(input: {
+    targetNode: string;
+    networkId: string;
+    action: string;
+    facts: NetworkInvocationFact;
+  }): Promise<{ authorization: string; invocationCid: string }> {
+    if (!this.wasmBindings.invokeAny) {
+      throw new Error("WASM binding does not support raw-resource invokeAny");
+    }
+    if (!this.wasmBindings.computeCid) {
+      throw new Error("WASM binding does not support invocation CID computation");
+    }
+    const session = this.requireServiceSession();
+    const headers = this.invokeAnyWithRuntimePermissions(
+      session,
+      [
+        {
+          resource: input.networkId,
+          service: "encryption",
+          path: input.networkId,
+          action: input.action,
+        },
+      ],
+      [input.facts as Record<string, unknown>],
+    );
+    const authorization = authorizationHeader(headers);
+    const audienceBound = await rewriteInvocationAudience(
+      authorization,
+      input.targetNode,
+      session.jwk,
+    );
+    return {
+      authorization: audienceBound,
+      invocationCid: this.wasmBindings.computeCid(
+        new TextEncoder().encode(audienceBound),
+        0x55n,
+      ),
+    };
+  }
+
+  private createEncryptionService(): EncryptionService {
+    const crypto = this.createEncryptionCrypto();
+    const transport: DecryptTransport = {
+      postDecrypt: async ({ networkId, authorization, canonicalBody }) => {
+        const response = await fetch(
+          `${this.config.host}/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: authorization,
+              "Content-Type": "application/json",
+            },
+            body: canonicalBody,
+          },
+        );
+        if (!response.ok) {
+          throw new Error(
+            `decrypt failed ${response.status}: ${await response.text()}`,
+          );
+        }
+        return (await response.json()) as DecryptResponseBody;
+      },
+    };
+    return new EncryptionService({
+      crypto,
+      signer: {
+        signDecryptInvocation: async (
+          input: BuildDecryptInvocationInput,
+        ): Promise<BuiltDecryptInvocation> => {
+          const signed = await this.signRawNetworkAuthorization({
+            targetNode: input.targetNode,
+            networkId: input.networkId,
+            action: DECRYPT_ACTION,
+            facts: input.facts,
+          });
+          return {
+            ...signed,
+            canonicalBody: canonicalizeEncryptionJson(
+              input.body as unknown as CanonicalizableEncryptionJson,
+            ),
+          };
+        },
+      },
+      transport,
+      node: {
+        fetchByNetworkId: (networkId) => this.getEncryptionNetwork(networkId),
+      },
+    });
+  }
+
+  private getEncryptionService(): EncryptionService {
+    if (!this._serviceContext) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+    if (!this._encryption) {
+      this._encryption = this.createEncryptionService();
+      this._encryption.initialize(this._serviceContext);
+      this._serviceContext.registerService("encryption", this._encryption);
+    }
+    return this._encryption;
+  }
+
   private createVaultService(spaceId: string, kv: IKVService): DataVaultService {
     const wasm = this.wasmBindings;
     const vaultCrypto = createVaultCrypto({
@@ -1089,6 +1383,13 @@ export class TinyCloudNode {
     return new DataVaultService({
       spaceId,
       crypto: vaultCrypto,
+      encryption: {
+        networkId: this.getDefaultEncryptionNetworkId(),
+        service: this.getEncryptionService(),
+        decryptCapabilityProof: () => ({
+          proofs: [this.requireServiceSession().delegationCid],
+        }),
+      },
       tc: {
         kv,
         ensurePublicSpace: async () => {
@@ -1365,7 +1666,7 @@ export class TinyCloudNode {
       return undefined;
     }
 
-    const session = this.auth?.tinyCloudSession;
+    const session = this.currentTinyCloudSession();
     if (!session) {
       return undefined;
     }
@@ -1541,6 +1842,93 @@ export class TinyCloudNode {
   }
 
   /**
+   * Network-scoped encryption/decrypt service.
+   */
+  get encryption(): IEncryptionService {
+    return this.getEncryptionService();
+  }
+
+  async getEncryptionNetwork(
+    nameOrNetworkId = this.getDefaultEncryptionNetworkId(),
+  ): Promise<NetworkDescriptor | null> {
+    const networkId = nameOrNetworkId.startsWith("urn:tinycloud:encryption:")
+      ? nameOrNetworkId
+      : this.getDefaultEncryptionNetworkId(nameOrNetworkId);
+    const response = await fetch(
+      `${this.config.host}/encryption/networks/${encodeURIComponent(networkId)}`,
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch encryption network ${networkId}: HTTP ${response.status} ${await response.text()}`,
+      );
+    }
+    const body = (await response.json()) as {
+      descriptor?: NetworkDescriptor;
+    } | NetworkDescriptor;
+    return "descriptor" in body && body.descriptor ? body.descriptor : body as NetworkDescriptor;
+  }
+
+  async createEncryptionNetwork(
+    name = DEFAULT_ENCRYPTION_NETWORK_NAME,
+  ): Promise<NetworkDescriptor> {
+    const targetNode = await this.fetchNodeId();
+    const principal = this.did;
+    const networkId = this.getDefaultEncryptionNetworkId(name);
+    const body = {
+      name,
+      principal,
+      threshold: { n: 1, t: 1 },
+    };
+    const crypto = this.createEncryptionCrypto();
+    const facts = {
+      type: NETWORK_ADMIN_TYPE,
+      targetNode,
+      networkId,
+      bodyHash: canonicalHashHex(
+        crypto.sha256,
+        body as unknown as CanonicalizableEncryptionJson,
+      ),
+      action: NETWORK_CREATE_ACTION,
+    };
+    const signed = await this.signRawNetworkAuthorization({
+      targetNode,
+      networkId,
+      action: NETWORK_CREATE_ACTION,
+      facts,
+    });
+    const response = await fetch(`${this.config.host}/encryption/networks`, {
+      method: "POST",
+      headers: {
+        Authorization: signed.authorization,
+        "Content-Type": "application/json",
+      },
+      body: canonicalizeEncryptionJson(
+        body as unknown as CanonicalizableEncryptionJson,
+      ),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Failed to create encryption network ${networkId}: HTTP ${response.status} ${await response.text()}`,
+      );
+    }
+    const created = (await response.json()) as { descriptor: NetworkDescriptor };
+    return created.descriptor;
+  }
+
+  async ensureEncryptionNetwork(
+    name = DEFAULT_ENCRYPTION_NETWORK_NAME,
+  ): Promise<NetworkDescriptor> {
+    const existing = await this.getEncryptionNetwork(name);
+    if (existing) {
+      return existing;
+    }
+    return this.createEncryptionNetwork(name);
+  }
+
+  /**
    * App-facing secrets API backed by the `secrets` space vault.
    */
   get secrets(): ISecretsService {
@@ -1551,8 +1939,10 @@ export class TinyCloudNode {
       this._secrets = new NodeSecretsService({
         getService: () => this.getBaseSecrets(),
         getManifest: () => this.manifest,
+        hasPermissions: (permissions) => this.hasRuntimePermissions(permissions),
         grantPermissions: (additional) => this.grantRuntimePermissions(additional),
         canEscalate: () => this.signer !== undefined && this.tc !== undefined,
+        getEncryptionNetworkId: () => this.getDefaultEncryptionNetworkId(),
         getUnlockSigner: () => this.signer ?? undefined,
       });
     }
@@ -1769,12 +2159,22 @@ export class TinyCloudNode {
       );
     }
 
+    const rawEntries = expanded.filter((entry) =>
+      this.isEncryptionPermissionEntry(entry)
+    );
+    const spaceEntries = expanded.filter((entry) =>
+      !this.isEncryptionPermissionEntry(entry)
+    );
+
     const bySpace = new Map<string, PermissionEntry[]>();
-    for (const entry of expanded) {
+    for (const entry of spaceEntries) {
       const spaceId = this.resolvePermissionSpace(entry.space, session);
       const current = bySpace.get(spaceId) ?? [];
       current.push(entry);
       bySpace.set(spaceId, current);
+    }
+    if (bySpace.size === 0 && rawEntries.length > 0) {
+      bySpace.set(session.spaceId, []);
     }
 
     const now = new Date();
@@ -1785,10 +2185,19 @@ export class TinyCloudNode {
     }
 
     const delegations: PortableDelegation[] = [];
+    let rawEntriesAttached = false;
     for (const [spaceId, entries] of bySpace) {
+      const rawForDelegation = !rawEntriesAttached ? rawEntries : [];
+      if (rawForDelegation.length > 0) {
+        rawEntriesAttached = true;
+      }
+      const delegatedEntries = [...entries, ...rawForDelegation];
       const abilities = this.permissionsToAbilities(entries);
       const prepared = this.wasmBindings.prepareSession({
         abilities,
+        ...(rawForDelegation.length > 0
+          ? { rawAbilities: this.permissionsToRawAbilities(rawForDelegation) }
+          : {}),
         address: this.wasmBindings.ensureEip55(session.address),
         chainId: session.chainId,
         domain: this.siweDomain,
@@ -1816,7 +2225,7 @@ export class TinyCloudNode {
 
       const delegation = this.runtimeDelegationFromSession(
         delegatedSession,
-        entries,
+        delegatedEntries,
         spaceId,
         session,
         expiresAt,
@@ -1830,7 +2239,7 @@ export class TinyCloudNode {
           jwk: session.jwk,
         },
         delegation,
-        operations: this.permissionOperations(entries, spaceId),
+        operations: this.permissionOperations(delegatedEntries, spaceId),
         expiresAt,
       });
       delegations.push(delegation);
@@ -2206,7 +2615,7 @@ export class TinyCloudNode {
   ): Promise<DelegateToResult> {
     // 1. Session validity check — fail fast with a clear error class so
     //    callers can catch and trigger a fresh sign-in.
-    const session = this.auth?.tinyCloudSession;
+    const session = this.currentTinyCloudSession();
     if (!session) {
       throw new SessionExpiredError(new Date(0));
     }
@@ -2375,11 +2784,8 @@ export class TinyCloudNode {
    * the current session; we build one multi-resource abilities map
    * and emit one signed UCAN covering them all.
    *
-   * All entries must share the same target space (the UCAN is
-   * scoped to a single space). If they don't, this throws — mixing
-   * spaces in a single delegation is not supported by the underlying
-   * Rust create_delegation call and the resulting UCAN would be
-   * under-specified.
+   * Non-encryption entries must share the same target space. Encryption
+   * entries are raw network URNs and do not participate in space grouping.
    *
    * @internal
    */
@@ -2395,24 +2801,31 @@ export class TinyCloudNode {
       );
     }
 
-    // Translate the manifest `space` field into the server-side
-    // spaceId. Full `tinycloud:` URIs pass through; short names are
-    // resolved against the current wallet.
+    // Translate non-raw manifest `space` fields into the server-side
+    // spaceId. Encryption entries target raw network URNs, not spaces.
     const resolvedSpaces = new Set<string>();
     for (const entry of entries) {
+      if (this.isEncryptionPermissionEntry(entry)) {
+        continue;
+      }
       const spaceId = this.resolvePermissionSpace(entry.space, session);
       resolvedSpaces.add(spaceId);
     }
-    if (resolvedSpaces.size !== 1) {
+    if (resolvedSpaces.size > 1) {
       throw new Error(
         `delegateTo: all permission entries must target the same space, got ${resolvedSpaces.size}: ${JSON.stringify([...resolvedSpaces])}`,
       );
     }
-    const spaceId = [...resolvedSpaces][0];
+    const spaceId = resolvedSpaces.size === 1
+      ? [...resolvedSpaces][0]
+      : session.spaceId;
 
     // Convert entries to the WASM abilities shape. Each entry's
     // `service` is the long form (e.g. "tinycloud.kv") which we
-    // translate to the short form keyed by the abilities map.
+    // translate to the short form keyed by the abilities map. Raw
+    // encryption network entries stay in this map because the Rust
+    // create_delegation boundary special-cases network URNs into raw
+    // resources while preserving the legacy spaceId parameter.
     // Multiple entries on the same (service, path) merge and dedupe
     // their action lists — unusual in practice (the subset check
     // should have pruned dupes already) but cheap and safe.
@@ -2605,6 +3018,32 @@ export class TinyCloudNode {
     return abilities;
   }
 
+  private isEncryptionPermissionEntry(entry: PermissionEntry): boolean {
+    return entry.service === ENCRYPTION_PERMISSION_SERVICE &&
+      entry.path.startsWith("urn:tinycloud:encryption:");
+  }
+
+  private permissionsToRawAbilities(
+    entries: PermissionEntry[],
+  ): Record<string, string[]> {
+    const rawAbilities: Record<string, string[]> = {};
+    for (const entry of entries) {
+      if (!this.isEncryptionPermissionEntry(entry)) {
+        continue;
+      }
+      const existing = rawAbilities[entry.path] ?? [];
+      const seen = new Set(existing);
+      for (const action of entry.actions) {
+        if (!seen.has(action)) {
+          existing.push(action);
+          seen.add(action);
+        }
+      }
+      rawAbilities[entry.path] = existing;
+    }
+    return rawAbilities;
+  }
+
   private permissionOperations(
     entries: PermissionEntry[],
     spaceId: string,
@@ -2612,7 +3051,9 @@ export class TinyCloudNode {
     return entries.flatMap((entry) => {
       const service = this.shortServiceName(entry.service);
       return entry.actions.map((action) => ({
-        spaceId,
+        ...(this.isEncryptionNetworkOperation(service, entry.path)
+          ? { resource: entry.path }
+          : { spaceId }),
         service,
         path: entry.path,
         action,
@@ -2643,7 +3084,9 @@ export class TinyCloudNode {
       const spaceId = this.resolvePermissionSpace(entry.space, session);
       const service = this.shortServiceName(entry.service);
       return entry.actions.map((action) => ({
-        spaceId,
+        ...(this.isEncryptionNetworkOperation(service, entry.path)
+          ? { resource: entry.path }
+          : { spaceId }),
         service,
         path: entry.path,
         action,
@@ -2720,13 +3163,35 @@ export class TinyCloudNode {
     };
   }
 
+  private installRuntimeGrantFromServiceSession(
+    delegation: PortableDelegation,
+    session: ServiceSession,
+    expiresAt: Date,
+  ): void {
+    const operations = this.operationsFromDelegation(delegation);
+    if (operations.length === 0) {
+      return;
+    }
+    this.runtimePermissionGrants = this.runtimePermissionGrants.filter(
+      (grant) =>
+        grant.delegation.cid !== delegation.cid &&
+        grant.session.delegationCid !== session.delegationCid,
+    );
+    this.runtimePermissionGrants.push({
+      session,
+      delegation,
+      operations,
+      expiresAt,
+    });
+  }
+
   private delegatedResourcesForEntries(
     entries: PermissionEntry[],
     spaceId: string,
   ): DelegatedResource[] {
     return entries.map((entry) => ({
       service: this.shortServiceName(entry.service),
-      space: spaceId,
+      space: this.isEncryptionPermissionEntry(entry) ? "encryption" : spaceId,
       path: entry.path,
       actions: [...entry.actions],
     }));
@@ -2740,14 +3205,17 @@ export class TinyCloudNode {
         ? delegation.resources
         : this.flatDelegationResources(delegation);
 
-    return resources.flatMap((resource) =>
-      resource.actions.map((action) => ({
-        spaceId: resource.space,
-        service: this.invocationServiceName(resource.service),
+    return resources.flatMap((resource) => {
+      const service = this.invocationServiceName(resource.service);
+      return resource.actions.map((action) => ({
+        ...(this.isEncryptionNetworkOperation(service, resource.path)
+          ? { resource: resource.path }
+          : { spaceId: resource.space }),
+        service,
         path: resource.path,
         action,
-      })),
-    );
+      }));
+    });
   }
 
   private flatDelegationResources(
@@ -2816,9 +3284,22 @@ export class TinyCloudNode {
     granted: RuntimePermissionOperation,
     requested: RuntimePermissionOperation,
   ): boolean {
-    return granted.spaceId === requested.spaceId &&
-      granted.service === requested.service &&
-      this.actionContains(granted.action, requested.action) &&
+    if (granted.service !== requested.service ||
+      !this.actionContains(granted.action, requested.action)
+    ) {
+      return false;
+    }
+
+    if (granted.resource !== undefined || requested.resource !== undefined) {
+      return granted.resource !== undefined &&
+        requested.resource !== undefined &&
+        granted.resource === requested.resource &&
+        this.pathContains(granted.path, requested.path);
+    }
+
+    return granted.spaceId !== undefined &&
+      requested.spaceId !== undefined &&
+      granted.spaceId === requested.spaceId &&
       this.pathContains(granted.path, requested.path);
   }
 
@@ -2837,6 +3318,46 @@ export class TinyCloudNode {
     return service.startsWith("tinycloud.")
       ? this.shortServiceName(service)
       : service;
+  }
+
+  private isEncryptionNetworkOperation(service: string, path: string): boolean {
+    return service === "encryption" &&
+      path.startsWith("urn:tinycloud:encryption:");
+  }
+
+  private operationFromInvokeAnyEntry(entry: {
+    spaceId?: string;
+    resource?: string;
+    service: string;
+    path: string;
+    action: string;
+  }): RuntimePermissionOperation | undefined {
+    const service = this.invocationServiceName(entry.service);
+    if (typeof entry.resource === "string") {
+      return {
+        resource: entry.resource,
+        service,
+        path: entry.path,
+        action: entry.action,
+      };
+    }
+    if (this.isEncryptionNetworkOperation(service, entry.path)) {
+      return {
+        resource: entry.path,
+        service,
+        path: entry.path,
+        action: entry.action,
+      };
+    }
+    if (typeof entry.spaceId === "string") {
+      return {
+        spaceId: entry.spaceId,
+        service,
+        path: entry.path,
+        action: entry.action,
+      };
+    }
+    return undefined;
   }
 
   private pathContains(grantedPath: string, requestedPath: string): boolean {
@@ -3175,6 +3696,17 @@ export class TinyCloudNode {
 
       // Track received delegation in registry
       this.trackReceivedDelegation(delegation, this.sessionKeyJwk as unknown as JWK);
+      this.installRuntimeGrantFromServiceSession(
+        delegation,
+        {
+          delegationHeader: session.delegationHeader,
+          delegationCid: session.delegationCid,
+          spaceId: session.spaceId,
+          verificationMethod: session.verificationMethod,
+          jwk: session.jwk,
+        },
+        delegation.expiry,
+      );
 
       return new DelegatedAccess(session, delegation, targetHost, this.wasmBindings.invoke);
     }
@@ -3194,6 +3726,10 @@ export class TinyCloudNode {
     const kvActions = delegation.actions.filter(a => a.startsWith("tinycloud.kv/"));
     const sqlActions = delegation.actions.filter(a => a.startsWith("tinycloud.sql/"));
     const duckdbActions = delegation.actions.filter(a => a.startsWith("tinycloud.duckdb/"));
+    const encryptionActions = delegation.actions.filter(a =>
+      a.startsWith("tinycloud.encryption/"),
+    );
+    const rawAbilities: Record<string, string[]> = {};
     if (kvActions.length > 0) {
       abilities.kv = { [delegation.path]: kvActions };
     }
@@ -3202,6 +3738,12 @@ export class TinyCloudNode {
     }
     if (duckdbActions.length > 0) {
       abilities.duckdb = { [delegation.path]: duckdbActions };
+    }
+    if (
+      encryptionActions.length > 0 &&
+      delegation.path.startsWith("urn:tinycloud:encryption:")
+    ) {
+      rawAbilities[delegation.path] = encryptionActions;
     }
 
     const now = new Date();
@@ -3224,6 +3766,7 @@ export class TinyCloudNode {
       spaceId: delegation.spaceId,
       jwk,
       parents: [delegation.cid],
+      ...(Object.keys(rawAbilities).length > 0 ? { rawAbilities } : {}),
     });
 
     // Sign with THIS user's signer
@@ -3261,6 +3804,17 @@ export class TinyCloudNode {
 
     // Track received delegation in registry
     this.trackReceivedDelegation(delegation, jwk as unknown as JWK);
+    this.installRuntimeGrantFromServiceSession(
+      delegation,
+      {
+        delegationHeader: session.delegationHeader,
+        delegationCid: session.delegationCid,
+        spaceId: session.spaceId,
+        verificationMethod: session.verificationMethod,
+        jwk: session.jwk,
+      },
+      expirationTime,
+    );
 
     return new DelegatedAccess(session, delegation, targetHost, this.wasmBindings.invoke);
   }

@@ -6,9 +6,6 @@ import { outputJson, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
-
-const SECRETS_PREFIX = "secrets/";
 
 /**
  * Read all data from stdin.
@@ -21,85 +18,102 @@ async function readStdin(): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-/**
- * Resolve private key from CLI options or environment variable.
- */
-function resolvePrivateKey(options: { privateKey?: string }): string {
-  const key = options.privateKey || process.env.TC_PRIVATE_KEY;
-  if (!key) {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      "Private key required. Use --private-key <hex> or set TC_PRIVATE_KEY env var.",
-      ExitCode.AUTH_REQUIRED,
-    );
-  }
-  return key;
+function authOptions(options: { privateKey?: string }): { privateKey?: string } | undefined {
+  const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
+  return privateKey ? { privateKey } : undefined;
 }
 
-/**
- * Unlock the vault on a TinyCloudNode instance.
- */
-async function unlockVault(
-  node: { vault: { unlock(signer: { signMessage(message: string): Promise<string> }): Promise<any> } },
-  privateKey: string,
-): Promise<void> {
-  const signer = new PrivateKeySigner(privateKey);
-  const result = await node.vault.unlock(signer);
-  if (result && !result.ok) {
-    throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-  }
+function resolveSecretScope(options: { scope?: string; space?: string }): { scope?: string } | undefined {
+  const scope = options.scope ?? options.space;
+  return scope ? { scope } : undefined;
 }
 
 export function registerSecretsCommand(program: Command): void {
   const secrets = program.command("secrets").description("Encrypted secrets management");
 
+  const network = secrets
+    .command("network")
+    .description("Manage the default secrets encryption network");
+
+  network
+    .command("show [nameOrNetworkId]")
+    .description("Show a secrets encryption network")
+    .option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)")
+    .action(async (nameOrNetworkId: string | undefined, options, cmd) => {
+      try {
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const node = await ensureAuthenticated(ctx, authOptions(options));
+        const requested = nameOrNetworkId ?? "default";
+        const networkId = requested.startsWith("urn:tinycloud:encryption:")
+          ? requested
+          : node.getDefaultEncryptionNetworkId(requested);
+        const descriptor = await withSpinner(
+          "Fetching encryption network...",
+          () => node.getEncryptionNetwork(requested),
+        );
+        outputJson({
+          networkId,
+          exists: descriptor !== null,
+          ...(descriptor ? { descriptor } : {}),
+        });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  network
+    .command("init [name]")
+    .description("Create a secrets encryption network if needed")
+    .option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)")
+    .action(async (name: string | undefined, options, cmd) => {
+      try {
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const node = await ensureAuthenticated(ctx, authOptions(options));
+        const descriptor = await withSpinner(
+          "Ensuring encryption network...",
+          () => node.ensureEncryptionNetwork(name ?? "default"),
+        );
+        outputJson({
+          networkId: descriptor.networkId,
+          state: descriptor.state,
+          descriptor,
+        });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
   // tc secrets list
   secrets
     .command("list")
     .description("List secrets")
-    .option("--space <spaceId>", "Space to list secrets from (for delegated access)")
+    .option("--scope <scope>", "Logical secret scope")
+    .option("--space <scope>", "Deprecated alias for --scope")
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const privateKey = resolvePrivateKey(options);
-        const node = await ensureAuthenticated(ctx, { privateKey });
-
-        await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
-
-        // TODO: SDK-level support for targeting a specific space via vault.list().
-        // The vault service currently operates on the space bound to the session.
-        // When --space is provided, we would need the SDK to accept a spaceId
-        // parameter on vault operations or support switching the active space.
-        if (options.space) {
-          throw new CLIError(
-            "NOT_IMPLEMENTED",
-            `Listing secrets from a delegated space (${options.space}) is not yet supported at the SDK level. ` +
-            "The vault service currently operates on the space bound to the active session. " +
-            "SDK support for cross-space vault operations is planned.",
-            ExitCode.ERROR,
-          );
-        }
-
-        const result = await withSpinner("Listing secrets...", () => node.vault.list({ prefix: SECRETS_PREFIX })) as any;
+        const node = await ensureAuthenticated(ctx, authOptions(options));
+        const scopeOptions = resolveSecretScope(options);
+        const result = await withSpinner(
+          "Listing secrets...",
+          () => node.secrets.list(scopeOptions),
+        );
 
         if (!result.ok) {
           throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
         }
 
-        const keys = result.data.data ?? result.data;
-        const keyList = Array.isArray(keys) ? keys : [];
-
-        // Strip the secrets/ prefix from key names
-        const secretNames = keyList.map((k: string) =>
-          typeof k === "string" && k.startsWith(SECRETS_PREFIX) ? k.slice(SECRETS_PREFIX.length) : k
-        );
+        const secretNames = Array.isArray(result.data) ? result.data : [];
+        const scope = options.scope ?? options.space;
 
         outputJson({
           secrets: secretNames,
           count: secretNames.length,
-          ...(options.space ? { space: options.space } : {}),
+          ...(scope ? { scope } : {}),
         });
       } catch (error) {
         handleError(error);
@@ -110,6 +124,8 @@ export function registerSecretsCommand(program: Command): void {
   secrets
     .command("get <name>")
     .description("Get a secret value")
+    .option("--scope <scope>", "Logical secret scope")
+    .option("--space <scope>", "Deprecated alias for --scope")
     .option("--raw", "Output raw value (no JSON wrapping)")
     .option("-o, --output <file>", "Write value to file")
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
@@ -117,42 +133,24 @@ export function registerSecretsCommand(program: Command): void {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const privateKey = resolvePrivateKey(options);
-        const node = await ensureAuthenticated(ctx, { privateKey });
-
-        await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
-
-        const vaultKey = `${SECRETS_PREFIX}${name}`;
-        const result = await withSpinner(`Getting secret ${name}...`, () => node.vault.get(vaultKey)) as any;
+        const node = await ensureAuthenticated(ctx, authOptions(options));
+        const scopeOptions = resolveSecretScope(options);
+        const result = await withSpinner(
+          `Getting secret ${name}...`,
+          () => node.secrets.get(name, scopeOptions),
+        );
 
         if (!result.ok) {
-          if (result.error.code === "NOT_FOUND") {
+          if (
+            result.error.code === "NOT_FOUND" ||
+            result.error.code === "KEY_NOT_FOUND"
+          ) {
             throw new CLIError("NOT_FOUND", `Secret "${name}" not found`, ExitCode.NOT_FOUND);
           }
           throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
         }
 
-        const data = result.data.data ?? result.data;
-
-        // Parse the stored payload to extract the value
-        let value: string;
-        if (typeof data === "string") {
-          try {
-            const parsed = JSON.parse(data);
-            value = parsed.value;
-          } catch {
-            value = data;
-          }
-        } else if (data instanceof Uint8Array) {
-          try {
-            const parsed = JSON.parse(Buffer.from(data).toString("utf-8"));
-            value = parsed.value;
-          } catch {
-            value = Buffer.from(data).toString("utf-8");
-          }
-        } else {
-          value = data.value ?? data;
-        }
+        const value = String(result.data);
 
         if (options.output) {
           await writeFile(options.output, value);
@@ -175,6 +173,8 @@ export function registerSecretsCommand(program: Command): void {
   secrets
     .command("put <name> [value]")
     .description("Store a secret")
+    .option("--scope <scope>", "Logical secret scope")
+    .option("--space <scope>", "Deprecated alias for --scope")
     .option("--file <path>", "Read value from file")
     .option("--stdin", "Read value from stdin")
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
@@ -182,10 +182,7 @@ export function registerSecretsCommand(program: Command): void {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const privateKey = resolvePrivateKey(options);
-        const node = await ensureAuthenticated(ctx, { privateKey });
-
-        await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
+        const node = await ensureAuthenticated(ctx, authOptions(options));
 
         // Determine value source
         let secretValue: string;
@@ -206,13 +203,11 @@ export function registerSecretsCommand(program: Command): void {
           secretValue = value!;
         }
 
-        const payload = JSON.stringify({
-          value: secretValue,
-          createdAt: new Date().toISOString(),
-        });
-
-        const vaultKey = `${SECRETS_PREFIX}${name}`;
-        const result = await withSpinner(`Storing secret ${name}...`, () => node.vault.put(vaultKey, payload)) as any;
+        const scopeOptions = resolveSecretScope(options);
+        const result = await withSpinner(
+          `Storing secret ${name}...`,
+          () => node.secrets.put(name, secretValue, scopeOptions),
+        );
 
         if (!result.ok) {
           throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
@@ -228,24 +223,62 @@ export function registerSecretsCommand(program: Command): void {
   secrets
     .command("delete <name>")
     .description("Delete a secret")
+    .option("--scope <scope>", "Logical secret scope")
+    .option("--space <scope>", "Deprecated alias for --scope")
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (name: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const privateKey = resolvePrivateKey(options);
-        const node = await ensureAuthenticated(ctx, { privateKey });
-
-        await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
-
-        const vaultKey = `${SECRETS_PREFIX}${name}`;
-        const result = await withSpinner(`Deleting secret ${name}...`, () => node.vault.delete(vaultKey)) as any;
+        const node = await ensureAuthenticated(ctx, authOptions(options));
+        const scopeOptions = resolveSecretScope(options);
+        const result = await withSpinner(
+          `Deleting secret ${name}...`,
+          () => node.secrets.delete(name, scopeOptions),
+        );
 
         if (!result.ok) {
           throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
         }
 
         outputJson({ name, deleted: true });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  network
+    .command("grant <recipientDid> [name]")
+    .description("Grant decrypt permission for a secrets encryption network")
+    .option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)")
+    .action(async (recipientDid: string, name: string | undefined, options, cmd) => {
+      try {
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const node = await ensureAuthenticated(ctx, authOptions(options));
+        const networkName = name ?? "default";
+        const descriptor = await withSpinner(
+          "Ensuring encryption network...",
+          () => node.ensureEncryptionNetwork(networkName),
+        );
+        const permission = {
+          service: "tinycloud.encryption",
+          path: descriptor.networkId,
+          actions: ["decrypt"],
+        };
+        const result = await withSpinner(
+          `Granting decrypt permission to ${recipientDid}...`,
+          () => node.delegateTo(recipientDid, [permission]),
+        );
+
+        outputJson({
+          networkId: descriptor.networkId,
+          recipientDid,
+          cid: result.delegation.cid,
+          prompted: result.prompted,
+          path: result.delegation.path,
+          actions: result.delegation.actions,
+        });
       } catch (error) {
         handleError(error);
       }

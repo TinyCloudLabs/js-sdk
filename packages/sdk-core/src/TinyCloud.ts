@@ -15,6 +15,7 @@ import {
   IDuckDbService,
   DuckDbService,
   IDataVaultService,
+  IEncryptionService,
   IHooksService,
   HooksService,
   ServiceSession,
@@ -349,6 +350,26 @@ export class TinyCloud {
       | undefined;
     if (!service) {
       throw new Error("Vault service is not registered.");
+    }
+    return service;
+  }
+
+  /**
+   * Get the Encryption service.
+   * @throws Error if services are not initialized or encryption service is not registered
+   */
+  public get encryption(): IEncryptionService {
+    if (!this._servicesInitialized) {
+      throw new Error(
+        "Services not initialized. Call initializeServices() first, " +
+          "or use TinyCloudWeb/TinyCloudNode which handles this automatically.",
+      );
+    }
+    const service = this._services.get("encryption") as
+      | IEncryptionService
+      | undefined;
+    if (!service) {
+      throw new Error("Encryption service is not registered.");
     }
     return service;
   }

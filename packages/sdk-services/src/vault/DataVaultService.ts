@@ -23,6 +23,10 @@ import {
 import { wrapError } from "../errors";
 import type { IKVService } from "../kv/IKVService";
 import type { KVService } from "../kv/KVService";
+import type {
+  DecryptCapabilityProof,
+  InlineEncryptedEnvelope,
+} from "../encryption";
 import type { IDataVaultService } from "./IDataVaultService";
 import {
   DataVaultConfig,
@@ -152,6 +156,13 @@ function base64Decode(str: string): Uint8Array {
   return bytes;
 }
 
+function unwrapKVData<T = unknown>(value: unknown): T {
+  if (value !== null && typeof value === "object" && "data" in value) {
+    return (value as { data: T }).data;
+  }
+  return value as T;
+}
+
 function isUnlockSigner(
   signer: unknown
 ): signer is { signMessage(message: string): Promise<string> } {
@@ -253,7 +264,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
    * Whether the vault is currently unlocked.
    */
   get isUnlocked(): boolean {
-    return this._isUnlocked;
+    return this.usesNetworkEncryption || this._isUnlocked;
   }
 
   /**
@@ -261,6 +272,9 @@ export class DataVaultService extends BaseService implements IDataVaultService {
    * Throws if vault is locked.
    */
   get publicKey(): Uint8Array {
+    if (this.usesNetworkEncryption) {
+      throw new Error("Network-encrypted vaults do not expose a local public key");
+    }
     if (!this.encryptionIdentity) {
       throw new Error("Vault is locked");
     }
@@ -281,11 +295,65 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     return this.vaultConfig.tc;
   }
 
+  private get networkEncryption() {
+    return this.vaultConfig.encryption;
+  }
+
+  private get usesNetworkEncryption(): boolean {
+    return this.networkEncryption !== undefined;
+  }
+
   /**
    * Get the host URL.
    */
   private get host(): string {
     return this.tc.hosts[0];
+  }
+
+  private async decryptCapabilityProof(): Promise<DecryptCapabilityProof> {
+    const proof = this.networkEncryption?.decryptCapabilityProof;
+    if (typeof proof === "function") {
+      return await proof();
+    }
+    return proof ?? { proofs: [] };
+  }
+
+  private serializeValue(
+    value: unknown,
+    options?: VaultPutOptions,
+  ): { plaintext: Uint8Array; contentType: string } {
+    let plaintext: Uint8Array;
+    if (value instanceof Uint8Array) {
+      plaintext = value;
+    } else if (options?.serialize) {
+      plaintext = options.serialize(value);
+    } else if (typeof value === "string") {
+      plaintext = toBytes(value);
+    } else {
+      plaintext = toBytes(JSON.stringify(value));
+    }
+
+    const contentType =
+      options?.contentType ??
+      (value instanceof Uint8Array ? "application/octet-stream" : "application/json");
+    return { plaintext, contentType };
+  }
+
+  private deserializeValue<T>(
+    plaintext: Uint8Array,
+    contentType: string,
+    options?: VaultGetOptions<T>,
+  ): T {
+    if (options?.raw) {
+      return plaintext as unknown as T;
+    }
+    if (options?.deserialize) {
+      return options.deserialize(plaintext);
+    }
+    if (contentType === "application/json") {
+      return JSON.parse(fromBytes(plaintext)) as T;
+    }
+    return plaintext as unknown as T;
   }
 
   // =========================================================================
@@ -307,6 +375,11 @@ export class DataVaultService extends BaseService implements IDataVaultService {
   async unlock(
     signer?: { signMessage(message: string): Promise<string> } | unknown
   ): Promise<Result<void, VaultError>> {
+    if (this.usesNetworkEncryption) {
+      this._isUnlocked = true;
+      return { ok: true, data: undefined };
+    }
+
     const unlockSigner = isUnlockSigner(signer) ? signer : undefined;
     if (
       this._isUnlocked &&
@@ -469,6 +542,158 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     super.onSignOut();
   }
 
+  private async putNetworkEncrypted(
+    key: string,
+    value: unknown,
+    options?: VaultPutOptions,
+  ): Promise<Result<void, VaultError>> {
+    const config = this.networkEncryption;
+    if (!config) {
+      return vaultError({
+        code: "VAULT_LOCKED",
+        message: "Network encryption is not configured",
+      });
+    }
+    if (!this.requireAuth()) {
+      return vaultError({
+        code: "VAULT_LOCKED",
+        message: "Authentication required",
+      });
+    }
+
+    try {
+      const { plaintext, contentType } = this.serializeValue(value, options);
+      const metadata: Record<string, string> = {
+        [VaultHeaders.VERSION]: "2",
+        [VaultHeaders.CIPHER]: "tinycloud-network-envelope",
+        [VaultHeaders.CONTENT_TYPE]: contentType,
+        ...(options?.metadata ?? {}),
+      };
+      const aad = toBytes(`tinycloud.vault:${this.vaultConfig.spaceId}:${key}`);
+      const envelopeResult = await config.service.encryptToNetwork(
+        config.networkId,
+        plaintext,
+        { aad, metadata },
+      );
+      if (!envelopeResult.ok) {
+        return vaultError({
+          code: "STORAGE_ERROR",
+          cause: new Error(envelopeResult.error.message),
+        });
+      }
+
+      const valuePutResult = await this.tc.kv.put(
+        `vault/${key}`,
+        JSON.stringify(envelopeResult.data),
+      );
+      if (!valuePutResult.ok) {
+        return vaultError({
+          code: "STORAGE_ERROR",
+          cause: new Error(
+            `Failed to store encrypted value: ${valuePutResult.error.message}`,
+          ),
+        });
+      }
+
+      return { ok: true, data: undefined };
+    } catch (error) {
+      return vaultError({
+        code: "STORAGE_ERROR",
+        cause: toError(error),
+      });
+    }
+  }
+
+  private async getNetworkEncrypted<T = unknown>(
+    key: string,
+    options?: VaultGetOptions<T>,
+  ): Promise<Result<VaultEntry<T>, VaultError>> {
+    const config = this.networkEncryption;
+    if (!config) {
+      return vaultError({
+        code: "VAULT_LOCKED",
+        message: "Network encryption is not configured",
+      });
+    }
+    if (!this.requireAuth()) {
+      return vaultError({
+        code: "VAULT_LOCKED",
+        message: "Authentication required",
+      });
+    }
+
+    try {
+      const valueResult = await this.tc.kv.get<string>(`vault/${key}`, {
+        raw: true,
+      });
+      if (!valueResult.ok) {
+        return vaultError({ code: "KEY_NOT_FOUND", key });
+      }
+
+      const rawEnvelope = unwrapKVData<string>(valueResult.data);
+      const envelope = (
+        typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope
+      ) as InlineEncryptedEnvelope;
+      const proof = await this.decryptCapabilityProof();
+      const plaintextResult = await config.service.decryptEnvelope(envelope, proof);
+      if (!plaintextResult.ok) {
+        return vaultError({
+          code: "DECRYPTION_FAILED",
+          message: plaintextResult.error.message,
+        });
+      }
+
+      const metadata: Record<string, string> = envelope.metadata ?? {};
+      const contentType =
+        metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
+      const keyId =
+        metadata[VaultHeaders.KEY_ID] ??
+        envelope.encryptedSymmetricKeyHash.slice(0, 16);
+      const value = this.deserializeValue<T>(
+        plaintextResult.data,
+        contentType,
+        options,
+      );
+
+      return { ok: true, data: { value, metadata, keyId } };
+    } catch (error) {
+      return vaultError({
+        code: "STORAGE_ERROR",
+        cause: toError(error),
+      });
+    }
+  }
+
+  private async headNetworkEncrypted(
+    key: string,
+  ): Promise<Result<Record<string, string>, VaultError>> {
+    if (!this.requireAuth()) {
+      return vaultError({
+        code: "VAULT_LOCKED",
+        message: "Authentication required",
+      });
+    }
+
+    try {
+      const valueResult = await this.tc.kv.get<string>(`vault/${key}`, {
+        raw: true,
+      });
+      if (!valueResult.ok) {
+        return vaultError({ code: "KEY_NOT_FOUND", key });
+      }
+      const rawEnvelope = unwrapKVData<string>(valueResult.data);
+      const envelope = (
+        typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope
+      ) as InlineEncryptedEnvelope;
+      return { ok: true, data: envelope.metadata ?? {} };
+    } catch (error) {
+      return vaultError({
+        code: "STORAGE_ERROR",
+        cause: toError(error),
+      });
+    }
+  }
+
   /**
    * Encrypt and store a value at the given key.
    *
@@ -482,6 +707,10 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     options?: VaultPutOptions
   ): Promise<Result<void, VaultError>> {
     return this.withTelemetry("put", key, async () => {
+      if (this.usesNetworkEncryption) {
+        return this.putNetworkEncrypted(key, value, options);
+      }
+
       if (!this._isUnlocked || !this.masterKey) {
         return vaultError({
           code: "VAULT_LOCKED",
@@ -601,6 +830,10 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     options?: VaultGetOptions<T>
   ): Promise<Result<VaultEntry<T>, VaultError>> {
     return this.withTelemetry("get", key, async () => {
+      if (this.usesNetworkEncryption) {
+        return this.getNetworkEncrypted<T>(key, options);
+      }
+
       if (!this._isUnlocked || !this.masterKey) {
         return vaultError({
           code: "VAULT_LOCKED",
@@ -686,7 +919,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
    */
   async delete(key: string): Promise<Result<void, VaultError>> {
     return this.withTelemetry("delete", key, async () => {
-      if (!this._isUnlocked) {
+      if (!this.isUnlocked) {
         return vaultError({
           code: "VAULT_LOCKED",
           message: "Vault must be unlocked before deleting data",
@@ -701,6 +934,14 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       }
 
       try {
+        if (this.usesNetworkEncryption) {
+          const valueDelResult = await this.tc.kv.delete(`vault/${key}`);
+          if (!valueDelResult.ok) {
+            return vaultError({ code: "KEY_NOT_FOUND", key });
+          }
+          return ok(undefined);
+        }
+
         // Delete from both key space and data space
         const [keyDelResult, valueDelResult] = await Promise.all([
           this.tc.kv.delete(`keys/${key}`),
@@ -732,7 +973,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     options?: VaultListOptions
   ): Promise<Result<string[], VaultError>> {
     return this.withTelemetry("list", options?.prefix, async () => {
-      if (!this._isUnlocked) {
+      if (!this.isUnlocked) {
         return vaultError({
           code: "VAULT_LOCKED",
           message: "Vault must be unlocked before listing data",
@@ -799,6 +1040,10 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     key: string
   ): Promise<Result<Record<string, string>, VaultError>> {
     return this.withTelemetry("head", key, async () => {
+      if (this.usesNetworkEncryption) {
+        return this.headNetworkEncrypted(key);
+      }
+
       if (!this._isUnlocked) {
         return vaultError({
           code: "VAULT_LOCKED",
@@ -885,6 +1130,17 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     options?: VaultGrantOptions
   ): Promise<Result<void, VaultError>> {
     return this.withTelemetry("reencrypt", key, async () => {
+      if (this.usesNetworkEncryption) {
+        void recipientDID;
+        void options;
+        return vaultError({
+          code: "STORAGE_ERROR",
+          cause: new Error(
+            "Vault key grants are deprecated for network-encrypted vaults; grant tinycloud.encryption/decrypt on the network plus KV access to vault data.",
+          ),
+        });
+      }
+
       if (!this._isUnlocked || !this.masterKey) {
         return vaultError({
           code: "VAULT_LOCKED",
@@ -1005,6 +1261,75 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     options?: VaultGetOptions<T>
   ): Promise<Result<VaultEntry<T>, VaultError>> {
     return this.withTelemetry("getShared", key, async () => {
+      if (this.usesNetworkEncryption) {
+        const grantorKV = options?.kv;
+        if (!grantorKV) {
+          return vaultError({
+            code: "STORAGE_ERROR",
+            cause: new Error(
+              "getShared requires a delegated KV service via options.kv.",
+            ),
+          });
+        }
+
+        const config = this.networkEncryption;
+        if (!config) {
+          return vaultError({
+            code: "VAULT_LOCKED",
+            message: "Network encryption is not configured",
+          });
+        }
+        if (!this.requireAuth()) {
+          return vaultError({
+            code: "VAULT_LOCKED",
+            message: "Authentication required",
+          });
+        }
+
+        try {
+          const valueResult = await grantorKV.get<string>(`vault/${key}`, {
+            raw: true,
+          });
+          if (!valueResult.ok) {
+            return vaultError({ code: "KEY_NOT_FOUND", key });
+          }
+          const rawEnvelope = unwrapKVData<string>(valueResult.data);
+          const envelope = (
+            typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope
+          ) as InlineEncryptedEnvelope;
+          const proof = await this.decryptCapabilityProof();
+          const plaintextResult = await config.service.decryptEnvelope(
+            envelope,
+            proof,
+          );
+          if (!plaintextResult.ok) {
+            return vaultError({
+              code: "DECRYPTION_FAILED",
+              message: plaintextResult.error.message,
+            });
+          }
+
+          const metadata: Record<string, string> = envelope.metadata ?? {};
+          const contentType =
+            metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
+          const keyId =
+            metadata[VaultHeaders.KEY_ID] ??
+            envelope.encryptedSymmetricKeyHash.slice(0, 16);
+          const value = this.deserializeValue<T>(
+            plaintextResult.data,
+            contentType,
+            options,
+          );
+          void grantorDID;
+          return { ok: true, data: { value, metadata, keyId } };
+        } catch (error) {
+          return vaultError({
+            code: "STORAGE_ERROR",
+            cause: toError(error),
+          });
+        }
+      }
+
       if (
         !this._isUnlocked ||
         !this.masterKey ||
@@ -1176,6 +1501,11 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     key: string
   ): Promise<Result<string[], VaultError>> {
     return this.withTelemetry("listGrants", key, async () => {
+      if (this.usesNetworkEncryption) {
+        void key;
+        return { ok: true, data: [] };
+      }
+
       if (!this._isUnlocked) {
         return vaultError({
           code: "VAULT_LOCKED",
@@ -1254,6 +1584,16 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     recipientDID: string
   ): Promise<Result<void, VaultError>> {
     return this.withTelemetry("revoke", key, async () => {
+      if (this.usesNetworkEncryption) {
+        void recipientDID;
+        return vaultError({
+          code: "STORAGE_ERROR",
+          cause: new Error(
+            "Vault key grants are deprecated for network-encrypted vaults; revoke KV and tinycloud.encryption/decrypt grants instead.",
+          ),
+        });
+      }
+
       if (!this._isUnlocked || !this.masterKey) {
         return vaultError({
           code: "VAULT_LOCKED",
