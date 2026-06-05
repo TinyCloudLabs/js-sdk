@@ -1,5 +1,175 @@
 # @tinycloudlabs/node-sdk
 
+## 2.2.0
+
+### Minor Changes
+
+- 0401ff8: Add default TinyCloud host discovery and run it from sign-in when no explicit host is configured.
+- 9ff4b34: Introduce `EXPIRY` tiers as the single source of truth for default
+  delegation lifetimes. Pick a tier, not a number, when adding a new
+  delegation surface.
+
+  The delegation tiers and signed URL TTL, exported from `@tinycloud/sdk-core`:
+  - `EXPIRY.EPHEMERAL_MS` (1h) — auto-refreshable, never user-visible.
+  - `EXPIRY.SIGNED_READ_URL_MS` (5m) — short-lived bearer KV read URLs.
+  - `EXPIRY.SESSION_MS` (7d) — sign-in sessions and runtime grants
+    (capped by session anyway).
+  - `EXPIRY.SHARE_MS` (7d) — share links and ad-hoc third-party
+    delegations.
+  - `EXPIRY.APP_MS` (30d) — manifest-declared installs.
+  - `EXPIRY.MAX_MS` (10y) — caller-supplied upper bound.
+
+  Behavior changes:
+  - **`SharingService` share-link default: 24h → 7d.** Same direction as
+    the runtime-grant default that already shipped at 7d. Callers passing
+    explicit expiry are unaffected.
+  - **`DelegationManager.create()` default: 24h → 7d** when the caller
+    omits `expiry`.
+  - **`SpaceService` server-response fallback: 24h → 7d** when the
+    server's delegation response lacks an `expiry` field.
+  - **`NodeUserAuthorization.sessionExpirationMs` default: 1h → 7d.**
+    Fixes a silent inconsistency where direct `NodeUserAuthorization`
+    consumers got 1h while `TinyCloudNode` users got 7d.
+  - **`TinyCloudNode` public-space sub-delegation: 1h** (unchanged value,
+    re-tagged as `EPHEMERAL` to make the intent legible — these are
+    re-derived transparently on every public-space touch).
+
+  Sites unchanged in value but re-pointed at tiered constants:
+  - `TinyCloudNode.DEFAULT_SESSION_EXPIRATION_MS` → `EXPIRY.SESSION_MS`
+  - `delegateToHelpers.DEFAULT_DELEGATION_EXPIRY_MS` → `EXPIRY.SESSION_MS`
+  - `manifest.DEFAULT_EXPIRY` (`"30d"`) — still ms-format string for
+    parser compatibility, comment now points at `EXPIRY.APP_MS`.
+
+- 9ff4b34: Default delegation lifetime bumped to 7 days; default session lifetime
+  bumped to 7 days; CLI gains `tc auth request --expiry`.
+
+  Why: 1-hour grants forced agent workflows to re-prompt the user for caps
+  they had already approved on every CLI invocation past the first hour.
+  The session itself defaulted to 1 hour too, so even an explicit
+  `--expiry 30d` couldn't outlive its parent. Both defaults moved to 7
+  days so the common agent loop runs unattended for a week.
+  - `delegateToHelpers.resolveExpiryMs(undefined)` now returns
+    `DEFAULT_DELEGATION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000`.
+  - `TinyCloudNodeConfig.sessionExpirationMs` default is now
+    `DEFAULT_SESSION_EXPIRATION_MS = 7 * 24 * 60 * 60 * 1000`. Existing
+    callers passing an explicit value are unaffected. Wallet-mode SIWE
+    sessions cap at 1 hour by protocol — that limit is independent of
+    this default.
+  - `tc auth request --expiry <duration>` accepts a ms-format string
+    (`"7d"`, `"30m"`) or raw millisecond integer. Forwarded to
+    `node.grantRuntimePermissions(permissions, { expiry })` for the
+    local-key path and encoded into the OpenKey `/delegate?expiry=...`
+    URL parameter for the OpenKey path. OpenKey-side support landed
+    separately in TinyCloudLabs/openkey.
+
+- 6561589: Add manifest v1 composition helpers, per-space capability requests, materialized manifest delegations, and the default account-space application registry grant.
+- 010ee0f: Fix `restoreSession` so runtime-permission-grant operations work after
+  session restore (notably the OpenKey-backed CLI path).
+
+  `TinyCloudNode.restoreSession` populated `_serviceContext.session` (the
+  `ServiceSession` used by service invokers) but never set
+  `auth.tinyCloudSession` (the richer `TinyCloudSession` that surfaces the
+  SIWE recap, address, chain, etc.). Methods that read from the latter —
+  `hasRuntimePermissions`, `getRuntimePermissionDelegations`,
+  `useRuntimeDelegation`, `grantRuntimePermissions` — therefore threw
+  `SessionExpiredError(new Date(0))` immediately after every restore.
+
+  Symptoms:
+  - `tc auth request --cap …` fails with `Session expired at 1970-01-01T00:00:00.000Z`
+  - Persisted runtime delegations replayed via `useRuntimeDelegation` are
+    rejected, so `tc auth caps` reports `granted: []` even when
+    `additional-delegations.json` has live entries.
+
+  Changes:
+  - `restoreSession` now accepts optional `siwe` and `signature` fields.
+  - When `siwe` + `address` + `chainId` are provided, a full
+    `TinyCloudSession` is rehydrated. In wallet mode it lands on
+    `auth.tinyCloudSession` via the new
+    `NodeUserAuthorization.setRestoredTinyCloudSession`. In session-only
+    mode (no auth layer — typical for OpenKey-restored CLIs) it lands on
+    a new `TinyCloudNode._restoredTcSession` field.
+  - A new private `currentTinyCloudSession()` helper resolves the active
+    session from either surface. The four runtime-permission readers
+    (`hasRuntimePermissions`, `getRuntimePermissionDelegations`,
+    `useRuntimeDelegation`, `grantRuntimePermissions`) now consult it.
+
+  CLI side (`@tinycloud/cli`): `replayAdditionalDelegations` exposes a
+  `TC_DEBUG_REPLAY=1` env switch that prints which stored delegations
+  fail to install and why. Useful for diagnosing future restore-related
+  issues.
+
+  Backwards compatible: `restoreSession`'s new parameters are optional;
+  old callers continue to work, they just don't get runtime-grant
+  support until they pass `siwe`. The CLI was already passing `siwe` —
+  the SDK was just dropping it.
+
+- 8367cef: Store approved runtime permissions as narrow portable delegations and route matching invocations through them instead of expanding the app manifest and re-signing the whole session. `delegateTo()` can now derive from an installed runtime delegation, web permission requests return any created runtime delegations, and the secrets wrapper can use the SDK's connected signer when unlocking the backing vault.
+- 35212bb: Add canonical scoped secret support. Manifest `secrets` entries now accept object specs with `scope` and optional `name`, and `tc.secrets` supports scoped `get`, `put`, `delete`, and `list` calls using the canonical `secrets/scoped/<scope>/<NAME>` vault layout.
+- 46f126a: Add manifest `secrets` declarations and SDK helpers backed by the secrets space vault, including read-default permissions and write/delete escalation.
+- f43143d: TC-1372: add `kv.createSignedReadUrl()` for minting short-lived signed KV read URLs through tinycloud-node's `/signed/kv` endpoint.
+
+  The method signs a normal `tinycloud.kv/get` invocation for the resolved key path, posts the signed URL request to tinycloud-node, and returns an absolute URL plus the opaque ticket id and expiry metadata. Requires tinycloud-node with the TC-1368 signed KV URL API.
+
+  The default signed read URL expiry is defined in `sdk-core` as
+  `EXPIRY.SIGNED_READ_URL_MS` and exposed as
+  `DEFAULT_SIGNED_READ_URL_EXPIRY_MS`.
+
+- 78ef7eb: Add `tinycloud.vault` as an SDK permission shorthand that expands to the backing KV permissions used by encrypted vault operations, including runtime permission escalation.
+
+### Patch Changes
+
+- 9ab4644: Check whether the manifest account registry space already exists before hosting it during sign-in, avoiding repeated account-space host prompts.
+- 9ff4b34: CLI: agent-friendly permission management and cross-space SQL.
+  - `tc auth request` requests additional runtime permissions via the SDK's
+    `grantRuntimePermissions` flow. Accepts `--cap <spec>`, `--permission <file>`,
+    or `--manifest <fileOrBase64>`. OpenKey path forwards the requested entries
+    through the `/delegate` URL so the consent UI shows what's being asked for.
+  - `tc auth caps` lists appended runtime delegations and their granted
+    capabilities. `--diff <spec>` reports whether the active session covers a
+    capability without granting it. `--history` shows the audit log.
+  - `tc manifest resolve <fileOrUrl>` is a read-only diagnostic that prints the
+    effective space URI, capability paths, and SQL database basenames for an
+    app manifest.
+  - `tc sql query|execute|export --space <name|uri>` routes through a
+    per-space SQL service so non-primary-space data is reachable. Backed by a
+    new `TinyCloudNode.sqlForSpace(spaceId)` helper that mirrors the per-space
+    KV factory pattern.
+  - `tc sql copy --from-space S --from-db D --to-space S2 --to-db D2 [--table T...] [--dry-run]`
+    copies rows between databases (optionally across spaces). Refuses self-copy.
+  - AUTH_UNAUTHORIZED errors emit a copy-pasteable
+    `tc auth request --cap "..."` hint derived from the unauthorized resource
+    and required action.
+  - NETWORK_ERROR emits a hint listing alternate profiles and their hosts when
+    the active profile's host is unreachable.
+  - `ProfileConfig.openkeyHost` (or `TC_OPENKEY_HOST` env var) overrides the
+    OpenKey base URL per profile, enabling self-hosted or local OpenKey
+    deployments for testing accounts. Default unchanged.
+  - Persists appended runtime delegations alongside the existing session in
+    `~/.tinycloud/profiles/<p>/additional-delegations.json` and replays them
+    via `useRuntimeDelegation()` on next CLI invocation. Grants logged to
+    `auth-grants.jsonl`.
+
+  node-sdk: adds `TinyCloudNode.sqlForSpace(spaceId): ISQLService` so callers
+  that already hold a delegation covering a non-primary space can issue SQL
+  queries without restoring a fresh session.
+
+- 04a0d5c: Expose `DelegatedAccess.restorable` — a read-only projection of the activated session handles (`delegationHeader`, `delegationCid`, `spaceId`, `jwk`, `verificationMethod`, `address`, `chainId`) in the exact shape `TinyCloudNode.restoreSession(...)` consumes. Enables persisting a `useDelegation` activation across processes or restarts (e.g. agent runtimes that want vanilla `@tinycloud/cli` to operate against a delegated space). Note: in wallet mode the header/cid are minted against the activator's server-side session and expire with it (~1h), so callers must periodically re-run `useDelegation` + `restoreSession`.
+- b9a24b5: Add implicit space-level `tinycloud.capabilities/read` grants for every space touched by a manifest request.
+- Updated dependencies [0401ff8]
+- Updated dependencies [0e049d7]
+- Updated dependencies [9dc2e8c]
+- Updated dependencies [9ff4b34]
+- Updated dependencies [2305a65]
+- Updated dependencies [b9a24b5]
+- Updated dependencies [de4d662]
+- Updated dependencies [6561589]
+- Updated dependencies [35212bb]
+- Updated dependencies [46f126a]
+- Updated dependencies [f43143d]
+- Updated dependencies [78ef7eb]
+  - @tinycloud/sdk-core@2.2.0
+  - @tinycloud/node-sdk-wasm@1.7.3
+
 ## 2.2.0-beta.13
 
 ### Patch Changes

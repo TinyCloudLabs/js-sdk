@@ -1,5 +1,23 @@
 # @tinycloudlabs/sdk-services-test
 
+## 8.0.0
+
+### Patch Changes
+
+- f43143d: TC-1372: add `kv.createSignedReadUrl()` for minting short-lived signed KV read URLs through tinycloud-node's `/signed/kv` endpoint.
+
+  The method signs a normal `tinycloud.kv/get` invocation for the resolved key path, posts the signed URL request to tinycloud-node, and returns an absolute URL plus the opaque ticket id and expiry metadata. Requires tinycloud-node with the TC-1368 signed KV URL API.
+
+  The default signed read URL expiry is defined in `sdk-core` as
+  `EXPIRY.SIGNED_READ_URL_MS` and exposed as
+  `DEFAULT_SIGNED_READ_URL_EXPIRY_MS`.
+
+- Updated dependencies [35212bb]
+- Updated dependencies [46f126a]
+- Updated dependencies [f43143d]
+- Updated dependencies [976b3c7]
+  - @tinycloud/sdk-services@2.2.0
+
 ## 8.0.0-beta.3
 
 ### Patch Changes

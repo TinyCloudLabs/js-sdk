@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk-wasm
 
+## 1.7.3
+
+### Patch Changes
+
+- 0e049d7: build(deps): bump tokio from 1.52.1 to 1.52.2 in the rust-minor-patch group
+- 9dc2e8c: Refresh Rust patch/minor dependencies used to build the TinyCloud WASM wrappers.
+- 6561589: Add manifest v1 composition helpers, per-space capability requests, materialized manifest delegations, and the default account-space application registry grant.
+
 ## 1.7.3-beta.2
 
 ### Patch Changes

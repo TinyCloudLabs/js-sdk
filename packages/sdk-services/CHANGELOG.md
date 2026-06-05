@@ -1,5 +1,23 @@
 # @tinycloudlabs/sdk-services
 
+## 2.2.0
+
+### Minor Changes
+
+- 35212bb: Add canonical scoped secret support. Manifest `secrets` entries now accept object specs with `scope` and optional `name`, and `tc.secrets` supports scoped `get`, `put`, `delete`, and `list` calls using the canonical `secrets/scoped/<scope>/<NAME>` vault layout.
+- 46f126a: Add manifest `secrets` declarations and SDK helpers backed by the secrets space vault, including read-default permissions and write/delete escalation.
+- f43143d: TC-1372: add `kv.createSignedReadUrl()` for minting short-lived signed KV read URLs through tinycloud-node's `/signed/kv` endpoint.
+
+  The method signs a normal `tinycloud.kv/get` invocation for the resolved key path, posts the signed URL request to tinycloud-node, and returns an absolute URL plus the opaque ticket id and expiry metadata. Requires tinycloud-node with the TC-1368 signed KV URL API.
+
+  The default signed read URL expiry is defined in `sdk-core` as
+  `EXPIRY.SIGNED_READ_URL_MS` and exposed as
+  `DEFAULT_SIGNED_READ_URL_EXPIRY_MS`.
+
+### Patch Changes
+
+- 976b3c7: Deduplicate in-flight vault unlocks and reuse in-memory vault key material so repeated OpenKey-backed unlock paths do not trigger duplicate signer prompts.
+
 ## 2.2.0-beta.13
 
 ### Patch Changes

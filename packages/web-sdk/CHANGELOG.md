@@ -1,5 +1,49 @@
 # @tinycloudlabs/web-sdk
 
+## 2.2.0
+
+### Minor Changes
+
+- 0401ff8: Add default TinyCloud host discovery and run it from sign-in when no explicit host is configured.
+- 6561589: Add manifest v1 composition helpers, per-space capability requests, materialized manifest delegations, and the default account-space application registry grant.
+- 8367cef: Store approved runtime permissions as narrow portable delegations and route matching invocations through them instead of expanding the app manifest and re-signing the whole session. `delegateTo()` can now derive from an installed runtime delegation, web permission requests return any created runtime delegations, and the secrets wrapper can use the SDK's connected signer when unlocking the backing vault.
+- 35212bb: Add canonical scoped secret support. Manifest `secrets` entries now accept object specs with `scope` and optional `name`, and `tc.secrets` supports scoped `get`, `put`, `delete`, and `list` calls using the canonical `secrets/scoped/<scope>/<NAME>` vault layout.
+- 46f126a: Add manifest `secrets` declarations and SDK helpers backed by the secrets space vault, including read-default permissions and write/delete escalation.
+- 51b6f51: TC-1365: add browser session persistence/restoration for `TinyCloudWeb`.
+
+  The web SDK now uses `BrowserSessionStorage` by default, validates persisted
+  session data before writing it, reports restore status, rejects expired or
+  corrupt stored sessions, and attempts to restore a valid session in
+  `signIn()` before falling back to wallet login.
+
+- 78ef7eb: Add `tinycloud.vault` as an SDK permission shorthand that expands to the backing KV permissions used by encrypted vault operations, including runtime permission escalation.
+
+### Patch Changes
+
+- 9ab4644: Check whether the manifest account registry space already exists before hosting it during sign-in, avoiding repeated account-space host prompts.
+- b9a24b5: Add implicit space-level `tinycloud.capabilities/read` grants for every space touched by a manifest request.
+- Updated dependencies [9ab4644]
+- Updated dependencies [9ff4b34]
+- Updated dependencies [0401ff8]
+- Updated dependencies [04a0d5c]
+- Updated dependencies [0e049d7]
+- Updated dependencies [9dc2e8c]
+- Updated dependencies [9ff4b34]
+- Updated dependencies [2305a65]
+- Updated dependencies [9ff4b34]
+- Updated dependencies [b9a24b5]
+- Updated dependencies [de4d662]
+- Updated dependencies [6561589]
+- Updated dependencies [010ee0f]
+- Updated dependencies [8367cef]
+- Updated dependencies [35212bb]
+- Updated dependencies [46f126a]
+- Updated dependencies [f43143d]
+- Updated dependencies [78ef7eb]
+  - @tinycloud/node-sdk@2.2.0
+  - @tinycloud/sdk-core@2.2.0
+  - @tinycloud/web-sdk-wasm@1.7.3
+
 ## 2.2.0-beta.13
 
 ### Patch Changes

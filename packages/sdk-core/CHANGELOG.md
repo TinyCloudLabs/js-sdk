@@ -1,5 +1,69 @@
 # @tinycloudlabs/sdk-core
 
+## 2.2.0
+
+### Minor Changes
+
+- 0401ff8: Add default TinyCloud host discovery and run it from sign-in when no explicit host is configured.
+- 9ff4b34: Introduce `EXPIRY` tiers as the single source of truth for default
+  delegation lifetimes. Pick a tier, not a number, when adding a new
+  delegation surface.
+
+  The delegation tiers and signed URL TTL, exported from `@tinycloud/sdk-core`:
+  - `EXPIRY.EPHEMERAL_MS` (1h) — auto-refreshable, never user-visible.
+  - `EXPIRY.SIGNED_READ_URL_MS` (5m) — short-lived bearer KV read URLs.
+  - `EXPIRY.SESSION_MS` (7d) — sign-in sessions and runtime grants
+    (capped by session anyway).
+  - `EXPIRY.SHARE_MS` (7d) — share links and ad-hoc third-party
+    delegations.
+  - `EXPIRY.APP_MS` (30d) — manifest-declared installs.
+  - `EXPIRY.MAX_MS` (10y) — caller-supplied upper bound.
+
+  Behavior changes:
+  - **`SharingService` share-link default: 24h → 7d.** Same direction as
+    the runtime-grant default that already shipped at 7d. Callers passing
+    explicit expiry are unaffected.
+  - **`DelegationManager.create()` default: 24h → 7d** when the caller
+    omits `expiry`.
+  - **`SpaceService` server-response fallback: 24h → 7d** when the
+    server's delegation response lacks an `expiry` field.
+  - **`NodeUserAuthorization.sessionExpirationMs` default: 1h → 7d.**
+    Fixes a silent inconsistency where direct `NodeUserAuthorization`
+    consumers got 1h while `TinyCloudNode` users got 7d.
+  - **`TinyCloudNode` public-space sub-delegation: 1h** (unchanged value,
+    re-tagged as `EPHEMERAL` to make the intent legible — these are
+    re-derived transparently on every public-space touch).
+
+  Sites unchanged in value but re-pointed at tiered constants:
+  - `TinyCloudNode.DEFAULT_SESSION_EXPIRATION_MS` → `EXPIRY.SESSION_MS`
+  - `delegateToHelpers.DEFAULT_DELEGATION_EXPIRY_MS` → `EXPIRY.SESSION_MS`
+  - `manifest.DEFAULT_EXPIRY` (`"30d"`) — still ms-format string for
+    parser compatibility, comment now points at `EXPIRY.APP_MS`.
+
+- 2305a65: Add TinyCloud location registry helpers for signed DID location records, multiaddr URL conversion, and priority-based cloud location resolution across explicit, blockchain, centralized registry, and fallback sources.
+- 6561589: Add manifest v1 composition helpers, per-space capability requests, materialized manifest delegations, and the default account-space application registry grant.
+- 35212bb: Add canonical scoped secret support. Manifest `secrets` entries now accept object specs with `scope` and optional `name`, and `tc.secrets` supports scoped `get`, `put`, `delete`, and `list` calls using the canonical `secrets/scoped/<scope>/<NAME>` vault layout.
+- 46f126a: Add manifest `secrets` declarations and SDK helpers backed by the secrets space vault, including read-default permissions and write/delete escalation.
+- f43143d: TC-1372: add `kv.createSignedReadUrl()` for minting short-lived signed KV read URLs through tinycloud-node's `/signed/kv` endpoint.
+
+  The method signs a normal `tinycloud.kv/get` invocation for the resolved key path, posts the signed URL request to tinycloud-node, and returns an absolute URL plus the opaque ticket id and expiry metadata. Requires tinycloud-node with the TC-1368 signed KV URL API.
+
+  The default signed read URL expiry is defined in `sdk-core` as
+  `EXPIRY.SIGNED_READ_URL_MS` and exposed as
+  `DEFAULT_SIGNED_READ_URL_EXPIRY_MS`.
+
+- 78ef7eb: Add `tinycloud.vault` as an SDK permission shorthand that expands to the backing KV permissions used by encrypted vault operations, including runtime permission escalation.
+
+### Patch Changes
+
+- b9a24b5: Add implicit space-level `tinycloud.capabilities/read` grants for every space touched by a manifest request.
+- de4d662: Expose and preserve optional manifest permission descriptions in resolved capability metadata.
+- Updated dependencies [35212bb]
+- Updated dependencies [46f126a]
+- Updated dependencies [f43143d]
+- Updated dependencies [976b3c7]
+  - @tinycloud/sdk-services@2.2.0
+
 ## 2.2.0-beta.13
 
 ### Patch Changes

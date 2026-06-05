@@ -1,5 +1,30 @@
 # @tinycloud/vfs
 
+## 0.1.0
+
+### Minor Changes
+
+- c1d4ecd: Initial beta release of `@tinycloud/vfs` for the TinyCloud VFS package.
+
+### Patch Changes
+
+- ce05b92: Update `@platformatic/vfs` to 0.4.0 and refresh TypeScript dev dependencies used by the workspace builds.
+- Updated dependencies [9ab4644]
+- Updated dependencies [9ff4b34]
+- Updated dependencies [0401ff8]
+- Updated dependencies [04a0d5c]
+- Updated dependencies [9ff4b34]
+- Updated dependencies [9ff4b34]
+- Updated dependencies [b9a24b5]
+- Updated dependencies [6561589]
+- Updated dependencies [010ee0f]
+- Updated dependencies [8367cef]
+- Updated dependencies [35212bb]
+- Updated dependencies [46f126a]
+- Updated dependencies [f43143d]
+- Updated dependencies [78ef7eb]
+  - @tinycloud/node-sdk@2.2.0
+
 ## 0.1.0-beta.14
 
 ### Patch Changes
