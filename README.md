@@ -14,6 +14,7 @@ TinyCloud SDK is a comprehensive toolkit for building decentralized applications
 - **KV Storage** - Content-addressed key-value store scoped to user spaces
 - **Delegation System** - Cryptographic capability chains for fine-grained access control
 - **Sharing** - Portable delegation bundles for cross-user data sharing
+- **Encryption Networks** - Network-scoped inline envelopes for secrets and vault data with `tinycloud.encryption/decrypt`
 - **Protocol Version Check** - Automatic SDK-node compatibility verification during sign-in
 - **Wallet Integration** - Seamless connection with popular Ethereum wallets (browser SDK)
 - **Server Support** - Node.js SDK for server-side delegation chains and automation

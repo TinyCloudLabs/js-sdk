@@ -668,6 +668,32 @@ describe("decrypt response verification", () => {
     }
   });
 
+  it("rejects a response whose nodeId does not match the target node", () => {
+    const crypto = makeCrypto();
+    const request = fullRequest(crypto);
+    const { response, requestBodyHash } = makeResponse(crypto, request, "bafyINV");
+    const facts = buildDecryptFacts({
+      crypto,
+      body: request,
+      encryptedSymmetricKeyHash: request.encryptedSymmetricKeyHash,
+      receiverPublicKey: new Uint8Array([4, 5, 6]),
+    });
+    response.nodeId = "did:key:z6MkOtherNode";
+    const result = verifyDecryptResponse({
+      crypto,
+      request,
+      facts,
+      invocationCid: "bafyINV",
+      requestBodyHash,
+      response,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("RESPONSE_BINDING_MISMATCH");
+      expect(result.error.field).toBe("nodeId");
+    }
+  });
+
   it("canonicalSignedResponse excludes the signature field", () => {
     const crypto = makeCrypto();
     const request = fullRequest(crypto);

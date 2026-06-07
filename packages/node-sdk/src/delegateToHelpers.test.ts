@@ -72,8 +72,8 @@ describe("legacyParamsToPermissionEntries", () => {
 });
 
 describe("resolveExpiryMs", () => {
-  test("undefined → 1 hour default", () => {
-    expect(resolveExpiryMs(undefined)).toBe(60 * 60 * 1000);
+  test("undefined → 7 day default", () => {
+    expect(resolveExpiryMs(undefined)).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
   test("positive number passes through unchanged", () => {

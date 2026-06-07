@@ -52,6 +52,28 @@ tc profile delete old-profile
 
 Per-command override: `tc kv get mykey --profile staging`
 
+## Secrets
+
+Secrets are stored as network-encrypted inline envelopes and read through
+`tinycloud.encryption/decrypt`. Secret names are env-style uppercase
+identifiers such as `FIREFLIES_API_KEY`. `tc secrets network show` accepts
+either a short network name or a full
+`urn:tinycloud:encryption:<principal>:<network>` identifier, and `tc secrets
+network grant` takes the short name, resolves the network, and issues
+`tinycloud.encryption/decrypt` on that network. Share the decrypt grant
+separately from any KV or SQL reads the app also needs.
+
+```bash
+tc secrets network init
+tc secrets network show
+tc secrets network grant did:pkh:eip155:1:0xRecipient...
+
+tc secrets put ANTHROPIC_API_KEY "sk-..."
+tc secrets get ANTHROPIC_API_KEY
+tc secrets list
+tc secrets delete ANTHROPIC_API_KEY
+```
+
 ## Node Health
 
 ```bash
