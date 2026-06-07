@@ -93,6 +93,15 @@ export function verifyDecryptResponse(
       }),
     };
   }
+  if (response.nodeId !== request.targetNode) {
+    return {
+      ok: false,
+      error: encryptionError({
+        code: "RESPONSE_BINDING_MISMATCH",
+        field: "nodeId",
+      }),
+    };
+  }
   if (response.alg !== request.alg) {
     return {
       ok: false,

@@ -1,8 +1,17 @@
 import { describe, expect, mock, test } from "bun:test";
 
 import {
+  canonicalHashHex,
+  hexEncode,
+  encryptionBase64Decode,
+  encryptionBase64Encode,
+  encryptionUtf8Encode,
+  type DecryptRequestBody,
+  type DecryptResponseBody,
+  type EncryptionCrypto,
   type ISessionManager,
   type IWasmBindings,
+  type NetworkDescriptor,
   type PermissionEntry,
 } from "@tinycloud/sdk-core";
 
@@ -74,6 +83,81 @@ function makeFakeWasmBindings(
     vault_random_bytes: mock(() => new Uint8Array()),
     vault_sha256: mock(() => new Uint8Array()),
     createSessionManager: makeFakeSessionManager,
+  };
+}
+
+function xor(left: Uint8Array, right: Uint8Array): Uint8Array {
+  const out = new Uint8Array(right.length);
+  for (let i = 0; i < right.length; i++) {
+    out[i] = left[i % left.length] ^ right[i % right.length];
+  }
+  return out;
+}
+
+function deterministicSha256(bytes: Uint8Array): Uint8Array {
+  const out = new Uint8Array(32);
+  let h0 = 0x6a09e667;
+  let h1 = 0xbb67ae85;
+  for (let i = 0; i < bytes.length; i++) {
+    h0 = ((h0 + bytes[i] * 31) ^ ((h0 << 5) | (h0 >>> 27))) >>> 0;
+    h1 = ((h1 ^ (bytes[i] + 17)) + ((h1 << 7) | (h1 >>> 25))) >>> 0;
+  }
+  for (let i = 0; i < 16; i++) {
+    out[i] = (h0 >>> ((i % 4) * 8)) & 0xff;
+    out[i + 16] = (h1 >>> ((i % 4) * 8)) & 0xff;
+    h0 = (h0 * 1103515245 + 12345) >>> 0;
+    h1 = (h1 * 1664525 + 1013904223) >>> 0;
+  }
+  return out;
+}
+
+function makeEncryptionCrypto(): EncryptionCrypto {
+  let seed = 0xdeadbeef;
+  const randomBytes = (length: number): Uint8Array => {
+    const out = new Uint8Array(length);
+    for (let i = 0; i < length; i++) {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      out[i] = seed & 0xff;
+    }
+    return out;
+  };
+
+  return {
+    sha256: deterministicSha256,
+    randomBytes,
+    x25519FromSeed: (seedBytes) => ({
+      publicKey: seedBytes,
+      privateKey: seedBytes,
+    }),
+    x25519Dh: (priv, pub) => deterministicSha256(xor(priv, pub)),
+    authEncrypt: (key, plaintext, aad) => {
+      const mixedKey = aad === undefined ? key : deterministicSha256(xor(key, aad));
+      return xor(mixedKey, plaintext);
+    },
+    authDecrypt: (key, ciphertext, aad) => {
+      const mixedKey = aad === undefined ? key : deterministicSha256(xor(key, aad));
+      return xor(mixedKey, ciphertext);
+    },
+    sealToNetworkKey: (networkPublicKey, symmetricKey) => xor(networkPublicKey, symmetricKey),
+    openWithReceiverKey: (receiverPrivateKey, wrappedKey) => xor(receiverPrivateKey, wrappedKey),
+    verifyNodeSignature: () => true,
+  };
+}
+
+function makeEncryptionDescriptor(networkId: string, nodeDid: string): NetworkDescriptor {
+  return {
+    networkId,
+    principal: nodeDid,
+    name: "default",
+    members: [{ nodeId: nodeDid, role: "primary" }],
+    threshold: { n: 1, t: 1 },
+    state: "active",
+    publicEncryptionKey: encryptionBase64Encode(new Uint8Array(32).fill(11)),
+    alg: "x25519-aes256gcm/v1",
+    keyVersion: 1,
+    keyBackend: "local-one-of-one",
+    createdAt: "2026-06-02T00:00:00.000Z",
+    updatedAt: "2026-06-02T00:00:00.000Z",
   };
 }
 
@@ -605,5 +689,189 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect(invokeAny.mock.calls[0][0].delegationHeader.Authorization).toBe(
       "runtime-token",
     );
+  });
+
+  test("encryption discovery falls back to the well-known cache record", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    (node as any)._address = address;
+    (node as any)._chainId = 1;
+    (node as any).getEncryptionNetwork = mock(async () => null);
+
+    const networkId = node.getDefaultEncryptionNetworkId();
+    const descriptor = {
+      networkId,
+      principal: node.did,
+      name: "default",
+      members: [{ nodeId: "did:key:cache-node", role: "primary" as const }],
+      threshold: { n: 1, t: 1 },
+      state: "active" as const,
+      publicEncryptionKey: "AQID",
+      alg: "x25519-aes256gcm/v1",
+      keyVersion: 1,
+      keyBackend: "local-one-of-one" as const,
+      createdAt: "2026-06-02T00:00:00.000Z",
+      updatedAt: "2026-06-02T00:00:00.000Z",
+    };
+
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () =>
+      new Response(JSON.stringify(descriptor), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    try {
+      const encryption = (node as any).createEncryptionService();
+      const result = await encryption.discoverNetwork("default", node.did);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data.networkId).toBe(networkId);
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("encryption service round-trips through the node encrypt/decrypt path", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const networkId = node.getDefaultEncryptionNetworkId();
+    const descriptor = makeEncryptionDescriptor(networkId, node.did);
+    const crypto = makeEncryptionCrypto();
+
+    (node as any).createEncryptionCrypto = () => crypto;
+
+    const signRawNetworkAuthorization = mock(
+      async ({ targetNode, networkId: signedNetworkId, action, facts }: any) => {
+        expect(targetNode).toBe(node.did);
+        expect(signedNetworkId).toBe(networkId);
+        expect(action).toBe("tinycloud.encryption/decrypt");
+        expect(facts.targetNode).toBe(node.did);
+        expect(facts.networkId).toBe(networkId);
+        return {
+          authorization: "Invocation node-encryption",
+          invocationCid: "bafy-node-encryption",
+        };
+      },
+    );
+    (node as any).signRawNetworkAuthorization = signRawNetworkAuthorization;
+
+    const fetchCalls: Array<{ method: string; url: string; body?: string }> = [];
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      const body =
+        typeof init?.body === "string"
+          ? init.body
+          : init?.body instanceof Uint8Array
+            ? new TextDecoder().decode(init.body)
+            : undefined;
+      fetchCalls.push({ method, url, body });
+
+      const getUrl =
+        `https://tinycloud.test/encryption/networks/${encodeURIComponent(networkId)}`;
+      const decryptUrl = `${getUrl}/decrypt`;
+
+      if (method === "GET" && url === getUrl) {
+        return new Response(JSON.stringify({ descriptor }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (method === "POST" && url === decryptUrl) {
+        if (!body) {
+          throw new Error("expected canonical decrypt body");
+        }
+        const request = JSON.parse(body) as DecryptRequestBody;
+        const wrappedSymmetricKey = encryptionBase64Decode(
+          request.encryptedSymmetricKey,
+        );
+        const networkPublicKey = encryptionBase64Decode(
+          descriptor.publicEncryptionKey,
+        );
+        const symmetricKey = xor(networkPublicKey, wrappedSymmetricKey);
+        const receiverPublicKey = encryptionBase64Decode(
+          request.receiverPublicKey,
+        );
+        const wrappedKey = xor(receiverPublicKey, symmetricKey);
+        const invocationCid = "bafy-node-encryption";
+        const requestBodyHash = canonicalHashHex(crypto.sha256, request as any);
+        const response: DecryptResponseBody = {
+          type: "tinycloud.encryption.decrypt-result/v1",
+          targetNode: request.targetNode,
+          networkId: request.networkId,
+          invocationCid,
+          encryptedSymmetricKeyHash: request.encryptedSymmetricKeyHash,
+          receiverPublicKeyHash: request.receiverPublicKeyHash,
+          wrappedKey: encryptionBase64Encode(wrappedKey),
+          alg: request.alg,
+          keyVersion: request.keyVersion,
+          requestHash: hexEncode(
+            crypto.sha256(
+              encryptionUtf8Encode(`${invocationCid}${requestBodyHash}`),
+            ),
+          ),
+          nodeId: node.did,
+          nodeSignature: encryptionBase64Encode(new Uint8Array(64).fill(9)),
+        };
+        return new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    try {
+      const encryption = (node as any).createEncryptionService();
+      const plaintext = encryptionUtf8Encode("hello tinycloud encryption");
+
+      const encryptResult = await encryption.encryptToNetwork(networkId, plaintext);
+      expect(encryptResult.ok).toBe(true);
+      if (!encryptResult.ok) return;
+
+      const decryptResult = await encryption.decryptEnvelope(encryptResult.data, {
+        proofs: ["bafyDelegationFromPrincipal"],
+      });
+      expect(decryptResult.ok).toBe(true);
+      if (!decryptResult.ok) return;
+
+      expect(new TextDecoder().decode(decryptResult.data)).toBe(
+        "hello tinycloud encryption",
+      );
+      expect(fetchCalls.map((call) => call.method)).toEqual(["GET", "GET", "POST"]);
+      expect(signRawNetworkAuthorization).toHaveBeenCalledTimes(1);
+
+      const postCall = fetchCalls[2];
+      expect(postCall.url).toBe(
+        `https://tinycloud.test/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
+      );
+      const request = JSON.parse(postCall.body ?? "{}") as DecryptRequestBody;
+      expect(request.targetNode).toBe(node.did);
+      expect(request.networkId).toBe(networkId);
+      expect(request.alg).toBe(descriptor.alg);
+      expect(request.keyVersion).toBe(descriptor.keyVersion);
+      expect(request.encryptedSymmetricKeyHash).toBe(
+        encryptResult.data.encryptedSymmetricKeyHash,
+      );
+      expect(request.receiverPublicKeyHash).toBe(
+        canonicalHashHex(crypto.sha256, request.receiverPublicKey),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

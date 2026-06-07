@@ -24,6 +24,11 @@ tc kv put greeting "Hello, world"
 tc kv get greeting
 tc kv list
 
+# Manage network-encrypted secrets on the default network
+tc secrets network init
+tc secrets put ANTHROPIC_API_KEY "sk-..."
+tc secrets get ANTHROPIC_API_KEY
+
 # Manage spaces
 tc space list
 tc space create
@@ -55,11 +60,20 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc profile list` | List profiles |
 | `tc profile show` | Show profile details |
 | `tc profile create` | Create a new profile |
-| `tc vault` | Manage encrypted vaults |
-| `tc secrets` | Manage secrets |
+| `tc vault` | Manage encrypted KV vaults |
+| `tc secrets` | Manage network-encrypted secrets |
+| `tc secrets network show` | Show a secrets decryption network |
+| `tc secrets network init` | Create or fetch the default secrets network |
+| `tc secrets network grant` | Grant `tinycloud.encryption/decrypt` on a secrets network |
 | `tc vars` | Manage environment variables |
 | `tc doctor` | Run diagnostic checks |
 | `tc completion` | Generate shell completions |
+
+Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
+`tc secrets network show` accepts either a short network name or a full
+`urn:tinycloud:encryption:<principal>:<network>` identifier. `tc secrets
+network grant` takes the short name, resolves the network, and grants
+`tinycloud.encryption/decrypt`.
 
 ## Global Options
 

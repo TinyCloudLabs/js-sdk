@@ -376,7 +376,6 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
           "": ["tinycloud.capabilities/read"],
         },
         kv: {
-          "keys/secrets/ANTHROPIC_API_KEY": ["tinycloud.kv/get"],
           "vault/secrets/ANTHROPIC_API_KEY": ["tinycloud.kv/get"],
         },
       },

@@ -97,6 +97,7 @@ ${theme.heading("Examples:")}
   ${theme.command("tc auth login")}                        ${theme.muted("Authenticate via browser")}
   ${theme.command('tc kv put greeting "Hello"')}           ${theme.muted("Store a value")}
   ${theme.command("tc kv list")}                           ${theme.muted("List all keys")}
+  ${theme.command("tc secrets network init")}              ${theme.muted("Create the default secrets network")}
   ${theme.command("tc delegation create --to did:pkh:...")}  ${theme.muted("Grant access to another user")}
   ${theme.command("tc space list")}                        ${theme.muted("Show your spaces")}
 

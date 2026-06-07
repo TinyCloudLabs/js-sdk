@@ -1357,6 +1357,29 @@ export class TinyCloudNode {
       node: {
         fetchByNetworkId: (networkId) => this.getEncryptionNetwork(networkId),
       },
+      wellKnown: {
+        fetchWellKnown: async (principal, discoveryKey) => {
+          if (!this._address || principal !== this.did) {
+            return null;
+          }
+          if (!this.config.host) {
+            return null;
+          }
+          const publicSpaceId = makePublicSpaceId(this._address, this._chainId);
+          const result = await TinyCloud.readPublicSpace<
+            NetworkDescriptor | { descriptor?: NetworkDescriptor }
+          >(this.config.host, publicSpaceId, discoveryKey);
+          if (!result.ok) {
+            return null;
+          }
+          const body = result.data as
+            | NetworkDescriptor
+            | { descriptor?: NetworkDescriptor };
+          return "descriptor" in body && body.descriptor
+            ? body.descriptor
+            : (body as NetworkDescriptor);
+        },
+      },
     });
   }
 

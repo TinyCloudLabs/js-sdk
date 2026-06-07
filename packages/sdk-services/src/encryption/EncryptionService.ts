@@ -175,6 +175,17 @@ export class EncryptionService
     try {
       const validated = validateEnvelope(this.crypto, envelope);
       if (!validated.ok) return validated;
+      if (
+        options?.aad !== undefined &&
+        validated.data.aad !== base64Encode(options.aad)
+      ) {
+        return encErr(
+          encryptionError({
+            code: "INVALID_INPUT",
+            message: "decryptEnvelope aad does not match the envelope",
+          }),
+        );
+      }
 
       let descriptor: NetworkDescriptor;
       if (options?.descriptor !== undefined) {

@@ -4,7 +4,7 @@ import wasm from "../../../web-sdk-wasm/tinycloud_web_sdk_rs_bg.wasm";
 
 import * as lib from "../../../web-sdk-wasm/tinycloud_web_sdk_rs.js";
 
-export const initialized: Promise<void> = init(wasm()).then(() =>
+export const initialized: Promise<void> = init({ module_or_path: wasm() }).then(() =>
   lib.initPanicHook()
 );
 
