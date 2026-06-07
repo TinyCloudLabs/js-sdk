@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-services
 
+## 2.2.1-beta.0
+
+### Patch Changes
+
+- 9ee7404: Harden encryption-network decrypt flows, add CLI secrets coverage, and fix web WASM initialization.
+
 ## 2.2.0
 
 ### Minor Changes

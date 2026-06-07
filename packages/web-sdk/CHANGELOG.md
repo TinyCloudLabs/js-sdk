@@ -1,5 +1,15 @@
 # @tinycloudlabs/web-sdk
 
+## 2.2.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [9ee7404]
+- Updated dependencies [f615a19]
+  - @tinycloud/node-sdk@2.2.1-beta.0
+  - @tinycloud/web-sdk-wasm@1.7.4-beta.0
+  - @tinycloud/sdk-core@2.2.1-beta.0
+
 ## 2.2.0
 
 ### Minor Changes

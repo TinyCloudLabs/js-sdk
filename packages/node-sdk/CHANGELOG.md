@@ -1,5 +1,14 @@
 # @tinycloudlabs/node-sdk
 
+## 2.2.1-beta.0
+
+### Patch Changes
+
+- 9ee7404: Harden encryption-network decrypt flows, add CLI secrets coverage, and fix web WASM initialization.
+- Updated dependencies [f615a19]
+  - @tinycloud/node-sdk-wasm@1.7.4-beta.0
+  - @tinycloud/sdk-core@2.2.1-beta.0
+
 ## 2.2.0
 
 ### Minor Changes

@@ -1,5 +1,12 @@
 # @tinycloudlabs/web-sdk-wasm
 
+## 1.7.4-beta.0
+
+### Patch Changes
+
+- 9ee7404: Harden encryption-network decrypt flows, add CLI secrets coverage, and fix web WASM initialization.
+- f615a19: build(deps): bump the rust-minor-patch group across 1 directory with 2 updates
+
 ## 1.7.3
 
 ### Patch Changes

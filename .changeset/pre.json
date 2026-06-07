@@ -17,5 +17,8 @@
     "@tinycloud/web-sdk": "2.2.0",
     "@tinycloud/sdk-services-test": "8.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "bright-clouds-decrypt",
+    "dependabot-dependabot-cargo-rust-minor-patch-fcf40cfdd5"
+  ]
 }

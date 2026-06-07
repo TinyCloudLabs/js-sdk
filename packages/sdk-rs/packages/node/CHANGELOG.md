@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk-wasm
 
+## 1.7.4-beta.0
+
+### Patch Changes
+
+- f615a19: build(deps): bump the rust-minor-patch group across 1 directory with 2 updates
+
 ## 1.7.3
 
 ### Patch Changes
