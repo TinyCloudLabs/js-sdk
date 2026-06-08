@@ -8,7 +8,7 @@ import type { ProfileConfig } from "../config/types.js";
  * what TinyCloudNode.signIn / restoreSession actually populates:
  *   1) session.address (set by both local-key and OpenKey auth flows)
  *   2) profile.address (local-key auth only)
- *   3) the address segment of profile.primaryDid (did:pkh:eip155:<chain>:<addr>)
+ *   3) the address segment of profile.ownerDid (did:pkh:eip155:<chain>:<addr>)
  */
 function resolveAddress(profile: ProfileConfig, session: Record<string, unknown> | null): string {
   const sessAddr = session?.address;
@@ -16,8 +16,8 @@ function resolveAddress(profile: ProfileConfig, session: Record<string, unknown>
 
   if (profile.address) return profile.address;
 
-  if (profile.primaryDid) {
-    const match = profile.primaryDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
+  if (profile.ownerDid) {
+    const match = profile.ownerDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
     if (match) return match[1];
   }
 

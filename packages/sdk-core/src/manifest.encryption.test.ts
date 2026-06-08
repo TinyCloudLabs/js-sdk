@@ -4,7 +4,7 @@
  * Encryption permissions:
  * - Use the networkId URN as the resource (not a space-shaped path).
  * - Are exempt from manifest prefix application — networkIds are
- *   top-level principal-owned resources.
+ *   top-level owner-scoped resources.
  * - Expand "decrypt" → "tinycloud.encryption/decrypt".
  */
 

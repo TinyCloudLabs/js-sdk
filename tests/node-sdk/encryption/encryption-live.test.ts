@@ -222,9 +222,9 @@ describe("encryption live node-sdk integration", () => {
 
   test("decrypts through the public EncryptionService using raw network resources", async () => {
     const wallet = new Wallet(TEST_KEY);
-    const principal = `did:pkh:eip155:1:${wallet.address}`;
+    const ownerDid = `did:pkh:eip155:1:${wallet.address}`;
     const networkName = `sdk-live-${Date.now()}`;
-    const networkId = `urn:tinycloud:encryption:${principal}:${networkName}`;
+    const networkId = `urn:tinycloud:encryption:${ownerDid}:${networkName}`;
     const manifest = {
       manifest_version: 1 as const,
       app_id: "dev.tinycloud.encryption-live",
@@ -253,7 +253,7 @@ describe("encryption live node-sdk integration", () => {
 
     const createBody = {
       name: networkName,
-      principal,
+      ownerDid,
       threshold: { n: 1, t: 1 },
     };
     const createFacts = {

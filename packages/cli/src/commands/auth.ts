@@ -169,7 +169,7 @@ export function registerAuthCommand(program: Command): void {
             authenticated,
             did: profile?.did ?? null,
             sessionDid: profile?.sessionDid ?? null,
-            primaryDid: profile?.primaryDid ?? null,
+            ownerDid: profile?.ownerDid ?? null,
             spaceId: profile?.spaceId ?? null,
             host: ctx.host,
             profile: ctx.profile,
@@ -189,7 +189,7 @@ export function registerAuthCommand(program: Command): void {
           process.stdout.write(formatField("Host", ctx.host) + "\n");
           process.stdout.write(formatField("DID", profile?.did ?? null) + "\n");
           process.stdout.write(formatField("Session DID", profile?.sessionDid ?? null) + "\n");
-          process.stdout.write(formatField("Primary DID", profile?.primaryDid ?? null) + "\n");
+          process.stdout.write(formatField("Owner DID", profile?.ownerDid ?? null) + "\n");
           process.stdout.write(formatField("Address", profile?.address ?? null) + "\n");
           process.stdout.write(formatField("Space ID", profile?.spaceId ?? null) + "\n");
           process.stdout.write(formatField("Has Key", hasKey !== null) + "\n");
@@ -434,7 +434,7 @@ export function registerAuthCommand(program: Command): void {
           yes: options.yes === true,
         });
         const result = await node.delegateTo(
-          parsed.did,
+          parsed.sessionDid,
           parsed.requested,
           parsed.requestedExpiry !== undefined
             ? { expiry: parsed.requestedExpiry }
@@ -604,7 +604,7 @@ export function registerAuthCommand(program: Command): void {
             profile: ctx.profile,
             did: profile.did,
             sessionDid: profile.sessionDid ?? null,
-            primaryDid: profile.primaryDid ?? null,
+            ownerDid: profile.ownerDid ?? null,
             spaceId: profile.spaceId ?? null,
             host: profile.host,
             authenticated,
@@ -618,7 +618,7 @@ export function registerAuthCommand(program: Command): void {
           process.stdout.write(formatField("Profile", ctx.profile) + "\n");
           process.stdout.write(formatField("DID", profile.did) + "\n");
           process.stdout.write(formatField("Session DID", profile.sessionDid ?? null) + "\n");
-          process.stdout.write(formatField("Primary DID", profile.primaryDid ?? null) + "\n");
+          process.stdout.write(formatField("Owner DID", profile.ownerDid ?? null) + "\n");
           process.stdout.write(formatField("Auth Method", profile.authMethod ?? null) + "\n");
           process.stdout.write(formatField("Posture", posture) + "\n");
           process.stdout.write(formatField("Operator", operatorType) + "\n");
@@ -1111,7 +1111,7 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
     spaceName: "default",
     did,
     sessionDid,
-    primaryDid: did,
+    ownerDid: did,
     spaceId: sessionResult.spaceId,
     createdAt: profile?.createdAt ?? new Date().toISOString(),
     posture: profile?.posture ?? "local-owner-key",
@@ -1160,7 +1160,7 @@ async function handleOpenKeyAuth(profileName: string, host: string, paste?: bool
   // Store session
   await ProfileManager.setSession(profileName, delegationData);
 
-  // Update profile with primary DID if present
+  // Update profile with owner DID if present
   const updatedProfile = {
     ...profile,
     sessionDid: profile.sessionDid ?? profile.did,
@@ -1171,7 +1171,7 @@ async function handleOpenKeyAuth(profileName: string, host: string, paste?: bool
 
   if (delegationData.spaceId) {
     updatedProfile.spaceId = delegationData.spaceId;
-    updatedProfile.primaryDid = delegationData.primaryDid as string | undefined;
+    updatedProfile.ownerDid = delegationData.ownerDid as string | undefined;
   }
 
   await ProfileManager.setProfile(profileName, updatedProfile);

@@ -48,7 +48,7 @@ export interface ProfileConfig {
   spaceName: string;
   did: string;
   sessionDid?: string;
-  primaryDid?: string;
+  ownerDid?: string;
   spaceId?: string;
   createdAt: string;
   posture?: CLIProfilePosture;

@@ -80,7 +80,7 @@ export function registerInitCommand(program: Command): void {
         await ProfileManager.setProfile(profileName, {
           ...profileConfig,
           spaceId: delegationData.spaceId,
-          primaryDid: delegationData.primaryDid as string | undefined,
+          ownerDid: delegationData.ownerDid as string | undefined,
         });
 
         outputJson({

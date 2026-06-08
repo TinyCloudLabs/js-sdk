@@ -13,7 +13,7 @@ type CLIErrorLike = {
 
 type NetworkDescriptorLike = {
   networkId: string;
-  principal: string;
+  ownerDid: string;
   name: string;
   members: Array<{ nodeId: string; role: "primary" | "share" }>;
   threshold: { n: number; t: number };
@@ -98,7 +98,7 @@ function makeDescriptor(
 ): NetworkDescriptorLike {
   return {
     networkId,
-    principal: DEFAULT_NODE_DID,
+    ownerDid: DEFAULT_NODE_DID,
     name: "default",
     members: [{ nodeId: DEFAULT_NODE_DID, role: "primary" }],
     threshold: { n: 1, t: 1 },

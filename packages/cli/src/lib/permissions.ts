@@ -51,8 +51,8 @@ export interface PermissionRequestArtifact {
   posture: CLIProfilePosture;
   operatorType: CLIOperatorType;
   host: string;
-  did: string;
-  primaryDid?: string;
+  sessionDid: string;
+  ownerDid?: string;
   spaceId?: string;
   requestedExpiry?: string | number;
   requested: PermissionEntry[];
@@ -101,8 +101,8 @@ export function createPermissionRequestArtifact(params: {
     posture: resolveProfilePosture(params.profile),
     operatorType: resolveProfileOperatorType(params.profile),
     host: params.host,
-    did: didWithoutFragment(params.profile.sessionDid ?? params.profile.did),
-    primaryDid: params.profile.primaryDid,
+    sessionDid: didWithoutFragment(params.profile.sessionDid ?? params.profile.did),
+    ownerDid: params.profile.ownerDid,
     spaceId: params.profile.spaceId,
     requestedExpiry: params.requestedExpiry,
     requested: params.requested,

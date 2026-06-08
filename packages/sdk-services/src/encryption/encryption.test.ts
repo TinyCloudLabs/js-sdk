@@ -66,9 +66,9 @@ import {
 // Test fixtures
 // ---------------------------------------------------------------------------
 
-const PRINCIPAL = "did:key:z6MkfPN4DefaultPrincipalAaaaaaaaaaaaaaaaaaaaaaaaa";
+const OWNER_DID = "did:key:z6MkfPN4DefaultPrincipalAaaaaaaaaaaaaaaaaaaaaaaaa";
 const NETWORK_NAME = "default";
-const NETWORK_ID = `${ENCRYPTION_NETWORK_URN_PREFIX}${PRINCIPAL}:${NETWORK_NAME}`;
+const NETWORK_ID = `${ENCRYPTION_NETWORK_URN_PREFIX}${OWNER_DID}:${NETWORK_NAME}`;
 const TARGET_NODE = "did:key:z6MkrfTargetNodeBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 // ---------------------------------------------------------------------------
@@ -153,19 +153,19 @@ function resetRng() {
 // ---------------------------------------------------------------------------
 
 describe("networkId", () => {
-  it("parses a valid urn into principal + name", () => {
+  it("parses a valid urn into ownerDid + name", () => {
     const parsed = parseNetworkId(NETWORK_ID);
     expect(parsed.networkId).toBe(NETWORK_ID);
-    expect(parsed.principal).toBe(PRINCIPAL);
+    expect(parsed.ownerDid).toBe(OWNER_DID);
     expect(parsed.name).toBe(NETWORK_NAME);
   });
 
   it("rejects non-URN inputs", () => {
     expect(() => parseNetworkId("did:key:z6Mk...")).toThrow();
-    expect(() => parseNetworkId(`${PRINCIPAL}:${NETWORK_NAME}`)).toThrow();
+    expect(() => parseNetworkId(`${OWNER_DID}:${NETWORK_NAME}`)).toThrow();
   });
 
-  it("rejects malformed principal segments", () => {
+  it("rejects malformed ownerDid segments", () => {
     expect(() =>
       parseNetworkId(`${ENCRYPTION_NETWORK_URN_PREFIX}notadid:default`),
     ).toThrow();
@@ -173,15 +173,15 @@ describe("networkId", () => {
 
   it("rejects names that violate the label regex", () => {
     expect(() =>
-      parseNetworkId(`${ENCRYPTION_NETWORK_URN_PREFIX}${PRINCIPAL}:Default`),
+      parseNetworkId(`${ENCRYPTION_NETWORK_URN_PREFIX}${OWNER_DID}:Default`),
     ).toThrow();
     expect(() =>
-      parseNetworkId(`${ENCRYPTION_NETWORK_URN_PREFIX}${PRINCIPAL}:-bad`),
+      parseNetworkId(`${ENCRYPTION_NETWORK_URN_PREFIX}${OWNER_DID}:-bad`),
     ).toThrow();
   });
 
   it("round-trips through buildNetworkId", () => {
-    const built = buildNetworkId(PRINCIPAL, NETWORK_NAME);
+    const built = buildNetworkId(OWNER_DID, NETWORK_NAME);
     expect(built).toBe(NETWORK_ID);
     expect(isNetworkId(built)).toBe(true);
     expect(isNetworkId("not-a-network")).toBe(false);
@@ -733,7 +733,7 @@ describe("discoverNetwork", () => {
   function makeDescriptor(state: NetworkDescriptor["state"] = "active"): NetworkDescriptor {
     return {
       networkId: NETWORK_ID,
-      principal: PRINCIPAL,
+      ownerDid: OWNER_DID,
       name: NETWORK_NAME,
       members: [{ nodeId: TARGET_NODE, role: "primary" }],
       threshold: { n: 1, t: 1 },
@@ -789,7 +789,7 @@ describe("discoverNetwork", () => {
     const node: NodeDescriptorFetcher = {
       fetchByNetworkId: async () => ({
         ...makeDescriptor(),
-        principal: "did:key:z6MkOther",
+        ownerDid: "did:key:z6MkOther",
       }),
     };
     const result = await discoverNetwork({ identifier: NETWORK_ID, node });
@@ -814,7 +814,7 @@ describe("EncryptionService one-of-one round trip", () => {
   function makeDescriptor(): NetworkDescriptor {
     return {
       networkId: NETWORK_ID,
-      principal: PRINCIPAL,
+      ownerDid: OWNER_DID,
       name: NETWORK_NAME,
       members: [{ nodeId: TARGET_NODE, role: "primary" }],
       threshold: { n: 1, t: 1 },
@@ -932,7 +932,7 @@ describe("EncryptionService one-of-one round trip", () => {
     const descriptor: NetworkDescriptor = {
       ...{
         networkId: NETWORK_ID,
-        principal: PRINCIPAL,
+        ownerDid: OWNER_DID,
         name: NETWORK_NAME,
         members: [{ nodeId: TARGET_NODE, role: "primary" as const }],
         threshold: { n: 1, t: 1 },

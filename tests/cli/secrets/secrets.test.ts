@@ -82,10 +82,10 @@ mock.module(new URL("../../../packages/cli/src/lib/sdk.ts", import.meta.url).pat
 const { registerSecretsCommand } = await import("../../../packages/cli/src/commands/secrets.ts");
 
 function makeNetworkDescriptor(name = "default") {
-  const principal = "did:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+  const ownerDid = "did:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
   return {
-    networkId: `urn:tinycloud:encryption:${principal}:${name}`,
-    principal,
+    networkId: `urn:tinycloud:encryption:${ownerDid}:${name}`,
+    ownerDid,
     name,
     members: [
       {

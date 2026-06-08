@@ -629,7 +629,7 @@ async function runDemo() {
   console.log();
   console.log("Key APIs for Session-Only Mode:");
   console.log("  • new TinyCloudNode({ host }) - Create session-only instance");
-  console.log("  • node.did - Primary DID (session key in session-only mode)");
+  console.log("  • node.did - Owner DID when wallet-backed; session key DID in session-only mode");
   console.log("  • node.isSessionOnly - Check if in session-only mode");
   console.log("  • node.useDelegation() - Works without signIn()");
   console.log();

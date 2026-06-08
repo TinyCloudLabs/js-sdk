@@ -71,7 +71,7 @@ tc delegation create --to did:pkh:eip155:1:0x...
 
 Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
 `tc secrets network show` accepts either a short network name or a full
-`urn:tinycloud:encryption:<principal>:<network>` identifier. `tc secrets
+`urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tc secrets
 network grant` takes the short name, resolves the network, and grants
 `tinycloud.encryption/decrypt`.
 

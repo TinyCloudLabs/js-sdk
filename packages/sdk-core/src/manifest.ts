@@ -291,7 +291,7 @@ export const SERVICE_SHORT_TO_LONG: Readonly<Record<string, string>> =
  * Manifest service identifier for TinyCloud encryption network grants.
  *
  * Encryption permissions live on a network id URN
- * (`urn:tinycloud:encryption:<principal>:<network>`), not on a space.
+ * (`urn:tinycloud:encryption:<ownerDid>:<network>`), not on a space.
  * The `path` field is the literal networkId; `actions` are
  * `["decrypt"]` (expanded to `["tinycloud.encryption/decrypt"]`).
  *
@@ -466,7 +466,7 @@ export function expandPermissionEntry(entry: PermissionEntry): PermissionEntry[]
  *
  * - `path` MUST be a networkId URN (`urn:tinycloud:encryption:...`).
  *   The manifest prefix is always skipped — network ids are top-level
- *   principal-owned resources, not space-scoped paths.
+ *   owner-scoped resources, not space-scoped paths.
  * - `actions` must be `decrypt`, `network.create`, or `network.revoke`
  *   (or their already-expanded `tinycloud.encryption/*` forms).
  *
@@ -1013,7 +1013,7 @@ function resolveEntry(
 ): ResourceCapability[] {
   // Encryption permissions reference a networkId URN as their resource
   // — the manifest prefix is meaningless against a top-level
-  // principal-owned resource and would corrupt the URN. Always skip.
+  // owner-scoped resource and would corrupt the URN. Always skip.
   const skipPrefixForEntry =
     entry.skipPrefix === true ||
     entry.service === ENCRYPTION_PERMISSION_SERVICE;

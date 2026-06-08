@@ -843,7 +843,7 @@ function registerInitCommand(program2) {
       await ProfileManager.setProfile(profileName, {
         ...profileConfig,
         spaceId: delegationData.spaceId,
-        primaryDid: delegationData.primaryDid
+        ownerDid: delegationData.ownerDid
       });
       outputJson({
         profile: profileName,
@@ -907,8 +907,8 @@ function resolveAddress(profile, session) {
   const sessAddr = session?.address;
   if (typeof sessAddr === "string" && sessAddr.length > 0) return sessAddr;
   if (profile.address) return profile.address;
-  if (profile.primaryDid) {
-    const match = profile.primaryDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
+  if (profile.ownerDid) {
+    const match = profile.ownerDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
     if (match) return match[1];
   }
   throw new CLIError(
@@ -959,8 +959,8 @@ function createPermissionRequestArtifact(params) {
     posture: resolveProfilePosture(params.profile),
     operatorType: resolveProfileOperatorType(params.profile),
     host: params.host,
-    did: didWithoutFragment(params.profile.sessionDid ?? params.profile.did),
-    primaryDid: params.profile.primaryDid,
+    sessionDid: didWithoutFragment(params.profile.sessionDid ?? params.profile.did),
+    ownerDid: params.profile.ownerDid,
     spaceId: params.profile.spaceId,
     requestedExpiry: params.requestedExpiry,
     requested: params.requested,
@@ -1382,7 +1382,7 @@ function registerAuthCommand(program2) {
           authenticated,
           did: profile?.did ?? null,
           sessionDid: profile?.sessionDid ?? null,
-          primaryDid: profile?.primaryDid ?? null,
+          ownerDid: profile?.ownerDid ?? null,
           spaceId: profile?.spaceId ?? null,
           host: ctx.host,
           profile: ctx.profile,
@@ -1402,7 +1402,7 @@ function registerAuthCommand(program2) {
         process.stdout.write(formatField("Host", ctx.host) + "\n");
         process.stdout.write(formatField("DID", profile?.did ?? null) + "\n");
         process.stdout.write(formatField("Session DID", profile?.sessionDid ?? null) + "\n");
-        process.stdout.write(formatField("Primary DID", profile?.primaryDid ?? null) + "\n");
+        process.stdout.write(formatField("Owner DID", profile?.ownerDid ?? null) + "\n");
         process.stdout.write(formatField("Address", profile?.address ?? null) + "\n");
         process.stdout.write(formatField("Space ID", profile?.spaceId ?? null) + "\n");
         process.stdout.write(formatField("Has Key", hasKey !== null) + "\n");
@@ -1603,7 +1603,7 @@ function registerAuthCommand(program2) {
         yes: options.yes === true
       });
       const result = await node.delegateTo(
-        parsed.did,
+        parsed.sessionDid,
         parsed.requested,
         parsed.requestedExpiry !== void 0 ? { expiry: parsed.requestedExpiry } : void 0
       );
@@ -1735,7 +1735,7 @@ function registerAuthCommand(program2) {
           profile: ctx.profile,
           did: profile.did,
           sessionDid: profile.sessionDid ?? null,
-          primaryDid: profile.primaryDid ?? null,
+          ownerDid: profile.ownerDid ?? null,
           spaceId: profile.spaceId ?? null,
           host: profile.host,
           authenticated,
@@ -1749,7 +1749,7 @@ function registerAuthCommand(program2) {
         process.stdout.write(formatField("Profile", ctx.profile) + "\n");
         process.stdout.write(formatField("DID", profile.did) + "\n");
         process.stdout.write(formatField("Session DID", profile.sessionDid ?? null) + "\n");
-        process.stdout.write(formatField("Primary DID", profile.primaryDid ?? null) + "\n");
+        process.stdout.write(formatField("Owner DID", profile.ownerDid ?? null) + "\n");
         process.stdout.write(formatField("Auth Method", profile.authMethod ?? null) + "\n");
         process.stdout.write(formatField("Posture", posture) + "\n");
         process.stdout.write(formatField("Operator", operatorType) + "\n");
@@ -2133,7 +2133,7 @@ async function handleLocalAuth(profileName, host) {
     spaceName: "default",
     did,
     sessionDid,
-    primaryDid: did,
+    ownerDid: did,
     spaceId: sessionResult.spaceId,
     createdAt: profile?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString(),
     posture: profile?.posture ?? "local-owner-key",
@@ -2178,7 +2178,7 @@ async function handleOpenKeyAuth(profileName, host, paste) {
   };
   if (delegationData.spaceId) {
     updatedProfile.spaceId = delegationData.spaceId;
-    updatedProfile.primaryDid = delegationData.primaryDid;
+    updatedProfile.ownerDid = delegationData.ownerDid;
   }
   await ProfileManager.setProfile(profileName, updatedProfile);
   outputJson({

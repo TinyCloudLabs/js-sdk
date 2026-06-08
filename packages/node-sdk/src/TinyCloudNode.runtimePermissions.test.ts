@@ -147,7 +147,7 @@ function makeEncryptionCrypto(): EncryptionCrypto {
 function makeEncryptionDescriptor(networkId: string, nodeDid: string): NetworkDescriptor {
   return {
     networkId,
-    principal: nodeDid,
+    ownerDid: nodeDid,
     name: "default",
     members: [{ nodeId: nodeDid, role: "primary" }],
     threshold: { n: 1, t: 1 },
@@ -747,7 +747,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
     const networkId = node.getDefaultEncryptionNetworkId();
     const descriptor = {
       networkId,
-      principal: node.did,
+      ownerDid: node.did,
       name: "default",
       members: [{ nodeId: "did:key:cache-node", role: "primary" as const }],
       threshold: { n: 1, t: 1 },
