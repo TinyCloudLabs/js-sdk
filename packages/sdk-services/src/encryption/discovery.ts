@@ -8,7 +8,7 @@
  *    descriptor (`state`, `publicEncryptionKey`, `keyVersion`, ...).
  * 2. If the node is unreachable, fall back to the cached discovery
  *    record at `.well-known/encryption/network/<name>` inside the
- *    principal's public space.
+ *    owner's public space.
  *
  * The node DB is authoritative on conflict; cached records are
  * advisory only.
@@ -39,20 +39,20 @@ export interface NodeDescriptorFetcher {
 
 export interface WellKnownDescriptorFetcher {
   /**
-   * Read the cached well-known descriptor by principal + network name.
+   * Read the cached well-known descriptor by owner DID + network name.
    * Returns null if no record exists or the record is unreadable.
    */
   fetchWellKnown(
-    principal: string,
+    ownerDid: string,
     discoveryKey: string,
   ): Promise<NetworkDescriptor | null>;
 }
 
 export interface DiscoverNetworkInput {
-  /** Either a networkId URN or a bare network name (paired with `principal`). */
+  /** Either a networkId URN or a bare network name (paired with `ownerDid`). */
   identifier: string;
   /** Required when identifier is a bare name. */
-  principal?: string;
+  ownerDid?: string;
   node?: NodeDescriptorFetcher;
   wellKnown?: WellKnownDescriptorFetcher;
 }
@@ -61,7 +61,7 @@ export interface DiscoverNetworkInput {
  * Resolve a network descriptor. The node fetcher is preferred; the
  * well-known fallback is used only on transport failure.
  *
- * The returned descriptor is sanity-checked: `networkId`, `principal`,
+ * The returned descriptor is sanity-checked: `networkId`, `ownerDid`,
  * and `name` must agree with the URN, and the public key field must
  * be non-empty.
  */
@@ -70,28 +70,28 @@ export async function discoverNetwork(
 ):
   | Promise<{ ok: true; data: DiscoveredNetwork } | { ok: false; error: EncryptionError }> {
   let networkId: string;
-  let principal: string;
+  let ownerDid: string;
   let name: string;
   try {
     if (input.identifier.startsWith("urn:tinycloud:encryption:")) {
       const parsed = parseNetworkId(input.identifier);
       networkId = parsed.networkId;
-      principal = parsed.principal;
+      ownerDid = parsed.ownerDid;
       name = parsed.name;
     } else {
-      if (input.principal === undefined) {
+      if (input.ownerDid === undefined) {
         return {
           ok: false,
           error: encryptionError({
             code: "INVALID_INPUT",
             message:
-              "discoverNetwork requires `principal` when identifier is a bare network name",
+              "discoverNetwork requires `ownerDid` when identifier is a bare network name",
           }),
         };
       }
-      networkId = `urn:tinycloud:encryption:${input.principal}:${input.identifier}`;
+      networkId = `urn:tinycloud:encryption:${input.ownerDid}:${input.identifier}`;
       const parsed = parseNetworkId(networkId);
-      principal = parsed.principal;
+      ownerDid = parsed.ownerDid;
       name = parsed.name;
     }
   } catch (err) {
@@ -112,7 +112,7 @@ export async function discoverNetwork(
     try {
       const descriptor = await input.node.fetchByNetworkId(networkId);
       if (descriptor !== null) {
-        const validated = validateDescriptor(descriptor, networkId, principal, name);
+        const validated = validateDescriptor(descriptor, networkId, ownerDid, name);
         if (!validated.ok) return validated;
         return { ok: true, data: { descriptor: validated.data, source: "node" } };
       }
@@ -125,11 +125,11 @@ export async function discoverNetwork(
   if (input.wellKnown !== undefined) {
     try {
       const descriptor = await input.wellKnown.fetchWellKnown(
-        principal,
+        ownerDid,
         networkDiscoveryKey(name),
       );
       if (descriptor !== null) {
-        const validated = validateDescriptor(descriptor, networkId, principal, name);
+        const validated = validateDescriptor(descriptor, networkId, ownerDid, name);
         if (!validated.ok) return validated;
         return {
           ok: true,
@@ -154,7 +154,7 @@ export async function discoverNetwork(
 function validateDescriptor(
   descriptor: NetworkDescriptor,
   networkId: string,
-  principal: string,
+  ownerDid: string,
   name: string,
 ):
   | { ok: true; data: NetworkDescriptor }
@@ -168,12 +168,12 @@ function validateDescriptor(
       }),
     };
   }
-  if (descriptor.principal !== principal) {
+  if (descriptor.ownerDid !== ownerDid) {
     return {
       ok: false,
       error: encryptionError({
         code: "INVALID_NETWORK_ID",
-        message: "descriptor principal does not match networkId principal",
+        message: "descriptor ownerDid does not match networkId ownerDid",
       }),
     };
   }

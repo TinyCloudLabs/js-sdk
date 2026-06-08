@@ -1358,8 +1358,8 @@ export class TinyCloudNode {
         fetchByNetworkId: (networkId) => this.getEncryptionNetwork(networkId),
       },
       wellKnown: {
-        fetchWellKnown: async (principal, discoveryKey) => {
-          if (!this._address || principal !== this.did) {
+        fetchWellKnown: async (ownerDid, discoveryKey) => {
+          if (!this._address || ownerDid !== this.did) {
             return null;
           }
           if (!this.config.host) {
@@ -1898,11 +1898,11 @@ export class TinyCloudNode {
     name = DEFAULT_ENCRYPTION_NETWORK_NAME,
   ): Promise<NetworkDescriptor> {
     const targetNode = await this.fetchNodeId();
-    const principal = this.did;
+    const ownerDid = this.did;
     const networkId = this.getDefaultEncryptionNetworkId(name);
     const body = {
       name,
-      principal,
+      ownerDid,
       threshold: { n: 1, t: 1 },
     };
     const crypto = this.createEncryptionCrypto();

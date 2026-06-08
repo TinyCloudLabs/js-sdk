@@ -2,7 +2,7 @@
  * TinyCloud encryption service exports.
  *
  * Reference architecture:
- * - Network ids: `urn:tinycloud:encryption:<principal>:<network>`
+ * - Network ids: `urn:tinycloud:encryption:<ownerDid>:<network>`
  * - Inline envelopes: `{ v, networkId, alg, keyVersion,
  *   encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext, aad,
  *   metadata }`

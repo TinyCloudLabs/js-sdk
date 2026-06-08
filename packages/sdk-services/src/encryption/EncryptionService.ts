@@ -118,11 +118,11 @@ export class EncryptionService
 
   async discoverNetwork(
     identifier: string,
-    principal?: string,
+    ownerDid?: string,
   ): Promise<Result<NetworkDescriptor, EncryptionError>> {
     const result = await discoverNetworkFn({
       identifier,
-      ...(principal !== undefined ? { principal } : {}),
+      ...(ownerDid !== undefined ? { ownerDid } : {}),
       ...(this._config.node !== undefined ? { node: this._config.node } : {}),
       ...(this._config.wellKnown !== undefined
         ? { wellKnown: this._config.wellKnown }

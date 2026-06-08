@@ -144,7 +144,7 @@ function createNetworkVault() {
       ok: true as const,
       data: {
         networkId,
-        principal: "did:key:z6MkPrincipal",
+        ownerDid: "did:key:z6MkPrincipal",
         name: "default",
         members: [],
         threshold: { n: 1, t: 1 },

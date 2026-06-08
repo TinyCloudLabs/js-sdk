@@ -47,12 +47,12 @@ export interface IEncryptionService extends IService {
    *
    * `identifier` may be either a full networkId URN
    * (`urn:tinycloud:encryption:did:key:...:default`) or a bare network
-   * name. The bare name form requires the principal to be supplied via
-   * `principal`.
+   * name. The bare name form requires the owner DID to be supplied via
+   * `ownerDid`.
    */
   discoverNetwork(
     identifier: string,
-    principal?: string,
+    ownerDid?: string,
   ): Promise<Result<NetworkDescriptor, EncryptionError>>;
 
   /**
@@ -72,7 +72,7 @@ export interface IEncryptionService extends IService {
    * decrypt invocation, POST it to the node, verify the signed
    * response, open `wrappedKey`, and decrypt the payload locally.
    *
-   * The capability proof must root at the network principal embedded
+   * The capability proof must root at the network owner DID embedded
    * in the envelope's networkId.
    */
   decryptEnvelope(

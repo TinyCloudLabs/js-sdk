@@ -1,13 +1,13 @@
 /**
  * TinyCloud encryption network identifiers.
  *
- * A network id is `urn:tinycloud:encryption:<principal>:<network>` where
- * `principal` is a DID (typically `did:key:...`) and `network` is a
+ * A network id is `urn:tinycloud:encryption:<ownerDid>:<network>` where
+ * `ownerDid` is the owner's DID and `network` is a
  * non-empty label drawn from `[a-z0-9][a-z0-9-]*`.
  *
- * The embedded principal is the root authority for the network: any
+ * The embedded owner DID is the root authority for the network: any
  * delegation chain ending in a `tinycloud.encryption/decrypt` grant on
- * the network must root at this principal.
+ * the network must root at this owner DID.
  */
 
 const URN_PREFIX = "urn:tinycloud:encryption:";
@@ -16,9 +16,9 @@ const NETWORK_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 export interface ParsedNetworkId {
   /** The full URN string. */
   networkId: string;
-  /** Principal DID embedded in the URN (the network's root authority). */
-  principal: string;
-  /** Network label (the suffix after the principal). */
+  /** Owner DID embedded in the URN (the network's root authority). */
+  ownerDid: string;
+  /** Network label (the suffix after the owner DID). */
   name: string;
 }
 
@@ -30,7 +30,7 @@ export class NetworkIdError extends Error {
 }
 
 /**
- * Parse a network id string into its principal and name components.
+ * Parse a network id string into its owner DID and name components.
  *
  * Throws {@link NetworkIdError} when the input does not match
  * `urn:tinycloud:encryption:<did>:<name>`, when the embedded DID is
@@ -46,29 +46,29 @@ export function parseNetworkId(networkId: string): ParsedNetworkId {
     );
   }
   const body = networkId.slice(URN_PREFIX.length);
-  // `body` = "<principal>:<network>"
-  // principal contains ':' (e.g. did:key:z6Mk...), so we split on the LAST colon
+  // `body` = "<ownerDid>:<network>"
+  // ownerDid contains ':' (e.g. did:key:z6Mk...), so we split on the LAST colon
   // and treat the suffix as the network name.
   const lastColon = body.lastIndexOf(":");
   if (lastColon <= 0 || lastColon === body.length - 1) {
     throw new NetworkIdError(
-      `networkId missing principal or name segment (got ${JSON.stringify(networkId)})`,
+      `networkId missing ownerDid or name segment (got ${JSON.stringify(networkId)})`,
     );
   }
-  const principal = body.slice(0, lastColon);
+  const ownerDid = body.slice(0, lastColon);
   const name = body.slice(lastColon + 1);
 
-  if (!principal.startsWith("did:")) {
+  if (!ownerDid.startsWith("did:")) {
     throw new NetworkIdError(
-      `networkId principal must be a DID (got ${JSON.stringify(principal)})`,
+      `networkId ownerDid must be a DID (got ${JSON.stringify(ownerDid)})`,
     );
   }
   // Minimal DID shape: did:<method>:<id> — three colon-separated segments,
   // each non-empty.
-  const didParts = principal.split(":");
+  const didParts = ownerDid.split(":");
   if (didParts.length < 3 || didParts.some((p) => p.length === 0)) {
     throw new NetworkIdError(
-      `networkId principal is not a well-formed DID (got ${JSON.stringify(principal)})`,
+      `networkId ownerDid is not a well-formed DID (got ${JSON.stringify(ownerDid)})`,
     );
   }
   if (!NETWORK_NAME_RE.test(name)) {
@@ -76,23 +76,23 @@ export function parseNetworkId(networkId: string): ParsedNetworkId {
       `networkId name ${JSON.stringify(name)} must match ${NETWORK_NAME_RE.source}`,
     );
   }
-  return { networkId, principal, name };
+  return { networkId, ownerDid, name };
 }
 
 /**
- * Construct a network id URN from a principal DID and a network name.
+ * Construct a network id URN from an owner DID and a network name.
  * Validates inputs and throws {@link NetworkIdError} on bad shape.
  */
-export function buildNetworkId(principal: string, name: string): string {
-  if (typeof principal !== "string" || !principal.startsWith("did:")) {
-    throw new NetworkIdError("principal must be a DID");
+export function buildNetworkId(ownerDid: string, name: string): string {
+  if (typeof ownerDid !== "string" || !ownerDid.startsWith("did:")) {
+    throw new NetworkIdError("ownerDid must be a DID");
   }
   if (typeof name !== "string" || !NETWORK_NAME_RE.test(name)) {
     throw new NetworkIdError(
       `network name ${JSON.stringify(name)} must match ${NETWORK_NAME_RE.source}`,
     );
   }
-  const networkId = `${URN_PREFIX}${principal}:${name}`;
+  const networkId = `${URN_PREFIX}${ownerDid}:${name}`;
   // Re-validate the composed result so the same error path triggers
   // for caller inputs that compose into a malformed URN.
   parseNetworkId(networkId);
@@ -116,7 +116,7 @@ export function isNetworkId(networkId: unknown): networkId is string {
 
 /**
  * Resolve the discovery key used to look up a network's descriptor under
- * a principal's public account-space.
+ * an owner's public account-space.
  *
  * Format: `.well-known/encryption/network/<name>`.
  */

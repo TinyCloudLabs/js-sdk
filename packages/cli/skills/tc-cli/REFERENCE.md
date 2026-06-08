@@ -58,7 +58,7 @@ Secrets are stored as network-encrypted inline envelopes and read through
 `tinycloud.encryption/decrypt`. Secret names are env-style uppercase
 identifiers such as `FIREFLIES_API_KEY`. `tc secrets network show` accepts
 either a short network name or a full
-`urn:tinycloud:encryption:<principal>:<network>` identifier, and `tc secrets
+`urn:tinycloud:encryption:<ownerDid>:<network>` identifier, and `tc secrets
 network grant` takes the short name, resolves the network, and issues
 `tinycloud.encryption/decrypt` on that network. Share the decrypt grant
 separately from any KV or SQL reads the app also needs.
@@ -123,6 +123,6 @@ tc completion fish | source
 ## DID Formats
 
 - **Session key**: `did:key:z6Mk...#z6Mk...` — generated at init
-- **Primary DID**: `did:pkh:eip155:{chainId}:{address}` — after auth
+- **Owner DID**: `did:pkh:eip155:{chainId}:{address}` — after auth
 
 All output is JSON. Errors go to stderr as `{error: {code, message}}`.

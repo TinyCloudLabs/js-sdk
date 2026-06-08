@@ -69,12 +69,12 @@ export interface InlineEncryptedEnvelope {
 /**
  * Node-published network descriptor. The node DB is authoritative; a
  * cached copy may also live under
- * `.well-known/encryption/network/<name>` in the principal's account
+ * `.well-known/encryption/network/<name>` in the owner's account
  * space (a discovery record only).
  */
 export interface NetworkDescriptor {
   networkId: string;
-  principal: string;
+  ownerDid: string;
   name: string;
   members: ReadonlyArray<{ nodeId: string; role: "primary" | "share" }>;
   threshold: { n: number; t: number };
@@ -222,7 +222,7 @@ export interface ReceiverKeySigner {
 
 /** Capability proof material accompanying a decrypt invocation. */
 export interface DecryptCapabilityProof {
-  /** Delegation chain CIDs rooted at the network principal. */
+  /** Delegation chain CIDs rooted at the network owner DID. */
   proofs: ReadonlyArray<string>;
   /** Optional Authorization header value to use instead of building one. */
   authorization?: string;
