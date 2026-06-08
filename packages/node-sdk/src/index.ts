@@ -57,6 +57,10 @@ export type {
   ISessionManager,
   ISpaceCreationHandler,
   SpaceCreationContext,
+  CanonicalAddress,
+  DidCacheKeyOptions,
+  DidEqualsOptions,
+  PkhDidParts,
 } from "@tinycloud/sdk-core";
 
 // Re-export core values for extensibility
@@ -64,6 +68,19 @@ export {
   SilentNotificationHandler,
   AutoApproveSpaceCreationHandler,
   defaultSpaceCreationHandler,
+  IdentityParseError,
+  addressStorageKey,
+  canonicalizeAddress,
+  canonicalizeDid,
+  canonicalizeDidUrl,
+  didCacheKey,
+  didEquals,
+  isEvmAddress,
+  makePkhSpaceId,
+  parsePkhDid,
+  pkhDid,
+  principalDid,
+  principalDidEquals,
 } from "@tinycloud/sdk-core";
 
 // Signers

@@ -27,6 +27,9 @@ import {
   resourceCapabilitiesToSpaceAbilitiesMap,
   resolveTinyCloudHosts,
   EXPIRY,
+  canonicalizeAddress,
+  makePkhSpaceId,
+  pkhDid,
 } from "@tinycloud/sdk-core";
 import {
   SignStrategy,
@@ -300,8 +303,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * expired-at-epoch-zero.
    */
   setRestoredTinyCloudSession(session: TinyCloudSession): void {
-    this._tinyCloudSession = session;
-    this._address = session.address;
+    const address = canonicalizeAddress(session.address);
+    this._tinyCloudSession = { ...session, address };
+    this._address = address;
     this._chainId = session.chainId;
   }
 
@@ -313,7 +317,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       return;
     }
 
-    const subject = `did:pkh:eip155:${chainId}:${address}`;
+    const subject = pkhDid(address, chainId);
     const resolved = await resolveTinyCloudHosts(subject, {
       registryUrl: this.tinycloudRegistryUrl,
       fallbackHosts: this.tinycloudFallbackHosts,
@@ -383,11 +387,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
     if (space.startsWith("tinycloud:")) {
       return space;
     }
-    return this.wasm.makeSpaceId(address, chainId, space);
+    return makePkhSpaceId(address, chainId, space);
   }
 
   private defaultEncryptionNetworkId(address: string, chainId: number): string {
-    return `urn:tinycloud:encryption:did:pkh:eip155:${chainId}:${address}:default`;
+    return `urn:tinycloud:encryption:${pkhDid(address, chainId)}:default`;
   }
 
   private resolveSignInCapabilities(
@@ -402,10 +406,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const request = this.getCapabilityRequest();
     if (request === undefined) {
       const defaultNetworkId = this.defaultEncryptionNetworkId(address, chainId);
-      const secretsSpaceId = this.wasm.makeSpaceId(address, chainId, "secrets");
+      const secretsSpaceId = makePkhSpaceId(address, chainId, "secrets");
       return {
         abilities: this.defaultActions,
-        spaceId: this.wasm.makeSpaceId(address, chainId, this.spacePrefix),
+        spaceId: makePkhSpaceId(address, chainId, this.spacePrefix),
         spaceAbilities: {
           [secretsSpaceId]: {
             kv: {
@@ -742,10 +746,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
    */
   async signIn(options?: SignInOptions): Promise<ClientSession> {
     // Get signer address and chain ID
-    this._address = await this.signer.getAddress();
+    this._address = canonicalizeAddress(await this.signer.getAddress());
     this._chainId = await this.signer.getChainId();
 
-    const address = this.wasm.ensureEip55(this._address);
+    const address = this._address;
     const chainId = this._chainId;
 
     await this.resolveTinyCloudHostsForSignIn(address, chainId);
@@ -820,7 +824,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // not at signIn time, to avoid creating spaces the user may never use.
     const spacesMetadata: Record<string, string> | undefined = this
       .enablePublicSpace
-      ? { public: this.wasm.makeSpaceId(address, chainId, "public") }
+      ? { public: makePkhSpaceId(address, chainId, "public") }
       : undefined;
 
     // Create TinyCloud session with full delegation data
@@ -915,7 +919,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    */
   async signMessage(message: string): Promise<string> {
     if (!this._address) {
-      this._address = await this.signer.getAddress();
+      this._address = canonicalizeAddress(await this.signer.getAddress());
     }
     if (!this._chainId) {
       this._chainId = await this.signer.getChainId();
@@ -955,7 +959,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     address: string;
     chainId: number;
   }> {
-    const address = this.wasm.ensureEip55(await this.signer.getAddress());
+    const address = canonicalizeAddress(await this.signer.getAddress());
     const chainId = await this.signer.getChainId();
 
     // Create a session key
@@ -1039,7 +1043,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Parse address and chainId from the prepared session
     // The SIWE message contains this info, but we need to extract it
     // For now, we'll get it from the signer since it should match
-    const address = this.wasm.ensureEip55(await this.signer.getAddress());
+    const address = canonicalizeAddress(await this.signer.getAddress());
     const chainId = await this.signer.getChainId();
 
     await this.resolveTinyCloudHostsForSignIn(address, chainId);
@@ -1057,7 +1061,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Compute additional spaces as metadata (not in the delegation itself).
     const spacesMetadata: Record<string, string> | undefined = this
       .enablePublicSpace
-      ? { public: this.wasm.makeSpaceId(address, chainId, "public") }
+      ? { public: makePkhSpaceId(address, chainId, "public") }
       : undefined;
 
     // Create TinyCloud session with full delegation data

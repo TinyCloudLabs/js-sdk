@@ -549,7 +549,7 @@ var ProfileManager = class _ProfileManager {
 
 // src/auth/local-key.ts
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, pkhDid } from "@tinycloud/node-sdk";
 import { randomBytes } from "crypto";
 var wasmInitialized = false;
 function ensureWasm() {
@@ -583,7 +583,7 @@ async function deriveAddress(privateKey) {
   return signer.getAddress();
 }
 function addressToDID(address, chainId = 1) {
-  return `did:pkh:eip155:${chainId}:${address}`;
+  return pkhDid(address, chainId);
 }
 async function generateLocalIdentity(chainId = 1) {
   const privateKey = generateEthereumPrivateKey();
@@ -903,13 +903,22 @@ import {
 } from "@tinycloud/node-sdk";
 
 // src/lib/space.ts
+import {
+  buildSpaceUri,
+  canonicalizeAddress,
+  makePkhSpaceId,
+  parsePkhDid,
+  parseSpaceUri
+} from "@tinycloud/node-sdk";
 function resolveAddress(profile, session) {
   const sessAddr = session?.address;
-  if (typeof sessAddr === "string" && sessAddr.length > 0) return sessAddr;
-  if (profile.address) return profile.address;
+  if (typeof sessAddr === "string" && sessAddr.length > 0) {
+    return canonicalizeAddress(sessAddr);
+  }
+  if (profile.address) return canonicalizeAddress(profile.address);
   if (profile.ownerDid) {
-    const match = profile.ownerDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
-    if (match) return match[1];
+    const pkh = parsePkhDid(profile.ownerDid);
+    if (pkh) return pkh.address;
   }
   throw new CLIError(
     "ADDRESS_UNKNOWN",
@@ -924,7 +933,17 @@ function resolveChainId(profile, session) {
 }
 async function resolveSpaceUri(input, profileName) {
   if (!input) return void 0;
-  if (input.startsWith("tinycloud:")) return input;
+  if (input.startsWith("tinycloud:")) {
+    const parsed = parseSpaceUri(input);
+    if (!parsed) {
+      throw new CLIError(
+        "INVALID_SPACE",
+        `Invalid --space "${input}". Use a short name ([A-Za-z0-9_-]) or a full tinycloud:... URI.`,
+        ExitCode.USAGE_ERROR
+      );
+    }
+    return buildSpaceUri(parsed.owner, parsed.name);
+  }
   if (!/^[A-Za-z0-9_-]+$/.test(input)) {
     throw new CLIError(
       "INVALID_SPACE",
@@ -936,7 +955,7 @@ async function resolveSpaceUri(input, profileName) {
   const session = await ProfileManager.getSession(profileName);
   const address = resolveAddress(profile, session);
   const chainId = resolveChainId(profile, session);
-  return `tinycloud:pkh:eip155:${chainId}:${address}:${input}`;
+  return makePkhSpaceId(address, chainId, input);
 }
 
 // src/lib/permissions.ts
@@ -2452,6 +2471,15 @@ function parseExpiry(input) {
 }
 
 // src/commands/delegation.ts
+import { principalDidEquals } from "@tinycloud/node-sdk";
+function didMatches(actual, expected) {
+  if (!actual) return false;
+  try {
+    return principalDidEquals(actual, expected);
+  } catch {
+    return actual === expected;
+  }
+}
 function registerDelegationCommand(program2) {
   const delegation = program2.command("delegation").description("Manage delegations");
   delegation.command("create").description("Create a delegation").requiredOption("--to <did>", "Recipient DID").requiredOption("--path <path>", "KV path scope").requiredOption("--actions <actions>", "Comma-separated actions (e.g., kv/get,kv/list)").option("--expiry <duration>", "Expiry duration (e.g., 1h, 7d, ISO date)", "1h").action(async (options, cmd) => {
@@ -2496,10 +2524,10 @@ function registerDelegationCommand(program2) {
       let delegations = result.data;
       if (options.granted) {
         const myDid = node.did;
-        delegations = delegations.filter((d) => d.delegatorDID === myDid);
+        delegations = delegations.filter((d) => didMatches(d.delegatorDID, myDid));
       } else if (options.received) {
         const myDid = node.did;
-        delegations = delegations.filter((d) => d.delegateDID === myDid || d.delegateDID?.includes(myDid));
+        delegations = delegations.filter((d) => didMatches(d.delegateDID, myDid));
       }
       outputJson({
         delegations: delegations.map((d) => ({

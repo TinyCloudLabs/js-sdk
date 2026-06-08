@@ -1,5 +1,5 @@
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, pkhDid } from "@tinycloud/node-sdk";
 import { randomBytes } from "node:crypto";
 
 let wasmInitialized = false;
@@ -58,7 +58,7 @@ export async function deriveAddress(privateKey: string): Promise<string> {
  * Uses EIP-155 chain ID 1 (mainnet).
  */
 export function addressToDID(address: string, chainId: number = 1): string {
-  return `did:pkh:eip155:${chainId}:${address}`;
+  return pkhDid(address, chainId);
 }
 
 /**

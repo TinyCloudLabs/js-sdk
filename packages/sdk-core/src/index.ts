@@ -38,6 +38,27 @@ export { IWasmBindings, ISessionManager } from "./wasm";
 // Signer interface
 export { ISigner, Bytes } from "./signer";
 
+// Identity helpers
+export {
+  IdentityParseError,
+  addressStorageKey,
+  canonicalizeAddress,
+  canonicalizeDid,
+  canonicalizeDidUrl,
+  didCacheKey,
+  didEquals,
+  isEvmAddress,
+  makePkhSpaceId,
+  parsePkhDid,
+  pkhDid,
+  principalDid,
+  principalDidEquals,
+  type CanonicalAddress,
+  type DidCacheKeyOptions,
+  type DidEqualsOptions,
+  type PkhDidParts,
+} from "./identity";
+
 // Session storage interface and types
 export {
   // Interface
