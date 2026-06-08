@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
+import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
@@ -386,6 +387,7 @@ export function registerAuthCommand(program: Command): void {
         outputJson({
           imported: true,
           kind: "tinycloud.auth.delegation",
+          requestId: imported.requestId ?? null,
           delegationCid: imported.delegation.cid,
           permissions: imported.permissions,
           expiry: imported.delegation.expiry.toISOString(),
@@ -396,9 +398,56 @@ export function registerAuthCommand(program: Command): void {
     });
 
   auth
+    .command("grant [request]")
+    .description("Grant a TinyCloud permission request artifact to its requester")
+    .option("--stdin", "Read the JSON request artifact from stdin")
+    .option("--paste", "Read the JSON request artifact from stdin")
+    .action(async (source: string | undefined, options, cmd) => {
+      try {
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const raw = await readAuthArtifactSource(source, {
+          stdin: options.stdin === true || options.paste === true,
+        });
+        const parsed = JSON.parse(raw) as unknown;
+
+        if (!isPermissionRequestArtifact(parsed)) {
+          throw new CLIError(
+            "INVALID_AUTH_REQUEST",
+            "Auth grant requires a tinycloud.auth.request artifact.",
+            ExitCode.USAGE_ERROR,
+          );
+        }
+
+        const node = await ensureAuthenticated(ctx);
+        const result = await node.delegateTo(
+          parsed.did,
+          parsed.requested,
+          parsed.requestedExpiry !== undefined
+            ? { expiry: parsed.requestedExpiry }
+            : undefined,
+        );
+
+        outputJson({
+          kind: "tinycloud.auth.delegation",
+          version: 1,
+          requestId: parsed.requestId,
+          delegationCid: result.delegation.cid,
+          delegation: result.delegation,
+          permissions: parsed.requested,
+          expiry: result.delegation.expiry.toISOString(),
+          prompted: result.prompted,
+        });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  auth
     .command("retry [requestId]")
     .description("Check whether a stored permission request is now satisfied")
     .option("--last", "Use the latest stored permission request for this profile")
+    .option("--exec", "Run the captured command when the request is covered")
     .action(async (requestId: string | undefined, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -421,6 +470,25 @@ export function registerAuthCommand(program: Command): void {
 
         const node = await ensureAuthenticated(ctx);
         const covered = node.hasRuntimePermissions(artifact.requested);
+        if (options.exec) {
+          if (!covered) {
+            throw new CLIError(
+              "PERMISSIONS_MISSING",
+              `Request ${artifact.requestId} is not covered yet. Import a delegation, then retry with --exec.`,
+              ExitCode.PERMISSION_DENIED,
+            );
+          }
+          if (!artifact.command?.argv?.length) {
+            throw new CLIError(
+              "COMMAND_NOT_CAPTURED",
+              `Request ${artifact.requestId} does not include a captured command.`,
+              ExitCode.USAGE_ERROR,
+            );
+          }
+          await execCapturedCommand(artifact.command);
+          return;
+        }
+
         outputJson({
           requestId: artifact.requestId,
           covered,
@@ -630,12 +698,14 @@ function readUrl(source: string): Promise<string> {
 }
 
 function normalizeDelegationImport(value: unknown): {
+  requestId?: string;
   delegation: PortableDelegation;
   permissions: PermissionEntry[];
 } {
   if (isDelegationImportArtifact(value)) {
     const delegation = normalizePortableDelegation(value.delegation);
     return {
+      requestId: value.requestId,
       delegation,
       permissions: Array.isArray(value.permissions) && value.permissions.length > 0
         ? value.permissions
@@ -701,6 +771,31 @@ function normalizePortableDelegation(delegation: PortableDelegation): PortableDe
     );
   }
   return { ...delegation, expiry };
+}
+
+function execCapturedCommand(command: { argv: string[]; cwd: string }): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [process.argv[1], ...command.argv], {
+      cwd: command.cwd,
+      env: process.env,
+      stdio: "inherit",
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        reject(new CLIError(
+          "COMMAND_SIGNAL",
+          `Captured command exited from signal ${signal}.`,
+          ExitCode.ERROR,
+        ));
+        return;
+      }
+      if (code && code !== 0) {
+        process.exitCode = code;
+      }
+      resolve();
+    });
+  });
 }
 
 async function collectRequestedPermissions(

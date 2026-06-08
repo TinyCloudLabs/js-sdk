@@ -65,6 +65,7 @@ export interface PermissionRequestArtifact {
 export interface DelegationImportArtifact {
   kind: "tinycloud.auth.delegation";
   version: 1;
+  requestId?: string;
   delegation: PortableDelegation;
   permissions?: PermissionEntry[];
 }
