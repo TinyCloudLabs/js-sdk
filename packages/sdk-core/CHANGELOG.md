@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 2.3.0-beta.3
+
+### Patch Changes
+
+- a92819d: Add canonical EVM address and `did:pkh:eip155` helpers, then use them when building and comparing TinyCloud DIDs and space IDs.
+
 ## 2.3.0-beta.2
 
 ### Minor Changes
