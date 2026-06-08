@@ -33,13 +33,28 @@ export async function createSDKInstance(
   }
 
   if (profile.authMethod === "local" && effectivePrivateKey) {
-    // Local key auth: create node with private key and sign in
+    // Local key auth: prefer the persisted TinyCloud session so the CLI
+    // keeps the same session key DID across request/grant/import flows.
     const node = new TinyCloudNode({
       host: ctx.host,
       privateKey: effectivePrivateKey,
     });
 
-    await node.signIn();
+    if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
+      await node.restoreSession({
+        delegationHeader: session.delegationHeader as { Authorization: string },
+        delegationCid: session.delegationCid as string,
+        spaceId: session.spaceId as string,
+        jwk: (session.jwk as object) ?? key,
+        verificationMethod: (session.verificationMethod as string) ?? profile.sessionDid ?? profile.did,
+        address: session.address as string | undefined,
+        chainId: session.chainId as number | undefined,
+        siwe: session.siwe as string | undefined,
+        signature: session.signature as string | undefined,
+      });
+    } else {
+      await node.signIn();
+    }
     await replayAdditionalDelegations(node, ctx.profile);
     return node;
   }
