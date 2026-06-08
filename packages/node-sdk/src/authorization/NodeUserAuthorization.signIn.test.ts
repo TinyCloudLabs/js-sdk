@@ -225,7 +225,7 @@ test("NodeUserAuthorization.signIn resolves TinyCloud hosts when none are explic
   expect(auth.hosts).toEqual([DEFAULT_TINYCLOUD_FALLBACK_HOST]);
   expect(requests).toContain(
     `${DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL}/v1/locations/${encodeURIComponent(
-      "did:pkh:eip155:1:0x1234567890abcdef1234567890abcdef12345678",
+      "did:pkh:eip155:1:0x1234567890AbcdEF1234567890aBcdef12345678",
     )}`,
   );
   expect(requests).toContain(`${DEFAULT_TINYCLOUD_FALLBACK_HOST}/info`);

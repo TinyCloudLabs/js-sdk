@@ -104,6 +104,9 @@ import {
   canonicalHashHex,
   canonicalizeEncryptionJson,
   verifyDidKeyEd25519Signature,
+  canonicalizeAddress,
+  pkhDid,
+  principalDidEquals,
   type BuildDecryptInvocationInput,
   type BuiltDecryptInvocation,
   type CanonicalJson,
@@ -139,6 +142,14 @@ const NETWORK_ADMIN_TYPE = "tinycloud.encryption.network-admin/v1";
  * for the tier rationale.
  */
 const DEFAULT_SESSION_EXPIRATION_MS = EXPIRY.SESSION_MS;
+
+function didPrincipalMatches(actual: string, expected: string): boolean {
+  try {
+    return principalDidEquals(actual, expected);
+  } catch {
+    return actual === expected;
+  }
+}
 
 /**
  * Configuration for TinyCloudNode.
@@ -683,7 +694,7 @@ export class TinyCloudNode {
   get did(): string {
     // If wallet is connected and signed in, return PKH (persistent identity)
     if (this._address) {
-      return `did:pkh:eip155:${this._chainId}:${this._address}`;
+      return pkhDid(this._address, this._chainId);
     }
     // Session-only mode: return session key DID (ephemeral identity)
     return this.sessionManager.getDID(this.sessionKeyId);
@@ -703,7 +714,7 @@ export class TinyCloudNode {
    * Get the Ethereum address for this user.
    */
   get address(): string | undefined {
-    return this._address;
+    return this.auth?.address() ?? this._address;
   }
 
   /**
@@ -748,7 +759,7 @@ export class TinyCloudNode {
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
 
-    this._address = await this.signer.getAddress();
+    this._address = canonicalizeAddress(await this.signer.getAddress());
     this._chainId = await this.signer.getChainId();
 
     // Reset services so they get recreated with new session
@@ -905,8 +916,11 @@ export class TinyCloudNode {
     this._serviceContext = undefined;
     this.runtimePermissionGrants = [];
 
-    if (sessionData.address) {
-      this._address = sessionData.address;
+    const restoredAddress = sessionData.address
+      ? canonicalizeAddress(sessionData.address)
+      : undefined;
+    if (restoredAddress) {
+      this._address = restoredAddress;
     }
     if (sessionData.chainId) {
       this._chainId = sessionData.chainId;
@@ -966,9 +980,9 @@ export class TinyCloudNode {
     // Required for `useRuntimeDelegation` / `hasRuntimePermissions` /
     // `getRuntimePermissionDelegations` to work after a session restore —
     // without this they bail with `SessionExpiredError(new Date(0))`.
-    if (sessionData.siwe && sessionData.address && sessionData.chainId) {
+    if (sessionData.siwe && restoredAddress && sessionData.chainId) {
       const tcSession: TinyCloudSession = {
-        address: sessionData.address,
+        address: restoredAddress,
         chainId: sessionData.chainId,
         sessionKey: JSON.stringify(sessionData.jwk),
         spaceId: sessionData.spaceId,
@@ -1358,8 +1372,8 @@ export class TinyCloudNode {
         fetchByNetworkId: (networkId) => this.getEncryptionNetwork(networkId),
       },
       wellKnown: {
-        fetchWellKnown: async (ownerDid, discoveryKey) => {
-          if (!this._address || ownerDid !== this.did) {
+        fetchWellKnown: async (principal, discoveryKey) => {
+          if (!this._address || !didPrincipalMatches(principal, this.did)) {
             return null;
           }
           if (!this.config.host) {
@@ -1738,7 +1752,7 @@ export class TinyCloudNode {
       return {
         cid: delegationSession.delegationCid,
         delegateDID: params.shareKeyDID,
-        delegatorDID: `did:pkh:eip155:${session.chainId}:${session.address}`,
+        delegatorDID: pkhDid(session.address, session.chainId),
         spaceId: params.spaceId,
         path: params.path,
         actions: params.actions,
@@ -2116,13 +2130,8 @@ export class TinyCloudNode {
       throw new SessionExpiredError(delegation.expiry);
     }
 
-    const expectedDids = new Set([
-      session.verificationMethod,
-      this.didWithoutFragment(session.verificationMethod),
-      this.sessionDid,
-      this.didWithoutFragment(this.sessionDid),
-    ]);
-    if (!expectedDids.has(delegation.delegateDID)) {
+    const expectedDids = [session.verificationMethod, this.sessionDid];
+    if (!expectedDids.some((did) => didPrincipalMatches(delegation.delegateDID, did))) {
       throw new Error(
         `Runtime delegation targets ${delegation.delegateDID} but this session key is ${session.verificationMethod}.`,
       );
@@ -2776,7 +2785,9 @@ export class TinyCloudNode {
         "materializeDelegation requires a composed manifest request",
       );
     }
-    const target = request.delegationTargets.find((entry) => entry.did === did);
+    const target = request.delegationTargets.find((entry) =>
+      didPrincipalMatches(entry.did, did),
+    );
     if (!target) {
       throw new Error(`No manifest delegation target found for DID ${did}`);
     }
@@ -3191,11 +3202,6 @@ export class TinyCloudNode {
     };
   }
 
-  private didWithoutFragment(did: string): string {
-    const fragment = did.indexOf("#");
-    return fragment === -1 ? did : did.slice(0, fragment);
-  }
-
   private installRuntimeGrantFromServiceSession(
     delegation: PortableDelegation,
     session: ServiceSession,
@@ -3492,7 +3498,7 @@ export class TinyCloudNode {
     if (resolvedDelegateDID.endsWith('.eth') && this.config.ensResolver) {
       const address = await this.config.ensResolver.resolveAddress(resolvedDelegateDID);
       if (!address) throw new Error(`Could not resolve ENS name: ${resolvedDelegateDID}`);
-      resolvedDelegateDID = `did:pkh:eip155:1:${address}`;
+      resolvedDelegateDID = pkhDid(address, 1);
     }
 
     // Legacy params lump multiple services' actions under one path. We
@@ -3705,7 +3711,7 @@ export class TinyCloudNode {
     if (this.isSessionOnly) {
       // Verify the delegation targets our session key DID
       const myDid = this.did; // In session-only mode, this is the session key DID
-      if (delegation.delegateDID !== myDid) {
+      if (!didPrincipalMatches(delegation.delegateDID, myDid)) {
         throw new Error(
           `Delegation targets ${delegation.delegateDID} but this user's DID is ${myDid}. ` +
           `The delegation must target this user's DID.`

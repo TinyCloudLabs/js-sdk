@@ -2,6 +2,13 @@ import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
 import type { ProfileConfig } from "../config/types.js";
+import {
+  buildSpaceUri,
+  canonicalizeAddress,
+  makePkhSpaceId,
+  parsePkhDid,
+  parseSpaceUri,
+} from "@tinycloud/node-sdk";
 
 /**
  * Resolve the active profile's Ethereum address. Source priority matches
@@ -12,13 +19,15 @@ import type { ProfileConfig } from "../config/types.js";
  */
 function resolveAddress(profile: ProfileConfig, session: Record<string, unknown> | null): string {
   const sessAddr = session?.address;
-  if (typeof sessAddr === "string" && sessAddr.length > 0) return sessAddr;
+  if (typeof sessAddr === "string" && sessAddr.length > 0) {
+    return canonicalizeAddress(sessAddr);
+  }
 
-  if (profile.address) return profile.address;
+  if (profile.address) return canonicalizeAddress(profile.address);
 
   if (profile.ownerDid) {
-    const match = profile.ownerDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
-    if (match) return match[1];
+    const pkh = parsePkhDid(profile.ownerDid);
+    if (pkh) return pkh.address;
   }
 
   throw new CLIError(
@@ -46,7 +55,17 @@ export async function resolveSpaceUri(
   profileName: string,
 ): Promise<string | undefined> {
   if (!input) return undefined;
-  if (input.startsWith("tinycloud:")) return input;
+  if (input.startsWith("tinycloud:")) {
+    const parsed = parseSpaceUri(input);
+    if (!parsed) {
+      throw new CLIError(
+        "INVALID_SPACE",
+        `Invalid --space "${input}". Use a short name ([A-Za-z0-9_-]) or a full tinycloud:... URI.`,
+        ExitCode.USAGE_ERROR,
+      );
+    }
+    return buildSpaceUri(parsed.owner, parsed.name);
+  }
 
   if (!/^[A-Za-z0-9_-]+$/.test(input)) {
     throw new CLIError(
@@ -61,5 +80,5 @@ export async function resolveSpaceUri(
 
   const address = resolveAddress(profile, session);
   const chainId = resolveChainId(profile, session);
-  return `tinycloud:pkh:eip155:${chainId}:${address}:${input}`;
+  return makePkhSpaceId(address, chainId, input);
 }

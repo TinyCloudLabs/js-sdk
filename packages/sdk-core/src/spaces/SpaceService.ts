@@ -43,12 +43,28 @@ import {
   type ServerDelegationsResponse,
 } from "./spaces.schema.js";
 import { EXPIRY } from "../expiry";
+import {
+  canonicalizeAddress,
+  makePkhSpaceId,
+  parsePkhDid,
+  pkhDid,
+  principalDidEquals,
+} from "../identity";
 
 // =============================================================================
 // Service Name and Error Codes
 // =============================================================================
 
 const SERVICE_NAME = "space";
+
+function ownerDidEquals(a: string, b: string | undefined): boolean {
+  if (!b) return false;
+  try {
+    return principalDidEquals(a, b);
+  } catch {
+    return a === b;
+  }
+}
 
 /**
  * Error codes for SpaceService operations.
@@ -191,7 +207,7 @@ export interface ISpaceService {
  * ```
  */
 export function makePublicSpaceId(address: string, chainId: number): string {
-  return `tinycloud:pkh:eip155:${chainId}:${address}:public`;
+  return makePkhSpaceId(address, chainId, "public");
 }
 
 // =============================================================================
@@ -216,12 +232,18 @@ export function parseSpaceUri(
   );
   if (fullUriMatch) {
     const [, chainId, address, name] = fullUriMatch;
-    return {
-      owner: `did:pkh:eip155:${chainId}:${address}`,
-      name,
-      chainId,
-      address,
-    };
+    try {
+      const chainIdNumber = Number(chainId);
+      const canonicalAddress = canonicalizeAddress(address);
+      return {
+        owner: pkhDid(canonicalAddress, chainIdNumber),
+        name,
+        chainId: String(chainIdNumber),
+        address: canonicalAddress,
+      };
+    } catch {
+      return null;
+    }
   }
 
   // Short name format - just return the name, owner will be inferred
@@ -243,11 +265,9 @@ export function parseSpaceUri(
  * @returns Full space URI
  */
 export function buildSpaceUri(owner: string, name: string): string {
-  // Extract chain ID and address from PKH DID
-  const pkhMatch = owner.match(/^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/);
-  if (pkhMatch) {
-    const [, chainId, address] = pkhMatch;
-    return `tinycloud:pkh:eip155:${chainId}:${address}:${name}`;
+  const pkh = parsePkhDid(owner);
+  if (pkh) {
+    return makePkhSpaceId(pkh.address, pkh.chainId, name);
   }
   // Fallback - shouldn't happen with valid PKH DIDs
   return `tinycloud:${owner}:${name}`;
@@ -869,7 +889,7 @@ export class SpaceService implements ISpaceService {
         id: data.id,
         name: data.name ?? this.extractNameFromId(data.id),
         owner: data.owner,
-        type: data.type ?? (data.owner === this.userDid ? "owned" : "delegated"),
+        type: data.type ?? (ownerDidEquals(data.owner, this.userDid) ? "owned" : "delegated"),
         permissions: data.permissions,
         expiresAt: data.expiresAt ? new Date(data.expiresAt) : undefined,
       };

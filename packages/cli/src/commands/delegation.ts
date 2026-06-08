@@ -5,6 +5,16 @@ import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { parseExpiry } from "../lib/duration.js";
+import { principalDidEquals } from "@tinycloud/node-sdk";
+
+function didMatches(actual: string | undefined, expected: string): boolean {
+  if (!actual) return false;
+  try {
+    return principalDidEquals(actual, expected);
+  } catch {
+    return actual === expected;
+  }
+}
 
 export function registerDelegationCommand(program: Command): void {
   const delegation = program.command("delegation").description("Manage delegations");
@@ -73,10 +83,10 @@ export function registerDelegationCommand(program: Command): void {
         // Filter if requested
         if (options.granted) {
           const myDid = node.did;
-          delegations = delegations.filter((d: any) => d.delegatorDID === myDid);
+          delegations = delegations.filter((d: any) => didMatches(d.delegatorDID, myDid));
         } else if (options.received) {
           const myDid = node.did;
-          delegations = delegations.filter((d: any) => d.delegateDID === myDid || d.delegateDID?.includes(myDid));
+          delegations = delegations.filter((d: any) => didMatches(d.delegateDID, myDid));
         }
 
         outputJson({
