@@ -1,5 +1,18 @@
 # @tinycloud/cli
 
+## 0.6.0-beta.2
+
+### Minor Changes
+
+- fb96a1e: Rename owner/delegate identity surfaces from primary/principal terminology to owner terminology.
+
+  CLI profiles and auth request artifacts now use `ownerDid` and `sessionDid`. Encryption network descriptors and discovery APIs now expose the owner identity as `ownerDid`.
+
+### Patch Changes
+
+- Updated dependencies [fb96a1e]
+  - @tinycloud/node-sdk@2.3.0-beta.2
+
 ## 0.6.0-beta.1
 
 ### Minor Changes

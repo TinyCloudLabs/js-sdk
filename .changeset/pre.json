@@ -20,6 +20,7 @@
   "changesets": [
     "bright-clouds-decrypt",
     "cli-auth-artifacts",
-    "dependabot-dependabot-cargo-rust-minor-patch-fcf40cfdd5"
+    "dependabot-dependabot-cargo-rust-minor-patch-fcf40cfdd5",
+    "owner-did-terminology"
   ]
 }
