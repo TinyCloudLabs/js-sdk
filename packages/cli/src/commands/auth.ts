@@ -1,11 +1,21 @@
 import { Command } from "commander";
+import { get as httpGet } from "node:http";
+import { get as httpsGet } from "node:https";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { createInterface } from "node:readline";
+import type { IncomingMessage } from "node:http";
 import type { PermissionEntry, PortableDelegation } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_HOST } from "../config/constants.js";
-import type { ProfileConfig } from "../config/types.js";
+import {
+  resolveProfileOperatorType,
+  resolveProfilePosture,
+  type AuthMethod,
+  type ProfileConfig,
+} from "../config/types.js";
 
 /**
  * Resolve the OpenKey base URL for a profile.
@@ -27,10 +37,15 @@ import {
   generateKey,
 } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
-import type { AuthMethod } from "../config/types.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import {
   appendAdditionalDelegation,
+  appendPermissionRequestArtifact,
+  createPermissionRequestArtifact,
+  getLastPermissionRequestArtifact,
+  getPermissionRequestArtifact,
+  isDelegationImportArtifact,
+  isPermissionRequestArtifact,
   appendGrantHistory,
   compactPermission,
   loadAdditionalDelegations,
@@ -40,6 +55,7 @@ import {
   permissionsFromDelegation,
   readGrantHistory,
   storedAdditionalDelegation,
+  type PermissionRequestArtifact,
 } from "../lib/permissions.js";
 
 /**
@@ -141,6 +157,8 @@ export function registerAuthCommand(program: Command): void {
         } catch {
           profile = null;
         }
+        const posture = profile ? resolveProfilePosture(profile) : null;
+        const operatorType = profile ? resolveProfileOperatorType(profile) : null;
 
         const authenticated = session !== null;
 
@@ -154,6 +172,8 @@ export function registerAuthCommand(program: Command): void {
             profile: ctx.profile,
             hasKey: hasKey !== null,
             authMethod: profile?.authMethod ?? null,
+            posture,
+            operatorType,
             address: profile?.address ?? null,
           });
         } else {
@@ -161,6 +181,8 @@ export function registerAuthCommand(program: Command): void {
           process.stdout.write(formatField("Profile", ctx.profile) + "\n");
           process.stdout.write(formatField("Authenticated", authenticated) + "\n");
           process.stdout.write(formatField("Auth Method", profile?.authMethod ?? null) + "\n");
+          process.stdout.write(formatField("Posture", posture) + "\n");
+          process.stdout.write(formatField("Operator", operatorType) + "\n");
           process.stdout.write(formatField("Host", ctx.host) + "\n");
           process.stdout.write(formatField("DID", profile?.did ?? null) + "\n");
           process.stdout.write(formatField("Primary DID", profile?.primaryDid ?? null) + "\n");
@@ -175,7 +197,7 @@ export function registerAuthCommand(program: Command): void {
 
   auth
     .command("request")
-    .description("Request additional TinyCloud permissions for the active session")
+    .description("Create a TinyCloud permission request artifact")
     .option(
       "--cap <spec>",
       "Capability spec: tinycloud.<service>:<space>:<path>:<actions-csv> (repeatable)",
@@ -188,14 +210,16 @@ export function registerAuthCommand(program: Command): void {
       "--expiry <duration>",
       "Lifetime of the granted delegation. ms-format string (e.g. \"7d\", \"30m\") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.",
     )
+    .option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided")
+    .option("--grant", "Grant the requested permissions immediately with this owner profile")
     .option("--yes", "Skip local-key TTY confirmation", false)
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const profile = await ProfileManager.getProfile(ctx.profile);
-        const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
         const requested = await collectRequestedPermissions(options, ctx.profile);
+        const expiryOption = parseExpiryOption(options.expiry);
 
         if (requested.length === 0) {
           throw new CLIError(
@@ -203,6 +227,19 @@ export function registerAuthCommand(program: Command): void {
             "Provide at least one --cap, --permission, or --manifest.",
             ExitCode.USAGE_ERROR,
           );
+        }
+
+        if (!options.grant) {
+          const artifact = createPermissionRequestArtifact({
+            profileName: ctx.profile,
+            profile,
+            host: ctx.host,
+            requested,
+            requestedExpiry: expiryOption,
+          });
+          await appendPermissionRequestArtifact(ctx.profile, artifact);
+          await emitPermissionRequestArtifact(artifact, options.emit);
+          return;
         }
 
         const node = await ensureAuthenticated(ctx);
@@ -223,7 +260,6 @@ export function registerAuthCommand(program: Command): void {
           const delegationCids: string[] = [];
           let expiry: string | undefined;
           const openkeyHost = resolveOpenKeyHost(profile);
-          const expiryOption = parseExpiryOption(options.expiry);
           for (const group of groupPermissionsBySpace(requested)) {
             const delegationData = await startAuthFlow(profile.did, {
               jwk: key,
@@ -266,12 +302,10 @@ export function registerAuthCommand(program: Command): void {
             ExitCode.USAGE_ERROR,
           );
         }
-        void session;
 
         // Local-key flow: master's grantRuntimePermissions handles signing
         // through the SDK's wallet-mode signer, groups by space, and skips
         // anything already covered by the session or an existing grant.
-        const expiryOption = parseExpiryOption(options.expiry);
         const delegations = await node.grantRuntimePermissions(
           requested,
           expiryOption !== undefined ? { expiry: expiryOption } : undefined,
@@ -303,6 +337,95 @@ export function registerAuthCommand(program: Command): void {
           delegationCid: delegationCids[0],
           delegationCids,
           expiry,
+        });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  auth
+    .command("import [source]")
+    .description("Import a TinyCloud delegation or permission request artifact")
+    .option("--stdin", "Read the JSON artifact from stdin")
+    .option("--paste", "Read the JSON artifact from stdin")
+    .action(async (source: string | undefined, options, cmd) => {
+      try {
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const raw = await readAuthArtifactSource(source, {
+          stdin: options.stdin === true || options.paste === true,
+        });
+        const parsed = JSON.parse(raw) as unknown;
+
+        if (isPermissionRequestArtifact(parsed)) {
+          await appendPermissionRequestArtifact(ctx.profile, parsed);
+          outputJson({
+            imported: true,
+            kind: parsed.kind,
+            requestId: parsed.requestId,
+            requested: parsed.requested,
+            next: `tc auth retry ${parsed.requestId}`,
+          });
+          return;
+        }
+
+        const imported = normalizeDelegationImport(parsed);
+        const node = await ensureAuthenticated(ctx);
+        await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
+          imported.delegation,
+          imported.permissions,
+        ));
+        await node.useRuntimeDelegation(imported.delegation);
+        await appendGrantHistory(ctx.profile, {
+          addedCaps: imported.permissions,
+          source: "cli",
+          delegationCid: imported.delegation.cid,
+          expiry: imported.delegation.expiry.toISOString(),
+        });
+
+        outputJson({
+          imported: true,
+          kind: "tinycloud.auth.delegation",
+          delegationCid: imported.delegation.cid,
+          permissions: imported.permissions,
+          expiry: imported.delegation.expiry.toISOString(),
+        });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  auth
+    .command("retry [requestId]")
+    .description("Check whether a stored permission request is now satisfied")
+    .option("--last", "Use the latest stored permission request for this profile")
+    .action(async (requestId: string | undefined, options, cmd) => {
+      try {
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const artifact = options.last
+          ? await getLastPermissionRequestArtifact(ctx.profile)
+          : requestId
+            ? await getPermissionRequestArtifact(ctx.profile, requestId)
+            : null;
+
+        if (!artifact) {
+          throw new CLIError(
+            "REQUEST_NOT_FOUND",
+            options.last
+              ? `No stored permission requests exist for profile "${ctx.profile}".`
+              : "Provide a requestId or use --last.",
+            ExitCode.NOT_FOUND,
+          );
+        }
+
+        const node = await ensureAuthenticated(ctx);
+        const covered = node.hasRuntimePermissions(artifact.requested);
+        outputJson({
+          requestId: artifact.requestId,
+          covered,
+          missing: covered ? [] : artifact.requested,
+          command: artifact.command ?? null,
         });
       } catch (error) {
         handleError(error);
@@ -392,6 +515,8 @@ export function registerAuthCommand(program: Command): void {
         const profile = await ProfileManager.getProfile(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile);
         const authenticated = session !== null;
+        const posture = resolveProfilePosture(profile);
+        const operatorType = resolveProfileOperatorType(profile);
 
         if (shouldOutputJson()) {
           outputJson({
@@ -402,6 +527,8 @@ export function registerAuthCommand(program: Command): void {
             host: profile.host,
             authenticated,
             authMethod: profile.authMethod ?? null,
+            posture,
+            operatorType,
             address: profile.address ?? null,
           });
         } else {
@@ -410,6 +537,8 @@ export function registerAuthCommand(program: Command): void {
           process.stdout.write(formatField("DID", profile.did) + "\n");
           process.stdout.write(formatField("Primary DID", profile.primaryDid ?? null) + "\n");
           process.stdout.write(formatField("Auth Method", profile.authMethod ?? null) + "\n");
+          process.stdout.write(formatField("Posture", posture) + "\n");
+          process.stdout.write(formatField("Operator", operatorType) + "\n");
           process.stdout.write(formatField("Address", profile.address ?? null) + "\n");
           process.stdout.write(formatField("Space ID", profile.spaceId ?? null) + "\n");
           process.stdout.write(formatField("Host", profile.host) + "\n");
@@ -419,6 +548,159 @@ export function registerAuthCommand(program: Command): void {
         handleError(error);
       }
     });
+}
+
+async function emitPermissionRequestArtifact(
+  artifact: PermissionRequestArtifact,
+  emitOption: unknown,
+): Promise<void> {
+  if (typeof emitOption === "string" && emitOption.length > 0) {
+    await mkdir(dirname(emitOption), { recursive: true });
+    await writeFile(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+    outputJson({
+      emitted: true,
+      path: emitOption,
+      requestId: artifact.requestId,
+      requested: artifact.requested,
+    });
+    return;
+  }
+  outputJson(artifact);
+}
+
+async function readAuthArtifactSource(
+  source: string | undefined,
+  options: { stdin: boolean },
+): Promise<string> {
+  if (options.stdin || source === "-" || (!source && !isInteractive())) {
+    return readStdin();
+  }
+
+  if (!source) {
+    throw new CLIError(
+      "IMPORT_SOURCE_REQUIRED",
+      "Provide an artifact file, URL, or use --stdin.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
+
+  if (source.startsWith("http://") || source.startsWith("https://")) {
+    return readUrl(source);
+  }
+
+  return readFile(source, "utf8");
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function readUrl(source: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const getter = source.startsWith("https://") ? httpsGet : httpGet;
+    const request = getter(source, (response: IncomingMessage) => {
+      const status = response.statusCode ?? 0;
+      if (status >= 300 && status < 400 && response.headers.location) {
+        response.resume();
+        readUrl(new URL(response.headers.location, source).toString()).then(resolve, reject);
+        return;
+      }
+      if (status < 200 || status >= 300) {
+        response.resume();
+        reject(new CLIError(
+          "IMPORT_FETCH_FAILED",
+          `Failed to fetch ${source}: HTTP ${status}.`,
+          ExitCode.ERROR,
+        ));
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer | string) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    });
+    request.on("error", reject);
+  });
+}
+
+function normalizeDelegationImport(value: unknown): {
+  delegation: PortableDelegation;
+  permissions: PermissionEntry[];
+} {
+  if (isDelegationImportArtifact(value)) {
+    const delegation = normalizePortableDelegation(value.delegation);
+    return {
+      delegation,
+      permissions: Array.isArray(value.permissions) && value.permissions.length > 0
+        ? value.permissions
+        : permissionsFromDelegation(delegation),
+    };
+  }
+
+  if (isStoredDelegationLike(value)) {
+    const delegation = normalizePortableDelegation(value.delegation);
+    return {
+      delegation,
+      permissions: Array.isArray(value.permissions) && value.permissions.length > 0
+        ? value.permissions
+        : permissionsFromDelegation(delegation),
+    };
+  }
+
+  if (isPortableDelegationLike(value)) {
+    const delegation = normalizePortableDelegation(value);
+    return {
+      delegation,
+      permissions: permissionsFromDelegation(delegation),
+    };
+  }
+
+  throw new CLIError(
+    "INVALID_AUTH_IMPORT",
+    "Auth import must be a tinycloud.auth.delegation artifact, a portable delegation, or a tinycloud.auth.request artifact.",
+    ExitCode.USAGE_ERROR,
+  );
+}
+
+function isStoredDelegationLike(value: unknown): value is {
+  delegation: PortableDelegation;
+  permissions?: PermissionEntry[];
+} {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as { delegation?: unknown };
+  return isPortableDelegationLike(candidate.delegation);
+}
+
+function isPortableDelegationLike(value: unknown): value is PortableDelegation {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Partial<PortableDelegation>;
+  return (
+    typeof candidate.cid === "string" &&
+    typeof candidate.spaceId === "string" &&
+    typeof candidate.path === "string" &&
+    Array.isArray(candidate.actions) &&
+    candidate.delegationHeader !== undefined &&
+    typeof candidate.delegationHeader === "object"
+  );
+}
+
+function normalizePortableDelegation(delegation: PortableDelegation): PortableDelegation {
+  const rawExpiry = (delegation as PortableDelegation & { expiry: unknown }).expiry;
+  const expiry = rawExpiry instanceof Date ? rawExpiry : new Date(String(rawExpiry));
+  if (Number.isNaN(expiry.getTime())) {
+    throw new CLIError(
+      "INVALID_AUTH_IMPORT",
+      "Imported delegation must include a valid expiry.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
+  return { ...delegation, expiry };
 }
 
 async function collectRequestedPermissions(
@@ -626,6 +908,7 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
 
   // Update profile
   await ProfileManager.setProfile(profileName, {
+    ...profile,
     name: profileName,
     host,
     chainId: DEFAULT_CHAIN_ID,
@@ -634,6 +917,8 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
     primaryDid: did,
     spaceId: sessionResult.spaceId,
     createdAt: profile?.createdAt ?? new Date().toISOString(),
+    posture: profile?.posture ?? "local-owner-key",
+    operatorType: profile?.operatorType ?? "human",
     authMethod: "local",
     privateKey,
     address,
@@ -680,6 +965,8 @@ async function handleOpenKeyAuth(profileName: string, host: string, paste?: bool
   // Update profile with primary DID if present
   const updatedProfile = {
     ...profile,
+    posture: profile.posture ?? "owner-openkey",
+    operatorType: profile.operatorType ?? "human",
     authMethod: "openkey" as const,
   };
 

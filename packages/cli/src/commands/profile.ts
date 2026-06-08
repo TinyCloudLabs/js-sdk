@@ -6,6 +6,16 @@ import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { generateKey } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
+import {
+  CLI_OPERATOR_TYPES,
+  CLI_PROFILE_POSTURES,
+  isCLIOperatorType,
+  isCLIProfilePosture,
+  resolveProfileOperatorType,
+  resolveProfilePosture,
+  type CLIOperatorType,
+  type CLIProfilePosture,
+} from "../config/types.js";
 
 export function registerProfileCommand(program: Command): void {
   const profile = program.command("profile").description("Profile management");
@@ -27,10 +37,19 @@ export function registerProfileCommand(program: Command): void {
                 name: p.name,
                 host: p.host,
                 did: p.did,
+                posture: resolveProfilePosture(p),
+                operatorType: resolveProfileOperatorType(p),
                 active: name === config.defaultProfile,
               };
             } catch {
-              return { name, host: null, did: null, active: name === config.defaultProfile };
+              return {
+                name,
+                host: null,
+                did: null,
+                posture: null,
+                operatorType: null,
+                active: name === config.defaultProfile,
+              };
             }
           })
         );
@@ -45,7 +64,8 @@ export function registerProfileCommand(program: Command): void {
             const marker = p.active ? theme.success("● ") : "  ";
             const name = p.active ? theme.brand(p.name) : p.name;
             const host = theme.muted(p.host || "no host");
-            process.stdout.write(`${marker}${name}  ${host}\n`);
+            const posture = p.posture ? theme.muted(String(p.posture)) : theme.muted("no posture");
+            process.stdout.write(`${marker}${name}  ${host}  ${posture}\n`);
           }
         }
       } catch (error) {
@@ -57,10 +77,20 @@ export function registerProfileCommand(program: Command): void {
     .command("create <name>")
     .description("Create a new profile")
     .option("--host <url>", "TinyCloud node URL")
+    .option(
+      "--posture <posture>",
+      `Profile posture: ${CLI_PROFILE_POSTURES.join(", ")}. Defaults to owner-openkey.`,
+    )
+    .option(
+      "--operator <type>",
+      `Operator type: ${CLI_OPERATOR_TYPES.join(", ")}. Defaults to human.`,
+    )
     .action(async (name: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const host = options.host ?? globalOpts.host ?? "https://node.tinycloud.xyz";
+        const posture = parseProfilePosture(options.posture);
+        const operatorType = parseOperatorType(options.operator);
 
         if (await ProfileManager.profileExists(name)) {
           throw new CLIError("PROFILE_EXISTS", `Profile "${name}" already exists`, ExitCode.ERROR);
@@ -76,9 +106,11 @@ export function registerProfileCommand(program: Command): void {
           spaceName: "default",
           did,
           createdAt: new Date().toISOString(),
+          posture,
+          operatorType,
         });
 
-        outputJson({ profile: name, did, host, created: true });
+        outputJson({ profile: name, did, host, posture, operatorType, created: true });
       } catch (error) {
         handleError(error);
       }
@@ -98,10 +130,14 @@ export function registerProfileCommand(program: Command): void {
         const hasSession = (await ProfileManager.getSession(profileName)) !== null;
         const config = await ProfileManager.getConfig();
         const isDefault = profileName === config.defaultProfile;
+        const posture = resolveProfilePosture(p);
+        const operatorType = resolveProfileOperatorType(p);
 
         if (shouldOutputJson()) {
           outputJson({
             ...p,
+            posture,
+            operatorType,
             hasKey,
             hasSession,
             isDefault,
@@ -110,6 +146,8 @@ export function registerProfileCommand(program: Command): void {
           process.stdout.write(`${theme.heading(p.name)}${isDefault ? theme.success(" (default)") : ""}\n`);
           process.stdout.write(formatField("Host", p.host) + "\n");
           process.stdout.write(formatField("DID", p.did) + "\n");
+          process.stdout.write(formatField("Posture", posture) + "\n");
+          process.stdout.write(formatField("Operator", operatorType) + "\n");
           process.stdout.write(formatField("Space", p.spaceId || null) + "\n");
           process.stdout.write(formatField("Key", hasKey) + "\n");
           process.stdout.write(formatField("Session", hasSession) + "\n");
@@ -162,4 +200,24 @@ export function registerProfileCommand(program: Command): void {
         handleError(error);
       }
     });
+}
+
+function parseProfilePosture(raw: unknown): CLIProfilePosture {
+  if (raw === undefined || raw === null || raw === "") return "owner-openkey";
+  if (isCLIProfilePosture(raw)) return raw;
+  throw new CLIError(
+    "INVALID_POSTURE",
+    `Invalid posture "${String(raw)}". Use one of: ${CLI_PROFILE_POSTURES.join(", ")}.`,
+    ExitCode.USAGE_ERROR,
+  );
+}
+
+function parseOperatorType(raw: unknown): CLIOperatorType {
+  if (raw === undefined || raw === null || raw === "") return "human";
+  if (isCLIOperatorType(raw)) return raw;
+  throw new CLIError(
+    "INVALID_OPERATOR",
+    `Invalid operator "${String(raw)}". Use one of: ${CLI_OPERATOR_TYPES.join(", ")}.`,
+    ExitCode.USAGE_ERROR,
+  );
 }

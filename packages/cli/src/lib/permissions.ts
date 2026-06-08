@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -13,6 +14,13 @@ import { fileExists, readJson, writeJson, ensureDir } from "../config/storage.js
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
+import {
+  resolveProfileOperatorType,
+  resolveProfilePosture,
+  type CLIOperatorType,
+  type CLIProfilePosture,
+  type ProfileConfig,
+} from "../config/types.js";
 
 /**
  * Stored shape for a runtime delegation appended to a profile.
@@ -34,13 +42,74 @@ export interface GrantHistoryEntry {
   expiry?: string;
 }
 
+export interface PermissionRequestArtifact {
+  kind: "tinycloud.auth.request";
+  version: 1;
+  requestId: string;
+  createdAt: string;
+  profile: string;
+  posture: CLIProfilePosture;
+  operatorType: CLIOperatorType;
+  host: string;
+  did: string;
+  primaryDid?: string;
+  spaceId?: string;
+  requestedExpiry?: string | number;
+  requested: PermissionEntry[];
+  command?: {
+    argv: string[];
+    cwd: string;
+  };
+}
+
+export interface DelegationImportArtifact {
+  kind: "tinycloud.auth.delegation";
+  version: 1;
+  delegation: PortableDelegation;
+  permissions?: PermissionEntry[];
+}
+
 export function additionalDelegationsPath(profile: string): string {
   // Sibling file keeps legacy session.json schema unchanged for existing readers.
   return join(PROFILES_DIR, profile, "additional-delegations.json");
 }
 
+export function permissionRequestsPath(profile: string): string {
+  return join(PROFILES_DIR, profile, "auth-requests.json");
+}
+
 export function grantHistoryPath(profile: string): string {
   return join(PROFILES_DIR, profile, "auth-grants.jsonl");
+}
+
+export function createPermissionRequestArtifact(params: {
+  profileName: string;
+  profile: ProfileConfig;
+  host: string;
+  requested: PermissionEntry[];
+  requestedExpiry?: string | number;
+  argv?: string[];
+  cwd?: string;
+}): PermissionRequestArtifact {
+  return {
+    kind: "tinycloud.auth.request",
+    version: 1,
+    requestId: `req_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`,
+    createdAt: new Date().toISOString(),
+    profile: params.profileName,
+    posture: resolveProfilePosture(params.profile),
+    operatorType: resolveProfileOperatorType(params.profile),
+    host: params.host,
+    did: params.profile.did,
+    primaryDid: params.profile.primaryDid,
+    spaceId: params.profile.spaceId,
+    requestedExpiry: params.requestedExpiry,
+    requested: params.requested,
+    command: {
+      argv: params.argv ?? process.argv.slice(2),
+      cwd: params.cwd ?? process.cwd(),
+    },
+  };
 }
 
 export async function loadAdditionalDelegations(
@@ -69,6 +138,71 @@ export async function appendAdditionalDelegation(
   const next = existing.filter((item) => item.delegation.cid !== entry.delegation.cid);
   next.push(entry);
   await saveAdditionalDelegations(profile, next);
+}
+
+export async function loadPermissionRequestArtifacts(
+  profile: string,
+): Promise<PermissionRequestArtifact[]> {
+  const raw = await readJson<PermissionRequestArtifact[]>(
+    permissionRequestsPath(profile),
+  );
+  return Array.isArray(raw) ? raw.filter(isPermissionRequestArtifact) : [];
+}
+
+export async function savePermissionRequestArtifacts(
+  profile: string,
+  entries: PermissionRequestArtifact[],
+): Promise<void> {
+  const profileDir = join(PROFILES_DIR, profile);
+  await ensureDir(profileDir);
+  await writeJson(permissionRequestsPath(profile), entries);
+}
+
+export async function appendPermissionRequestArtifact(
+  profile: string,
+  artifact: PermissionRequestArtifact,
+): Promise<void> {
+  const existing = await loadPermissionRequestArtifacts(profile);
+  const next = existing.filter((item) => item.requestId !== artifact.requestId);
+  next.push(artifact);
+  await savePermissionRequestArtifacts(profile, next);
+}
+
+export async function getPermissionRequestArtifact(
+  profile: string,
+  requestId: string,
+): Promise<PermissionRequestArtifact | null> {
+  const existing = await loadPermissionRequestArtifacts(profile);
+  return existing.find((item) => item.requestId === requestId) ?? null;
+}
+
+export async function getLastPermissionRequestArtifact(
+  profile: string,
+): Promise<PermissionRequestArtifact | null> {
+  const existing = await loadPermissionRequestArtifacts(profile);
+  return existing.at(-1) ?? null;
+}
+
+export function isPermissionRequestArtifact(value: unknown): value is PermissionRequestArtifact {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Partial<PermissionRequestArtifact>;
+  return (
+    candidate.kind === "tinycloud.auth.request" &&
+    candidate.version === 1 &&
+    typeof candidate.requestId === "string" &&
+    Array.isArray(candidate.requested)
+  );
+}
+
+export function isDelegationImportArtifact(value: unknown): value is DelegationImportArtifact {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Partial<DelegationImportArtifact>;
+  return (
+    candidate.kind === "tinycloud.auth.delegation" &&
+    candidate.version === 1 &&
+    candidate.delegation !== undefined &&
+    typeof candidate.delegation === "object"
+  );
 }
 
 export async function replayAdditionalDelegations(
