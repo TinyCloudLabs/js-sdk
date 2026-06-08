@@ -47,6 +47,7 @@ export interface ProfileConfig {
   chainId: number;
   spaceName: string;
   did: string;
+  sessionDid?: string;
   primaryDid?: string;
   spaceId?: string;
   createdAt: string;

@@ -36,6 +36,7 @@ import {
   addressToDID,
   localKeySignIn,
   generateKey,
+  keyToDID,
 } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
@@ -167,6 +168,7 @@ export function registerAuthCommand(program: Command): void {
           outputJson({
             authenticated,
             did: profile?.did ?? null,
+            sessionDid: profile?.sessionDid ?? null,
             primaryDid: profile?.primaryDid ?? null,
             spaceId: profile?.spaceId ?? null,
             host: ctx.host,
@@ -186,6 +188,7 @@ export function registerAuthCommand(program: Command): void {
           process.stdout.write(formatField("Operator", operatorType) + "\n");
           process.stdout.write(formatField("Host", ctx.host) + "\n");
           process.stdout.write(formatField("DID", profile?.did ?? null) + "\n");
+          process.stdout.write(formatField("Session DID", profile?.sessionDid ?? null) + "\n");
           process.stdout.write(formatField("Primary DID", profile?.primaryDid ?? null) + "\n");
           process.stdout.write(formatField("Address", profile?.address ?? null) + "\n");
           process.stdout.write(formatField("Space ID", profile?.spaceId ?? null) + "\n");
@@ -402,10 +405,12 @@ export function registerAuthCommand(program: Command): void {
     .description("Grant a TinyCloud permission request artifact to its requester")
     .option("--stdin", "Read the JSON request artifact from stdin")
     .option("--paste", "Read the JSON request artifact from stdin")
+    .option("--yes", "Skip local-key TTY confirmation", false)
     .action(async (source: string | undefined, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
+        const profile = await ProfileManager.getProfile(ctx.profile);
         const raw = await readAuthArtifactSource(source, {
           stdin: options.stdin === true || options.paste === true,
         });
@@ -420,6 +425,14 @@ export function registerAuthCommand(program: Command): void {
         }
 
         const node = await ensureAuthenticated(ctx);
+        await ensureDelegationAuthority({
+          ctx,
+          profile,
+          node,
+          requested: parsed.requested,
+          expiryOption: parsed.requestedExpiry,
+          yes: options.yes === true,
+        });
         const result = await node.delegateTo(
           parsed.did,
           parsed.requested,
@@ -590,6 +603,7 @@ export function registerAuthCommand(program: Command): void {
           outputJson({
             profile: ctx.profile,
             did: profile.did,
+            sessionDid: profile.sessionDid ?? null,
             primaryDid: profile.primaryDid ?? null,
             spaceId: profile.spaceId ?? null,
             host: profile.host,
@@ -603,6 +617,7 @@ export function registerAuthCommand(program: Command): void {
           process.stdout.write(theme.heading("Identity") + "\n");
           process.stdout.write(formatField("Profile", ctx.profile) + "\n");
           process.stdout.write(formatField("DID", profile.did) + "\n");
+          process.stdout.write(formatField("Session DID", profile.sessionDid ?? null) + "\n");
           process.stdout.write(formatField("Primary DID", profile.primaryDid ?? null) + "\n");
           process.stdout.write(formatField("Auth Method", profile.authMethod ?? null) + "\n");
           process.stdout.write(formatField("Posture", posture) + "\n");
@@ -771,6 +786,81 @@ function normalizePortableDelegation(delegation: PortableDelegation): PortableDe
     );
   }
   return { ...delegation, expiry };
+}
+
+async function ensureDelegationAuthority(params: {
+  ctx: { profile: string; host: string };
+  profile: ProfileConfig;
+  node: Awaited<ReturnType<typeof ensureAuthenticated>>;
+  requested: PermissionEntry[];
+  expiryOption: string | number | undefined;
+  yes: boolean;
+}): Promise<void> {
+  if (params.node.hasRuntimePermissions(params.requested)) return;
+
+  if (params.profile.authMethod === "openkey") {
+    const key = await ProfileManager.getKey(params.ctx.profile);
+    if (!key) {
+      throw new CLIError(
+        "NO_KEY",
+        `No key found for profile "${params.ctx.profile}". Run \`tc init\` first.`,
+        ExitCode.AUTH_REQUIRED,
+      );
+    }
+    const openkeyHost = resolveOpenKeyHost(params.profile);
+    for (const group of groupPermissionsBySpace(params.requested)) {
+      const delegationData = await startAuthFlow(params.profile.did, {
+        jwk: key,
+        host: params.ctx.host,
+        permissions: group,
+        openkeyHost,
+        expiry: params.expiryOption,
+      });
+      const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host);
+      await appendAdditionalDelegation(
+        params.ctx.profile,
+        storedAdditionalDelegation(delegation, group),
+      );
+      await params.node.useRuntimeDelegation(delegation);
+      await appendGrantHistory(params.ctx.profile, {
+        addedCaps: group,
+        source: "cli",
+        delegationCid: delegation.cid,
+        expiry: delegation.expiry.toISOString(),
+      });
+    }
+    return;
+  }
+
+  if (isInteractive()) {
+    if (!params.yes) {
+      await confirmPermissionRequest(params.requested);
+    }
+  } else if (!params.yes) {
+    throw new CLIError(
+      "CONFIRMATION_REQUIRED",
+      "Local-key auth grants in non-interactive mode require --yes.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
+
+  const delegations = await params.node.grantRuntimePermissions(
+    params.requested,
+    params.expiryOption !== undefined ? { expiry: params.expiryOption } : undefined,
+  );
+  for (const delegation of delegations) {
+    const covering = permissionsFromDelegation(delegation);
+    await appendAdditionalDelegation(
+      params.ctx.profile,
+      storedAdditionalDelegation(delegation, covering),
+    );
+    await appendGrantHistory(params.ctx.profile, {
+      addedCaps: covering,
+      source: "cli",
+      delegationCid: delegation.cid,
+      expiry: delegation.expiry.toISOString(),
+    });
+  }
 }
 
 function execCapturedCommand(command: { argv: string[]; cwd: string }): Promise<void> {
@@ -951,6 +1041,7 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
   let privateKey: string;
   let address: string;
   let did: string;
+  let sessionDid = profile?.sessionDid;
 
   if (profile?.authMethod === "local" && profile.privateKey && profile.address) {
     // Reuse existing local key
@@ -982,10 +1073,13 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
   // We also need a session key (Ed25519 JWK) for the profile
   const hasKey = await ProfileManager.getKey(profileName);
   if (!hasKey) {
-    const { jwk } = await withSpinner("Generating session key...", async () => {
+    const { jwk, did: generatedSessionDid } = await withSpinner("Generating session key...", async () => {
       return generateKey();
     });
     await ProfileManager.setKey(profileName, jwk);
+    sessionDid = generatedSessionDid;
+  } else if (!sessionDid) {
+    sessionDid = keyToDID(hasKey);
   }
 
   // Sign in using the private key
@@ -999,7 +1093,14 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
     address,
     chainId: DEFAULT_CHAIN_ID,
     spaceId: sessionResult.spaceId,
+    delegationHeader: sessionResult.delegationHeader,
+    delegationCid: sessionResult.delegationCid,
+    jwk: sessionResult.jwk,
+    verificationMethod: sessionResult.verificationMethod,
+    siwe: sessionResult.siwe,
+    signature: sessionResult.signature,
   });
+  sessionDid = sessionResult.verificationMethod;
 
   // Update profile
   await ProfileManager.setProfile(profileName, {
@@ -1009,6 +1110,7 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
     chainId: DEFAULT_CHAIN_ID,
     spaceName: "default",
     did,
+    sessionDid,
     primaryDid: did,
     spaceId: sessionResult.spaceId,
     createdAt: profile?.createdAt ?? new Date().toISOString(),
@@ -1023,6 +1125,7 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
     authenticated: true,
     profile: profileName,
     did,
+    sessionDid,
     address,
     spaceId: sessionResult.spaceId,
     authMethod: "local",
@@ -1060,6 +1163,7 @@ async function handleOpenKeyAuth(profileName: string, host: string, paste?: bool
   // Update profile with primary DID if present
   const updatedProfile = {
     ...profile,
+    sessionDid: profile.sessionDid ?? profile.did,
     posture: profile.posture ?? "owner-openkey",
     operatorType: profile.operatorType ?? "human",
     authMethod: "openkey" as const,

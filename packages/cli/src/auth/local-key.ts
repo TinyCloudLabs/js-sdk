@@ -1,4 +1,4 @@
-import { TCWSessionManager, initPanicHook } from "@tinycloud/node-sdk-wasm";
+import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
 import { randomBytes } from "node:crypto";
 
@@ -31,9 +31,7 @@ export function generateKey(): { jwk: object; did: string } {
 export function keyToDID(jwk: object): string {
   ensureWasm();
   const mgr = new TCWSessionManager();
-  // Import key by creating with known ID, then getting DID
-  // For now, re-generate and return — TODO: import support
-  const keyId = mgr.createSessionKey("imported");
+  const keyId = importKey(mgr, JSON.stringify(jwk), "imported");
   return mgr.getDID(keyId);
 }
 
@@ -88,6 +86,12 @@ export async function localKeySignIn(options: {
   spaceId: string;
   address: string;
   chainId: number;
+  delegationHeader: { Authorization: string };
+  delegationCid: string;
+  jwk: object;
+  verificationMethod: string;
+  siwe?: string;
+  signature?: string;
 }> {
   const { TinyCloudNode } = await import("@tinycloud/node-sdk");
 
@@ -100,10 +104,20 @@ export async function localKeySignIn(options: {
   await node.signIn();
 
   const address = await new PrivateKeySigner(options.privateKey).getAddress();
+  const session = node.session;
+  if (!session) {
+    throw new Error("Local key sign-in did not produce a TinyCloud session");
+  }
 
   return {
-    spaceId: node.spaceId ?? "",
+    spaceId: session.spaceId,
     address,
     chainId: 1,
+    delegationHeader: session.delegationHeader,
+    delegationCid: session.delegationCid,
+    jwk: session.jwk,
+    verificationMethod: session.verificationMethod,
+    siwe: session.siwe,
+    signature: session.signature,
   };
 }

@@ -101,7 +101,7 @@ export function createPermissionRequestArtifact(params: {
     posture: resolveProfilePosture(params.profile),
     operatorType: resolveProfileOperatorType(params.profile),
     host: params.host,
-    did: params.profile.did,
+    did: didWithoutFragment(params.profile.sessionDid ?? params.profile.did),
     primaryDid: params.profile.primaryDid,
     spaceId: params.profile.spaceId,
     requestedExpiry: params.requestedExpiry,
@@ -111,6 +111,11 @@ export function createPermissionRequestArtifact(params: {
       cwd: params.cwd ?? process.cwd(),
     },
   };
+}
+
+function didWithoutFragment(did: string): string {
+  const fragment = did.indexOf("#");
+  return fragment === -1 ? did : did.slice(0, fragment);
 }
 
 export async function loadAdditionalDelegations(

@@ -391,6 +391,49 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect(node.hasRuntimePermissions([permission])).toBe(true);
   });
 
+  test("can reinstall a runtime delegation targeted at fragmentless session DID", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    (node as any).auth.tinyCloudSession.verificationMethod = "did:key:default#default";
+    Object.defineProperty(node, "sessionDid", {
+      configurable: true,
+      get: () => "did:key:default#default",
+    });
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const secretsSpaceId = `tinycloud:pkh:eip155:1:${address}:secrets`;
+    const permission: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: "secrets",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      actions: ["tinycloud.kv/put"],
+    };
+    const delegation = {
+      cid: "fragmentless-cid",
+      delegationHeader: { Authorization: "fragmentless-token" },
+      spaceId: secretsSpaceId,
+      path: permission.path,
+      actions: permission.actions,
+      resources: [{
+        service: "kv",
+        space: secretsSpaceId,
+        path: permission.path,
+        actions: permission.actions,
+      }],
+      expiry: new Date(Date.now() + 60_000),
+      delegateDID: "did:key:default",
+      ownerAddress: address,
+      chainId: 1,
+    };
+
+    await withActivatedDelegations(async () => {
+      await node.useRuntimeDelegation(delegation);
+    });
+
+    expect(node.hasRuntimePermissions([permission])).toBe(true);
+  });
+
   test("grants decrypt permission for the default encryption network", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,

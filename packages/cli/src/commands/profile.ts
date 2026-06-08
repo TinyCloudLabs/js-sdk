@@ -105,6 +105,7 @@ export function registerProfileCommand(program: Command): void {
           chainId: 1,
           spaceName: "default",
           did,
+          sessionDid: did,
           createdAt: new Date().toISOString(),
           posture,
           operatorType,
@@ -146,6 +147,7 @@ export function registerProfileCommand(program: Command): void {
           process.stdout.write(`${theme.heading(p.name)}${isDefault ? theme.success(" (default)") : ""}\n`);
           process.stdout.write(formatField("Host", p.host) + "\n");
           process.stdout.write(formatField("DID", p.did) + "\n");
+          process.stdout.write(formatField("Session DID", p.sessionDid ?? null) + "\n");
           process.stdout.write(formatField("Posture", posture) + "\n");
           process.stdout.write(formatField("Operator", operatorType) + "\n");
           process.stdout.write(formatField("Space", p.spaceId || null) + "\n");

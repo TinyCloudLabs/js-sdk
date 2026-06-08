@@ -2116,7 +2116,12 @@ export class TinyCloudNode {
       throw new SessionExpiredError(delegation.expiry);
     }
 
-    const expectedDids = new Set([session.verificationMethod, this.sessionDid]);
+    const expectedDids = new Set([
+      session.verificationMethod,
+      this.didWithoutFragment(session.verificationMethod),
+      this.sessionDid,
+      this.didWithoutFragment(this.sessionDid),
+    ]);
     if (!expectedDids.has(delegation.delegateDID)) {
       throw new Error(
         `Runtime delegation targets ${delegation.delegateDID} but this session key is ${session.verificationMethod}.`,
@@ -3184,6 +3189,11 @@ export class TinyCloudNode {
       operations,
       expiresAt: delegation.expiry,
     };
+  }
+
+  private didWithoutFragment(did: string): string {
+    const fragment = did.indexOf("#");
+    return fragment === -1 ? did : did.slice(0, fragment);
   }
 
   private installRuntimeGrantFromServiceSession(
