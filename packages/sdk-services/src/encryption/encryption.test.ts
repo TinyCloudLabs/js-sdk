@@ -70,6 +70,10 @@ const OWNER_DID = "did:key:z6MkfPN4DefaultPrincipalAaaaaaaaaaaaaaaaaaaaaaaaa";
 const NETWORK_NAME = "default";
 const NETWORK_ID = `${ENCRYPTION_NETWORK_URN_PREFIX}${OWNER_DID}:${NETWORK_NAME}`;
 const TARGET_NODE = "did:key:z6MkrfTargetNodeBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const PKH_OWNER_DID =
+  "did:pkh:eip155:1:0x7bEF1A1238Bf1e2C0615602DDD589aD7F385fE8B";
+const LOWERCASE_PKH_OWNER_DID = PKH_OWNER_DID.toLowerCase();
+const PKH_NETWORK_ID = `${ENCRYPTION_NETWORK_URN_PREFIX}${PKH_OWNER_DID}:${NETWORK_NAME}`;
 
 // ---------------------------------------------------------------------------
 // In-memory crypto used across all tests.
@@ -747,6 +751,16 @@ describe("discoverNetwork", () => {
     };
   }
 
+  function makePkhDescriptor(
+    ownerDid = LOWERCASE_PKH_OWNER_DID,
+  ): NetworkDescriptor {
+    return {
+      ...makeDescriptor(),
+      networkId: `${ENCRYPTION_NETWORK_URN_PREFIX}${ownerDid}:${NETWORK_NAME}`,
+      ownerDid,
+    };
+  }
+
   it("prefers the node-authoritative descriptor", async () => {
     const node: NodeDescriptorFetcher = {
       fetchByNetworkId: async () => makeDescriptor(),
@@ -783,6 +797,41 @@ describe("discoverNetwork", () => {
     if (result.ok) {
       expect(result.data.source).toBe("well-known");
     }
+  });
+
+  it("accepts PKH descriptor principals that differ only by address casing", async () => {
+    const node: NodeDescriptorFetcher = {
+      fetchByNetworkId: async () => makePkhDescriptor(),
+    };
+    const result = await discoverNetwork({ identifier: PKH_NETWORK_ID, node });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts legacy principal descriptors when the PKH principal matches", async () => {
+    const { ownerDid: _ownerDid, ...descriptor } = makePkhDescriptor();
+    const node: NodeDescriptorFetcher = {
+      fetchByNetworkId: async () =>
+        ({
+          ...descriptor,
+          principal: LOWERCASE_PKH_OWNER_DID,
+        }) as unknown as NetworkDescriptor,
+    };
+    const result = await discoverNetwork({ identifier: PKH_NETWORK_ID, node });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.descriptor.ownerDid).toBe(LOWERCASE_PKH_OWNER_DID);
+    }
+  });
+
+  it("rejects PKH descriptors whose principal address really drifts", async () => {
+    const node: NodeDescriptorFetcher = {
+      fetchByNetworkId: async () =>
+        makePkhDescriptor(
+          "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+        ),
+    };
+    const result = await discoverNetwork({ identifier: PKH_NETWORK_ID, node });
+    expect(result.ok).toBe(false);
   });
 
   it("rejects descriptors whose embedded ids drift from the URN", async () => {
