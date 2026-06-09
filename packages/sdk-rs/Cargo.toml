@@ -22,9 +22,9 @@ console_error_panic_hook = "0.1"
 hex = "0.4.3"
 iri-string = "0.7.12"
 js-sys = "0.3.59"
-# Includes TinyCloudLabs/tinycloud-node#71.
-tinycloud-sdk-rs = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", rev = "b483946a0ed2737237daa38f6ee456a4a398b51e" }
-tinycloud-sdk-wasm = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", rev = "b483946a0ed2737237daa38f6ee456a4a398b51e" }
+# Includes TinyCloudLabs/tinycloud-node#71 via the v1.4.2 release.
+tinycloud-sdk-rs = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", tag = "v1.4.2" }
+tinycloud-sdk-wasm = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", tag = "v1.4.2" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.150"
 serde-wasm-bindgen = "0.6.5"

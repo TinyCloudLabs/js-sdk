@@ -12,6 +12,7 @@
 
 const URN_PREFIX = "urn:tinycloud:encryption:";
 const NETWORK_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+const PKH_EIP155_DID_RE = /^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/;
 
 export interface ParsedNetworkId {
   /** The full URN string. */
@@ -112,6 +113,31 @@ export function isNetworkId(networkId: unknown): networkId is string {
   } catch {
     return false;
   }
+}
+
+function parsePkhOwnerDid(ownerDid: string):
+  | { chainId: string; address: string }
+  | null {
+  const match = ownerDid.match(PKH_EIP155_DID_RE);
+  if (!match) return null;
+  return {
+    chainId: match[1],
+    address: match[2].toLowerCase(),
+  };
+}
+
+/**
+ * Compare owner DIDs as network principals. For `did:pkh:eip155`, EVM
+ * address casing is not part of principal identity; other DID methods
+ * remain exact string matches.
+ */
+export function ownerDidMatches(a: string, b: string): boolean {
+  const aPkh = parsePkhOwnerDid(a);
+  const bPkh = parsePkhOwnerDid(b);
+  if (aPkh && bPkh) {
+    return aPkh.chainId === bPkh.chainId && aPkh.address === bPkh.address;
+  }
+  return a === b;
 }
 
 /**

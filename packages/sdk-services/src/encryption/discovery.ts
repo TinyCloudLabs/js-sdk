@@ -17,6 +17,7 @@
 import {
   NetworkIdError,
   networkDiscoveryKey,
+  ownerDidMatches,
   parseNetworkId,
 } from "./networkId";
 import {
@@ -159,7 +160,25 @@ function validateDescriptor(
 ):
   | { ok: true; data: NetworkDescriptor }
   | { ok: false; error: EncryptionError } {
-  if (descriptor.networkId !== networkId) {
+  let descriptorNetwork;
+  try {
+    descriptorNetwork = parseNetworkId(descriptor.networkId);
+  } catch (err) {
+    return {
+      ok: false,
+      error: encryptionError({
+        code: "INVALID_NETWORK_ID",
+        message: `descriptor networkId is malformed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      }),
+    };
+  }
+
+  if (
+    descriptorNetwork.name !== name ||
+    !ownerDidMatches(descriptorNetwork.ownerDid, ownerDid)
+  ) {
     return {
       ok: false,
       error: encryptionError({
@@ -168,7 +187,13 @@ function validateDescriptor(
       }),
     };
   }
-  if (descriptor.ownerDid !== ownerDid) {
+
+  const descriptorOwnerDid = descriptorOwner(descriptor);
+  if (
+    descriptorOwnerDid === undefined ||
+    !ownerDidMatches(descriptorOwnerDid, ownerDid) ||
+    !ownerDidMatches(descriptorOwnerDid, descriptorNetwork.ownerDid)
+  ) {
     return {
       ok: false,
       error: encryptionError({
@@ -198,7 +223,27 @@ function validateDescriptor(
       }),
     };
   }
-  return { ok: true, data: descriptor };
+  return {
+    ok: true,
+    data: {
+      ...descriptor,
+      ownerDid: descriptorOwnerDid,
+    },
+  };
+}
+
+function descriptorOwner(descriptor: NetworkDescriptor): string | undefined {
+  if (typeof descriptor.ownerDid === "string" && descriptor.ownerDid.length > 0) {
+    return descriptor.ownerDid;
+  }
+
+  const legacyDescriptor = descriptor as NetworkDescriptor & {
+    principal?: unknown;
+  };
+  return typeof legacyDescriptor.principal === "string" &&
+    legacyDescriptor.principal.length > 0
+    ? legacyDescriptor.principal
+    : undefined;
 }
 
 /**
