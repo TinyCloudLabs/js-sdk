@@ -23,6 +23,7 @@
     "canonical-network-id",
     "cli-auth-artifacts",
     "dependabot-dependabot-cargo-rust-minor-patch-fcf40cfdd5",
-    "owner-did-terminology"
+    "owner-did-terminology",
+    "secrets-descriptor-principal"
   ]
 }

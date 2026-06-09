@@ -1,5 +1,14 @@
 # @tinycloud/cli
 
+## 0.6.0-beta.5
+
+### Patch Changes
+
+- d606baf: Accept equivalent `did:pkh:eip155` owner DID address casing when validating encryption network descriptors, including legacy `principal` descriptors, so `tc secrets` can read existing network metadata. Pin the Rust WASM source to the released `tinycloud-node` `v1.4.2` tag.
+- Updated dependencies [d606baf]
+  - @tinycloud/node-sdk@2.3.0-beta.5
+  - @tinycloud/node-sdk-wasm@1.7.4-beta.1
+
 ## 0.6.0-beta.4
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-services",
-  "version": "2.3.0-beta.2",
+  "version": "2.3.0-beta.5",
   "description": "TinyCloud SDK Services - Platform-agnostic service implementations",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -43,7 +43,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
-    "@tinycloud/node-sdk-wasm": "1.7.4-beta.0",
+    "@tinycloud/node-sdk-wasm": "1.7.4-beta.1",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"
   },
