@@ -59,6 +59,13 @@ export {
   type PkhDidParts,
 } from "./identity";
 
+// Encryption network identity helpers
+export {
+  canonicalizeNetworkId,
+  parseCanonicalNetworkId,
+  type CanonicalParsedNetworkId,
+} from "./networkId";
+
 // Session storage interface and types
 export {
   // Interface
