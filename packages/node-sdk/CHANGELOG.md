@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 2.3.0-beta.4
+
+### Patch Changes
+
+- 90bdc18: Add canonical encryption network ID helpers so apps can compare network-scoped capabilities across equivalent owner DID address casing.
+- Updated dependencies [90bdc18]
+  - @tinycloud/sdk-core@2.3.0-beta.4
+
 ## 2.3.0-beta.3
 
 ### Patch Changes

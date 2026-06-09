@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 2.3.0-beta.4
+
+### Patch Changes
+
+- 90bdc18: Add canonical encryption network ID helpers so apps can compare network-scoped capabilities across equivalent owner DID address casing.
+
 ## 2.3.0-beta.3
 
 ### Patch Changes
