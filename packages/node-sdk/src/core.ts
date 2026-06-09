@@ -34,6 +34,7 @@ export type {
   ISpaceCreationHandler,
   SpaceCreationContext,
   CanonicalAddress,
+  CanonicalParsedNetworkId,
   DidCacheKeyOptions,
   DidEqualsOptions,
   PkhDidParts,
@@ -49,6 +50,7 @@ export {
   canonicalizeAddress,
   canonicalizeDid,
   canonicalizeDidUrl,
+  canonicalizeNetworkId,
   didCacheKey,
   didEquals,
   isEvmAddress,
@@ -57,6 +59,7 @@ export {
   pkhDid,
   principalDid,
   principalDidEquals,
+  parseCanonicalNetworkId,
 } from "@tinycloud/sdk-core";
 
 // Storage implementations
@@ -131,10 +134,7 @@ export {
 
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";
-export {
-  serializeDelegation,
-  deserializeDelegation,
-} from "./delegation";
+export { serializeDelegation, deserializeDelegation } from "./delegation";
 export type { PortableDelegation } from "./delegation";
 
 // Re-export KV service values
@@ -174,7 +174,11 @@ export type {
 } from "@tinycloud/sdk-core";
 
 // Re-export DuckDB service values
-export { DuckDbService, DuckDbDatabaseHandle, DuckDbAction } from "@tinycloud/sdk-core";
+export {
+  DuckDbService,
+  DuckDbDatabaseHandle,
+  DuckDbAction,
+} from "@tinycloud/sdk-core";
 
 // Re-export DuckDB service types
 export type {

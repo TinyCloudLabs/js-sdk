@@ -58,6 +58,7 @@ export type {
   ISpaceCreationHandler,
   SpaceCreationContext,
   CanonicalAddress,
+  CanonicalParsedNetworkId,
   DidCacheKeyOptions,
   DidEqualsOptions,
   PkhDidParts,
@@ -73,6 +74,7 @@ export {
   canonicalizeAddress,
   canonicalizeDid,
   canonicalizeDidUrl,
+  canonicalizeNetworkId,
   didCacheKey,
   didEquals,
   isEvmAddress,
@@ -81,6 +83,7 @@ export {
   pkhDid,
   principalDid,
   principalDidEquals,
+  parseCanonicalNetworkId,
 } from "@tinycloud/sdk-core";
 
 // Signers

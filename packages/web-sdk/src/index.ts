@@ -199,7 +199,9 @@ export {
 // Re-export encryption service types and helpers from sdk-core
 export {
   EncryptionService,
+  canonicalizeNetworkId,
   parseNetworkId,
+  parseCanonicalNetworkId,
   buildNetworkId,
   isNetworkId,
   networkDiscoveryKey,
