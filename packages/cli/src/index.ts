@@ -89,6 +89,8 @@ registerDuckdbCommand(program);
 registerManifestCommand(program);
 registerUpgradeCommand(program);
 
+program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}\n`);
+
 program.addHelpText("afterAll", () => {
   if (!process.stdout.isTTY) return "";
   return `
