@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 0.6.0-beta.6
+
+### Patch Changes
+
+- 74161ce: Show the installed CLI version in the default `tc` help output.
+
 ## 0.6.0-beta.5
 
 ### Patch Changes

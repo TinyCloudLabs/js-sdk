@@ -22,6 +22,7 @@
     "canonical-did-addresses",
     "canonical-network-id",
     "cli-auth-artifacts",
+    "cli-default-version",
     "dependabot-dependabot-cargo-rust-minor-patch-fcf40cfdd5",
     "owner-did-terminology",
     "secrets-descriptor-principal"
