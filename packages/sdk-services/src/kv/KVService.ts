@@ -30,6 +30,9 @@ import {
   KVServiceConfig,
   KVGetOptions,
   KVPutOptions,
+  KVBatchPutItem,
+  KVBatchPutOptions,
+  KVBatchPutResponse,
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
@@ -45,6 +48,12 @@ interface SignedKvUrlNodeResponse {
   url: string;
   ticketId: string;
   expiresAt: string;
+}
+
+function encodeKvBatchPartName(path: string): string {
+  return encodeURIComponent(path).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
 }
 
 /**
@@ -211,6 +220,67 @@ export class KVService extends BaseService implements IKVService {
       body,
       signal: this.combineSignals(signal),
     });
+  }
+
+  private serializeBatchPutValue(item: KVBatchPutItem): Blob {
+    const contentType = item.contentType;
+
+    if (item.value instanceof Blob) {
+      if (!contentType || item.value.type === contentType) {
+        return item.value;
+      }
+      return new Blob([item.value], { type: contentType });
+    }
+
+    if (item.value instanceof ArrayBuffer) {
+      return new Blob([item.value], {
+        type: contentType ?? "application/octet-stream",
+      });
+    }
+
+    if (ArrayBuffer.isView(item.value)) {
+      const value = item.value;
+      const bytes = new Uint8Array(value.byteLength);
+      bytes.set(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+      return new Blob([bytes], {
+        type: contentType ?? "application/octet-stream",
+      });
+    }
+
+    if (typeof item.value === "string") {
+      return new Blob([item.value], {
+        type: contentType ?? "text/plain;charset=UTF-8",
+      });
+    }
+
+    const json = JSON.stringify(item.value);
+    if (json === undefined) {
+      throw new Error(`Cannot JSON serialize KV batch value for key "${item.key}"`);
+    }
+
+    return new Blob([json], {
+      type: contentType ?? "application/json",
+    });
+  }
+
+  private normalizeBatchPutResponse(data: unknown): KVBatchPutResponse | undefined {
+    if (!data || typeof data !== "object") {
+      return undefined;
+    }
+
+    const response = data as Partial<KVBatchPutResponse>;
+    if (
+      !Array.isArray(response.written) ||
+      !response.written.every((key) => typeof key === "string") ||
+      typeof response.count !== "number"
+    ) {
+      return undefined;
+    }
+
+    return {
+      written: response.written,
+      count: response.count,
+    };
   }
 
   /**
@@ -463,6 +533,123 @@ export class KVService extends BaseService implements IKVService {
           data: undefined as void,
           headers: this.createResponseHeaders(response.headers),
         });
+      } catch (error) {
+        return err(wrapError("kv", error));
+      }
+    });
+  }
+
+  /**
+   * Store multiple values in one TinyCloud KV invocation.
+   */
+  async batchPut(
+    items: KVBatchPutItem[],
+    options?: KVBatchPutOptions
+  ): Promise<Result<KVBatchPutResponse>> {
+    return this.withTelemetry("batchPut", String(items.length), async () => {
+      if (!this.requireAuth()) {
+        return err(authRequiredError("kv"));
+      }
+
+      if (items.length === 0) {
+        return ok({ written: [], count: 0 });
+      }
+
+      if (!this.context.invokeAny) {
+        return err(
+          serviceError(
+            ErrorCodes.INVALID_INPUT,
+            "KV batchPut requires SDK runtime support for multi-resource invocations",
+            "kv"
+          )
+        );
+      }
+
+      const session = this.context.session!;
+      const paths = items.map((item) => this.getFullPath(item.key, options?.prefix));
+      const seen = new Set<string>();
+      for (const path of paths) {
+        if (seen.has(path)) {
+          return err(
+            serviceError(
+              ErrorCodes.INVALID_INPUT,
+              `KV batchPut received duplicate key after prefix resolution: ${path}`,
+              "kv"
+            )
+          );
+        }
+        seen.add(path);
+      }
+
+      try {
+        const body = new FormData();
+        for (let index = 0; index < items.length; index++) {
+          body.append(
+            encodeKvBatchPartName(paths[index]!),
+            this.serializeBatchPutValue(items[index]!)
+          );
+        }
+
+        const headers = this.context.invokeAny(
+          session,
+          paths.map((path) => ({
+            spaceId: session.spaceId,
+            service: "kv",
+            path,
+            action: KVAction.PUT,
+          }))
+        );
+
+        const response = await this.context.fetch(`${this.host}/invoke`, {
+          method: "POST",
+          headers,
+          body,
+          signal: this.combineSignals(options?.signal),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+
+          if (response.status === 401 || response.status === 403) {
+            const { resource, action } = parseAuthError(errorText);
+            return err(authUnauthorizedError("kv", errorText, {
+              status: response.status,
+              ...(action && { requiredAction: action }),
+              ...(resource && { resource }),
+            }));
+          }
+
+          const quotaError = this.handleQuotaErrorResponse(
+            response,
+            errorText,
+            "batch"
+          );
+          if (quotaError) {
+            return quotaError;
+          }
+
+          return err(
+            serviceError(
+              ErrorCodes.KV_WRITE_FAILED,
+              `Failed to batch put ${items.length} key(s): ${response.status} - ${errorText}`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            )
+          );
+        }
+
+        const batchResponse = this.normalizeBatchPutResponse(await response.json());
+        if (!batchResponse || batchResponse.count !== batchResponse.written.length) {
+          return err(
+            serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              "KV batchPut response did not include matching written keys and count",
+              "kv"
+            )
+          );
+        }
+
+        return ok(batchResponse);
       } catch (error) {
         return err(wrapError("kv", error));
       }

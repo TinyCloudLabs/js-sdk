@@ -33,6 +33,9 @@ import { Result } from "../types";
 import {
   KVGetOptions,
   KVPutOptions,
+  KVBatchPutItem,
+  KVBatchPutOptions,
+  KVBatchPutResponse,
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
@@ -97,6 +100,14 @@ export interface IPrefixedKVService {
     value: unknown,
     options?: Omit<KVPutOptions, 'prefix'>
   ): Promise<Result<KVResponse<void>>>;
+
+  /**
+   * Store multiple values within this prefix in one TinyCloud KV invocation.
+   */
+  batchPut(
+    items: KVBatchPutItem[],
+    options?: Omit<KVBatchPutOptions, 'prefix'>
+  ): Promise<Result<KVBatchPutResponse>>;
 
   /**
    * List keys within this prefix.
@@ -202,6 +213,11 @@ interface IKVServiceLike {
     value: unknown,
     options?: KVPutOptions
   ): Promise<Result<KVResponse<void>>>;
+
+  batchPut(
+    items: KVBatchPutItem[],
+    options?: KVBatchPutOptions
+  ): Promise<Result<KVBatchPutResponse>>;
 
   list(options?: KVListOptions): Promise<Result<KVListResponse>>;
 
@@ -311,6 +327,22 @@ export class PrefixedKVService implements IPrefixedKVService {
   ): Promise<Result<KVResponse<void>>> {
     const fullKey = this.getFullKey(key);
     return this._kv.put(fullKey, value, { ...options, prefix: '' });
+  }
+
+  /**
+   * Store multiple values within this prefix in one TinyCloud KV invocation.
+   */
+  async batchPut(
+    items: KVBatchPutItem[],
+    options?: Omit<KVBatchPutOptions, 'prefix'>
+  ): Promise<Result<KVBatchPutResponse>> {
+    return this._kv.batchPut(
+      items.map((item) => ({
+        ...item,
+        key: this.getFullKey(item.key),
+      })),
+      { ...options, prefix: '' }
+    );
   }
 
   /**
