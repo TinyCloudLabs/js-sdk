@@ -196,7 +196,7 @@ export type InvokeAnyFunction = (
 export interface FetchRequestInit {
   method?: string;
   headers?: ServiceHeaders;
-  body?: Blob | string;
+  body?: Blob | FormData | string;
   signal?: AbortSignal;
 }
 

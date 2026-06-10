@@ -11,6 +11,9 @@ import {
   KVServiceConfig,
   KVGetOptions,
   KVPutOptions,
+  KVBatchPutItem,
+  KVBatchPutOptions,
+  KVBatchPutResponse,
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
@@ -86,6 +89,21 @@ export interface IKVService extends IService {
     value: unknown,
     options?: KVPutOptions
   ): Promise<Result<KVResponse<void>>>;
+
+  /**
+   * Store multiple values in one TinyCloud KV invocation.
+   *
+   * The batch is authorized as one invocation containing one `tinycloud.kv/put`
+   * capability per key. The node commits the whole batch or rejects it.
+   *
+   * @param items - Entries to write
+   * @param options - Optional batch configuration
+   * @returns Result with the written keys and count
+   */
+  batchPut(
+    items: KVBatchPutItem[],
+    options?: KVBatchPutOptions
+  ): Promise<Result<KVBatchPutResponse>>;
 
   /**
    * List keys with optional prefix filtering.

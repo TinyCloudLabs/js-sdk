@@ -88,6 +88,65 @@ export interface KVPutOptions {
 }
 
 /**
+ * One entry in a KV batch put request.
+ */
+export interface KVBatchPutItem {
+  /**
+   * The key to store under.
+   */
+  key: string;
+
+  /**
+   * The value to store.
+   *
+   * Objects are JSON stringified. Strings are stored as text. Binary values
+   * should be supplied as Blob, ArrayBuffer, or Uint8Array.
+   */
+  value: unknown;
+
+  /**
+   * Content type for this item. Defaults to application/json for objects and
+   * application/octet-stream for binary values.
+   */
+  contentType?: string;
+}
+
+/**
+ * Options for KV batch put operations.
+ */
+export interface KVBatchPutOptions {
+  /**
+   * Override the default prefix for all entries in this batch.
+   */
+  prefix?: string;
+
+  /**
+   * Custom timeout for this operation in milliseconds.
+   */
+  timeout?: number;
+
+  /**
+   * Custom abort signal for this operation.
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * Response from KV batch put operations.
+ */
+export interface KVBatchPutResponse {
+  /**
+   * Keys successfully written by the batch.
+   */
+  written: string[];
+
+  /**
+   * Number of written keys.
+   */
+  count: number;
+}
+
+/**
  * Options for KV list operations.
  */
 export interface KVListOptions {
