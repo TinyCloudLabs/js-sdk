@@ -2045,18 +2045,33 @@ function parseExpiryOption(raw) {
 }
 function groupPermissionsBySpace(permissions) {
   const groups = /* @__PURE__ */ new Map();
+  const rawEntries = [];
   for (const permission of permissions) {
+    if (isRawPermission(permission)) {
+      rawEntries.push(permission);
+      continue;
+    }
     const group = groups.get(permission.space) ?? [];
     group.push(permission);
     groups.set(permission.space, group);
   }
-  return Array.from(groups.values());
+  const grouped = Array.from(groups.values());
+  if (grouped.length === 0) {
+    return rawEntries.length > 0 ? [rawEntries] : [];
+  }
+  grouped[0].push(...rawEntries);
+  return grouped;
+}
+function isRawPermission(permission) {
+  return permission.service === "tinycloud.encryption" && permission.path.startsWith("urn:tinycloud:encryption:");
 }
 function portableFromOpenKeyDelegation(data, permissions, host) {
-  const primary = permissions[0];
-  const returnedSpace = String(data.spaceId ?? primary.space);
-  const expectedSpaces = new Set(permissions.map((permission) => permission.space));
-  if (expectedSpaces.size !== 1 || !expectedSpaces.has(returnedSpace)) {
+  const primary = permissions.find((permission) => !isRawPermission(permission)) ?? permissions[0];
+  const returnedSpace = String(data.spaceId ?? primary.space ?? "encryption");
+  const expectedSpaces = new Set(
+    permissions.filter((permission) => !isRawPermission(permission)).map((permission) => permission.space)
+  );
+  if (expectedSpaces.size > 0 && (expectedSpaces.size !== 1 || !expectedSpaces.has(returnedSpace))) {
     throw new CLIError(
       "OPENKEY_SCOPE_MISMATCH",
       `OpenKey returned delegation for ${returnedSpace}, expected ${Array.from(expectedSpaces).join(", ")}.`,
@@ -3217,6 +3232,11 @@ function registerVaultCommand(program2) {
 // src/commands/secrets.ts
 import { readFile as readFile6 } from "fs/promises";
 import { writeFile as writeFile5 } from "fs/promises";
+import {
+  resolveSecretListPrefix,
+  resolveSecretPath
+} from "@tinycloud/node-sdk";
+var SECRETS_SPACE = "secrets";
 async function readStdin4() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -3231,6 +3251,61 @@ function authOptions(options) {
 function resolveSecretScope(options) {
   const scope = options.scope ?? options.space;
   return scope ? { scope } : void 0;
+}
+async function runSecretOperation(params) {
+  const first = await withSpinner(params.label, params.operation);
+  if (first.ok || !shouldRequestSecretPermissions(first.error)) {
+    return first;
+  }
+  const profile = await ProfileManager.getProfile(params.ctx.profile);
+  if (!canRequestOwnerPermissions(profile)) {
+    return first;
+  }
+  const requested = secretPermissionEntries({
+    action: params.action,
+    name: params.name,
+    options: params.scopeOptions,
+    node: params.node
+  });
+  await withSpinner(
+    "Requesting secret permissions...",
+    () => ensureDelegationAuthority({
+      ctx: params.ctx,
+      profile,
+      node: params.node,
+      requested,
+      expiryOption: void 0,
+      yes: true
+    })
+  );
+  return withSpinner(params.label, params.operation);
+}
+function canRequestOwnerPermissions(profile) {
+  const posture = resolveProfilePosture(profile);
+  return posture === "owner-openkey" || posture === "local-owner-key";
+}
+function shouldRequestSecretPermissions(error) {
+  if (error.code !== "PERMISSION_DENIED") return false;
+  return /permission|session expired|autosign|capabilit/i.test(error.message);
+}
+function secretPermissionEntries(params) {
+  const path = params.action === "list" ? resolveSecretListPrefix(params.options) : resolveSecretPath(params.name ?? "", params.options).permissionPaths.vault;
+  const permissions = [{
+    service: "tinycloud.kv",
+    space: SECRETS_SPACE,
+    path,
+    actions: [params.action],
+    skipPrefix: true
+  }];
+  if (params.action === "get") {
+    permissions.push({
+      service: "tinycloud.encryption",
+      path: params.node.getDefaultEncryptionNetworkId(),
+      actions: ["decrypt"],
+      skipPrefix: true
+    });
+  }
+  return permissions;
 }
 function registerSecretsCommand(program2) {
   const secrets = program2.command("secrets").description("Encrypted secrets management");
@@ -3279,10 +3354,14 @@ function registerSecretsCommand(program2) {
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx, authOptions(options));
       const scopeOptions = resolveSecretScope(options);
-      const result = await withSpinner(
-        "Listing secrets...",
-        () => node.secrets.list(scopeOptions)
-      );
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "list",
+        scopeOptions,
+        label: "Listing secrets...",
+        operation: () => node.secrets.list(scopeOptions)
+      });
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }
@@ -3303,10 +3382,15 @@ function registerSecretsCommand(program2) {
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx, authOptions(options));
       const scopeOptions = resolveSecretScope(options);
-      const result = await withSpinner(
-        `Getting secret ${name}...`,
-        () => node.secrets.get(name, scopeOptions)
-      );
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "get",
+        name,
+        scopeOptions,
+        label: `Getting secret ${name}...`,
+        operation: () => node.secrets.get(name, scopeOptions)
+      });
       if (!result.ok) {
         if (result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND") {
           throw new CLIError("NOT_FOUND", `Secret "${name}" not found`, ExitCode.NOT_FOUND);
@@ -3349,10 +3433,15 @@ function registerSecretsCommand(program2) {
         secretValue = value;
       }
       const scopeOptions = resolveSecretScope(options);
-      const result = await withSpinner(
-        `Storing secret ${name}...`,
-        () => node.secrets.put(name, secretValue, scopeOptions)
-      );
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "put",
+        name,
+        scopeOptions,
+        label: `Storing secret ${name}...`,
+        operation: () => node.secrets.put(name, secretValue, scopeOptions)
+      });
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }
@@ -3367,10 +3456,15 @@ function registerSecretsCommand(program2) {
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx, authOptions(options));
       const scopeOptions = resolveSecretScope(options);
-      const result = await withSpinner(
-        `Deleting secret ${name}...`,
-        () => node.secrets.delete(name, scopeOptions)
-      );
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "del",
+        name,
+        scopeOptions,
+        label: `Deleting secret ${name}...`,
+        operation: () => node.secrets.delete(name, scopeOptions)
+      });
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }

@@ -788,7 +788,7 @@ function normalizePortableDelegation(delegation: PortableDelegation): PortableDe
   return { ...delegation, expiry };
 }
 
-async function ensureDelegationAuthority(params: {
+export async function ensureDelegationAuthority(params: {
   ctx: { profile: string; host: string };
   profile: ProfileConfig;
   node: Awaited<ReturnType<typeof ensureAuthenticated>>;
@@ -975,12 +975,27 @@ function parseExpiryOption(raw: unknown): string | number | undefined {
 
 function groupPermissionsBySpace(permissions: PermissionEntry[]): PermissionEntry[][] {
   const groups = new Map<string, PermissionEntry[]>();
+  const rawEntries: PermissionEntry[] = [];
   for (const permission of permissions) {
+    if (isRawPermission(permission)) {
+      rawEntries.push(permission);
+      continue;
+    }
     const group = groups.get(permission.space) ?? [];
     group.push(permission);
     groups.set(permission.space, group);
   }
-  return Array.from(groups.values());
+  const grouped = Array.from(groups.values());
+  if (grouped.length === 0) {
+    return rawEntries.length > 0 ? [rawEntries] : [];
+  }
+  grouped[0].push(...rawEntries);
+  return grouped;
+}
+
+function isRawPermission(permission: PermissionEntry): boolean {
+  return permission.service === "tinycloud.encryption" &&
+    permission.path.startsWith("urn:tinycloud:encryption:");
 }
 
 function portableFromOpenKeyDelegation(
@@ -988,10 +1003,14 @@ function portableFromOpenKeyDelegation(
   permissions: PermissionEntry[],
   host: string,
 ): PortableDelegation {
-  const primary = permissions[0];
-  const returnedSpace = String(data.spaceId ?? primary.space);
-  const expectedSpaces = new Set(permissions.map((permission) => permission.space));
-  if (expectedSpaces.size !== 1 || !expectedSpaces.has(returnedSpace)) {
+  const primary = permissions.find((permission) => !isRawPermission(permission)) ?? permissions[0];
+  const returnedSpace = String(data.spaceId ?? primary.space ?? "encryption");
+  const expectedSpaces = new Set(
+    permissions
+      .filter((permission) => !isRawPermission(permission))
+      .map((permission) => permission.space),
+  );
+  if (expectedSpaces.size > 0 && (expectedSpaces.size !== 1 || !expectedSpaces.has(returnedSpace))) {
     throw new CLIError(
       "OPENKEY_SCOPE_MISMATCH",
       `OpenKey returned delegation for ${returnedSpace}, expected ${Array.from(expectedSpaces).join(", ")}.`,

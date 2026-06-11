@@ -11,6 +11,10 @@ type CLIErrorLike = {
   exitCode: number;
 };
 
+type SecretResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: { code: string; message: string; service?: string } };
+
 type NetworkDescriptorLike = {
   networkId: string;
   ownerDid: string;
@@ -74,9 +78,30 @@ const recorded = {
       actions: string[];
     }>;
   }>,
+  permissionRequests: [] as Array<{
+    profile: string;
+    requested: Array<{
+      service: string;
+      space?: string;
+      path: string;
+      actions: string[];
+      skipPrefix?: boolean;
+    }>;
+  }>,
 };
 
 let currentNode: FakeNode;
+let currentProfile = {
+  name: "default",
+  host: "https://tinycloud.test",
+  chainId: 1,
+  spaceName: "default",
+  did: "did:key:z6MkSession",
+  createdAt: "2026-06-01T00:00:00.000Z",
+  authMethod: "openkey" as const,
+  posture: "owner-openkey" as const,
+  operatorType: "human" as const,
+};
 
 function resetRecorded(): void {
   recorded.outputs.length = 0;
@@ -91,6 +116,7 @@ function resetRecorded(): void {
   recorded.networkShowCalls.length = 0;
   recorded.networkInitCalls.length = 0;
   recorded.delegateCalls.length = 0;
+  recorded.permissionRequests.length = 0;
 }
 
 function makeDescriptor(
@@ -113,10 +139,10 @@ function makeDescriptor(
 }
 
 function makeFakeNode(overrides: {
-  getResult?: { ok: false; error: { code: string; message: string; service?: string } } | { ok: true; data: string };
-  listResult?: { ok: false; error: { code: string; message: string; service?: string } } | { ok: true; data: string[] };
-  putResult?: { ok: false; error: { code: string; message: string; service?: string } } | { ok: true; data: undefined };
-  deleteResult?: { ok: false; error: { code: string; message: string; service?: string } } | { ok: true; data: undefined };
+  getResult?: SecretResult<string> | SecretResult<string>[];
+  listResult?: SecretResult<string[]> | SecretResult<string[]>[];
+  putResult?: SecretResult<undefined> | SecretResult<undefined>[];
+  deleteResult?: SecretResult<undefined> | SecretResult<undefined>[];
   networkShowResult?: NetworkDescriptorLike | null;
   networkInitResult?: NetworkDescriptorLike;
   delegateResult?: { delegation: { cid: string; path: string; actions: string[] }; prompted: boolean };
@@ -130,19 +156,19 @@ function makeFakeNode(overrides: {
     secrets: {
       async list(options?: { scope?: string }) {
         recorded.listCalls.push(options);
-        return overrides.listResult ?? { ok: true as const, data: ["ANTHROPIC_API_KEY"] };
+        return nextResult(overrides.listResult, { ok: true as const, data: ["ANTHROPIC_API_KEY"] });
       },
       async get(name: string, options?: { scope?: string }) {
         recorded.getCalls.push({ name, options });
-        return overrides.getResult ?? { ok: true as const, data: "stored-value" };
+        return nextResult(overrides.getResult, { ok: true as const, data: "stored-value" });
       },
       async put(name: string, value: string, options?: { scope?: string }) {
         recorded.putCalls.push({ name, value, options });
-        return overrides.putResult ?? { ok: true as const, data: undefined };
+        return nextResult(overrides.putResult, { ok: true as const, data: undefined });
       },
       async delete(name: string, options?: { scope?: string }) {
         recorded.deleteCalls.push({ name, options });
-        return overrides.deleteResult ?? { ok: true as const, data: undefined };
+        return nextResult(overrides.deleteResult, { ok: true as const, data: undefined });
       },
     },
     async getEncryptionNetwork(nameOrNetworkId: string) {
@@ -169,6 +195,33 @@ function makeFakeNode(overrides: {
   };
 }
 
+function nextResult<T>(
+  result: SecretResult<T> | SecretResult<T>[] | undefined,
+  fallback: SecretResult<T>,
+): SecretResult<T> {
+  if (Array.isArray(result)) {
+    return result.shift() ?? fallback;
+  }
+  return result ?? fallback;
+}
+
+mock.module("@tinycloud/node-sdk", () => ({
+  NodeWasmBindings: class NodeWasmBindings {
+    parseRecapFromSiwe(): unknown[] {
+      return [];
+    }
+  },
+  resolveSecretListPrefix: (options?: { scope?: string }) =>
+    options?.scope ? `vault/secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/` : "vault/secrets/",
+  resolveSecretPath: (name: string, options?: { scope?: string }) => ({
+    permissionPaths: {
+      vault: options?.scope
+        ? `vault/secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/${name}`
+        : `vault/secrets/${name}`,
+    },
+  }),
+}));
+
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     resolveContext: async (globalOpts: unknown) => {
@@ -178,6 +231,7 @@ mock.module("../config/profiles.js", () => ({
         host: "https://tinycloud.test",
       };
     },
+    getProfile: async () => currentProfile,
   },
 }));
 
@@ -185,6 +239,24 @@ mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async (ctx: unknown, options: unknown) => {
     recorded.ensureAuthenticated.push({ ctx, options });
     return currentNode;
+  },
+}));
+
+mock.module("./auth.js", () => ({
+  ensureDelegationAuthority: async (params: {
+    ctx: { profile: string };
+    requested: Array<{
+      service: string;
+      space?: string;
+      path: string;
+      actions: string[];
+      skipPrefix?: boolean;
+    }>;
+  }) => {
+    recorded.permissionRequests.push({
+      profile: params.ctx.profile,
+      requested: params.requested,
+    });
   },
 }));
 
@@ -225,6 +297,17 @@ async function runSecretsCommand(args: string[]): Promise<void> {
 beforeEach(() => {
   resetRecorded();
   currentNode = makeFakeNode();
+  currentProfile = {
+    name: "default",
+    host: "https://tinycloud.test",
+    chainId: 1,
+    spaceName: "default",
+    did: "did:key:z6MkSession",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    authMethod: "openkey",
+    posture: "owner-openkey",
+    operatorType: "human",
+  };
 });
 
 describe("CLI secrets commands", () => {
@@ -315,7 +398,115 @@ describe("CLI secrets commands", () => {
     ]);
   });
 
-  test("surfaces permission errors without exposing secret values", async () => {
+  test("requests list permission and retries when an owner session is expired", async () => {
+    currentNode = makeFakeNode({
+      listResult: [
+        {
+          ok: false,
+          error: {
+            code: "PERMISSION_DENIED",
+            service: "secrets",
+            message: "Session expired at 2026-06-02T17:30:53.120Z",
+          },
+        },
+        { ok: true, data: ["ANTHROPIC_API_KEY"] },
+      ],
+    });
+
+    await runSecretsCommand(["secrets", "list"]);
+
+    expect(recorded.listCalls).toEqual([undefined, undefined]);
+    expect(recorded.permissionRequests).toEqual([
+      {
+        profile: "default",
+        requested: [
+          {
+            service: "tinycloud.kv",
+            space: "secrets",
+            path: "vault/secrets/",
+            actions: ["list"],
+            skipPrefix: true,
+          },
+        ],
+      },
+    ]);
+    expect(recorded.outputs).toEqual([
+      { secrets: ["ANTHROPIC_API_KEY"], count: 1 },
+    ]);
+  });
+
+  test("requests secret read and decrypt permissions before retrying get", async () => {
+    currentNode = makeFakeNode({
+      getResult: [
+        {
+          ok: false,
+          error: {
+            code: "PERMISSION_DENIED",
+            service: "secrets",
+            message: "Cannot autosign tinycloud.kv/get for ANTHROPIC_API_KEY",
+          },
+        },
+        { ok: true, data: "stored-value" },
+      ],
+    });
+
+    await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
+
+    expect(recorded.getCalls).toEqual([
+      { name: "ANTHROPIC_API_KEY", options: undefined },
+      { name: "ANTHROPIC_API_KEY", options: undefined },
+    ]);
+    expect(recorded.permissionRequests).toEqual([
+      {
+        profile: "default",
+        requested: [
+          {
+            service: "tinycloud.kv",
+            space: "secrets",
+            path: "vault/secrets/ANTHROPIC_API_KEY",
+            actions: ["get"],
+            skipPrefix: true,
+          },
+          {
+            service: "tinycloud.encryption",
+            path: DEFAULT_NETWORK_ID,
+            actions: ["decrypt"],
+            skipPrefix: true,
+          },
+        ],
+      },
+    ]);
+    expect(recorded.outputs).toEqual([
+      { name: "ANTHROPIC_API_KEY", value: "stored-value" },
+    ]);
+  });
+
+  test("does not request owner permissions for delegate-session profiles", async () => {
+    currentProfile = {
+      ...currentProfile,
+      posture: "delegate-session",
+    };
+    currentNode = makeFakeNode({
+      listResult: {
+        ok: false,
+        error: {
+          code: "PERMISSION_DENIED",
+          service: "secrets",
+          message: "Permission denied while listing secrets",
+        },
+      },
+    });
+
+    await runSecretsCommand(["secrets", "list"]);
+
+    expect(recorded.permissionRequests).toEqual([]);
+    expect(recorded.errors).toHaveLength(1);
+    const error = recorded.errors[0] as CLIErrorLike;
+    expect(error.code).toBe("PERMISSION_DENIED");
+    expect(error.message).toBe("Permission denied while listing secrets");
+  });
+
+  test("surfaces permission errors after a retry without exposing secret values", async () => {
     currentNode = makeFakeNode({
       getResult: {
         ok: false,
@@ -333,5 +524,6 @@ describe("CLI secrets commands", () => {
     const error = recorded.errors[0] as CLIErrorLike;
     expect(error.code).toBe("PERMISSION_DENIED");
     expect(error.message).toBe("Permission denied while reading secret");
+    expect(recorded.outputs).toEqual([]);
   });
 });

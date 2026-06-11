@@ -156,6 +156,15 @@ mock.module("@tinycloud/node-sdk", () => ({
       return recaps.get(siwe) ?? [];
     }
   },
+  resolveSecretListPrefix: (options?: { scope?: string }) =>
+    options?.scope ? `vault/secrets/scoped/${options.scope}/` : "vault/secrets/",
+  resolveSecretPath: (name: string, options?: { scope?: string }) => ({
+    permissionPaths: {
+      vault: options?.scope
+        ? `vault/secrets/scoped/${options.scope}/${name}`
+        : `vault/secrets/${name}`,
+    },
+  }),
 }));
 
 mock.module("../output/formatter.js", () => ({
