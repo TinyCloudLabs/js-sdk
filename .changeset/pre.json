@@ -23,8 +23,13 @@
     "canonical-network-id",
     "cli-auth-artifacts",
     "cli-default-version",
+    "cli-status",
     "dependabot-dependabot-cargo-rust-minor-patch-fcf40cfdd5",
+    "dependabot-dependabot-npm-and-yarn-openkey-77db4987d5",
+    "mock-kv-batch-put",
     "owner-did-terminology",
-    "secrets-descriptor-principal"
+    "secrets-descriptor-principal",
+    "secrets-session-refresh",
+    "tc-1398-kv-batch-put"
   ]
 }

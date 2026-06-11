@@ -1,5 +1,16 @@
 # @tinycloudlabs/node-sdk
 
+## 2.3.0-beta.6
+
+### Minor Changes
+
+- c7676d6: Add `kv.batchPut` for one-invocation TinyCloud KV batch writes.
+
+### Patch Changes
+
+- Updated dependencies [c7676d6]
+  - @tinycloud/sdk-core@2.3.0-beta.6
+
 ## 2.3.0-beta.5
 
 ### Patch Changes

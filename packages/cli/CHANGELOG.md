@@ -1,5 +1,17 @@
 # @tinycloud/cli
 
+## 0.6.0-beta.7
+
+### Patch Changes
+
+- 836915f: Add `tc status` to show local profile, session, delegation, and permission state in human and JSON formats.
+
+  TinyCloud secrets commands now request the required owner delegation and retry once when a secrets operation fails because the active session or permission grant is missing or expired.
+
+- 91f2025: Refresh expired owner OpenKey sessions before running TinyCloud secrets commands.
+- Updated dependencies [c7676d6]
+  - @tinycloud/node-sdk@2.3.0-beta.6
+
 ## 0.6.0-beta.6
 
 ### Patch Changes
