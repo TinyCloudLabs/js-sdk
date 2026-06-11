@@ -18,6 +18,17 @@ import { ensureDelegationAuthority, refreshOpenKeySession } from "./auth.js";
 
 const SECRETS_SPACE = "secrets";
 type SecretAction = "get" | "put" | "del" | "list";
+type SecretKvAbility =
+  | "tinycloud.kv/get"
+  | "tinycloud.kv/put"
+  | "tinycloud.kv/del"
+  | "tinycloud.kv/list";
+const SECRET_KV_ABILITIES: Record<SecretAction, SecretKvAbility> = {
+  get: "tinycloud.kv/get",
+  put: "tinycloud.kv/put",
+  del: "tinycloud.kv/del",
+  list: "tinycloud.kv/list",
+};
 type SecretResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string; service?: string } };
@@ -134,6 +145,10 @@ function parseDate(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function secretKvAbility(action: SecretAction): SecretKvAbility {
+  return SECRET_KV_ABILITIES[action];
+}
+
 function secretPermissionEntries(params: {
   action: SecretAction;
   name?: string;
@@ -147,7 +162,7 @@ function secretPermissionEntries(params: {
     service: "tinycloud.kv",
     space: SECRETS_SPACE,
     path,
-    actions: [params.action],
+    actions: [secretKvAbility(params.action)],
     skipPrefix: true,
   }];
 
@@ -155,7 +170,7 @@ function secretPermissionEntries(params: {
     permissions.push({
       service: "tinycloud.encryption",
       path: params.node.getDefaultEncryptionNetworkId(),
-      actions: ["decrypt"],
+      actions: ["tinycloud.encryption/decrypt"],
       skipPrefix: true,
     });
   }

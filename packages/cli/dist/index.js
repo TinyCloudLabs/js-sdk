@@ -3333,6 +3333,12 @@ import {
   resolveSecretPath
 } from "@tinycloud/node-sdk";
 var SECRETS_SPACE = "secrets";
+var SECRET_KV_ABILITIES = {
+  get: "tinycloud.kv/get",
+  put: "tinycloud.kv/put",
+  del: "tinycloud.kv/del",
+  list: "tinycloud.kv/list"
+};
 async function readStdin4() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -3418,20 +3424,23 @@ function parseDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
 }
+function secretKvAbility(action) {
+  return SECRET_KV_ABILITIES[action];
+}
 function secretPermissionEntries(params) {
   const path = params.action === "list" ? resolveSecretListPrefix(params.options) : resolveSecretPath(params.name ?? "", params.options).permissionPaths.vault;
   const permissions = [{
     service: "tinycloud.kv",
     space: SECRETS_SPACE,
     path,
-    actions: [params.action],
+    actions: [secretKvAbility(params.action)],
     skipPrefix: true
   }];
   if (params.action === "get") {
     permissions.push({
       service: "tinycloud.encryption",
       path: params.node.getDefaultEncryptionNetworkId(),
-      actions: ["decrypt"],
+      actions: ["tinycloud.encryption/decrypt"],
       skipPrefix: true
     });
   }
