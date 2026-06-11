@@ -1156,6 +1156,22 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
  * This is the original auth flow.
  */
 async function handleOpenKeyAuth(profileName: string, host: string, paste?: boolean): Promise<void> {
+  const { profile, delegationData } = await refreshOpenKeySession(profileName, host, { paste });
+
+  outputJson({
+    authenticated: true,
+    profile: profileName,
+    did: profile.did,
+    spaceId: delegationData.spaceId,
+    authMethod: "openkey",
+  });
+}
+
+export async function refreshOpenKeySession(
+  profileName: string,
+  host: string,
+  options: { paste?: boolean } = {},
+): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown> }> {
   const key = await ProfileManager.getKey(profileName);
   if (!key) {
     throw new CLIError(
@@ -1170,7 +1186,7 @@ async function handleOpenKeyAuth(profileName: string, host: string, paste?: bool
 
   // Start browser auth flow
   const delegationData = await startAuthFlow(profile.did, {
-    paste,
+    paste: options.paste,
     jwk: key,
     host,
     openkeyHost: resolveOpenKeyHost(profile),
@@ -1195,11 +1211,5 @@ async function handleOpenKeyAuth(profileName: string, host: string, paste?: bool
 
   await ProfileManager.setProfile(profileName, updatedProfile);
 
-  outputJson({
-    authenticated: true,
-    profile: profileName,
-    did: profile.did,
-    spaceId: delegationData.spaceId,
-    authMethod: "openkey",
-  });
+  return { profile: updatedProfile, delegationData };
 }
