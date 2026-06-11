@@ -1402,6 +1402,15 @@ function registerAuthCommand(program2) {
       handleError(error);
     }
   });
+  auth.command("rotate").description("Rotate the active profile session key").option("--paste", "Use manual paste mode instead of browser callback").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      await rotateAuthKey(ctx.profile, ctx.host, { paste: options.paste });
+    } catch (error) {
+      handleError(error);
+    }
+  });
   auth.command("status").description("Show current authentication state").action(async (_options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -2127,16 +2136,74 @@ function inferDelegationExpiry(data) {
   }
   return new Date(Date.now() + 60 * 60 * 1e3);
 }
-async function handleLocalAuth(profileName, host) {
+async function rotateAuthKey(profileName, host, options = {}) {
+  const profile = await ProfileManager.getProfile(profileName);
+  const posture = resolveProfilePosture(profile);
+  const oldDid = profile.sessionDid ?? profile.did;
+  if (posture === "delegate-session") {
+    throw new CLIError(
+      "ROTATE_DELEGATE_SESSION_UNSUPPORTED",
+      `Profile "${profileName}" is a delegated session. Request or import a new owner delegation instead of rotating it locally.`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  if (profile.authMethod === "local" || posture === "local-owner-key") {
+    if (!profile.privateKey) {
+      throw new CLIError(
+        "LOCAL_OWNER_KEY_REQUIRED",
+        `Profile "${profileName}" does not have a local owner private key. Run \`tc auth login --method local\` first.`,
+        ExitCode.AUTH_REQUIRED
+      );
+    }
+    await ProfileManager.clearSession(profileName);
+    const result2 = await handleLocalAuth(profileName, host, {
+      emitOutput: false,
+      forceSessionKey: true
+    });
+    outputRotationResult(result2.profile, profileName, oldDid, "local");
+    return;
+  }
+  const { jwk, did } = await withSpinner("Generating session key...", async () => {
+    return generateKey();
+  });
+  await ProfileManager.setKey(profileName, jwk);
+  await ProfileManager.clearSession(profileName);
+  await ProfileManager.setProfile(profileName, {
+    ...profile,
+    host,
+    did,
+    sessionDid: did,
+    posture: profile.posture ?? "owner-openkey",
+    operatorType: profile.operatorType ?? "human",
+    authMethod: "openkey"
+  });
+  const result = await refreshOpenKeySession(profileName, host, {
+    paste: options.paste
+  });
+  outputRotationResult(result.profile, profileName, oldDid, "openkey");
+}
+function outputRotationResult(profile, profileName, oldDid, authMethod) {
+  outputJson({
+    rotated: true,
+    profile: profileName,
+    oldDid,
+    did: profile.did,
+    sessionDid: profile.sessionDid ?? null,
+    authMethod,
+    spaceId: profile.spaceId ?? null
+  });
+}
+async function handleLocalAuth(profileName, host, options = {}) {
   const profile = await ProfileManager.getProfile(profileName).catch(() => null);
+  const posture = profile ? resolveProfilePosture(profile) : null;
   let privateKey;
   let address;
   let did;
   let sessionDid = profile?.sessionDid;
-  if (profile?.authMethod === "local" && profile.privateKey && profile.address) {
+  if ((profile?.authMethod === "local" || posture === "local-owner-key") && profile.privateKey) {
     privateKey = profile.privateKey;
-    address = profile.address;
-    did = profile.did;
+    address = profile.address ?? await deriveAddress(privateKey);
+    did = profile.did.startsWith("did:pkh:") ? profile.did : addressToDID(address, profile.chainId ?? DEFAULT_CHAIN_ID);
     if (isInteractive()) {
       process.stderr.write(theme.muted("Using existing local key") + "\n");
       process.stderr.write(formatField("Address", address) + "\n");
@@ -2155,7 +2222,7 @@ async function handleLocalAuth(profileName, host) {
     }
   }
   const hasKey = await ProfileManager.getKey(profileName);
-  if (!hasKey) {
+  if (options.forceSessionKey || !hasKey) {
     const { jwk, did: generatedSessionDid } = await withSpinner("Generating session key...", async () => {
       return generateKey();
     });
@@ -2180,7 +2247,7 @@ async function handleLocalAuth(profileName, host) {
     signature: sessionResult.signature
   });
   sessionDid = sessionResult.verificationMethod;
-  await ProfileManager.setProfile(profileName, {
+  const updatedProfile = {
     ...profile,
     name: profileName,
     host,
@@ -2196,16 +2263,20 @@ async function handleLocalAuth(profileName, host) {
     authMethod: "local",
     privateKey,
     address
-  });
-  outputJson({
-    authenticated: true,
-    profile: profileName,
-    did,
-    sessionDid,
-    address,
-    spaceId: sessionResult.spaceId,
-    authMethod: "local"
-  });
+  };
+  await ProfileManager.setProfile(profileName, updatedProfile);
+  if (options.emitOutput ?? true) {
+    outputJson({
+      authenticated: true,
+      profile: profileName,
+      did,
+      sessionDid,
+      address,
+      spaceId: sessionResult.spaceId,
+      authMethod: "local"
+    });
+  }
+  return { profile: updatedProfile, sessionResult };
 }
 async function handleOpenKeyAuth(profileName, host, paste) {
   const { profile, delegationData } = await refreshOpenKeySession(profileName, host, { paste });
@@ -2978,7 +3049,7 @@ _tc_completions() {
   commands="init auth kv space delegation share node profile completion"
 
   case "\${COMP_WORDS[1]}" in
-    auth) subcommands="login logout status whoami" ;;
+    auth) subcommands="login logout rotate status whoami" ;;
     kv) subcommands="get put delete list head" ;;
     space) subcommands="list create info switch" ;;
     delegation) subcommands="create list info revoke" ;;
@@ -3028,7 +3099,7 @@ _tc() {
       ;;
     args)
       case $words[1] in
-        auth) _values 'subcommand' login logout status whoami ;;
+        auth) _values 'subcommand' login logout rotate status whoami ;;
         kv) _values 'subcommand' get put delete list head ;;
         space) _values 'subcommand' list create info switch ;;
         delegation) _values 'subcommand' create list info revoke ;;
@@ -3063,7 +3134,7 @@ complete -c tc -n "not __fish_seen_subcommand_from $commands" -a profile -d "Pro
 complete -c tc -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
 
 # Subcommands
-complete -c tc -n "__fish_seen_subcommand_from auth" -a "login logout status whoami"
+complete -c tc -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
 complete -c tc -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
 complete -c tc -n "__fish_seen_subcommand_from space" -a "list create info switch"
 complete -c tc -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"

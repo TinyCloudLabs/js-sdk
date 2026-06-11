@@ -39,7 +39,7 @@ _tc_completions() {
   commands="init auth kv space delegation share node profile completion"
 
   case "\${COMP_WORDS[1]}" in
-    auth) subcommands="login logout status whoami" ;;
+    auth) subcommands="login logout rotate status whoami" ;;
     kv) subcommands="get put delete list head" ;;
     space) subcommands="list create info switch" ;;
     delegation) subcommands="create list info revoke" ;;
@@ -90,7 +90,7 @@ _tc() {
       ;;
     args)
       case $words[1] in
-        auth) _values 'subcommand' login logout status whoami ;;
+        auth) _values 'subcommand' login logout rotate status whoami ;;
         kv) _values 'subcommand' get put delete list head ;;
         space) _values 'subcommand' list create info switch ;;
         delegation) _values 'subcommand' create list info revoke ;;
@@ -126,7 +126,7 @@ complete -c tc -n "not __fish_seen_subcommand_from $commands" -a profile -d "Pro
 complete -c tc -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
 
 # Subcommands
-complete -c tc -n "__fish_seen_subcommand_from auth" -a "login logout status whoami"
+complete -c tc -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
 complete -c tc -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
 complete -c tc -n "__fish_seen_subcommand_from space" -a "list create info switch"
 complete -c tc -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"
