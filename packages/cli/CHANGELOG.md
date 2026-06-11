@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 0.6.0-beta.8
+
+### Patch Changes
+
+- f2d0014: Strip private JWK fields before sending delegate key material to OpenKey.
+
 ## 0.6.0-beta.7
 
 ### Patch Changes

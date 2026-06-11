@@ -27,6 +27,7 @@
     "dependabot-dependabot-cargo-rust-minor-patch-fcf40cfdd5",
     "dependabot-dependabot-npm-and-yarn-openkey-77db4987d5",
     "mock-kv-batch-put",
+    "openkey-public-jwk",
     "owner-did-terminology",
     "secrets-descriptor-principal",
     "secrets-session-refresh",
