@@ -2187,6 +2187,16 @@ async function handleLocalAuth(profileName, host) {
   });
 }
 async function handleOpenKeyAuth(profileName, host, paste) {
+  const { profile, delegationData } = await refreshOpenKeySession(profileName, host, { paste });
+  outputJson({
+    authenticated: true,
+    profile: profileName,
+    did: profile.did,
+    spaceId: delegationData.spaceId,
+    authMethod: "openkey"
+  });
+}
+async function refreshOpenKeySession(profileName, host, options = {}) {
   const key = await ProfileManager.getKey(profileName);
   if (!key) {
     throw new CLIError(
@@ -2197,7 +2207,7 @@ async function handleOpenKeyAuth(profileName, host, paste) {
   }
   const profile = await ProfileManager.getProfile(profileName);
   const delegationData = await startAuthFlow(profile.did, {
-    paste,
+    paste: options.paste,
     jwk: key,
     host,
     openkeyHost: resolveOpenKeyHost(profile)
@@ -2215,13 +2225,7 @@ async function handleOpenKeyAuth(profileName, host, paste) {
     updatedProfile.ownerDid = delegationData.ownerDid;
   }
   await ProfileManager.setProfile(profileName, updatedProfile);
-  outputJson({
-    authenticated: true,
-    profile: profileName,
-    did: profile.did,
-    spaceId: delegationData.spaceId,
-    authMethod: "openkey"
-  });
+  return { profile: updatedProfile, delegationData };
 }
 
 // src/commands/kv.ts
@@ -3252,6 +3256,23 @@ function resolveSecretScope(options) {
   const scope = options.scope ?? options.space;
   return scope ? { scope } : void 0;
 }
+async function ensureSecretsNode(ctx, options) {
+  const auth = authOptions(options);
+  if (auth?.privateKey) {
+    return ensureAuthenticated(ctx, auth);
+  }
+  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+  if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+    const session = await ProfileManager.getSession(ctx.profile);
+    if (!session || isStoredSessionExpired(session)) {
+      await withSpinner(
+        session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
+        () => refreshOpenKeySession(ctx.profile, ctx.host)
+      );
+    }
+  }
+  return ensureAuthenticated(ctx, auth);
+}
 async function runSecretOperation(params) {
   const first = await withSpinner(params.label, params.operation);
   if (first.ok || !shouldRequestSecretPermissions(first.error)) {
@@ -3287,6 +3308,23 @@ function canRequestOwnerPermissions(profile) {
 function shouldRequestSecretPermissions(error) {
   if (error.code !== "PERMISSION_DENIED") return false;
   return /permission|session expired|autosign|capabilit/i.test(error.message);
+}
+function isStoredSessionExpired(session) {
+  const record = session;
+  const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
+  if (direct) return direct.getTime() <= Date.now();
+  if (typeof record.siwe !== "string") return false;
+  const match = record.siwe.match(/^Expiration Time:\s*(.+)$/im);
+  const expiry = match ? parseDate(match[1].trim()) : null;
+  return expiry !== null && expiry.getTime() <= Date.now();
+}
+function parseDate(value) {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 function secretPermissionEntries(params) {
   const path = params.action === "list" ? resolveSecretListPrefix(params.options) : resolveSecretPath(params.name ?? "", params.options).permissionPaths.vault;
@@ -3352,7 +3390,7 @@ function registerSecretsCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const node = await ensureSecretsNode(ctx, options);
       const scopeOptions = resolveSecretScope(options);
       const result = await runSecretOperation({
         ctx,
@@ -3380,7 +3418,7 @@ function registerSecretsCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const node = await ensureSecretsNode(ctx, options);
       const scopeOptions = resolveSecretScope(options);
       const result = await runSecretOperation({
         ctx,
@@ -3416,7 +3454,7 @@ function registerSecretsCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const node = await ensureSecretsNode(ctx, options);
       let secretValue;
       const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
       if (sources.length === 0) {
@@ -3454,7 +3492,7 @@ function registerSecretsCommand(program2) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const node = await ensureSecretsNode(ctx, options);
       const scopeOptions = resolveSecretScope(options);
       const result = await runSecretOperation({
         ctx,
@@ -4514,7 +4552,7 @@ async function readDelegations(name, issues) {
   }
 }
 function inspectDelegation(entry) {
-  const expiry = parseDate(entry.delegation.expiry);
+  const expiry = parseDate2(entry.delegation.expiry);
   const expired = expiry === null ? null : expiry.getTime() <= Date.now();
   const permissions = normalizePermissions(
     Array.isArray(entry.permissions) && entry.permissions.length > 0 ? entry.permissions : permissionsFromDelegation(entry.delegation)
@@ -4599,14 +4637,14 @@ function compactPermissions(entries) {
 }
 function extractSessionExpiry(session) {
   for (const key of ["expiresAt", "expiry", "expirationTime"]) {
-    const parsed = parseDate(session[key]);
+    const parsed = parseDate2(session[key]);
     if (parsed) return parsed;
   }
   if (typeof session.siwe !== "string") return null;
   const match = session.siwe.match(/^Expiration Time:\s*(.+)$/im);
-  return match ? parseDate(match[1].trim()) : null;
+  return match ? parseDate2(match[1].trim()) : null;
 }
-function parseDate(value) {
+function parseDate2(value) {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value;
   }

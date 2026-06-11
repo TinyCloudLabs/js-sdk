@@ -88,9 +88,11 @@ const recorded = {
       skipPrefix?: boolean;
     }>;
   }>,
+  sessionRefreshes: [] as Array<{ profile: string; host: string }>,
 };
 
 let currentNode: FakeNode;
+let currentSession: object | null = { expiresAt: "2099-01-01T00:00:00.000Z" };
 let currentProfile = {
   name: "default",
   host: "https://tinycloud.test",
@@ -117,6 +119,7 @@ function resetRecorded(): void {
   recorded.networkInitCalls.length = 0;
   recorded.delegateCalls.length = 0;
   recorded.permissionRequests.length = 0;
+  recorded.sessionRefreshes.length = 0;
 }
 
 function makeDescriptor(
@@ -232,6 +235,7 @@ mock.module("../config/profiles.js", () => ({
       };
     },
     getProfile: async () => currentProfile,
+    getSession: async () => currentSession,
   },
 }));
 
@@ -243,6 +247,10 @@ mock.module("../lib/sdk.js", () => ({
 }));
 
 mock.module("./auth.js", () => ({
+  refreshOpenKeySession: async (profile: string, host: string) => {
+    recorded.sessionRefreshes.push({ profile, host });
+    currentSession = { expiresAt: "2099-01-01T00:00:00.000Z" };
+  },
   ensureDelegationAuthority: async (params: {
     ctx: { profile: string };
     requested: Array<{
@@ -297,6 +305,7 @@ async function runSecretsCommand(args: string[]): Promise<void> {
 beforeEach(() => {
   resetRecorded();
   currentNode = makeFakeNode();
+  currentSession = { expiresAt: "2099-01-01T00:00:00.000Z" };
   currentProfile = {
     name: "default",
     host: "https://tinycloud.test",
@@ -342,6 +351,30 @@ describe("CLI secrets commands", () => {
       "Getting secret ANTHROPIC_API_KEY...",
       "Storing secret ANTHROPIC_API_KEY...",
       "Deleting secret ANTHROPIC_API_KEY...",
+    ]);
+  });
+
+  test("refreshes an expired owner OpenKey session before listing secrets", async () => {
+    currentSession = {
+      siwe: [
+        "tinycloud.test wants you to sign in",
+        "Expiration Time: 2026-06-02T17:30:53.120Z",
+      ].join("\n"),
+    };
+
+    await runSecretsCommand(["secrets", "list"]);
+
+    expect(recorded.sessionRefreshes).toEqual([
+      { profile: "default", host: "https://tinycloud.test" },
+    ]);
+    expect(recorded.ensureAuthenticated).toHaveLength(1);
+    expect(recorded.listCalls).toEqual([undefined]);
+    expect(recorded.outputs).toEqual([
+      { secrets: ["ANTHROPIC_API_KEY"], count: 1 },
+    ]);
+    expect(recorded.spinners).toEqual([
+      "Refreshing TinyCloud session...",
+      "Listing secrets...",
     ]);
   });
 

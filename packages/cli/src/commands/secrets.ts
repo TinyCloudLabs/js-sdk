@@ -14,7 +14,7 @@ import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
-import { ensureDelegationAuthority } from "./auth.js";
+import { ensureDelegationAuthority, refreshOpenKeySession } from "./auth.js";
 
 const SECRETS_SPACE = "secrets";
 type SecretAction = "get" | "put" | "del" | "list";
@@ -41,6 +41,29 @@ function authOptions(options: { privateKey?: string }): { privateKey?: string } 
 function resolveSecretScope(options: { scope?: string; space?: string }): { scope?: string } | undefined {
   const scope = options.scope ?? options.space;
   return scope ? { scope } : undefined;
+}
+
+async function ensureSecretsNode(
+  ctx: CLIContext,
+  options: { privateKey?: string },
+): Promise<TinyCloudNode> {
+  const auth = authOptions(options);
+  if (auth?.privateKey) {
+    return ensureAuthenticated(ctx, auth);
+  }
+
+  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+  if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+    const session = await ProfileManager.getSession(ctx.profile);
+    if (!session || isStoredSessionExpired(session)) {
+      await withSpinner(
+        session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
+        () => refreshOpenKeySession(ctx.profile, ctx.host),
+      );
+    }
+  }
+
+  return ensureAuthenticated(ctx, auth);
 }
 
 async function runSecretOperation<T>(params: {
@@ -90,6 +113,25 @@ function canRequestOwnerPermissions(profile: ProfileConfig): boolean {
 function shouldRequestSecretPermissions(error: { code: string; message: string }): boolean {
   if (error.code !== "PERMISSION_DENIED") return false;
   return /permission|session expired|autosign|capabilit/i.test(error.message);
+}
+
+function isStoredSessionExpired(session: object): boolean {
+  const record = session as Record<string, unknown>;
+  const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
+  if (direct) return direct.getTime() <= Date.now();
+  if (typeof record.siwe !== "string") return false;
+  const match = record.siwe.match(/^Expiration Time:\s*(.+)$/im);
+  const expiry = match ? parseDate(match[1].trim()) : null;
+  return expiry !== null && expiry.getTime() <= Date.now();
+}
+
+function parseDate(value: unknown): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function secretPermissionEntries(params: {
@@ -189,7 +231,7 @@ export function registerSecretsCommand(program: Command): void {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const node = await ensureAuthenticated(ctx, authOptions(options));
+        const node = await ensureSecretsNode(ctx, options);
         const scopeOptions = resolveSecretScope(options);
         const result = await runSecretOperation({
           ctx,
@@ -230,7 +272,7 @@ export function registerSecretsCommand(program: Command): void {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const node = await ensureAuthenticated(ctx, authOptions(options));
+        const node = await ensureSecretsNode(ctx, options);
         const scopeOptions = resolveSecretScope(options);
         const result = await runSecretOperation({
           ctx,
@@ -284,7 +326,7 @@ export function registerSecretsCommand(program: Command): void {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const node = await ensureAuthenticated(ctx, authOptions(options));
+        const node = await ensureSecretsNode(ctx, options);
 
         // Determine value source
         let secretValue: string;
@@ -337,7 +379,7 @@ export function registerSecretsCommand(program: Command): void {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const node = await ensureAuthenticated(ctx, authOptions(options));
+        const node = await ensureSecretsNode(ctx, options);
         const scopeOptions = resolveSecretScope(options);
         const result = await runSecretOperation({
           ctx,
