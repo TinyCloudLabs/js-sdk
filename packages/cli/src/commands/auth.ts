@@ -144,6 +144,20 @@ export function registerAuthCommand(program: Command): void {
     });
 
   auth
+    .command("rotate")
+    .description("Rotate the active profile session key")
+    .option("--paste", "Use manual paste mode instead of browser callback")
+    .action(async (options, cmd) => {
+      try {
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        await rotateAuthKey(ctx.profile, ctx.host, { paste: options.paste });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  auth
     .command("status")
     .description("Show current authentication state")
     .action(async (_options, cmd) => {
@@ -1049,24 +1063,110 @@ function inferDelegationExpiry(data: Record<string, unknown>): Date {
   return new Date(Date.now() + 60 * 60 * 1000);
 }
 
+async function rotateAuthKey(
+  profileName: string,
+  host: string,
+  options: { paste?: boolean } = {},
+): Promise<void> {
+  const profile = await ProfileManager.getProfile(profileName);
+  const posture = resolveProfilePosture(profile);
+  const oldDid = profile.sessionDid ?? profile.did;
+
+  if (posture === "delegate-session") {
+    throw new CLIError(
+      "ROTATE_DELEGATE_SESSION_UNSUPPORTED",
+      `Profile "${profileName}" is a delegated session. Request or import a new owner delegation instead of rotating it locally.`,
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+
+  if (profile.authMethod === "local" || posture === "local-owner-key") {
+    if (!profile.privateKey) {
+      throw new CLIError(
+        "LOCAL_OWNER_KEY_REQUIRED",
+        `Profile "${profileName}" does not have a local owner private key. Run \`tc auth login --method local\` first.`,
+        ExitCode.AUTH_REQUIRED,
+      );
+    }
+
+    await ProfileManager.clearSession(profileName);
+    const result = await handleLocalAuth(profileName, host, {
+      emitOutput: false,
+      forceSessionKey: true,
+    });
+    outputRotationResult(result.profile, profileName, oldDid, "local");
+    return;
+  }
+
+  const { jwk, did } = await withSpinner("Generating session key...", async () => {
+    return generateKey();
+  });
+
+  await ProfileManager.setKey(profileName, jwk);
+  await ProfileManager.clearSession(profileName);
+  await ProfileManager.setProfile(profileName, {
+    ...profile,
+    host,
+    did,
+    sessionDid: did,
+    posture: profile.posture ?? "owner-openkey",
+    operatorType: profile.operatorType ?? "human",
+    authMethod: "openkey",
+  });
+
+  const result = await refreshOpenKeySession(profileName, host, {
+    paste: options.paste,
+  });
+  outputRotationResult(result.profile, profileName, oldDid, "openkey");
+}
+
+function outputRotationResult(
+  profile: ProfileConfig,
+  profileName: string,
+  oldDid: string,
+  authMethod: AuthMethod,
+): void {
+  outputJson({
+    rotated: true,
+    profile: profileName,
+    oldDid,
+    did: profile.did,
+    sessionDid: profile.sessionDid ?? null,
+    authMethod,
+    spaceId: profile.spaceId ?? null,
+  });
+}
+
+type LocalAuthResult = {
+  profile: ProfileConfig;
+  sessionResult: Awaited<ReturnType<typeof localKeySignIn>>;
+};
+
 /**
  * Handle local Ethereum key authentication.
  * Generates or reuses a local private key, creates a did:pkh identity,
  * and signs in to TinyCloud directly (no browser needed).
  */
-async function handleLocalAuth(profileName: string, host: string): Promise<void> {
+async function handleLocalAuth(
+  profileName: string,
+  host: string,
+  options: { emitOutput?: boolean; forceSessionKey?: boolean } = {},
+): Promise<LocalAuthResult> {
   const profile = await ProfileManager.getProfile(profileName).catch(() => null);
+  const posture = profile ? resolveProfilePosture(profile) : null;
 
   let privateKey: string;
   let address: string;
   let did: string;
   let sessionDid = profile?.sessionDid;
 
-  if (profile?.authMethod === "local" && profile.privateKey && profile.address) {
+  if ((profile?.authMethod === "local" || posture === "local-owner-key") && profile.privateKey) {
     // Reuse existing local key
     privateKey = profile.privateKey;
-    address = profile.address;
-    did = profile.did;
+    address = profile.address ?? await deriveAddress(privateKey);
+    did = profile.did.startsWith("did:pkh:")
+      ? profile.did
+      : addressToDID(address, profile.chainId ?? DEFAULT_CHAIN_ID);
 
     if (isInteractive()) {
       process.stderr.write(theme.muted("Using existing local key") + "\n");
@@ -1091,7 +1191,7 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
 
   // We also need a session key (Ed25519 JWK) for the profile
   const hasKey = await ProfileManager.getKey(profileName);
-  if (!hasKey) {
+  if (options.forceSessionKey || !hasKey) {
     const { jwk, did: generatedSessionDid } = await withSpinner("Generating session key...", async () => {
       return generateKey();
     });
@@ -1122,7 +1222,7 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
   sessionDid = sessionResult.verificationMethod;
 
   // Update profile
-  await ProfileManager.setProfile(profileName, {
+  const updatedProfile = {
     ...profile,
     name: profileName,
     host,
@@ -1138,17 +1238,23 @@ async function handleLocalAuth(profileName: string, host: string): Promise<void>
     authMethod: "local",
     privateKey,
     address,
-  });
+  } satisfies ProfileConfig;
 
-  outputJson({
-    authenticated: true,
-    profile: profileName,
-    did,
-    sessionDid,
-    address,
-    spaceId: sessionResult.spaceId,
-    authMethod: "local",
-  });
+  await ProfileManager.setProfile(profileName, updatedProfile);
+
+  if (options.emitOutput ?? true) {
+    outputJson({
+      authenticated: true,
+      profile: profileName,
+      did,
+      sessionDid,
+      address,
+      spaceId: sessionResult.spaceId,
+      authMethod: "local",
+    });
+  }
+
+  return { profile: updatedProfile, sessionResult };
 }
 
 /**
