@@ -620,6 +620,25 @@ async function localKeySignIn(options) {
 // src/auth/browser-auth.ts
 import { createServer } from "http";
 import { createInterface } from "readline";
+var PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
+  "d",
+  "p",
+  "q",
+  "dp",
+  "dq",
+  "qi",
+  "oth",
+  "k"
+]);
+function publicJwkForDelegation(jwk) {
+  const publicJwk = {};
+  for (const [key, value] of Object.entries(jwk)) {
+    if (!PRIVATE_JWK_FIELDS.has(key)) {
+      publicJwk[key] = value;
+    }
+  }
+  return publicJwk;
+}
 async function startAuthFlow(did, options = {}) {
   if (options.paste) {
     return pasteFlow(did, options);
@@ -641,7 +660,9 @@ function buildAuthUrl(did, options = {}) {
     params.set("callback", options.callback);
   }
   if (options.jwk) {
-    const jwkB64 = Buffer.from(JSON.stringify(options.jwk)).toString("base64url");
+    const jwkB64 = Buffer.from(
+      JSON.stringify(publicJwkForDelegation(options.jwk))
+    ).toString("base64url");
     params.set("jwk", jwkB64);
   }
   if (options.host) {

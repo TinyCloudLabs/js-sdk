@@ -31,6 +31,29 @@ interface AuthFlowOptions {
   expiry?: string | number;
 }
 
+const PRIVATE_JWK_FIELDS = new Set([
+  "d",
+  "p",
+  "q",
+  "dp",
+  "dq",
+  "qi",
+  "oth",
+  "k",
+]);
+
+export function publicJwkForDelegation(jwk: object): object {
+  const publicJwk: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(jwk)) {
+    if (!PRIVATE_JWK_FIELDS.has(key)) {
+      publicJwk[key] = value;
+    }
+  }
+
+  return publicJwk;
+}
+
 /**
  * Start the browser auth flow.
  * Mode 1 (default): local HTTP callback server
@@ -56,7 +79,7 @@ export async function startAuthFlow(
   }
 }
 
-function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?: string } = {}): string {
+export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?: string } = {}): string {
   const params = new URLSearchParams();
   params.set("did", did);
   if (options.callback) {
@@ -64,7 +87,9 @@ function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?: strin
   }
   if (options.jwk) {
     // base64url-encode the JWK
-    const jwkB64 = Buffer.from(JSON.stringify(options.jwk)).toString("base64url");
+    const jwkB64 = Buffer.from(
+      JSON.stringify(publicJwkForDelegation(options.jwk)),
+    ).toString("base64url");
     params.set("jwk", jwkB64);
   }
   if (options.host) {
