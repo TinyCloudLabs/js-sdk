@@ -1,5 +1,12 @@
 # @tinycloud/cli
 
+## 0.6.0-beta.9
+
+### Patch Changes
+
+- ac2dde4: Add `tc auth rotate` for rotating the active CLI profile session key and refreshing auth.
+- fb1ef97: Request fully-qualified TinyCloud actions when OpenKey grants secrets permissions.
+
 ## 0.6.0-beta.8
 
 ### Patch Changes
