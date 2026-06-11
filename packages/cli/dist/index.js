@@ -2045,18 +2045,33 @@ function parseExpiryOption(raw) {
 }
 function groupPermissionsBySpace(permissions) {
   const groups = /* @__PURE__ */ new Map();
+  const rawEntries = [];
   for (const permission of permissions) {
+    if (isRawPermission(permission)) {
+      rawEntries.push(permission);
+      continue;
+    }
     const group = groups.get(permission.space) ?? [];
     group.push(permission);
     groups.set(permission.space, group);
   }
-  return Array.from(groups.values());
+  const grouped = Array.from(groups.values());
+  if (grouped.length === 0) {
+    return rawEntries.length > 0 ? [rawEntries] : [];
+  }
+  grouped[0].push(...rawEntries);
+  return grouped;
+}
+function isRawPermission(permission) {
+  return permission.service === "tinycloud.encryption" && permission.path.startsWith("urn:tinycloud:encryption:");
 }
 function portableFromOpenKeyDelegation(data, permissions, host) {
-  const primary = permissions[0];
-  const returnedSpace = String(data.spaceId ?? primary.space);
-  const expectedSpaces = new Set(permissions.map((permission) => permission.space));
-  if (expectedSpaces.size !== 1 || !expectedSpaces.has(returnedSpace)) {
+  const primary = permissions.find((permission) => !isRawPermission(permission)) ?? permissions[0];
+  const returnedSpace = String(data.spaceId ?? primary.space ?? "encryption");
+  const expectedSpaces = new Set(
+    permissions.filter((permission) => !isRawPermission(permission)).map((permission) => permission.space)
+  );
+  if (expectedSpaces.size > 0 && (expectedSpaces.size !== 1 || !expectedSpaces.has(returnedSpace))) {
     throw new CLIError(
       "OPENKEY_SCOPE_MISMATCH",
       `OpenKey returned delegation for ${returnedSpace}, expected ${Array.from(expectedSpaces).join(", ")}.`,
@@ -3217,6 +3232,11 @@ function registerVaultCommand(program2) {
 // src/commands/secrets.ts
 import { readFile as readFile6 } from "fs/promises";
 import { writeFile as writeFile5 } from "fs/promises";
+import {
+  resolveSecretListPrefix,
+  resolveSecretPath
+} from "@tinycloud/node-sdk";
+var SECRETS_SPACE = "secrets";
 async function readStdin4() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -3231,6 +3251,61 @@ function authOptions(options) {
 function resolveSecretScope(options) {
   const scope = options.scope ?? options.space;
   return scope ? { scope } : void 0;
+}
+async function runSecretOperation(params) {
+  const first = await withSpinner(params.label, params.operation);
+  if (first.ok || !shouldRequestSecretPermissions(first.error)) {
+    return first;
+  }
+  const profile = await ProfileManager.getProfile(params.ctx.profile);
+  if (!canRequestOwnerPermissions(profile)) {
+    return first;
+  }
+  const requested = secretPermissionEntries({
+    action: params.action,
+    name: params.name,
+    options: params.scopeOptions,
+    node: params.node
+  });
+  await withSpinner(
+    "Requesting secret permissions...",
+    () => ensureDelegationAuthority({
+      ctx: params.ctx,
+      profile,
+      node: params.node,
+      requested,
+      expiryOption: void 0,
+      yes: true
+    })
+  );
+  return withSpinner(params.label, params.operation);
+}
+function canRequestOwnerPermissions(profile) {
+  const posture = resolveProfilePosture(profile);
+  return posture === "owner-openkey" || posture === "local-owner-key";
+}
+function shouldRequestSecretPermissions(error) {
+  if (error.code !== "PERMISSION_DENIED") return false;
+  return /permission|session expired|autosign|capabilit/i.test(error.message);
+}
+function secretPermissionEntries(params) {
+  const path = params.action === "list" ? resolveSecretListPrefix(params.options) : resolveSecretPath(params.name ?? "", params.options).permissionPaths.vault;
+  const permissions = [{
+    service: "tinycloud.kv",
+    space: SECRETS_SPACE,
+    path,
+    actions: [params.action],
+    skipPrefix: true
+  }];
+  if (params.action === "get") {
+    permissions.push({
+      service: "tinycloud.encryption",
+      path: params.node.getDefaultEncryptionNetworkId(),
+      actions: ["decrypt"],
+      skipPrefix: true
+    });
+  }
+  return permissions;
 }
 function registerSecretsCommand(program2) {
   const secrets = program2.command("secrets").description("Encrypted secrets management");
@@ -3279,10 +3354,14 @@ function registerSecretsCommand(program2) {
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx, authOptions(options));
       const scopeOptions = resolveSecretScope(options);
-      const result = await withSpinner(
-        "Listing secrets...",
-        () => node.secrets.list(scopeOptions)
-      );
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "list",
+        scopeOptions,
+        label: "Listing secrets...",
+        operation: () => node.secrets.list(scopeOptions)
+      });
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }
@@ -3303,10 +3382,15 @@ function registerSecretsCommand(program2) {
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx, authOptions(options));
       const scopeOptions = resolveSecretScope(options);
-      const result = await withSpinner(
-        `Getting secret ${name}...`,
-        () => node.secrets.get(name, scopeOptions)
-      );
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "get",
+        name,
+        scopeOptions,
+        label: `Getting secret ${name}...`,
+        operation: () => node.secrets.get(name, scopeOptions)
+      });
       if (!result.ok) {
         if (result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND") {
           throw new CLIError("NOT_FOUND", `Secret "${name}" not found`, ExitCode.NOT_FOUND);
@@ -3349,10 +3433,15 @@ function registerSecretsCommand(program2) {
         secretValue = value;
       }
       const scopeOptions = resolveSecretScope(options);
-      const result = await withSpinner(
-        `Storing secret ${name}...`,
-        () => node.secrets.put(name, secretValue, scopeOptions)
-      );
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "put",
+        name,
+        scopeOptions,
+        label: `Storing secret ${name}...`,
+        operation: () => node.secrets.put(name, secretValue, scopeOptions)
+      });
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }
@@ -3367,10 +3456,15 @@ function registerSecretsCommand(program2) {
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx, authOptions(options));
       const scopeOptions = resolveSecretScope(options);
-      const result = await withSpinner(
-        `Deleting secret ${name}...`,
-        () => node.secrets.delete(name, scopeOptions)
-      );
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "del",
+        name,
+        scopeOptions,
+        label: `Deleting secret ${name}...`,
+        operation: () => node.secrets.delete(name, scopeOptions)
+      });
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }
@@ -4281,6 +4375,358 @@ function registerUpgradeCommand(program2) {
   });
 }
 
+// src/commands/status.ts
+import {
+  NodeWasmBindings
+} from "@tinycloud/node-sdk";
+var wasmBindings = null;
+function registerStatusCommand(program2) {
+  program2.command("status").description("Show local TinyCloud profile, session, delegation, and permission state").action(async (_options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const config = await ProfileManager.getConfig();
+      const names = (await ProfileManager.listProfiles()).sort(
+        (a, b) => a.localeCompare(b)
+      );
+      const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      const profiles = await Promise.all(
+        names.map(
+          (name) => inspectProfile({
+            name,
+            activeProfile: ctx.profile,
+            defaultProfile: config.defaultProfile
+          })
+        )
+      );
+      const summary = {
+        generatedAt,
+        activeProfile: ctx.profile,
+        defaultProfile: config.defaultProfile,
+        profileCount: profiles.length,
+        authenticatedProfileCount: profiles.filter((p) => p.authenticated).length,
+        activeDelegationCount: profiles.reduce(
+          (sum, profile) => sum + profile.activeDelegationCount,
+          0
+        ),
+        profiles
+      };
+      if (shouldOutputJson()) {
+        outputJson(summary);
+        return;
+      }
+      process.stdout.write(formatStatus(summary));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+async function inspectProfile(params) {
+  const issues = [];
+  const profile = await readProfile(params.name, issues);
+  const session = await readSession(params.name, issues);
+  const hasKey = await readHasKey(params.name, issues);
+  const storedDelegations = await readDelegations(params.name, issues);
+  const sessionPermissions = session ? sessionPermissionsFromRecap(session) : [];
+  const sessionExpiry = session ? extractSessionExpiry(session) : null;
+  const sessionExpired = sessionExpiry === null ? null : sessionExpiry.getTime() <= Date.now();
+  const statusSession = {
+    present: session !== null,
+    expired: session === null ? null : sessionExpired,
+    expiresAt: sessionExpiry?.toISOString() ?? null,
+    permissions: sessionPermissions,
+    permissionsCompact: compactPermissions(sessionPermissions)
+  };
+  const delegations = storedDelegations.map(inspectDelegation);
+  const activeDelegationPermissions = delegations.filter((delegation) => delegation.active).flatMap((delegation) => delegation.permissions);
+  const permissions = uniquePermissions([
+    ...sessionPermissions,
+    ...activeDelegationPermissions
+  ]);
+  const hasPrivateKey = typeof profile?.privateKey === "string" && profile.privateKey.length > 0;
+  const localKeyAuthenticated = profile?.authMethod === "local" && hasPrivateKey;
+  const sessionAuthenticated = session !== null && sessionExpired !== true;
+  const authenticated = localKeyAuthenticated || sessionAuthenticated;
+  const status = resolveStatus({
+    exists: profile !== null,
+    authenticated,
+    localKeyAuthenticated,
+    sessionExpired
+  });
+  return {
+    name: params.name,
+    active: params.name === params.activeProfile,
+    default: params.name === params.defaultProfile,
+    exists: profile !== null,
+    status,
+    host: profile?.host ?? null,
+    did: profile?.did ?? null,
+    sessionDid: profile?.sessionDid ?? null,
+    ownerDid: profile?.ownerDid ?? null,
+    address: profile?.address ?? null,
+    spaceId: profile?.spaceId ?? null,
+    authMethod: profile?.authMethod ?? null,
+    posture: profile ? resolveProfilePosture(profile) : null,
+    operatorType: profile ? resolveProfileOperatorType(profile) : null,
+    hasKey,
+    hasPrivateKey,
+    authenticated,
+    session: statusSession,
+    delegations,
+    permissions,
+    permissionsCompact: compactPermissions(permissions),
+    permissionCount: permissions.length,
+    activeDelegationCount: delegations.filter((delegation) => delegation.active).length,
+    delegationCount: delegations.length,
+    issues
+  };
+}
+async function readProfile(name, issues) {
+  try {
+    return await ProfileManager.getProfile(name);
+  } catch (error) {
+    issues.push(`profile: ${messageFromError(error)}`);
+    return null;
+  }
+}
+async function readSession(name, issues) {
+  try {
+    return asRecord(await ProfileManager.getSession(name));
+  } catch (error) {
+    issues.push(`session: ${messageFromError(error)}`);
+    return null;
+  }
+}
+async function readHasKey(name, issues) {
+  try {
+    return await ProfileManager.getKey(name) !== null;
+  } catch (error) {
+    issues.push(`key: ${messageFromError(error)}`);
+    return false;
+  }
+}
+async function readDelegations(name, issues) {
+  try {
+    return await loadAdditionalDelegations(name);
+  } catch (error) {
+    issues.push(`delegations: ${messageFromError(error)}`);
+    return [];
+  }
+}
+function inspectDelegation(entry) {
+  const expiry = parseDate(entry.delegation.expiry);
+  const expired = expiry === null ? null : expiry.getTime() <= Date.now();
+  const permissions = normalizePermissions(
+    Array.isArray(entry.permissions) && entry.permissions.length > 0 ? entry.permissions : permissionsFromDelegation(entry.delegation)
+  );
+  return {
+    cid: entry.delegation.cid,
+    active: expired !== true,
+    expired,
+    expiresAt: expiry?.toISOString() ?? null,
+    permissions,
+    permissionsCompact: compactPermissions(permissions)
+  };
+}
+function resolveStatus(params) {
+  if (!params.exists) return "missing";
+  if (params.localKeyAuthenticated) return "local-key";
+  if (params.authenticated) return "logged-in";
+  if (params.sessionExpired === true) return "expired";
+  return "signed-out";
+}
+function sessionPermissionsFromRecap(session) {
+  if (typeof session.siwe !== "string" || session.siwe.length === 0) return [];
+  try {
+    const rawEntries = getWasmBindings().parseRecapFromSiwe(session.siwe);
+    if (!Array.isArray(rawEntries)) return [];
+    return normalizePermissions(rawEntries.map(permissionFromRawRecap));
+  } catch {
+    return [];
+  }
+}
+function permissionFromRawRecap(value) {
+  const record = asRecord(value);
+  if (!record) return null;
+  const service = stringValue(record.service);
+  const space = stringValue(record.space);
+  const path = stringValue(record.path);
+  const actions = Array.isArray(record.actions) ? record.actions.map(String).filter(Boolean) : [];
+  if (!service || !space || path === null || actions.length === 0) return null;
+  return {
+    service: normalizeService2(service),
+    space,
+    path,
+    actions
+  };
+}
+function normalizePermissions(entries) {
+  const permissions = [];
+  for (const entry of entries) {
+    const permission = permissionFromUnknown(entry);
+    if (permission) permissions.push(permission);
+  }
+  return uniquePermissions(permissions);
+}
+function permissionFromUnknown(value) {
+  const record = asRecord(value);
+  if (!record) return null;
+  const service = stringValue(record.service);
+  const space = stringValue(record.space);
+  const path = stringValue(record.path);
+  const actions = Array.isArray(record.actions) ? record.actions.map(String).filter(Boolean) : [];
+  if (!service || !space || path === null || actions.length === 0) return null;
+  return {
+    service: normalizeService2(service),
+    space,
+    path,
+    actions
+  };
+}
+function uniquePermissions(entries) {
+  const seen = /* @__PURE__ */ new Set();
+  const unique2 = [];
+  for (const entry of entries) {
+    const key = compactPermission(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique2.push(entry);
+  }
+  return unique2;
+}
+function compactPermissions(entries) {
+  return entries.map(compactPermission);
+}
+function extractSessionExpiry(session) {
+  for (const key of ["expiresAt", "expiry", "expirationTime"]) {
+    const parsed = parseDate(session[key]);
+    if (parsed) return parsed;
+  }
+  if (typeof session.siwe !== "string") return null;
+  const match = session.siwe.match(/^Expiration Time:\s*(.+)$/im);
+  return match ? parseDate(match[1].trim()) : null;
+}
+function parseDate(value) {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const millis = value > 0 && value < 1e12 ? value * 1e3 : value;
+    const date2 = new Date(millis);
+    return Number.isNaN(date2.getTime()) ? null : date2;
+  }
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+function getWasmBindings() {
+  wasmBindings ??= new NodeWasmBindings();
+  return wasmBindings;
+}
+function normalizeService2(service) {
+  return service.startsWith("tinycloud.") ? service : `tinycloud.${service}`;
+}
+function asRecord(value) {
+  return value !== null && typeof value === "object" ? value : null;
+}
+function stringValue(value) {
+  return typeof value === "string" ? value : null;
+}
+function messageFromError(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function formatStatus(summary) {
+  const lines = [];
+  lines.push(theme.heading("TinyCloud Status"));
+  lines.push(`Active profile: ${theme.value(summary.activeProfile)}`);
+  lines.push(`Default profile: ${theme.value(summary.defaultProfile)}`);
+  lines.push("");
+  if (summary.profiles.length === 0) {
+    lines.push(theme.muted("No profiles configured. Run: tc init"));
+    return `${lines.join("\n")}
+`;
+  }
+  lines.push(theme.label("Profiles"));
+  for (const profile of summary.profiles) {
+    lines.push(formatProfile(profile));
+  }
+  return `${lines.join("\n")}
+`;
+}
+function formatProfile(profile) {
+  const marker = profile.active ? theme.success("*") : " ";
+  const name = profile.default ? `${profile.name} (default)` : profile.name;
+  const host = profile.host ? theme.muted(profile.host) : theme.muted("no host");
+  const summary = [
+    `${marker} ${profile.active ? theme.brand(name) : name}`,
+    formatProfileStatus(profile.status),
+    profile.posture ?? "no posture",
+    plural(profile.permissionCount, "permission"),
+    `${profile.activeDelegationCount}/${profile.delegationCount} delegations`,
+    host
+  ].join("  ");
+  const lines = [summary];
+  lines.push(`  session: ${formatSession(profile.session)}`);
+  if (profile.permissionsCompact.length > 0) {
+    lines.push("  permissions:");
+    for (const permission of profile.permissionsCompact) {
+      lines.push(`    ${permission}`);
+    }
+  }
+  if (profile.delegations.length > 0) {
+    lines.push("  delegations:");
+    for (const delegation of profile.delegations) {
+      lines.push(`    ${formatDelegation(delegation)}`);
+    }
+  }
+  if (profile.issues.length > 0) {
+    lines.push("  issues:");
+    for (const issue of profile.issues) {
+      lines.push(`    ${theme.warn(issue)}`);
+    }
+  }
+  return lines.join("\n");
+}
+function formatProfileStatus(status) {
+  switch (status) {
+    case "logged-in":
+      return theme.success("logged in");
+    case "local-key":
+      return theme.success("local key");
+    case "expired":
+      return theme.warn("expired");
+    case "missing":
+      return theme.warn("missing");
+    case "signed-out":
+      return theme.muted("signed out");
+  }
+}
+function formatSession(session) {
+  if (!session.present) return theme.muted("none");
+  if (session.expired === true) {
+    return `${theme.warn("expired")}${formatExpiresAt(session.expiresAt)}`;
+  }
+  if (session.expired === false) {
+    return `${theme.success("active")}${formatExpiresAt(session.expiresAt)}`;
+  }
+  return `${theme.success("present")}${formatExpiresAt(session.expiresAt)}`;
+}
+function formatDelegation(delegation) {
+  const state = delegation.expired === true ? theme.warn("expired") : theme.success("active");
+  return [
+    delegation.cid,
+    state,
+    formatExpiresAt(delegation.expiresAt).trim(),
+    plural(delegation.permissions.length, "permission")
+  ].filter(Boolean).join("  ");
+}
+function formatExpiresAt(expiresAt) {
+  return expiresAt ? ` until ${expiresAt}` : "";
+}
+function plural(count, label) {
+  return `${count} ${label}${count === 1 ? "" : "s"}`;
+}
+
 // src/index.ts
 var { version } = JSON.parse(
   readFileSync3(new URL("../package.json", import.meta.url), "utf-8")
@@ -4295,7 +4741,7 @@ program.hook("preAction", async (thisCommand) => {
   const commandName = thisCommand.name();
   const parentName = thisCommand.parent?.name();
   const fullCommand = parentName && parentName !== "tc" ? `${parentName} ${commandName}` : commandName;
-  const skipGuard = ["tc", "init", "doctor", "completion", "help", "upgrade"].includes(commandName) || fullCommand === "profile create";
+  const skipGuard = ["tc", "init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) || fullCommand === "profile create";
   if (!skipGuard && !opts.quiet && isInteractive()) {
     try {
       const config = await ProfileManager.getConfig();
@@ -4330,6 +4776,7 @@ registerSqlCommand(program);
 registerDuckdbCommand(program);
 registerManifestCommand(program);
 registerUpgradeCommand(program);
+registerStatusCommand(program);
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}
 `);
 program.addHelpText("afterAll", () => {

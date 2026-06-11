@@ -26,6 +26,7 @@ import { registerSqlCommand } from "./commands/sql.js";
 import { registerDuckdbCommand } from "./commands/duckdb.js";
 import { registerManifestCommand } from "./commands/manifest.js";
 import { registerUpgradeCommand } from "./commands/upgrade.js";
+import { registerStatusCommand } from "./commands/status.js";
 
 const program = new Command();
 
@@ -50,7 +51,7 @@ program.hook("preAction", async (thisCommand) => {
   const commandName = thisCommand.name();
   const parentName = thisCommand.parent?.name();
   const fullCommand = parentName && parentName !== "tc" ? `${parentName} ${commandName}` : commandName;
-  const skipGuard = ["tc", "init", "doctor", "completion", "help", "upgrade"].includes(commandName) ||
+  const skipGuard = ["tc", "init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
                     fullCommand === "profile create";
   if (!skipGuard && !opts.quiet && isInteractive()) {
     try {
@@ -88,6 +89,7 @@ registerSqlCommand(program);
 registerDuckdbCommand(program);
 registerManifestCommand(program);
 registerUpgradeCommand(program);
+registerStatusCommand(program);
 
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}\n`);
 
