@@ -13,6 +13,9 @@ import type {
   KVServiceConfig,
   KVGetOptions,
   KVPutOptions,
+  KVBatchPutItem,
+  KVBatchPutOptions,
+  KVBatchPutResponse,
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
@@ -35,7 +38,14 @@ import {
  * Recorded operation for assertions.
  */
 export interface RecordedOperation {
-  type: "get" | "put" | "list" | "delete" | "head" | "createSignedReadUrl";
+  type:
+    | "get"
+    | "put"
+    | "batchPut"
+    | "list"
+    | "delete"
+    | "head"
+    | "createSignedReadUrl";
   key?: string;
   value?: unknown;
   options?: unknown;
@@ -213,6 +223,60 @@ export class MockKVService implements IKVService {
       data: undefined as void,
       headers: this.createHeaders(stored),
     });
+  }
+
+  async batchPut(
+    items: KVBatchPutItem[],
+    options?: KVBatchPutOptions
+  ): Promise<Result<KVBatchPutResponse>> {
+    this.recordOperation("batchPut", undefined, items, options);
+
+    if (items.length === 0) {
+      return ok({ written: [], count: 0 });
+    }
+
+    const entries = items.map((item) => ({
+      item,
+      fullKey: this.getFullKey(item.key, options?.prefix),
+    }));
+    const seen = new Set<string>();
+
+    for (const { fullKey } of entries) {
+      if (seen.has(fullKey)) {
+        return err(
+          serviceError(
+            ErrorCodes.INVALID_INPUT,
+            `KV batchPut received duplicate key after prefix resolution: ${fullKey}`,
+            "kv"
+          )
+        );
+      }
+      seen.add(fullKey);
+    }
+
+    for (const { fullKey } of entries) {
+      const injectedError = this.checkErrorInjection(fullKey, "batchPut");
+      if (injectedError) {
+        return err(injectedError);
+      }
+    }
+
+    await this.simulateLatency();
+
+    // Check abort
+    if (options?.signal?.aborted) {
+      return err(serviceError(ErrorCodes.ABORTED, "Request aborted", "kv"));
+    }
+
+    for (const { item, fullKey } of entries) {
+      this._store.set(
+        fullKey,
+        this.createStoredValue(item.value, item.contentType)
+      );
+    }
+
+    const written = entries.map(({ fullKey }) => fullKey);
+    return ok({ written, count: written.length });
   }
 
   async list(options?: KVListOptions): Promise<Result<KVListResponse>> {
