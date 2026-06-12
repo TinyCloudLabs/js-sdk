@@ -1854,6 +1854,36 @@ export class TinyCloudNode {
   }
 
   /**
+   * Get a KV service scoped to a specific space.
+   *
+   * The KV counterpart to {@link sqlForSpace}: clones the active service
+   * context and overrides its session's spaceId so that subsequent
+   * `kv/<action>` invocations route to that space. Useful for reading data
+   * that a manifest app stores outside the primary space (e.g. transcripts a
+   * `defaults: true` app keeps under the owner's `applications` space), when
+   * the caller already holds a delegation covering the target space.
+   *
+   * Does NOT auto-create the space.
+   *
+   * @param spaceId - Full space URI (`tinycloud:pkh:eip155:<chain>:<addr>:<name>`).
+   */
+  kvForSpace(spaceId: string): IKVService {
+    if (!this._serviceContext || !this._serviceContext.session) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+
+    const kv = new KVService({});
+    const spaceScopedContext = new ServiceContext({
+      invoke: this._serviceContext.invoke,
+      fetch: this._serviceContext.fetch,
+      hosts: this._serviceContext.hosts,
+    });
+    spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
+    kv.initialize(spaceScopedContext);
+    return kv;
+  }
+
+  /**
    * DuckDB database operations on this user's space.
    */
   get duckdb(): IDuckDbService {
