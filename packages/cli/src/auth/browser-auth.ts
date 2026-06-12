@@ -13,6 +13,7 @@ interface DelegationData {
 
 interface AuthFlowOptions {
   paste?: boolean;
+  noPopup?: boolean;
   jwk?: object;
   host?: string;
   permissions?: PermissionEntry[];
@@ -108,6 +109,12 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
   return `${base}/delegate?${params.toString()}`;
 }
 
+function shouldOpenBrowser(options: AuthFlowOptions): boolean {
+  if (options.noPopup) return false;
+  const env = process.env.TC_AUTH_NO_POPUP ?? process.env.TC_NO_POPUP;
+  return env !== "1" && env !== "true";
+}
+
 async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise<DelegationData> {
   return new Promise((resolve, reject) => {
     let timeout: ReturnType<typeof setTimeout>;
@@ -184,18 +191,23 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       const port = addr.port;
       const callbackUrl = `http://127.0.0.1:${port}/callback`;
       const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
+      const openBrowser = shouldOpenBrowser(options);
 
-      if (isInteractive()) {
+      if (openBrowser && isInteractive()) {
         console.error(`Opening browser for authentication...`);
         console.error(`If the browser doesn't open, visit: ${authUrl}`);
+      } else if (!openBrowser || isInteractive()) {
+        console.error(`Open this URL in a browser to authenticate: ${authUrl}`);
       }
 
-      try {
-        const open = (await import("open")).default;
-        await open(authUrl);
-      } catch {
-        server.close();
-        throw new Error("Failed to open browser");
+      if (openBrowser) {
+        try {
+          const open = (await import("open")).default;
+          await open(authUrl);
+        } catch {
+          server.close();
+          throw new Error("Failed to open browser");
+        }
       }
 
       // In interactive mode, also accept paste input while waiting for callback

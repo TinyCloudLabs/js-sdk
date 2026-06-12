@@ -98,6 +98,7 @@ export function registerAuthCommand(program: Command): void {
     .command("login")
     .description("Authenticate with TinyCloud")
     .option("--paste", "Use manual paste mode instead of browser callback")
+    .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
     .action(async (options, cmd) => {
       try {
@@ -122,7 +123,10 @@ export function registerAuthCommand(program: Command): void {
         if (method === "local") {
           await handleLocalAuth(ctx.profile, ctx.host);
         } else {
-          await handleOpenKeyAuth(ctx.profile, ctx.host, options.paste);
+          await handleOpenKeyAuth(ctx.profile, ctx.host, {
+            paste: options.paste,
+            noPopup: options.popup === false,
+          });
         }
       } catch (error) {
         handleError(error);
@@ -147,11 +151,15 @@ export function registerAuthCommand(program: Command): void {
     .command("rotate")
     .description("Rotate the active profile session key")
     .option("--paste", "Use manual paste mode instead of browser callback")
+    .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        await rotateAuthKey(ctx.profile, ctx.host, { paste: options.paste });
+        await rotateAuthKey(ctx.profile, ctx.host, {
+          paste: options.paste,
+          noPopup: options.popup === false,
+        });
       } catch (error) {
         handleError(error);
       }
@@ -231,6 +239,7 @@ export function registerAuthCommand(program: Command): void {
     .option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided")
     .option("--grant", "Grant the requested permissions immediately with this owner profile")
     .option("--yes", "Skip local-key TTY confirmation", false)
+    .option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -285,6 +294,7 @@ export function registerAuthCommand(program: Command): void {
               permissions: group,
               openkeyHost,
               expiry: expiryOption,
+              noPopup: options.popup === false,
             });
             const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
             const stored = storedAdditionalDelegation(delegation, group);
@@ -1077,7 +1087,7 @@ function inferDelegationExpiry(data: Record<string, unknown>): Date {
 async function rotateAuthKey(
   profileName: string,
   host: string,
-  options: { paste?: boolean } = {},
+  options: { paste?: boolean; noPopup?: boolean } = {},
 ): Promise<void> {
   const profile = await ProfileManager.getProfile(profileName);
   const posture = resolveProfilePosture(profile);
@@ -1127,6 +1137,7 @@ async function rotateAuthKey(
 
   const result = await refreshOpenKeySession(profileName, host, {
     paste: options.paste,
+    noPopup: options.noPopup,
   });
   outputRotationResult(result.profile, profileName, oldDid, "openkey");
 }
@@ -1272,8 +1283,12 @@ async function handleLocalAuth(
  * Handle OpenKey (browser-based) authentication.
  * This is the original auth flow.
  */
-async function handleOpenKeyAuth(profileName: string, host: string, paste?: boolean): Promise<void> {
-  const { profile, delegationData } = await refreshOpenKeySession(profileName, host, { paste });
+async function handleOpenKeyAuth(
+  profileName: string,
+  host: string,
+  options: { paste?: boolean; noPopup?: boolean } = {},
+): Promise<void> {
+  const { profile, delegationData } = await refreshOpenKeySession(profileName, host, options);
 
   outputJson({
     authenticated: true,
@@ -1287,7 +1302,7 @@ async function handleOpenKeyAuth(profileName: string, host: string, paste?: bool
 export async function refreshOpenKeySession(
   profileName: string,
   host: string,
-  options: { paste?: boolean } = {},
+  options: { paste?: boolean; noPopup?: boolean } = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown> }> {
   const key = await ProfileManager.getKey(profileName);
   if (!key) {
@@ -1304,6 +1319,7 @@ export async function refreshOpenKeySession(
   // Start browser auth flow
   const delegationData = await startAuthFlow(profile.did, {
     paste: options.paste,
+    noPopup: options.noPopup,
     jwk: key,
     host,
     openkeyHost: resolveOpenKeyHost(profile),

@@ -680,6 +680,11 @@ function buildAuthUrl(did, options = {}) {
   const base = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
   return `${base}/delegate?${params.toString()}`;
 }
+function shouldOpenBrowser(options) {
+  if (options.noPopup) return false;
+  const env = process.env.TC_AUTH_NO_POPUP ?? process.env.TC_NO_POPUP;
+  return env !== "1" && env !== "true";
+}
 async function callbackFlow(did, options = {}) {
   return new Promise((resolve3, reject) => {
     let timeout;
@@ -750,16 +755,21 @@ async function callbackFlow(did, options = {}) {
       const port = addr.port;
       const callbackUrl = `http://127.0.0.1:${port}/callback`;
       const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
-      if (isInteractive()) {
+      const openBrowser = shouldOpenBrowser(options);
+      if (openBrowser && isInteractive()) {
         console.error(`Opening browser for authentication...`);
         console.error(`If the browser doesn't open, visit: ${authUrl}`);
+      } else if (!openBrowser || isInteractive()) {
+        console.error(`Open this URL in a browser to authenticate: ${authUrl}`);
       }
-      try {
-        const open = (await import("open")).default;
-        await open(authUrl);
-      } catch {
-        server.close();
-        throw new Error("Failed to open browser");
+      if (openBrowser) {
+        try {
+          const open = (await import("open")).default;
+          await open(authUrl);
+        } catch {
+          server.close();
+          throw new Error("Failed to open browser");
+        }
       }
       if (isInteractive()) {
         console.error(`
@@ -816,7 +826,7 @@ Open this URL in a browser to authenticate:
 
 // src/commands/init.ts
 function registerInitCommand(program2) {
-  program2.command("init").description("Initialize a new TinyCloud profile").option("--name <profile>", "Profile name", "default").option("--key-only", "Only generate key, skip authentication").option("--host <url>", "TinyCloud node URL").option("--paste", "Use manual paste mode for authentication").action(async (options, cmd) => {
+  program2.command("init").description("Initialize a new TinyCloud profile").option("--name <profile>", "Profile name", "default").option("--key-only", "Only generate key, skip authentication").option("--host <url>", "TinyCloud node URL").option("--paste", "Use manual paste mode for authentication").option("--no-popup", "Print the OpenKey URL without opening a browser").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const profileName = options.name;
@@ -857,6 +867,7 @@ function registerInitCommand(program2) {
       }
       const delegationData = await startAuthFlow(did, {
         paste: options.paste,
+        noPopup: options.popup === false,
         jwk,
         host
       });
@@ -1366,7 +1377,7 @@ async function promptAuthMethod() {
 }
 function registerAuthCommand(program2) {
   const auth = program2.command("auth").description("Authentication management");
-  auth.command("login").description("Authenticate with TinyCloud").option("--paste", "Use manual paste mode instead of browser callback").option("--method <method>", "Authentication method: local or openkey").action(async (options, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--paste", "Use manual paste mode instead of browser callback").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -1386,7 +1397,10 @@ function registerAuthCommand(program2) {
       if (method === "local") {
         await handleLocalAuth(ctx.profile, ctx.host);
       } else {
-        await handleOpenKeyAuth(ctx.profile, ctx.host, options.paste);
+        await handleOpenKeyAuth(ctx.profile, ctx.host, {
+          paste: options.paste,
+          noPopup: options.popup === false
+        });
       }
     } catch (error) {
       handleError(error);
@@ -1402,11 +1416,14 @@ function registerAuthCommand(program2) {
       handleError(error);
     }
   });
-  auth.command("rotate").description("Rotate the active profile session key").option("--paste", "Use manual paste mode instead of browser callback").action(async (options, cmd) => {
+  auth.command("rotate").description("Rotate the active profile session key").option("--paste", "Use manual paste mode instead of browser callback").option("--no-popup", "Print the OpenKey URL without opening a browser").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      await rotateAuthKey(ctx.profile, ctx.host, { paste: options.paste });
+      await rotateAuthKey(ctx.profile, ctx.host, {
+        paste: options.paste,
+        noPopup: options.popup === false
+      });
     } catch (error) {
       handleError(error);
     }
@@ -1468,7 +1485,7 @@ function registerAuthCommand(program2) {
   ).option("--permission <file>", 'JSON permission request: { "permissions": PermissionEntry[] }').option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON").option(
     "--expiry <duration>",
     `Lifetime of the granted delegation. ms-format string (e.g. "7d", "30m") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.`
-  ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", "Skip local-key TTY confirmation", false).action(async (options, cmd) => {
+  ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", "Skip local-key TTY confirmation", false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -1513,7 +1530,8 @@ function registerAuthCommand(program2) {
             host: ctx.host,
             permissions: group,
             openkeyHost,
-            expiry: expiryOption
+            expiry: expiryOption,
+            noPopup: options.popup === false
           });
           const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
           const stored = storedAdditionalDelegation(delegation, group);
@@ -2185,7 +2203,8 @@ async function rotateAuthKey(profileName, host, options = {}) {
     authMethod: "openkey"
   });
   const result = await refreshOpenKeySession(profileName, host, {
-    paste: options.paste
+    paste: options.paste,
+    noPopup: options.noPopup
   });
   outputRotationResult(result.profile, profileName, oldDid, "openkey");
 }
@@ -2285,8 +2304,8 @@ async function handleLocalAuth(profileName, host, options = {}) {
   }
   return { profile: updatedProfile, sessionResult };
 }
-async function handleOpenKeyAuth(profileName, host, paste) {
-  const { profile, delegationData } = await refreshOpenKeySession(profileName, host, { paste });
+async function handleOpenKeyAuth(profileName, host, options = {}) {
+  const { profile, delegationData } = await refreshOpenKeySession(profileName, host, options);
   outputJson({
     authenticated: true,
     profile: profileName,
@@ -2307,6 +2326,7 @@ async function refreshOpenKeySession(profileName, host, options = {}) {
   const profile = await ProfileManager.getProfile(profileName);
   const delegationData = await startAuthFlow(profile.did, {
     paste: options.paste,
+    noPopup: options.noPopup,
     jwk: key,
     host,
     openkeyHost: resolveOpenKeyHost(profile)
@@ -3554,7 +3574,7 @@ function registerSecretsCommand(program2) {
       handleError(error);
     }
   });
-  secrets.command("get <name>").description("Get a secret value").option("--scope <scope>", "Logical secret scope").option("--space <scope>", "Deprecated alias for --scope").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
+  secrets.command("get <name>").description("Get a secret value").option("--scope <scope>", "Logical secret scope").option("--space <scope>", "Deprecated alias for --scope").option("--raw", "Output raw value (no JSON wrapping)").option("--value-only", "Output only the secret value (alias for --raw)").option("-o, --output <file>", "Write value to file").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -3581,7 +3601,7 @@ function registerSecretsCommand(program2) {
         outputJson({ name, written: options.output });
         return;
       }
-      if (options.raw) {
+      if (options.raw || options.valueOnly) {
         process.stdout.write(value);
         return;
       }
