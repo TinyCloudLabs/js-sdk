@@ -2124,7 +2124,7 @@ function portableFromOpenKeyDelegation(data, permissions, host) {
     actions: primary.actions,
     resources: permissions.map((permission) => ({
       service: permission.service.startsWith("tinycloud.") ? permission.service.slice("tinycloud.".length) : permission.service,
-      space: permission.space,
+      space: isRawPermission(permission) ? permission.space : returnedSpace,
       path: permission.path,
       actions: [...permission.actions]
     })),

@@ -484,6 +484,14 @@ describe("CLI auth rotate command", () => {
       spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:secrets",
       path: "vault/secrets/",
       actions: ["tinycloud.kv/list"],
+      resources: [
+        expect.objectContaining({
+          service: "kv",
+          space: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:secrets",
+          path: "vault/secrets/",
+          actions: ["tinycloud.kv/list"],
+        }),
+      ],
     }));
   });
 });
