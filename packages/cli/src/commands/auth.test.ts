@@ -56,6 +56,8 @@ const recorded = {
       jwk?: object;
       host?: string;
       openkeyHost?: string;
+      permissions?: unknown[];
+      expiry?: string | number;
     };
   }>,
   localSignIns: [] as Array<{ privateKey: string; host: string }>,
@@ -163,6 +165,8 @@ mock.module("../auth/browser-auth.js", () => ({
       jwk?: object;
       host?: string;
       openkeyHost?: string;
+      permissions?: unknown[];
+      expiry?: string | number;
     },
   ) => {
     recorded.startAuthFlows.push({ did, options });
@@ -273,7 +277,7 @@ mock.module("../output/errors.js", () => ({
   setActiveProfileName: () => {},
 }));
 
-const { registerAuthCommand } = await import("./auth.js");
+const { ensureDelegationAuthority, registerAuthCommand } = await import("./auth.js");
 
 async function runAuthCommand(args: string[]): Promise<void> {
   const program = new Command();
@@ -415,5 +419,71 @@ describe("CLI auth rotate command", () => {
     const error = recorded.errors[0] as CLIErrorLike;
     expect(error.code).toBe("ROTATE_DELEGATE_SESSION_UNSUPPORTED");
     expect(error.message).toContain("Request or import a new owner delegation");
+  });
+
+  test("accepts OpenKey full space URI for a requested logical space name", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "openkey-public", d: "openkey-private" };
+    profiles.set("default", makeProfile({
+      did: "did:key:openkey-session",
+      ownerDid: "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412",
+      authMethod: "openkey",
+      posture: "owner-openkey",
+      openkeyHost: "https://openkey.test",
+    }));
+    keys.set("default", key);
+    openKeyDelegation = {
+      delegationHeader: { Authorization: "Bearer scoped-secrets" },
+      delegationCid: "bafy-scoped-secrets",
+      spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:secrets",
+      ownerDid: "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412",
+      verificationMethod: "did:key:openkey-session",
+    };
+    const node = {
+      hasRuntimePermissions: mock(() => false),
+      useRuntimeDelegation: mock(async () => undefined),
+    };
+
+    await ensureDelegationAuthority({
+      ctx: { profile: "default", host: activeHost },
+      profile: profiles.get("default")!,
+      node,
+      requested: [
+        {
+          service: "tinycloud.kv",
+          space: "secrets",
+          path: "vault/secrets/",
+          actions: ["tinycloud.kv/list"],
+          skipPrefix: true,
+        },
+      ],
+      expiryOption: undefined,
+      yes: true,
+    });
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.startAuthFlows).toHaveLength(1);
+    expect(recorded.startAuthFlows[0]).toEqual({
+      did: "did:key:openkey-session",
+      options: expect.objectContaining({
+        jwk: key,
+        host: activeHost,
+        openkeyHost: "https://openkey.test",
+        permissions: [
+          {
+            service: "tinycloud.kv",
+            space: "secrets",
+            path: "vault/secrets/",
+            actions: ["tinycloud.kv/list"],
+            skipPrefix: true,
+          },
+        ],
+      }),
+    });
+    expect(node.useRuntimeDelegation).toHaveBeenCalledWith(expect.objectContaining({
+      cid: "bafy-scoped-secrets",
+      spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:secrets",
+      path: "vault/secrets/",
+      actions: ["tinycloud.kv/list"],
+    }));
   });
 });
