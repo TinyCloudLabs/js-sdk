@@ -33,6 +33,7 @@
     "secrets-descriptor-principal",
     "secrets-permission-action-urns",
     "secrets-session-refresh",
+    "tall-rivers-pragma-admin",
     "tc-1398-kv-batch-put"
   ]
 }

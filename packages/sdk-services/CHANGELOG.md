@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-services
 
+## 2.3.0-beta.7
+
+### Patch Changes
+
+- 945f43c: Sign SQLite PRAGMA statements with the SQL admin capability so approved admin grants are used for PRAGMA requests.
+
 ## 2.3.0-beta.6
 
 ### Minor Changes
