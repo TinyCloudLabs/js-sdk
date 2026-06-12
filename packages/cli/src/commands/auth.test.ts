@@ -53,6 +53,7 @@ const recorded = {
     did: string;
     options: {
       paste?: boolean;
+      noPopup?: boolean;
       jwk?: object;
       host?: string;
       openkeyHost?: string;
@@ -162,6 +163,7 @@ mock.module("../auth/browser-auth.js", () => ({
     did: string,
     options: {
       paste?: boolean;
+      noPopup?: boolean;
       jwk?: object;
       host?: string;
       openkeyHost?: string;
@@ -337,6 +339,32 @@ describe("CLI auth rotate command", () => {
         sessionDid: "did:key:new-openkey",
         authMethod: "openkey",
         spaceId: "space-openkey-new",
+      },
+    ]);
+  });
+
+  test("passes --no-popup through owner OpenKey rotation", async () => {
+    const oldJwk = { kty: "OKP", crv: "Ed25519", x: "old-public", d: "old-private" };
+    const newJwk = { kty: "OKP", crv: "Ed25519", x: "new-public", d: "new-private" };
+    profiles.set("default", makeProfile({
+      ownerDid: "did:pkh:eip155:1:0xowner",
+      spaceId: "space-openkey-old",
+    }));
+    keys.set("default", oldJwk);
+    sessions.set("default", { delegationCid: "old-session" });
+    generatedKeys.push({ jwk: newJwk, did: "did:key:new-openkey" });
+
+    await runAuthCommand(["auth", "rotate", "--no-popup"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.startAuthFlows).toEqual([
+      {
+        did: "did:key:new-openkey",
+        options: expect.objectContaining({
+          noPopup: true,
+          jwk: newJwk,
+          host: activeHost,
+        }),
       },
     ]);
   });

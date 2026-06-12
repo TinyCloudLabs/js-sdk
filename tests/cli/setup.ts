@@ -13,6 +13,13 @@ const TC_BIN = join(import.meta.dir, "../../packages/cli/bin/tc");
 
 export { SERVER_URL, TEST_KEY, PROFILE_NAME, TC_BIN };
 
+export interface TcResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  json: any;
+}
+
 export async function checkServerHealth(): Promise<void> {
   try {
     const res = await fetch(`${SERVER_URL}/version`);
@@ -96,19 +103,21 @@ export async function setupCliProfile(): Promise<TinyCloudNode> {
   return node;
 }
 
-/**
- * Run a `tc` CLI command and return parsed JSON output.
- * Always passes --profile, --host, --json, --quiet flags.
- */
-export async function tc(...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number; json: any }> {
+async function runTc(args: string[], input?: string): Promise<TcResult> {
   const proc = Bun.spawn(
     ["bun", TC_BIN, "--profile", PROFILE_NAME, "--host", SERVER_URL, "--json", "--quiet", ...args],
     {
+      stdin: input === undefined ? "ignore" : "pipe",
       stdout: "pipe",
       stderr: "pipe",
       env: { ...process.env, NODE_ENV: "test" },
     },
   );
+
+  if (input !== undefined) {
+    proc.stdin.write(input);
+    proc.stdin.end();
+  }
 
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
@@ -120,6 +129,21 @@ export async function tc(...args: string[]): Promise<{ stdout: string; stderr: s
   } catch {}
 
   return { stdout: stdout.trim(), stderr, exitCode, json };
+}
+
+/**
+ * Run a `tc` CLI command and return parsed JSON output.
+ * Always passes --profile, --host, --json, --quiet flags.
+ */
+export async function tc(...args: string[]): Promise<TcResult> {
+  return runTc(args);
+}
+
+/**
+ * Run a `tc` CLI command with stdin piped to the process.
+ */
+export async function tcWithInput(input: string, ...args: string[]): Promise<TcResult> {
+  return runTc(args, input);
 }
 
 /**

@@ -312,6 +312,7 @@ export function registerSecretsCommand(program: Command): void {
     .option("--scope <scope>", "Logical secret scope")
     .option("--space <scope>", "Deprecated alias for --scope")
     .option("--raw", "Output raw value (no JSON wrapping)")
+    .option("--value-only", "Output only the secret value (alias for --raw)")
     .option("-o, --output <file>", "Write value to file")
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (name: string, options, cmd) => {
@@ -348,7 +349,7 @@ export function registerSecretsCommand(program: Command): void {
           return;
         }
 
-        if (options.raw) {
+        if (options.raw || options.valueOnly) {
           process.stdout.write(value);
           return;
         }

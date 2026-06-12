@@ -14,6 +14,7 @@ export function registerInitCommand(program: Command): void {
     .option("--key-only", "Only generate key, skip authentication")
     .option("--host <url>", "TinyCloud node URL")
     .option("--paste", "Use manual paste mode for authentication")
+    .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -69,6 +70,7 @@ export function registerInitCommand(program: Command): void {
         // Auth flow
         const delegationData = await startAuthFlow(did, {
           paste: options.paste,
+          noPopup: options.popup === false,
           jwk,
           host,
         });
