@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk-wasm
 
+## 1.7.4
+
+### Patch Changes
+
+- 9ee7404: Harden encryption-network decrypt flows, add CLI secrets coverage, and fix web WASM initialization.
+- f615a19: build(deps): bump the rust-minor-patch group across 1 directory with 2 updates
+- d606baf: Accept equivalent `did:pkh:eip155` owner DID address casing when validating encryption network descriptors, including legacy `principal` descriptors, so `tc secrets` can read existing network metadata. Pin the Rust WASM source to the released `tinycloud-node` `v1.4.2` tag.
+
 ## 1.7.4-beta.1
 
 ### Patch Changes

@@ -1,5 +1,28 @@
 # @tinycloudlabs/sdk-core
 
+## 2.3.0
+
+### Minor Changes
+
+- fb96a1e: Rename owner/delegate identity surfaces from primary/principal terminology to owner terminology.
+
+  CLI profiles and auth request artifacts now use `ownerDid` and `sessionDid`. Encryption network descriptors and discovery APIs now expose the owner identity as `ownerDid`.
+
+- c7676d6: Add `kv.batchPut` for one-invocation TinyCloud KV batch writes.
+
+### Patch Changes
+
+- a92819d: Add canonical EVM address and `did:pkh:eip155` helpers, then use them when building and comparing TinyCloud DIDs and space IDs.
+- 90bdc18: Add canonical encryption network ID helpers so apps can compare network-scoped capabilities across equivalent owner DID address casing.
+- f11e468: Add default-off telemetry configuration and named span timing events for SDK operations.
+- Updated dependencies [9ee7404]
+- Updated dependencies [fb96a1e]
+- Updated dependencies [d606baf]
+- Updated dependencies [945f43c]
+- Updated dependencies [c7676d6]
+- Updated dependencies [f11e468]
+  - @tinycloud/sdk-services@2.3.0
+
 ## 2.3.0-beta.8
 
 ### Patch Changes

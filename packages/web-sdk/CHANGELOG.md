@@ -1,5 +1,25 @@
 # @tinycloudlabs/web-sdk
 
+## 2.3.0
+
+### Patch Changes
+
+- 90bdc18: Add canonical encryption network ID helpers so apps can compare network-scoped capabilities across equivalent owner DID address casing.
+- f11e468: Add default-off telemetry configuration and named span timing events for SDK operations.
+- Updated dependencies [9ee7404]
+- Updated dependencies [a92819d]
+- Updated dependencies [90bdc18]
+- Updated dependencies [9550c18]
+- Updated dependencies [f615a19]
+- Updated dependencies [ddab8fa]
+- Updated dependencies [fb96a1e]
+- Updated dependencies [d606baf]
+- Updated dependencies [c7676d6]
+- Updated dependencies [f11e468]
+  - @tinycloud/node-sdk@2.3.0
+  - @tinycloud/web-sdk-wasm@1.7.4
+  - @tinycloud/sdk-core@2.3.0
+
 ## 2.3.0-beta.8
 
 ### Patch Changes

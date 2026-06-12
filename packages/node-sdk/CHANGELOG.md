@@ -1,5 +1,55 @@
 # @tinycloudlabs/node-sdk
 
+## 2.3.0
+
+### Minor Changes
+
+- fb96a1e: Rename owner/delegate identity surfaces from primary/principal terminology to owner terminology.
+
+  CLI profiles and auth request artifacts now use `ownerDid` and `sessionDid`. Encryption network descriptors and discovery APIs now expose the owner identity as `ownerDid`.
+
+- c7676d6: Add `kv.batchPut` for one-invocation TinyCloud KV batch writes.
+
+### Patch Changes
+
+- 9ee7404: Harden encryption-network decrypt flows, add CLI secrets coverage, and fix web WASM initialization.
+- a92819d: Add canonical EVM address and `did:pkh:eip155` helpers, then use them when building and comparing TinyCloud DIDs and space IDs.
+- 90bdc18: Add canonical encryption network ID helpers so apps can compare network-scoped capabilities across equivalent owner DID address casing.
+- 9550c18: Add CLI auth artifact handoff flows for owner/delegate workflows.
+
+  `tc auth request` now emits and stores a `tinycloud.auth.request` artifact by
+  default, with `--grant` preserving the immediate grant behavior. Profiles now
+  track canonical posture/operator metadata so a local key, OpenKey owner, or
+  delegate session can be represented explicitly.
+
+  New commands:
+  - `tc auth grant <request>` consumes a request artifact as an owner profile and
+    emits a `tinycloud.auth.delegation` artifact to stdout. Local-key owner
+    grants can use `--yes` for non-interactive approval.
+  - `tc auth import <artifact>` installs delegation artifacts and preserves their
+    originating request id.
+  - `tc auth retry <requestId|--last> --exec` reruns the captured command once the
+    requested permissions are covered.
+
+  Local-key CLI profiles now persist and restore their TinyCloud session key
+  identity so request artifacts target the same session key that later imports the
+  delegation. `@tinycloud/node-sdk` now accepts runtime delegations targeted at the
+  fragmentless form of the current session DID (`did:key:...`) as equivalent to
+  the session verification method DID URL (`did:key:...#...`).
+
+- ddab8fa: Add `TinyCloudNode.kvForSpace(spaceId)` and a `--space` option on `tc kv get/list/head`, mirroring the existing `sqlForSpace` / `tc sql --space`. This lets KV reads target a non-primary space — e.g. reading a manifest app's data kept under the owner's `applications` space (such as Listen's transcripts at `applications/kv/<app-id>/transcript/<id>`) when the session already holds a covering delegation.
+- d606baf: Accept equivalent `did:pkh:eip155` owner DID address casing when validating encryption network descriptors, including legacy `principal` descriptors, so `tc secrets` can read existing network metadata. Pin the Rust WASM source to the released `tinycloud-node` `v1.4.2` tag.
+- f11e468: Add default-off telemetry configuration and named span timing events for SDK operations.
+- Updated dependencies [a92819d]
+- Updated dependencies [90bdc18]
+- Updated dependencies [f615a19]
+- Updated dependencies [fb96a1e]
+- Updated dependencies [d606baf]
+- Updated dependencies [c7676d6]
+- Updated dependencies [f11e468]
+  - @tinycloud/sdk-core@2.3.0
+  - @tinycloud/node-sdk-wasm@1.7.4
+
 ## 2.3.0-beta.8
 
 ### Patch Changes

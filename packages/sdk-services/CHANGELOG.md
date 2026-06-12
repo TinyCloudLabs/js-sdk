@@ -1,5 +1,22 @@
 # @tinycloudlabs/sdk-services
 
+## 2.3.0
+
+### Minor Changes
+
+- fb96a1e: Rename owner/delegate identity surfaces from primary/principal terminology to owner terminology.
+
+  CLI profiles and auth request artifacts now use `ownerDid` and `sessionDid`. Encryption network descriptors and discovery APIs now expose the owner identity as `ownerDid`.
+
+- c7676d6: Add `kv.batchPut` for one-invocation TinyCloud KV batch writes.
+
+### Patch Changes
+
+- 9ee7404: Harden encryption-network decrypt flows, add CLI secrets coverage, and fix web WASM initialization.
+- d606baf: Accept equivalent `did:pkh:eip155` owner DID address casing when validating encryption network descriptors, including legacy `principal` descriptors, so `tc secrets` can read existing network metadata. Pin the Rust WASM source to the released `tinycloud-node` `v1.4.2` tag.
+- 945f43c: Sign SQLite PRAGMA statements with the SQL admin capability so approved admin grants are used for PRAGMA requests.
+- f11e468: Add default-off telemetry configuration and named span timing events for SDK operations.
+
 ## 2.3.0-beta.8
 
 ### Patch Changes

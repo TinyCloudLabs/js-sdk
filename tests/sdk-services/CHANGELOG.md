@@ -1,5 +1,18 @@
 # @tinycloudlabs/sdk-services-test
 
+## 9.0.0
+
+### Patch Changes
+
+- 4b3c50e: Add `batchPut` to `MockKVService` so the test utility package matches the current KV service interface.
+- Updated dependencies [9ee7404]
+- Updated dependencies [fb96a1e]
+- Updated dependencies [d606baf]
+- Updated dependencies [945f43c]
+- Updated dependencies [c7676d6]
+- Updated dependencies [f11e468]
+  - @tinycloud/sdk-services@2.3.0
+
 ## 9.0.0-beta.5
 
 ### Patch Changes

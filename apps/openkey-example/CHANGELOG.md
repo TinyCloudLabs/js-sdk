@@ -1,5 +1,14 @@
 # tinycloud-openkey-example-app
 
+## 0.0.16
+
+### Patch Changes
+
+- 85333e2: build(deps): bump @openkey/sdk from 0.8.4 to 0.8.7 in the openkey group
+- Updated dependencies [90bdc18]
+- Updated dependencies [f11e468]
+  - @tinycloud/web-sdk@2.3.0
+
 ## 0.0.16-beta.8
 
 ### Patch Changes
