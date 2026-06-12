@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-core
 
+## 2.3.0-beta.8
+
+### Patch Changes
+
+- f11e468: Add default-off telemetry configuration and named span timing events for SDK operations.
+- Updated dependencies [f11e468]
+  - @tinycloud/sdk-services@2.3.0-beta.8
+
 ## 2.3.0-beta.7
 
 ### Patch Changes

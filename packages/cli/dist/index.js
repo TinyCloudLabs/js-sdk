@@ -2337,14 +2337,19 @@ async function readStdin2() {
   }
   return Buffer.concat(chunks);
 }
+async function kvHandle(node, spaceInput, profileName) {
+  const spaceUri = await resolveSpaceUri(spaceInput, profileName);
+  return spaceUri ? node.kvForSpace(spaceUri) : node.kv;
+}
 function registerKvCommand(program2) {
   const kv = program2.command("kv").description("Key-value store operations");
-  kv.command("get <key>").description("Get a value by key").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").action(async (key, options, cmd) => {
+  kv.command("get <key>").description("Get a value by key").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const result = await withSpinner(`Getting ${key}...`, () => node.kv.get(key));
+      const kv2 = await kvHandle(node, options.space, ctx.profile);
+      const result = await withSpinner(`Getting ${key}...`, () => kv2.get(key));
       if (!result.ok) {
         if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
           throw new CLIError("NOT_FOUND", `Key "${key}" not found`, ExitCode.NOT_FOUND);
@@ -2425,13 +2430,14 @@ function registerKvCommand(program2) {
       handleError(error);
     }
   });
-  kv.command("list").description("List keys").option("--prefix <prefix>", "Filter by key prefix").action(async (options, cmd) => {
+  kv.command("list").description("List keys").option("--prefix <prefix>", "Filter by key prefix").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
+      const kv2 = await kvHandle(node, options.space, ctx.profile);
       const listOptions = options.prefix ? { prefix: options.prefix } : void 0;
-      const result = await withSpinner("Listing keys...", () => node.kv.list(listOptions));
+      const result = await withSpinner("Listing keys...", () => kv2.list(listOptions));
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }
@@ -2459,12 +2465,13 @@ function registerKvCommand(program2) {
       handleError(error);
     }
   });
-  kv.command("head <key>").description("Get metadata for a key (no body)").action(async (key, _options, cmd) => {
+  kv.command("head <key>").description("Get metadata for a key (no body)").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const result = await withSpinner(`Checking ${key}...`, () => node.kv.head(key));
+      const kv2 = await kvHandle(node, options.space, ctx.profile);
+      const result = await withSpinner(`Checking ${key}...`, () => kv2.head(key));
       if (!result.ok) {
         if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
           outputJson({ key, exists: false, metadata: {} });

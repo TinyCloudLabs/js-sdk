@@ -1,5 +1,14 @@
 # @tinycloud/cli
 
+## 0.6.0-beta.11
+
+### Patch Changes
+
+- ddab8fa: Add `TinyCloudNode.kvForSpace(spaceId)` and a `--space` option on `tc kv get/list/head`, mirroring the existing `sqlForSpace` / `tc sql --space`. This lets KV reads target a non-primary space — e.g. reading a manifest app's data kept under the owner's `applications` space (such as Listen's transcripts at `applications/kv/<app-id>/transcript/<id>`) when the session already holds a covering delegation.
+- Updated dependencies [ddab8fa]
+- Updated dependencies [f11e468]
+  - @tinycloud/node-sdk@2.3.0-beta.8
+
 ## 0.6.0-beta.10
 
 ### Patch Changes

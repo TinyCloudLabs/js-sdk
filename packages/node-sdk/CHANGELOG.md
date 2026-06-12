@@ -1,5 +1,14 @@
 # @tinycloudlabs/node-sdk
 
+## 2.3.0-beta.8
+
+### Patch Changes
+
+- ddab8fa: Add `TinyCloudNode.kvForSpace(spaceId)` and a `--space` option on `tc kv get/list/head`, mirroring the existing `sqlForSpace` / `tc sql --space`. This lets KV reads target a non-primary space — e.g. reading a manifest app's data kept under the owner's `applications` space (such as Listen's transcripts at `applications/kv/<app-id>/transcript/<id>`) when the session already holds a covering delegation.
+- f11e468: Add default-off telemetry configuration and named span timing events for SDK operations.
+- Updated dependencies [f11e468]
+  - @tinycloud/sdk-core@2.3.0-beta.8
+
 ## 2.3.0-beta.7
 
 ### Patch Changes
