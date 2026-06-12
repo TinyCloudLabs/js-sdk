@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "bench:prepare": "bun run --cwd ../../packages/sdk-rs build:wasm:node && bun run --cwd ../../packages/sdk-rs/packages/node build && bun run --cwd ../../packages/sdk-services build && bun run --cwd ../../packages/sdk-core build && bun run --cwd ../../packages/node-sdk build",
+    "bench": "bun benchmarks/node-sdk.bench.ts",
     "test": "bun test",
     "test:sql": "bun test sql/",
     "test:duckdb": "bun test duckdb/"

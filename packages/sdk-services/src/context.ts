@@ -12,12 +12,10 @@ import {
   InvokeAnyFunction,
   FetchFunction,
   defaultRetryPolicy,
+  EventHandler,
+  TelemetryEventHandler,
+  TelemetryConfig,
 } from "./types";
-
-/**
- * Event handler type for telemetry events.
- */
-type EventHandler = (data: unknown) => void;
 
 /**
  * Configuration options for ServiceContext.
@@ -35,6 +33,8 @@ export interface ServiceContextConfig {
   session?: ServiceSession | null;
   /** Retry policy configuration */
   retryPolicy?: Partial<RetryPolicy>;
+  /** Default-off telemetry event delivery. */
+  telemetry?: TelemetryConfig;
 }
 
 /**
@@ -68,6 +68,8 @@ export class ServiceContext implements IServiceContext {
   private readonly _fetch: FetchFunction;
   private readonly _hosts: string[];
   private readonly _retryPolicy: RetryPolicy;
+  private readonly _telemetryEnabled: boolean;
+  private readonly _telemetryHandler?: TelemetryEventHandler;
 
   constructor(config: ServiceContextConfig) {
     this._invoke = config.invoke;
@@ -79,6 +81,12 @@ export class ServiceContext implements IServiceContext {
       ...defaultRetryPolicy,
       ...config.retryPolicy,
     };
+    this._telemetryEnabled =
+      typeof config.telemetry === "boolean"
+        ? config.telemetry
+        : config.telemetry?.enabled === true;
+    this._telemetryHandler =
+      typeof config.telemetry === "object" ? config.telemetry.onEvent : undefined;
   }
 
   // ============================================================
@@ -190,6 +198,15 @@ export class ServiceContext implements IServiceContext {
    * @param data - Event data
    */
   emit(event: string, data: unknown): void {
+    if (this._telemetryEnabled && this._telemetryHandler) {
+      try {
+        this._telemetryHandler(event, data);
+      } catch (error) {
+        // Don't let telemetry handlers break SDK operations.
+        console.error(`Error in telemetry handler for "${event}":`, error);
+      }
+    }
+
     const handlers = this._eventHandlers.get(event);
     if (handlers) {
       for (const handler of handlers) {

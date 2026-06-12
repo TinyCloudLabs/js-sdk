@@ -406,11 +406,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const request = this.getCapabilityRequest();
     if (request === undefined) {
       const defaultNetworkId = this.defaultEncryptionNetworkId(address, chainId);
+      const primarySpaceId = makePkhSpaceId(address, chainId, this.spacePrefix);
       const secretsSpaceId = makePkhSpaceId(address, chainId, "secrets");
       return {
         abilities: this.defaultActions,
-        spaceId: makePkhSpaceId(address, chainId, this.spacePrefix),
+        spaceId: primarySpaceId,
         spaceAbilities: {
+          [primarySpaceId]: this.defaultActions,
           [secretsSpaceId]: {
             kv: {
               "vault/secrets/": [

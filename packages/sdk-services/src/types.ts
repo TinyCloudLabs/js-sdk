@@ -267,6 +267,21 @@ export const defaultRetryPolicy: RetryPolicy = {
 export type EventHandler = (data: unknown) => void;
 
 /**
+ * SDK telemetry event handler.
+ */
+export type TelemetryEventHandler = (event: string, data: unknown) => void;
+
+/**
+ * Default-off telemetry configuration.
+ */
+export type TelemetryConfig =
+  | boolean
+  | {
+      enabled?: boolean;
+      onEvent?: TelemetryEventHandler;
+    };
+
+/**
  * Service interface - base contract for all services.
  */
 export interface IService {
@@ -333,6 +348,7 @@ export interface IServiceContext {
 export interface ServiceRequestEvent {
   service: string;
   action: string;
+  span?: string;
   key?: string;
   timestamp: number;
 }
@@ -343,8 +359,10 @@ export interface ServiceRequestEvent {
 export interface ServiceResponseEvent {
   service: string;
   action: string;
+  span?: string;
   ok: boolean;
   duration: number;
+  durationMs?: number;
   status?: number;
 }
 
@@ -353,6 +371,7 @@ export interface ServiceResponseEvent {
  */
 export interface ServiceErrorEvent {
   service: string;
+  span?: string;
   error: ServiceError;
 }
 
@@ -367,9 +386,23 @@ export interface ServiceRetryEvent {
 }
 
 /**
+ * Generic named span event for aggregating operation timings.
+ */
+export interface TelemetrySpanEvent {
+  span: string;
+  ok: boolean;
+  durationMs: number;
+  service?: string;
+  action?: string;
+  status?: number;
+  error?: ServiceError;
+}
+
+/**
  * Telemetry event names.
  */
 export const TelemetryEvents = {
+  SPAN: "telemetry.span",
   SERVICE_REQUEST: "service.request",
   SERVICE_RESPONSE: "service.response",
   SERVICE_ERROR: "service.error",
