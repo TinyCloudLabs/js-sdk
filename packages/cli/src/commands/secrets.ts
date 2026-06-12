@@ -86,7 +86,7 @@ async function runSecretOperation<T>(params: {
   label: string;
   operation: () => Promise<SecretResult<T>>;
 }): Promise<SecretResult<T>> {
-  const first = await withSpinner(params.label, params.operation);
+  const first = await runSecretOperationAttempt(params.label, params.operation);
   if (first.ok || !shouldRequestSecretPermissions(first.error)) {
     return first;
   }
@@ -110,10 +110,24 @@ async function runSecretOperation<T>(params: {
       requested,
       expiryOption: undefined,
       yes: true,
+      force: true,
     }),
   );
 
-  return withSpinner(params.label, params.operation);
+  return runSecretOperationAttempt(params.label, params.operation);
+}
+
+async function runSecretOperationAttempt<T>(
+  label: string,
+  operation: () => Promise<SecretResult<T>>,
+): Promise<SecretResult<T>> {
+  try {
+    return await withSpinner(label, operation);
+  } catch (error) {
+    const permissionError = thrownPermissionError(error);
+    if (permissionError) return permissionError;
+    throw error;
+  }
 }
 
 function canRequestOwnerPermissions(profile: ProfileConfig): boolean {
@@ -124,6 +138,23 @@ function canRequestOwnerPermissions(profile: ProfileConfig): boolean {
 function shouldRequestSecretPermissions(error: { code: string; message: string }): boolean {
   if (error.code !== "PERMISSION_DENIED") return false;
   return /permission|session expired|autosign|capabilit/i.test(error.message);
+}
+
+function thrownPermissionError<T>(error: unknown): SecretResult<T> | null {
+  const record = error as { code?: unknown; message?: unknown };
+  const message = typeof record?.message === "string" ? record.message : String(error);
+  const code = typeof record?.code === "string" ? record.code : "PERMISSION_DENIED";
+  if (code !== "PERMISSION_DENIED" && !/permission|session expired|autosign|capabilit/i.test(message)) {
+    return null;
+  }
+
+  return {
+    ok: false,
+    error: {
+      code: "PERMISSION_DENIED",
+      message,
+    },
+  };
 }
 
 function isStoredSessionExpired(session: object): boolean {
