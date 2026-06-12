@@ -10,6 +10,7 @@ import {
   IDuckDbService,
   ServiceSession,
   ServiceContext,
+  type TelemetryConfig,
 } from "@tinycloud/sdk-core";
 import type { InvokeFunction } from "@tinycloud/sdk-services";
 import { PortableDelegation } from "./delegation";
@@ -57,6 +58,7 @@ export class DelegatedAccess {
     delegation: PortableDelegation,
     host: string,
     invoke: InvokeFunction,
+    telemetry?: TelemetryConfig,
   ) {
     this.session = session;
     this._delegation = delegation;
@@ -67,6 +69,7 @@ export class DelegatedAccess {
       invoke,
       fetch: globalThis.fetch.bind(globalThis),
       hosts: [host],
+      telemetry,
     });
 
     // Create and initialize KV service with path prefix from delegation

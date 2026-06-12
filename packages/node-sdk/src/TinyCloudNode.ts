@@ -52,6 +52,7 @@ import {
   createVaultCrypto,
   ServiceSession,
   ServiceContext,
+  type TelemetryConfig,
   ISessionStorage,
   ISigner,
   type InvokeAnyFunction,
@@ -215,6 +216,8 @@ export interface TinyCloudNodeConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Include implicit account registry permissions when composing `manifest`. Default true. */
   includeAccountRegistryPermissions?: boolean;
+  /** Default-off service telemetry. */
+  telemetry?: TelemetryConfig;
 }
 
 /**
@@ -574,6 +577,7 @@ export class TinyCloudNode {
           invoke: config.invoke,
           fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
           hosts: config.hosts,
+          telemetry: this.config.telemetry,
         });
         kvContext.setSession(config.session);
         kvService.initialize(kvContext);
@@ -625,6 +629,7 @@ export class TinyCloudNode {
 
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
+      telemetry: config.telemetry,
     });
   }
 
@@ -932,6 +937,7 @@ export class TinyCloudNode {
       invokeAny: this.invokeAnyWithRuntimePermissions,
       fetch: globalThis.fetch.bind(globalThis),
       hosts: [this.config.host!],
+      telemetry: this.config.telemetry,
     });
 
     // Create and register KV service
@@ -1076,6 +1082,7 @@ export class TinyCloudNode {
     // Create TinyCloud instance
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
+      telemetry: this.config.telemetry,
     });
 
     // Update config with prefix
@@ -1127,6 +1134,7 @@ export class TinyCloudNode {
 
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
+      telemetry: this.config.telemetry,
     });
     this.config.prefix = prefix;
   }
@@ -1150,6 +1158,7 @@ export class TinyCloudNode {
       invokeAny: this.invokeAnyWithRuntimePermissions,
       fetch: globalThis.fetch.bind(globalThis),
       hosts: [this.config.host!],
+      telemetry: this.config.telemetry,
     });
 
     // Create and register KV service
@@ -1203,6 +1212,7 @@ export class TinyCloudNode {
         invoke: this._serviceContext.invoke,
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
+        telemetry: this.config.telemetry,
       });
       const session = this._serviceContext.session;
       if (session) {
@@ -1847,6 +1857,7 @@ export class TinyCloudNode {
       invoke: this._serviceContext.invoke,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
+      telemetry: this.config.telemetry,
     });
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     sql.initialize(spaceScopedContext);
@@ -2506,6 +2517,7 @@ export class TinyCloudNode {
         invoke: this.invokeWithRuntimePermissions,
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
+        telemetry: this.config.telemetry,
       });
       publicContext.setSession({
         delegationHeader: delegationSession.delegationHeader,
@@ -3747,7 +3759,13 @@ export class TinyCloudNode {
         delegation.expiry,
       );
 
-      return new DelegatedAccess(session, delegation, targetHost, this.wasmBindings.invoke);
+      return new DelegatedAccess(
+        session,
+        delegation,
+        targetHost,
+        this.wasmBindings.invoke,
+        this.config.telemetry,
+      );
     }
 
     // Wallet mode: create a SIWE sub-delegation
@@ -3855,7 +3873,13 @@ export class TinyCloudNode {
       expirationTime,
     );
 
-    return new DelegatedAccess(session, delegation, targetHost, this.wasmBindings.invoke);
+    return new DelegatedAccess(
+      session,
+      delegation,
+      targetHost,
+      this.wasmBindings.invoke,
+      this.config.telemetry,
+    );
   }
 
   /**

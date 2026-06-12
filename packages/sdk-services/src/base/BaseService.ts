@@ -157,9 +157,11 @@ export abstract class BaseService implements IService {
    * @param key - Optional key/path being accessed
    */
   protected emitRequest(action: string, key?: string): void {
+    const service = this.getServiceName();
     this.emit(TelemetryEvents.SERVICE_REQUEST, {
-      service: this.getServiceName(),
+      service,
       action,
+      span: this.spanName(action),
       key,
       timestamp: Date.now(),
     });
@@ -179,11 +181,24 @@ export abstract class BaseService implements IService {
     startTime: number,
     status?: number
   ): void {
+    const service = this.getServiceName();
+    const durationMs = Date.now() - startTime;
+    const span = this.spanName(action);
     this.emit(TelemetryEvents.SERVICE_RESPONSE, {
-      service: this.getServiceName(),
+      service,
+      action,
+      span,
+      ok,
+      duration: durationMs,
+      durationMs,
+      status,
+    });
+    this.emit(TelemetryEvents.SPAN, {
+      span,
+      service,
       action,
       ok,
-      duration: Date.now() - startTime,
+      durationMs,
       status,
     });
   }
@@ -193,9 +208,11 @@ export abstract class BaseService implements IService {
    *
    * @param error - The service error
    */
-  protected emitError(error: ServiceError): void {
+  protected emitError(error: ServiceError, action?: string): void {
+    const span = action ? this.spanName(action) : undefined;
     this.emit(TelemetryEvents.SERVICE_ERROR, {
       service: this.getServiceName(),
+      ...(span ? { span } : {}),
       error,
     });
   }
@@ -206,6 +223,13 @@ export abstract class BaseService implements IService {
    */
   protected getServiceName(): string {
     return (this.constructor as typeof BaseService).serviceName;
+  }
+
+  /**
+   * Stable span name used by SDK telemetry sinks.
+   */
+  protected spanName(action: string): string {
+    return `sdk.${this.getServiceName()}.${action}`;
   }
 
   /**
@@ -254,14 +278,14 @@ export abstract class BaseService implements IService {
         this.emitResponse(action, true, startTime);
       } else {
         this.emitResponse(action, false, startTime);
-        this.emitError(result.error);
+        this.emitError(result.error, action);
       }
 
       return result;
     } catch (error) {
       const serviceError = wrapError(this.getServiceName(), error);
       this.emitResponse(action, false, startTime);
-      this.emitError(serviceError);
+      this.emitError(serviceError, action);
       return err(serviceError);
     }
   }

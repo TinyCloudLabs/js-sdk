@@ -166,6 +166,7 @@ export type KVListResultType = z.infer<typeof KVListResultSchema>;
 export const ServiceRequestEventSchema = z.object({
   service: z.string(),
   action: z.string(),
+  span: z.string().optional(),
   key: z.string().optional(),
   timestamp: z.number(),
 });
@@ -178,8 +179,10 @@ export type ServiceRequestEventType = z.infer<typeof ServiceRequestEventSchema>;
 export const ServiceResponseEventSchema = z.object({
   service: z.string(),
   action: z.string(),
+  span: z.string().optional(),
   ok: z.boolean(),
   duration: z.number(),
+  durationMs: z.number().optional(),
   status: z.number().optional(),
 });
 
@@ -190,6 +193,7 @@ export type ServiceResponseEventType = z.infer<typeof ServiceResponseEventSchema
  */
 export const ServiceErrorEventSchema = z.object({
   service: z.string(),
+  span: z.string().optional(),
   error: ServiceErrorSchema,
 });
 
@@ -206,6 +210,21 @@ export const ServiceRetryEventSchema = z.object({
 });
 
 export type ServiceRetryEventType = z.infer<typeof ServiceRetryEventSchema>;
+
+/**
+ * Schema for generic named span event.
+ */
+export const TelemetrySpanEventSchema = z.object({
+  span: z.string(),
+  ok: z.boolean(),
+  durationMs: z.number(),
+  service: z.string().optional(),
+  action: z.string().optional(),
+  status: z.number().optional(),
+  error: ServiceErrorSchema.optional(),
+});
+
+export type TelemetrySpanEventType = z.infer<typeof TelemetrySpanEventSchema>;
 
 // =============================================================================
 // Retry Policy Schema
@@ -411,6 +430,30 @@ export function validateServiceResponseEvent(
   data: unknown
 ): { ok: true; data: ServiceResponseEventType } | { ok: false; error: ValidationError } {
   const result = ServiceResponseEventSchema.safeParse(data);
+  if (!result.success) {
+    return {
+      ok: false,
+      error: {
+        code: "VALIDATION_ERROR",
+        message: result.error.message,
+        service: "telemetry",
+        meta: { issues: result.error.issues },
+      },
+    };
+  }
+  return { ok: true, data: result.data };
+}
+
+/**
+ * Validate named telemetry span event against the schema.
+ *
+ * @param data - Unknown data to validate
+ * @returns Result with validated data or validation error
+ */
+export function validateTelemetrySpanEvent(
+  data: unknown
+): { ok: true; data: TelemetrySpanEventType } | { ok: false; error: ValidationError } {
+  const result = TelemetrySpanEventSchema.safeParse(data);
   if (!result.success) {
     return {
       ok: false,

@@ -11,6 +11,7 @@ import {
   ServiceResponseEventSchema,
   ServiceErrorEventSchema,
   ServiceRetryEventSchema,
+  TelemetrySpanEventSchema,
   RetryPolicySchema,
   ServiceSessionSchema,
   GenericResultSchema,
@@ -23,6 +24,7 @@ import {
   validateRetryPolicy,
   validateServiceRequestEvent,
   validateServiceResponseEvent,
+  validateTelemetrySpanEvent,
 } from "./types.schema";
 import { z } from "zod";
 
@@ -55,6 +57,7 @@ const validKVListResponse = {
 const validServiceRequestEvent = {
   service: "kv",
   action: "tinycloud.kv/get",
+  span: "sdk.kv.get",
   key: "test-key",
   timestamp: 1706832000000,
 };
@@ -62,9 +65,19 @@ const validServiceRequestEvent = {
 const validServiceResponseEvent = {
   service: "kv",
   action: "tinycloud.kv/get",
+  span: "sdk.kv.get",
   ok: true,
   duration: 150,
+  durationMs: 150,
   status: 200,
+};
+
+const validTelemetrySpanEvent = {
+  span: "sdk.kv.get",
+  service: "kv",
+  action: "get",
+  ok: true,
+  durationMs: 150,
 };
 
 const validRetryPolicy = {
@@ -442,6 +455,23 @@ describe("ServiceResponseEventSchema", () => {
 });
 
 // =============================================================================
+// TelemetrySpanEventSchema Tests
+// =============================================================================
+
+describe("TelemetrySpanEventSchema", () => {
+  it("accepts valid named span event", () => {
+    const result = TelemetrySpanEventSchema.safeParse(validTelemetrySpanEvent);
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects missing span", () => {
+    const { span, ...withoutSpan } = validTelemetrySpanEvent;
+    const result = TelemetrySpanEventSchema.safeParse(withoutSpan);
+    expect(result.success).toBe(false);
+  });
+});
+
+// =============================================================================
 // ServiceErrorEventSchema Tests
 // =============================================================================
 
@@ -789,5 +819,18 @@ describe("validateServiceResponseEvent", () => {
     if (!result.ok) {
       expect(result.error.service).toBe("telemetry");
     }
+  });
+});
+
+describe("validateTelemetrySpanEvent", () => {
+  it("returns ok result for valid data", () => {
+    const result = validateTelemetrySpanEvent(validTelemetrySpanEvent);
+    expect(result.ok).toBe(true);
+  });
+
+  it("returns error result for missing durationMs", () => {
+    const { durationMs, ...withoutDuration } = validTelemetrySpanEvent;
+    const result = validateTelemetrySpanEvent(withoutDuration);
+    expect(result.ok).toBe(false);
   });
 });

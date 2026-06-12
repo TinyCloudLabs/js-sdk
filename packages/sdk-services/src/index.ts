@@ -54,10 +54,13 @@ export type {
   FetchResponse,
   ServiceHeaders,
   EventHandler,
+  TelemetryConfig,
+  TelemetryEventHandler,
   ServiceRequestEvent,
   ServiceResponseEvent,
   ServiceErrorEvent,
   ServiceRetryEvent,
+  TelemetrySpanEvent,
 } from "./types";
 
 export {
@@ -79,6 +82,7 @@ export {
   ServiceResponseEventSchema,
   ServiceErrorEventSchema,
   ServiceRetryEventSchema,
+  TelemetrySpanEventSchema,
   RetryPolicySchema,
   ServiceSessionSchema,
   GenericResultSchema,
@@ -95,6 +99,7 @@ export {
   validateRetryPolicy,
   validateServiceRequestEvent,
   validateServiceResponseEvent,
+  validateTelemetrySpanEvent,
 } from "./types.schema";
 
 export type {
@@ -109,6 +114,7 @@ export type {
   ServiceResponseEventType,
   ServiceErrorEventType,
   ServiceRetryEventType,
+  TelemetrySpanEventType,
   RetryPolicyType,
   ServiceSessionType,
 } from "./types.schema";

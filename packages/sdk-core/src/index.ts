@@ -130,6 +130,8 @@ export {
   type InvokeAnyFunction,
   type InvokeAnyEntry,
   type FetchFunction,
+  type TelemetryConfig,
+  type TelemetryEventHandler,
   // Retry
   type RetryPolicy,
   defaultRetryPolicy,

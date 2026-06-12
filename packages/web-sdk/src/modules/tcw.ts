@@ -42,6 +42,7 @@ import {
   KVService,
   ServiceContext,
   ServiceSession,
+  type TelemetryConfig,
   ISpaceCreationHandler,
   type Manifest,
   type ComposedManifestRequest,
@@ -150,6 +151,8 @@ export interface Config extends ClientConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Include implicit account registry permissions when composing `manifest`. Default true. */
   includeAccountRegistryPermissions?: boolean;
+  /** Default-off service telemetry. */
+  telemetry?: TelemetryConfig;
 }
 
 /**
@@ -351,6 +354,7 @@ export class TinyCloudWeb {
       capabilityRequest: this._capabilityRequest,
       includeAccountRegistryPermissions:
         this.config.includeAccountRegistryPermissions,
+      telemetry: this.config.telemetry,
     };
 
     // Wire up signer if available

@@ -24,6 +24,7 @@ import {
   FetchFunction,
   RetryPolicy,
   defaultRetryPolicy,
+  TelemetryConfig,
   ServiceConstructor,
   Result,
   ok,
@@ -97,6 +98,11 @@ export interface TinyCloudConfig {
    * Retry policy for service operations.
    */
   retryPolicy?: Partial<RetryPolicy>;
+
+  /**
+   * Default-off telemetry for service operation timing.
+   */
+  telemetry?: TelemetryConfig;
 }
 
 /**
@@ -216,6 +222,7 @@ export class TinyCloud {
       fetch: fetchFn ?? this.config.fetch ?? globalThis.fetch.bind(globalThis),
       hosts: effectiveHosts,
       retryPolicy: this.config.retryPolicy,
+      telemetry: this.config.telemetry,
     });
 
     // Register default services (can be overridden via config.services)
@@ -680,6 +687,7 @@ export class TinyCloud {
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
       retryPolicy: this.config.retryPolicy,
+      telemetry: this.config.telemetry,
     });
     publicContext.setSession({
       ...session,

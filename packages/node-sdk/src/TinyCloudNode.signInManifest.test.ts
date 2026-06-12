@@ -229,6 +229,14 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     // legacy default table.
     expect(cfg.abilities.kv).toHaveProperty("");
     expect(cfg.abilities.kv[""]).toContain("tinycloud.kv/get");
+    expect(cfg.spaceAbilities[cfg.spaceId]).toEqual(cfg.abilities);
+    const secretsSpaceId = Object.keys(cfg.spaceAbilities).find((spaceId) =>
+      spaceId.endsWith(":secrets"),
+    );
+    expect(secretsSpaceId).toBeDefined();
+    expect(cfg.spaceAbilities[secretsSpaceId!].kv["vault/secrets/"]).toContain(
+      "tinycloud.kv/get",
+    );
   });
 
   test("manifest with app permissions → recap reflects manifest", async () => {

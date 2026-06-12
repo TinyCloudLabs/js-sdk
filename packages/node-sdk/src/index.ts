@@ -452,6 +452,8 @@ export type {
   ServiceSession,
   InvokeFunction,
   FetchFunction,
+  TelemetryConfig,
+  TelemetryEventHandler,
 } from "@tinycloud/sdk-core";
 
 // Re-export KeyProvider interface from sdk-core
