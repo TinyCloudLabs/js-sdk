@@ -62,11 +62,28 @@ const ensureAuthenticated = mock(async () => currentNode);
 mock.module(new URL("../../../packages/cli/src/config/profiles.ts", import.meta.url).pathname, () => ({
   ProfileManager: {
     resolveContext,
+    getProfile: async () => ({
+      name: context.profile,
+      host: context.host,
+      chainId: 1,
+      spaceName: "default",
+      did: "did:key:z6MkSession",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      authMethod: "openkey",
+      posture: "delegate-session",
+      operatorType: "agent",
+    }),
+    getSession: async () => null,
   },
 }));
 
 mock.module(new URL("../../../packages/cli/src/output/formatter.ts", import.meta.url).pathname, () => ({
+  formatField: (label: string, value: unknown) => `${label}: ${String(value)}`,
+  formatTable: (_headers: string[], rows: string[][]) =>
+    rows.map((row) => row.join("  ")).join("\n"),
+  isInteractive: () => false,
   outputJson,
+  shouldOutputJson: () => true,
   withSpinner,
 }));
 
@@ -77,6 +94,35 @@ mock.module(new URL("../../../packages/cli/src/output/errors.ts", import.meta.ur
 
 mock.module(new URL("../../../packages/cli/src/lib/sdk.ts", import.meta.url).pathname, () => ({
   ensureAuthenticated,
+}));
+
+mock.module("@tinycloud/node-sdk", () => ({
+  buildSpaceUri: (owner: string, name: string) => `${owner}:${name}`,
+  canonicalizeAddress: (address: string) => address,
+  makePkhSpaceId: (address: string, chainId = 1, name = "default") =>
+    `tinycloud:pkh:eip155:${chainId}:${address}:${name}`,
+  parsePkhDid: (did: string) => {
+    const match = did.match(/^did:pkh:eip155:(\d+):(.+)$/);
+    return match ? { chainId: Number(match[1]), address: match[2] } : null;
+  },
+  parseSpaceUri: (space: string) => {
+    const match = space.match(/^(tinycloud:pkh:eip155:\d+:[^:]+):([^:]+)$/);
+    return match ? { owner: match[1], name: match[2] } : null;
+  },
+  expandActionShortNames: (permission: { actions: string[] }) => permission.actions,
+  isCapabilitySubset: () => false,
+  PrivateKeySigner: class PrivateKeySigner {},
+  pkhDid: (address: string, chainId = 1) => `did:pkh:eip155:${chainId}:${address}`,
+  resolveManifest: () => ({ permissions: [] }),
+  resolveSecretListPrefix: (options?: { scope?: string }) =>
+    options?.scope ? `vault/secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/` : "vault/secrets/",
+  resolveSecretPath: (name: string, options?: { scope?: string }) => ({
+    permissionPaths: {
+      vault: options?.scope
+        ? `vault/secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/${name}`
+        : `vault/secrets/${name}`,
+    },
+  }),
 }));
 
 const { registerSecretsCommand } = await import("../../../packages/cli/src/commands/secrets.ts");

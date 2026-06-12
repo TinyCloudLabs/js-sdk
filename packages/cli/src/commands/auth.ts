@@ -1012,6 +1012,14 @@ function isRawPermission(permission: PermissionEntry): boolean {
     permission.path.startsWith("urn:tinycloud:encryption:");
 }
 
+function returnedSpaceMatchesExpected(returnedSpace: string, expectedSpace: string): boolean {
+  if (returnedSpace === expectedSpace) return true;
+
+  if (!returnedSpace.startsWith("tinycloud:")) return false;
+  const returnedName = returnedSpace.slice(returnedSpace.lastIndexOf(":") + 1);
+  return returnedName === expectedSpace;
+}
+
 function portableFromOpenKeyDelegation(
   data: Record<string, unknown>,
   permissions: PermissionEntry[],
@@ -1024,7 +1032,9 @@ function portableFromOpenKeyDelegation(
       .filter((permission) => !isRawPermission(permission))
       .map((permission) => permission.space),
   );
-  if (expectedSpaces.size > 0 && (expectedSpaces.size !== 1 || !expectedSpaces.has(returnedSpace))) {
+  const matchesExpectedSpace = expectedSpaces.size === 1 &&
+    returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]!);
+  if (expectedSpaces.size > 0 && !matchesExpectedSpace) {
     throw new CLIError(
       "OPENKEY_SCOPE_MISMATCH",
       `OpenKey returned delegation for ${returnedSpace}, expected ${Array.from(expectedSpaces).join(", ")}.`,
