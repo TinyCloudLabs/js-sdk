@@ -108,7 +108,7 @@ export class SQLService extends BaseService implements ISQLService {
       try {
         const response = await this.invokeSQL(
           dbName,
-          SQLAction.READ,
+          this.actionForSql(sql, SQLAction.READ),
           { action: "query", sql, params: params ?? [] },
           options?.signal
         );
@@ -148,7 +148,7 @@ export class SQLService extends BaseService implements ISQLService {
 
         const response = await this.invokeSQL(
           dbName,
-          SQLAction.WRITE,
+          this.actionForSql(sql, SQLAction.WRITE),
           body,
           options?.signal
         );
@@ -178,7 +178,7 @@ export class SQLService extends BaseService implements ISQLService {
       try {
         const response = await this.invokeSQL(
           dbName,
-          SQLAction.WRITE,
+          this.actionForSqlBatch(statements),
           { action: "batch", statements },
           options?.signal
         );
@@ -287,6 +287,18 @@ export class SQLService extends BaseService implements ISQLService {
     });
   }
 
+  private actionForSql(sql: string, fallback: string): string {
+    return firstSqlToken(sql) === "pragma" ? SQLAction.ADMIN : fallback;
+  }
+
+  private actionForSqlBatch(statements: SqlStatement[]): string {
+    return statements.some(
+      (statement) => this.actionForSql(statement.sql, SQLAction.WRITE) === SQLAction.ADMIN,
+    )
+      ? SQLAction.ADMIN
+      : SQLAction.WRITE;
+  }
+
   private async handleErrorResponse(
     response: FetchResponse,
     operation: string
@@ -345,4 +357,37 @@ export class SQLService extends BaseService implements ISQLService {
         return ErrorCodes.NETWORK_ERROR;
     }
   }
+}
+
+function firstSqlToken(sql: string): string | undefined {
+  let index = 0;
+
+  while (index < sql.length) {
+    while (index < sql.length && /\s/.test(sql[index])) {
+      index++;
+    }
+
+    if (sql.startsWith("--", index)) {
+      const newline = sql.indexOf("\n", index + 2);
+      if (newline === -1) {
+        return undefined;
+      }
+      index = newline + 1;
+      continue;
+    }
+
+    if (sql.startsWith("/*", index)) {
+      const end = sql.indexOf("*/", index + 2);
+      if (end === -1) {
+        return undefined;
+      }
+      index = end + 2;
+      continue;
+    }
+
+    break;
+  }
+
+  const match = /^[A-Za-z_]+/.exec(sql.slice(index));
+  return match?.[0].toLowerCase();
 }
