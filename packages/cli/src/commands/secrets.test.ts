@@ -144,6 +144,7 @@ function makeDescriptor(
 function makeFakeNode(overrides: {
   getResult?: SecretResult<string> | SecretResult<string>[];
   listResult?: SecretResult<string[]> | SecretResult<string[]>[];
+  listError?: Error | Error[];
   putResult?: SecretResult<undefined> | SecretResult<undefined>[];
   deleteResult?: SecretResult<undefined> | SecretResult<undefined>[];
   networkShowResult?: NetworkDescriptorLike | null;
@@ -159,6 +160,8 @@ function makeFakeNode(overrides: {
     secrets: {
       async list(options?: { scope?: string }) {
         recorded.listCalls.push(options);
+        const listError = nextError(overrides.listError);
+        if (listError) throw listError;
         return nextResult(overrides.listResult, { ok: true as const, data: ["ANTHROPIC_API_KEY"] });
       },
       async get(name: string, options?: { scope?: string }) {
@@ -196,6 +199,13 @@ function makeFakeNode(overrides: {
       );
     },
   };
+}
+
+function nextError(error: Error | Error[] | undefined): Error | null {
+  if (Array.isArray(error)) {
+    return error.shift() ?? null;
+  }
+  return error ?? null;
 }
 
 function nextResult<T>(
@@ -463,6 +473,38 @@ describe("CLI secrets commands", () => {
         ],
       },
     ]);
+    expect(recorded.outputs).toEqual([
+      { secrets: ["ANTHROPIC_API_KEY"], count: 1 },
+    ]);
+  });
+
+  test("requests list permission and retries when the SDK throws a permission error", async () => {
+    currentNode = makeFakeNode({
+      listError: [
+        Object.assign(
+          new Error("grantRuntimePermissions requires wallet mode with a signer or privateKey."),
+          { code: "PERMISSION_DENIED" },
+        ),
+      ],
+    });
+
+    await runSecretsCommand(["secrets", "list"]);
+
+    expect(recorded.permissionRequests).toEqual([
+      {
+        profile: "default",
+        requested: [
+          {
+            service: "tinycloud.kv",
+            space: "secrets",
+            path: "vault/secrets/",
+            actions: ["tinycloud.kv/list"],
+            skipPrefix: true,
+          },
+        ],
+      },
+    ]);
+    expect(recorded.listCalls).toEqual([undefined, undefined]);
     expect(recorded.outputs).toEqual([
       { secrets: ["ANTHROPIC_API_KEY"], count: 1 },
     ]);

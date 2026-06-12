@@ -809,8 +809,9 @@ export async function ensureDelegationAuthority(params: {
   requested: PermissionEntry[];
   expiryOption: string | number | undefined;
   yes: boolean;
+  force?: boolean;
 }): Promise<void> {
-  if (params.node.hasRuntimePermissions(params.requested)) return;
+  if (!params.force && params.node.hasRuntimePermissions(params.requested)) return;
 
   if (params.profile.authMethod === "openkey") {
     const key = await ProfileManager.getKey(params.ctx.profile);

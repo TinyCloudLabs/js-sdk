@@ -1929,7 +1929,7 @@ function normalizePortableDelegation(delegation) {
   return { ...delegation, expiry };
 }
 async function ensureDelegationAuthority(params) {
-  if (params.node.hasRuntimePermissions(params.requested)) return;
+  if (!params.force && params.node.hasRuntimePermissions(params.requested)) return;
   if (params.profile.authMethod === "openkey") {
     const key = await ProfileManager.getKey(params.ctx.profile);
     if (!key) {
@@ -3379,7 +3379,7 @@ async function ensureSecretsNode(ctx, options) {
   return ensureAuthenticated(ctx, auth);
 }
 async function runSecretOperation(params) {
-  const first = await withSpinner(params.label, params.operation);
+  const first = await runSecretOperationAttempt(params.label, params.operation);
   if (first.ok || !shouldRequestSecretPermissions(first.error)) {
     return first;
   }
@@ -3401,10 +3401,20 @@ async function runSecretOperation(params) {
       node: params.node,
       requested,
       expiryOption: void 0,
-      yes: true
+      yes: true,
+      force: true
     })
   );
-  return withSpinner(params.label, params.operation);
+  return runSecretOperationAttempt(params.label, params.operation);
+}
+async function runSecretOperationAttempt(label, operation) {
+  try {
+    return await withSpinner(label, operation);
+  } catch (error) {
+    const permissionError = thrownPermissionError(error);
+    if (permissionError) return permissionError;
+    throw error;
+  }
 }
 function canRequestOwnerPermissions(profile) {
   const posture = resolveProfilePosture(profile);
@@ -3413,6 +3423,21 @@ function canRequestOwnerPermissions(profile) {
 function shouldRequestSecretPermissions(error) {
   if (error.code !== "PERMISSION_DENIED") return false;
   return /permission|session expired|autosign|capabilit/i.test(error.message);
+}
+function thrownPermissionError(error) {
+  const record = error;
+  const message = typeof record?.message === "string" ? record.message : String(error);
+  const code = typeof record?.code === "string" ? record.code : "PERMISSION_DENIED";
+  if (code !== "PERMISSION_DENIED" && !/permission|session expired|autosign|capabilit/i.test(message)) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      code: "PERMISSION_DENIED",
+      message
+    }
+  };
 }
 function isStoredSessionExpired(session) {
   const record = session;
