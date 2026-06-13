@@ -4,4 +4,5 @@
  * @packageDocumentation
  */
 
-export { WasmKeyProvider, WasmKeyProviderConfig, createWasmKeyProvider } from "./WasmKeyProvider";
+export { WasmKeyProvider, createWasmKeyProvider } from "./WasmKeyProvider";
+export type { WasmKeyProviderConfig } from "./WasmKeyProvider";

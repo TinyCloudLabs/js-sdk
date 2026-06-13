@@ -734,6 +734,103 @@ describe("TinyCloudNode runtime permission delegations", () => {
     );
   });
 
+  test("useDelegation activates every resource of a multi-resource delegation", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const secretsSpaceId = `tinycloud:pkh:eip155:1:${address}:secrets`;
+    const networkId = node.getDefaultEncryptionNetworkId();
+    const secretPath = "vault/secrets/ANTHROPIC_API_KEY";
+
+    // A delegation covering BOTH a kv secret and an encryption network.
+    // The flat top-level path/actions mirror only the encryption resource
+    // (sorted first by service); the full set lives in `resources[]`.
+    const delegation = {
+      cid: "owner-multi-cid",
+      delegationHeader: { Authorization: "owner-multi-token" },
+      spaceId: secretsSpaceId,
+      path: networkId,
+      actions: ["tinycloud.encryption/decrypt"],
+      resources: [
+        {
+          service: "encryption",
+          space: "encryption",
+          path: networkId,
+          actions: ["tinycloud.encryption/decrypt"],
+        },
+        {
+          service: "kv",
+          space: secretsSpaceId,
+          path: secretPath,
+          actions: ["tinycloud.kv/get"],
+        },
+      ],
+      disableSubDelegation: false,
+      expiry: new Date(Date.now() + 3600_000),
+      delegateDID: "did:key:default",
+      ownerAddress: address,
+      chainId: 1,
+      host: "https://tinycloud.test",
+    };
+
+    await withActivatedDelegations(async () => {
+      await node.useDelegation(delegation as any);
+    });
+
+    const prepareSession = (node as any).wasmBindings.prepareSession;
+    const call = prepareSession.mock.calls[0][0];
+
+    // The kv capability must NOT be dropped from the activation.
+    expect(call.abilities).toEqual({
+      kv: { [secretPath]: ["tinycloud.kv/get"] },
+    });
+    // The encryption capability must also be present, as a raw network grant.
+    expect(call.rawAbilities).toEqual({
+      [networkId]: ["tinycloud.encryption/decrypt"],
+    });
+
+    // Both resources are tracked as runtime grants so subsequent
+    // invocations route to the activated sub-delegation session.
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: secretsSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeWithRuntimePermissions(
+      fallback,
+      "kv",
+      secretPath,
+      "tinycloud.kv/get",
+    );
+    expect(
+      invoke.mock.calls[invoke.mock.calls.length - 1][0].delegationHeader
+        .Authorization,
+    ).toBe("runtime-token");
+
+    (node as any).invokeAnyWithRuntimePermissions(
+      fallback,
+      [
+        {
+          resource: networkId,
+          service: "encryption",
+          path: networkId,
+          action: "tinycloud.encryption/decrypt",
+        },
+      ],
+      [{}],
+    );
+    const invokeAny = (node as any).wasmBindings.invokeAny;
+    expect(
+      invokeAny.mock.calls[invokeAny.mock.calls.length - 1][0].delegationHeader
+        .Authorization,
+    ).toBe("runtime-token");
+  });
+
   test("encryption discovery falls back to the well-known cache record", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,

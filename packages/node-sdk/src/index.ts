@@ -96,7 +96,7 @@ export { FileSessionStorage } from "./storage/FileSessionStorage";
 // Authorization
 export {
   NodeUserAuthorization,
-  NodeUserAuthorizationConfig,
+  type NodeUserAuthorizationConfig,
 } from "./authorization/NodeUserAuthorization";
 
 // Sign strategies — value exports
@@ -462,6 +462,6 @@ export type { KeyProvider } from "@tinycloud/sdk-core";
 // Key management for node-sdk
 export {
   WasmKeyProvider,
-  WasmKeyProviderConfig,
+  type WasmKeyProviderConfig,
   createWasmKeyProvider,
 } from "./keys/WasmKeyProvider";

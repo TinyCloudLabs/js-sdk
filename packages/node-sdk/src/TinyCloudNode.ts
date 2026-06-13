@@ -3317,6 +3317,73 @@ export class TinyCloudNode {
     }));
   }
 
+  /**
+   * Build the abilities/rawAbilities maps for a wallet-mode activation
+   * sub-delegation from the FULL resource set of a received delegation.
+   *
+   * Each entry in `delegation.resources[]` is one `(service, space, path,
+   * actions)` grant; the flat top-level `path`/`actions` mirror only the
+   * first resource. We must reconstruct every grant so the activated
+   * session carries all of them (e.g. both `tinycloud.kv/get` and
+   * `tinycloud.encryption/decrypt`) — not just the primary one.
+   *
+   * Encryption resources are raw network URNs (space-independent) and go
+   * into `rawAbilities`. All other resources are space-scoped and go into
+   * `abilities` keyed by short service name. The activation `prepareSession`
+   * call uses a single `spaceId` (`delegation.spaceId`), so every
+   * non-encryption resource must target that same space — which is exactly
+   * what the multi-resource issuance path enforces. A resource targeting a
+   * different space cannot be activated in one call, so we fail loudly
+   * rather than silently dropping it.
+   *
+   * @internal
+   */
+  private buildActivationAbilities(delegation: PortableDelegation): {
+    abilities: Record<string, Record<string, string[]>>;
+    rawAbilities: Record<string, string[]>;
+  } {
+    const resources =
+      delegation.resources !== undefined && delegation.resources.length > 0
+        ? delegation.resources
+        : this.flatDelegationResources(delegation);
+
+    const abilities: Record<string, Record<string, string[]>> = {};
+    const rawAbilities: Record<string, string[]> = {};
+
+    const addActions = (target: string[], actions: string[]): void => {
+      const seen = new Set(target);
+      for (const action of actions) {
+        if (!seen.has(action)) {
+          target.push(action);
+          seen.add(action);
+        }
+      }
+    };
+
+    for (const resource of resources) {
+      const service = this.invocationServiceName(resource.service);
+      if (this.isEncryptionNetworkOperation(service, resource.path)) {
+        rawAbilities[resource.path] ??= [];
+        addActions(rawAbilities[resource.path], resource.actions);
+        continue;
+      }
+
+      if (resource.space !== delegation.spaceId) {
+        throw new Error(
+          `useDelegation: resource targets space '${resource.space}' but the ` +
+            `delegation activates space '${delegation.spaceId}'. Multi-space ` +
+            `delegations cannot be activated in a single useDelegation call.`,
+        );
+      }
+
+      abilities[service] ??= {};
+      abilities[service][resource.path] ??= [];
+      addActions(abilities[service][resource.path], resource.actions);
+    }
+
+    return { abilities, rawAbilities };
+  }
+
   private selectInvocationSession(
     fallback: ServiceSession,
     service: string,
@@ -3808,30 +3875,13 @@ export class TinyCloudNode {
     // We must use the same key that the delegation was created for
     const jwk = mySession.jwk;
 
-    // Build abilities from the delegation
-    const abilities: Record<string, Record<string, string[]>> = {};
-    const kvActions = delegation.actions.filter(a => a.startsWith("tinycloud.kv/"));
-    const sqlActions = delegation.actions.filter(a => a.startsWith("tinycloud.sql/"));
-    const duckdbActions = delegation.actions.filter(a => a.startsWith("tinycloud.duckdb/"));
-    const encryptionActions = delegation.actions.filter(a =>
-      a.startsWith("tinycloud.encryption/"),
-    );
-    const rawAbilities: Record<string, string[]> = {};
-    if (kvActions.length > 0) {
-      abilities.kv = { [delegation.path]: kvActions };
-    }
-    if (sqlActions.length > 0) {
-      abilities.sql = { [delegation.path]: sqlActions };
-    }
-    if (duckdbActions.length > 0) {
-      abilities.duckdb = { [delegation.path]: duckdbActions };
-    }
-    if (
-      encryptionActions.length > 0 &&
-      delegation.path.startsWith("urn:tinycloud:encryption:")
-    ) {
-      rawAbilities[delegation.path] = encryptionActions;
-    }
+    // Build the activation abilities from the FULL resource set, not just
+    // the flat top-level path/actions. A multi-resource delegation (e.g.
+    // [{kv get vault/secrets/X}, {encryption decrypt <networkId>}]) carries
+    // every grant in `delegation.resources[]`; the flat `path`/`actions`
+    // mirror only the first resource. Building from the flat fields alone
+    // silently drops every other resource from the activated session.
+    const { abilities, rawAbilities } = this.buildActivationAbilities(delegation);
 
     const now = new Date();
     // Use delegation expiry or 1 hour, whichever is sooner
