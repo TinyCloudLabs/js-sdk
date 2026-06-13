@@ -3,8 +3,10 @@ import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   expandActionShortNames,
-  isCapabilitySubset,
   resolveManifest,
+} from "../../../sdk-core/src/manifest.js";
+import { isCapabilitySubset } from "../../../sdk-core/src/capabilities.js";
+import {
   type PermissionEntry,
   type PortableDelegation,
   type TinyCloudNode,

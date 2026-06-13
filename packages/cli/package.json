@@ -20,7 +20,8 @@
   "scripts": {
     "build": "tsup",
     "clean": "rm -rf dist",
-    "dev": "tsup --watch"
+    "dev": "tsup --watch",
+    "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts"
   },
   "dependencies": {
     "@tinycloud/node-sdk": "2.3.0",
