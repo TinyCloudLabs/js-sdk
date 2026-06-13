@@ -2540,16 +2540,13 @@ function registerSpaceCommand(program2) {
       handleError(error);
     }
   });
-  space.command("create <name>").description("Create a new space").action(async (name, _options, cmd) => {
+  space.command("create <name>").alias("host").description("Create (host) one of your owned spaces by name").action(async (name, _options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const result = await node.spaces.create(name);
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({ spaceId: result.data.id, name });
+      const spaceId = await node.hostOwnedSpace(name);
+      outputJson({ spaceId, name, hosted: true });
     } catch (error) {
       handleError(error);
     }

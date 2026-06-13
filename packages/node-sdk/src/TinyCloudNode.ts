@@ -873,6 +873,53 @@ export class TinyCloudNode {
   }
 
   /**
+   * Host one of this user's owned spaces by name (e.g. `"applications"`).
+   *
+   * Resolves the name to the owned space URI
+   * (`tinycloud:pkh:eip155:<chain>:<addr>:<name>`) and registers it on the
+   * server via the host-SIWE delegation flow, so subsequent KV/SQL writes to
+   * that space succeed instead of returning `404 - Space not found`. The
+   * caller is the root authority of their own owned spaces, so no additional
+   * delegation is required.
+   *
+   * Unlike {@link ensureOwnedSpaceHosted}, this always submits the host
+   * delegation rather than inferring hosting from session activation: a space
+   * the current session has never referenced is reported neither as
+   * `activated` nor `skipped`, so activation-based detection would wrongly
+   * skip the host. The host SIWE is idempotent server-side, so re-hosting an
+   * existing space is a safe no-op. Must be called after {@link signIn}.
+   *
+   * @param name - The owned space name (e.g. `"applications"`).
+   * @returns The hosted space URI.
+   */
+  async hostOwnedSpace(name: string): Promise<string> {
+    if (!this.auth || !this.auth.tinyCloudSession) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+
+    const spaceId = this.ownedSpaceId(name);
+
+    const hosted = await (this.auth as NodeUserAuthorization).hostOwnedSpace(
+      spaceId,
+    );
+    if (!hosted) {
+      throw new Error(`Failed to host owned space: ${spaceId}`);
+    }
+
+    // Re-activate the session so it covers the newly hosted space before the
+    // caller writes to it.
+    const host = this.hosts[0] ?? this.config.host;
+    if (host) {
+      await activateSessionWithHost(
+        host,
+        this.auth.tinyCloudSession.delegationHeader,
+      );
+    }
+
+    return spaceId;
+  }
+
+  /**
    * Restore a previously established session from stored delegation data.
    *
    * This is used by the CLI to restore a session that was created via the
