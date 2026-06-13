@@ -18,6 +18,8 @@
     "@tinycloud/sdk-services-test": "9.0.0"
   },
   "changesets": [
+    "cli-cross-user-auth-import",
+    "cli-delegated-secret-reads",
     "usedelegation-multiresource"
   ]
 }
