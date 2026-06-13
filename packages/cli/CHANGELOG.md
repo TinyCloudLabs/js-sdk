@@ -1,5 +1,33 @@
 # @tinycloud/cli
 
+## 0.7.0-beta.2
+
+### Minor Changes
+
+- 0e8ccc6: Add `TinyCloudNode.hostOwnedSpace(name)` and wire `tc space create`/`tc space host` to it.
+
+  Hosting an owned space (e.g. `applications`) by name now registers it on the server via the host-SIWE delegation flow, so subsequent KV/SQL writes to that space succeed instead of returning `404 - Space not found`. Unlike the internal `ensureOwnedSpaceHosted`, this always submits the host delegation rather than inferring hosting from session activation — a space the current session has never referenced is reported neither `activated` nor `skipped`, which previously caused the host to be silently skipped. The host SIWE is idempotent server-side, so re-hosting an existing space is a safe no-op.
+
+  The `tc space create <name>` command (which previously POSTed the unsupported `tinycloud.space/create` action and failed with `401 Unauthorized`) now hosts the caller's owned space; `tc space host <name>` is added as an alias.
+
+### Patch Changes
+
+- c94b81b: Fix `tc kv put`/`kv delete --space` and binary KV round-trips.
+  - `tc kv put` and `tc kv delete` now accept `--space <name|uri>`, routing through
+    the space-scoped KV (`kvForSpace`) like `get`/`list`/`head` already did. KV
+    writes to a non-primary space (e.g. an `applications` space) are now possible
+    from the CLI.
+  - Binary KV values now round-trip byte-identically. `KVService.put` sends
+    Blob/ArrayBuffer/typed-array/Buffer values as raw bytes
+    (`application/octet-stream`, honoring an explicit `contentType`) instead of
+    JSON-stringifying them into `{"type":"Buffer","data":[...]}`. A new
+    `KVGetOptions.binary` returns the raw response bytes as a `Uint8Array`, and the
+    CLI's `kv get -o <file>` / `--raw` use it so images and other binaries are
+    written out unchanged.
+
+- Updated dependencies [0e8ccc6]
+  - @tinycloud/node-sdk@2.4.0-beta.1
+
 ## 0.7.0-beta.1
 
 ### Minor Changes

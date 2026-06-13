@@ -18,8 +18,10 @@
     "@tinycloud/sdk-services-test": "9.0.0"
   },
   "changesets": [
+    "applications-space-host",
     "cli-cross-user-auth-import",
     "cli-delegated-secret-reads",
+    "kv-space-and-binary-roundtrip",
     "usedelegation-multiresource"
   ]
 }
