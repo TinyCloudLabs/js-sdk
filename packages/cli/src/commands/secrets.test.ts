@@ -233,6 +233,41 @@ mock.module("@tinycloud/node-sdk", () => ({
         : `vault/secrets/${name}`,
     },
   }),
+  principalDidEquals: (a: string, b: string) =>
+    a.split("#")[0].toLowerCase() === b.split("#")[0].toLowerCase(),
+}));
+
+mock.module("../lib/permissions.js", () => ({
+  loadAdditionalDelegations: async () => [],
+  permissionsFromDelegation: (delegation: {
+    spaceId: string;
+    path: string;
+    actions: string[];
+    resources?: Array<{
+      service: string;
+      space?: string;
+      path: string;
+      actions: string[];
+    }>;
+  }) => {
+    if (Array.isArray(delegation.resources) && delegation.resources.length > 0) {
+      return delegation.resources.map((resource) => ({
+        service: resource.service.startsWith("tinycloud.")
+          ? resource.service
+          : `tinycloud.${resource.service}`,
+        space: resource.space ?? delegation.spaceId,
+        path: resource.path,
+        actions: [...resource.actions],
+      }));
+    }
+
+    return [{
+      service: "tinycloud.kv",
+      space: delegation.spaceId,
+      path: delegation.path,
+      actions: [...delegation.actions],
+    }];
+  },
 }));
 
 mock.module("../config/profiles.js", () => ({
