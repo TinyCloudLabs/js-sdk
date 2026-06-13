@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import type { PermissionEntry, PortableDelegation } from "@tinycloud/node-sdk";
+import { principalDidEquals, type PermissionEntry, type PortableDelegation } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
@@ -403,7 +403,21 @@ export function registerAuthCommand(program: Command): void {
           imported.delegation,
           imported.permissions,
         ));
-        await node.useRuntimeDelegation(imported.delegation);
+
+        // A delegation whose audience is this profile's own session key can be
+        // installed as a runtime grant (useRuntimeDelegation activates it for
+        // matching service calls). A cross-user delegation — audience is this
+        // profile's stable identity DID or another principal — cannot: the node
+        // rejects runtime delegations that don't target the session key. Persist
+        // it and let the read path activate it via useDelegation in wallet mode.
+        const targetsSessionKey =
+          typeof imported.delegation.delegateDID === "string" &&
+          principalDidEquals(imported.delegation.delegateDID, node.sessionDid);
+        let activated = false;
+        if (targetsSessionKey) {
+          await node.useRuntimeDelegation(imported.delegation);
+          activated = true;
+        }
         await appendGrantHistory(ctx.profile, {
           addedCaps: imported.permissions,
           source: "cli",
@@ -413,6 +427,7 @@ export function registerAuthCommand(program: Command): void {
 
         outputJson({
           imported: true,
+          activated,
           kind: "tinycloud.auth.delegation",
           requestId: imported.requestId ?? null,
           delegationCid: imported.delegation.cid,
