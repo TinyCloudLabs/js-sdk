@@ -222,6 +222,49 @@ export class KVService extends BaseService implements IKVService {
     });
   }
 
+  /**
+   * Serialize a single put value into a fetch body.
+   *
+   * Binary values (Blob/ArrayBuffer/typed-array, incl. Node Buffer) are sent as
+   * raw bytes (as a Blob) so they round-trip byte-identically — without this a
+   * Buffer would be JSON.stringify'd into `{"type":"Buffer","data":[...]}`.
+   * Strings are returned unchanged (preserving prior behavior); other values are
+   * JSON-encoded. `contentType` overrides the inferred type for binary values.
+   */
+  private serializePutValue(
+    value: unknown,
+    contentType?: string
+  ): Blob | string {
+    if (value instanceof Blob) {
+      if (!contentType || value.type === contentType) {
+        return value;
+      }
+      return new Blob([value], { type: contentType });
+    }
+
+    if (value instanceof ArrayBuffer) {
+      return new Blob([value], {
+        type: contentType ?? "application/octet-stream",
+      });
+    }
+
+    if (ArrayBuffer.isView(value)) {
+      // Pass a ranged view (honors byteOffset/byteLength so a Node Buffer backed
+      // by a shared pool isn't over-read); Blob snapshots the bytes at
+      // construction, so no defensive copy is needed.
+      const view = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      return new Blob([view], {
+        type: contentType ?? "application/octet-stream",
+      });
+    }
+
+    if (typeof value === "string") {
+      return contentType ? new Blob([value], { type: contentType }) : value;
+    }
+
+    return JSON.stringify(value);
+  }
+
   private serializeBatchPutValue(item: KVBatchPutItem): Blob {
     const contentType = item.contentType;
 
@@ -312,10 +355,15 @@ export class KVService extends BaseService implements IKVService {
    */
   private async parseResponse<T>(
     response: FetchResponse,
-    raw: boolean = false
+    raw: boolean = false,
+    binary: boolean = false
   ): Promise<T | undefined> {
     if (!response.ok) {
       return undefined;
+    }
+
+    if (binary) {
+      return new Uint8Array(await response.arrayBuffer()) as unknown as T;
     }
 
     if (raw) {
@@ -454,7 +502,11 @@ export class KVService extends BaseService implements IKVService {
           );
         }
 
-        const data = await this.parseResponse<T>(response, options?.raw);
+        const data = await this.parseResponse<T>(
+          response,
+          options?.raw,
+          options?.binary
+        );
         return ok({
           data: data as T,
           headers: this.createResponseHeaders(response.headers),
@@ -480,13 +532,10 @@ export class KVService extends BaseService implements IKVService {
 
       const path = this.getFullPath(key, options?.prefix);
 
-      // Serialize value to string
-      let body: string;
-      if (typeof value === "string") {
-        body = value;
-      } else {
-        body = JSON.stringify(value);
-      }
+      // Serialize the value. Binary values (Blob/ArrayBuffer/typed-array/Buffer)
+      // are sent as raw bytes so they round-trip byte-identically; strings are
+      // sent as-is; everything else is JSON. Mirrors serializeBatchPutValue.
+      const body = this.serializePutValue(value, options?.contentType);
 
       try {
         const response = await this.invokeOperation(
