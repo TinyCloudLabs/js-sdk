@@ -93,6 +93,16 @@ describe("resolveSpaceUri default-space precedence", () => {
     expect(recorded.pkhCalls.map((c) => c.name)).toEqual(["applications"]);
   });
 
+  test("explicit --space matching the default resolves identically to omitting it", async () => {
+    // Locks the invariant: with defaultSpace="applications", passing
+    // "applications" explicitly must equal omitting --space entirely.
+    profile = { name: "p", address: ADDR, chainId: 1, defaultSpace: "applications" };
+    const explicit = await resolveSpaceUri("applications", "p");
+    const omitted = await resolveSpaceUri(undefined, "p");
+    expect(explicit).toBe(omitted);
+    expect(explicit).toBe(`tinycloud:pkh:eip155:1:${ADDR}:applications`);
+  });
+
   test("falls back to the primary space (undefined) when no default and no flag", async () => {
     profile = { name: "p", address: ADDR, chainId: 1 };
     const uri = await resolveSpaceUri(undefined, "p");
