@@ -17,5 +17,7 @@
     "@tinycloud/web-sdk": "2.3.0",
     "@tinycloud/sdk-services-test": "9.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "usedelegation-multiresource"
+  ]
 }
