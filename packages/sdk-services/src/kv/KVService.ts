@@ -249,11 +249,11 @@ export class KVService extends BaseService implements IKVService {
     }
 
     if (ArrayBuffer.isView(value)) {
-      const bytes = new Uint8Array(value.byteLength);
-      bytes.set(
-        new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
-      );
-      return new Blob([bytes], {
+      // Pass a ranged view (honors byteOffset/byteLength so a Node Buffer backed
+      // by a shared pool isn't over-read); Blob snapshots the bytes at
+      // construction, so no defensive copy is needed.
+      const view = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      return new Blob([view], {
         type: contentType ?? "application/octet-stream",
       });
     }
