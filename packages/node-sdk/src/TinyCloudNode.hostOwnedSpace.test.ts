@@ -88,6 +88,28 @@ test("hostOwnedSpace resolves the owned space URI and always submits the host de
   expect(hostOwnedSpace).toHaveBeenCalledWith(APPS);
 });
 
+test("hostOwnedSpace succeeds when re-activation omits the space from skipped", async () => {
+  // A genuinely-hosted owned space the session has not referenced is reported
+  // under neither `activated` nor `skipped`; that must still count as success.
+  const APPS = `tinycloud:pkh:eip155:1:${ADDRESS}:applications`;
+  const hostOwnedSpace = mock(async () => true);
+  const { node } = makeNode(hostOwnedSpace);
+
+  const spaceId = await withFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          activated: [`tinycloud:pkh:eip155:1:${ADDRESS}:default`],
+          skipped: [],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    () => node.hostOwnedSpace("applications"),
+  );
+
+  expect(spaceId).toBe(APPS);
+});
+
 test("hostOwnedSpace throws when the host delegation is rejected", async () => {
   const hostOwnedSpace = mock(async () => false);
   const { node } = makeNode(hostOwnedSpace);
@@ -102,6 +124,55 @@ test("hostOwnedSpace throws when the host delegation is rejected", async () => {
       () => node.hostOwnedSpace("applications"),
     ),
   ).rejects.toThrow("Failed to host owned space");
+});
+
+test("hostOwnedSpace throws when re-activation reports the space skipped", async () => {
+  const APPS = `tinycloud:pkh:eip155:1:${ADDRESS}:applications`;
+  const hostOwnedSpace = mock(async () => true);
+  const { node } = makeNode(hostOwnedSpace);
+
+  await expect(
+    withFetch(
+      async () =>
+        new Response(JSON.stringify({ activated: [], skipped: [APPS] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      () => node.hostOwnedSpace("applications"),
+    ),
+  ).rejects.toThrow("Failed to activate session for owned space");
+  // The host was still attempted (idempotent), it is only the post-host
+  // usability assertion that failed.
+  expect(hostOwnedSpace).toHaveBeenCalledWith(APPS);
+});
+
+test("hostOwnedSpace throws when re-activation fails", async () => {
+  const hostOwnedSpace = mock(async () => true);
+  const { node } = makeNode(hostOwnedSpace);
+
+  await expect(
+    withFetch(
+      async () =>
+        new Response("nope", {
+          status: 500,
+        }),
+      () => node.hostOwnedSpace("applications"),
+    ),
+  ).rejects.toThrow("Failed to activate session for owned space");
+});
+
+test("hostOwnedSpace throws when no TinyCloud host is configured", async () => {
+  const hostOwnedSpace = mock(async () => true);
+  const { node } = makeNode(hostOwnedSpace);
+  // Remove every host source so resolution yields none.
+  (node as any).config.host = undefined;
+  (node as any).auth.hosts = [];
+
+  await expect(node.hostOwnedSpace("applications")).rejects.toThrow(
+    "requires a TinyCloud host",
+  );
+  // Must fail before submitting the host delegation.
+  expect(hostOwnedSpace).not.toHaveBeenCalled();
 });
 
 test("hostOwnedSpace throws when not signed in", async () => {

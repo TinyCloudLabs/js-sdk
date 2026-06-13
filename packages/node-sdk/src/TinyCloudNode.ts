@@ -899,6 +899,11 @@ export class TinyCloudNode {
 
     const spaceId = this.ownedSpaceId(name);
 
+    const host = this.hosts[0] ?? this.config.host;
+    if (!host) {
+      throw new Error("Owned space hosting requires a TinyCloud host");
+    }
+
     const hosted = await (this.auth as NodeUserAuthorization).hostOwnedSpace(
       spaceId,
     );
@@ -906,13 +911,19 @@ export class TinyCloudNode {
       throw new Error(`Failed to host owned space: ${spaceId}`);
     }
 
-    // Re-activate the session so it covers the newly hosted space before the
-    // caller writes to it.
-    const host = this.hosts[0] ?? this.config.host;
-    if (host) {
-      await activateSessionWithHost(
-        host,
-        this.auth.tinyCloudSession.delegationHeader,
+    // Re-activate the session so it covers the newly hosted space, and prove
+    // the session can actually use it before reporting success: a successful
+    // /delegate that still lists the space under `skipped` means it is not
+    // hosted for this session.
+    const activation = await activateSessionWithHost(
+      host,
+      this.auth.tinyCloudSession.delegationHeader,
+    );
+    if (!activation.success || activation.skipped?.includes(spaceId)) {
+      throw new Error(
+        `Failed to activate session for owned space ${spaceId}: ${
+          activation.error ?? "space was skipped"
+        }`,
       );
     }
 
