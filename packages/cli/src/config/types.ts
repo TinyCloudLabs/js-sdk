@@ -50,6 +50,12 @@ export interface ProfileConfig {
   sessionDid?: string;
   ownerDid?: string;
   spaceId?: string;
+  /**
+   * Default space NAME (e.g. "applications") applied when a kv/sql command
+   * omits `--space`. Resolved per-profile at command time to a full URI.
+   * Precedence: explicit `--space` flag > profile `defaultSpace` > primary space.
+   */
+  defaultSpace?: string;
   createdAt: string;
   posture?: CLIProfilePosture;
   operatorType?: CLIOperatorType;
