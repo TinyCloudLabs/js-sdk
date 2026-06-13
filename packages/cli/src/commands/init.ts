@@ -15,11 +15,20 @@ export function registerInitCommand(program: Command): void {
     .option("--host <url>", "TinyCloud node URL")
     .option("--paste", "Use manual paste mode for authentication")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
+    .option("--default-space <name>", "Default space used when --space is omitted (e.g. applications)")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const profileName: string = options.name;
         const host: string = options.host ?? globalOpts.host ?? DEFAULT_HOST;
+        const defaultSpace: string | undefined = options.defaultSpace;
+        if (defaultSpace !== undefined && !/^[A-Za-z0-9_-]+$/.test(defaultSpace)) {
+          throw new CLIError(
+            "INVALID_SPACE",
+            `Invalid --default-space "${defaultSpace}". Use a short name ([A-Za-z0-9_-]).`,
+            ExitCode.USAGE_ERROR,
+          );
+        }
 
         // Check if profile already exists
         if (await ProfileManager.profileExists(profileName)) {
@@ -47,6 +56,7 @@ export function registerInitCommand(program: Command): void {
           spaceName: "default",
           did,
           createdAt: new Date().toISOString(),
+          ...(defaultSpace ? { defaultSpace } : {}),
         };
 
         await ProfileManager.setProfile(profileName, profileConfig);
