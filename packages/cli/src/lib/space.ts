@@ -2,13 +2,47 @@ import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
 import type { ProfileConfig } from "../config/types.js";
-import {
-  buildSpaceUri,
-  canonicalizeAddress,
-  makePkhSpaceId,
-  parsePkhDid,
-  parseSpaceUri,
-} from "@tinycloud/node-sdk";
+
+interface ParsedPkhDid {
+  address: string;
+  chainId: number;
+}
+
+function canonicalizeAddress(address: string): string {
+  const trimmed = address.trim();
+  return trimmed.startsWith("0x")
+    ? `0x${trimmed.slice(2).toLowerCase()}`
+    : trimmed.toLowerCase();
+}
+
+function parsePkhDid(did: string): ParsedPkhDid | null {
+  const match = did.match(/^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/);
+  if (!match) return null;
+  return {
+    chainId: Number(match[1]),
+    address: canonicalizeAddress(match[2]),
+  };
+}
+
+function makePkhSpaceId(address: string, chainId: number, name: string): string {
+  return `tinycloud:pkh:eip155:${chainId}:${canonicalizeAddress(address)}:${name}`;
+}
+
+function parseSpaceUri(input: string): { owner: string; name: string } | null {
+  if (!input.startsWith("tinycloud:")) return null;
+  const parts = input.split(":");
+  if (parts.length < 3) return null;
+  const name = parts.at(-1);
+  if (!name) return null;
+  return {
+    owner: parts.slice(1, -1).join(":"),
+    name,
+  };
+}
+
+function buildSpaceUri(owner: string, name: string): string {
+  return `tinycloud:${owner}:${name}`;
+}
 
 /**
  * Resolve the active profile's Ethereum address. Source priority matches

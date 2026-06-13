@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 type ProfileLike = {
   name: string;
@@ -197,15 +200,32 @@ mock.module("../auth/local-key.js", () => ({
   keyToDID: (jwk: { did?: string }) => jwk.did ?? "did:key:from-key",
 }));
 
+let importSessionDid = "did:key:z6MkSession#z6MkSession";
+const importRecorded = {
+  useRuntimeDelegation: [] as Array<{ cid: string }>,
+  appendedDelegations: [] as Array<{ delegation: { cid: string }; permissions: unknown[] }>,
+};
+
 mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async () => ({
     hasRuntimePermissions: () => true,
     getRuntimePermissionDelegations: () => [],
+    get sessionDid() {
+      return importSessionDid;
+    },
+    useRuntimeDelegation: async (delegation: { cid: string }) => {
+      importRecorded.useRuntimeDelegation.push({ cid: delegation.cid });
+    },
   }),
 }));
 
 mock.module("../lib/permissions.js", () => ({
-  appendAdditionalDelegation: async () => {},
+  appendAdditionalDelegation: async (
+    _profile: string,
+    entry: { delegation: { cid: string }; permissions: unknown[] },
+  ) => {
+    importRecorded.appendedDelegations.push(entry);
+  },
   appendPermissionRequestArtifact: async () => {},
   createPermissionRequestArtifact: () => ({}),
   getLastPermissionRequestArtifact: async () => null,
@@ -521,5 +541,79 @@ describe("CLI auth rotate command", () => {
         }),
       ],
     }));
+  });
+});
+
+function makePortableDelegation(overrides: { delegateDID: string; cid?: string }): Record<string, unknown> {
+  return {
+    cid: overrides.cid ?? "bafy-import-delegation",
+    spaceId: "tinycloud:pkh:eip155:1:0xOwner:secrets",
+    path: "vault/secrets/ANTHROPIC_API_KEY",
+    actions: ["tinycloud.kv/get"],
+    delegateDID: overrides.delegateDID,
+    ownerAddress: "0xOwner",
+    chainId: 1,
+    delegationHeader: { Authorization: "Bearer import-delegation" },
+    expiry: "2099-01-01T00:00:00.000Z",
+  };
+}
+
+describe("CLI auth import command", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    resetState();
+    importRecorded.useRuntimeDelegation.length = 0;
+    importRecorded.appendedDelegations.length = 0;
+    importSessionDid = "did:key:z6MkSession#z6MkSession";
+    tempDir = await mkdtemp(join(tmpdir(), "tc-auth-import-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  test("persists a cross-user delegation without installing it as a runtime grant", async () => {
+    // Audience is the importer's stable identity DID (did:pkh), not the session
+    // key. The node would reject this via useRuntimeDelegation, so import must
+    // persist it for later activation through useDelegation.
+    const delegation = makePortableDelegation({
+      delegateDID: "did:pkh:eip155:1:0xAgent",
+      cid: "bafy-cross-user",
+    });
+    const source = join(tempDir, "cross-user.json");
+    await writeFile(source, JSON.stringify(delegation), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(importRecorded.appendedDelegations).toHaveLength(1);
+    expect(importRecorded.appendedDelegations[0].delegation.cid).toBe("bafy-cross-user");
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(recorded.outputs[0]).toMatchObject({
+      imported: true,
+      activated: false,
+      delegationCid: "bafy-cross-user",
+    });
+  });
+
+  test("installs a delegation that targets the active session key as a runtime grant", async () => {
+    const delegation = makePortableDelegation({
+      delegateDID: "did:key:z6MkSession",
+      cid: "bafy-self-session",
+    });
+    const source = join(tempDir, "self-session.json");
+    await writeFile(source, JSON.stringify(delegation), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(importRecorded.appendedDelegations).toHaveLength(1);
+    expect(importRecorded.useRuntimeDelegation).toEqual([{ cid: "bafy-self-session" }]);
+    expect(recorded.outputs[0]).toMatchObject({
+      imported: true,
+      activated: true,
+      delegationCid: "bafy-self-session",
+    });
   });
 });

@@ -1,11 +1,11 @@
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import {
-  resolveSecretListPrefix,
-  resolveSecretPath,
   type PermissionEntry,
-  type SecretScopeOptions,
+  type PortableDelegation,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
@@ -33,6 +33,19 @@ type SecretResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string; service?: string } };
 
+interface SecretScopeOptions {
+  scope?: string;
+}
+
+interface DelegationCandidate {
+  delegation: PortableDelegation;
+  permissions: PermissionEntry[];
+}
+
+interface ResolvedDelegatedSecretSource extends DelegationCandidate {
+  source: string;
+}
+
 /**
  * Read all data from stdin.
  */
@@ -52,6 +65,86 @@ function authOptions(options: { privateKey?: string }): { privateKey?: string } 
 function resolveSecretScope(options: { scope?: string; space?: string }): { scope?: string } | undefined {
   const scope = options.scope ?? options.space;
   return scope ? { scope } : undefined;
+}
+
+const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
+const RESERVED_SECRET_SCOPES = new Set(["default", "global"]);
+
+function canonicalizeSecretScope(scope: string | undefined): string | undefined {
+  if (scope === undefined) return undefined;
+
+  const trimmed = scope.trim();
+  if (trimmed === "") {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      "Secret scope must be non-empty; omit scope for global secrets.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
+
+  const canonical = trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+
+  if (canonical === "") {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      "Secret scope must contain at least one letter or number.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
+
+  if (RESERVED_SECRET_SCOPES.has(canonical)) {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      `Secret scope ${JSON.stringify(scope)} is reserved; omit scope for global secrets.`,
+      ExitCode.USAGE_ERROR,
+    );
+  }
+
+  return canonical;
+}
+
+function resolveSecretPath(
+  name: string,
+  options: SecretScopeOptions = {},
+): { name: string; scope?: string; vaultKey: string; permissionPaths: { vault: string } } {
+  const normalizedName = name.trim();
+  if (!SECRET_NAME_RE.test(normalizedName)) {
+    throw new CLIError(
+      "INVALID_SECRET_NAME",
+      `Invalid secret name ${JSON.stringify(name)}. Secret names must match ${SECRET_NAME_RE.source}.`,
+      ExitCode.USAGE_ERROR,
+    );
+  }
+
+  const scope = canonicalizeSecretScope(options.scope);
+  const vaultKey = scope === undefined
+    ? `secrets/${normalizedName}`
+    : `secrets/scoped/${scope}/${normalizedName}`;
+
+  return {
+    name: normalizedName,
+    ...(scope !== undefined ? { scope } : {}),
+    vaultKey,
+    permissionPaths: {
+      vault: `vault/${vaultKey}`,
+    },
+  };
+}
+
+function resolveSecretListPrefix(options: SecretScopeOptions = {}): string {
+  const scope = canonicalizeSecretScope(options.scope);
+  return scope === undefined
+    ? "vault/secrets/"
+    : `vault/secrets/scoped/${scope}/`;
+}
+
+function resolveProfilesDir(): string {
+  const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+  return join(home, ".tinycloud", "profiles");
 }
 
 async function ensureSecretsNode(
@@ -155,6 +248,411 @@ function thrownPermissionError<T>(error: unknown): SecretResult<T> | null {
       message,
     },
   };
+}
+
+function isMissingFileError(error: unknown): boolean {
+  const typed = error as NodeJS.ErrnoException | null;
+  return typed?.code === "ENOENT";
+}
+
+function hasPermissionAction(actions: string[], action: string): boolean {
+  return actions.some(
+    (entry) =>
+      entry === action ||
+      entry.endsWith(`/${action.split("/").at(-1)}`) ||
+      entry === action.split("/").at(-1),
+  );
+}
+
+function delegationCoversPath(
+  permissions: PermissionEntry[],
+  path: string,
+): boolean {
+  return permissions.some((permission) => {
+    if (permission.service !== "tinycloud.kv") return false;
+    if (!permissionTargetsSecretsSpace(permission)) return false;
+    if (!hasPermissionAction(permission.actions, "tinycloud.kv/get")) return false;
+    return permission.path === path || (permission.path.endsWith("/") && path.startsWith(permission.path));
+  });
+}
+
+function permissionTargetsSecretsSpace(permission: PermissionEntry): boolean {
+  if (permission.service !== "tinycloud.kv") return false;
+  if (typeof permission.space !== "string") return false;
+  const space = permission.space.trim().toLowerCase();
+  if (space === "") return false;
+  return space === SECRETS_SPACE || space.endsWith(`:${SECRETS_SPACE}`);
+}
+
+function delegationCoversDecrypt(
+  permissions: PermissionEntry[],
+  networkId: string,
+): boolean {
+  return permissions.some((permission) => {
+    if (permission.service !== "tinycloud.encryption") return false;
+    if (!hasPermissionAction(permission.actions, "tinycloud.encryption/decrypt")) return false;
+    return permission.path === networkId;
+  });
+}
+
+function parseDelegationExpiry(expiry: unknown): Date {
+  const parsed =
+    expiry instanceof Date
+      ? expiry
+      : typeof expiry === "number"
+        ? new Date(expiry)
+        : new Date(String(expiry));
+  if (Number.isNaN(parsed.getTime())) {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      "Delegation must include a valid expiry.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
+  return parsed;
+}
+
+function normalizePortableDelegation(value: unknown): PortableDelegation {
+  if (value === null || typeof value !== "object") {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      "Delegation source must contain a PortableDelegation object.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
+
+  const candidate = value as Partial<PortableDelegation> & {
+    expiry?: unknown;
+    delegationHeader?: unknown;
+  };
+  const authorization = candidate.delegationHeader as { Authorization?: unknown } | undefined;
+  if (
+    typeof candidate.cid !== "string" ||
+    typeof candidate.spaceId !== "string" ||
+    typeof candidate.path !== "string" ||
+    !Array.isArray(candidate.actions) ||
+    typeof candidate.delegateDID !== "string" ||
+    typeof candidate.ownerAddress !== "string" ||
+    typeof candidate.chainId !== "number" ||
+    typeof authorization !== "object" ||
+    authorization === null ||
+    typeof authorization.Authorization !== "string"
+  ) {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      "Delegation source must contain a PortableDelegation object.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
+
+  return {
+    ...candidate,
+    actions: [...candidate.actions],
+    expiry: parseDelegationExpiry(candidate.expiry),
+    delegationHeader: { Authorization: authorization.Authorization },
+  } as PortableDelegation;
+}
+
+function normalizeDelegationCandidates(
+  value: unknown,
+  source: string,
+): DelegationCandidate[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => normalizeDelegationCandidates(entry, source));
+  }
+
+  if (value === null || typeof value !== "object") {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      `Delegation source "${source}" must be a delegation file or imported profile reference.`,
+      ExitCode.USAGE_ERROR,
+    );
+  }
+
+  const candidate = value as Record<string, unknown> & {
+    delegation?: unknown;
+    permissions?: PermissionEntry[];
+  };
+
+  if (candidate.delegation !== undefined) {
+    const delegation = normalizePortableDelegation(candidate.delegation);
+    return [{
+      delegation,
+      permissions: Array.isArray(candidate.permissions) && candidate.permissions.length > 0
+        ? candidate.permissions
+        : permissionsFromDelegation(delegation),
+    }];
+  }
+
+  const delegation = normalizePortableDelegation(candidate);
+  return [{
+    delegation,
+    permissions: permissionsFromDelegation(delegation),
+  }];
+}
+
+function permissionsFromDelegation(delegation: PortableDelegation): PermissionEntry[] {
+  if (delegation.resources?.length) {
+    return delegation.resources.map((resource) => ({
+      service: resource.service.startsWith("tinycloud.")
+        ? resource.service
+        : `tinycloud.${resource.service}`,
+      space: resource.space,
+      path: resource.path,
+      actions: [...resource.actions],
+    }));
+  }
+
+  const service = delegation.actions[0]?.includes("/")
+    ? delegation.actions[0].slice(0, delegation.actions[0].indexOf("/"))
+    : "tinycloud.unknown";
+
+  return [{
+    service,
+    space: delegation.spaceId,
+    path: delegation.path,
+    actions: [...delegation.actions],
+  }];
+}
+
+async function loadDelegationCandidates(source: string): Promise<DelegationCandidate[]> {
+  try {
+    const raw = JSON.parse(await readFile(source, "utf8")) as unknown;
+    return normalizeDelegationCandidates(raw, source);
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      if (error instanceof SyntaxError) {
+        throw new CLIError(
+          "INVALID_DELEGATION_SOURCE",
+          `Delegation source "${source}" must be valid JSON.`,
+          ExitCode.USAGE_ERROR,
+        );
+      }
+      throw new CLIError(
+        "INVALID_DELEGATION_SOURCE",
+        `Delegation source "${source}" could not be read.`,
+        ExitCode.USAGE_ERROR,
+      );
+    }
+  }
+
+  try {
+    const importedPath = join(resolveProfilesDir(), source, "additional-delegations.json");
+    const raw = JSON.parse(await readFile(importedPath, "utf8")) as unknown;
+    return normalizeDelegationCandidates(raw, source);
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return [];
+    }
+    if (error instanceof SyntaxError) {
+      throw new CLIError(
+        "INVALID_DELEGATION_SOURCE",
+        `Delegation source "${source}" must be valid JSON.`,
+        ExitCode.USAGE_ERROR,
+      );
+    }
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      `Delegation source "${source}" could not be read.`,
+      ExitCode.USAGE_ERROR,
+    );
+  }
+}
+
+function selectDelegationCandidate(
+  candidates: DelegationCandidate[],
+  source: string,
+  secretPath: string,
+): DelegationCandidate {
+  const liveCandidates = candidates.filter((candidate) => candidate.delegation.expiry.getTime() > Date.now());
+  if (liveCandidates.length === 0) {
+    throw new CLIError(
+      "DELEGATION_EXPIRED",
+      `Delegation source "${source}" has no live delegations.`,
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+
+  const secretsSpaceCandidates = liveCandidates.filter((candidate) =>
+    candidate.permissions.some(permissionTargetsSecretsSpace)
+  );
+  if (secretsSpaceCandidates.length === 0) {
+    throw new CLIError(
+      "PERMISSION_DENIED",
+      `Delegation source "${source}" does not target the secrets space.`,
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+
+  const exact = secretsSpaceCandidates.find((candidate) => delegationCoversPath(candidate.permissions, secretPath));
+  if (exact) {
+    return exact;
+  }
+
+  throw new CLIError(
+    "PERMISSION_DENIED",
+    `Delegation source "${source}" does not cover secret "${secretPath}".`,
+    ExitCode.PERMISSION_DENIED,
+  );
+}
+
+async function resolveDelegatedSecretSource(
+  source: string,
+  secretPath: string,
+): Promise<ResolvedDelegatedSecretSource> {
+  const candidates = await loadDelegationCandidates(source);
+  if (candidates.length === 0) {
+    throw new CLIError(
+      "DELEGATION_NOT_FOUND",
+      `Delegation source "${source}" did not resolve to any imported delegations.`,
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+
+  const selected = selectDelegationCandidate(candidates, source, secretPath);
+  return { ...selected, source };
+}
+
+function mapEncryptionResultError(error: { code: string; message: string }): CLIError {
+  const code = error.code || "DECRYPTION_FAILED";
+  const exitCode =
+    code === "PERMISSION_DENIED" ? ExitCode.PERMISSION_DENIED :
+    code === "NOT_FOUND" ? ExitCode.NOT_FOUND :
+    code === "NETWORK_ERROR" || code === "TRANSPORT_ERROR" ? ExitCode.NETWORK_ERROR :
+    ExitCode.ERROR;
+
+  return new CLIError(code, error.message, exitCode);
+}
+
+function parseDecryptedSecretPayload(
+  data: Uint8Array,
+  secretPath: string,
+): string {
+  const text = new TextDecoder().decode(data);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new CLIError(
+      "INVALID_SECRET_PAYLOAD",
+      `Delegated secret "${secretPath}" did not decrypt to valid JSON.`,
+      ExitCode.ERROR,
+    );
+  }
+
+  if (parsed === null || typeof parsed !== "object" || typeof (parsed as { value?: unknown }).value !== "string") {
+    throw new CLIError(
+      "INVALID_SECRET_PAYLOAD",
+      `Delegated secret "${secretPath}" did not decrypt to { value: string }.`,
+      ExitCode.ERROR,
+    );
+  }
+
+  return (parsed as { value: string }).value;
+}
+
+async function readDelegatedSecretValue(params: {
+  node: TinyCloudNode;
+  delegation: PortableDelegation;
+  delegationCid: string;
+  permissions: PermissionEntry[];
+  secretPath: string;
+  name: string;
+}): Promise<string> {
+  if (!delegationCoversPath(params.permissions, params.secretPath)) {
+    throw new CLIError(
+      "PERMISSION_DENIED",
+      `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+
+  const access = await params.node.useDelegation(params.delegation);
+  if (typeof access?.kv?.get !== "function") {
+    throw new CLIError(
+      "DELEGATION_INVALID",
+      `Delegation "${params.delegationCid}" did not resolve delegated KV access.`,
+      ExitCode.ERROR,
+    );
+  }
+
+  const envelopeResult = await access.kv.get<unknown>(params.secretPath, {
+    raw: true,
+    prefix: "",
+  });
+
+  if (!envelopeResult.ok) {
+    if (
+      envelopeResult.error.code === "NOT_FOUND" ||
+      envelopeResult.error.code === "KEY_NOT_FOUND" ||
+      envelopeResult.error.code === "KV_NOT_FOUND"
+    ) {
+      throw new CLIError(
+        "NOT_FOUND",
+        `Secret "${params.name}" not found`,
+        ExitCode.NOT_FOUND,
+      );
+    }
+    if (envelopeResult.error.code === "PERMISSION_DENIED") {
+      throw new CLIError(
+        "PERMISSION_DENIED",
+        `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
+        ExitCode.PERMISSION_DENIED,
+      );
+    }
+    throw new CLIError(
+      envelopeResult.error.code,
+      envelopeResult.error.message,
+      ExitCode.ERROR,
+    );
+  }
+
+  const rawEnvelope = envelopeResult.data.data;
+  if (typeof rawEnvelope !== "string") {
+    throw new CLIError(
+      "INVALID_ENVELOPE",
+      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
+      ExitCode.ERROR,
+    );
+  }
+
+  let envelope: Record<string, unknown>;
+  try {
+    envelope = JSON.parse(rawEnvelope) as Record<string, unknown>;
+  } catch {
+    throw new CLIError(
+      "INVALID_ENVELOPE",
+      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
+      ExitCode.ERROR,
+    );
+  }
+
+  const networkId = envelope.networkId;
+  if (typeof networkId !== "string") {
+    throw new CLIError(
+      "INVALID_ENVELOPE",
+      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
+      ExitCode.ERROR,
+    );
+  }
+
+  if (!delegationCoversDecrypt(params.permissions, networkId)) {
+    throw new CLIError(
+      "PERMISSION_DENIED",
+      `Delegation "${params.delegationCid}" does not include tinycloud.encryption/decrypt for ${networkId}.`,
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+
+  const decrypted = await params.node.encryption.decryptEnvelope(
+    envelope as never,
+    { proofs: [params.delegationCid] },
+  );
+  if (!decrypted.ok) {
+    throw mapEncryptionResultError(decrypted.error);
+  }
+
+  return parseDecryptedSecretPayload(decrypted.data, params.secretPath);
 }
 
 function isStoredSessionExpired(session: object): boolean {
@@ -314,13 +812,48 @@ export function registerSecretsCommand(program: Command): void {
     .option("--raw", "Output raw value (no JSON wrapping)")
     .option("--value-only", "Output only the secret value (alias for --raw)")
     .option("-o, --output <file>", "Write value to file")
+    .option("--delegation <source>", "Delegation file path or imported profile name")
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (name: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const node = await ensureSecretsNode(ctx, options);
         const scopeOptions = resolveSecretScope(options);
+        const secretPath = resolveSecretPath(name, scopeOptions).permissionPaths.vault;
+
+        if (options.delegation) {
+          const delegated = await resolveDelegatedSecretSource(options.delegation, secretPath);
+          const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
+          const delegatedCtx = { ...ctx, host: effectiveHost };
+          const node = await ensureSecretsNode(delegatedCtx, options);
+          const value = await withSpinner(
+            `Getting secret ${name}...`,
+            () => readDelegatedSecretValue({
+              node,
+              delegation: delegated.delegation,
+              delegationCid: delegated.delegation.cid,
+              permissions: delegated.permissions,
+              secretPath,
+              name,
+            }),
+          );
+
+          if (options.output) {
+            await writeFile(options.output, value);
+            outputJson({ name, written: options.output });
+            return;
+          }
+
+          if (options.raw) {
+            process.stdout.write(value);
+            return;
+          }
+
+          outputJson({ name, value });
+          return;
+        }
+
+        const node = await ensureSecretsNode(ctx, options);
         const result = await runSecretOperation({
           ctx,
           node,
