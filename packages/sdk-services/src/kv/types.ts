@@ -46,6 +46,13 @@ export interface KVGetOptions {
   raw?: boolean;
 
   /**
+   * Return the raw response bytes as a Uint8Array instead of parsed/text data.
+   * Use this to read back binary values (e.g. images) byte-identically. Takes
+   * precedence over {@link raw}.
+   */
+  binary?: boolean;
+
+  /**
    * Custom timeout for this operation in milliseconds.
    */
   timeout?: number;

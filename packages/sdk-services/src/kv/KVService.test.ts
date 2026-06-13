@@ -374,3 +374,136 @@ describe("KVService.createSignedReadUrl", () => {
     }
   });
 });
+
+describe("KVService.put serialization", () => {
+  test("sends a string value as-is (no JSON wrapping)", async () => {
+    let requestInit: FetchRequestInit | undefined;
+    const service = new KVService({});
+    service.initialize(
+      createContext(async (_url, init) => {
+        requestInit = init;
+        return response(true, 200, "");
+      })
+    );
+
+    const result = await service.put("note", "hello-artifact");
+
+    expect(result.ok).toBe(true);
+    expect(requestInit?.body).toBe("hello-artifact");
+  });
+
+  test("JSON-encodes plain objects", async () => {
+    let requestInit: FetchRequestInit | undefined;
+    const service = new KVService({});
+    service.initialize(
+      createContext(async (_url, init) => {
+        requestInit = init;
+        return response(true, 200, "");
+      })
+    );
+
+    const result = await service.put("settings", { theme: "dark" });
+
+    expect(result.ok).toBe(true);
+    expect(requestInit?.body).toBe(JSON.stringify({ theme: "dark" }));
+  });
+
+  test("sends binary (Uint8Array) values as raw bytes, not JSON", async () => {
+    let requestInit: FetchRequestInit | undefined;
+    const service = new KVService({});
+    service.initialize(
+      createContext(async (_url, init) => {
+        requestInit = init;
+        return response(true, 200, "");
+      })
+    );
+
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]); // PNG magic
+    const result = await service.put("img.png", bytes);
+
+    expect(result.ok).toBe(true);
+    expect(requestInit?.body).toBeInstanceOf(Blob);
+    const blob = requestInit?.body as Blob;
+    expect(blob.type).toBe("application/octet-stream");
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(bytes);
+  });
+
+  test("sends Buffer values as raw bytes (not {type:Buffer,data:[...]})", async () => {
+    let requestInit: FetchRequestInit | undefined;
+    const service = new KVService({});
+    service.initialize(
+      createContext(async (_url, init) => {
+        requestInit = init;
+        return response(true, 200, "");
+      })
+    );
+
+    const buf = Buffer.from([0, 1, 2, 254, 255]);
+    const result = await service.put("blob.bin", buf);
+
+    expect(result.ok).toBe(true);
+    expect(requestInit?.body).toBeInstanceOf(Blob);
+    const blob = requestInit?.body as Blob;
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(
+      new Uint8Array([0, 1, 2, 254, 255])
+    );
+    // Guard against the regression: must NOT serialize as JSON Buffer wrapper.
+    const text = await blob.text();
+    expect(text).not.toContain('"type":"Buffer"');
+  });
+
+  test("honors an explicit contentType for binary values", async () => {
+    let requestInit: FetchRequestInit | undefined;
+    const service = new KVService({});
+    service.initialize(
+      createContext(async (_url, init) => {
+        requestInit = init;
+        return response(true, 200, "");
+      })
+    );
+
+    const bytes = new Uint8Array([1, 2, 3]);
+    const result = await service.put("img.png", bytes, {
+      contentType: "image/png",
+    });
+
+    expect(result.ok).toBe(true);
+    expect((requestInit?.body as Blob).type).toBe("image/png");
+  });
+});
+
+describe("KVService.get binary", () => {
+  function binaryResponse(bytes: Uint8Array): FetchResponse {
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: { get: () => null },
+      json: async () => {
+        throw new Error("not json");
+      },
+      text: async () => new TextDecoder().decode(bytes),
+      arrayBuffer: async () =>
+        bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength
+        ) as ArrayBuffer,
+      blob: async () => new Blob([bytes]),
+    };
+  }
+
+  test("returns raw bytes as a Uint8Array when binary: true", async () => {
+    // Bytes that are NOT valid UTF-8, to prove we don't go through text().
+    const bytes = new Uint8Array([137, 80, 78, 71, 0, 255, 254, 1]);
+    const service = new KVService({});
+    service.initialize(createContext(async () => binaryResponse(bytes)));
+
+    const result = await service.get("img.png", { binary: true });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.data).toBeInstanceOf(Uint8Array);
+      expect(result.data.data).toEqual(bytes);
+    }
+  });
+});

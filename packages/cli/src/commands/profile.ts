@@ -151,6 +151,7 @@ export function registerProfileCommand(program: Command): void {
           process.stdout.write(formatField("Posture", posture) + "\n");
           process.stdout.write(formatField("Operator", operatorType) + "\n");
           process.stdout.write(formatField("Space", p.spaceId || null) + "\n");
+          process.stdout.write(formatField("Default Space", p.defaultSpace || null) + "\n");
           process.stdout.write(formatField("Key", hasKey) + "\n");
           process.stdout.write(formatField("Session", hasSession) + "\n");
           process.stdout.write(formatField("Created", p.createdAt) + "\n");
@@ -173,6 +174,56 @@ export function registerProfileCommand(program: Command): void {
         await ProfileManager.setConfig({ ...config, defaultProfile: name });
 
         outputJson({ defaultProfile: name, switched: true });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  profile
+    .command("set-default-space [name]")
+    .description("Set (or clear) the default space used when --space is omitted")
+    .option("--profile <name>", "Profile to modify (defaults to the active profile)")
+    .option("--unset", "Clear the default space so commands fall back to the primary space")
+    .addHelpText("after", `
+
+The default space is a short space NAME (e.g. "applications"), resolved per
+profile at command time. Precedence for every kv/sql command:
+  explicit --space flag  >  profile defaultSpace  >  primary space.
+
+Examples:
+  $ tc profile set-default-space applications
+  $ tc profile set-default-space applications --profile cli-test
+  $ tc profile set-default-space --unset
+`)
+    .action(async (name: string | undefined, options, cmd) => {
+      try {
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext({
+          ...globalOpts,
+          profile: options.profile ?? globalOpts.profile,
+        });
+        const profileName = ctx.profile;
+
+        if (!options.unset && (name === undefined || name === "")) {
+          throw new CLIError(
+            "USAGE_ERROR",
+            "Provide a space name (e.g. `tc profile set-default-space applications`) or pass --unset.",
+            ExitCode.USAGE_ERROR,
+          );
+        }
+        if (!options.unset && !/^[A-Za-z0-9_-]+$/.test(name as string)) {
+          throw new CLIError(
+            "INVALID_SPACE",
+            `Invalid space name "${name}". Use a short name ([A-Za-z0-9_-]).`,
+            ExitCode.USAGE_ERROR,
+          );
+        }
+
+        const p = await ProfileManager.getProfile(profileName);
+        const defaultSpace = options.unset ? undefined : (name as string);
+        await ProfileManager.setProfile(profileName, { ...p, defaultSpace });
+
+        outputJson({ profile: profileName, defaultSpace: defaultSpace ?? null, updated: true });
       } catch (error) {
         handleError(error);
       }
