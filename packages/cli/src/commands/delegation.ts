@@ -5,12 +5,17 @@ import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { parseExpiry } from "../lib/duration.js";
-import { principalDidEquals } from "@tinycloud/node-sdk";
+
+function normalizeDid(input: string): string {
+  const normalized = input.trim();
+  const fragmentIndex = normalized.indexOf("#");
+  return (fragmentIndex === -1 ? normalized : normalized.slice(0, fragmentIndex)).toLowerCase();
+}
 
 function didMatches(actual: string | undefined, expected: string): boolean {
   if (!actual) return false;
   try {
-    return principalDidEquals(actual, expected);
+    return normalizeDid(actual) === normalizeDid(expected);
   } catch {
     return actual === expected;
   }
