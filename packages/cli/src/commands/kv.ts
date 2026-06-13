@@ -56,7 +56,14 @@ export function registerKvCommand(program: Command): void {
         const node = await ensureAuthenticated(ctx);
 
         const kv = await kvHandle(node, options.space, ctx.profile);
-        const result = await withSpinner(`Getting ${key}...`, () => kv.get(key)) as any;
+        // For raw / file output, read the value as raw bytes so binary values
+        // (e.g. images) round-trip byte-identically. The default (parsed/JSON)
+        // path is unchanged.
+        const wantBytes = !!options.output || !!options.raw;
+        const result = await withSpinner(
+          `Getting ${key}...`,
+          () => kv.get(key, wantBytes ? { binary: true } : undefined),
+        ) as any;
 
         if (!result.ok) {
           if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
@@ -69,17 +76,15 @@ export function registerKvCommand(program: Command): void {
         const metadata = result.data.headers ?? {};
 
         if (options.output) {
-          // Write to file
-          const content = typeof data === "string" ? data : JSON.stringify(data);
-          await writeFile(options.output, content);
+          // Write raw bytes to file (data is a Uint8Array when wantBytes).
+          await writeFile(options.output, data as Uint8Array);
           outputJson({ key, written: options.output });
           return;
         }
 
         if (options.raw) {
-          // Raw output - write directly to stdout
-          const content = typeof data === "string" ? data : JSON.stringify(data);
-          process.stdout.write(content);
+          // Raw output - write bytes directly to stdout.
+          process.stdout.write(data as Uint8Array);
           return;
         }
 
@@ -106,6 +111,7 @@ export function registerKvCommand(program: Command): void {
     .description("Set a value")
     .option("--file <path>", "Read value from file")
     .option("--stdin", "Read value from stdin")
+    .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
     .action(async (key: string, value: string | undefined, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -136,7 +142,8 @@ export function registerKvCommand(program: Command): void {
           }
         }
 
-        const result = await withSpinner(`Writing ${key}...`, () => node.kv.put(key, putValue)) as any;
+        const kv = await kvHandle(node, options.space, ctx.profile);
+        const result = await withSpinner(`Writing ${key}...`, () => kv.put(key, putValue)) as any;
 
         if (!result.ok) {
           throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
@@ -152,13 +159,15 @@ export function registerKvCommand(program: Command): void {
   kv
     .command("delete <key>")
     .description("Delete a key")
-    .action(async (key: string, _options, cmd) => {
+    .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
+    .action(async (key: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const result = await withSpinner(`Deleting ${key}...`, () => node.kv.delete(key)) as any;
+        const kv = await kvHandle(node, options.space, ctx.profile);
+        const result = await withSpinner(`Deleting ${key}...`, () => kv.delete(key)) as any;
 
         if (!result.ok) {
           throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
