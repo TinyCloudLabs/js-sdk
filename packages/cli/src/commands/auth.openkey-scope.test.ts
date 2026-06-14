@@ -118,6 +118,26 @@ describe("portableFromOpenKeyDelegation (scope mismatch)", () => {
       /OpenKey returned delegation/,
     );
   });
+
+  test("still throws when OpenKey returns the same NAME but a different ADDRESS", () => {
+    // Only the address segment is case-normalized; a genuinely different owner
+    // address under the same ":applications" name must NOT match.
+    const otherAddr = "0x1111111111111111111111111111111111111111";
+    const permissions = [
+      cap("tinycloud.sql", SPACE_LOWER, "xyz.tinycloud.listen/conversations", ["read"]),
+    ];
+    const data = {
+      spaceId: `tinycloud:pkh:eip155:1:${otherAddr}:applications`,
+      delegationCid: "bafyTEST5",
+      delegationHeader: { Authorization: "Bearer x" },
+      verificationMethod: "did:key:zTest",
+      address: otherAddr,
+      chainId: 1,
+    };
+    expect(() => portableFromOpenKeyDelegation(data, permissions, "https://host")).toThrow(
+      /OpenKey returned delegation/,
+    );
+  });
 });
 
 describe("groupPermissionsBySpace (case-insensitive batching)", () => {
