@@ -38,22 +38,39 @@ function toBytes(chunk: unknown): Uint8Array {
   return new TextEncoder().encode(String(chunk));
 }
 
+// Sentinel key prefixes let a test drive the error path of a KV op:
+//   UNHOSTED:* -> 404 + "Space not found" body (the unhosted-space signal)
+//   MISSING:*  -> plain KV_NOT_FOUND "Key not found"
+function errorFor(key: string) {
+  if (key.startsWith("UNHOSTED:")) {
+    return { ok: false, error: { code: "KV_NOT_FOUND", message: "KV 404 - Space not found", meta: { status: 404 } } };
+  }
+  if (key.startsWith("MISSING:")) {
+    return { ok: false, error: { code: "KV_NOT_FOUND", message: "Key not found: " + key } };
+  }
+  return null;
+}
+
 // A KV handle whose name records which space ("primary" vs the resolved uri)
 // each operation routed through.
 function makeKv(handle: string) {
   return {
     put: async (key: string, value: unknown) => {
       recorded.puts.push({ handle, key, value });
-      return { ok: true, data: { data: undefined, headers: {} } };
+      return errorFor(key) ?? { ok: true, data: { data: undefined, headers: {} } };
     },
     delete: async (key: string) => {
       recorded.deletes.push({ handle, key });
-      return { ok: true, data: undefined };
+      return errorFor(key) ?? { ok: true, data: undefined };
     },
     get: async (key: string, options: unknown) => {
       recorded.gets.push({ handle, key, options });
       // Mirror the SDK: when { binary: true }, data is the raw bytes.
-      return { ok: true, data: { data: GET_BYTES, headers: {} } };
+      return errorFor(key) ?? { ok: true, data: { data: GET_BYTES, headers: {} } };
+    },
+    head: async (key: string) => {
+      recorded.gets.push({ handle, key, options: "head" });
+      return errorFor(key) ?? { ok: true, data: { headers: {} } };
     },
   };
 }
@@ -120,6 +137,25 @@ mock.module("../output/errors.js", () => ({
   },
   handleError: (error: unknown) => {
     recorded.errors.push(error);
+  },
+}));
+
+mock.module("../lib/host.js", () => ({
+  // Mirror the real predicate (status 404 + "Space not found") so the kv
+  // command's error routing is genuinely exercised; the per-identity hint
+  // wording is covered in host.test.ts. Returns a CLIError-like on match.
+  unhostedSpaceError: async (
+    error: { message: string; meta?: { status?: number } },
+    spaceUri: string | undefined,
+  ) => {
+    if (!spaceUri) return null;
+    if (error.meta?.status === 404 && /space not found/i.test(error.message)) {
+      const e: any = new Error("SPACE_NOT_HOSTED");
+      e.code = "SPACE_NOT_HOSTED";
+      e.exitCode = 1;
+      return e;
+    }
+    return null;
   },
 }));
 
@@ -239,5 +275,48 @@ describe("CLI kv get binary output", () => {
     expect(recorded.gets).toEqual([
       { handle: "primary", key: "img.png", options: undefined },
     ]);
+  });
+});
+
+describe("CLI kv SPACE_NOT_HOSTED routing for reads", () => {
+  beforeEach(resetState);
+
+  // get/head/delete must surface SPACE_NOT_HOSTED on an unhosted space (not a
+  // benign "key not found" / exists:false), while a genuine missing key still
+  // reports NOT_FOUND / exists:false.
+  test("get on an unhosted space surfaces SPACE_NOT_HOSTED, not NOT_FOUND", async () => {
+    await runKv(["get", "UNHOSTED:k", "--space", "applications"]);
+    expect(recorded.outputs).toEqual([]);
+    expect(recorded.errors).toHaveLength(1);
+    expect((recorded.errors[0] as { code: string }).code).toBe("SPACE_NOT_HOSTED");
+  });
+
+  test("get on a genuinely missing key reports NOT_FOUND", async () => {
+    await runKv(["get", "MISSING:k", "--space", "applications"]);
+    expect(recorded.outputs).toEqual([]);
+    expect(recorded.errors).toHaveLength(1);
+    expect((recorded.errors[0] as { code: string }).code).toBe("NOT_FOUND");
+  });
+
+  test("head on an unhosted space surfaces SPACE_NOT_HOSTED, not exists:false", async () => {
+    await runKv(["head", "UNHOSTED:k", "--space", "applications"]);
+    expect(recorded.outputs).toEqual([]);
+    expect(recorded.errors).toHaveLength(1);
+    expect((recorded.errors[0] as { code: string }).code).toBe("SPACE_NOT_HOSTED");
+  });
+
+  test("head on a genuinely missing key reports exists:false", async () => {
+    await runKv(["head", "MISSING:k", "--space", "applications"]);
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.outputs).toEqual([
+      { key: "MISSING:k", exists: false, metadata: {} },
+    ]);
+  });
+
+  test("delete on an unhosted space surfaces SPACE_NOT_HOSTED", async () => {
+    await runKv(["delete", "UNHOSTED:k", "--space", "applications"]);
+    expect(recorded.outputs).toEqual([]);
+    expect(recorded.errors).toHaveLength(1);
+    expect((recorded.errors[0] as { code: string }).code).toBe("SPACE_NOT_HOSTED");
   });
 });

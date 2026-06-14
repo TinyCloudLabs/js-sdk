@@ -507,3 +507,35 @@ describe("KVService.get binary", () => {
     }
   });
 });
+
+describe("KVService 404 classification (unhosted space vs missing key)", () => {
+  function service(body: string) {
+    const svc = new KVService({});
+    svc.initialize(createContext(async () => response(false, 404, body)));
+    return svc;
+  }
+
+  // An un-hosted space 404 must preserve status + the "Space not found" body so
+  // the CLI/SDK can normalize it to SPACE_NOT_HOSTED (matching put/list/sql).
+  for (const op of ["get", "head", "delete"] as const) {
+    test(`${op}: unhosted-space 404 keeps status 404 + "Space not found" body`, async () => {
+      const result = await service("404 - Space not found")[op]("k");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCodes.KV_NOT_FOUND);
+        expect(result.error.message).toMatch(/space not found/i);
+        expect((result.error.meta as { status?: number } | undefined)?.status).toBe(404);
+      }
+    });
+
+    test(`${op}: genuine missing key 404 is a plain KV_NOT_FOUND (no host signal)`, async () => {
+      const result = await service("key not found")[op]("k");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCodes.KV_NOT_FOUND);
+        expect(result.error.message).toBe("Key not found: k");
+        expect(result.error.message).not.toMatch(/space not found/i);
+      }
+    });
+  }
+});

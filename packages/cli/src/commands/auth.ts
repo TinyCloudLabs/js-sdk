@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { principalDidEquals, type PermissionEntry, type PortableDelegation } from "@tinycloud/node-sdk";
+import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
@@ -472,24 +472,12 @@ export function registerAuthCommand(program: Command): void {
           expiryOption: parsed.requestedExpiry,
           yes: options.yes === true,
         });
-        const result = await node.delegateTo(
-          parsed.sessionDid,
-          parsed.requested,
-          parsed.requestedExpiry !== undefined
-            ? { expiry: parsed.requestedExpiry }
-            : undefined,
-        );
 
-        outputJson({
-          kind: "tinycloud.auth.delegation",
-          version: 1,
-          requestId: parsed.requestId,
-          delegationCid: result.delegation.cid,
-          delegation: result.delegation,
-          permissions: parsed.requested,
-          expiry: result.delegation.expiry.toISOString(),
-          prompted: result.prompted,
-        });
+        // The grant logic lives in the SDK (grantAuthRequest) so it is callable
+        // programmatically; this command is a thin wrapper. The CLI request
+        // artifact is a structural superset of AuthRequestArtifact.
+        const grant = await grantAuthRequest(node, parsed);
+        outputJson(grant);
       } catch (error) {
         handleError(error);
       }

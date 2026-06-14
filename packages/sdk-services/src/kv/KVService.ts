@@ -162,6 +162,35 @@ export class KVService extends BaseService implements IKVService {
   }
 
   /**
+   * Classify a KV 404 by reading the response body once.
+   *
+   * The server returns 404 both for a genuinely missing key AND for an
+   * un-hosted space (body "Space not found"). Previously get/head/delete
+   * collapsed every 404 to KV_NOT_FOUND before reading the body, so an
+   * un-hosted-space read was indistinguishable from a missing key. We now
+   * preserve status + the "Space not found" body for the un-hosted case (so the
+   * CLI/SDK can normalize it to SPACE_NOT_HOSTED, matching put/list/sql), and
+   * fall through to KV_NOT_FOUND for a real missing key.
+   */
+  private async classifyNotFound(
+    response: FetchResponse,
+    key: string
+  ): Promise<Result<never>> {
+    const errorText = await response.text();
+    if (/space not found/i.test(errorText)) {
+      return err(
+        serviceError(
+          ErrorCodes.KV_NOT_FOUND,
+          `KV ${response.status} - ${errorText}`,
+          "kv",
+          { meta: { status: response.status, statusText: response.statusText } }
+        )
+      );
+    }
+    return err(serviceError(ErrorCodes.KV_NOT_FOUND, `Key not found: ${key}`, "kv"));
+  }
+
+  /**
    * Get the full path with optional prefix.
    *
    * @param key - The key
@@ -482,13 +511,7 @@ export class KVService extends BaseService implements IKVService {
           }
 
           if (response.status === 404) {
-            return err(
-              serviceError(
-                ErrorCodes.KV_NOT_FOUND,
-                `Key not found: ${key}`,
-                "kv"
-              )
-            );
+            return this.classifyNotFound(response, key);
           }
 
           const errorText = await response.text();
@@ -803,13 +826,7 @@ export class KVService extends BaseService implements IKVService {
           }
 
           if (response.status === 404) {
-            return err(
-              serviceError(
-                ErrorCodes.KV_NOT_FOUND,
-                `Key not found: ${key}`,
-                "kv"
-              )
-            );
+            return this.classifyNotFound(response, key);
           }
 
           const errorText = await response.text();
@@ -864,13 +881,7 @@ export class KVService extends BaseService implements IKVService {
           }
 
           if (response.status === 404) {
-            return err(
-              serviceError(
-                ErrorCodes.KV_NOT_FOUND,
-                `Key not found: ${key}`,
-                "kv"
-              )
-            );
+            return this.classifyNotFound(response, key);
           }
 
           const errorText = await response.text();

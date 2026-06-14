@@ -8,6 +8,7 @@ import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveSpaceUri } from "../lib/space.js";
+import { unhostedSpaceError } from "../lib/host.js";
 import { theme } from "../output/theme.js";
 
 /**
@@ -17,16 +18,36 @@ import { theme } from "../output/theme.js";
  * primary-space SQL service (preserves prior behavior). When present,
  * we use TinyCloudNode.sqlForSpace, which clones the active service
  * context with a session whose spaceId points at the target space.
+ *
+ * Returns the resolved space URI alongside the handle so error handling can
+ * build the identity-aware SPACE_NOT_HOSTED hint.
  */
 async function dbHandle(
   node: TinyCloudNode,
   dbName: string,
   spaceInput: string | undefined,
   profileName: string,
-): Promise<IDatabaseHandle> {
+): Promise<{ handle: IDatabaseHandle; spaceUri: string | undefined }> {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName);
   const sql = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
-  return sql.db(dbName);
+  return { handle: sql.db(dbName), spaceUri };
+}
+
+/**
+ * Throw the sql service error, normalized to SPACE_NOT_HOSTED with an
+ * identity-aware hint when (and only when) the failure is the exact
+ * unhosted-space condition. Keeps the single error path consistent across sql.
+ */
+async function throwSqlError(
+  error: { code: string; message: string; meta?: { status?: number } },
+  spaceUri: string | undefined,
+  profileName: string,
+  prefix?: string,
+): Promise<never> {
+  const hosted = await unhostedSpaceError(error, spaceUri, profileName);
+  if (hosted) throw hosted;
+  const message = prefix ? `${prefix}${error.message}` : error.message;
+  throw new CLIError(error.code, message, ExitCode.ERROR, error.meta);
 }
 
 export function registerSqlCommand(program: Command): void {
@@ -86,14 +107,14 @@ Output:
         const node = await ensureAuthenticated(ctx);
 
         const params = options.params ? JSON.parse(options.params) : undefined;
-        const handle = await dbHandle(node, options.db, options.space, ctx.profile);
+        const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
 
         const result = await withSpinner("Running query...", () =>
           handle.query(sqlStr, params)
         ) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR, result.error.meta);
+          await throwSqlError(result.error, spaceUri, ctx.profile);
         }
 
         const { columns, rows, rowCount } = result.data;
@@ -142,14 +163,14 @@ Output:
         const node = await ensureAuthenticated(ctx);
 
         const params = options.params ? JSON.parse(options.params) : undefined;
-        const handle = await dbHandle(node, options.db, options.space, ctx.profile);
+        const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
 
         const result = await withSpinner("Executing statement...", () =>
           handle.execute(sqlStr, params)
         ) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR, result.error.meta);
+          await throwSqlError(result.error, spaceUri, ctx.profile);
         }
 
         outputJson({
@@ -184,14 +205,14 @@ Output:
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const handle = await dbHandle(node, options.db, options.space, ctx.profile);
+        const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
 
         const result = await withSpinner("Exporting database...", () =>
           handle.export()
         ) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR, result.error.meta);
+          await throwSqlError(result.error, spaceUri, ctx.profile);
         }
 
         const blob: Blob = result.data;
@@ -259,8 +280,8 @@ Notes:
           );
         }
 
-        const fromHandle = await dbHandle(node, options.fromDb, fromSpaceInput, ctx.profile);
-        const toHandle = await dbHandle(node, options.toDb, toSpaceInput, ctx.profile);
+        const { handle: fromHandle, spaceUri: fromSpaceUriResolved } = await dbHandle(node, options.fromDb, fromSpaceInput, ctx.profile);
+        const { handle: toHandle, spaceUri: toSpaceUriResolved } = await dbHandle(node, options.toDb, toSpaceInput, ctx.profile);
 
         // Resolve target tables: explicit list, or all user tables in source.
         let tables: string[];
@@ -271,7 +292,7 @@ Notes:
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
           ) as any;
           if (!listing.ok) {
-            throw new CLIError(listing.error.code, `Cannot list source tables: ${listing.error.message}`, ExitCode.ERROR, listing.error.meta);
+            await throwSqlError(listing.error, fromSpaceUriResolved, ctx.profile, "Cannot list source tables: ");
           }
           tables = (listing.data.rows as unknown[][]).map((r) => String(r[0]));
         }
@@ -290,12 +311,7 @@ Notes:
           const safe = quoteIdent(table);
           const countResult = await fromHandle.query(`SELECT count(*) AS n FROM ${safe}`) as any;
           if (!countResult.ok) {
-            throw new CLIError(
-              countResult.error.code,
-              `Cannot count rows in source table "${table}": ${countResult.error.message}`,
-              ExitCode.ERROR,
-              countResult.error.meta,
-            );
+            await throwSqlError(countResult.error, fromSpaceUriResolved, ctx.profile, `Cannot count rows in source table "${table}": `);
           }
           const rows = Number(countResult.data.rows[0]?.[0] ?? 0);
           plan.push({ table, rows, copied: 0, skipped: 0 });
@@ -315,7 +331,7 @@ Notes:
           const safe = quoteIdent(entry.table);
           const fetched = await fromHandle.query(`SELECT * FROM ${safe}`) as any;
           if (!fetched.ok) {
-            throw new CLIError(fetched.error.code, `Failed to read "${entry.table}": ${fetched.error.message}`, ExitCode.ERROR, fetched.error.meta);
+            await throwSqlError(fetched.error, fromSpaceUriResolved, ctx.profile, `Failed to read "${entry.table}": `);
           }
           const columns: string[] = fetched.data.columns;
           const rows: unknown[][] = fetched.data.rows;
@@ -329,12 +345,7 @@ Notes:
           for (const row of rows) {
             const writeResult = await toHandle.execute(insertSql, row as any) as any;
             if (!writeResult.ok) {
-              throw new CLIError(
-                writeResult.error.code,
-                `Insert into "${entry.table}" failed after ${entry.copied} row(s): ${writeResult.error.message}`,
-                ExitCode.ERROR,
-                writeResult.error.meta,
-              );
+              await throwSqlError(writeResult.error, toSpaceUriResolved, ctx.profile, `Insert into "${entry.table}" failed after ${entry.copied} row(s): `);
             }
             entry.copied += writeResult.data.changes ?? 1;
           }
