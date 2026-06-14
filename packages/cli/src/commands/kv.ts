@@ -83,6 +83,10 @@ export function registerKvCommand(program: Command): void {
         ) as any;
 
         if (!result.ok) {
+          // SPACE_NOT_HOSTED (unhosted-space 404) takes precedence over the
+          // generic "key not found"; only a true missing key falls through.
+          const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
+          if (hosted) throw hosted;
           if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
             throw new CLIError("NOT_FOUND", `Key "${key}" not found`, ExitCode.NOT_FOUND);
           }
@@ -257,6 +261,9 @@ export function registerKvCommand(program: Command): void {
         const result = await withSpinner(`Checking ${key}...`, () => kv.head(key)) as any;
 
         if (!result.ok) {
+          // An unhosted space must not be reported as a benign "key absent".
+          const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
+          if (hosted) throw hosted;
           if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
             outputJson({ key, exists: false, metadata: {} });
             return;

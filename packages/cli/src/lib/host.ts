@@ -1,6 +1,6 @@
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
-import type { ProfileConfig } from "../config/types.js";
+import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { resolveSpaceUri } from "./space.js";
 
@@ -89,12 +89,18 @@ export function ownerDidFromSpaceUri(spaceUri: string): string | null {
  * the owner address baked into the space DID. Only the root authority may host
  * a space — a delegate's key never matches, so this is the same branch key the
  * server enforces cryptographically, computed client-side for actionable hints.
+ *
+ * A `delegate-session` profile is NEVER the root authority, even when its stored
+ * ownerDid/session.address is the SPACE OWNER's address (a delegate legitimately
+ * knows whose space it accesses). Short-circuiting on posture prevents handing a
+ * delegate the owner hint ("run tc space host"), which only the owner can do.
  */
 export async function isRootAuthority(
   spaceUri: string,
   profileName: string,
 ): Promise<boolean> {
   const profile = await ProfileManager.getProfile(profileName);
+  if (resolveProfilePosture(profile) === "delegate-session") return false;
   const ownerAddr = ownerAddressFromSpaceUri(spaceUri);
   if (!ownerAddr) return false;
   const selfAddr = await resolveLocalAddress(profile, profileName);

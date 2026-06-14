@@ -60,6 +60,21 @@ describe("isRootAuthority", () => {
     const uri = `tinycloud:pkh:eip155:1:${SELF_ADDR}:applications`;
     expect(await isRootAuthority(uri, "p")).toBe(true);
   });
+
+  test("delegate-session is NEVER root authority, even when ownerDid == the space owner", async () => {
+    // A delegate legitimately knows the space owner's address (it's in ownerDid
+    // / session.address). Posture must win so the delegate gets the host-request
+    // hint, not the owner "tc space host" hint.
+    profile = {
+      name: "delegate",
+      chainId: 1,
+      posture: "delegate-session",
+      ownerDid: `did:pkh:eip155:1:${OTHER_ADDR}`,
+    };
+    session = { address: OTHER_ADDR };
+    const uri = `tinycloud:pkh:eip155:1:${OTHER_ADDR}:applications`;
+    expect(await isRootAuthority(uri, "delegate")).toBe(false);
+  });
 });
 
 describe("ownerDidFromSpaceUri / spaceNameFromUri", () => {
