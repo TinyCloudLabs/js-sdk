@@ -11918,9 +11918,10 @@ function groupPermissionsBySpace(permissions) {
       rawEntries.push(permission);
       continue;
     }
-    const group = groups.get(permission.space) ?? [];
+    const key = normalizeSpaceForCompare(permission.space);
+    const group = groups.get(key) ?? [];
     group.push(permission);
-    groups.set(permission.space, group);
+    groups.set(key, group);
   }
   const grouped = Array.from(groups.values());
   if (grouped.length === 0) {
@@ -11932,8 +11933,16 @@ function groupPermissionsBySpace(permissions) {
 function isRawPermission(permission) {
   return permission.service === "tinycloud.encryption" && permission.path.startsWith("urn:tinycloud:encryption:");
 }
+function normalizeSpaceForCompare(space) {
+  return space.replace(
+    /(eip155:\d+:)(0x[0-9a-fA-F]{40})/,
+    (_match, prefix, addr) => prefix + addr.toLowerCase()
+  );
+}
 function returnedSpaceMatchesExpected(returnedSpace, expectedSpace) {
-  if (returnedSpace === expectedSpace) return true;
+  if (normalizeSpaceForCompare(returnedSpace) === normalizeSpaceForCompare(expectedSpace)) {
+    return true;
+  }
   if (!returnedSpace.startsWith("tinycloud:")) return false;
   const returnedName = returnedSpace.slice(returnedSpace.lastIndexOf(":") + 1);
   return returnedName === expectedSpace;
@@ -11942,7 +11951,7 @@ function portableFromOpenKeyDelegation(data, permissions, host) {
   const primary = permissions.find((permission) => !isRawPermission(permission)) ?? permissions[0];
   const returnedSpace = String(data.spaceId ?? primary.space ?? "encryption");
   const expectedSpaces = new Set(
-    permissions.filter((permission) => !isRawPermission(permission)).map((permission) => permission.space)
+    permissions.filter((permission) => !isRawPermission(permission)).map((permission) => normalizeSpaceForCompare(permission.space))
   );
   const matchesExpectedSpace = expectedSpaces.size === 1 && returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]);
   if (expectedSpaces.size > 0 && !matchesExpectedSpace) {
