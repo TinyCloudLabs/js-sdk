@@ -19,10 +19,12 @@
   },
   "changesets": [
     "applications-space-host",
+    "auth-dx-host-request",
     "cli-cross-user-auth-import",
     "cli-delegated-secret-reads",
     "kv-space-and-binary-roundtrip",
     "openkey-scope-case-insensitive",
-    "usedelegation-multiresource"
+    "usedelegation-multiresource",
+    "web-sdk-space-scoped-services"
   ]
 }

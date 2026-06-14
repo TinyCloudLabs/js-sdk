@@ -322,7 +322,8 @@ function wrapError(error) {
 }
 function handleError(error) {
   const cliError = wrapError(error);
-  const hint = buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
+  const prebuilt = typeof cliError.metadata?.hint === "string" ? cliError.metadata.hint : void 0;
+  const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
   outputError(cliError.code, cliError.message, hint);
   process.exit(cliError.exitCode);
 }
@@ -1053,7 +1054,7 @@ import { spawn } from "child_process";
 import { mkdir as mkdir2, readFile as readFile3, writeFile as writeFile2 } from "fs/promises";
 import { dirname as dirname2 } from "path";
 import { createInterface as createInterface2 } from "readline";
-import { principalDidEquals } from "@tinycloud/node-sdk";
+import { grantAuthRequest, principalDidEquals } from "@tinycloud/node-sdk";
 
 // src/config/types.ts
 var CLI_PROFILE_POSTURES = [
@@ -5741,6 +5742,31 @@ var KVService = class extends BaseService {
     return void 0;
   }
   /**
+   * Classify a KV 404 by reading the response body once.
+   *
+   * The server returns 404 both for a genuinely missing key AND for an
+   * un-hosted space (body "Space not found"). Previously get/head/delete
+   * collapsed every 404 to KV_NOT_FOUND before reading the body, so an
+   * un-hosted-space read was indistinguishable from a missing key. We now
+   * preserve status + the "Space not found" body for the un-hosted case (so the
+   * CLI/SDK can normalize it to SPACE_NOT_HOSTED, matching put/list/sql), and
+   * fall through to KV_NOT_FOUND for a real missing key.
+   */
+  async classifyNotFound(response, key) {
+    const errorText = await response.text();
+    if (/space not found/i.test(errorText)) {
+      return err(
+        serviceError(
+          ErrorCodes.KV_NOT_FOUND,
+          `KV ${response.status} - ${errorText}`,
+          "kv",
+          { meta: { status: response.status, statusText: response.statusText } }
+        )
+      );
+    }
+    return err(serviceError(ErrorCodes.KV_NOT_FOUND, `Key not found: ${key}`, "kv"));
+  }
+  /**
    * Get the full path with optional prefix.
    *
    * @param key - The key
@@ -5986,13 +6012,7 @@ var KVService = class extends BaseService {
             }));
           }
           if (response.status === 404) {
-            return err(
-              serviceError(
-                ErrorCodes.KV_NOT_FOUND,
-                `Key not found: ${key}`,
-                "kv"
-              )
-            );
+            return this.classifyNotFound(response, key);
           }
           const errorText = await response.text();
           return err(
@@ -6253,13 +6273,7 @@ var KVService = class extends BaseService {
             }));
           }
           if (response.status === 404) {
-            return err(
-              serviceError(
-                ErrorCodes.KV_NOT_FOUND,
-                `Key not found: ${key}`,
-                "kv"
-              )
-            );
+            return this.classifyNotFound(response, key);
           }
           const errorText = await response.text();
           return err(
@@ -6304,13 +6318,7 @@ var KVService = class extends BaseService {
             }));
           }
           if (response.status === 404) {
-            return err(
-              serviceError(
-                ErrorCodes.KV_NOT_FOUND,
-                `Key not found: ${key}`,
-                "kv"
-              )
-            );
+            return this.classifyNotFound(response, key);
           }
           const errorText = await response.text();
           return err(
@@ -11488,21 +11496,8 @@ function registerAuthCommand(program2) {
         expiryOption: parsed.requestedExpiry,
         yes: options.yes === true
       });
-      const result = await node.delegateTo(
-        parsed.sessionDid,
-        parsed.requested,
-        parsed.requestedExpiry !== void 0 ? { expiry: parsed.requestedExpiry } : void 0
-      );
-      outputJson({
-        kind: "tinycloud.auth.delegation",
-        version: 1,
-        requestId: parsed.requestId,
-        delegationCid: result.delegation.cid,
-        delegation: result.delegation,
-        permissions: parsed.requested,
-        expiry: result.delegation.expiry.toISOString(),
-        prompted: result.prompted
-      });
+      const grant = await grantAuthRequest(node, parsed);
+      outputJson(grant);
     } catch (error) {
       handleError(error);
     }
@@ -12178,6 +12173,79 @@ async function refreshOpenKeySession(profileName, host, options = {}) {
 // src/commands/kv.ts
 import { readFile as readFile4 } from "fs/promises";
 import { writeFile as writeFile3 } from "fs/promises";
+
+// src/lib/host.ts
+function canonicalizeAddress2(address) {
+  const trimmed = address.trim();
+  return trimmed.startsWith("0x") ? `0x${trimmed.slice(2).toLowerCase()}` : trimmed.toLowerCase();
+}
+async function resolveLocalAddress(profile, profileName) {
+  const session = await ProfileManager.getSession(profileName);
+  const sessAddr = session?.address;
+  if (typeof sessAddr === "string" && sessAddr.length > 0) {
+    return canonicalizeAddress2(sessAddr);
+  }
+  if (profile.address) return canonicalizeAddress2(profile.address);
+  if (profile.ownerDid) {
+    const match = profile.ownerDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
+    if (match) return canonicalizeAddress2(match[1]);
+  }
+  return null;
+}
+function ownerAddressFromSpaceUri(spaceUri) {
+  const match = spaceUri.match(/^tinycloud:pkh:eip155:\d+:(0x[a-fA-F0-9]{40}):/);
+  return match ? canonicalizeAddress2(match[1]) : null;
+}
+function ownerDidFromSpaceUri(spaceUri) {
+  const match = spaceUri.match(/^tinycloud:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40}):/);
+  if (!match) return null;
+  return `did:pkh:eip155:${match[1]}:${canonicalizeAddress2(match[2])}`;
+}
+async function isRootAuthority(spaceUri, profileName) {
+  const profile = await ProfileManager.getProfile(profileName);
+  if (resolveProfilePosture(profile) === "delegate-session") return false;
+  const ownerAddr = ownerAddressFromSpaceUri(spaceUri);
+  if (!ownerAddr) return false;
+  const selfAddr = await resolveLocalAddress(profile, profileName);
+  return selfAddr !== null && selfAddr === ownerAddr;
+}
+function spaceNameFromUri(spaceUri) {
+  return spaceUri.slice(spaceUri.lastIndexOf(":") + 1);
+}
+async function unhostedSpaceError(error, spaceUri, profileName) {
+  if (!spaceUri) return null;
+  const status = error.meta?.status;
+  const isUnhosted = status === 404 && /space not found/i.test(error.message);
+  if (!isUnhosted) return null;
+  const spaceName = spaceNameFromUri(spaceUri);
+  const owner = await isRootAuthority(spaceUri, profileName);
+  const hint = owner ? [
+    "You are the owner. Host it once:",
+    `  tc space host ${spaceName}`,
+    "Then retry."
+  ].join("\n") : [
+    "You are a delegate and CANNOT host this space \u2014 only its owner can.",
+    "Emit a host request:",
+    `  tc space host-request ${spaceName} --emit ./host-request.json`,
+    "Send it to the owner; they run `tc space host` and confirm. Then retry."
+  ].join("\n");
+  const message = owner ? `Space '${spaceName}' (${spaceUri}) is not hosted.` : `Space '${spaceName}' (owner ${ownerDidFromSpaceUri(spaceUri) ?? spaceUri}) is not hosted.`;
+  return new CLIError("SPACE_NOT_HOSTED", message, ExitCode.ERROR, { hint });
+}
+async function resolveHostSpace(name, profileName) {
+  const resolved = await resolveSpaceUri(name, profileName);
+  if (!resolved) {
+    throw new Error(`Could not resolve a space for "${name}".`);
+  }
+  return resolved;
+}
+
+// src/commands/kv.ts
+async function throwKvError(error, spaceUri, profileName) {
+  const hosted = await unhostedSpaceError(error, spaceUri, profileName);
+  if (hosted) throw hosted;
+  throw new CLIError(error.code, error.message, ExitCode.ERROR);
+}
 async function readStdin2() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -12187,7 +12255,8 @@ async function readStdin2() {
 }
 async function kvHandle(node, spaceInput, profileName) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName);
-  return spaceUri ? node.kvForSpace(spaceUri) : node.kv;
+  const kv = spaceUri ? node.kvForSpace(spaceUri) : node.kv;
+  return { kv, spaceUri };
 }
 function registerKvCommand(program2) {
   const kv = program2.command("kv").description("Key-value store operations");
@@ -12196,17 +12265,19 @@ function registerKvCommand(program2) {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const kv2 = await kvHandle(node, options.space, ctx.profile);
+      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
       const wantBytes = !!options.output || !!options.raw;
       const result = await withSpinner(
         `Getting ${key}...`,
         () => kv2.get(key, wantBytes ? { binary: true } : void 0)
       );
       if (!result.ok) {
+        const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
+        if (hosted) throw hosted;
         if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
           throw new CLIError("NOT_FOUND", `Key "${key}" not found`, ExitCode.NOT_FOUND);
         }
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        await throwKvError(result.error, spaceUri, ctx.profile);
       }
       const data = result.data.data;
       const metadata = result.data.headers ?? {};
@@ -12257,10 +12328,10 @@ function registerKvCommand(program2) {
           putValue = value;
         }
       }
-      const kv2 = await kvHandle(node, options.space, ctx.profile);
+      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
       const result = await withSpinner(`Writing ${key}...`, () => kv2.put(key, putValue));
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        await throwKvError(result.error, spaceUri, ctx.profile);
       }
       outputJson({ key, written: true });
     } catch (error) {
@@ -12272,10 +12343,10 @@ function registerKvCommand(program2) {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const kv2 = await kvHandle(node, options.space, ctx.profile);
+      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
       const result = await withSpinner(`Deleting ${key}...`, () => kv2.delete(key));
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        await throwKvError(result.error, spaceUri, ctx.profile);
       }
       outputJson({ key, deleted: true });
     } catch (error) {
@@ -12287,11 +12358,11 @@ function registerKvCommand(program2) {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const kv2 = await kvHandle(node, options.space, ctx.profile);
+      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
       const listOptions = options.prefix ? { prefix: options.prefix } : void 0;
       const result = await withSpinner("Listing keys...", () => kv2.list(listOptions));
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        await throwKvError(result.error, spaceUri, ctx.profile);
       }
       const rawData = result.data.data ?? result.data;
       const keyList = Array.isArray(rawData) ? rawData : rawData?.keys ?? [];
@@ -12322,14 +12393,16 @@ function registerKvCommand(program2) {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const kv2 = await kvHandle(node, options.space, ctx.profile);
+      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
       const result = await withSpinner(`Checking ${key}...`, () => kv2.head(key));
       if (!result.ok) {
+        const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
+        if (hosted) throw hosted;
         if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
           outputJson({ key, exists: false, metadata: {} });
           return;
         }
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        await throwKvError(result.error, spaceUri, ctx.profile);
       }
       outputJson({
         key,
@@ -12343,6 +12416,13 @@ function registerKvCommand(program2) {
 }
 
 // src/commands/space.ts
+import { randomBytes as randomBytes3 } from "crypto";
+import { mkdir as mkdir3, writeFile as writeFile4 } from "fs/promises";
+import { dirname as dirname3 } from "path";
+function didWithoutFragment2(did) {
+  const fragment = did.indexOf("#");
+  return fragment === -1 ? did : did.slice(0, fragment);
+}
 function registerSpaceCommand(program2) {
   const space = program2.command("space").description("Space management");
   space.command("list").description("List spaces").action(async (_options, cmd) => {
@@ -12383,6 +12463,53 @@ function registerSpaceCommand(program2) {
       handleError(error);
     }
   });
+  space.command("host-request <name>").description("Emit a request asking the space owner to host it (delegate-only)").option("--emit [file]", "Write the request artifact to file (or stdout when no path)").addHelpText("after", `
+
+A delegate cannot host a space \u2014 only its owner (root authority) can. This
+emits a tinycloud.host.request artifact naming the space and its owner so you
+can hand it to the owner; they run \`tc space host <name>\` and confirm.
+
+If you ARE the owner of the resolved space, this refuses and tells you to host
+it directly with \`tc space host <name>\` (no request needed).
+`).action(async (name, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const profile = await ProfileManager.getProfile(ctx.profile);
+      const spaceId = await resolveHostSpace(name, ctx.profile);
+      const spaceName = spaceNameFromUri(spaceId);
+      if (await isRootAuthority(spaceId, ctx.profile)) {
+        throw new CLIError(
+          "ALREADY_ROOT_AUTHORITY",
+          `You are the owner of ${spaceId}. Host it directly: tc space host ${spaceName}`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      const requesterDid = didWithoutFragment2(profile.sessionDid ?? profile.did);
+      const ownerDid = ownerDidFromSpaceUri(spaceId);
+      if (!ownerDid) {
+        throw new CLIError(
+          "UNRESOLVABLE_OWNER",
+          `Cannot determine the owner of ${spaceId}; host-request needs a pkh space URI.`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      const artifact = {
+        kind: "tinycloud.host.request",
+        version: 1,
+        requestId: `hostreq_${Date.now().toString(36)}_${randomBytes3(4).toString("hex")}`,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        spaceName,
+        spaceId,
+        ownerDid,
+        requesterDid,
+        host: ctx.host
+      };
+      await emitHostRequestArtifact(artifact, options.emit);
+    } catch (error) {
+      handleError(error);
+    }
+  });
   space.command("info [space-id]").description("Get space info").action(async (spaceId, _options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -12414,6 +12541,22 @@ function registerSpaceCommand(program2) {
       handleError(error);
     }
   });
+}
+async function emitHostRequestArtifact(artifact, emitOption) {
+  if (typeof emitOption === "string" && emitOption.length > 0) {
+    await mkdir3(dirname3(emitOption), { recursive: true });
+    await writeFile4(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+    outputJson({
+      emitted: true,
+      path: emitOption,
+      requestId: artifact.requestId,
+      spaceName: artifact.spaceName,
+      spaceId: artifact.spaceId,
+      ownerDid: artifact.ownerDid
+    });
+    return;
+  }
+  outputJson(artifact);
 }
 
 // src/lib/duration.ts
@@ -13062,7 +13205,7 @@ complete -c tc -l quiet -s q -d "Suppress non-essential output"
 
 // src/commands/vault.ts
 import { readFile as readFile5 } from "fs/promises";
-import { writeFile as writeFile4 } from "fs/promises";
+import { writeFile as writeFile5 } from "fs/promises";
 import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
 async function readStdin3() {
   const chunks = [];
@@ -13151,7 +13294,7 @@ function registerVaultCommand(program2) {
       const data = result.data.data ?? result.data;
       if (options.output) {
         const content = data instanceof Uint8Array ? Buffer.from(data) : typeof data === "string" ? data : JSON.stringify(data);
-        await writeFile4(options.output, content);
+        await writeFile5(options.output, content);
         outputJson({ key, written: options.output });
         return;
       }
@@ -13235,7 +13378,7 @@ function registerVaultCommand(program2) {
 
 // src/commands/secrets.ts
 import { readFile as readFile6 } from "fs/promises";
-import { writeFile as writeFile5 } from "fs/promises";
+import { writeFile as writeFile6 } from "fs/promises";
 import { join as join5 } from "path";
 import { homedir as homedir2 } from "os";
 var SECRETS_SPACE2 = "secrets";
@@ -13826,7 +13969,7 @@ function registerSecretsCommand(program2) {
           })
         );
         if (options.output) {
-          await writeFile5(options.output, value2);
+          await writeFile6(options.output, value2);
           outputJson({ name, written: options.output });
           return;
         }
@@ -13855,7 +13998,7 @@ function registerSecretsCommand(program2) {
       }
       const value = String(result.data);
       if (options.output) {
-        await writeFile5(options.output, value);
+        await writeFile6(options.output, value);
         outputJson({ name, written: options.output });
         return;
       }
@@ -13973,7 +14116,7 @@ function registerSecretsCommand(program2) {
 
 // src/commands/vars.ts
 import { readFile as readFile7 } from "fs/promises";
-import { writeFile as writeFile6 } from "fs/promises";
+import { writeFile as writeFile7 } from "fs/promises";
 var VARIABLES_PREFIX = "variables/";
 async function readStdin5() {
   const chunks = [];
@@ -14045,7 +14188,7 @@ function registerVarsCommand(program2) {
         value = typeof data === "string" ? data : JSON.stringify(data);
       }
       if (options.output) {
-        await writeFile6(options.output, value);
+        await writeFile7(options.output, value);
         outputJson({ name, written: options.output });
         return;
       }
@@ -14219,12 +14362,18 @@ function registerDoctorCommand(program2) {
 }
 
 // src/commands/sql.ts
-import { writeFile as writeFile7 } from "fs/promises";
+import { writeFile as writeFile8 } from "fs/promises";
 import { resolve } from "path";
 async function dbHandle(node, dbName, spaceInput, profileName) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName);
   const sql = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
-  return sql.db(dbName);
+  return { handle: sql.db(dbName), spaceUri };
+}
+async function throwSqlError(error, spaceUri, profileName, prefix) {
+  const hosted = await unhostedSpaceError(error, spaceUri, profileName);
+  if (hosted) throw hosted;
+  const message = prefix ? `${prefix}${error.message}` : error.message;
+  throw new CLIError(error.code, message, ExitCode.ERROR, error.meta);
 }
 function registerSqlCommand(program2) {
   const sql = program2.command("sql").description("SQLite database operations for your TinyCloud space").addHelpText("after", `
@@ -14270,13 +14419,13 @@ Output:
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
       const params = options.params ? JSON.parse(options.params) : void 0;
-      const handle = await dbHandle(node, options.db, options.space, ctx.profile);
+      const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
       const result = await withSpinner(
         "Running query...",
         () => handle.query(sqlStr, params)
       );
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR, result.error.meta);
+        await throwSqlError(result.error, spaceUri, ctx.profile);
       }
       const { columns, rows, rowCount } = result.data;
       if (shouldOutputJson()) {
@@ -14314,13 +14463,13 @@ Output:
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
       const params = options.params ? JSON.parse(options.params) : void 0;
-      const handle = await dbHandle(node, options.db, options.space, ctx.profile);
+      const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
       const result = await withSpinner(
         "Executing statement...",
         () => handle.execute(sqlStr, params)
       );
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR, result.error.meta);
+        await throwSqlError(result.error, spaceUri, ctx.profile);
       }
       outputJson({
         changes: result.data.changes,
@@ -14344,18 +14493,18 @@ Output:
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const handle = await dbHandle(node, options.db, options.space, ctx.profile);
+      const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
       const result = await withSpinner(
         "Exporting database...",
         () => handle.export()
       );
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR, result.error.meta);
+        await throwSqlError(result.error, spaceUri, ctx.profile);
       }
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
       const outputPath = resolve(options.output);
-      await writeFile7(outputPath, buffer);
+      await writeFile8(outputPath, buffer);
       outputJson({
         file: outputPath,
         size: blob.size,
@@ -14399,8 +14548,8 @@ Notes:
           ExitCode.USAGE_ERROR
         );
       }
-      const fromHandle = await dbHandle(node, options.fromDb, fromSpaceInput, ctx.profile);
-      const toHandle = await dbHandle(node, options.toDb, toSpaceInput, ctx.profile);
+      const { handle: fromHandle, spaceUri: fromSpaceUriResolved } = await dbHandle(node, options.fromDb, fromSpaceInput, ctx.profile);
+      const { handle: toHandle, spaceUri: toSpaceUriResolved } = await dbHandle(node, options.toDb, toSpaceInput, ctx.profile);
       let tables;
       if (options.table && options.table.length > 0) {
         tables = options.table.flatMap((t) => t.split(",").map((s) => s.trim()).filter(Boolean));
@@ -14409,7 +14558,7 @@ Notes:
           "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         );
         if (!listing.ok) {
-          throw new CLIError(listing.error.code, `Cannot list source tables: ${listing.error.message}`, ExitCode.ERROR, listing.error.meta);
+          await throwSqlError(listing.error, fromSpaceUriResolved, ctx.profile, "Cannot list source tables: ");
         }
         tables = listing.data.rows.map((r) => String(r[0]));
       }
@@ -14425,12 +14574,7 @@ Notes:
         const safe = quoteIdent(table);
         const countResult = await fromHandle.query(`SELECT count(*) AS n FROM ${safe}`);
         if (!countResult.ok) {
-          throw new CLIError(
-            countResult.error.code,
-            `Cannot count rows in source table "${table}": ${countResult.error.message}`,
-            ExitCode.ERROR,
-            countResult.error.meta
-          );
+          await throwSqlError(countResult.error, fromSpaceUriResolved, ctx.profile, `Cannot count rows in source table "${table}": `);
         }
         const rows = Number(countResult.data.rows[0]?.[0] ?? 0);
         plan.push({ table, rows, copied: 0, skipped: 0 });
@@ -14448,7 +14592,7 @@ Notes:
         const safe = quoteIdent(entry.table);
         const fetched = await fromHandle.query(`SELECT * FROM ${safe}`);
         if (!fetched.ok) {
-          throw new CLIError(fetched.error.code, `Failed to read "${entry.table}": ${fetched.error.message}`, ExitCode.ERROR, fetched.error.meta);
+          await throwSqlError(fetched.error, fromSpaceUriResolved, ctx.profile, `Failed to read "${entry.table}": `);
         }
         const columns = fetched.data.columns;
         const rows = fetched.data.rows;
@@ -14459,12 +14603,7 @@ Notes:
         for (const row of rows) {
           const writeResult = await toHandle.execute(insertSql, row);
           if (!writeResult.ok) {
-            throw new CLIError(
-              writeResult.error.code,
-              `Insert into "${entry.table}" failed after ${entry.copied} row(s): ${writeResult.error.message}`,
-              ExitCode.ERROR,
-              writeResult.error.meta
-            );
+            await throwSqlError(writeResult.error, toSpaceUriResolved, ctx.profile, `Insert into "${entry.table}" failed after ${entry.copied} row(s): `);
           }
           entry.copied += writeResult.data.changes ?? 1;
         }
@@ -14484,7 +14623,7 @@ function quoteIdent(name) {
 }
 
 // src/commands/duckdb.ts
-import { readFile as readFile8, writeFile as writeFile8 } from "fs/promises";
+import { readFile as readFile8, writeFile as writeFile9 } from "fs/promises";
 import { resolve as resolve2 } from "path";
 function registerDuckdbCommand(program2) {
   const duckdb = program2.command("duckdb").description("DuckDB database operations");
@@ -14598,7 +14737,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
       const outputPath = resolve2(options.output);
-      await writeFile8(outputPath, buffer);
+      await writeFile9(outputPath, buffer);
       outputJson({
         file: outputPath,
         size: blob.size,

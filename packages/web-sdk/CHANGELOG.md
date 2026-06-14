@@ -1,5 +1,19 @@
 # @tinycloudlabs/web-sdk
 
+## 2.4.0-beta.2
+
+### Minor Changes
+
+- 68b041b: Expose `sqlForSpace(spaceId)` and `kvForSpace(spaceId)` on `TinyCloudWeb`.
+
+  These thin passthroughs forward to the underlying `TinyCloudNode.sqlForSpace`/`kvForSpace` (already used by the CLI), mirroring the existing `get sql()`/`get kv()` accessors. They let a browser/web-SDK app read or write a non-primary space — e.g. the pure-client viewer reading the artifact `feed` SQL and appending `interaction` rows under the owner's `applications` space.
+
+### Patch Changes
+
+- Updated dependencies [934534d]
+  - @tinycloud/node-sdk@2.4.0-beta.2
+  - @tinycloud/sdk-core@2.4.0-beta.2
+
 ## 2.4.0-beta.1
 
 ### Patch Changes
