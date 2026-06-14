@@ -274,6 +274,98 @@ describe("TinyCloudNode runtime permission delegations", () => {
     );
   });
 
+  test("matches a runtime grant across EIP-155 address-case differences", async () => {
+    // The grant stores its operation spaceId with the EIP-55 checksummed
+    // address (from the session). A real invocation routed through the CLI
+    // arrives with the SAME address lowercased (the CLI canonicalizes space
+    // URIs to lowercase). The casing is cosmetic — the grant must still match.
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const lowercasedSpaceId = `tinycloud:pkh:eip155:1:${address.toLowerCase()}:secrets`;
+    const permission: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: "secrets",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      actions: ["tinycloud.kv/put"],
+    };
+
+    await withActivatedDelegations(async () => {
+      await node.grantRuntimePermissions([permission]);
+    });
+
+    // Fallback (the base session for the request) carries the lowercased
+    // address; the granted operation carries the checksummed one.
+    const lowercasedFallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: lowercasedSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeWithRuntimePermissions(
+      lowercasedFallback,
+      "kv",
+      "vault/secrets/ANTHROPIC_API_KEY",
+      "tinycloud.kv/put",
+    );
+    // Before the fix the strict spaceId === comparison missed and fell back to
+    // base-token; now the case-insensitive compare selects the runtime grant.
+    expect(invoke.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "runtime-token",
+    );
+
+    // Symmetry: a checksummed-address request against a grant whose op space is
+    // lowercased must also match. Reinstall the grant under a lowercased space.
+    const lowercaseAddrNode = (() => {
+      const n = makeNode(invoke);
+      (n as any).auth.tinyCloudSession.address = address.toLowerCase();
+      (n as any).auth.tinyCloudSession.spaceId =
+        `tinycloud:pkh:eip155:1:${address.toLowerCase()}:default`;
+      return n;
+    })();
+    await withActivatedDelegations(async () => {
+      await lowercaseAddrNode.grantRuntimePermissions([permission]);
+    });
+    const checksummedFallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: `tinycloud:pkh:eip155:1:${address}:secrets`,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+    (lowercaseAddrNode as any).invokeWithRuntimePermissions(
+      checksummedFallback,
+      "kv",
+      "vault/secrets/ANTHROPIC_API_KEY",
+      "tinycloud.kv/put",
+    );
+    const lastCall = invoke.mock.calls[invoke.mock.calls.length - 1];
+    expect(lastCall[0].delegationHeader.Authorization).toBe("runtime-token");
+
+    // Only the address segment is case-normalized — the space NAME stays
+    // case-sensitive. A request for a differently-cased NAME must NOT match the
+    // grant (it falls back to the base session).
+    const wrongNameFallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: `tinycloud:pkh:eip155:1:${address.toLowerCase()}:SECRETS`,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+    (node as any).invokeWithRuntimePermissions(
+      wrongNameFallback,
+      "kv",
+      "vault/secrets/ANTHROPIC_API_KEY",
+      "tinycloud.kv/put",
+    );
+    const wrongNameCall = invoke.mock.calls[invoke.mock.calls.length - 1];
+    expect(wrongNameCall[0].delegationHeader.Authorization).toBe("base-token");
+  });
+
   test("expands vault shorthand before storing runtime delegation operations", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
