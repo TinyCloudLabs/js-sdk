@@ -1,5 +1,12 @@
 # @tinycloudlabs/web-sdk
 
+## 2.4.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [8e8f7e8]
+  - @tinycloud/node-sdk@2.4.0-beta.3
+
 ## 2.4.0-beta.2
 
 ### Minor Changes
