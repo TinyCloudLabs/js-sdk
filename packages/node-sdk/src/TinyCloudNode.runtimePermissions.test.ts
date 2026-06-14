@@ -366,6 +366,70 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect(wrongNameCall[0].delegationHeader.Authorization).toBe("base-token");
   });
 
+  test("does NOT match a runtime grant for a different address or chain", async () => {
+    // The case-insensitive compare normalizes ONLY the casing of the eip155
+    // address segment. A genuinely different owner (a different 40-hex address)
+    // or a different chain id is NOT the same space and must never be covered by
+    // the grant — the request falls back to the base session token.
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const permission: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: "secrets",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      actions: ["tinycloud.kv/put"],
+    };
+
+    await withActivatedDelegations(async () => {
+      await node.grantRuntimePermissions([permission]);
+    });
+
+    // A request whose space embeds a DIFFERENT owner address (same length, same
+    // chain, same name) must not be covered — case normalization is not address
+    // equivalence.
+    const otherAddress = "0xAbAdBabeAbAdBabeAbAdBabeAbAdBabeAbAdBabe";
+    const otherAddressFallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: `tinycloud:pkh:eip155:1:${otherAddress}:secrets`,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+    (node as any).invokeWithRuntimePermissions(
+      otherAddressFallback,
+      "kv",
+      "vault/secrets/ANTHROPIC_API_KEY",
+      "tinycloud.kv/put",
+    );
+    expect(
+      invoke.mock.calls[invoke.mock.calls.length - 1][0].delegationHeader
+        .Authorization,
+    ).toBe("base-token");
+
+    // A request on a DIFFERENT chain id (same address, same name) must not be
+    // covered either — the chain segment is part of the space identity.
+    const otherChainFallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: `tinycloud:pkh:eip155:137:${address}:secrets`,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+    (node as any).invokeWithRuntimePermissions(
+      otherChainFallback,
+      "kv",
+      "vault/secrets/ANTHROPIC_API_KEY",
+      "tinycloud.kv/put",
+    );
+    expect(
+      invoke.mock.calls[invoke.mock.calls.length - 1][0].delegationHeader
+        .Authorization,
+    ).toBe("base-token");
+  });
+
   test("expands vault shorthand before storing runtime delegation operations", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
