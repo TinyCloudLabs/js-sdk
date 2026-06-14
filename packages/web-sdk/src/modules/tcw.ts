@@ -412,6 +412,11 @@ export class TinyCloudWeb {
 
   get kv(): IKVService { return this.node.kv; }
   get sql(): ISQLService { return this.node.sql; }
+
+  /** Space-scoped SQL service for a non-primary space (e.g. the owner's `applications` space). */
+  sqlForSpace(spaceId: string): ISQLService { return this.node.sqlForSpace(spaceId); }
+  /** Space-scoped KV service for a non-primary space (e.g. the owner's `applications` space). */
+  kvForSpace(spaceId: string): IKVService { return this.node.kvForSpace(spaceId); }
   get duckdb(): IDuckDbService { return this.node.duckdb; }
   get hooks(): IHooksService { return this.node.hooks; }
   get encryption(): IEncryptionService { return this.node.encryption; }
