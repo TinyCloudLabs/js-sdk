@@ -46,7 +46,12 @@ export function wrapError(error: unknown): CLIError {
 
 export function handleError(error: unknown): never {
   const cliError = wrapError(error);
-  const hint = buildAuthHint(cliError) ??
+  // A pre-built hint on the error (e.g. the identity-aware SPACE_NOT_HOSTED
+  // hint) takes precedence over the derived auth/network hints.
+  const prebuilt = typeof cliError.metadata?.hint === "string"
+    ? (cliError.metadata.hint as string)
+    : undefined;
+  const hint = prebuilt ?? buildAuthHint(cliError) ??
     (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : undefined);
   outputError(cliError.code, cliError.message, hint);
   process.exit(cliError.exitCode);

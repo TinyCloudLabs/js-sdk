@@ -123,6 +123,12 @@ mock.module("../output/errors.js", () => ({
   },
 }));
 
+mock.module("../lib/host.js", () => ({
+  // The unhosted-space normalizer is exercised in host.test.ts; here we keep it
+  // a no-op so kv command routing tests don't pull in its real dependency graph.
+  unhostedSpaceError: async () => null,
+}));
+
 const { registerKvCommand } = await import("./kv.js");
 
 async function runKv(args: string[]): Promise<void> {

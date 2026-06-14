@@ -7,8 +7,24 @@ import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveSpaceUri } from "../lib/space.js";
+import { unhostedSpaceError } from "../lib/host.js";
 import { theme } from "../output/theme.js";
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
+
+/**
+ * Throw the kv/sql service error, normalized to SPACE_NOT_HOSTED with an
+ * identity-aware hint when (and only when) the failure is the exact
+ * unhosted-space condition. Keeps the single error path consistent across kv.
+ */
+async function throwKvError(
+  error: { code: string; message: string; meta?: { status?: number } },
+  spaceUri: string | undefined,
+  profileName: string,
+): Promise<never> {
+  const hosted = await unhostedSpaceError(error, spaceUri, profileName);
+  if (hosted) throw hosted;
+  throw new CLIError(error.code, error.message, ExitCode.ERROR);
+}
 
 /**
  * Read all data from stdin.
@@ -36,7 +52,8 @@ async function kvHandle(
   profileName: string,
 ) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName);
-  return spaceUri ? node.kvForSpace(spaceUri) : node.kv;
+  const kv = spaceUri ? node.kvForSpace(spaceUri) : node.kv;
+  return { kv, spaceUri };
 }
 
 export function registerKvCommand(program: Command): void {
@@ -55,7 +72,7 @@ export function registerKvCommand(program: Command): void {
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const kv = await kvHandle(node, options.space, ctx.profile);
+        const { kv, spaceUri } = await kvHandle(node, options.space, ctx.profile);
         // For raw / file output, read the value as raw bytes so binary values
         // (e.g. images) round-trip byte-identically. The default (parsed/JSON)
         // path is unchanged.
@@ -69,7 +86,7 @@ export function registerKvCommand(program: Command): void {
           if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
             throw new CLIError("NOT_FOUND", `Key "${key}" not found`, ExitCode.NOT_FOUND);
           }
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          await throwKvError(result.error, spaceUri, ctx.profile);
         }
 
         const data = result.data.data;
@@ -142,11 +159,11 @@ export function registerKvCommand(program: Command): void {
           }
         }
 
-        const kv = await kvHandle(node, options.space, ctx.profile);
+        const { kv, spaceUri } = await kvHandle(node, options.space, ctx.profile);
         const result = await withSpinner(`Writing ${key}...`, () => kv.put(key, putValue)) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          await throwKvError(result.error, spaceUri, ctx.profile);
         }
 
         outputJson({ key, written: true });
@@ -166,11 +183,11 @@ export function registerKvCommand(program: Command): void {
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const kv = await kvHandle(node, options.space, ctx.profile);
+        const { kv, spaceUri } = await kvHandle(node, options.space, ctx.profile);
         const result = await withSpinner(`Deleting ${key}...`, () => kv.delete(key)) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          await throwKvError(result.error, spaceUri, ctx.profile);
         }
 
         outputJson({ key, deleted: true });
@@ -191,12 +208,12 @@ export function registerKvCommand(program: Command): void {
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const kv = await kvHandle(node, options.space, ctx.profile);
+        const { kv, spaceUri } = await kvHandle(node, options.space, ctx.profile);
         const listOptions = options.prefix ? { prefix: options.prefix } : undefined;
         const result = await withSpinner("Listing keys...", () => kv.list(listOptions)) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          await throwKvError(result.error, spaceUri, ctx.profile);
         }
 
         const rawData = result.data.data ?? result.data;
@@ -236,7 +253,7 @@ export function registerKvCommand(program: Command): void {
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
-        const kv = await kvHandle(node, options.space, ctx.profile);
+        const { kv, spaceUri } = await kvHandle(node, options.space, ctx.profile);
         const result = await withSpinner(`Checking ${key}...`, () => kv.head(key)) as any;
 
         if (!result.ok) {
@@ -244,7 +261,7 @@ export function registerKvCommand(program: Command): void {
             outputJson({ key, exists: false, metadata: {} });
             return;
           }
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          await throwKvError(result.error, spaceUri, ctx.profile);
         }
 
         outputJson({
