@@ -1013,7 +1013,7 @@ function parseExpiryOption(raw: unknown): string | number | undefined {
   return raw;
 }
 
-function groupPermissionsBySpace(permissions: PermissionEntry[]): PermissionEntry[][] {
+export function groupPermissionsBySpace(permissions: PermissionEntry[]): PermissionEntry[][] {
   const groups = new Map<string, PermissionEntry[]>();
   const rawEntries: PermissionEntry[] = [];
   for (const permission of permissions) {
@@ -1021,9 +1021,14 @@ function groupPermissionsBySpace(permissions: PermissionEntry[]): PermissionEntr
       rawEntries.push(permission);
       continue;
     }
-    const group = groups.get(permission.space) ?? [];
+    // Key by address-normalized space so multiple caps on the same space batch
+    // into one OpenKey round-trip even when one cap's address is checksummed and
+    // another is lowercase. The space NAME stays case-sensitive, so genuinely
+    // different names are NOT merged. Entries keep their original space string.
+    const key = normalizeSpaceForCompare(permission.space);
+    const group = groups.get(key) ?? [];
     group.push(permission);
-    groups.set(permission.space, group);
+    groups.set(key, group);
   }
   const grouped = Array.from(groups.values());
   if (grouped.length === 0) {
@@ -1038,25 +1043,49 @@ function isRawPermission(permission: PermissionEntry): boolean {
     permission.path.startsWith("urn:tinycloud:encryption:");
 }
 
-function returnedSpaceMatchesExpected(returnedSpace: string, expectedSpace: string): boolean {
-  if (returnedSpace === expectedSpace) return true;
+/**
+ * Normalize a space identifier for case-insensitive comparison of its
+ * embedded Ethereum address ONLY.
+ *
+ * Space URIs are `tinycloud:pkh:eip155:<chain>:<0xADDR>:<name>`. Ethereum
+ * addresses are case-insensitive, but OpenKey returns the EIP-55 checksummed
+ * form (mixed case) while the CLI builds the lowercase form, so a byte-for-byte
+ * compare spuriously fails. Lowercase ONLY the `eip155:<chain>:0x<addr>` address
+ * segment and leave everything else — crucially the space NAME, which repo
+ * parsers treat as case-sensitive — byte-exact.
+ */
+function normalizeSpaceForCompare(space: string): string {
+  return space.replace(
+    /(eip155:\d+:)(0x[0-9a-fA-F]{40})/,
+    (_match, prefix: string, addr: string) => prefix + addr.toLowerCase(),
+  );
+}
+
+export function returnedSpaceMatchesExpected(returnedSpace: string, expectedSpace: string): boolean {
+  if (normalizeSpaceForCompare(returnedSpace) === normalizeSpaceForCompare(expectedSpace)) {
+    return true;
+  }
 
   if (!returnedSpace.startsWith("tinycloud:")) return false;
+  // expectedSpace may be a bare space NAME; the NAME is case-sensitive, so
+  // compare the returned URI's name segment byte-exact.
   const returnedName = returnedSpace.slice(returnedSpace.lastIndexOf(":") + 1);
   return returnedName === expectedSpace;
 }
 
-function portableFromOpenKeyDelegation(
+export function portableFromOpenKeyDelegation(
   data: Record<string, unknown>,
   permissions: PermissionEntry[],
   host: string,
 ): PortableDelegation {
   const primary = permissions.find((permission) => !isRawPermission(permission)) ?? permissions[0];
   const returnedSpace = String(data.spaceId ?? primary.space ?? "encryption");
+  // Normalize for the size check so that multiple caps on the same space that
+  // only differ by address checksum casing collapse to one expected space.
   const expectedSpaces = new Set(
     permissions
       .filter((permission) => !isRawPermission(permission))
-      .map((permission) => permission.space),
+      .map((permission) => normalizeSpaceForCompare(permission.space)),
   );
   const matchesExpectedSpace = expectedSpaces.size === 1 &&
     returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]!);
