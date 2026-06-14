@@ -35,6 +35,14 @@ describe("returnedSpaceMatchesExpected (case-insensitive address)", () => {
     const other = `tinycloud:pkh:eip155:1:${ADDR_LOWER}:other`;
     expect(returnedSpaceMatchesExpected(other, SPACE_LOWER)).toBe(false);
   });
+
+  test("space NAME is case-sensitive — only-case NAME difference does NOT match", () => {
+    // Same address, name "Applications" vs "applications" — must NOT be equal.
+    const nameUpper = `tinycloud:pkh:eip155:1:${ADDR_CHECKSUM}:Applications`;
+    expect(returnedSpaceMatchesExpected(nameUpper, SPACE_LOWER)).toBe(false);
+    // Bare-name form likewise stays case-sensitive.
+    expect(returnedSpaceMatchesExpected(SPACE_LOWER, "Applications")).toBe(false);
+  });
 });
 
 describe("portableFromOpenKeyDelegation (scope mismatch)", () => {
@@ -92,6 +100,24 @@ describe("portableFromOpenKeyDelegation (scope mismatch)", () => {
       /OpenKey returned delegation/,
     );
   });
+
+  test("still throws when OpenKey returns the same address but a case-different NAME", () => {
+    // Name is case-sensitive: expected "applications", returned "Applications".
+    const permissions = [
+      cap("tinycloud.sql", SPACE_LOWER, "xyz.tinycloud.listen/conversations", ["read"]),
+    ];
+    const data = {
+      spaceId: `tinycloud:pkh:eip155:1:${ADDR_CHECKSUM}:Applications`,
+      delegationCid: "bafyTEST4",
+      delegationHeader: { Authorization: "Bearer x" },
+      verificationMethod: "did:key:zTest",
+      address: ADDR_CHECKSUM,
+      chainId: 1,
+    };
+    expect(() => portableFromOpenKeyDelegation(data, permissions, "https://host")).toThrow(
+      /OpenKey returned delegation/,
+    );
+  });
 });
 
 describe("groupPermissionsBySpace (case-insensitive batching)", () => {
@@ -109,6 +135,15 @@ describe("groupPermissionsBySpace (case-insensitive batching)", () => {
     const permissions = [
       cap("tinycloud.sql", SPACE_LOWER, "a", ["read"]),
       cap("tinycloud.kv", `tinycloud:pkh:eip155:1:${ADDR_LOWER}:other`, "b", ["get"]),
+    ];
+    expect(groupPermissionsBySpace(permissions).length).toBe(2);
+  });
+
+  test("same address but case-different NAME is NOT merged (separate round-trips)", () => {
+    // Name is case-sensitive: "applications" vs "Applications" are distinct spaces.
+    const permissions = [
+      cap("tinycloud.sql", SPACE_LOWER, "a", ["read"]),
+      cap("tinycloud.kv", `tinycloud:pkh:eip155:1:${ADDR_CHECKSUM}:Applications`, "b", ["get"]),
     ];
     expect(groupPermissionsBySpace(permissions).length).toBe(2);
   });
