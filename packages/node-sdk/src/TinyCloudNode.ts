@@ -3505,8 +3505,26 @@ export class TinyCloudNode {
 
     return granted.spaceId !== undefined &&
       requested.spaceId !== undefined &&
-      granted.spaceId === requested.spaceId &&
+      this.spaceIdsEqual(granted.spaceId, requested.spaceId) &&
       this.pathContains(granted.path, requested.path);
+  }
+
+  // Space IDs are `tinycloud:pkh:eip155:<chain>:<0xADDR>:<name>`. The embedded
+  // EIP-155 address is case-insensitive, but the CLI canonicalizes it to
+  // lowercase when building a space URI while stored runtime delegations keep
+  // the EIP-55 checksummed form — so a byte-for-byte compare spuriously rejects
+  // an otherwise-valid grant. Lowercase ONLY the `eip155:<chain>:0x<addr>`
+  // segment and leave everything else (crucially the case-sensitive space NAME)
+  // byte-exact. Mirrors the CLI's `normalizeSpaceForCompare` (OPENKEY_SCOPE_MISMATCH fix).
+  private spaceIdsEqual(a: string, b: string): boolean {
+    return this.normalizeSpaceAddress(a) === this.normalizeSpaceAddress(b);
+  }
+
+  private normalizeSpaceAddress(space: string): string {
+    return space.replace(
+      /(eip155:\d+:)(0x[0-9a-fA-F]{40})/,
+      (_match, prefix: string, addr: string) => prefix + addr.toLowerCase(),
+    );
   }
 
   private actionContains(grantedAction: string, requestedAction: string): boolean {
