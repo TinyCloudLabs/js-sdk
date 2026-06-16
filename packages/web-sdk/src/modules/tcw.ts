@@ -57,6 +57,10 @@ import {
   validateAdditionalPermissions,
 } from "./requestPermissionsCore";
 import {
+  isPermissionPromptSuppressed,
+  suppressPermissionPromptFor30Days,
+} from "./permissionPromptSuppression";
+import {
   clientSessionFromPersisted,
   restoreDataFromPersisted,
 } from "./browserSessionPersistence";
@@ -288,7 +292,10 @@ export class TinyCloudWeb {
       appName: string;
       appIcon?: string;
       additional: PermissionEntry[];
-    }) => Promise<{ approved: boolean }>;
+    }) => Promise<{
+      approved: boolean;
+      suppressPromptFor30Days?: boolean;
+    }>;
     hasRuntimePermissions?: (additional: PermissionEntry[]) => boolean;
     grantPermissions?: (
       additional: PermissionEntry[],
@@ -743,6 +750,9 @@ export class TinyCloudWeb {
     const result = await requestPermissionsCore(additional, {
       manifest,
       showModal: this._testHooks?.showModal ?? showPermissionRequestModal,
+      isPromptSuppressed: () => isPermissionPromptSuppressed(manifest),
+      suppressPromptFor30Days: () =>
+        suppressPermissionPromptFor30Days(manifest),
       grantPermissions: this._testHooks?.grantPermissions ??
         ((approved) => node.grantRuntimePermissions(approved)),
     });

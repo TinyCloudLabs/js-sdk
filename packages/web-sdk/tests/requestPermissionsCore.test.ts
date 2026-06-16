@@ -128,6 +128,65 @@ describe("requestPermissionsCore: approve", () => {
     expect(granted).toEqual(additional);
   });
 
+  test("persists prompt suppression after approved permissions are granted", async () => {
+    const order: string[] = [];
+    const suppressPromptFor30Days = mock(() => {
+      order.push("suppressPromptFor30Days");
+    });
+
+    await requestPermissionsCore(additional, {
+      manifest: baseManifest,
+      showModal: async () => ({
+        approved: true,
+        suppressPromptFor30Days: true,
+      }),
+      suppressPromptFor30Days,
+      grantPermissions: async () => {
+        order.push("grantPermissions");
+      },
+    });
+
+    expect(suppressPromptFor30Days).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["grantPermissions", "suppressPromptFor30Days"]);
+  });
+
+  test("does not persist prompt suppression when granting fails", async () => {
+    const err = new Error("grant failed");
+    const suppressPromptFor30Days = mock(() => {});
+
+    await expect(
+      requestPermissionsCore(additional, {
+        manifest: baseManifest,
+        showModal: async () => ({
+          approved: true,
+          suppressPromptFor30Days: true,
+        }),
+        suppressPromptFor30Days,
+        grantPermissions: async () => {
+          throw err;
+        },
+      }),
+    ).rejects.toBe(err);
+
+    expect(suppressPromptFor30Days).not.toHaveBeenCalled();
+  });
+
+  test("skips the modal when the page/app prompt is suppressed", async () => {
+    const showModal = mock(async () => ({ approved: false }));
+    const grantPermissions = mock(async () => {});
+
+    const result = await requestPermissionsCore(additional, {
+      manifest: baseManifest,
+      showModal,
+      isPromptSuppressed: () => true,
+      grantPermissions,
+    });
+
+    expect(result).toEqual({ approved: true });
+    expect(showModal).not.toHaveBeenCalled();
+    expect(grantPermissions).toHaveBeenCalledWith(additional);
+  });
+
   test("returns runtime delegations from the grant step", async () => {
     const delegation = { cid: "runtime-cid" } as any;
 

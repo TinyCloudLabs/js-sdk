@@ -166,6 +166,9 @@ describe("TinyCloudPermissionRequestModal", () => {
     expect(modal.shadowRoot.innerHTML).toContain("Read key-value data");
     expect(modal.shadowRoot.innerHTML).toContain("Show technical details");
     expect(modal.shadowRoot.innerHTML).toContain("This app is asking you");
+    expect(modal.shadowRoot.innerHTML).toContain(
+      "Do not show me again for 30 days",
+    );
   });
 
   test("describes secret writes as secret permissions", async () => {
@@ -227,7 +230,29 @@ describe("TinyCloudPermissionRequestModal", () => {
     (modal as any).handleApprove();
 
     const result = await modal.getCompletionPromise();
-    expect(result).toEqual({ approved: true });
+    expect(result).toEqual({
+      approved: true,
+      suppressPromptFor30Days: false,
+    });
+  });
+
+  test("approve includes prompt suppression when checkbox is checked", async () => {
+    const Modal = await loadModal();
+    const modal = new Modal(sampleOptions);
+    modal.connectedCallback();
+
+    const checkedElement = {
+      checked: true,
+      setAttribute: () => {},
+    };
+    modal.shadowRoot.querySelector = () => checkedElement as any;
+    (modal as any).handleApprove();
+
+    const result = await modal.getCompletionPromise();
+    expect(result).toEqual({
+      approved: true,
+      suppressPromptFor30Days: true,
+    });
   });
 
   test("dismiss resolves with { approved: false }", async () => {

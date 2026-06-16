@@ -29,6 +29,8 @@ export interface PermissionRequestModalOptions {
 export interface PermissionRequestResult {
   /** True when the user clicked Approve, false when they declined or dismissed. */
   approved: boolean;
+  /** True when the user opted out of this SDK prompt for the next 30 days. */
+  suppressPromptFor30Days?: boolean;
 }
 
 export class TinyCloudPermissionRequestModal extends HTMLElement {
@@ -99,6 +101,10 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
                 This app is asking you to grant scoped permission. Review what it will be allowed to do before approving.
               </p>
               <ul class="permission-list">${entriesHtml}</ul>
+              <label class="suppression-option">
+                <input type="checkbox" class="suppression-checkbox" data-role="suppress-prompt" />
+                <span>Do not show me again for 30 days</span>
+              </label>
             </div>
 
             <div class="modal-actions">
@@ -240,6 +246,16 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         border: 1px solid var(--modal-border);
         border-radius: 10px; padding: 14px;
       }
+      .suppression-option {
+        display: flex; align-items: center; gap: 10px;
+        margin-top: 16px; color: var(--modal-muted);
+        font-size: 13px; line-height: 1.4; cursor: pointer;
+      }
+      .suppression-checkbox {
+        width: 16px; height: 16px; flex: 0 0 auto;
+        margin: 0; accent-color: var(--modal-accent);
+      }
+      .suppression-option:hover { color: var(--modal-foreground); }
       .entry-summary {
         font-size: 13px; line-height: 1.45; color: var(--modal-muted);
         margin: 10px 0;
@@ -362,7 +378,13 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
   };
 
   private handleApprove(): void {
-    this.resolveResult?.({ approved: true });
+    const checkbox = this.shadowRoot!.querySelector(
+      '[data-role="suppress-prompt"]',
+    ) as HTMLInputElement | null;
+    this.resolveResult?.({
+      approved: true,
+      suppressPromptFor30Days: checkbox?.checked === true,
+    });
     this.hide();
   }
 
