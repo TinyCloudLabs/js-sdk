@@ -24,6 +24,7 @@
     "cli-delegated-secret-reads",
     "kv-space-and-binary-roundtrip",
     "openkey-scope-case-insensitive",
+    "permission-prompt-suppression",
     "runtime-grant-space-case-insensitive",
     "usedelegation-multiresource",
     "web-sdk-space-scoped-services"

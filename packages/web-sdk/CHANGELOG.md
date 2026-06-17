@@ -1,5 +1,11 @@
 # @tinycloudlabs/web-sdk
 
+## 2.4.0-beta.4
+
+### Patch Changes
+
+- da92ba7: Add a 30-day opt-out checkbox to the runtime permission request prompt so repeat permission escalations on the same page can skip the SDK explainer modal while still requiring the runtime permission grant.
+
 ## 2.4.0-beta.3
 
 ### Patch Changes

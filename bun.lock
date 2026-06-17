@@ -33,7 +33,7 @@
     },
     "apps/openkey-example": {
       "name": "tinycloud-openkey-example-app",
-      "version": "0.0.17-beta.3",
+      "version": "0.0.17-beta.4",
       "dependencies": {
         "@openkey/sdk": "^0.8.7",
         "@radix-ui/react-accordion": "^1.2.3",
@@ -83,7 +83,7 @@
     },
     "apps/openkey-vite": {
       "name": "openkey-vite",
-      "version": "0.0.15-beta.3",
+      "version": "0.0.15-beta.4",
       "dependencies": {
         "@openkey/sdk": "0.8.7",
         "@radix-ui/react-accordion": "^1.2.3",
@@ -278,7 +278,7 @@
     },
     "packages/web-sdk": {
       "name": "@tinycloud/web-sdk",
-      "version": "2.4.0-beta.3",
+      "version": "2.4.0-beta.4",
       "dependencies": {
         "@metamask/detect-provider": "^1.2.0",
         "@multiformats/multiaddr": "^13.0.1",
