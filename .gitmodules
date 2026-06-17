@@ -1,0 +1,4 @@
+[submodule "submodules/feed"]
+	path = submodules/feed
+	url = https://github.com/TinyCloudLabs/feed
+	branch = main

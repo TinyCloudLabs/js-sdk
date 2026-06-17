@@ -65,6 +65,81 @@ await tc.kv.put('myKey', { hello: 'world' });
 const result = await tc.kv.get('myKey');
 ```
 
+## Artifact Feed Submodule
+
+This branch vendors the TinyCloud artifact feed as a git submodule at
+[`submodules/feed`](./submodules/feed):
+
+```bash
+git submodule update --init --recursive submodules/feed
+```
+
+If you are cloning this project from scratch, either clone with submodules:
+
+```bash
+git clone --recurse-submodules https://github.com/TinyCloudLabs/js-sdk.git
+```
+
+or inflate the submodule after checkout or after a pull:
+
+```bash
+bun run artifact:inflate
+```
+
+`artifact:inflate` initializes `submodules/feed` and runs `bun install` inside
+the feed repo. Use it whenever the checkout has an empty `submodules/feed`
+directory or after a pull changes the recorded feed submodule commit.
+
+### Run the artifact stack
+
+The feed frontend talks directly to TinyCloud for artifact SQL/KV, and it talks
+to the distillery agent backend for delegation and generation. For local stack
+development, run both sides:
+
+```bash
+bun run artifact:dev
+```
+
+That command starts the distillery backend on `http://localhost:4097`, starts the
+feed frontend on `http://localhost:5173`, and wires a matching local
+`AGENT_API_TOKEN` / `VITE_AGENT_TOKEN` for the two processes.
+
+To run the two sides manually in separate terminals:
+
+```bash
+# Terminal 1: distillery agent backend
+export AGENT_API_TOKEN=local-artifact-dev
+export AGENT_ALLOWED_ORIGIN=http://localhost:5173
+bun run artifact:backend
+
+# Terminal 2: feed frontend
+export VITE_AGENT_HOST=http://localhost:4097
+export VITE_AGENT_TOKEN=local-artifact-dev
+bun run artifact:frontend
+```
+
+The backend script looks for a distillery checkout with
+`harness/agent/src/server.ts`. In this Conductor workspace it detects the
+distillery worktree automatically. In a standalone checkout, point it at the
+backend explicitly:
+
+```bash
+DISTILLERY_REPO=/path/to/distillery bun run artifact:backend
+```
+
+### Test the artifact stack
+
+```bash
+bun run artifact:frontend:check
+bun run artifact:backend:smoke
+bun run artifact:test
+```
+
+`artifact:frontend:check` runs the feed typecheck and build.
+`artifact:backend:smoke` starts the distillery backend on a temporary local port
+and verifies `GET /agent/info`. `artifact:test` runs both checks, then runs
+`bun test` in the detected distillery checkout.
+
 ### Node.js SDK
 
 ```bash
