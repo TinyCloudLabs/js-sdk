@@ -26,7 +26,14 @@ export interface RequestPermissionsCoreDeps {
     appName: string;
     appIcon?: string;
     additional: PermissionEntry[];
-  }) => Promise<{ approved: boolean }>;
+  }) => Promise<{
+    approved: boolean;
+    suppressPromptFor30Days?: boolean;
+  }>;
+  /** Whether this page/app has opted out of the SDK explainer prompt. */
+  isPromptSuppressed?: () => boolean;
+  /** Persist a successful opt-out from the SDK explainer prompt. */
+  suppressPromptFor30Days?: () => void;
   /** Store approved permissions as runtime delegations. */
   grantPermissions: (
     additional: PermissionEntry[],
@@ -63,17 +70,26 @@ export async function requestPermissionsCore(
 ): Promise<RequestPermissionsCoreResult> {
   validateAdditionalPermissions(additional);
 
-  const modalResult = await deps.showModal({
-    appName: deps.manifest.name,
-    appIcon: deps.manifest.icon,
-    additional,
-  });
+  let shouldSuppressPrompt = false;
+  if (deps.isPromptSuppressed?.() !== true) {
+    const modalResult = await deps.showModal({
+      appName: deps.manifest.name,
+      appIcon: deps.manifest.icon,
+      additional,
+    });
 
-  if (!modalResult.approved) {
-    return { approved: false };
+    if (!modalResult.approved) {
+      return { approved: false };
+    }
+
+    shouldSuppressPrompt = modalResult.suppressPromptFor30Days === true;
   }
 
   const delegations = await deps.grantPermissions(additional);
+
+  if (shouldSuppressPrompt) {
+    deps.suppressPromptFor30Days?.();
+  }
 
   return Array.isArray(delegations)
     ? { approved: true, delegations }
