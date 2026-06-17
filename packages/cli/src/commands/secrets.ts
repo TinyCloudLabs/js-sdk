@@ -9,7 +9,8 @@ import {
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
-import { outputJson, withSpinner } from "../output/formatter.js";
+import { formatCheck, formatSection, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
+import { theme } from "../output/theme.js";
 import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
@@ -44,6 +45,31 @@ interface DelegationCandidate {
 
 interface ResolvedDelegatedSecretSource extends DelegationCandidate {
   source: string;
+}
+
+type SecretDoctorCheck = {
+  name: string;
+  ok: boolean | "warn";
+  detail?: string;
+  hint?: string;
+};
+
+interface SecretDoctorResult {
+  healthy: boolean;
+  network: {
+    name: string;
+    networkId: string;
+    exists: boolean;
+    state?: string;
+  };
+  secret?: {
+    name: string;
+    path: string;
+    scope?: string;
+    exists: boolean;
+    readable: boolean;
+  };
+  checks: SecretDoctorCheck[];
 }
 
 /**
@@ -707,6 +733,32 @@ function secretPermissionEntries(params: {
   return permissions;
 }
 
+function formatSecretScopeFlag(options: SecretScopeOptions | undefined): string {
+  return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
+}
+
+function outputSecretDoctor(result: SecretDoctorResult): void {
+  if (shouldOutputJson()) {
+    outputJson(result);
+    return;
+  }
+
+  process.stderr.write(formatSection("Secrets") + "\n");
+  for (const check of result.checks) {
+    process.stdout.write(formatCheck(check.ok, check.name, check.detail) + "\n");
+    if (check.hint) {
+      process.stdout.write(`  ${theme.hint(check.hint)}\n`);
+    }
+  }
+  process.stdout.write("\n");
+  if (result.healthy) {
+    process.stdout.write(theme.success("Secrets checks passed.") + "\n");
+  } else {
+    const failed = result.checks.filter((check) => check.ok === false).length;
+    process.stdout.write(theme.warn(`${failed} secrets check${failed > 1 ? "s" : ""} need attention.`) + "\n");
+  }
+}
+
 export function registerSecretsCommand(program: Command): void {
   const secrets = program.command("secrets").description("Encrypted secrets management");
 
@@ -758,6 +810,110 @@ export function registerSecretsCommand(program: Command): void {
           networkId: descriptor.networkId,
           state: descriptor.state,
           descriptor,
+        });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  secrets
+    .command("doctor [name]")
+    .description("Check secrets setup and optional secret access")
+    .option("--scope <scope>", "Logical secret scope")
+    .option("--space <scope>", "Deprecated alias for --scope")
+    .option("--network <name>", "Encryption network name", "default")
+    .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
+    .action(async (name: string | undefined, options, cmd) => {
+      try {
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const node = await ensureSecretsNode(ctx, options);
+        const networkName = options.network ?? "default";
+        const networkId = networkName.startsWith("urn:tinycloud:encryption:")
+          ? networkName
+          : node.getDefaultEncryptionNetworkId(networkName);
+        const descriptor = await withSpinner(
+          "Checking secrets encryption network...",
+          () => node.getEncryptionNetwork(networkName),
+        );
+        const checks: SecretDoctorCheck[] = [
+          descriptor
+            ? {
+                name: "Encryption network",
+                ok: descriptor.state === "active" ? true : "warn",
+                detail: `${networkName} (${descriptor.state})`,
+              }
+            : {
+                name: "Encryption network",
+                ok: false,
+                detail: `${networkName} not found`,
+                hint: `tc secrets network init ${networkName}`,
+              },
+        ];
+        let secret: SecretDoctorResult["secret"];
+
+        if (name) {
+          const scopeOptions = resolveSecretScope(options);
+          const resolved = resolveSecretPath(name, scopeOptions);
+          const result = await runSecretOperation({
+            ctx,
+            node,
+            action: "get",
+            name,
+            scopeOptions,
+            label: `Checking secret ${name}...`,
+            operation: () => node.secrets.get(name, scopeOptions),
+          });
+
+          if (result.ok) {
+            secret = {
+              name: resolved.name,
+              path: resolved.permissionPaths.vault,
+              ...(resolved.scope ? { scope: resolved.scope } : {}),
+              exists: true,
+              readable: true,
+            };
+            checks.push({
+              name: "Secret access",
+              ok: true,
+              detail: `${resolved.permissionPaths.vault} readable`,
+            });
+          } else {
+            const notFound = result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND";
+            secret = {
+              name: resolved.name,
+              path: resolved.permissionPaths.vault,
+              ...(resolved.scope ? { scope: resolved.scope } : {}),
+              exists: !notFound,
+              readable: false,
+            };
+            checks.push({
+              name: "Secret access",
+              ok: false,
+              detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
+              hint: notFound
+                ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} <value>`
+                : "Ask the owner profile to grant tinycloud.kv/get and tinycloud.encryption/decrypt.",
+            });
+          }
+        } else {
+          checks.push({
+            name: "Secret access",
+            ok: "warn",
+            detail: "skipped; pass a secret name to verify read access",
+          });
+        }
+
+        outputSecretDoctor({
+          healthy: checks.every((check) => check.ok !== false),
+          network: {
+            name: networkName,
+            networkId,
+            exists: descriptor !== null,
+            ...(descriptor?.state ? { state: descriptor.state } : {}),
+          },
+          ...(secret ? { secret } : {}),
+          checks,
         });
       } catch (error) {
         handleError(error);

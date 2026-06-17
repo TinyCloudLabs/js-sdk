@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  ENCRYPTION_MANIFEST_SPACE,
+  ENCRYPTION_PERMISSION_SERVICE,
   expandActionShortNames,
   resolveManifest,
 } from "../../../sdk-core/src/manifest.js";
@@ -13,6 +15,7 @@ import {
 } from "@tinycloud/node-sdk";
 import { PROFILES_DIR } from "../config/constants.js";
 import { fileExists, readJson, writeJson, ensureDir } from "../config/storage.js";
+import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
@@ -357,6 +360,7 @@ export async function loadManifestPermissions(
           ),
         };
       });
+    permissions.push(...await secretPermissionsFromAppManifest(manifest, profile));
     return resolvePermissionSpaces(permissions, profile);
   }
 
@@ -365,6 +369,56 @@ export async function loadManifestPermissions(
     "Manifest must contain either SDK field \"id\" or app manifest field \"app_id\".",
     ExitCode.USAGE_ERROR,
   );
+}
+
+async function secretPermissionsFromAppManifest(
+  manifest: Record<string, unknown>,
+  profile: string,
+): Promise<PermissionEntry[]> {
+  if (manifest.secrets === undefined) {
+    return [];
+  }
+
+  const resolved = resolveManifest({
+    app_id: String(manifest.app_id),
+    name: typeof manifest.name === "string" ? manifest.name : String(manifest.app_id),
+    defaults: false,
+    prefix: "",
+    secrets: manifest.secrets as Parameters<typeof resolveManifest>[0]["secrets"],
+  });
+  const permissions = resolved.resources.filter((resource) =>
+    resource.service === "tinycloud.kv" &&
+    resource.space === "secrets" &&
+    resource.path.startsWith("vault/secrets/")
+  );
+
+  const needsDecrypt = permissions.some((permission) =>
+    permission.actions.includes("tinycloud.kv/get")
+  );
+  if (needsDecrypt) {
+    permissions.push({
+      service: ENCRYPTION_PERMISSION_SERVICE,
+      space: ENCRYPTION_MANIFEST_SPACE,
+      path: await defaultSecretsNetworkId(profile),
+      actions: ["tinycloud.encryption/decrypt"],
+      skipPrefix: true,
+    });
+  }
+
+  return permissions;
+}
+
+async function defaultSecretsNetworkId(profileName: string): Promise<string> {
+  const profile = await ProfileManager.getProfile(profileName);
+  const ownerDid = (profile.ownerDid ?? profile.did)?.split("#")[0];
+  if (!ownerDid) {
+    throw new CLIError(
+      "OWNER_DID_UNKNOWN",
+      `Cannot determine owner DID for profile "${profileName}". Run \`tc auth login\` first.`,
+      ExitCode.AUTH_REQUIRED,
+    );
+  }
+  return `urn:tinycloud:encryption:${ownerDid}:default`;
 }
 
 export function diffPermissions(

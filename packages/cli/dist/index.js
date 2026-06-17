@@ -10990,6 +10990,7 @@ async function loadManifestPermissions(source, profile) {
         )
       };
     });
+    permissions.push(...await secretPermissionsFromAppManifest(manifest, profile));
     return resolvePermissionSpaces(permissions, profile);
   }
   throw new CLIError(
@@ -10997,6 +10998,46 @@ async function loadManifestPermissions(source, profile) {
     'Manifest must contain either SDK field "id" or app manifest field "app_id".',
     ExitCode.USAGE_ERROR
   );
+}
+async function secretPermissionsFromAppManifest(manifest, profile) {
+  if (manifest.secrets === void 0) {
+    return [];
+  }
+  const resolved = resolveManifest({
+    app_id: String(manifest.app_id),
+    name: typeof manifest.name === "string" ? manifest.name : String(manifest.app_id),
+    defaults: false,
+    prefix: "",
+    secrets: manifest.secrets
+  });
+  const permissions = resolved.resources.filter(
+    (resource) => resource.service === "tinycloud.kv" && resource.space === "secrets" && resource.path.startsWith("vault/secrets/")
+  );
+  const needsDecrypt = permissions.some(
+    (permission) => permission.actions.includes("tinycloud.kv/get")
+  );
+  if (needsDecrypt) {
+    permissions.push({
+      service: ENCRYPTION_PERMISSION_SERVICE,
+      space: ENCRYPTION_MANIFEST_SPACE,
+      path: await defaultSecretsNetworkId(profile),
+      actions: ["tinycloud.encryption/decrypt"],
+      skipPrefix: true
+    });
+  }
+  return permissions;
+}
+async function defaultSecretsNetworkId(profileName) {
+  const profile = await ProfileManager.getProfile(profileName);
+  const ownerDid = (profile.ownerDid ?? profile.did)?.split("#")[0];
+  if (!ownerDid) {
+    throw new CLIError(
+      "OWNER_DID_UNKNOWN",
+      `Cannot determine owner DID for profile "${profileName}". Run \`tc auth login\` first.`,
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  return `urn:tinycloud:encryption:${ownerDid}:default`;
 }
 function permissionsFromDelegation(delegation) {
   if (delegation.resources?.length) {
@@ -13877,6 +13918,30 @@ function secretPermissionEntries(params) {
   }
   return permissions;
 }
+function formatSecretScopeFlag(options) {
+  return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
+}
+function outputSecretDoctor(result) {
+  if (shouldOutputJson()) {
+    outputJson(result);
+    return;
+  }
+  process.stderr.write(formatSection("Secrets") + "\n");
+  for (const check of result.checks) {
+    process.stdout.write(formatCheck(check.ok, check.name, check.detail) + "\n");
+    if (check.hint) {
+      process.stdout.write(`  ${theme.hint(check.hint)}
+`);
+    }
+  }
+  process.stdout.write("\n");
+  if (result.healthy) {
+    process.stdout.write(theme.success("Secrets checks passed.") + "\n");
+  } else {
+    const failed = result.checks.filter((check) => check.ok === false).length;
+    process.stdout.write(theme.warn(`${failed} secrets check${failed > 1 ? "s" : ""} need attention.`) + "\n");
+  }
+}
 function registerSecretsCommand(program2) {
   const secrets = program2.command("secrets").description("Encrypted secrets management");
   const network = secrets.command("network").description("Manage the default secrets encryption network");
@@ -13913,6 +13978,93 @@ function registerSecretsCommand(program2) {
         networkId: descriptor.networkId,
         state: descriptor.state,
         descriptor
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("doctor [name]").description("Check secrets setup and optional secret access").option("--scope <scope>", "Logical secret scope").option("--space <scope>", "Deprecated alias for --scope").option("--network <name>", "Encryption network name", "default").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureSecretsNode(ctx, options);
+      const networkName = options.network ?? "default";
+      const networkId = networkName.startsWith("urn:tinycloud:encryption:") ? networkName : node.getDefaultEncryptionNetworkId(networkName);
+      const descriptor = await withSpinner(
+        "Checking secrets encryption network...",
+        () => node.getEncryptionNetwork(networkName)
+      );
+      const checks = [
+        descriptor ? {
+          name: "Encryption network",
+          ok: descriptor.state === "active" ? true : "warn",
+          detail: `${networkName} (${descriptor.state})`
+        } : {
+          name: "Encryption network",
+          ok: false,
+          detail: `${networkName} not found`,
+          hint: `tc secrets network init ${networkName}`
+        }
+      ];
+      let secret;
+      if (name) {
+        const scopeOptions = resolveSecretScope(options);
+        const resolved = resolveSecretPath2(name, scopeOptions);
+        const result = await runSecretOperation({
+          ctx,
+          node,
+          action: "get",
+          name,
+          scopeOptions,
+          label: `Checking secret ${name}...`,
+          operation: () => node.secrets.get(name, scopeOptions)
+        });
+        if (result.ok) {
+          secret = {
+            name: resolved.name,
+            path: resolved.permissionPaths.vault,
+            ...resolved.scope ? { scope: resolved.scope } : {},
+            exists: true,
+            readable: true
+          };
+          checks.push({
+            name: "Secret access",
+            ok: true,
+            detail: `${resolved.permissionPaths.vault} readable`
+          });
+        } else {
+          const notFound = result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND";
+          secret = {
+            name: resolved.name,
+            path: resolved.permissionPaths.vault,
+            ...resolved.scope ? { scope: resolved.scope } : {},
+            exists: !notFound,
+            readable: false
+          };
+          checks.push({
+            name: "Secret access",
+            ok: false,
+            detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
+            hint: notFound ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} <value>` : "Ask the owner profile to grant tinycloud.kv/get and tinycloud.encryption/decrypt."
+          });
+        }
+      } else {
+        checks.push({
+          name: "Secret access",
+          ok: "warn",
+          detail: "skipped; pass a secret name to verify read access"
+        });
+      }
+      outputSecretDoctor({
+        healthy: checks.every((check) => check.ok !== false),
+        network: {
+          name: networkName,
+          networkId,
+          exists: descriptor !== null,
+          ...descriptor?.state ? { state: descriptor.state } : {}
+        },
+        ...secret ? { secret } : {},
+        checks
       });
     } catch (error) {
       handleError(error);
