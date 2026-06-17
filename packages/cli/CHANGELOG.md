@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 0.7.0-beta.6
+
+### Patch Changes
+
+- e2c3bb1: Add `tc secrets doctor` and include default secrets decrypt permissions when app manifests request readable secrets.
+
 ## 0.7.0-beta.5
 
 ### Patch Changes
