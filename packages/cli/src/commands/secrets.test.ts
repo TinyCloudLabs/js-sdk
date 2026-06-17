@@ -179,7 +179,9 @@ function makeFakeNode(overrides: {
     },
     async getEncryptionNetwork(nameOrNetworkId: string) {
       recorded.networkShowCalls.push(nameOrNetworkId);
-      return overrides.networkShowResult ?? descriptor;
+      return Object.hasOwn(overrides, "networkShowResult")
+        ? overrides.networkShowResult!
+        : descriptor;
     },
     async ensureEncryptionNetwork(name: string) {
       recorded.networkInitCalls.push(name);
@@ -314,14 +316,29 @@ mock.module("./auth.js", () => ({
 }));
 
 mock.module("../output/formatter.js", () => ({
+  formatCheck: (ok: boolean | "warn", label: string, detail?: string) =>
+    `${String(ok)} ${label}${detail ? ` (${detail})` : ""}`,
+  formatSection: (title: string) => title,
   outputJson: (payload: unknown) => {
     recorded.outputs.push(payload);
   },
+  shouldOutputJson: () => true,
   withSpinner: async (_message: string, fn: () => unknown) => {
     recorded.spinners.push(_message);
     return await fn();
   },
 }));
+
+mock.module("../output/theme.js", () => {
+  const passthrough = (value: string) => value;
+  return {
+    theme: {
+      hint: passthrough,
+      success: passthrough,
+      warn: passthrough,
+    },
+  };
+});
 
 mock.module("../output/errors.js", () => ({
   CLIError: class CLIError extends Error implements CLIErrorLike {
@@ -435,6 +452,81 @@ describe("CLI secrets commands", () => {
         networkId: descriptor.networkId,
         exists: true,
         descriptor,
+      },
+    ]);
+  });
+
+  test("doctor reports an existing encryption network and readable secret", async () => {
+    const descriptor = makeDescriptor();
+    currentNode = makeFakeNode({ networkShowResult: descriptor });
+
+    await runSecretsCommand(["secrets", "doctor", "ANTHROPIC_API_KEY", "--scope", "Food Tracker"]);
+
+    expect(recorded.networkShowCalls).toEqual(["default"]);
+    expect(recorded.getCalls).toEqual([
+      { name: "ANTHROPIC_API_KEY", options: { scope: "Food Tracker" } },
+    ]);
+    expect(recorded.outputs).toEqual([
+      {
+        healthy: true,
+        network: {
+          name: "default",
+          networkId: DEFAULT_NETWORK_ID,
+          exists: true,
+          state: "active",
+        },
+        secret: {
+          name: "ANTHROPIC_API_KEY",
+          path: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+          scope: "food-tracker",
+          exists: true,
+          readable: true,
+        },
+        checks: [
+          {
+            name: "Encryption network",
+            ok: true,
+            detail: "default (active)",
+          },
+          {
+            name: "Secret access",
+            ok: true,
+            detail: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY readable",
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("doctor reports a missing network without initializing it", async () => {
+    currentNode = makeFakeNode({ networkShowResult: null });
+
+    await runSecretsCommand(["secrets", "doctor"]);
+
+    expect(recorded.networkShowCalls).toEqual(["default"]);
+    expect(recorded.networkInitCalls).toEqual([]);
+    expect(recorded.getCalls).toEqual([]);
+    expect(recorded.outputs).toEqual([
+      {
+        healthy: false,
+        network: {
+          name: "default",
+          networkId: DEFAULT_NETWORK_ID,
+          exists: false,
+        },
+        checks: [
+          {
+            name: "Encryption network",
+            ok: false,
+            detail: "default not found",
+            hint: "tc secrets network init default",
+          },
+          {
+            name: "Secret access",
+            ok: "warn",
+            detail: "skipped; pass a secret name to verify read access",
+          },
+        ],
       },
     ]);
   });
