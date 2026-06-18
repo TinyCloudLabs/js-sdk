@@ -23,6 +23,8 @@ import {
   DEFAULT_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
   composeManifestRequest,
+  parseNetworkId,
+  principalDidEquals,
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
   resolveTinyCloudHosts,
@@ -38,6 +40,32 @@ import {
   defaultSignStrategy,
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+
+const DECRYPT_ACTION = "tinycloud.encryption/decrypt";
+const NETWORK_CREATE_ACTION = "tinycloud.encryption/network.create";
+
+function didPrincipalMatches(actual: string, expected: string): boolean {
+  try {
+    return principalDidEquals(actual, expected);
+  } catch {
+    return actual === expected;
+  }
+}
+
+function addRawAbility(
+  rawAbilities: Record<string, string[]>,
+  resource: string,
+  action: string,
+): void {
+  const actions = rawAbilities[resource];
+  if (actions === undefined) {
+    rawAbilities[resource] = [action];
+    return;
+  }
+  if (!actions.includes(action)) {
+    actions.push(action);
+  }
+}
 
 /**
  * Configuration for NodeUserAuthorization.
@@ -435,20 +463,18 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
 
     const rawAbilities: Record<string, string[]> = {};
+    const currentDid = pkhDid(address, chainId);
     const spaceResources = request.resources.filter((entry) => {
       if (entry.service !== ENCRYPTION_PERMISSION_SERVICE) {
         return true;
       }
-      const existing = rawAbilities[entry.path];
-      if (existing === undefined) {
-        rawAbilities[entry.path] = [...entry.actions];
-      } else {
-        const seen = new Set(existing);
-        for (const action of entry.actions) {
-          if (!seen.has(action)) {
-            existing.push(action);
-            seen.add(action);
-          }
+      for (const action of entry.actions) {
+        addRawAbility(rawAbilities, entry.path, action);
+      }
+      if (entry.actions.includes(DECRYPT_ACTION)) {
+        const parsed = parseNetworkId(entry.path);
+        if (didPrincipalMatches(parsed.ownerDid, currentDid)) {
+          addRawAbility(rawAbilities, entry.path, NETWORK_CREATE_ACTION);
         }
       }
       return false;

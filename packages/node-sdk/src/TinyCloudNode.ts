@@ -108,6 +108,7 @@ import {
   canonicalizeAddress,
   pkhDid,
   principalDidEquals,
+  parseNetworkId,
   type BuildDecryptInvocationInput,
   type BuiltDecryptInvocation,
   type CanonicalJson,
@@ -786,6 +787,8 @@ export class TinyCloudNode {
     // Initialize service context with session
     this.initializeServices();
 
+    await this.ensureRequestedEncryptionNetworks();
+
     if (this.config.manifest === undefined && this.config.capabilityRequest === undefined) {
       await this.ensureOwnedSpaceHosted(this.ownedSpaceId("secrets"));
     }
@@ -826,6 +829,39 @@ export class TinyCloudNode {
           `Failed to write manifest registry record ${record.key}: ${result.error.message}`,
         );
       }
+    }
+  }
+
+  private requestedEncryptionNetworkIds(): string[] {
+    const request = this.capabilityRequest;
+    if (!request) {
+      return [];
+    }
+
+    const networkIds = new Set<string>();
+    for (const resource of request.resources) {
+      if (
+        resource.service === ENCRYPTION_PERMISSION_SERVICE &&
+        resource.path.startsWith("urn:tinycloud:encryption:") &&
+        resource.actions.includes(DECRYPT_ACTION)
+      ) {
+        networkIds.add(resource.path);
+      }
+    }
+    return [...networkIds];
+  }
+
+  private async ensureRequestedEncryptionNetworks(): Promise<void> {
+    if (!this.signer || !this.auth) {
+      return;
+    }
+
+    for (const networkId of this.requestedEncryptionNetworkIds()) {
+      const parsed = parseNetworkId(networkId);
+      if (!didPrincipalMatches(parsed.ownerDid, this.did)) {
+        continue;
+      }
+      await this.ensureEncryptionNetwork(networkId);
     }
   }
 
@@ -2055,13 +2091,22 @@ export class TinyCloudNode {
   }
 
   async ensureEncryptionNetwork(
-    name = DEFAULT_ENCRYPTION_NETWORK_NAME,
+    nameOrNetworkId = DEFAULT_ENCRYPTION_NETWORK_NAME,
   ): Promise<NetworkDescriptor> {
-    const existing = await this.getEncryptionNetwork(name);
+    const networkId = nameOrNetworkId.startsWith("urn:tinycloud:encryption:")
+      ? nameOrNetworkId
+      : this.getDefaultEncryptionNetworkId(nameOrNetworkId);
+    const existing = await this.getEncryptionNetwork(networkId);
     if (existing) {
       return existing;
     }
-    return this.createEncryptionNetwork(name);
+    const parsed = parseNetworkId(networkId);
+    if (!didPrincipalMatches(parsed.ownerDid, this.did)) {
+      throw new Error(
+        `Cannot create encryption network ${networkId}: owner ${parsed.ownerDid} does not match signed-in DID ${this.did}`,
+      );
+    }
+    return this.createEncryptionNetwork(parsed.name);
   }
 
   /**
