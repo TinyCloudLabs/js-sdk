@@ -393,6 +393,119 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     );
   });
 
+  test("signIn adds a create grant and ensures requested owner encryption networks exist", async () => {
+    const networkId =
+      "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
+    const wasm = makeFakeWasmBindings();
+    const node = makeNodeWithSigner(wasm, {
+      includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "com.listen.app",
+        name: "Listen",
+        defaults: false,
+        permissions: [
+          {
+            service: "tinycloud.encryption",
+            path: networkId,
+            actions: ["decrypt"],
+          },
+        ],
+      },
+    });
+    const ensureEncryptionNetwork = mock(async () => ({
+      networkId,
+      name: "default",
+      ownerDid: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+      threshold: { n: 1, t: 1 },
+      participants: [],
+      publicEncryptionKey: "",
+      state: "active",
+      createdAt: new Date().toISOString(),
+    }));
+    (node as any).ensureEncryptionNetwork = ensureEncryptionNetwork;
+
+    await withFetchResponses(
+      [
+        new Response(
+          JSON.stringify({
+            protocol: 1,
+            version: "test",
+            features: ["encryption"],
+            nodeId: "did:key:z6MkNode",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await node.signIn();
+      },
+    );
+
+    expect(ensureEncryptionNetwork).toHaveBeenCalledTimes(1);
+    expect(ensureEncryptionNetwork).toHaveBeenCalledWith(networkId);
+    expect((wasm.prepareSession as any).mock.calls[0][0].rawAbilities).toEqual({
+      [networkId]: [
+        "tinycloud.encryption/decrypt",
+        "tinycloud.encryption/network.create",
+      ],
+    });
+  });
+
+  test("signIn does not add a create grant for another owner's encryption network", async () => {
+    const networkId =
+      "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000002:default";
+    const wasm = makeFakeWasmBindings();
+    const node = makeNodeWithSigner(wasm, {
+      includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "com.listen.app",
+        name: "Listen",
+        defaults: false,
+        permissions: [
+          {
+            service: "tinycloud.encryption",
+            path: networkId,
+            actions: ["decrypt"],
+          },
+        ],
+      },
+    });
+    const ensureEncryptionNetwork = mock(async () => {
+      throw new Error("should not create another owner's network");
+    });
+    (node as any).ensureEncryptionNetwork = ensureEncryptionNetwork;
+
+    await withFetchResponses(
+      [
+        new Response(
+          JSON.stringify({
+            protocol: 1,
+            version: "test",
+            features: ["encryption"],
+            nodeId: "did:key:z6MkNode",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await node.signIn();
+      },
+    );
+
+    expect(ensureEncryptionNetwork).not.toHaveBeenCalled();
+    expect((wasm.prepareSession as any).mock.calls[0][0].rawAbilities).toEqual({
+      [networkId]: ["tinycloud.encryption/decrypt"],
+    });
+  });
+
   test("manifest registry write does not re-host existing account space", async () => {
     const node = makeNodeWithSigner(makeFakeWasmBindings());
     const auth = (node as any).auth;

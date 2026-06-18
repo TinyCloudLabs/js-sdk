@@ -48,6 +48,19 @@ This monorepo contains the following packages:
 
 ## Quick Start
 
+### Encryption Network Sign-In
+
+When a manifest or composed capability request includes
+`tinycloud.encryption/decrypt` for one of the signed-in user's own network IDs,
+the SDK adds a separate sign-in grant for
+`tinycloud.encryption/network.create` on that same network. After sign-in, the
+SDK checks whether the network exists and creates it when missing, mirroring
+`autoCreateSpace` behavior for newly hosted spaces.
+
+This is the path used by apps such as Listen that request the user's default
+network (`urn:tinycloud:encryption:<ownerDid>:default`) during manifest-driven
+sign-in before delegating decrypt access to a backend.
+
 ### Browser SDK
 
 ```bash
