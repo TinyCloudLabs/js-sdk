@@ -22,6 +22,7 @@
     "auth-dx-host-request",
     "cli-cross-user-auth-import",
     "cli-delegated-secret-reads",
+    "encryption-network-signin-create",
     "kv-space-and-binary-roundtrip",
     "openkey-scope-case-insensitive",
     "permission-prompt-suppression",

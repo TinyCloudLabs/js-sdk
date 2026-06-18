@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk
 
+## 2.4.0-beta.5
+
+### Patch Changes
+
+- 7c5fe21: Automatically ensure owner-owned encryption networks exist during manifest-driven sign-in. When a requested `tinycloud.encryption/decrypt` permission targets the signed-in user's network ID, the SDK adds a separate scoped `tinycloud.encryption/network.create` sign-in grant and `signIn()` creates the network if the node reports it missing.
+
 ## 2.4.0-beta.3
 
 ### Patch Changes
