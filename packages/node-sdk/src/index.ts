@@ -123,6 +123,17 @@ export {
   type RuntimePermissionGrantOptions,
 } from "./TinyCloudNode";
 
+export { AccountService } from "./account/AccountService";
+export type {
+  AccountApplication,
+  AccountDelegation,
+  AccountDelegationListOptions,
+  AccountDelegationRevokeOptions,
+  AccountIndexRebuildResult,
+  AccountServiceConfig,
+  AccountStatus,
+} from "./account/AccountService";
+
 // Capability-chain primitives (spec: .claude/specs/capability-chain.md).
 export {
   type PermissionEntry,

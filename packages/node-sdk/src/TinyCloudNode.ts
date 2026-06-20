@@ -118,6 +118,7 @@ import {
   type NetworkDescriptor,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import { AccountService } from "./account/AccountService";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import { PortableDelegation } from "./delegation";
@@ -412,6 +413,7 @@ export class TinyCloudNode {
   private _encryption?: EncryptionService;
   private _baseSecrets?: ISecretsService;
   private _secrets?: ISecretsService;
+  private _account?: AccountService;
   /** Cached public KV with proper delegation (set by ensurePublicSpace) */
   private _publicKV?: KVService;
 
@@ -738,6 +740,42 @@ export class TinyCloudNode {
    */
   get spaceId(): string | undefined {
     return this.auth?.tinyCloudSession?.spaceId;
+  }
+
+  /**
+   * Get the account space ID for this wallet identity.
+   * Available after wallet-backed sign-in or a restored session with address metadata.
+   */
+  get accountSpaceId(): string | undefined {
+    if (!this._address) {
+      return undefined;
+    }
+    return this.wasmBindings.makeSpaceId(this._address, this._chainId, ACCOUNT_REGISTRY_SPACE);
+  }
+
+  /**
+   * Account-level application and delegation helpers.
+   */
+  get account(): AccountService {
+    if (!this._account) {
+      this._account = new AccountService({
+        getDid: () => this.did,
+        getHost: () => this.hosts[0] ?? this.config.host!,
+        getPrimarySpaceId: () => this.spaceId,
+        getAccountSpaceId: () => this.accountSpaceId,
+        getSpaces: () => this.spaces,
+        getAccountDb: () =>
+          this.accountSpaceId
+            ? this.sqlForSpace(this.accountSpaceId).db("account")
+            : undefined,
+        ensureAccountSpaceHosted: async () => {
+          if (this.accountSpaceId && this.auth) {
+            await this.ensureOwnedSpaceHosted(this.accountSpaceId);
+          }
+        },
+      });
+    }
+    return this._account;
   }
 
   /**

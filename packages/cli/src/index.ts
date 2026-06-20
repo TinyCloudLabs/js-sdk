@@ -27,6 +27,7 @@ import { registerDuckdbCommand } from "./commands/duckdb.js";
 import { registerManifestCommand } from "./commands/manifest.js";
 import { registerUpgradeCommand } from "./commands/upgrade.js";
 import { registerStatusCommand } from "./commands/status.js";
+import { registerAccountCommand } from "./commands/account.js";
 
 const program = new Command();
 
@@ -90,6 +91,7 @@ registerDuckdbCommand(program);
 registerManifestCommand(program);
 registerUpgradeCommand(program);
 registerStatusCommand(program);
+registerAccountCommand(program);
 
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}\n`);
 
@@ -102,6 +104,7 @@ ${theme.heading("Examples:")}
   ${theme.command('tc kv put greeting "Hello"')}           ${theme.muted("Store a value")}
   ${theme.command("tc kv list")}                           ${theme.muted("List all keys")}
   ${theme.command("tc secrets network init")}              ${theme.muted("Create the default secrets network")}
+  ${theme.command("tc account apps list")}                 ${theme.muted("List registered account apps")}
   ${theme.command("tc delegation create --to did:pkh:...")}  ${theme.muted("Grant access to another user")}
   ${theme.command("tc space list")}                        ${theme.muted("Show your spaces")}
 

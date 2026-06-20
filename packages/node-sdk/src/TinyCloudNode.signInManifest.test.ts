@@ -561,6 +561,68 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     expect(auth.hostOwnedSpace).toHaveBeenCalledWith(accountSpaceId);
   });
 
+  test("signIn writes manifest records into the account applications registry", async () => {
+    const manifest: Manifest = {
+      app_id: "com.listen.app",
+      name: "Listen",
+      description: "Conversation memory",
+      defaults: false,
+      permissions: [
+        {
+          service: "tinycloud.kv",
+          space: "applications",
+          path: "com.listen.app/",
+          actions: ["get", "list"],
+        },
+      ],
+    };
+    const node = makeNodeWithSigner(makeFakeWasmBindings(), { manifest });
+    const accountSpaceId =
+      "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account";
+    const ensureOwnedSpaceHosted = mock(async () => {});
+    const put = mock(async () => ({ ok: true, data: undefined, headers: {} }));
+
+    (node as any).ensureOwnedSpaceHosted = ensureOwnedSpaceHosted;
+    Object.defineProperty(node, "spaces", {
+      configurable: true,
+      value: {
+        get: (spaceId: string) => {
+          expect(spaceId).toBe(accountSpaceId);
+          return { kv: { put } };
+        },
+      },
+    });
+
+    await withFetchResponses(
+      [
+        new Response(
+          JSON.stringify({
+            protocol: 1,
+            version: "test",
+            features: [],
+            nodeId: "did:key:z6MkNode",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await node.signIn();
+      },
+    );
+
+    expect(ensureOwnedSpaceHosted).toHaveBeenCalledWith(accountSpaceId);
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(put).toHaveBeenCalledWith("applications/com.listen.app", {
+      app_id: "com.listen.app",
+      manifests: [manifest],
+      updated_at: expect.any(String),
+    });
+  });
+
   test("multiple manifests → recap unions app caps + delegation caps", async () => {
     // This is the headline test for the listen use case: an app
     // declares its own permissions AND a backend delegation target,
