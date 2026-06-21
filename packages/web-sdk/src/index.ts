@@ -68,8 +68,18 @@ export {
   IUserAuthorization as ICoreUserAuthorization,
   PersistedSessionData,
   PartialSiweMessage,
+  AccountService,
 } from "@tinycloud/sdk-core";
-export type { SignInOptions } from "@tinycloud/sdk-core";
+export type {
+  AccountApplication,
+  AccountDelegation,
+  AccountDelegationListOptions,
+  AccountDelegationRevokeOptions,
+  AccountIndexRebuildResult,
+  AccountServiceConfig,
+  AccountStatus,
+  SignInOptions,
+} from "@tinycloud/sdk-core";
 
 // Re-export KV service types for direct usage
 export {

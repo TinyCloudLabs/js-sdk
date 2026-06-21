@@ -91,6 +91,18 @@ export type { SignInOptions } from "./userAuthorization";
 // Main TinyCloud class
 export { TinyCloud, TinyCloudConfig } from "./TinyCloud";
 
+// Account-level app registry, delegation, and materialized index helpers
+export { AccountService } from "./account/AccountService";
+export type {
+  AccountApplication,
+  AccountDelegation,
+  AccountDelegationListOptions,
+  AccountDelegationRevokeOptions,
+  AccountIndexRebuildResult,
+  AccountServiceConfig,
+  AccountStatus,
+} from "./account/AccountService";
+
 // Re-export service types from sdk-services for convenience
 export {
   // Context
