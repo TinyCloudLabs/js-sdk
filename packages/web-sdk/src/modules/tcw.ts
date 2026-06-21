@@ -46,6 +46,7 @@ import {
   ISpaceCreationHandler,
   type Manifest,
   type ComposedManifestRequest,
+  type AccountService,
   type ResolvedDelegate,
   type PermissionEntry,
   type NetworkDescriptor,
@@ -444,6 +445,8 @@ export class TinyCloudWeb {
   get delegations(): DelegationManager { return this.node.delegationManager; }
   get capabilityRegistry(): ICapabilityKeyRegistry { return this.node.capabilityRegistry; }
   get spaceId(): string | undefined { return this._node?.spaceId; }
+  get accountSpaceId(): string | undefined { return this._node?.accountSpaceId; }
+  get account(): AccountService { return this.node.account; }
   get hosts(): string[] { return this.node.hosts; }
   get sessionRestoreStatus(): SessionRestoreStatus { return this._sessionRestoreStatus; }
 
