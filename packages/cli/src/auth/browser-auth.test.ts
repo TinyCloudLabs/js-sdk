@@ -43,4 +43,30 @@ describe("browser auth delegation URLs", () => {
       x: "public-key",
     });
   });
+
+  test("includes permission request reason for OpenKey consent", () => {
+    const url = buildAuthUrl("did:key:z6MkDelegate", {
+      openkeyHost: "https://openkey.test",
+      reason: "Allow `tc secrets get DEPLOY_KEY` to read and decrypt this secret.",
+      permissions: [
+        {
+          service: "tinycloud.kv",
+          space: "secrets",
+          path: "vault/secrets/DEPLOY_KEY",
+          actions: ["tinycloud.kv/get"],
+        },
+      ],
+    });
+
+    const parsed = new URL(url);
+    expect(parsed.searchParams.get("reason")).toBe(
+      "Allow `tc secrets get DEPLOY_KEY` to read and decrypt this secret.",
+    );
+
+    const payload = JSON.parse(
+      Buffer.from(parsed.searchParams.get("permissions")!, "base64url").toString("utf8"),
+    );
+    expect(payload.reason).toBe("Allow `tc secrets get DEPLOY_KEY` to read and decrypt this secret.");
+    expect(payload.permissions).toHaveLength(1);
+  });
 });

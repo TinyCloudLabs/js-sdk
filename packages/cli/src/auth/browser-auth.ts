@@ -18,6 +18,12 @@ interface AuthFlowOptions {
   host?: string;
   permissions?: PermissionEntry[];
   /**
+   * User-facing context shown on the OpenKey approval page. Optional at the
+   * OpenKey protocol boundary, but TinyCloud CLI permission-grant call sites
+   * should always provide it.
+   */
+  reason?: string;
+  /**
    * OpenKey base URL. Resolution order in callers: TC_OPENKEY_HOST env →
    * profile.openkeyHost → DEFAULT_OPENKEY_HOST. Threaded explicitly so this
    * module stays free of profile lookups.
@@ -96,11 +102,18 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
   if (options.host) {
     params.set("host", options.host);
   }
+  const reason = typeof options.reason === "string" ? options.reason.trim() : "";
   if (options.permissions?.length) {
     params.set(
       "permissions",
-      Buffer.from(JSON.stringify({ permissions: options.permissions })).toString("base64url"),
+      Buffer.from(JSON.stringify({
+        permissions: options.permissions,
+        ...(reason ? { reason } : {}),
+      })).toString("base64url"),
     );
+  }
+  if (reason) {
+    params.set("reason", reason);
   }
   if (options.expiry !== undefined) {
     params.set("expiry", String(options.expiry));

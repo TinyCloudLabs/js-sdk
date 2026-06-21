@@ -62,6 +62,7 @@ const recorded = {
       openkeyHost?: string;
       permissions?: unknown[];
       expiry?: string | number;
+      reason?: string;
     };
   }>,
   localSignIns: [] as Array<{ privateKey: string; host: string }>,
@@ -505,6 +506,7 @@ describe("CLI auth rotate command", () => {
         },
       ],
       expiryOption: undefined,
+      reason: "Test missing capability grant.",
       yes: true,
     });
 
@@ -516,6 +518,7 @@ describe("CLI auth rotate command", () => {
         jwk: key,
         host: activeHost,
         openkeyHost: "https://openkey.test",
+        reason: expect.stringContaining("Test missing capability grant."),
         permissions: [
           {
             service: "tinycloud.kv",
