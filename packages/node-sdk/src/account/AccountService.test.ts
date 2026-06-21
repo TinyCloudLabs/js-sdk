@@ -32,11 +32,21 @@ function makeAccountService() {
     }),
     query: mock(async (sql: string, params?: unknown[]) => {
       queries.push({ sql, params });
+      if (sql.includes("FROM application_state")) {
+        return {
+          ok: true,
+          data: {
+            columns: ["matched"],
+            rows: [],
+            rowCount: 0,
+          },
+        };
+      }
       if (sql.includes("FROM applications")) {
         return {
           ok: true,
           data: {
-            columns: ["app_id", "name", "description", "updated_at", "manifest_json"],
+            columns: ["app_id", "name", "description", "updated_at", "manifest_json", "manifest_hash"],
             rows: [
               [
                 "com.listen.app",
@@ -44,6 +54,39 @@ function makeAccountService() {
                 "Conversation memory",
                 "2026-06-20T00:00:00.000Z",
                 JSON.stringify([{ app_id: "com.listen.app", name: "Listen" }]),
+                "080c363ec8fc3d69",
+              ],
+            ],
+            rowCount: 1,
+          },
+        };
+      }
+      if (sql.includes("FROM spaces")) {
+        return {
+          ok: true,
+          data: {
+            columns: [
+              "space_id",
+              "name",
+              "owner_did",
+              "type",
+              "permissions_json",
+              "status",
+              "registered_at",
+              "updated_at",
+              "expires_at",
+            ],
+            rows: [
+              [
+                spaces[0]!.id,
+                "applications",
+                "did:pkh:eip155:1:0xabc",
+                "owned",
+                JSON.stringify(["*"]),
+                "active",
+                "2026-06-20T00:00:00.000Z",
+                "2026-06-20T00:00:00.000Z",
+                null,
               ],
             ],
             rowCount: 1,
@@ -166,6 +209,7 @@ describe("AccountService applications", () => {
       {
         appId: "com.listen.app",
         manifests: [{ app_id: "com.listen.app", name: "Listen" }],
+        manifestHash: "080c363ec8fc3d69",
         name: "Listen",
         description: undefined,
         updatedAt: "2026-06-20T00:00:00.000Z",
@@ -188,6 +232,7 @@ describe("AccountService applications", () => {
     expect(put).toHaveBeenCalledWith("applications/com.notes.app", {
       app_id: "com.notes.app",
       manifests: [manifest],
+      manifest_hash: expect.any(String),
       updated_at: expect.any(String),
     });
   });
@@ -259,6 +304,28 @@ describe("AccountService index", () => {
         description: "Conversation memory",
         updatedAt: "2026-06-20T00:00:00.000Z",
         manifests: [{ app_id: "com.listen.app", name: "Listen" }],
+        manifestHash: "080c363ec8fc3d69",
+      },
+    ]);
+  });
+
+  test("lists spaces from the materialized index", async () => {
+    const { service } = makeAccountService();
+
+    const result = await service.index.spaces.list();
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data).toEqual([
+      {
+        spaceId: "tinycloud:pkh:eip155:1:0xabc:applications",
+        name: "applications",
+        ownerDid: "did:pkh:eip155:1:0xabc",
+        type: "owned",
+        permissions: ["*"],
+        status: "active",
+        registeredAt: "2026-06-20T00:00:00.000Z",
+        updatedAt: "2026-06-20T00:00:00.000Z",
+        expiresAt: undefined,
       },
     ]);
   });

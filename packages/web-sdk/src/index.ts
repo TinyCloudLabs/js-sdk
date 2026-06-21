@@ -76,7 +76,9 @@ export type {
   AccountDelegationListOptions,
   AccountDelegationRevokeOptions,
   AccountIndexRebuildResult,
+  AccountIndexStatus,
   AccountServiceConfig,
+  AccountSpace,
   AccountStatus,
   SignInOptions,
 } from "@tinycloud/sdk-core";

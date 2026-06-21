@@ -7,6 +7,8 @@ const recorded = {
   opened: [] as string[],
   registered: [] as unknown[],
   revoked: [] as unknown[],
+  registeredSpaces: [] as unknown[],
+  removedSpaces: [] as string[],
 };
 
 function resetState(): void {
@@ -15,6 +17,8 @@ function resetState(): void {
   recorded.opened = [];
   recorded.registered = [];
   recorded.revoked = [];
+  recorded.registeredSpaces = [];
+  recorded.removedSpaces = [];
 }
 
 const node = {
@@ -27,6 +31,7 @@ const node = {
         primarySpaceId: "tinycloud:pkh:eip155:1:0xabc:default",
         accountSpaceId: "tinycloud:pkh:eip155:1:0xabc:account",
         applications: 1,
+        spaces: 1,
         grantedDelegations: 1,
         receivedDelegations: 1,
       },
@@ -64,6 +69,54 @@ const node = {
       },
       remove: async () => ({ ok: true, data: undefined }),
     },
+    spaces: {
+      list: async () => ({
+        ok: true,
+        data: [
+          {
+            spaceId: "tinycloud:pkh:eip155:1:0xabc:applications",
+            name: "applications",
+            ownerDid: "did:pkh:eip155:1:0xabc",
+            type: "owned",
+            permissions: ["*"],
+            status: "active",
+            updatedAt: "2026-06-20T00:00:00.000Z",
+          },
+        ],
+      }),
+      get: async (spaceId: string) => ({
+        ok: true,
+        data: {
+          spaceId,
+          name: "applications",
+          ownerDid: "did:pkh:eip155:1:0xabc",
+          type: "owned",
+          permissions: ["*"],
+          status: "active",
+        },
+      }),
+      register: async (space: unknown) => {
+        recorded.registeredSpaces.push(space);
+        return { ok: true, data: space };
+      },
+      syncAccessible: async () => ({
+        ok: true,
+        data: [
+          {
+            spaceId: "tinycloud:pkh:eip155:1:0xabc:default",
+            name: "default",
+            ownerDid: "did:pkh:eip155:1:0xabc",
+            type: "owned",
+            permissions: ["*"],
+            status: "active",
+          },
+        ],
+      }),
+      remove: async (spaceId: string) => {
+        recorded.removedSpaces.push(spaceId);
+        return { ok: true, data: undefined };
+      },
+    },
     delegations: {
       list: async (options: unknown) => ({
         ok: true,
@@ -95,6 +148,7 @@ const node = {
         data: {
           database: "account",
           applications: 1,
+          spaces: 1,
           delegations: 1,
           syncedAt: "2026-06-20T00:00:00.000Z",
         },
@@ -107,6 +161,22 @@ const node = {
               appId: "com.indexed.app",
               name: "Indexed",
               manifests: [{ app_id: "com.indexed.app", name: "Indexed" }],
+              updatedAt: "2026-06-20T00:00:00.000Z",
+            },
+          ],
+        }),
+      },
+      spaces: {
+        list: async () => ({
+          ok: true,
+          data: [
+            {
+              spaceId: "tinycloud:pkh:eip155:1:0xabc:indexed",
+              name: "indexed",
+              ownerDid: "did:pkh:eip155:1:0xabc",
+              type: "owned",
+              permissions: ["*"],
+              status: "active",
               updatedAt: "2026-06-20T00:00:00.000Z",
             },
           ],
@@ -139,6 +209,16 @@ const node = {
           columns: ["n"],
           rows: [[1]],
           rowCount: 1,
+        },
+      }),
+      status: async () => ({
+        ok: true,
+        data: {
+          database: "account",
+          sources: [
+            { source: "applications", syncedAt: "2026-06-20T00:00:00.000Z", count: 1 },
+            { source: "spaces", syncedAt: "2026-06-20T00:00:00.000Z", count: 1 },
+          ],
         },
       }),
     },
@@ -238,6 +318,7 @@ describe("tc account", () => {
     expect(recorded.outputs[0]).toMatchObject({
       did: "did:pkh:eip155:1:0xabc",
       applications: 1,
+      spaces: 1,
       grantedDelegations: 1,
       receivedDelegations: 1,
     });
@@ -249,17 +330,80 @@ describe("tc account", () => {
     expect(recorded.errors).toEqual([]);
     expect(recorded.outputs[0]).toMatchObject({
       count: 1,
-      applications: [{ appId: "com.listen.app", name: "Listen" }],
+      applications: [{ appId: "com.indexed.app", name: "Indexed" }],
     });
   });
 
-  test("lists indexed account applications", async () => {
-    await runAccount(["apps", "list", "--index"]);
+  test("lists live account applications", async () => {
+    await runAccount(["apps", "list", "--live"]);
 
     expect(recorded.errors).toEqual([]);
     expect(recorded.outputs[0]).toMatchObject({
       count: 1,
-      applications: [{ appId: "com.indexed.app", name: "Indexed" }],
+      applications: [{ appId: "com.listen.app", name: "Listen" }],
+    });
+  });
+
+  test("lists indexed account spaces", async () => {
+    await runAccount(["spaces", "list"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.outputs[0]).toMatchObject({
+      count: 1,
+      spaces: [{ spaceId: "tinycloud:pkh:eip155:1:0xabc:indexed", name: "indexed" }],
+    });
+  });
+
+  test("lists live account spaces", async () => {
+    await runAccount(["spaces", "list", "--live"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.outputs[0]).toMatchObject({
+      count: 1,
+      spaces: [{ spaceId: "tinycloud:pkh:eip155:1:0xabc:applications", name: "applications" }],
+    });
+  });
+
+  test("registers an account space", async () => {
+    await runAccount([
+      "spaces",
+      "register",
+      "tinycloud:pkh:eip155:1:0xabc:photos",
+      "--name",
+      "photos",
+      "--owner",
+      "did:pkh:eip155:1:0xabc",
+      "--type",
+      "owned",
+      "--permission",
+      "*",
+    ]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.registeredSpaces).toEqual([
+      {
+        spaceId: "tinycloud:pkh:eip155:1:0xabc:photos",
+        name: "photos",
+        ownerDid: "did:pkh:eip155:1:0xabc",
+        type: "owned",
+        permissions: ["*"],
+        status: "active",
+      },
+    ]);
+    expect(recorded.outputs[0]).toMatchObject({
+      registered: true,
+      space: { name: "photos" },
+    });
+  });
+
+  test("syncs accessible account spaces", async () => {
+    await runAccount(["spaces", "sync"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.outputs[0]).toMatchObject({
+      synced: true,
+      count: 1,
+      spaces: [{ name: "default" }],
     });
   });
 
@@ -277,7 +421,7 @@ describe("tc account", () => {
   });
 
   test("lists account delegations with filters", async () => {
-    await runAccount(["delegations", "list", "--granted", "--space", "applications"]);
+    await runAccount(["delegations", "list", "--granted", "--space", "applications", "--live"]);
 
     expect(recorded.errors).toEqual([]);
     expect(recorded.outputs[0]).toMatchObject({
@@ -294,7 +438,7 @@ describe("tc account", () => {
   });
 
   test("lists indexed account delegations", async () => {
-    await runAccount(["delegations", "list", "--received", "--index"]);
+    await runAccount(["delegations", "list", "--received"]);
 
     expect(recorded.errors).toEqual([]);
     expect(recorded.outputs[0]).toMatchObject({
@@ -338,8 +482,19 @@ describe("tc account", () => {
     expect(recorded.outputs[0]).toEqual({
       database: "account",
       applications: 1,
+      spaces: 1,
       delegations: 1,
       syncedAt: "2026-06-20T00:00:00.000Z",
+    });
+  });
+
+  test("prints the materialized account index status", async () => {
+    await runAccount(["index", "status"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.outputs[0]).toMatchObject({
+      database: "account",
+      sources: expect.arrayContaining([{ source: "applications", syncedAt: "2026-06-20T00:00:00.000Z", count: 1 }]),
     });
   });
 

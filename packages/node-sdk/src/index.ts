@@ -130,7 +130,9 @@ export type {
   AccountDelegationListOptions,
   AccountDelegationRevokeOptions,
   AccountIndexRebuildResult,
+  AccountIndexStatus,
   AccountServiceConfig,
+  AccountSpace,
   AccountStatus,
 } from "./account/AccountService";
 

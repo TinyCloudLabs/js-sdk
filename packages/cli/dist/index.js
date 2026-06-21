@@ -15479,7 +15479,7 @@ import open from "open";
 import { readFile as readFile10 } from "fs/promises";
 var ACCOUNT_BILLING_URL = "https://account.tinycloud.xyz/billing";
 function registerAccountCommand(program2) {
-  const account = program2.command("account").description("Account applications, delegations, and billing");
+  const account = program2.command("account").description("Account applications, spaces, delegations, and billing");
   account.command("status").description("Show account status").action(async (_options, cmd) => {
     try {
       const node = await authenticatedNode(cmd);
@@ -15491,11 +15491,11 @@ function registerAccountCommand(program2) {
     }
   });
   const apps = account.command("apps").description("Manage account application registry");
-  apps.command("list").description("List applications registered under account/applications").option("--index", "Read from the materialized account SQLite index").action(async (_options, cmd) => {
+  apps.command("list").description("List applications registered under account/applications").option("--live", "Read canonical account KV records instead of the SQLite index").action(async (_options, cmd) => {
     try {
       const options = _options;
       const node = await authenticatedNode(cmd);
-      const result = options.index ? await node.account.index.applications.list() : await node.account.applications.list();
+      const result = options.live ? await node.account.applications.list() : await node.account.index.applications.list();
       assertOk(result);
       const payload = { applications: result.data, count: result.data.length };
       if (shouldOutputJson()) {
@@ -15517,6 +15517,84 @@ function registerAccountCommand(program2) {
           ])
         ) + "\n"
       );
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  const spaces = account.command("spaces").description("Manage account space registry");
+  spaces.command("list").description("List spaces registered under account/spaces").option("--live", "Read canonical account KV records instead of the SQLite index").action(async (options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = options.live ? await node.account.spaces.list() : await node.account.index.spaces.list();
+      assertOk(result);
+      const payload = { spaces: result.data.map(formatSpace), count: result.data.length };
+      if (shouldOutputJson()) {
+        outputJson(payload);
+        return;
+      }
+      if (result.data.length === 0) {
+        process.stdout.write(theme.muted("No account spaces registered.") + "\n");
+        return;
+      }
+      process.stdout.write(
+        formatTable(
+          ["Space", "Type", "Owner", "Status", "Updated"],
+          result.data.map((space) => [
+            space.name,
+            space.type,
+            space.ownerDid,
+            space.status,
+            space.updatedAt ?? "\u2014"
+          ])
+        ) + "\n"
+      );
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  spaces.command("info <space-id>").description("Show a registered account space").action(async (spaceId, _options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.spaces.get(spaceId);
+      assertOk(result);
+      outputJson(formatSpace(result.data));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  spaces.command("register <space-id>").description("Register a space in account/spaces").requiredOption("--name <name>", "Display name for the space").requiredOption("--owner <did>", "Owner DID for the space").option("--type <type>", "Space type: owned, delegated, or discovered", "discovered").option("--permission <permission...>", "Permission strings for the space").action(async (spaceId, options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.spaces.register({
+        spaceId,
+        name: options.name,
+        ownerDid: options.owner,
+        type: options.type,
+        permissions: options.permission ?? [],
+        status: "active"
+      });
+      assertOk(result);
+      outputJson({ space: formatSpace(result.data), registered: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  spaces.command("sync").description("Register currently accessible spaces into account/spaces").action(async (_options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.spaces.syncAccessible();
+      assertOk(result);
+      outputJson({ spaces: result.data.map(formatSpace), count: result.data.length, synced: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  spaces.command("remove <space-id>").alias("delete").description("Remove a space registry entry").action(async (spaceId, _options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.spaces.remove(spaceId);
+      assertOk(result);
+      outputJson({ spaceId, removed: true });
     } catch (error) {
       handleError(error);
     }
@@ -15553,14 +15631,14 @@ function registerAccountCommand(program2) {
     }
   });
   const delegations = account.command("delegations").description("View and revoke account delegations");
-  delegations.command("list").description("List delegations granted by or to this account").option("--granted", "Show only delegations granted by this account").option("--received", "Show only delegations granted to this account").option("--space <space>", "Filter by space name or ID").option("--index", "Read from the materialized account SQLite index").action(async (options, cmd) => {
+  delegations.command("list").description("List delegations granted by or to this account").option("--granted", "Show only delegations granted by this account").option("--received", "Show only delegations granted to this account").option("--space <space>", "Filter by space name or ID").option("--live", "Read live delegation services instead of the SQLite index").action(async (options, cmd) => {
     try {
       if (options.granted && options.received) {
         throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
       }
       const node = await authenticatedNode(cmd);
       const direction = options.granted ? "granted" : options.received ? "received" : "all";
-      const result = options.index ? await node.account.index.delegations.list({ direction, space: options.space }) : await node.account.delegations.list({ direction, space: options.space });
+      const result = options.live ? await node.account.delegations.list({ direction, space: options.space }) : await node.account.index.delegations.list({ direction, space: options.space });
       assertOk(result);
       const payload = { delegations: result.data.map(formatDelegation2), count: result.data.length };
       if (shouldOutputJson()) {
@@ -15599,6 +15677,16 @@ function registerAccountCommand(program2) {
     }
   });
   const index = account.command("index").description("Manage the materialized account SQLite index");
+  index.command("status").description("Show account SQLite index sync status").action(async (_options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.index.status();
+      assertOk(result);
+      outputJson(result.data);
+    } catch (error) {
+      handleError(error);
+    }
+  });
   index.command("rebuild").description("Rebuild account SQLite index from canonical account data").action(async (_options, cmd) => {
     try {
       const node = await authenticatedNode(cmd);
@@ -15681,6 +15769,12 @@ function formatDelegation2(delegation) {
     expiry: delegation.expiry.toISOString(),
     status: delegation.status,
     createdAt: delegation.createdAt?.toISOString()
+  };
+}
+function formatSpace(space) {
+  return {
+    ...space,
+    expiresAt: space.expiresAt?.toISOString()
   };
 }
 

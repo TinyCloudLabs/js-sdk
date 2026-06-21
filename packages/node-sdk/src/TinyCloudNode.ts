@@ -831,7 +831,7 @@ export class TinyCloudNode {
       await this.ensureOwnedSpaceHosted(this.ownedSpaceId("secrets"));
     }
 
-    await this.writeManifestRegistryRecords();
+    this.scheduleAccountRegistrySync();
 
     this.notificationHandler.success("Successfully signed in");
   }
@@ -855,19 +855,43 @@ export class TinyCloudNode {
     const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
     await this.ensureOwnedSpaceHosted(accountSpaceId);
 
-    const accountKV = this.spaces.get(accountSpaceId).kv;
-    for (const record of request.registryRecords) {
-      const result = await accountKV.put(record.key, {
-        app_id: record.app_id,
-        manifests: record.manifests,
-        updated_at: new Date().toISOString(),
-      });
-      if (!result.ok) {
-        throw new Error(
-          `Failed to write manifest registry record ${record.key}: ${result.error.message}`,
-        );
+    const result = await this.account.applications.register(request.manifests);
+    if (!result.ok) {
+      throw new Error(
+        `Failed to write manifest registry records: ${result.error.message}`,
+      );
+    }
+  }
+
+  private scheduleAccountRegistrySync(): void {
+    void this.withAccountRegistryRetry(async () => {
+      await this.writeManifestRegistryRecords();
+      const spaces = await this.account.spaces.syncAccessible();
+      if (!spaces.ok) {
+        throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+      }
+    });
+  }
+
+  private async withAccountRegistryRetry(task: () => Promise<void>): Promise<void> {
+    const delays = [250, 1_000, 3_000];
+    let lastError: unknown;
+    for (let attempt = 0; attempt < delays.length; attempt += 1) {
+      try {
+        await task();
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < delays.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+        }
       }
     }
+
+    console.warn(
+      "TinyCloud account registry sync failed after retries",
+      lastError,
+    );
   }
 
   private requestedEncryptionNetworkIds(): string[] {
@@ -1000,6 +1024,17 @@ export class TinyCloudNode {
         }`,
       );
     }
+
+    void this.account.spaces
+      .register({
+        spaceId,
+        name,
+        ownerDid: this.did,
+        type: "owned",
+        permissions: ["*"],
+        status: "active",
+      })
+      .catch(() => {});
 
     return spaceId;
   }
@@ -1746,6 +1781,9 @@ export class TinyCloudNode {
             },
           };
         }
+      },
+      onSpaceRegistered: async (space) => {
+        await this.account.spaces.register(space);
       },
     });
 

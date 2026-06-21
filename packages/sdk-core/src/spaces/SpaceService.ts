@@ -137,6 +137,8 @@ export interface SpaceServiceConfig {
    * Required for space.delegations.create() to work.
    */
   createDelegation?: CreateDelegationFunction;
+  /** Optional best-effort hook after the SDK discovers or creates a space. */
+  onSpaceRegistered?: (space: SpaceInfo) => void | Promise<void>;
 }
 
 /**
@@ -377,6 +379,7 @@ export class SpaceService implements ISpaceService {
   private _userDid?: string;
   private sharingService?: ISharingService;
   private createDelegationFn?: CreateDelegationFunction;
+  private onSpaceRegisteredFn?: (space: SpaceInfo) => void | Promise<void>;
 
   /** Cache of created Space objects */
   private spaceCache: Map<string, ISpace> = new Map();
@@ -403,6 +406,7 @@ export class SpaceService implements ISpaceService {
     this._userDid = config.userDid;
     this.sharingService = config.sharingService;
     this.createDelegationFn = config.createDelegation;
+    this.onSpaceRegisteredFn = config.onSpaceRegistered;
   }
 
   /**
@@ -419,6 +423,7 @@ export class SpaceService implements ISpaceService {
     if (config.userDid !== undefined) this._userDid = config.userDid;
     if (config.sharingService) this.sharingService = config.sharingService;
     if (config.createDelegation) this.createDelegationFn = config.createDelegation;
+    if (config.onSpaceRegistered) this.onSpaceRegisteredFn = config.onSpaceRegistered;
 
     // Clear caches when config changes
     this.spaceCache.clear();
@@ -486,6 +491,9 @@ export class SpaceService implements ISpaceService {
 
       // Remove duplicates (prefer owned over delegated)
       const uniqueSpaces = this.deduplicateSpaces(spaces);
+      for (const space of uniqueSpaces) {
+        this.notifySpaceRegistered(space);
+      }
 
       return ok(uniqueSpaces);
     } catch (error) {
@@ -724,6 +732,7 @@ export class SpaceService implements ISpaceService {
 
       // Cache the info
       this.infoCache.set(spaceInfo.id, { info: spaceInfo, cachedAt: Date.now() });
+      this.notifySpaceRegistered(spaceInfo);
 
       return ok(spaceInfo);
     } catch (error) {
@@ -736,6 +745,14 @@ export class SpaceService implements ISpaceService {
         )
       );
     }
+  }
+
+  private notifySpaceRegistered(space: SpaceInfo): void {
+    if (!this.onSpaceRegisteredFn) return;
+    void Promise.resolve(this.onSpaceRegisteredFn(space)).catch(() => {
+      // Account-space registration is an index maintenance side effect; it must
+      // not make the canonical space operation fail.
+    });
   }
 
   // ===========================================================================

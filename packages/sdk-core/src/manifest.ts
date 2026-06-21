@@ -1196,12 +1196,21 @@ function withCapabilitiesReadForSpaces(
   ]);
 }
 
-function accountRegistryPermission(): ResourceCapability {
-  return {
+function accountRegistryPermissions(): ResourceCapability[] {
+  return [ACCOUNT_REGISTRY_PATH, "spaces/"].map((path) => ({
     service: "tinycloud.kv",
     space: ACCOUNT_REGISTRY_SPACE,
-    path: ACCOUNT_REGISTRY_PATH,
+    path,
     actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
+  }));
+}
+
+function accountRegistryIndexPermission(): ResourceCapability {
+  return {
+    service: "tinycloud.sql",
+    space: ACCOUNT_REGISTRY_SPACE,
+    path: "account",
+    actions: ["tinycloud.sql/read", "tinycloud.sql/write"],
   };
 }
 
@@ -1233,7 +1242,8 @@ export function composeManifestRequest(
   );
 
   if (includeAccountRegistryPermissions) {
-    resources.push(accountRegistryPermission());
+    resources.push(...accountRegistryPermissions());
+    resources.push(accountRegistryIndexPermission());
   }
   const resourcesWithImplicitCapabilities =
     withCapabilitiesReadForSpaces(resources);
