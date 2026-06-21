@@ -18,6 +18,7 @@
     "@tinycloud/sdk-services-test": "9.0.0"
   },
   "changesets": [
+    "account-api-and-cli",
     "applications-space-host",
     "auth-dx-host-request",
     "cli-cross-user-auth-import",

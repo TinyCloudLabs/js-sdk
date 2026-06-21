@@ -1,5 +1,17 @@
 # @tinycloudlabs/web-sdk
 
+## 2.4.0-beta.6
+
+### Minor Changes
+
+- 6b554d6: Add shared account APIs for applications and delegations, expose them from the node and web SDK clients, and add the `tc account` CLI command group.
+
+### Patch Changes
+
+- Updated dependencies [6b554d6]
+  - @tinycloud/sdk-core@2.4.0-beta.6
+  - @tinycloud/node-sdk@2.4.0-beta.6
+
 ## 2.4.0-beta.5
 
 ### Patch Changes
