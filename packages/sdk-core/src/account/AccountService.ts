@@ -19,6 +19,7 @@ import type { ISpaceService } from "../spaces/SpaceService";
 
 const SERVICE_NAME = "account";
 const ACCOUNT_INDEX_DB = "account";
+const ACCOUNT_SPACES_PATH = "spaces/";
 
 export interface AccountApplication {
   appId: string;
@@ -26,6 +27,19 @@ export interface AccountApplication {
   updatedAt?: string;
   name?: string;
   description?: string;
+  manifestHash?: string;
+}
+
+export interface AccountSpace {
+  spaceId: string;
+  name: string;
+  ownerDid: string;
+  type: "owned" | "delegated" | "discovered";
+  permissions: string[];
+  status: "active" | "archived";
+  registeredAt?: string;
+  updatedAt?: string;
+  expiresAt?: Date;
 }
 
 export interface AccountDelegation {
@@ -49,6 +63,7 @@ export interface AccountStatus {
   primarySpaceId?: string;
   accountSpaceId?: string;
   applications: number;
+  spaces: number;
   grantedDelegations: number;
   receivedDelegations: number;
 }
@@ -56,6 +71,7 @@ export interface AccountStatus {
 export interface AccountIndexRebuildResult {
   database: string;
   applications: number;
+  spaces: number;
   delegations: number;
   syncedAt: string;
 }
@@ -90,12 +106,16 @@ export class AccountService {
     const delegations = await this.delegations.list();
     if (!delegations.ok) return delegations;
 
+    const spaces = await this.spaces.list();
+    if (!spaces.ok) return spaces;
+
     return ok({
       did: this.config.getDid(),
       host: this.config.getHost(),
       primarySpaceId: this.config.getPrimarySpaceId(),
       accountSpaceId: this.config.getAccountSpaceId(),
       applications: apps.data.length,
+      spaces: spaces.data.length,
       grantedDelegations: delegations.data.filter((d) => d.direction === "granted").length,
       receivedDelegations: delegations.data.filter((d) => d.direction === "received").length,
     });
@@ -150,14 +170,29 @@ export class AccountService {
 
       let registered: AccountApplication | undefined;
       for (const record of request.registryRecords) {
+        const manifestHash = hashJson(record.manifests);
+        if (await this.indexHasApplicationHash(record.app_id, manifestHash)) {
+          registered = {
+            appId: record.app_id,
+            manifests: record.manifests,
+            manifestHash,
+            name: record.manifests[0]?.name,
+            description: record.manifests[0]?.description,
+          };
+          continue;
+        }
+
         const stored = {
           app_id: record.app_id,
           manifests: record.manifests,
+          manifest_hash: manifestHash,
           updated_at: new Date().toISOString(),
         };
         const written = await kvResult.data.put(record.key, stored);
         if (!written.ok) return accountErr(written.error);
         registered = applicationFromRecord(record.key, stored);
+        const indexed = await this.upsertApplicationIndex(registered);
+        if (!indexed.ok) return indexed;
       }
 
       return ok(registered!);
@@ -169,6 +204,77 @@ export class AccountService {
 
       const removed = await kvResult.data.delete(applicationKey(appId));
       if (!removed.ok) return accountErr(removed.error);
+      const indexed = await this.deleteApplicationIndex(appId);
+      if (!indexed.ok) return indexed;
+      return ok(undefined);
+    },
+  };
+
+  readonly spaces = {
+    list: async (): Promise<Result<AccountSpace[]>> => {
+      const kvResult = this.accountKV();
+      if (!kvResult.ok) return kvResult;
+
+      const listed = await kvResult.data.list({ prefix: ACCOUNT_SPACES_PATH });
+      if (!listed.ok) return accountErr(listed.error);
+
+      const spaces: AccountSpace[] = [];
+      for (const key of listed.data.keys) {
+        const loaded = await kvResult.data.get<StoredSpaceRecord>(key);
+        if (!loaded.ok) return accountErr(loaded.error);
+        spaces.push(spaceFromRecord(key, loaded.data.data));
+      }
+
+      spaces.sort((a, b) => a.name.localeCompare(b.name) || a.spaceId.localeCompare(b.spaceId));
+      return ok(spaces);
+    },
+
+    get: async (spaceId: string): Promise<Result<AccountSpace>> => {
+      const kvResult = this.accountKV();
+      if (!kvResult.ok) return kvResult;
+
+      const loaded = await kvResult.data.get<StoredSpaceRecord>(spaceKey(spaceId));
+      if (!loaded.ok) return accountErr(loaded.error);
+      return ok(spaceFromRecord(spaceKey(spaceId), loaded.data.data));
+    },
+
+    register: async (space: SpaceInfo | AccountSpace): Promise<Result<AccountSpace>> => {
+      await this.config.ensureAccountSpaceHosted?.();
+
+      const kvResult = this.accountKV();
+      if (!kvResult.ok) return kvResult;
+
+      const stored = spaceRecordFromInput(space);
+      const written = await kvResult.data.put(spaceKey(stored.space_id), stored);
+      if (!written.ok) return accountErr(written.error);
+
+      const registered = spaceFromRecord(spaceKey(stored.space_id), stored);
+      const indexed = await this.upsertSpaceIndex(registered);
+      if (!indexed.ok) return indexed;
+      return ok(registered);
+    },
+
+    syncAccessible: async (): Promise<Result<AccountSpace[]>> => {
+      const listed = await this.config.getSpaces().list();
+      if (!listed.ok) return accountErr(listed.error);
+
+      const registered: AccountSpace[] = [];
+      for (const space of listed.data) {
+        const result = await this.spaces.register(space);
+        if (!result.ok) return result;
+        registered.push(result.data);
+      }
+      return ok(registered);
+    },
+
+    remove: async (spaceId: string): Promise<Result<void>> => {
+      const kvResult = this.accountKV();
+      if (!kvResult.ok) return kvResult;
+
+      const removed = await kvResult.data.delete(spaceKey(spaceId));
+      if (!removed.ok) return accountErr(removed.error);
+      const indexed = await this.deleteSpaceIndex(spaceId);
+      if (!indexed.ok) return indexed;
       return ok(undefined);
     },
   };
@@ -223,6 +329,9 @@ export class AccountService {
       const applications = await this.applications.list();
       if (!applications.ok) return applications;
 
+      const spaces = await this.spaces.list();
+      if (!spaces.ok) return spaces;
+
       const delegations = await this.delegations.list();
       if (!delegations.ok) return delegations;
 
@@ -230,6 +339,8 @@ export class AccountService {
       const statements = [
         ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
         { sql: "DELETE FROM applications" },
+        { sql: "DELETE FROM application_state" },
+        { sql: "DELETE FROM spaces" },
         { sql: "DELETE FROM delegations" },
         { sql: "DELETE FROM sync_state" },
         ...applications.data.map((app) => ({
@@ -241,6 +352,26 @@ export class AccountService {
             app.description ?? null,
             app.updatedAt ?? syncedAt,
             JSON.stringify(app.manifests),
+          ],
+        })),
+        ...applications.data.map((app) => ({
+          sql:
+            "INSERT OR REPLACE INTO application_state (app_id, manifest_hash, indexed_at) VALUES (?, ?, ?)",
+          params: [app.appId, app.manifestHash ?? hashJson(app.manifests), syncedAt],
+        })),
+        ...spaces.data.map((space) => ({
+          sql:
+            "INSERT OR REPLACE INTO spaces (space_id, name, owner_did, type, permissions_json, status, registered_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          params: [
+            space.spaceId,
+            space.name,
+            space.ownerDid,
+            space.type,
+            JSON.stringify(space.permissions),
+            space.status,
+            space.registeredAt ?? syncedAt,
+            space.updatedAt ?? syncedAt,
+            space.expiresAt?.toISOString() ?? null,
           ],
         })),
         ...delegations.data.map((delegation) => ({
@@ -268,6 +399,10 @@ export class AccountService {
         },
         {
           sql: "INSERT INTO sync_state (source, synced_at, count) VALUES (?, ?, ?)",
+          params: ["spaces", syncedAt, spaces.data.length],
+        },
+        {
+          sql: "INSERT INTO sync_state (source, synced_at, count) VALUES (?, ?, ?)",
           params: ["delegations", syncedAt, delegations.data.length],
         },
       ];
@@ -278,6 +413,7 @@ export class AccountService {
       return ok({
         database: ACCOUNT_INDEX_DB,
         applications: applications.data.length,
+        spaces: spaces.data.length,
         delegations: delegations.data.length,
         syncedAt,
       });
@@ -289,11 +425,25 @@ export class AccountService {
         if (!dbResult.ok) return dbResult;
 
         const queried = await dbResult.data.query<string | null>(
-          "SELECT app_id, name, description, updated_at, manifest_json FROM applications ORDER BY app_id",
+          "SELECT applications.app_id, name, description, updated_at, manifest_json, application_state.manifest_hash FROM applications LEFT JOIN application_state ON applications.app_id = application_state.app_id ORDER BY applications.app_id",
         );
         if (!queried.ok) return accountErr(queried.error);
 
         return ok((queried.data.rows as unknown as IndexedApplicationRow[]).map(indexedApplicationFromRow));
+      },
+    },
+
+    spaces: {
+      list: async (): Promise<Result<AccountSpace[]>> => {
+        const dbResult = this.accountDb();
+        if (!dbResult.ok) return dbResult;
+
+        const queried = await dbResult.data.query<string | null>(
+          "SELECT space_id, name, owner_did, type, permissions_json, status, registered_at, updated_at, expires_at FROM spaces ORDER BY name, space_id",
+        );
+        if (!queried.ok) return accountErr(queried.error);
+
+        return ok((queried.data.rows as unknown as IndexedSpaceRow[]).map(indexedSpaceFromRow));
       },
     },
 
@@ -337,6 +487,23 @@ export class AccountService {
       if (!queried.ok) return accountErr(queried.error);
       return ok(queried.data);
     },
+
+    status: async (): Promise<Result<AccountIndexStatus>> => {
+      const dbResult = this.accountDb();
+      if (!dbResult.ok) return dbResult;
+      const queried = await dbResult.data.query<string | number>(
+        "SELECT source, synced_at, count FROM sync_state ORDER BY source",
+      );
+      if (!queried.ok) return accountErr(queried.error);
+      return ok({
+        database: ACCOUNT_INDEX_DB,
+        sources: (queried.data.rows as unknown as IndexedSyncStateRow[]).map(([source, syncedAt, count]) => ({
+          source,
+          syncedAt,
+          count,
+        })),
+      });
+    },
   };
 
   private accountKV(): Result<IKVService> {
@@ -367,6 +534,98 @@ export class AccountService {
     return ok(db);
   }
 
+  private async indexHasApplicationHash(appId: string, manifestHash: string): Promise<boolean> {
+    const dbResult = this.accountDb();
+    if (!dbResult.ok) return false;
+
+    const schema = await dbResult.data.batch(ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })));
+    if (!schema.ok) return false;
+
+    const queried = await dbResult.data.query<string>(
+      "SELECT 1 FROM application_state WHERE app_id = ? AND manifest_hash = ? LIMIT 1",
+      [appId, manifestHash],
+    );
+    return queried.ok && queried.data.rows.length > 0;
+  }
+
+  private async upsertApplicationIndex(app: AccountApplication): Promise<Result<void>> {
+    const dbResult = this.accountDb();
+    if (!dbResult.ok) return ok(undefined);
+
+    const updatedAt = app.updatedAt ?? new Date().toISOString();
+    const manifestHash = app.manifestHash ?? hashJson(app.manifests);
+    const written = await dbResult.data.batch([
+      ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
+      {
+        sql:
+          "INSERT OR REPLACE INTO applications (app_id, name, description, updated_at, manifest_json) VALUES (?, ?, ?, ?, ?)",
+        params: [
+          app.appId,
+          app.name ?? null,
+          app.description ?? null,
+          updatedAt,
+          JSON.stringify(app.manifests),
+        ],
+      },
+      {
+        sql:
+          "INSERT OR REPLACE INTO application_state (app_id, manifest_hash, indexed_at) VALUES (?, ?, ?)",
+        params: [app.appId, manifestHash, updatedAt],
+      },
+    ]);
+    if (!written.ok) return accountErr(written.error);
+    return ok(undefined);
+  }
+
+  private async deleteApplicationIndex(appId: string): Promise<Result<void>> {
+    const dbResult = this.accountDb();
+    if (!dbResult.ok) return ok(undefined);
+    const deleted = await dbResult.data.batch([
+      ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
+      { sql: "DELETE FROM applications WHERE app_id = ?", params: [appId] },
+      { sql: "DELETE FROM application_state WHERE app_id = ?", params: [appId] },
+    ]);
+    if (!deleted.ok) return accountErr(deleted.error);
+    return ok(undefined);
+  }
+
+  private async upsertSpaceIndex(space: AccountSpace): Promise<Result<void>> {
+    const dbResult = this.accountDb();
+    if (!dbResult.ok) return ok(undefined);
+    const updatedAt = space.updatedAt ?? new Date().toISOString();
+    const written = await dbResult.data.batch([
+      ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
+      {
+        sql:
+          "INSERT OR REPLACE INTO spaces (space_id, name, owner_did, type, permissions_json, status, registered_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params: [
+          space.spaceId,
+          space.name,
+          space.ownerDid,
+          space.type,
+          JSON.stringify(space.permissions),
+          space.status,
+          space.registeredAt ?? updatedAt,
+          updatedAt,
+          space.expiresAt?.toISOString() ?? null,
+        ],
+      },
+    ]);
+    if (!written.ok) return accountErr(written.error);
+    return ok(undefined);
+  }
+
+  private async deleteSpaceIndex(spaceId: string): Promise<Result<void>> {
+    const dbResult = this.accountDb();
+    if (!dbResult.ok) return ok(undefined);
+    const deleted = await dbResult.data.batch([
+      ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
+      { sql: "DELETE FROM spaces WHERE space_id = ?", params: [spaceId] },
+    ]);
+    if (!deleted.ok) return accountErr(deleted.error);
+    return ok(undefined);
+  }
+
   private async resolveSpace(space: string): Promise<Result<SpaceInfo>> {
     const listed = await this.config.getSpaces().list();
     if (!listed.ok) return accountErr(listed.error);
@@ -388,6 +647,22 @@ const ACCOUNT_INDEX_SCHEMA = [
     description TEXT,
     updated_at TEXT,
     manifest_json TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS application_state (
+    app_id TEXT PRIMARY KEY,
+    manifest_hash TEXT NOT NULL,
+    indexed_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS spaces (
+    space_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_did TEXT NOT NULL,
+    type TEXT NOT NULL,
+    permissions_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    registered_at TEXT,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS delegations (
     cid TEXT PRIMARY KEY,
@@ -412,12 +687,16 @@ const ACCOUNT_INDEX_SCHEMA = [
   "CREATE INDEX IF NOT EXISTS idx_delegations_direction ON delegations(direction)",
   "CREATE INDEX IF NOT EXISTS idx_delegations_space ON delegations(space_id)",
   "CREATE INDEX IF NOT EXISTS idx_delegations_counterparty ON delegations(counterparty_did)",
+  "CREATE INDEX IF NOT EXISTS idx_spaces_owner ON spaces(owner_did)",
+  "CREATE INDEX IF NOT EXISTS idx_spaces_type ON spaces(type)",
 ];
 
 interface StoredApplicationRecord {
   app_id?: string;
   appId?: string;
   manifests?: Manifest[];
+  manifest_hash?: string;
+  manifestHash?: string;
   updated_at?: string;
   updatedAt?: string;
 }
@@ -439,21 +718,147 @@ function applicationFromRecord(key: string, record: StoredApplicationRecord): Ac
     updatedAt: record.updated_at ?? record.updatedAt,
     name: first?.name,
     description: first?.description,
+    manifestHash: record.manifest_hash ?? record.manifestHash ?? hashJson(manifests),
   };
 }
 
-type IndexedApplicationRow = [string, string | null, string | null, string | null, string];
+type IndexedApplicationRow = [string, string | null, string | null, string | null, string, string | null];
 
 function indexedApplicationFromRow(row: IndexedApplicationRow): AccountApplication {
-  const [appId, name, description, updatedAt, manifestJson] = row;
+  const [appId, name, description, updatedAt, manifestJson, manifestHash] = row;
   return {
     appId,
     name: name ?? undefined,
     description: description ?? undefined,
     updatedAt: updatedAt ?? undefined,
     manifests: JSON.parse(manifestJson) as Manifest[],
+    manifestHash: manifestHash ?? undefined,
   };
 }
+
+interface StoredSpaceRecord {
+  space_id?: string;
+  spaceId?: string;
+  name?: string;
+  owner_did?: string;
+  ownerDid?: string;
+  owner?: string;
+  type?: "owned" | "delegated" | "discovered";
+  permissions?: string[];
+  status?: "active" | "archived";
+  registered_at?: string;
+  registeredAt?: string;
+  updated_at?: string;
+  updatedAt?: string;
+  expires_at?: string;
+  expiresAt?: string | Date;
+}
+
+function spaceKey(spaceId: string): string {
+  return `${ACCOUNT_SPACES_PATH}${spaceId}`;
+}
+
+function spaceIdFromKey(key: string): string {
+  return key.startsWith(ACCOUNT_SPACES_PATH) ? key.slice(ACCOUNT_SPACES_PATH.length) : key;
+}
+
+function spaceRecordFromInput(space: SpaceInfo | AccountSpace): Required<Pick<StoredSpaceRecord, "space_id" | "name" | "owner_did" | "type" | "permissions" | "status" | "updated_at">> &
+  StoredSpaceRecord {
+  const now = new Date().toISOString();
+  const accountSpace: AccountSpace = "spaceId" in space
+    ? space
+    : {
+        spaceId: space.id,
+        name: space.name ?? space.id.split(":").pop() ?? space.id,
+        ownerDid: space.owner ?? "",
+        type: (space.type ?? "discovered") as AccountSpace["type"],
+        permissions: space.permissions ?? [],
+        status: "active" as const,
+        expiresAt: space.expiresAt,
+      };
+
+  return {
+    space_id: accountSpace.spaceId,
+    name: accountSpace.name,
+    owner_did: accountSpace.ownerDid,
+    type: accountSpace.type,
+    permissions: accountSpace.permissions,
+    status: accountSpace.status,
+    registered_at: accountSpace.registeredAt ?? now,
+    updated_at: now,
+    expires_at: accountSpace.expiresAt instanceof Date
+      ? accountSpace.expiresAt.toISOString()
+      : accountSpace.expiresAt,
+  };
+}
+
+function spaceFromRecord(key: string, record: StoredSpaceRecord): AccountSpace {
+  const expiresAt = record.expires_at ?? record.expiresAt;
+  return {
+    spaceId: record.space_id ?? record.spaceId ?? spaceIdFromKey(key),
+    name: record.name ?? spaceIdFromKey(key).split(":").pop() ?? spaceIdFromKey(key),
+    ownerDid: record.owner_did ?? record.ownerDid ?? record.owner ?? "",
+    type: record.type ?? "discovered",
+    permissions: Array.isArray(record.permissions) ? record.permissions : [],
+    status: record.status ?? "active",
+    registeredAt: record.registered_at ?? record.registeredAt,
+    updatedAt: record.updated_at ?? record.updatedAt,
+    expiresAt: expiresAt ? new Date(expiresAt) : undefined,
+  };
+}
+
+type IndexedSpaceRow = [string, string, string, "owned" | "delegated" | "discovered", string, "active" | "archived", string | null, string, string | null];
+
+function indexedSpaceFromRow(row: IndexedSpaceRow): AccountSpace {
+  const [spaceId, name, ownerDid, type, permissionsJson, status, registeredAt, updatedAt, expiresAt] = row;
+  return {
+    spaceId,
+    name,
+    ownerDid,
+    type,
+    permissions: JSON.parse(permissionsJson) as string[],
+    status,
+    registeredAt: registeredAt ?? undefined,
+    updatedAt,
+    expiresAt: expiresAt ? new Date(expiresAt) : undefined,
+  };
+}
+
+function hashJson(value: unknown): string {
+  const input = stableJson(value);
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= BigInt(input.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * prime);
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  const object = value as Record<string, unknown>;
+  return `{${Object.keys(object)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`)
+    .join(",")}}`;
+}
+
+export interface AccountIndexStatus {
+  database: string;
+  sources: Array<{
+    source: string;
+    syncedAt: string;
+    count: number;
+  }>;
+}
+
+type IndexedSyncStateRow = [string, string, number];
 
 type IndexedDelegationRow = [
   string,

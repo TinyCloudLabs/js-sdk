@@ -843,6 +843,22 @@ describe("resolveManifest — end-to-end composition", () => {
           ],
         }),
         expect.objectContaining({
+          service: "tinycloud.kv",
+          space: "account",
+          path: "spaces/",
+          actions: [
+            "tinycloud.kv/get",
+            "tinycloud.kv/put",
+            "tinycloud.kv/list",
+          ],
+        }),
+        expect.objectContaining({
+          service: "tinycloud.sql",
+          space: "account",
+          path: "account",
+          actions: ["tinycloud.sql/read", "tinycloud.sql/write"],
+        }),
+        expect.objectContaining({
           service: "tinycloud.capabilities",
           space: "applications",
           path: "",

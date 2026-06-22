@@ -34,6 +34,16 @@ import { TinyCloudNode } from "./TinyCloudNode";
 // keep this file self-contained and easy to read in isolation)
 // ---------------------------------------------------------------------------
 
+async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error("Timed out waiting for predicate");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 function makeFakeSessionManager(): ISessionManager {
   // Pre-seed with "default" since that's the key name the
   // TinyCloudNode constructor uses on the WASM side; the real
@@ -341,6 +351,17 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
             "tinycloud.kv/put",
             "tinycloud.kv/list",
           ],
+          "spaces/": [
+            "tinycloud.kv/get",
+            "tinycloud.kv/put",
+            "tinycloud.kv/list",
+          ],
+        },
+        sql: {
+          account: [
+            "tinycloud.sql/read",
+            "tinycloud.sql/write",
+          ],
         },
       },
     });
@@ -614,11 +635,13 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       },
     );
 
+    await waitFor(() => put.mock.calls.length > 0);
     expect(ensureOwnedSpaceHosted).toHaveBeenCalledWith(accountSpaceId);
     expect(put).toHaveBeenCalledTimes(1);
     expect(put).toHaveBeenCalledWith("applications/com.listen.app", {
       app_id: "com.listen.app",
       manifests: [manifest],
+      manifest_hash: expect.any(String),
       updated_at: expect.any(String),
     });
   });
