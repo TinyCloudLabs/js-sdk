@@ -1210,7 +1210,7 @@ function accountRegistryIndexPermission(): ResourceCapability {
     service: "tinycloud.sql",
     space: ACCOUNT_REGISTRY_SPACE,
     path: "account",
-    actions: ["tinycloud.sql/read", "tinycloud.sql/write"],
+    actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/ddl"],
   };
 }
 

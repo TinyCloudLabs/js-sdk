@@ -856,7 +856,7 @@ describe("resolveManifest — end-to-end composition", () => {
           service: "tinycloud.sql",
           space: "account",
           path: "account",
-          actions: ["tinycloud.sql/read", "tinycloud.sql/write"],
+          actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/ddl"],
         }),
         expect.objectContaining({
           service: "tinycloud.capabilities",
