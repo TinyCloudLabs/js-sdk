@@ -292,6 +292,10 @@ export function registerAuthCommand(program: Command): void {
               jwk: key,
               host: ctx.host,
               permissions: group,
+              reason: permissionGrantReason(
+                "Grant requested TinyCloud permissions from `tc auth request --grant`.",
+                group,
+              ),
               openkeyHost,
               expiry: expiryOption,
               noPopup: options.popup === false,
@@ -470,6 +474,7 @@ export function registerAuthCommand(program: Command): void {
           node,
           requested: parsed.requested,
           expiryOption: parsed.requestedExpiry,
+          reason: "Grant permissions requested by a TinyCloud auth request artifact.",
           yes: options.yes === true,
         });
 
@@ -821,6 +826,7 @@ export async function ensureDelegationAuthority(params: {
   node: Awaited<ReturnType<typeof ensureAuthenticated>>;
   requested: PermissionEntry[];
   expiryOption: string | number | undefined;
+  reason: string;
   yes: boolean;
   force?: boolean;
 }): Promise<void> {
@@ -841,6 +847,7 @@ export async function ensureDelegationAuthority(params: {
         jwk: key,
         host: params.ctx.host,
         permissions: group,
+        reason: permissionGrantReason(params.reason, group),
         openkeyHost,
         expiry: params.expiryOption,
       });
@@ -889,6 +896,15 @@ export async function ensureDelegationAuthority(params: {
       expiry: delegation.expiry.toISOString(),
     });
   }
+}
+
+function permissionGrantReason(context: string, permissions: PermissionEntry[]): string {
+  const first = permissions[0];
+  const summary = first ? compactPermission(first) : "no permissions";
+  const more = permissions.length > 1
+    ? ` and ${permissions.length - 1} more permission${permissions.length === 2 ? "" : "s"}`
+    : "";
+  return `${context} Requested: ${summary}${more}.`;
 }
 
 function execCapturedCommand(command: { argv: string[]; cwd: string }): Promise<void> {
