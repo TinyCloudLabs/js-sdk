@@ -102,6 +102,7 @@ export interface BatchResponse {
 export const SQLAction = {
   READ: "tinycloud.sql/read",
   WRITE: "tinycloud.sql/write",
+  DDL: "tinycloud.sql/ddl",
   ADMIN: "tinycloud.sql/admin",
   SELECT: "tinycloud.sql/select",
   INSERT: "tinycloud.sql/insert",

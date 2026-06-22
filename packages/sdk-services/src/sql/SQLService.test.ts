@@ -34,6 +34,7 @@ function response(
 function createContext(
   fetchImpl: IServiceContext["fetch"],
   invokeCalls: Array<{ service: string; path: string; action: string }>,
+  invokeAnyCalls: Array<{ entries: Array<{ service: string; path: string; action: string }> }> = [],
 ): IServiceContext {
   return {
     session: {
@@ -48,6 +49,18 @@ function createContext(
       invokeCalls.push({ service, path, action });
       return {
         Authorization: "Bearer signed-invocation",
+      };
+    },
+    invokeAny: (_session, entries) => {
+      invokeAnyCalls.push({
+        entries: entries.map((entry) => ({
+          service: entry.service,
+          path: entry.path,
+          action: entry.action,
+        })),
+      });
+      return {
+        Authorization: "Bearer signed-multi-invocation",
       };
     },
     fetch: fetchImpl,
@@ -122,13 +135,14 @@ describe("SQLService permissions", () => {
 
   test("execute and batch sign PRAGMA statements with admin permission", async () => {
     const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
+    const invokeAnyCalls: Array<{ entries: Array<{ service: string; path: string; action: string }> }> = [];
 
     const service = new SQLService();
     service.initialize(
       createContext(async () => response(true, 200, {
         changes: 0,
         lastInsertRowId: null,
-      }), invokeCalls),
+      }), invokeCalls, invokeAnyCalls),
     );
 
     const executeResult = await service.execute("pragma user_version = 1");
@@ -141,7 +155,77 @@ describe("SQLService permissions", () => {
     expect(batchResult.ok).toBe(true);
     expect(invokeCalls).toEqual([
       { service: "sql", path: "default", action: SQLAction.ADMIN },
-      { service: "sql", path: "default", action: SQLAction.ADMIN },
+    ]);
+    expect(invokeAnyCalls).toEqual([
+      {
+        entries: [
+          { service: "sql", path: "default", action: SQLAction.WRITE },
+          { service: "sql", path: "default", action: SQLAction.ADMIN },
+        ],
+      },
+    ]);
+  });
+
+  test("execute and batch sign DDL statements with ddl permission", async () => {
+    const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
+    const invokeAnyCalls: Array<{ entries: Array<{ service: string; path: string; action: string }> }> = [];
+
+    const service = new SQLService();
+    service.initialize(
+      createContext(async () => response(true, 200, {
+        changes: 0,
+        lastInsertRowId: null,
+      }), invokeCalls, invokeAnyCalls),
+    );
+
+    const executeResult = await service.execute("CREATE TABLE IF NOT EXISTS notes (body TEXT)");
+    const batchResult = await service.batch([
+      { sql: "CREATE TABLE IF NOT EXISTS notes (body TEXT)" },
+      { sql: "INSERT INTO notes (body) VALUES (?)", params: ["hello"] },
+    ]);
+
+    expect(executeResult.ok).toBe(true);
+    expect(batchResult.ok).toBe(true);
+    expect(invokeCalls).toEqual([
+      { service: "sql", path: "default", action: SQLAction.DDL },
+    ]);
+    expect(invokeAnyCalls).toEqual([
+      {
+        entries: [
+          { service: "sql", path: "default", action: SQLAction.DDL },
+          { service: "sql", path: "default", action: SQLAction.WRITE },
+        ],
+      },
+    ]);
+  });
+
+  test("execute with schema signs both schema ddl and statement write permissions", async () => {
+    const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
+    const invokeAnyCalls: Array<{ entries: Array<{ service: string; path: string; action: string }> }> = [];
+
+    const service = new SQLService();
+    service.initialize(
+      createContext(async () => response(true, 200, {
+        changes: 1,
+        lastInsertRowId: 1,
+      }), invokeCalls, invokeAnyCalls),
+    );
+
+    const result = await service.execute(
+      "INSERT INTO notes (body) VALUES (?)",
+      ["hello"],
+      { schema: ["CREATE TABLE IF NOT EXISTS notes (body TEXT)"] },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(invokeCalls).toEqual([]);
+    expect(invokeAnyCalls).toEqual([
+      {
+        entries: [
+          { service: "sql", path: "default", action: SQLAction.WRITE },
+          { service: "sql", path: "default", action: SQLAction.DDL },
+        ],
+      },
     ]);
   });
 });

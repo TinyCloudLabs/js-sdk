@@ -13,6 +13,8 @@ import {
   ErrorCodes,
   serviceError,
   type FetchResponse,
+  type ServiceHeaders,
+  type ServiceSession,
 } from "../types";
 import { authRequiredError, wrapError, parseAuthError } from "../errors";
 import type { ISQLService } from "./ISQLService";
@@ -30,6 +32,8 @@ import {
   type BatchResponse,
   SQLAction,
 } from "./types";
+
+const DDL_TOKENS = new Set(["alter", "create", "drop"]);
 
 export class SQLService extends BaseService implements ISQLService {
   static readonly serviceName = "sql";
@@ -146,9 +150,15 @@ export class SQLService extends BaseService implements ISQLService {
           body.schema = options.schema;
         }
 
+        const actions = [
+          this.actionForSql(sql, SQLAction.WRITE),
+          ...(options?.schema ?? []).map((statement) =>
+            this.actionForSql(statement, SQLAction.DDL),
+          ),
+        ];
         const response = await this.invokeSQL(
           dbName,
-          this.actionForSql(sql, SQLAction.WRITE),
+          this.dedupeActions(actions),
           body,
           options?.signal
         );
@@ -178,7 +188,7 @@ export class SQLService extends BaseService implements ISQLService {
       try {
         const response = await this.invokeSQL(
           dbName,
-          this.actionForSqlBatch(statements),
+          this.actionsForSqlBatch(statements),
           { action: "batch", statements },
           options?.signal
         );
@@ -269,12 +279,16 @@ export class SQLService extends BaseService implements ISQLService {
 
   private async invokeSQL(
     dbName: string,
-    action: string,
+    actions: string | string[],
     body: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<FetchResponse> {
     const session = this.context.session!;
-    const headers = this.context.invoke(session, "sql", dbName, action);
+    const actionList = Array.isArray(actions) ? actions : [actions];
+    const headers =
+      actionList.length === 1
+        ? this.context.invoke(session, "sql", dbName, actionList[0]!)
+        : this.invokeSQLAny(session, dbName, actionList);
 
     return this.context.fetch(`${this.host}/invoke`, {
       method: "POST",
@@ -288,15 +302,42 @@ export class SQLService extends BaseService implements ISQLService {
   }
 
   private actionForSql(sql: string, fallback: string): string {
-    return firstSqlToken(sql) === "pragma" ? SQLAction.ADMIN : fallback;
+    const token = firstSqlToken(sql);
+    if (token === "pragma") return SQLAction.ADMIN;
+    if (token !== undefined && DDL_TOKENS.has(token)) return SQLAction.DDL;
+    return fallback;
   }
 
-  private actionForSqlBatch(statements: SqlStatement[]): string {
-    return statements.some(
-      (statement) => this.actionForSql(statement.sql, SQLAction.WRITE) === SQLAction.ADMIN,
-    )
-      ? SQLAction.ADMIN
-      : SQLAction.WRITE;
+  private actionsForSqlBatch(statements: SqlStatement[]): string[] {
+    return this.dedupeActions(
+      statements.map((statement) => this.actionForSql(statement.sql, SQLAction.WRITE)),
+    );
+  }
+
+  private dedupeActions(actions: string[]): string[] {
+    return [...new Set(actions)];
+  }
+
+  private invokeSQLAny(
+    session: ServiceSession,
+    dbName: string,
+    actions: string[],
+  ): ServiceHeaders {
+    if (!this.context.invokeAny) {
+      throw new Error(
+        `SQL operation requires multiple permissions (${actions.join(", ")}) but this SDK runtime does not support multi-resource invocations`,
+      );
+    }
+
+    return this.context.invokeAny(
+      session,
+      actions.map((action) => ({
+        spaceId: session.spaceId,
+        service: "sql",
+        path: dbName,
+        action,
+      })),
+    );
   }
 
   private async handleErrorResponse(

@@ -239,6 +239,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     // legacy default table.
     expect(cfg.abilities.kv).toHaveProperty("");
     expect(cfg.abilities.kv[""]).toContain("tinycloud.kv/get");
+    expect(cfg.abilities.sql[""]).toContain("tinycloud.sql/ddl");
     expect(cfg.spaceAbilities[cfg.spaceId]).toEqual(cfg.abilities);
     const secretsSpaceId = Object.keys(cfg.spaceAbilities).find((spaceId) =>
       spaceId.endsWith(":secrets"),
@@ -361,6 +362,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
           account: [
             "tinycloud.sql/read",
             "tinycloud.sql/write",
+            "tinycloud.sql/ddl",
           ],
         },
       },
