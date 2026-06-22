@@ -282,8 +282,40 @@ fn string_conversion_error() {
 #[cfg(test)]
 pub mod test {
     use super::*;
-    use ssi::jwk::JWK;
     use std::collections::HashSet;
+    use tinycloud_sdk_rs::tinycloud_auth::ssi::jwk::JWK;
+
+    fn test_session() -> Session {
+        let config = serde_json::json!({
+            "abilities": {
+                "kv": {
+                    "path": [
+                        "tinycloud.kv/put",
+                        "tinycloud.kv/get",
+                        "tinycloud.kv/list",
+                        "tinycloud.kv/del",
+                        "tinycloud.kv/metadata"
+                    ]
+                }
+            },
+            "address": "0x7BD63AA37326a64d458559F44432103e3d6eEDE9",
+            "chainId": 1u8,
+            "domain": "example.com",
+            "issuedAt": "2022-01-01T00:00:00.000Z",
+            "spaceId": "tinycloud:pkh:eip155:1:0x7BD63AA37326a64d458559F44432103e3d6eEDE9:default",
+            "expirationTime": "3000-01-01T00:00:00.000Z",
+        });
+        let prepared =
+            tinycloud_sdk_wasm::session::prepare_session(serde_json::from_value(config).unwrap())
+                .unwrap();
+        let mut signed = serde_json::to_value(prepared).unwrap();
+        signed.as_object_mut().unwrap().insert(
+            "signature".into(),
+            "361647d08fb3ac41b26d9300d80e1964e1b3e7960e5276b3c9f5045ae55171442287279c83fd8922f9238312e89336b1672be8778d078d7dc5107b8c913299721c".into(),
+        );
+        tinycloud_sdk_wasm::session::complete_session_setup(serde_json::from_value(signed).unwrap())
+            .unwrap()
+    }
 
     #[tokio::test]
     async fn test_new_session_key_manager() {
@@ -369,6 +401,25 @@ pub mod test {
         assert!(result.is_some());
         let jwk = result.unwrap();
         assert!(jwk.contains("crv\":\"Ed25519\""));
+    }
+
+    #[tokio::test]
+    async fn test_invocation_mints_nonce_by_default() {
+        let invocation = test_session()
+            .invoke_any_uri(
+                [(
+                    "tinycloud://example/kv/path".parse::<UriString>().unwrap(),
+                    ["tinycloud.kv/get".parse::<Ability>().unwrap()],
+                )],
+                None,
+            )
+            .expect("failed to create invocation");
+        let nonce = invocation
+            .payload()
+            .nonce
+            .as_deref()
+            .expect("invocation nonce");
+        assert!(nonce.starts_with("urn:uuid:"));
     }
 
     #[tokio::test]
