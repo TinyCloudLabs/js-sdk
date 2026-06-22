@@ -1,5 +1,19 @@
 # @tinycloud/cli
 
+## 0.7.0-beta.9
+
+### Minor Changes
+
+- 75bebb1: Add account registry write-through indexing, account space registry APIs, and matching `tc account spaces` / `tc account index status` CLI commands.
+
+  Manifest registration now records an indexed manifest hash and skips durable KV rewrites when the indexed record is current. Sign-in schedules best-effort background registry sync for application manifests and accessible spaces, while every discovered or hosted space is written through to the account registry index.
+
+### Patch Changes
+
+- cdcb227: Send a user-facing `reason` when TinyCloud CLI opens OpenKey permission approval flows, so the consent page can show why the requested capabilities are needed.
+- Updated dependencies [75bebb1]
+  - @tinycloud/node-sdk@2.4.0-beta.7
+
 ## 0.7.0-beta.8
 
 ### Minor Changes

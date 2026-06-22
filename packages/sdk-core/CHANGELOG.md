@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-core
 
+## 2.4.0-beta.7
+
+### Minor Changes
+
+- 75bebb1: Add account registry write-through indexing, account space registry APIs, and matching `tc account spaces` / `tc account index status` CLI commands.
+
+  Manifest registration now records an indexed manifest hash and skips durable KV rewrites when the indexed record is current. Sign-in schedules best-effort background registry sync for application manifests and accessible spaces, while every discovered or hosted space is written through to the account registry index.
+
 ## 2.4.0-beta.6
 
 ### Minor Changes

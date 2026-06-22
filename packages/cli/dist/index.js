@@ -816,11 +816,18 @@ function buildAuthUrl(did, options = {}) {
   if (options.host) {
     params.set("host", options.host);
   }
+  const reason = typeof options.reason === "string" ? options.reason.trim() : "";
   if (options.permissions?.length) {
     params.set(
       "permissions",
-      Buffer.from(JSON.stringify({ permissions: options.permissions })).toString("base64url")
+      Buffer.from(JSON.stringify({
+        permissions: options.permissions,
+        ...reason ? { reason } : {}
+      })).toString("base64url")
     );
+  }
+  if (reason) {
+    params.set("reason", reason);
   }
   if (options.expiry !== void 0) {
     params.set("expiry", String(options.expiry));
@@ -11391,6 +11398,10 @@ function registerAuthCommand(program2) {
             jwk: key,
             host: ctx.host,
             permissions: group,
+            reason: permissionGrantReason(
+              "Grant requested TinyCloud permissions from `tc auth request --grant`.",
+              group
+            ),
             openkeyHost,
             expiry: expiryOption,
             noPopup: options.popup === false
@@ -11535,6 +11546,7 @@ function registerAuthCommand(program2) {
         node,
         requested: parsed.requested,
         expiryOption: parsed.requestedExpiry,
+        reason: "Grant permissions requested by a TinyCloud auth request artifact.",
         yes: options.yes === true
       });
       const grant = await grantAuthRequest(node, parsed);
@@ -11818,6 +11830,7 @@ async function ensureDelegationAuthority(params) {
         jwk: key,
         host: params.ctx.host,
         permissions: group,
+        reason: permissionGrantReason(params.reason, group),
         openkeyHost,
         expiry: params.expiryOption
       });
@@ -11864,6 +11877,12 @@ async function ensureDelegationAuthority(params) {
       expiry: delegation.expiry.toISOString()
     });
   }
+}
+function permissionGrantReason(context, permissions) {
+  const first = permissions[0];
+  const summary = first ? compactPermission(first) : "no permissions";
+  const more = permissions.length > 1 ? ` and ${permissions.length - 1} more permission${permissions.length === 2 ? "" : "s"}` : "";
+  return `${context} Requested: ${summary}${more}.`;
 }
 function execCapturedCommand(command) {
   return new Promise((resolve3, reject) => {
@@ -13541,11 +13560,16 @@ async function runSecretOperation(params) {
       node: params.node,
       requested,
       expiryOption: void 0,
+      reason: secretPermissionReason(params.action, params.name),
       yes: true,
       force: true
     })
   );
   return runSecretOperationAttempt(params.label, params.operation);
+}
+function secretPermissionReason(action, name) {
+  const target = name ? ` secret "${name}"` : " secrets";
+  return `Allow \`tc secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
 }
 async function runSecretOperationAttempt(label, operation) {
   try {
