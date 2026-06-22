@@ -19,6 +19,7 @@
   },
   "changesets": [
     "account-api-and-cli",
+    "account-index-ddl-permission",
     "account-registry-index-spaces",
     "applications-space-host",
     "auth-dx-host-request",

@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-services
 
+## 2.4.0-beta.8
+
+### Patch Changes
+
+- 895804a: Include `tinycloud.sql/ddl` in the implicit account registry index permission and legacy default SQL grant so account registry writes can create their SQLite tables and indexes on first use. SQL execute and batch calls now sign DDL statements with `tinycloud.sql/ddl`, and mixed batches sign with every required SQL action instead of collapsing to write-only.
+
 ## 2.4.0-beta.2
 
 ### Patch Changes

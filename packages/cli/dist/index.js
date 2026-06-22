@@ -6472,6 +6472,7 @@ var DatabaseHandle = class {
 var SQLAction = {
   READ: "tinycloud.sql/read",
   WRITE: "tinycloud.sql/write",
+  DDL: "tinycloud.sql/ddl",
   ADMIN: "tinycloud.sql/admin",
   SELECT: "tinycloud.sql/select",
   INSERT: "tinycloud.sql/insert",
@@ -6481,6 +6482,7 @@ var SQLAction = {
   EXPORT: "tinycloud.sql/export",
   ALL: "tinycloud.sql/*"
 };
+var DDL_TOKENS = /* @__PURE__ */ new Set(["alter", "create", "drop"]);
 var SQLService = class extends BaseService {
   constructor(config = {}) {
     super();
@@ -6556,9 +6558,15 @@ var SQLService = class extends BaseService {
         if (options?.schema) {
           body.schema = options.schema;
         }
+        const actions = [
+          this.actionForSql(sql, SQLAction.WRITE),
+          ...(options?.schema ?? []).map(
+            (statement) => this.actionForSql(statement, SQLAction.DDL)
+          )
+        ];
         const response = await this.invokeSQL(
           dbName,
-          this.actionForSql(sql, SQLAction.WRITE),
+          this.dedupeActions(actions),
           body,
           options?.signal
         );
@@ -6580,7 +6588,7 @@ var SQLService = class extends BaseService {
       try {
         const response = await this.invokeSQL(
           dbName,
-          this.actionForSqlBatch(statements),
+          this.actionsForSqlBatch(statements),
           { action: "batch", statements },
           options?.signal
         );
@@ -6644,9 +6652,10 @@ var SQLService = class extends BaseService {
     });
   }
   // === Private helpers ===
-  async invokeSQL(dbName, action, body, signal) {
+  async invokeSQL(dbName, actions, body, signal) {
     const session = this.context.session;
-    const headers = this.context.invoke(session, "sql", dbName, action);
+    const actionList = Array.isArray(actions) ? actions : [actions];
+    const headers = actionList.length === 1 ? this.context.invoke(session, "sql", dbName, actionList[0]) : this.invokeSQLAny(session, dbName, actionList);
     return this.context.fetch(`${this.host}/invoke`, {
       method: "POST",
       headers: {
@@ -6658,12 +6667,34 @@ var SQLService = class extends BaseService {
     });
   }
   actionForSql(sql, fallback) {
-    return firstSqlToken(sql) === "pragma" ? SQLAction.ADMIN : fallback;
+    const token = firstSqlToken(sql);
+    if (token === "pragma") return SQLAction.ADMIN;
+    if (token !== void 0 && DDL_TOKENS.has(token)) return SQLAction.DDL;
+    return fallback;
   }
-  actionForSqlBatch(statements) {
-    return statements.some(
-      (statement) => this.actionForSql(statement.sql, SQLAction.WRITE) === SQLAction.ADMIN
-    ) ? SQLAction.ADMIN : SQLAction.WRITE;
+  actionsForSqlBatch(statements) {
+    return this.dedupeActions(
+      statements.map((statement) => this.actionForSql(statement.sql, SQLAction.WRITE))
+    );
+  }
+  dedupeActions(actions) {
+    return [...new Set(actions)];
+  }
+  invokeSQLAny(session, dbName, actions) {
+    if (!this.context.invokeAny) {
+      throw new Error(
+        `SQL operation requires multiple permissions (${actions.join(", ")}) but this SDK runtime does not support multi-resource invocations`
+      );
+    }
+    return this.context.invokeAny(
+      session,
+      actions.map((action) => ({
+        spaceId: session.spaceId,
+        service: "sql",
+        path: dbName,
+        action
+      }))
+    );
   }
   async handleErrorResponse(response, operation) {
     const errorText = await response.text();
