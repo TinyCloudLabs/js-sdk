@@ -474,6 +474,28 @@ export class TinyCloudWeb {
     return node.ensureEncryptionNetwork(name);
   }
 
+  /**
+   * Ensure one of this user's owned spaces (e.g. `"secrets"`) is hosted on the
+   * server.
+   *
+   * A full-authority sign-in auto-hosts the owner's `secrets` space, but a
+   * session created with a manifest / capabilityRequest does not. Such a
+   * session can hold valid `tinycloud.kv/*` capabilities for the owned
+   * `secrets` space yet still fail its first scoped `secrets.put(...)` with
+   * `404 Space not found`, because the space was never registered on the node.
+   *
+   * Calling this resolves `name` to the owner's owned-space URI and hosts it
+   * via the host-SIWE delegation flow (one signature, idempotent server-side).
+   * Must be called after {@link signIn}.
+   *
+   * @param name - The owned space name (e.g. `"secrets"`).
+   * @returns The hosted owned-space URI.
+   */
+  async ensureOwnedSpaceHosted(name: string): Promise<string> {
+    const node = await this.ensureNode();
+    return node.ensureOwnedSpaceHosted(name);
+  }
+
   // ===========================================================================
   // Auth Methods (delegate to TinyCloudNode)
   // ===========================================================================

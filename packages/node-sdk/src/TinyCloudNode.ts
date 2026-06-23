@@ -770,7 +770,7 @@ export class TinyCloudNode {
             : undefined,
         ensureAccountSpaceHosted: async () => {
           if (this.accountSpaceId && this.auth) {
-            await this.ensureOwnedSpaceHosted(this.accountSpaceId);
+            await this.ensureOwnedSpaceHostedById(this.accountSpaceId);
           }
         },
       });
@@ -828,7 +828,7 @@ export class TinyCloudNode {
     await this.ensureRequestedEncryptionNetworks();
 
     if (this.config.manifest === undefined && this.config.capabilityRequest === undefined) {
-      await this.ensureOwnedSpaceHosted(this.ownedSpaceId("secrets"));
+      await this.ensureOwnedSpaceHostedById(this.ownedSpaceId("secrets"));
     }
 
     this.scheduleAccountRegistrySync();
@@ -853,7 +853,7 @@ export class TinyCloudNode {
     }
 
     const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
-    await this.ensureOwnedSpaceHosted(accountSpaceId);
+    await this.ensureOwnedSpaceHostedById(accountSpaceId);
 
     const result = await this.account.applications.register(request.manifests);
     if (!result.ok) {
@@ -927,7 +927,7 @@ export class TinyCloudNode {
     }
   }
 
-  private async ensureOwnedSpaceHosted(spaceId: string): Promise<void> {
+  private async ensureOwnedSpaceHostedById(spaceId: string): Promise<void> {
     if (!this.auth) {
       throw new Error("Owned space hosting requires wallet mode");
     }
@@ -980,7 +980,7 @@ export class TinyCloudNode {
    * caller is the root authority of their own owned spaces, so no additional
    * delegation is required.
    *
-   * Unlike {@link ensureOwnedSpaceHosted}, this always submits the host
+   * Unlike {@link ensureOwnedSpaceHostedById}, this always submits the host
    * delegation rather than inferring hosting from session activation: a space
    * the current session has never referenced is reported neither as
    * `activated` nor `skipped`, so activation-based detection would wrongly
@@ -1037,6 +1037,30 @@ export class TinyCloudNode {
       .catch(() => {});
 
     return spaceId;
+  }
+
+  /**
+   * Ensure one of this user's owned spaces (e.g. `"secrets"`) is hosted on the
+   * server.
+   *
+   * At sign-in, a full-authority session auto-hosts the owner's `secrets`
+   * space, but a session created with a manifest / capabilityRequest does not.
+   * Such a session can therefore hold valid `tinycloud.kv/*` capabilities for
+   * the owned `secrets` space yet still fail its first scoped
+   * `secrets.put(...)` with `404 Space not found`, because the space was never
+   * registered on the node.
+   *
+   * Calling this resolves `name` to the owner's owned-space URI
+   * (`tinycloud:pkh:eip155:<chain>:<addr>:<name>`) and hosts it via the
+   * host-SIWE delegation flow. The host SIWE is idempotent server-side, so it
+   * is safe to call whether or not the space already exists; do not gate it on
+   * a prior existence check. Must be called after {@link signIn}.
+   *
+   * @param name - The owned space name (e.g. `"secrets"`).
+   * @returns The hosted owned-space URI.
+   */
+  async ensureOwnedSpaceHosted(name: string): Promise<string> {
+    return this.hostOwnedSpace(name);
   }
 
   /**
