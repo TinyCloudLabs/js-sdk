@@ -72,9 +72,9 @@ describe("expandActionShortNames", () => {
   });
 
   it("handles arbitrary services", () => {
-    expect(expandActionShortNames("tinycloud.sql", ["read", "ddl"])).toEqual([
+    expect(expandActionShortNames("tinycloud.sql", ["read", "schema"])).toEqual([
       "tinycloud.sql/read",
-      "tinycloud.sql/ddl",
+      "tinycloud.sql/schema",
     ]);
   });
 });
@@ -389,14 +389,14 @@ describe("resolveManifest — defaults tiers", () => {
     expect(resolved.resources).toEqual([]);
   });
 
-  it("admin includes sql/ddl and only implicit capabilities/read", () => {
+  it("admin includes sql/schema and only implicit capabilities/read", () => {
     const resolved = resolveManifest({
       app_id: "a.b.c",
       name: "x",
       defaults: "admin",
     });
     const sql = resolved.resources.find((r) => r.service === "tinycloud.sql");
-    expect(sql?.actions).toContain("tinycloud.sql/ddl");
+    expect(sql?.actions).toContain("tinycloud.sql/schema");
     const caps = resolved.resources.find(
       (r) => r.service === "tinycloud.capabilities",
     );
@@ -431,7 +431,7 @@ describe("resolveManifest — defaults tiers", () => {
     });
     // Standard tier, not admin or all.
     const sql = resolved.resources.find((r) => r.service === "tinycloud.sql");
-    expect(sql?.actions).not.toContain("tinycloud.sql/ddl");
+    expect(sql?.actions).not.toContain("tinycloud.sql/schema");
   });
 
   it("adds capabilities read for explicit permission spaces", () => {
@@ -919,7 +919,7 @@ describe("resolveManifest — end-to-end composition", () => {
           service: "tinycloud.sql",
           space: "account",
           path: "account",
-          actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/ddl"],
+          actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"],
         }),
         expect.objectContaining({
           service: "tinycloud.capabilities",

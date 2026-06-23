@@ -983,6 +983,7 @@ function isDangerousPermission(permission: PermissionEntry): boolean {
     action.includes("*") ||
     action.endsWith("/write") ||
     action.endsWith("/admin") ||
+    action.endsWith("/schema") ||
     action.endsWith("/ddl") ||
     action.endsWith("/del"),
   );

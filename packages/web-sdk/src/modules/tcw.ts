@@ -51,6 +51,7 @@ import {
   type PermissionEntry,
   type NetworkDescriptor,
   SignInOptions,
+  composeManifestRequest,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
 import {
@@ -80,7 +81,7 @@ import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../provi
 import {
   ModalSpaceCreationHandler,
   defaultWebSpaceCreationHandler,
-} from "../authorization";
+} from "../authorization/WebSpaceCreationHandler";
 import type { NotificationConfig } from "../notifications/types";
 import { WasmInitializer } from "./WasmInitializer";
 import { invoke } from "./Storage/tinycloud/module";
@@ -181,6 +182,7 @@ export type SessionRestoreStatus =
   | "corrupt"
   | "storage-unavailable"
   | "restore-failed"
+  | "stale"
   | "logging-in";
 
 export interface SessionRestoreResult {
@@ -565,10 +567,35 @@ export class TinyCloudWeb {
     }
   }
 
+  private configuredManifestPermissions(): PermissionEntry[] {
+    const request =
+      this._capabilityRequest ??
+      (this._manifest === undefined
+        ? undefined
+        : composeManifestRequest(
+            Array.isArray(this._manifest) ? this._manifest : [this._manifest],
+            {
+              includeAccountRegistryPermissions:
+                this.config.includeAccountRegistryPermissions,
+            },
+          ));
+    return (request?.resources as PermissionEntry[] | undefined) ?? [];
+  }
+
+  private restoredSessionCoversConfiguredManifest(node: TinyCloudNode): boolean {
+    const permissions = this.configuredManifestPermissions();
+    return permissions.length === 0 || node.hasRuntimePermissions(permissions);
+  }
+
   signIn = async (options?: SignInOptions): Promise<ClientSession> => {
     const restored = await this.restoreSession();
     if (restored.status === "restored" && restored.session) {
-      return restored.session;
+      const node = await this.ensureNode();
+      if (this.restoredSessionCoversConfiguredManifest(node)) {
+        return restored.session;
+      }
+      await this.clearPersistedSession(restored.session.address);
+      this._sessionRestoreStatus = "stale";
     }
 
     this._sessionRestoreStatus = "logging-in";

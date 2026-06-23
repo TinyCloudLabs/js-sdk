@@ -824,7 +824,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
     );
   });
 
-  test("uses a single runtime SQL grant for migration-style ddl and write batches", async () => {
+  test("uses a single runtime SQL grant for migration-style schema and write batches", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
     })) as any;
@@ -835,7 +835,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
       service: "tinycloud.sql",
       space: "secrets",
       path: "default",
-      actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/ddl"],
+      actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"],
     };
 
     await withActivatedDelegations(async () => {
@@ -857,7 +857,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
           spaceId: secretsSpaceId,
           service: "sql",
           path: "default",
-          action: "tinycloud.sql/ddl",
+          action: "tinycloud.sql/schema",
         },
         {
           spaceId: secretsSpaceId,

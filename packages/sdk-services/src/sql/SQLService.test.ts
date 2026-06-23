@@ -166,7 +166,7 @@ describe("SQLService permissions", () => {
     ]);
   });
 
-  test("execute and batch sign DDL statements with ddl permission", async () => {
+  test("execute and batch sign schema statements with schema permission", async () => {
     const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
     const invokeAnyCalls: Array<{ entries: Array<{ service: string; path: string; action: string }> }> = [];
 
@@ -187,19 +187,19 @@ describe("SQLService permissions", () => {
     expect(executeResult.ok).toBe(true);
     expect(batchResult.ok).toBe(true);
     expect(invokeCalls).toEqual([
-      { service: "sql", path: "default", action: SQLAction.DDL },
+      { service: "sql", path: "default", action: SQLAction.SCHEMA },
     ]);
     expect(invokeAnyCalls).toEqual([
       {
         entries: [
-          { service: "sql", path: "default", action: SQLAction.DDL },
+          { service: "sql", path: "default", action: SQLAction.SCHEMA },
           { service: "sql", path: "default", action: SQLAction.WRITE },
         ],
       },
     ]);
   });
 
-  test("execute with schema signs both schema ddl and statement write permissions", async () => {
+  test("execute with schema signs both schema and statement write permissions", async () => {
     const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
     const invokeAnyCalls: Array<{ entries: Array<{ service: string; path: string; action: string }> }> = [];
 
@@ -223,7 +223,7 @@ describe("SQLService permissions", () => {
       {
         entries: [
           { service: "sql", path: "default", action: SQLAction.WRITE },
-          { service: "sql", path: "default", action: SQLAction.DDL },
+          { service: "sql", path: "default", action: SQLAction.SCHEMA },
         ],
       },
     ]);
@@ -290,13 +290,13 @@ describe("SQLService permissions", () => {
     expect(invokeAnyCalls).toEqual([
       {
         entries: [
-          { service: "sql", path: "app.db", action: SQLAction.DDL },
+          { service: "sql", path: "app.db", action: SQLAction.SCHEMA },
           { service: "sql", path: "app.db", action: SQLAction.WRITE },
         ],
       },
       {
         entries: [
-          { service: "sql", path: "app.db", action: SQLAction.DDL },
+          { service: "sql", path: "app.db", action: SQLAction.SCHEMA },
           { service: "sql", path: "app.db", action: SQLAction.WRITE },
         ],
       },
@@ -386,7 +386,7 @@ describe("SQLService permissions", () => {
     expect(invokeAnyCalls).toEqual([
       {
         entries: [
-          { service: "sql", path: "app.db", action: SQLAction.DDL },
+          { service: "sql", path: "app.db", action: SQLAction.SCHEMA },
           { service: "sql", path: "app.db", action: SQLAction.WRITE },
         ],
       },

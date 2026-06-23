@@ -177,7 +177,7 @@ describe("SQL Basics", () => {
 
   // PART 5: Migration permission repair
   describe("Migrations", () => {
-    test("runtime SQL ddl repair lets a legacy read/write session apply migrations", async () => {
+    test("runtime SQL schema repair lets a legacy read/write session apply migrations", async () => {
       const runId = Date.now();
       const space = `secrets-e2e-${runId}`;
       const table = `secret_metadata_${runId}`;
@@ -213,7 +213,7 @@ describe("SQL Basics", () => {
           service: "tinycloud.sql",
           space,
           path: "default",
-          actions: ["read", "write", "ddl"],
+          actions: ["read", "write", "schema"],
           skipPrefix: true,
         },
       ]);
