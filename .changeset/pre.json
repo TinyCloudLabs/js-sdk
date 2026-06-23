@@ -33,6 +33,7 @@
     "permission-prompt-suppression",
     "public-ensure-owned-space-hosted",
     "quiet-secrets-listen",
+    "restore-host-resolution",
     "runtime-grant-space-case-insensitive",
     "sql-migrations-primitive",
     "usedelegation-multiresource",
