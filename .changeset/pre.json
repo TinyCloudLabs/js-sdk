@@ -19,6 +19,7 @@
   },
   "changesets": [
     "account-api-and-cli",
+    "account-index-cache-policy",
     "account-index-ddl-permission",
     "account-registry-index-spaces",
     "applications-space-host",
