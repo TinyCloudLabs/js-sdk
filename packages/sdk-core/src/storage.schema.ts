@@ -93,6 +93,14 @@ export const PersistedSessionDataSchema = z.object({
   version: z.string(),
   /** Optional ENS data */
   ens: EnsDataSchema.optional(),
+  /**
+   * TinyCloud hosts this session was created against. Persisted so a
+   * restored session resolves to the same node without re-running the
+   * registry/fallback resolution (or the wallet sign-in flow). Optional
+   * for backward compatibility with sessions persisted before this field
+   * existed — those restore and lazily re-resolve their hosts.
+   */
+  tinycloudHosts: z.array(z.string()).optional(),
 });
 
 export type PersistedSessionData = z.infer<typeof PersistedSessionDataSchema>;

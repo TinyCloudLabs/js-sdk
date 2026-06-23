@@ -5,6 +5,7 @@ import {
   type IWasmBindings,
   type ISessionManager,
   type ISigner,
+  type TinyCloudSession,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
@@ -229,4 +230,111 @@ test("NodeUserAuthorization.signIn resolves TinyCloud hosts when none are explic
     )}`,
   );
   expect(requests).toContain(`${DEFAULT_TINYCLOUD_FALLBACK_HOST}/info`);
+});
+
+function restoredTinyCloudSession(): TinyCloudSession {
+  return {
+    address: "0x1234567890abcdef1234567890abcdef12345678",
+    chainId: 1,
+    sessionKey: "session-key",
+    spaceId: "tinycloud:pkh:eip155:1:0x1234567890abcdef1234567890abcdef12345678:default",
+    delegationCid: "bafy-restored",
+    delegationHeader: { Authorization: "Bearer restored" },
+    verificationMethod: "did:key:restored#restored",
+    jwk: { kty: "OKP", kid: "session-key" },
+    siwe: "example.com wants you to sign in...",
+    signature: "0xrestored",
+  };
+}
+
+test("restored session adopts persisted hosts WITHOUT the wallet flow and a host-needing call does not throw", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const signedMessages: string[] = [];
+  const requests: string[] = [];
+  const originalFetch = globalThis.fetch;
+  (globalThis as any).__originalFetch = originalFetch;
+  globalThis.fetch = async (input: any, init?: any) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      // Primary space already activated — no creation needed.
+      return new Response(
+        JSON.stringify({ activated: ["space"], skipped: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const auth = new NodeUserAuthorization({
+    signer: createSigner(signedMessages),
+    wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    sessionStorage: new MemorySessionStorage(),
+  });
+
+  // Restore the session with the hosts that were persisted at sign-in time.
+  const persistedHosts = ["https://persisted.node.test"];
+  auth.setRestoredTinyCloudSession(restoredTinyCloudSession(), persistedHosts);
+
+  // Hosts are adopted immediately, with NO wallet signing and NO registry hit.
+  expect(auth.hosts).toEqual(persistedHosts);
+
+  // A host-needing call must NOT throw "hosts have not been resolved".
+  await auth.ensureSpaceExists();
+
+  expect(signedMessages.length).toBe(0); // no wallet flow
+  // No registry lookup — persisted hosts were used directly.
+  expect(
+    requests.some((u) => u.startsWith(DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL)),
+  ).toBe(false);
+  // The host-needing call targeted the persisted host.
+  expect(requests).toContain(`${persistedHosts[0]}/delegate`);
+});
+
+test("restored session with NO persisted hosts lazily resolves via registry/fallback", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const signedMessages: string[] = [];
+  const requests: string[] = [];
+  const originalFetch = globalThis.fetch;
+  (globalThis as any).__originalFetch = originalFetch;
+  globalThis.fetch = async (input: any, init?: any) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.startsWith(`${DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL}/v1/locations/`)) {
+      return new Response("{}", { status: 404 });
+    }
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return new Response(
+        JSON.stringify({ activated: ["space"], skipped: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const auth = new NodeUserAuthorization({
+    signer: createSigner(signedMessages),
+    wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    sessionStorage: new MemorySessionStorage(),
+  });
+
+  // Old persisted session: no hosts supplied on restore.
+  auth.setRestoredTinyCloudSession(restoredTinyCloudSession());
+  expect(auth.hosts).toEqual([]); // not yet resolved
+
+  // First host-needing call resolves lazily via registry -> fallback.
+  await auth.ensureSpaceExists();
+
+  expect(auth.hosts).toEqual([DEFAULT_TINYCLOUD_FALLBACK_HOST]);
+  expect(requests).toContain(
+    `${DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL}/v1/locations/${encodeURIComponent(
+      "did:pkh:eip155:1:0x1234567890AbcdEF1234567890aBcdef12345678",
+    )}`,
+  );
+  expect(requests).toContain(`${DEFAULT_TINYCLOUD_FALLBACK_HOST}/delegate`);
+  expect(signedMessages.length).toBe(0); // still no wallet flow
 });

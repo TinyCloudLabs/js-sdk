@@ -10,6 +10,11 @@ export interface RestorableSessionData {
   chainId: number;
   siwe: string;
   signature: string;
+  /**
+   * Hosts the session was created against. Absent for sessions persisted
+   * before this field existed; in that case the node re-resolves lazily.
+   */
+  tinycloudHosts?: string[];
 }
 
 export function clientSessionFromPersisted(
@@ -53,5 +58,6 @@ export function restoreDataFromPersisted(
     chainId: data.chainId,
     siwe: data.siwe,
     signature: data.signature,
+    tinycloudHosts: data.tinycloudHosts,
   };
 }
