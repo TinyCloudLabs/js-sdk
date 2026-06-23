@@ -38,6 +38,7 @@
     "runtime-grant-space-case-insensitive",
     "secrets-ddl-regression",
     "sql-migrations-primitive",
+    "sql-schema-action",
     "usedelegation-multiresource",
     "web-sdk-space-scoped-services"
   ]

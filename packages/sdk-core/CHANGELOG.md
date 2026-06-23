@@ -1,5 +1,16 @@
 # @tinycloudlabs/sdk-core
 
+## 2.4.0-beta.14
+
+### Patch Changes
+
+- a22a7f0: Rename the SDK-emitted SQL schema-change permission from `tinycloud.sql/ddl` to `tinycloud.sql/schema`, including manifest defaults and account-registry grants.
+
+  TinyCloudWeb now treats a restored persisted session as stale when it does not cover the currently configured manifest permissions, then runs the normal manifest sign-in flow instead of letting apps request those manifest permissions separately after login.
+
+- Updated dependencies [a22a7f0]
+  - @tinycloud/sdk-services@2.4.0-beta.14
+
 ## 2.4.0-beta.13
 
 ### Patch Changes

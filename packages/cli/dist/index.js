@@ -37854,7 +37854,9 @@ var DatabaseHandle = class {
 var SQLAction = {
   READ: "tinycloud.sql/read",
   WRITE: "tinycloud.sql/write",
-  DDL: "tinycloud.sql/ddl",
+  SCHEMA: "tinycloud.sql/schema",
+  /** @deprecated Use SQLAction.SCHEMA. */
+  DDL: "tinycloud.sql/schema",
   ADMIN: "tinycloud.sql/admin",
   SELECT: "tinycloud.sql/select",
   INSERT: "tinycloud.sql/insert",
@@ -37972,7 +37974,7 @@ var SQLService = class extends BaseService {
         const actions = [
           this.actionForSql(sql, SQLAction.WRITE),
           ...(options?.schema ?? []).map(
-            (statement) => this.actionForSql(statement, SQLAction.DDL)
+            (statement) => this.actionForSql(statement, SQLAction.SCHEMA)
           )
         ];
         const response = await this.invokeSQL(
@@ -38152,7 +38154,7 @@ var SQLService = class extends BaseService {
   actionForSql(sql, fallback) {
     const token = firstSqlToken(sql);
     if (token === "pragma") return SQLAction.ADMIN;
-    if (token !== void 0 && DDL_TOKENS.has(token)) return SQLAction.DDL;
+    if (token !== void 0 && DDL_TOKENS.has(token)) return SQLAction.SCHEMA;
     return fallback;
   }
   actionsForSqlBatch(statements) {
@@ -41761,7 +41763,7 @@ var DEFAULT_ADMIN_ENTRIES = [
     service: "tinycloud.sql",
     space: DEFAULT_MANIFEST_SPACE,
     path: "/",
-    actions: ["read", "write", "ddl"]
+    actions: ["read", "write", "schema"]
   }
 ];
 var DEFAULT_ALL_ENTRIES = [
@@ -41775,7 +41777,7 @@ var DEFAULT_ALL_ENTRIES = [
     service: "tinycloud.sql",
     space: DEFAULT_MANIFEST_SPACE,
     path: "/",
-    actions: ["read", "write", "ddl"]
+    actions: ["read", "write", "schema"]
   },
   {
     service: "tinycloud.duckdb",
@@ -43532,7 +43534,7 @@ async function confirmPermissionRequest(permissions) {
 function isDangerousPermission(permission) {
   if (permission.path === "" || permission.path === "/") return true;
   return permission.actions.some(
-    (action) => action.includes("*") || action.endsWith("/write") || action.endsWith("/admin") || action.endsWith("/ddl") || action.endsWith("/del")
+    (action) => action.includes("*") || action.endsWith("/write") || action.endsWith("/admin") || action.endsWith("/schema") || action.endsWith("/ddl") || action.endsWith("/del")
   );
 }
 function parseExpiryOption(raw) {
