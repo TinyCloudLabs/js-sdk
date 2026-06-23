@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 2.4.0-beta.13
+
+### Patch Changes
+
+- 7603d1f: Support concise app manifest knowledge pointers. The SDK now validates `knowledge: true` and `knowledge/*.md` roots, exposes a helper for resolving the effective knowledge root, and `tc manifest resolve` includes that root in its output.
+
 ## 2.4.0-beta.12
 
 ### Patch Changes

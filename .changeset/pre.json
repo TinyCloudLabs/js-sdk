@@ -28,6 +28,7 @@
     "cli-delegated-secret-reads",
     "encryption-network-signin-create",
     "kv-space-and-binary-roundtrip",
+    "manifest-knowledge-pointers",
     "openkey-reason",
     "openkey-scope-case-insensitive",
     "permission-prompt-suppression",
