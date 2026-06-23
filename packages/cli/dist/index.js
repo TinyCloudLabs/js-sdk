@@ -37855,8 +37855,6 @@ var SQLAction = {
   READ: "tinycloud.sql/read",
   WRITE: "tinycloud.sql/write",
   SCHEMA: "tinycloud.sql/schema",
-  /** @deprecated Use SQLAction.SCHEMA. */
-  DDL: "tinycloud.sql/schema",
   ADMIN: "tinycloud.sql/admin",
   SELECT: "tinycloud.sql/select",
   INSERT: "tinycloud.sql/insert",
@@ -43534,7 +43532,7 @@ async function confirmPermissionRequest(permissions) {
 function isDangerousPermission(permission) {
   if (permission.path === "" || permission.path === "/") return true;
   return permission.actions.some(
-    (action) => action.includes("*") || action.endsWith("/write") || action.endsWith("/admin") || action.endsWith("/schema") || action.endsWith("/ddl") || action.endsWith("/del")
+    (action) => action.includes("*") || action.endsWith("/write") || action.endsWith("/admin") || action.endsWith("/schema") || action.endsWith("/del")
   );
 }
 function parseExpiryOption(raw) {

@@ -1,5 +1,12 @@
 # @tinycloudlabs/sdk-core
 
+## 2.4.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [bd8a60f]
+  - @tinycloud/sdk-services@2.4.0-beta.15
+
 ## 2.4.0-beta.14
 
 ### Patch Changes

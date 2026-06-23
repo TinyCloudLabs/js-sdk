@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk
 
+## 2.4.0-beta.15
+
+### Patch Changes
+
+- bd8a60f: Remove the deprecated `SQLAction.DDL` export and the `tinycloud.sql/ddl` permission display path. SQL schema changes use `SQLAction.SCHEMA` and `tinycloud.sql/schema`.
+  - @tinycloud/sdk-core@2.4.0-beta.15
+  - @tinycloud/node-sdk@2.4.0-beta.15
+
 ## 2.4.0-beta.14
 
 ### Patch Changes
