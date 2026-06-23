@@ -37,16 +37,25 @@ const node = {
       },
     }),
     applications: {
-      list: async () => ({
+      list: async (options?: { preferIndex?: boolean }) => ({
         ok: true,
-        data: [
-          {
-            appId: "com.listen.app",
-            name: "Listen",
-            manifests: [{ app_id: "com.listen.app", name: "Listen" }],
-            updatedAt: "2026-06-20T00:00:00.000Z",
-          },
-        ],
+        data: options?.preferIndex
+          ? [
+              {
+                appId: "com.indexed.app",
+                name: "Indexed",
+                manifests: [{ app_id: "com.indexed.app", name: "Indexed" }],
+                updatedAt: "2026-06-20T00:00:00.000Z",
+              },
+            ]
+          : [
+              {
+                appId: "com.listen.app",
+                name: "Listen",
+                manifests: [{ app_id: "com.listen.app", name: "Listen" }],
+                updatedAt: "2026-06-20T00:00:00.000Z",
+              },
+            ],
       }),
       get: async (appId: string) => ({
         ok: true,
@@ -70,19 +79,31 @@ const node = {
       remove: async () => ({ ok: true, data: undefined }),
     },
     spaces: {
-      list: async () => ({
+      list: async (options?: { preferIndex?: boolean }) => ({
         ok: true,
-        data: [
-          {
-            spaceId: "tinycloud:pkh:eip155:1:0xabc:applications",
-            name: "applications",
-            ownerDid: "did:pkh:eip155:1:0xabc",
-            type: "owned",
-            permissions: ["*"],
-            status: "active",
-            updatedAt: "2026-06-20T00:00:00.000Z",
-          },
-        ],
+        data: options?.preferIndex
+          ? [
+              {
+                spaceId: "tinycloud:pkh:eip155:1:0xabc:indexed",
+                name: "indexed",
+                ownerDid: "did:pkh:eip155:1:0xabc",
+                type: "owned",
+                permissions: ["*"],
+                status: "active",
+                updatedAt: "2026-06-20T00:00:00.000Z",
+              },
+            ]
+          : [
+              {
+                spaceId: "tinycloud:pkh:eip155:1:0xabc:applications",
+                name: "applications",
+                ownerDid: "did:pkh:eip155:1:0xabc",
+                type: "owned",
+                permissions: ["*"],
+                status: "active",
+                updatedAt: "2026-06-20T00:00:00.000Z",
+              },
+            ],
       }),
       get: async (spaceId: string) => ({
         ok: true,
@@ -118,24 +139,41 @@ const node = {
       },
     },
     delegations: {
-      list: async (options: unknown) => ({
+      list: async (options: { preferIndex?: boolean } = {}) => ({
         ok: true,
-        data: [
-          {
-            cid: "bafy-granted",
-            direction: "granted",
-            spaceId: "tinycloud:pkh:eip155:1:0xabc:applications",
-            spaceName: "applications",
-            counterpartyDid: "did:key:zdelegate",
-            delegateDid: "did:key:zdelegate",
-            delegatorDid: "did:pkh:eip155:1:0xabc",
-            path: "applications/com.listen.app/",
-            actions: ["tinycloud.kv/get"],
-            expiry: new Date("2026-07-20T00:00:00.000Z"),
-            status: "active",
-            options,
-          },
-        ],
+        data: options.preferIndex
+          ? [
+              {
+                cid: "bafy-indexed",
+                direction: "received",
+                spaceId: "tinycloud:pkh:eip155:1:0xabc:applications",
+                spaceName: "applications",
+                counterpartyDid: "did:key:zgrantor",
+                delegateDid: "did:pkh:eip155:1:0xabc",
+                delegatorDid: "did:key:zgrantor",
+                path: "shared/",
+                actions: ["tinycloud.kv/list"],
+                expiry: new Date("2026-08-20T00:00:00.000Z"),
+                status: "active",
+                options,
+              },
+            ]
+          : [
+              {
+                cid: "bafy-granted",
+                direction: "granted",
+                spaceId: "tinycloud:pkh:eip155:1:0xabc:applications",
+                spaceName: "applications",
+                counterpartyDid: "did:key:zdelegate",
+                delegateDid: "did:key:zdelegate",
+                delegatorDid: "did:pkh:eip155:1:0xabc",
+                path: "applications/com.listen.app/",
+                actions: ["tinycloud.kv/get"],
+                expiry: new Date("2026-07-20T00:00:00.000Z"),
+                status: "active",
+                options,
+              },
+            ],
       }),
       revoke: async (input: unknown) => {
         recorded.revoked.push(input);

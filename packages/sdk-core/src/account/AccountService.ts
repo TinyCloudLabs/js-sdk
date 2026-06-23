@@ -76,9 +76,20 @@ export interface AccountIndexRebuildResult {
   syncedAt: string;
 }
 
+export interface AccountIndexedReadOptions {
+  preferIndex?: boolean;
+  refreshIndex?: boolean;
+}
+
+export type AccountApplicationListOptions = AccountIndexedReadOptions;
+
+export type AccountSpaceListOptions = AccountIndexedReadOptions;
+
 export interface AccountDelegationListOptions {
   direction?: "granted" | "received" | "all";
   space?: string;
+  preferIndex?: boolean;
+  refreshIndex?: boolean;
 }
 
 export interface AccountDelegationRevokeOptions {
@@ -122,7 +133,19 @@ export class AccountService {
   }
 
   readonly applications = {
-    list: async (): Promise<Result<AccountApplication[]>> => {
+    list: async (options: AccountApplicationListOptions = {}): Promise<Result<AccountApplication[]>> => {
+      if (options.preferIndex) {
+        const indexed = await this.index.applications.list();
+        if (indexed.ok && indexed.data.length > 0) return indexed;
+        if (!indexed.ok && !isMissingIndexError(indexed.error)) return indexed;
+
+        const canonical = await this.applications.list();
+        if (canonical.ok && options.refreshIndex !== false) {
+          await this.replaceApplicationsIndexQuietly(canonical.data);
+        }
+        return canonical;
+      }
+
       const kvResult = this.accountKV();
       if (!kvResult.ok) return kvResult;
 
@@ -188,11 +211,10 @@ export class AccountService {
           manifest_hash: manifestHash,
           updated_at: new Date().toISOString(),
         };
-        const written = await kvResult.data.put(record.key, stored);
-        if (!written.ok) return accountErr(written.error);
-        registered = applicationFromRecord(record.key, stored);
-        const indexed = await this.upsertApplicationIndex(registered);
-        if (!indexed.ok) return indexed;
+      const written = await kvResult.data.put(record.key, stored);
+      if (!written.ok) return accountErr(written.error);
+      registered = applicationFromRecord(record.key, stored);
+      await this.upsertApplicationIndexQuietly(registered);
       }
 
       return ok(registered!);
@@ -204,14 +226,25 @@ export class AccountService {
 
       const removed = await kvResult.data.delete(applicationKey(appId));
       if (!removed.ok) return accountErr(removed.error);
-      const indexed = await this.deleteApplicationIndex(appId);
-      if (!indexed.ok) return indexed;
+      await this.deleteApplicationIndexQuietly(appId);
       return ok(undefined);
     },
   };
 
   readonly spaces = {
-    list: async (): Promise<Result<AccountSpace[]>> => {
+    list: async (options: AccountSpaceListOptions = {}): Promise<Result<AccountSpace[]>> => {
+      if (options.preferIndex) {
+        const indexed = await this.index.spaces.list();
+        if (indexed.ok && indexed.data.length > 0) return indexed;
+        if (!indexed.ok && !isMissingIndexError(indexed.error)) return indexed;
+
+        const canonical = await this.spaces.syncAccessible();
+        if (canonical.ok && options.refreshIndex !== false) {
+          await this.replaceSpacesIndexQuietly(canonical.data);
+        }
+        return canonical;
+      }
+
       const kvResult = this.accountKV();
       if (!kvResult.ok) return kvResult;
 
@@ -249,8 +282,7 @@ export class AccountService {
       if (!written.ok) return accountErr(written.error);
 
       const registered = spaceFromRecord(spaceKey(stored.space_id), stored);
-      const indexed = await this.upsertSpaceIndex(registered);
-      if (!indexed.ok) return indexed;
+      await this.upsertSpaceIndexQuietly(registered);
       return ok(registered);
     },
 
@@ -273,8 +305,7 @@ export class AccountService {
 
       const removed = await kvResult.data.delete(spaceKey(spaceId));
       if (!removed.ok) return accountErr(removed.error);
-      const indexed = await this.deleteSpaceIndex(spaceId);
-      if (!indexed.ok) return indexed;
+      await this.deleteSpaceIndexQuietly(spaceId);
       return ok(undefined);
     },
   };
@@ -283,6 +314,21 @@ export class AccountService {
     list: async (
       options: AccountDelegationListOptions = {},
     ): Promise<Result<AccountDelegation[]>> => {
+      if (options.preferIndex) {
+        const indexed = await this.index.delegations.list(options);
+        if (indexed.ok && indexed.data.length > 0) return indexed;
+        if (!indexed.ok && !isMissingIndexError(indexed.error)) return indexed;
+
+        const live = await this.delegations.list({
+          direction: options.direction,
+          space: options.space,
+        });
+        if (live.ok && options.refreshIndex !== false) {
+          await this.replaceDelegationsIndexQuietly(live.data);
+        }
+        return live;
+      }
+
       const spaces = await this.config.getSpaces().list();
       if (!spaces.ok) return accountErr(spaces.error);
 
@@ -494,9 +540,15 @@ export class AccountService {
       const queried = await dbResult.data.query<string | number>(
         "SELECT source, synced_at, count FROM sync_state ORDER BY source",
       );
-      if (!queried.ok) return accountErr(queried.error);
+      if (!queried.ok) {
+        if (isMissingIndexError(queried.error)) {
+          return ok({ database: ACCOUNT_INDEX_DB, state: "missing", sources: [] });
+        }
+        return accountErr(queried.error);
+      }
       return ok({
         database: ACCOUNT_INDEX_DB,
+        state: "ready",
         sources: (queried.data.rows as unknown as IndexedSyncStateRow[]).map(([source, syncedAt, count]) => ({
           source,
           syncedAt,
@@ -548,6 +600,10 @@ export class AccountService {
     return queried.ok && queried.data.rows.length > 0;
   }
 
+  private async upsertApplicationIndexQuietly(app: AccountApplication): Promise<void> {
+    await ignoreIndexFailure(() => this.upsertApplicationIndex(app));
+  }
+
   private async upsertApplicationIndex(app: AccountApplication): Promise<Result<void>> {
     const dbResult = this.accountDb();
     if (!dbResult.ok) return ok(undefined);
@@ -577,6 +633,10 @@ export class AccountService {
     return ok(undefined);
   }
 
+  private async deleteApplicationIndexQuietly(appId: string): Promise<void> {
+    await ignoreIndexFailure(() => this.deleteApplicationIndex(appId));
+  }
+
   private async deleteApplicationIndex(appId: string): Promise<Result<void>> {
     const dbResult = this.accountDb();
     if (!dbResult.ok) return ok(undefined);
@@ -587,6 +647,10 @@ export class AccountService {
     ]);
     if (!deleted.ok) return accountErr(deleted.error);
     return ok(undefined);
+  }
+
+  private async upsertSpaceIndexQuietly(space: AccountSpace): Promise<void> {
+    await ignoreIndexFailure(() => this.upsertSpaceIndex(space));
   }
 
   private async upsertSpaceIndex(space: AccountSpace): Promise<Result<void>> {
@@ -615,6 +679,10 @@ export class AccountService {
     return ok(undefined);
   }
 
+  private async deleteSpaceIndexQuietly(spaceId: string): Promise<void> {
+    await ignoreIndexFailure(() => this.deleteSpaceIndex(spaceId));
+  }
+
   private async deleteSpaceIndex(spaceId: string): Promise<Result<void>> {
     const dbResult = this.accountDb();
     if (!dbResult.ok) return ok(undefined);
@@ -637,6 +705,105 @@ export class AccountService {
       );
     }
     return ok(found);
+  }
+
+  private async replaceApplicationsIndexQuietly(applications: AccountApplication[]): Promise<void> {
+    await ignoreIndexFailure(async () => {
+      const dbResult = this.accountDb();
+      if (!dbResult.ok) return;
+      const syncedAt = new Date().toISOString();
+      await dbResult.data.batch([
+        ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
+        { sql: "DELETE FROM applications" },
+        { sql: "DELETE FROM application_state" },
+        ...applications.map((app) => ({
+          sql:
+            "INSERT OR REPLACE INTO applications (app_id, name, description, updated_at, manifest_json) VALUES (?, ?, ?, ?, ?)",
+          params: [
+            app.appId,
+            app.name ?? null,
+            app.description ?? null,
+            app.updatedAt ?? syncedAt,
+            JSON.stringify(app.manifests),
+          ],
+        })),
+        ...applications.map((app) => ({
+          sql:
+            "INSERT OR REPLACE INTO application_state (app_id, manifest_hash, indexed_at) VALUES (?, ?, ?)",
+          params: [app.appId, app.manifestHash ?? hashJson(app.manifests), syncedAt],
+        })),
+        {
+          sql: "INSERT OR REPLACE INTO sync_state (source, synced_at, count) VALUES (?, ?, ?)",
+          params: ["applications", syncedAt, applications.length],
+        },
+      ]);
+    });
+  }
+
+  private async replaceSpacesIndexQuietly(spaces: AccountSpace[]): Promise<void> {
+    await ignoreIndexFailure(async () => {
+      const dbResult = this.accountDb();
+      if (!dbResult.ok) return;
+      const syncedAt = new Date().toISOString();
+      await dbResult.data.batch([
+        ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
+        { sql: "DELETE FROM spaces" },
+        ...spaces.map((space) => ({
+          sql:
+            "INSERT OR REPLACE INTO spaces (space_id, name, owner_did, type, permissions_json, status, registered_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          params: [
+            space.spaceId,
+            space.name,
+            space.ownerDid,
+            space.type,
+            JSON.stringify(space.permissions),
+            space.status,
+            space.registeredAt ?? syncedAt,
+            space.updatedAt ?? syncedAt,
+            space.expiresAt?.toISOString() ?? null,
+          ],
+        })),
+        {
+          sql: "INSERT OR REPLACE INTO sync_state (source, synced_at, count) VALUES (?, ?, ?)",
+          params: ["spaces", syncedAt, spaces.length],
+        },
+      ]);
+    });
+  }
+
+  private async replaceDelegationsIndexQuietly(delegations: AccountDelegation[]): Promise<void> {
+    await ignoreIndexFailure(async () => {
+      const dbResult = this.accountDb();
+      if (!dbResult.ok) return;
+      const syncedAt = new Date().toISOString();
+      await dbResult.data.batch([
+        ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
+        { sql: "DELETE FROM delegations" },
+        ...delegations.map((delegation) => ({
+          sql:
+            "INSERT OR REPLACE INTO delegations (cid, direction, space_id, space_name, counterparty_did, delegate_did, delegator_did, path, actions_json, expiry, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          params: [
+            delegation.cid,
+            delegation.direction,
+            delegation.spaceId,
+            delegation.spaceName ?? null,
+            delegation.counterpartyDid,
+            delegation.delegateDid,
+            delegation.delegatorDid ?? null,
+            delegation.path,
+            JSON.stringify(delegation.actions),
+            delegation.expiry.toISOString(),
+            delegation.status,
+            delegation.createdAt?.toISOString() ?? null,
+            syncedAt,
+          ],
+        })),
+        {
+          sql: "INSERT OR REPLACE INTO sync_state (source, synced_at, count) VALUES (?, ?, ?)",
+          params: ["delegations", syncedAt, delegations.length],
+        },
+      ]);
+    });
   }
 }
 
@@ -851,6 +1018,7 @@ function stableJson(value: unknown): string {
 
 export interface AccountIndexStatus {
   database: string;
+  state: "ready" | "missing";
   sources: Array<{
     source: string;
     syncedAt: string;
@@ -936,4 +1104,17 @@ function mapDelegation(
 
 function accountErr(error: ServiceError): Result<never> {
   return err(serviceError(error.code, error.message, SERVICE_NAME, { cause: error.cause, meta: error.meta }));
+}
+
+function isMissingIndexError(error: ServiceError): boolean {
+  return /no such table:/i.test(error.message);
+}
+
+async function ignoreIndexFailure(task: () => Promise<unknown>): Promise<void> {
+  try {
+    await task();
+  } catch {
+    // The account index is a cache. Canonical reads/writes must not fail
+    // because a best-effort cache update could not be applied.
+  }
 }

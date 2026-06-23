@@ -2,7 +2,11 @@ import { describe, expect, mock, test } from "bun:test";
 import { AccountService } from "./AccountService";
 import type { Delegation, Manifest, SpaceInfo } from "@tinycloud/sdk-core";
 
-function makeAccountService() {
+function makeAccountService(options: {
+  emptyIndexTables?: string[];
+  failingIndexUpdates?: boolean;
+  missingIndexTables?: string[];
+} = {}) {
   const records = new Map<string, unknown>([
     [
       "applications/com.listen.app",
@@ -28,10 +32,29 @@ function makeAccountService() {
   const db = {
     batch: mock(async (statements: any[]) => {
       batches.push(statements);
+      if (options.failingIndexUpdates) {
+        return {
+          ok: false,
+          error: {
+            code: "SQL_PERMISSION_DENIED",
+            message: "SQL batch failed: 403 - not authorized",
+          },
+        };
+      }
       return { ok: true, data: { results: statements.map(() => ({ changes: 1, lastInsertRowId: 0 })) } };
     }),
     query: mock(async (sql: string, params?: unknown[]) => {
       queries.push({ sql, params });
+      const missing = options.missingIndexTables?.find((table) => sql.includes(`FROM ${table}`));
+      if (missing) {
+        return {
+          ok: false,
+          error: {
+            code: "SQL_ERROR",
+            message: `SQL query failed: 400 - SQLite error: no such table: ${missing}`,
+          },
+        };
+      }
       if (sql.includes("FROM application_state")) {
         return {
           ok: true,
@@ -43,6 +66,16 @@ function makeAccountService() {
         };
       }
       if (sql.includes("FROM applications")) {
+        if (options.emptyIndexTables?.includes("applications")) {
+          return {
+            ok: true,
+            data: {
+              columns: ["app_id", "name", "description", "updated_at", "manifest_json", "manifest_hash"],
+              rows: [],
+              rowCount: 0,
+            },
+          };
+        }
         return {
           ok: true,
           data: {
@@ -62,6 +95,26 @@ function makeAccountService() {
         };
       }
       if (sql.includes("FROM spaces")) {
+        if (options.emptyIndexTables?.includes("spaces")) {
+          return {
+            ok: true,
+            data: {
+              columns: [
+                "space_id",
+                "name",
+                "owner_did",
+                "type",
+                "permissions_json",
+                "status",
+                "registered_at",
+                "updated_at",
+                "expires_at",
+              ],
+              rows: [],
+              rowCount: 0,
+            },
+          };
+        }
         return {
           ok: true,
           data: {
@@ -94,6 +147,29 @@ function makeAccountService() {
         };
       }
       if (sql.includes("FROM delegations")) {
+        if (options.emptyIndexTables?.includes("delegations")) {
+          return {
+            ok: true,
+            data: {
+              columns: [
+                "cid",
+                "direction",
+                "space_id",
+                "space_name",
+                "counterparty_did",
+                "delegate_did",
+                "delegator_did",
+                "path",
+                "actions_json",
+                "expiry",
+                "status",
+                "created_at",
+              ],
+              rows: [],
+              rowCount: 0,
+            },
+          };
+        }
         return {
           ok: true,
           data: {
@@ -237,6 +313,20 @@ describe("AccountService applications", () => {
     });
   });
 
+  test("does not fail canonical manifest registration when index update fails", async () => {
+    const { put, service } = makeAccountService({ failingIndexUpdates: true });
+    const manifest: Manifest = {
+      app_id: "com.notes.app",
+      name: "Notes",
+      defaults: false,
+    };
+
+    const result = await service.applications.register(manifest);
+
+    expect(result.ok).toBe(true);
+    expect(put).toHaveBeenCalledWith("applications/com.notes.app", expect.any(Object));
+  });
+
   test("removes application registry records", async () => {
     const { del, service } = makeAccountService();
 
@@ -309,6 +399,33 @@ describe("AccountService index", () => {
     ]);
   });
 
+  test("falls back to canonical applications when preferred index is missing", async () => {
+    const { batches, service } = makeAccountService({ missingIndexTables: ["applications"] });
+
+    const result = await service.applications.list({ preferIndex: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data).toEqual([
+      expect.objectContaining({
+        appId: "com.listen.app",
+        name: "Listen",
+      }),
+    ]);
+    expect(batches.at(-1).some((statement: any) => statement.sql.includes("CREATE TABLE IF NOT EXISTS applications"))).toBe(true);
+  });
+
+  test("falls back to canonical applications when preferred index is empty", async () => {
+    const { service } = makeAccountService({ emptyIndexTables: ["applications"] });
+
+    const result = await service.applications.list({ preferIndex: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data[0]).toMatchObject({
+      appId: "com.listen.app",
+      name: "Listen",
+    });
+  });
+
   test("lists spaces from the materialized index", async () => {
     const { service } = makeAccountService();
 
@@ -328,6 +445,21 @@ describe("AccountService index", () => {
         expiresAt: undefined,
       },
     ]);
+  });
+
+  test("falls back to accessible spaces when preferred index is missing", async () => {
+    const { batches, service } = makeAccountService({ missingIndexTables: ["spaces"] });
+
+    const result = await service.spaces.list({ preferIndex: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data).toEqual([
+      expect.objectContaining({
+        spaceId: "tinycloud:pkh:eip155:1:0xabc:applications",
+        name: "applications",
+      }),
+    ]);
+    expect(batches.at(-1).some((statement: any) => statement.sql.includes("CREATE TABLE IF NOT EXISTS spaces"))).toBe(true);
   });
 
   test("lists delegations from the materialized index with filters", async () => {
@@ -350,6 +482,19 @@ describe("AccountService index", () => {
     });
   });
 
+  test("falls back to live delegations when preferred index is missing", async () => {
+    const { batches, service } = makeAccountService({ missingIndexTables: ["delegations"] });
+
+    const result = await service.delegations.list({ preferIndex: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data.map((delegation) => delegation.cid)).toEqual([
+      "bafy-granted",
+      "bafy-received",
+    ]);
+    expect(batches.at(-1).some((statement: any) => statement.sql.includes("CREATE TABLE IF NOT EXISTS delegations"))).toBe(true);
+  });
+
   test("runs custom read queries against the materialized index", async () => {
     const { service } = makeAccountService();
 
@@ -360,6 +505,19 @@ describe("AccountService index", () => {
       columns: ["value"],
       rows: [[1]],
       rowCount: 1,
+    });
+  });
+
+  test("reports missing index status without surfacing raw SQLite table errors", async () => {
+    const { service } = makeAccountService({ missingIndexTables: ["sync_state"] });
+
+    const result = await service.index.status();
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data).toEqual({
+      database: "account",
+      state: "missing",
+      sources: [],
     });
   });
 });

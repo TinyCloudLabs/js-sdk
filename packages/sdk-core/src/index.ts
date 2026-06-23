@@ -95,13 +95,16 @@ export { TinyCloud, TinyCloudConfig } from "./TinyCloud";
 export { AccountService } from "./account/AccountService";
 export type {
   AccountApplication,
+  AccountApplicationListOptions,
   AccountDelegation,
   AccountDelegationListOptions,
   AccountDelegationRevokeOptions,
   AccountIndexRebuildResult,
   AccountIndexStatus,
+  AccountIndexedReadOptions,
   AccountServiceConfig,
   AccountSpace,
+  AccountSpaceListOptions,
   AccountStatus,
 } from "./account/AccountService";
 
