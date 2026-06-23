@@ -28,8 +28,33 @@ function makeAccountService(options: {
   const revoke = mock(async () => ({ ok: true, data: undefined }));
   const ensureAccountSpaceHosted = mock(async () => {});
   const batches: any[] = [];
+  const migrations: any[] = [];
   const queries: Array<{ sql: string; params?: unknown[] }> = [];
   const db = {
+    migrations: {
+      apply: mock(async (migrationOptions: any) => {
+        migrations.push(migrationOptions);
+        if (options.failingIndexUpdates) {
+          return {
+            ok: false,
+            error: {
+              code: "SQL_PERMISSION_DENIED",
+              message: "SQL migration failed: 403 - not authorized",
+            },
+          };
+        }
+        return {
+          ok: true,
+          data: {
+            database: "account",
+            namespace: migrationOptions.namespace,
+            status: "already_current",
+            applied: [],
+            skipped: migrationOptions.migrations.map((migration: any) => migration.id),
+          },
+        };
+      }),
+    },
     batch: mock(async (statements: any[]) => {
       batches.push(statements);
       if (options.failingIndexUpdates) {
@@ -271,7 +296,7 @@ function makeAccountService(options: {
     getAccountDb: () => db as any,
   });
 
-  return { batches, db, del, ensureAccountSpaceHosted, put, queries, records, revoke, service };
+  return { batches, db, del, ensureAccountSpaceHosted, migrations, put, queries, records, revoke, service };
 }
 
 describe("AccountService applications", () => {
@@ -365,7 +390,7 @@ describe("AccountService delegations", () => {
 
 describe("AccountService index", () => {
   test("rebuilds the materialized account SQLite index", async () => {
-    const { batches, service } = makeAccountService();
+    const { batches, migrations, service } = makeAccountService();
 
     const result = await service.index.rebuild();
 
@@ -375,8 +400,17 @@ describe("AccountService index", () => {
       applications: 1,
       delegations: 2,
     });
+    expect(migrations).toHaveLength(1);
+    expect(migrations[0]).toMatchObject({
+      namespace: "tinycloud.account.index",
+      migrations: [
+        {
+          id: "001_initial",
+        },
+      ],
+    });
+    expect(migrations[0].migrations[0].sql.some((sql: string) => sql.includes("CREATE TABLE IF NOT EXISTS applications"))).toBe(true);
     expect(batches).toHaveLength(1);
-    expect(batches[0].some((s: any) => s.sql.includes("CREATE TABLE IF NOT EXISTS applications"))).toBe(true);
     expect(batches[0].some((s: any) => s.sql.includes("INSERT INTO applications"))).toBe(true);
     expect(batches[0].some((s: any) => s.sql.includes("INSERT INTO delegations"))).toBe(true);
   });
@@ -400,7 +434,7 @@ describe("AccountService index", () => {
   });
 
   test("falls back to canonical applications when preferred index is missing", async () => {
-    const { batches, service } = makeAccountService({ missingIndexTables: ["applications"] });
+    const { migrations, service } = makeAccountService({ missingIndexTables: ["applications"] });
 
     const result = await service.applications.list({ preferIndex: true });
 
@@ -411,7 +445,7 @@ describe("AccountService index", () => {
         name: "Listen",
       }),
     ]);
-    expect(batches.at(-1).some((statement: any) => statement.sql.includes("CREATE TABLE IF NOT EXISTS applications"))).toBe(true);
+    expect(migrations[0].migrations[0].sql.some((sql: string) => sql.includes("CREATE TABLE IF NOT EXISTS applications"))).toBe(true);
   });
 
   test("falls back to canonical applications when preferred index is empty", async () => {
@@ -448,7 +482,7 @@ describe("AccountService index", () => {
   });
 
   test("falls back to accessible spaces when preferred index is missing", async () => {
-    const { batches, service } = makeAccountService({ missingIndexTables: ["spaces"] });
+    const { migrations, service } = makeAccountService({ missingIndexTables: ["spaces"] });
 
     const result = await service.spaces.list({ preferIndex: true });
 
@@ -459,7 +493,7 @@ describe("AccountService index", () => {
         name: "applications",
       }),
     ]);
-    expect(batches.at(-1).some((statement: any) => statement.sql.includes("CREATE TABLE IF NOT EXISTS spaces"))).toBe(true);
+    expect(migrations[0].migrations[0].sql.some((sql: string) => sql.includes("CREATE TABLE IF NOT EXISTS spaces"))).toBe(true);
   });
 
   test("lists delegations from the materialized index with filters", async () => {
@@ -483,7 +517,7 @@ describe("AccountService index", () => {
   });
 
   test("falls back to live delegations when preferred index is missing", async () => {
-    const { batches, service } = makeAccountService({ missingIndexTables: ["delegations"] });
+    const { migrations, service } = makeAccountService({ missingIndexTables: ["delegations"] });
 
     const result = await service.delegations.list({ preferIndex: true });
 
@@ -492,7 +526,7 @@ describe("AccountService index", () => {
       "bafy-granted",
       "bafy-received",
     ]);
-    expect(batches.at(-1).some((statement: any) => statement.sql.includes("CREATE TABLE IF NOT EXISTS delegations"))).toBe(true);
+    expect(migrations[0].migrations[0].sql.some((sql: string) => sql.includes("CREATE TABLE IF NOT EXISTS delegations"))).toBe(true);
   });
 
   test("runs custom read queries against the materialized index", async () => {

@@ -15,7 +15,19 @@ import type {
   QueryResponse,
   ExecuteResponse,
   BatchResponse,
+  SqlMigrationApplyOptions,
+  SqlMigrationApplyResponse,
 } from "./types";
+
+/**
+ * Migration helper bound to a specific database.
+ */
+export interface ISQLMigrations {
+  /**
+   * Apply ordered, app-owned migrations and record completed ids.
+   */
+  apply(options: SqlMigrationApplyOptions): Promise<Result<SqlMigrationApplyResponse>>;
+}
 
 /**
  * Database handle interface for operations on a specific named database.
@@ -23,6 +35,9 @@ import type {
 export interface IDatabaseHandle {
   /** The database name */
   readonly name: string;
+
+  /** Versioned schema migration helper. */
+  readonly migrations: ISQLMigrations;
 
   /**
    * Execute a SQL query and return rows.

@@ -19,6 +19,7 @@ import type { ISpaceService } from "../spaces/SpaceService";
 
 const SERVICE_NAME = "account";
 const ACCOUNT_INDEX_DB = "account";
+const ACCOUNT_INDEX_NAMESPACE = "tinycloud.account.index";
 const ACCOUNT_SPACES_PATH = "spaces/";
 
 export interface AccountApplication {
@@ -382,8 +383,10 @@ export class AccountService {
       if (!delegations.ok) return delegations;
 
       const syncedAt = new Date().toISOString();
+      const schema = await this.ensureAccountIndex(dbResult.data);
+      if (!schema.ok) return schema;
+
       const statements = [
-        ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
         { sql: "DELETE FROM applications" },
         { sql: "DELETE FROM application_state" },
         { sql: "DELETE FROM spaces" },
@@ -590,7 +593,7 @@ export class AccountService {
     const dbResult = this.accountDb();
     if (!dbResult.ok) return false;
 
-    const schema = await dbResult.data.batch(ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })));
+    const schema = await this.ensureAccountIndex(dbResult.data);
     if (!schema.ok) return false;
 
     const queried = await dbResult.data.query<string>(
@@ -608,10 +611,12 @@ export class AccountService {
     const dbResult = this.accountDb();
     if (!dbResult.ok) return ok(undefined);
 
+    const schema = await this.ensureAccountIndex(dbResult.data);
+    if (!schema.ok) return schema;
+
     const updatedAt = app.updatedAt ?? new Date().toISOString();
     const manifestHash = app.manifestHash ?? hashJson(app.manifests);
     const written = await dbResult.data.batch([
-      ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
       {
         sql:
           "INSERT OR REPLACE INTO applications (app_id, name, description, updated_at, manifest_json) VALUES (?, ?, ?, ?, ?)",
@@ -640,8 +645,10 @@ export class AccountService {
   private async deleteApplicationIndex(appId: string): Promise<Result<void>> {
     const dbResult = this.accountDb();
     if (!dbResult.ok) return ok(undefined);
+    const schema = await this.ensureAccountIndex(dbResult.data);
+    if (!schema.ok) return schema;
+
     const deleted = await dbResult.data.batch([
-      ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
       { sql: "DELETE FROM applications WHERE app_id = ?", params: [appId] },
       { sql: "DELETE FROM application_state WHERE app_id = ?", params: [appId] },
     ]);
@@ -656,9 +663,11 @@ export class AccountService {
   private async upsertSpaceIndex(space: AccountSpace): Promise<Result<void>> {
     const dbResult = this.accountDb();
     if (!dbResult.ok) return ok(undefined);
+    const schema = await this.ensureAccountIndex(dbResult.data);
+    if (!schema.ok) return schema;
+
     const updatedAt = space.updatedAt ?? new Date().toISOString();
     const written = await dbResult.data.batch([
-      ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
       {
         sql:
           "INSERT OR REPLACE INTO spaces (space_id, name, owner_did, type, permissions_json, status, registered_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -686,8 +695,10 @@ export class AccountService {
   private async deleteSpaceIndex(spaceId: string): Promise<Result<void>> {
     const dbResult = this.accountDb();
     if (!dbResult.ok) return ok(undefined);
+    const schema = await this.ensureAccountIndex(dbResult.data);
+    if (!schema.ok) return schema;
+
     const deleted = await dbResult.data.batch([
-      ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
       { sql: "DELETE FROM spaces WHERE space_id = ?", params: [spaceId] },
     ]);
     if (!deleted.ok) return accountErr(deleted.error);
@@ -712,8 +723,10 @@ export class AccountService {
       const dbResult = this.accountDb();
       if (!dbResult.ok) return;
       const syncedAt = new Date().toISOString();
+      const schema = await this.ensureAccountIndex(dbResult.data);
+      if (!schema.ok) return;
+
       await dbResult.data.batch([
-        ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
         { sql: "DELETE FROM applications" },
         { sql: "DELETE FROM application_state" },
         ...applications.map((app) => ({
@@ -745,8 +758,10 @@ export class AccountService {
       const dbResult = this.accountDb();
       if (!dbResult.ok) return;
       const syncedAt = new Date().toISOString();
+      const schema = await this.ensureAccountIndex(dbResult.data);
+      if (!schema.ok) return;
+
       await dbResult.data.batch([
-        ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
         { sql: "DELETE FROM spaces" },
         ...spaces.map((space) => ({
           sql:
@@ -776,8 +791,10 @@ export class AccountService {
       const dbResult = this.accountDb();
       if (!dbResult.ok) return;
       const syncedAt = new Date().toISOString();
+      const schema = await this.ensureAccountIndex(dbResult.data);
+      if (!schema.ok) return;
+
       await dbResult.data.batch([
-        ...ACCOUNT_INDEX_SCHEMA.map((sql) => ({ sql })),
         { sql: "DELETE FROM delegations" },
         ...delegations.map((delegation) => ({
           sql:
@@ -804,6 +821,20 @@ export class AccountService {
         },
       ]);
     });
+  }
+
+  private async ensureAccountIndex(db: IDatabaseHandle): Promise<Result<void>> {
+    const migrated = await db.migrations.apply({
+      namespace: ACCOUNT_INDEX_NAMESPACE,
+      migrations: [
+        {
+          id: "001_initial",
+          sql: ACCOUNT_INDEX_SCHEMA,
+        },
+      ],
+    });
+    if (!migrated.ok) return accountErr(migrated.error);
+    return ok(undefined);
   }
 }
 

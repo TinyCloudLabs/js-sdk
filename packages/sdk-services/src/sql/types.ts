@@ -97,6 +97,53 @@ export interface BatchResponse {
 }
 
 /**
+ * A versioned SQL migration owned by an application or SDK subsystem.
+ */
+export interface SqlMigration {
+  /**
+   * Stable migration id within the namespace, e.g. "001_initial".
+   */
+  id: string;
+
+  /**
+   * SQL statements to apply when this migration has not been recorded.
+   * Statements should be idempotent where SQLite supports it.
+   */
+  sql: Array<string | SqlStatement>;
+}
+
+/**
+ * Options for applying SQL migrations.
+ */
+export interface SqlMigrationApplyOptions {
+  /**
+   * Namespace for this migration set, usually an app id or SDK subsystem.
+   */
+  namespace: string;
+
+  /**
+   * Ordered migration list.
+   */
+  migrations: SqlMigration[];
+
+  /**
+   * Custom abort signal for migration operations.
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * Result from applying SQL migrations.
+ */
+export interface SqlMigrationApplyResponse {
+  database: string;
+  namespace: string;
+  status: "already_current" | "applied";
+  applied: string[];
+  skipped: string[];
+}
+
+/**
  * SQL service action types.
  */
 export const SQLAction = {

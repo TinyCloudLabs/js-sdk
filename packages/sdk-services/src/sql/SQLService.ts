@@ -17,6 +17,11 @@ import {
   type ServiceSession,
 } from "../types";
 import { authRequiredError, wrapError, parseAuthError } from "../errors";
+import {
+  formatServiceResponseError,
+  parseServiceErrorBody,
+  responseErrorMeta,
+} from "../responseErrors";
 import type { ISQLService } from "./ISQLService";
 import type { IDatabaseHandle } from "./ISQLService";
 import { DatabaseHandle } from "./DatabaseHandle";
@@ -30,15 +35,29 @@ import {
   type QueryResponse,
   type ExecuteResponse,
   type BatchResponse,
+  type SqlMigration,
+  type SqlMigrationApplyOptions,
+  type SqlMigrationApplyResponse,
   SQLAction,
 } from "./types";
 
 const DDL_TOKENS = new Set(["alter", "create", "drop"]);
+const MIGRATIONS_TABLE = "__tinycloud_sql_migrations";
+const MIGRATIONS_SCHEMA = `CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (
+  key TEXT PRIMARY KEY,
+  namespace TEXT NOT NULL,
+  id TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  statement_count INTEGER NOT NULL
+)`;
+const MIGRATIONS_META_NAMESPACE = "tinycloud.sql.migrations";
+const MIGRATIONS_META_ID = "000_metadata";
 
 export class SQLService extends BaseService implements ISQLService {
   static readonly serviceName = "sql";
 
   declare protected _config: SQLServiceConfig;
+  private readonly migrationLocks = new Map<string, Promise<Result<SqlMigrationApplyResponse>>>();
 
   constructor(config: SQLServiceConfig = {}) {
     super();
@@ -94,6 +113,30 @@ export class SQLService extends BaseService implements ISQLService {
     options?: BatchOptions
   ): Promise<Result<BatchResponse>> {
     return this.batchOnDb(this.defaultDbName, statements, options);
+  }
+
+  async applyMigrationsOnDb(
+    dbName: string,
+    options: SqlMigrationApplyOptions,
+  ): Promise<Result<SqlMigrationApplyResponse>> {
+    const validationError = validateMigrationOptions(options);
+    if (validationError) {
+      return err(serviceError(ErrorCodes.INVALID_INPUT, validationError, "sql"));
+    }
+
+    const lockKey = `${dbName}\0${options.namespace}`;
+    const existing = this.migrationLocks.get(lockKey);
+    if (existing) {
+      return existing;
+    }
+
+    const promise = this.applyMigrationsOnDbUnlocked(dbName, options);
+    this.migrationLocks.set(lockKey, promise);
+    try {
+      return await promise;
+    } finally {
+      this.migrationLocks.delete(lockKey);
+    }
   }
 
   // === Internal methods called by DatabaseHandle ===
@@ -275,6 +318,101 @@ export class SQLService extends BaseService implements ISQLService {
     });
   }
 
+  private async applyMigrationsOnDbUnlocked(
+    dbName: string,
+    options: SqlMigrationApplyOptions,
+  ): Promise<Result<SqlMigrationApplyResponse>> {
+    return this.withTelemetry("migrations.apply", dbName, async () => {
+      const created = await this.ensureMigrationsTable(dbName, options.signal);
+      if (!created.ok) return created;
+
+      const listed = await this.queryOnDb<{ id: string }>(
+        dbName,
+        `SELECT id FROM ${MIGRATIONS_TABLE} WHERE namespace = ? ORDER BY applied_at, id`,
+        [options.namespace],
+        { signal: options.signal },
+      );
+      if (!listed.ok) return listed;
+
+      const appliedIds = new Set(
+        listed.data.rows
+          .map((row) => rowValue(row, 0))
+          .filter((id): id is string => typeof id === "string"),
+      );
+      const skipped = options.migrations
+        .filter((migration) => appliedIds.has(migration.id))
+        .map((migration) => migration.id);
+      const pending = options.migrations.filter((migration) => !appliedIds.has(migration.id));
+      const applied: string[] = [];
+
+      for (const migration of pending) {
+        const result = await this.applyOneMigration(dbName, options.namespace, migration, options.signal);
+        if (!result.ok) return result;
+        applied.push(migration.id);
+      }
+
+      return ok({
+        database: dbName,
+        namespace: options.namespace,
+        status: applied.length > 0 ? "applied" : "already_current",
+        applied,
+        skipped,
+      });
+    });
+  }
+
+  private async applyOneMigration(
+    dbName: string,
+    namespace: string,
+    migration: SqlMigration,
+    signal?: AbortSignal,
+  ): Promise<Result<void>> {
+    const statements = [
+      ...migration.sql.map((statement) =>
+        typeof statement === "string" ? { sql: statement } : statement,
+      ),
+      {
+        sql: `INSERT OR REPLACE INTO ${MIGRATIONS_TABLE} (key, namespace, id, applied_at, statement_count) VALUES (?, ?, ?, ?, ?)`,
+        params: [
+          migrationKey(namespace, migration.id),
+          namespace,
+          migration.id,
+          new Date().toISOString(),
+          migration.sql.length,
+        ],
+      },
+    ];
+
+    const result = await this.batchOnDb(dbName, statements, { signal });
+    if (!result.ok) return result;
+    return ok(undefined);
+  }
+
+  private async ensureMigrationsTable(
+    dbName: string,
+    signal?: AbortSignal,
+  ): Promise<Result<void>> {
+    const result = await this.batchOnDb(
+      dbName,
+      [
+        { sql: MIGRATIONS_SCHEMA },
+        {
+          sql: `INSERT OR REPLACE INTO ${MIGRATIONS_TABLE} (key, namespace, id, applied_at, statement_count) VALUES (?, ?, ?, ?, ?)`,
+          params: [
+            migrationKey(MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID),
+            MIGRATIONS_META_NAMESPACE,
+            MIGRATIONS_META_ID,
+            new Date().toISOString(),
+            1,
+          ],
+        },
+      ],
+      { signal },
+    );
+    if (!result.ok) return result;
+    return ok(undefined);
+  }
+
   // === Private helpers ===
 
   private async invokeSQL(
@@ -346,22 +484,21 @@ export class SQLService extends BaseService implements ISQLService {
   ): Promise<Result<never>> {
     const errorText = await response.text();
 
-    let errorBody: { error?: string; message?: string; code?: string } = {};
-    try {
-      errorBody = JSON.parse(errorText);
-    } catch {
-      // Not JSON
-    }
+    const errorBody = parseServiceErrorBody(errorText);
 
     const errorCode = this.mapHttpStatusToErrorCode(
       response.status,
       errorBody.error
     );
-    const message =
-      errorBody.message ||
-      `SQL ${operation} failed: ${response.status} - ${errorText}`;
+    const message = formatServiceResponseError(
+      "SQL",
+      operation,
+      response.status,
+      errorText,
+      errorBody,
+    );
 
-    const meta: Record<string, unknown> = { status: response.status, statusText: response.statusText };
+    const meta = responseErrorMeta(response.status, response.statusText, errorText);
 
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);
@@ -431,4 +568,57 @@ function firstSqlToken(sql: string): string | undefined {
 
   const match = /^[A-Za-z_]+/.exec(sql.slice(index));
   return match?.[0].toLowerCase();
+}
+
+function validateMigrationOptions(options: SqlMigrationApplyOptions): string | null {
+  if (!options || typeof options !== "object") {
+    return "SQL migrations require options";
+  }
+  if (!options.namespace || typeof options.namespace !== "string") {
+    return "SQL migrations require a non-empty namespace";
+  }
+  if (!Array.isArray(options.migrations)) {
+    return "SQL migrations require an ordered migrations array";
+  }
+
+  const ids = new Set<string>();
+  for (const migration of options.migrations) {
+    if (!migration.id || typeof migration.id !== "string") {
+      return "SQL migrations require every migration to have a non-empty id";
+    }
+    if (ids.has(migration.id)) {
+      return `Duplicate SQL migration id: ${migration.id}`;
+    }
+    ids.add(migration.id);
+
+    if (!Array.isArray(migration.sql)) {
+      return `SQL migration ${migration.id} requires a sql array`;
+    }
+    for (const statement of migration.sql) {
+      if (typeof statement === "string") {
+        if (statement.trim() === "") {
+          return `SQL migration ${migration.id} contains an empty statement`;
+        }
+        continue;
+      }
+      if (!statement || typeof statement.sql !== "string" || statement.sql.trim() === "") {
+        return `SQL migration ${migration.id} contains an invalid statement`;
+      }
+    }
+  }
+
+  return null;
+}
+
+function migrationKey(namespace: string, id: string): string {
+  return `${encodeURIComponent(namespace)}:${encodeURIComponent(id)}`;
+}
+
+function rowValue(row: unknown, index: number): unknown {
+  if (Array.isArray(row)) return row[index];
+  if (row && typeof row === "object") {
+    const values = Object.values(row as Record<string, unknown>);
+    return values[index];
+  }
+  return undefined;
 }

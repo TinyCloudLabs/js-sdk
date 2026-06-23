@@ -15,6 +15,11 @@ import {
   type FetchResponse,
 } from "../types";
 import { authRequiredError, wrapError, parseAuthError } from "../errors";
+import {
+  formatServiceResponseError,
+  parseServiceErrorBody,
+  responseErrorMeta,
+} from "../responseErrors";
 import type { IDuckDbService, IDuckDbDatabaseHandle } from "./IDuckDbService";
 import { DuckDbDatabaseHandle } from "./DuckDbDatabaseHandle";
 import {
@@ -408,22 +413,21 @@ export class DuckDbService extends BaseService implements IDuckDbService {
   ): Promise<Result<never>> {
     const errorText = await response.text();
 
-    let errorBody: { error?: string; message?: string; code?: string } = {};
-    try {
-      errorBody = JSON.parse(errorText);
-    } catch {
-      // Not JSON
-    }
+    const errorBody = parseServiceErrorBody(errorText);
 
     const errorCode = this.mapHttpStatusToErrorCode(
       response.status,
       errorBody.error
     );
-    const message =
-      errorBody.message ||
-      `DuckDB ${operation} failed: ${response.status} - ${errorText}`;
+    const message = formatServiceResponseError(
+      "DuckDB",
+      operation,
+      response.status,
+      errorText,
+      errorBody,
+    );
 
-    const meta: Record<string, unknown> = { status: response.status, statusText: response.statusText };
+    const meta = responseErrorMeta(response.status, response.statusText, errorText);
 
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);
