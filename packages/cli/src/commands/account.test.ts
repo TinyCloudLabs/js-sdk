@@ -181,6 +181,12 @@ const node = {
       },
     },
     index: {
+      ensure: async () => ({
+        ok: true,
+        data: {
+          database: "account",
+        },
+      }),
       rebuild: async () => ({
         ok: true,
         data: {
@@ -523,6 +529,16 @@ describe("tc account", () => {
       spaces: 1,
       delegations: 1,
       syncedAt: "2026-06-20T00:00:00.000Z",
+    });
+  });
+
+  test("ensures the materialized account index schema", async () => {
+    await runAccount(["index", "ensure"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.outputs[0]).toEqual({
+      database: "account",
+      ensured: true,
     });
   });
 

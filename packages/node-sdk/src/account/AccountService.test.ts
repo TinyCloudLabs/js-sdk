@@ -389,6 +389,26 @@ describe("AccountService delegations", () => {
 });
 
 describe("AccountService index", () => {
+  test("ensures the materialized account SQLite schema", async () => {
+    const { batches, migrations, service } = makeAccountService();
+
+    const result = await service.index.ensure();
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data).toEqual({ database: "account" });
+    expect(migrations).toHaveLength(1);
+    expect(migrations[0]).toMatchObject({
+      namespace: "tinycloud.account.index",
+      migrations: [
+        {
+          id: "001_initial",
+        },
+      ],
+    });
+    expect(migrations[0].migrations[0].sql.some((sql: string) => sql.includes("CREATE TABLE IF NOT EXISTS applications"))).toBe(true);
+    expect(batches).toHaveLength(0);
+  });
+
   test("rebuilds the materialized account SQLite index", async () => {
     const { batches, migrations, service } = makeAccountService();
 

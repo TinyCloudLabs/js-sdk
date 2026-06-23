@@ -866,6 +866,7 @@ export class TinyCloudNode {
 
   private scheduleAccountRegistrySync(): void {
     void this.withAccountRegistryRetry(async () => {
+      void this.account.index.ensure();
       await this.writeManifestRegistryRecords();
       const spaces = await this.account.spaces.syncAccessible();
       if (!spaces.ok) {
