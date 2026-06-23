@@ -40,7 +40,7 @@ export function registerAccountCommand(program: Command): void {
         const node = await authenticatedNode(cmd);
         const result = options.live
           ? await node.account.applications.list()
-          : await node.account.index.applications.list();
+          : await node.account.applications.list({ preferIndex: true });
         assertOk(result);
         const payload = { applications: result.data, count: result.data.length };
         if (shouldOutputJson()) {
@@ -78,7 +78,7 @@ export function registerAccountCommand(program: Command): void {
         const node = await authenticatedNode(cmd);
         const result = options.live
           ? await node.account.spaces.list()
-          : await node.account.index.spaces.list();
+          : await node.account.spaces.list({ preferIndex: true });
         assertOk(result);
         const payload = { spaces: result.data.map(formatSpace), count: result.data.length };
         if (shouldOutputJson()) {
@@ -236,7 +236,7 @@ export function registerAccountCommand(program: Command): void {
         const direction = options.granted ? "granted" : options.received ? "received" : "all";
         const result = options.live
           ? await node.account.delegations.list({ direction, space: options.space })
-          : await node.account.index.delegations.list({ direction, space: options.space });
+          : await node.account.delegations.list({ direction, space: options.space, preferIndex: true });
         assertOk(result);
         const payload = { delegations: result.data.map(formatDelegation), count: result.data.length };
         if (shouldOutputJson()) {
