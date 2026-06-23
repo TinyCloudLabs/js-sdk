@@ -1052,16 +1052,98 @@ export class TinyCloudNode {
    * registered on the node.
    *
    * Calling this resolves `name` to the owner's owned-space URI
-   * (`tinycloud:pkh:eip155:<chain>:<addr>:<name>`) and hosts it via the
-   * host-SIWE delegation flow. The host SIWE is idempotent server-side, so it
-   * is safe to call whether or not the space already exists; do not gate it on
-   * a prior existence check. Must be called after {@link signIn}.
+   * (`tinycloud:pkh:eip155:<chain>:<addr>:<name>`). It first consults the
+   * account-space spaces registry (`account/spaces/{space_id}`, the canonical
+   * KV source of truth, fronted by a best-effort SQLite index): if the space is
+   * already registered/hosted it returns the URI WITHOUT submitting a host
+   * delegation, avoiding a redundant host-SIWE signature prompt for owners who
+   * already use the space. Only when the space is absent — or the registry
+   * check fails for any reason (e.g. a cold SQLite index reporting
+   * `no such table: spaces`) — does it fall through to {@link hostOwnedSpace}.
+   *
+   * The registry check is purely an optimization: any failure falls back to
+   * hosting, and the host SIWE is idempotent server-side, so re-hosting an
+   * existing space remains a safe no-op. Must be called after {@link signIn}.
    *
    * @param name - The owned space name (e.g. `"secrets"`).
    * @returns The hosted owned-space URI.
    */
   async ensureOwnedSpaceHosted(name: string): Promise<string> {
-    return this.hostOwnedSpace(name);
+    if (!this.auth || !this.auth.tinyCloudSession) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+
+    const spaceId = this.ownedSpaceId(name);
+
+    if (await this.isOwnedSpaceRegistered(spaceId)) {
+      return spaceId;
+    }
+
+    const hosted = await this.hostOwnedSpace(name);
+
+    // hostOwnedSpace registers best-effort and fire-and-forget; await an
+    // explicit registry write here so the canonical `account/spaces/{id}`
+    // record is durably present and a subsequent ensure short-circuits on the
+    // registry instead of re-hosting. The host already succeeded, so a failed
+    // registry write must not fail this call.
+    try {
+      await this.account.spaces.register({
+        spaceId,
+        name,
+        ownerDid: this.did,
+        type: "owned",
+        permissions: ["*"],
+        status: "active",
+      });
+    } catch {
+      // Registry write is best-effort; the space is hosted regardless.
+    }
+
+    return hosted;
+  }
+
+  /**
+   * Check whether an owned space is already registered/hosted by consulting the
+   * account spaces registry.
+   *
+   * Source of truth is the canonical KV registry record
+   * `account/spaces/{space_id}`, read here via `account.spaces.get(spaceId)`.
+   * The KV path is used (rather than `syncAccessible()`) because it works under
+   * a manifest/recap session with NO extra prompt: the composed manifest recap
+   * already grants `tinycloud.kv get/list` on the account space `spaces/`
+   * prefix, whereas `syncAccessible()` depends on `tinycloud.space/list`, which
+   * a recap session does not hold. Before reading, it consults the fast SQLite
+   * index (`account.index.spaces.list()`) as a best-effort short-circuit; on a
+   * cold index (`no such table: spaces`) or any other index failure it falls
+   * back to the canonical KV read.
+   *
+   * This is a best-effort optimization. ANY failure of the check path (missing
+   * table, KV error, missing record, thrown exception) resolves to `false` so
+   * the caller falls through to hosting — per the directive, "if it fails in any
+   * way then create the space".
+   */
+  private async isOwnedSpaceRegistered(spaceId: string): Promise<boolean> {
+    // Best-effort fast path: the SQLite index. Only trust a positive hit; treat
+    // misses/empties/errors/throws (e.g. a cold `no such table: spaces`) as
+    // inconclusive and fall through to the canonical KV read.
+    try {
+      const indexed = await this.account.index.spaces.list();
+      if (indexed.ok && indexed.data.some((space) => space.spaceId === spaceId)) {
+        return true;
+      }
+    } catch {
+      // Cache miss/error — fall back to canonical below.
+    }
+
+    // Canonical: the `account/spaces/{space_id}` KV record. This is the registry
+    // source of truth and is recap-readable. Any failure here (missing record,
+    // KV error, throw) resolves to "not registered" so the caller hosts.
+    try {
+      const record = await this.account.spaces.get(spaceId);
+      return record.ok;
+    } catch {
+      return false;
+    }
   }
 
   /**

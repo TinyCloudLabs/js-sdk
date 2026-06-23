@@ -486,9 +486,12 @@ export class TinyCloudWeb {
    * `secrets` space yet still fail its first scoped `secrets.put(...)` with
    * `404 Space not found`, because the space was never registered on the node.
    *
-   * Calling this resolves `name` to the owner's owned-space URI and hosts it
-   * via the host-SIWE delegation flow (one signature, idempotent server-side).
-   * Must be called after {@link signIn}.
+   * Calling this resolves `name` to the owner's owned-space URI. It first
+   * consults the account spaces registry and, if the space is already
+   * registered/hosted, returns without prompting for a host signature; only
+   * when the space is absent (or the registry check fails) does it host via the
+   * host-SIWE delegation flow (one signature, idempotent server-side). Must be
+   * called after {@link signIn}.
    *
    * @param name - The owned space name (e.g. `"secrets"`).
    * @returns The hosted owned-space URI.
