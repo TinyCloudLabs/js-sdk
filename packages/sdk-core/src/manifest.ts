@@ -86,6 +86,17 @@ export type ManifestSecretActions =
 export type ManifestDefaults = boolean | "admin" | "all";
 
 /**
+ * Agent-readable app knowledge bundle pointer.
+ *
+ * - `true` means the default root: `knowledge/index.md`
+ * - string values must point at a markdown root under `knowledge/`
+ */
+export type ManifestKnowledge = true | string;
+
+/** Default root used when `manifest.knowledge === true`. */
+export const DEFAULT_KNOWLEDGE_ROOT = "knowledge/index.md";
+
+/**
  * The raw manifest shape an app declares. See `.claude/specs/manifest.md`.
  */
 export interface Manifest {
@@ -120,6 +131,8 @@ export interface Manifest {
   defaults?: ManifestDefaults | string;
   /** Whether to include the public-space companion delegation. Default `true`. */
   includePublicSpace?: boolean;
+  /** Agent-readable knowledge bundle root. `true` means `knowledge/index.md`. */
+  knowledge?: ManifestKnowledge;
   /**
    * Additional permissions beyond the defaults. Use for cross-space access,
    * DuckDB (opt-in), or `skipPrefix: true` entries.
@@ -653,6 +666,9 @@ export function validateManifest(input: unknown): Manifest {
     // Will throw with a clear error if invalid.
     parseExpiry(m.expiry);
   }
+  if (m.knowledge !== undefined) {
+    resolveManifestKnowledgeRoot(m.knowledge);
+  }
   if (m.permissions !== undefined) {
     if (!Array.isArray(m.permissions)) {
       throw new ManifestValidationError(
@@ -667,6 +683,33 @@ export function validateManifest(input: unknown): Manifest {
     validateManifestSecrets(m.secrets);
   }
   return m;
+}
+
+/**
+ * Resolve a manifest knowledge pointer to its root markdown file.
+ *
+ * This is metadata only; app knowledge does not create capabilities.
+ */
+export function resolveManifestKnowledgeRoot(
+  knowledge: Manifest["knowledge"] | undefined,
+): string | undefined {
+  if (knowledge === undefined) {
+    return undefined;
+  }
+  if (knowledge === true) {
+    return DEFAULT_KNOWLEDGE_ROOT;
+  }
+  if (typeof knowledge !== "string" || knowledge.length === 0) {
+    throw new ManifestValidationError(
+      "manifest.knowledge must be true or a knowledge/*.md root path",
+    );
+  }
+  if (!/^knowledge\/.+\.md$/.test(knowledge)) {
+    throw new ManifestValidationError(
+      "manifest.knowledge must be true or a knowledge/*.md root path",
+    );
+  }
+  return knowledge;
 }
 
 function validateManifestSecrets(secrets: unknown): void {
