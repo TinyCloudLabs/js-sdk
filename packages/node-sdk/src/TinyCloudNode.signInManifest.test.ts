@@ -545,7 +545,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
         }),
       ],
       async () => {
-        await (node as any).ensureOwnedSpaceHosted(
+        await (node as any).ensureOwnedSpaceHostedById(
           "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account",
         );
       },
@@ -576,7 +576,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
         }),
       ],
       async () => {
-        await (node as any).ensureOwnedSpaceHosted(accountSpaceId);
+        await (node as any).ensureOwnedSpaceHostedById(accountSpaceId);
       },
     );
 
@@ -602,10 +602,10 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const node = makeNodeWithSigner(makeFakeWasmBindings(), { manifest });
     const accountSpaceId =
       "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account";
-    const ensureOwnedSpaceHosted = mock(async () => {});
+    const ensureOwnedSpaceHostedById = mock(async () => {});
     const put = mock(async () => ({ ok: true, data: undefined, headers: {} }));
 
-    (node as any).ensureOwnedSpaceHosted = ensureOwnedSpaceHosted;
+    (node as any).ensureOwnedSpaceHostedById = ensureOwnedSpaceHostedById;
     Object.defineProperty(node, "spaces", {
       configurable: true,
       value: {
@@ -638,7 +638,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     );
 
     await waitFor(() => put.mock.calls.length > 0);
-    expect(ensureOwnedSpaceHosted).toHaveBeenCalledWith(accountSpaceId);
+    expect(ensureOwnedSpaceHostedById).toHaveBeenCalledWith(accountSpaceId);
     expect(put).toHaveBeenCalledTimes(1);
     expect(put).toHaveBeenCalledWith("applications/com.listen.app", {
       app_id: "com.listen.app",
