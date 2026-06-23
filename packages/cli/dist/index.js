@@ -6448,10 +6448,54 @@ var KVService = class extends BaseService {
   }
 };
 KVService.serviceName = "kv";
+function parseServiceErrorBody(errorText) {
+  try {
+    return JSON.parse(errorText);
+  } catch {
+    return {};
+  }
+}
+function formatServiceResponseError(serviceLabel, operation, status, errorText, parsed) {
+  if (parsed.message) {
+    return compactMessage(parsed.message);
+  }
+  if (looksLikeHtml(errorText)) {
+    if (status === 524 || /524\s*[:-]/i.test(errorText) || /a timeout occurred/i.test(errorText)) {
+      return `${serviceLabel} ${operation} failed: upstream request timed out. Please retry.`;
+    }
+    return `${serviceLabel} ${operation} failed: upstream service returned an HTML error page (${status}).`;
+  }
+  return `${serviceLabel} ${operation} failed: ${status} - ${compactMessage(errorText)}`;
+}
+function responseErrorMeta(status, statusText, errorText) {
+  const meta = { status, statusText };
+  const snippet = compactMessage(errorText);
+  if (snippet) {
+    meta.responseSnippet = snippet.slice(0, 300);
+  }
+  return meta;
+}
+function looksLikeHtml(text) {
+  return /<!doctype html/i.test(text) || /<html[\s>]/i.test(text);
+}
+function compactMessage(message) {
+  const compact = message.replace(/\s+/g, " ").trim();
+  return compact.length > 500 ? `${compact.slice(0, 500)}...` : compact;
+}
+var SQLMigrations = class {
+  constructor(service, dbName) {
+    this.service = service;
+    this.dbName = dbName;
+  }
+  apply(options) {
+    return this.service.applyMigrationsOnDb(this.dbName, options);
+  }
+};
 var DatabaseHandle = class {
   constructor(service, name) {
     this.service = service;
     this.name = name;
+    this.migrations = new SQLMigrations(service, name);
   }
   async query(sql, params, options) {
     return this.service.queryOnDb(this.name, sql, params, options);
@@ -6483,9 +6527,20 @@ var SQLAction = {
   ALL: "tinycloud.sql/*"
 };
 var DDL_TOKENS = /* @__PURE__ */ new Set(["alter", "create", "drop"]);
+var MIGRATIONS_TABLE = "__tinycloud_sql_migrations";
+var MIGRATIONS_SCHEMA = `CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (
+  key TEXT PRIMARY KEY,
+  namespace TEXT NOT NULL,
+  id TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  statement_count INTEGER NOT NULL
+)`;
+var MIGRATIONS_META_NAMESPACE = "tinycloud.sql.migrations";
+var MIGRATIONS_META_ID = "000_metadata";
 var SQLService = class extends BaseService {
   constructor(config = {}) {
     super();
+    this.migrationLocks = /* @__PURE__ */ new Map();
     this._config = config;
   }
   get config() {
@@ -6520,6 +6575,24 @@ var SQLService = class extends BaseService {
    */
   async batch(statements, options) {
     return this.batchOnDb(this.defaultDbName, statements, options);
+  }
+  async applyMigrationsOnDb(dbName, options) {
+    const validationError = validateMigrationOptions(options);
+    if (validationError) {
+      return err(serviceError(ErrorCodes.INVALID_INPUT, validationError, "sql"));
+    }
+    const lockKey = `${dbName}\0${options.namespace}`;
+    const existing = this.migrationLocks.get(lockKey);
+    if (existing) {
+      return existing;
+    }
+    const promise = this.applyMigrationsOnDbUnlocked(dbName, options);
+    this.migrationLocks.set(lockKey, promise);
+    try {
+      return await promise;
+    } finally {
+      this.migrationLocks.delete(lockKey);
+    }
   }
   // === Internal methods called by DatabaseHandle ===
   async queryOnDb(dbName, sql, params, options) {
@@ -6651,6 +6724,78 @@ var SQLService = class extends BaseService {
       }
     });
   }
+  async applyMigrationsOnDbUnlocked(dbName, options) {
+    return this.withTelemetry("migrations.apply", dbName, async () => {
+      const created = await this.ensureMigrationsTable(dbName, options.signal);
+      if (!created.ok) return created;
+      const listed = await this.queryOnDb(
+        dbName,
+        `SELECT id FROM ${MIGRATIONS_TABLE} WHERE namespace = ? ORDER BY applied_at, id`,
+        [options.namespace],
+        { signal: options.signal }
+      );
+      if (!listed.ok) return listed;
+      const appliedIds = new Set(
+        listed.data.rows.map((row) => rowValue(row, 0)).filter((id) => typeof id === "string")
+      );
+      const skipped = options.migrations.filter((migration) => appliedIds.has(migration.id)).map((migration) => migration.id);
+      const pending = options.migrations.filter((migration) => !appliedIds.has(migration.id));
+      const applied = [];
+      for (const migration of pending) {
+        const result = await this.applyOneMigration(dbName, options.namespace, migration, options.signal);
+        if (!result.ok) return result;
+        applied.push(migration.id);
+      }
+      return ok({
+        database: dbName,
+        namespace: options.namespace,
+        status: applied.length > 0 ? "applied" : "already_current",
+        applied,
+        skipped
+      });
+    });
+  }
+  async applyOneMigration(dbName, namespace, migration, signal) {
+    const statements = [
+      ...migration.sql.map(
+        (statement) => typeof statement === "string" ? { sql: statement } : statement
+      ),
+      {
+        sql: `INSERT OR REPLACE INTO ${MIGRATIONS_TABLE} (key, namespace, id, applied_at, statement_count) VALUES (?, ?, ?, ?, ?)`,
+        params: [
+          migrationKey(namespace, migration.id),
+          namespace,
+          migration.id,
+          (/* @__PURE__ */ new Date()).toISOString(),
+          migration.sql.length
+        ]
+      }
+    ];
+    const result = await this.batchOnDb(dbName, statements, { signal });
+    if (!result.ok) return result;
+    return ok(void 0);
+  }
+  async ensureMigrationsTable(dbName, signal) {
+    const result = await this.batchOnDb(
+      dbName,
+      [
+        { sql: MIGRATIONS_SCHEMA },
+        {
+          sql: `INSERT OR REPLACE INTO ${MIGRATIONS_TABLE} (key, namespace, id, applied_at, statement_count) VALUES (?, ?, ?, ?, ?)`,
+          params: [
+            migrationKey(MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID),
+            MIGRATIONS_META_NAMESPACE,
+            MIGRATIONS_META_ID,
+            (/* @__PURE__ */ new Date()).toISOString(),
+            1
+          ]
+        }
+      ],
+      { signal }
+    );
+    if (!result.ok) return result;
+    return ok(void 0);
+  }
   // === Private helpers ===
   async invokeSQL(dbName, actions, body, signal) {
     const session = this.context.session;
@@ -6698,17 +6843,19 @@ var SQLService = class extends BaseService {
   }
   async handleErrorResponse(response, operation) {
     const errorText = await response.text();
-    let errorBody = {};
-    try {
-      errorBody = JSON.parse(errorText);
-    } catch {
-    }
+    const errorBody = parseServiceErrorBody(errorText);
     const errorCode = this.mapHttpStatusToErrorCode(
       response.status,
       errorBody.error
     );
-    const message = errorBody.message || `SQL ${operation} failed: ${response.status} - ${errorText}`;
-    const meta = { status: response.status, statusText: response.statusText };
+    const message = formatServiceResponseError(
+      "SQL",
+      operation,
+      response.status,
+      errorText,
+      errorBody
+    );
+    const meta = responseErrorMeta(response.status, response.statusText, errorText);
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);
       if (action) meta.requiredAction = action;
@@ -6767,6 +6914,53 @@ function firstSqlToken(sql) {
   }
   const match = /^[A-Za-z_]+/.exec(sql.slice(index));
   return match?.[0].toLowerCase();
+}
+function validateMigrationOptions(options) {
+  if (!options || typeof options !== "object") {
+    return "SQL migrations require options";
+  }
+  if (!options.namespace || typeof options.namespace !== "string") {
+    return "SQL migrations require a non-empty namespace";
+  }
+  if (!Array.isArray(options.migrations)) {
+    return "SQL migrations require an ordered migrations array";
+  }
+  const ids = /* @__PURE__ */ new Set();
+  for (const migration of options.migrations) {
+    if (!migration.id || typeof migration.id !== "string") {
+      return "SQL migrations require every migration to have a non-empty id";
+    }
+    if (ids.has(migration.id)) {
+      return `Duplicate SQL migration id: ${migration.id}`;
+    }
+    ids.add(migration.id);
+    if (!Array.isArray(migration.sql)) {
+      return `SQL migration ${migration.id} requires a sql array`;
+    }
+    for (const statement of migration.sql) {
+      if (typeof statement === "string") {
+        if (statement.trim() === "") {
+          return `SQL migration ${migration.id} contains an empty statement`;
+        }
+        continue;
+      }
+      if (!statement || typeof statement.sql !== "string" || statement.sql.trim() === "") {
+        return `SQL migration ${migration.id} contains an invalid statement`;
+      }
+    }
+  }
+  return null;
+}
+function migrationKey(namespace, id) {
+  return `${encodeURIComponent(namespace)}:${encodeURIComponent(id)}`;
+}
+function rowValue(row, index) {
+  if (Array.isArray(row)) return row[index];
+  if (row && typeof row === "object") {
+    const values = Object.values(row);
+    return values[index];
+  }
+  return void 0;
 }
 var DuckDbDatabaseHandle = class {
   constructor(service, name) {
@@ -7071,17 +7265,19 @@ var DuckDbService = class extends BaseService {
   }
   async handleErrorResponse(response, operation) {
     const errorText = await response.text();
-    let errorBody = {};
-    try {
-      errorBody = JSON.parse(errorText);
-    } catch {
-    }
+    const errorBody = parseServiceErrorBody(errorText);
     const errorCode = this.mapHttpStatusToErrorCode(
       response.status,
       errorBody.error
     );
-    const message = errorBody.message || `DuckDB ${operation} failed: ${response.status} - ${errorText}`;
-    const meta = { status: response.status, statusText: response.statusText };
+    const message = formatServiceResponseError(
+      "DuckDB",
+      operation,
+      response.status,
+      errorText,
+      errorBody
+    );
+    const meta = responseErrorMeta(response.status, response.statusText, errorText);
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);
       if (action) meta.requiredAction = action;

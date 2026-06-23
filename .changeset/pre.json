@@ -31,8 +31,10 @@
     "openkey-reason",
     "openkey-scope-case-insensitive",
     "permission-prompt-suppression",
+    "public-ensure-owned-space-hosted",
     "quiet-secrets-listen",
     "runtime-grant-space-case-insensitive",
+    "sql-migrations-primitive",
     "usedelegation-multiresource",
     "web-sdk-space-scoped-services"
   ]
