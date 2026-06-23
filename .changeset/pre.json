@@ -35,6 +35,7 @@
     "quiet-secrets-listen",
     "restore-host-resolution",
     "runtime-grant-space-case-insensitive",
+    "secrets-ddl-regression",
     "sql-migrations-primitive",
     "usedelegation-multiresource",
     "web-sdk-space-scoped-services"

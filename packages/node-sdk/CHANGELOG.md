@@ -1,5 +1,12 @@
 # @tinycloudlabs/node-sdk
 
+## 2.4.0-beta.12
+
+### Patch Changes
+
+- fa4a7c7: Add regression coverage for SQL migration batches that require both `tinycloud.sql/ddl` and `tinycloud.sql/write`, including the legacy-session runtime permission repair path used by TinyCloud Secrets.
+  - @tinycloud/sdk-core@2.4.0-beta.12
+
 ## 2.4.0-beta.11
 
 ### Minor Changes
