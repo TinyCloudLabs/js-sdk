@@ -28,6 +28,7 @@
     "cli-delegated-secret-reads",
     "drop-sql-ddl",
     "encryption-network-signin-create",
+    "ensure-owned-space-registry-check",
     "kv-space-and-binary-roundtrip",
     "manifest-knowledge-pointers",
     "openkey-reason",
