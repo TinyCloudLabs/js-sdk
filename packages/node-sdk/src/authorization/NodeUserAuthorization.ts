@@ -227,7 +227,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         "": [
           "tinycloud.sql/read",
           "tinycloud.sql/write",
-          "tinycloud.sql/ddl",
+          "tinycloud.sql/schema",
           "tinycloud.sql/admin",
           "tinycloud.sql/export",
         ],

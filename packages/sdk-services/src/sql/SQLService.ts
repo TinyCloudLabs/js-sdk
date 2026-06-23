@@ -196,7 +196,7 @@ export class SQLService extends BaseService implements ISQLService {
         const actions = [
           this.actionForSql(sql, SQLAction.WRITE),
           ...(options?.schema ?? []).map((statement) =>
-            this.actionForSql(statement, SQLAction.DDL),
+            this.actionForSql(statement, SQLAction.SCHEMA),
           ),
         ];
         const response = await this.invokeSQL(
@@ -442,7 +442,7 @@ export class SQLService extends BaseService implements ISQLService {
   private actionForSql(sql: string, fallback: string): string {
     const token = firstSqlToken(sql);
     if (token === "pragma") return SQLAction.ADMIN;
-    if (token !== undefined && DDL_TOKENS.has(token)) return SQLAction.DDL;
+    if (token !== undefined && DDL_TOKENS.has(token)) return SQLAction.SCHEMA;
     return fallback;
   }
 

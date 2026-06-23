@@ -480,6 +480,11 @@ const CAPABILITY_DESCRIPTIONS: Record<string, CapabilityDescription> = {
     description:
       "Allows this app to insert, update, or delete rows in the selected SQL database.",
   },
+  "tinycloud.sql/schema": {
+    title: "Change SQL schema",
+    description:
+      "Allows this app to create, alter, or drop SQL tables, indexes, and schema objects.",
+  },
   "tinycloud.sql/ddl": {
     title: "Change SQL schema",
     description:

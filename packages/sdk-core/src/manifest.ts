@@ -45,7 +45,7 @@ export interface PermissionEntry {
    */
   path: string;
   /**
-   * Short action names (e.g. "get", "put", "read", "ddl"). The SDK expands
+   * Short action names (e.g. "get", "put", "read", "schema"). The SDK expands
    * these to full URNs (e.g. `tinycloud.kv/get`) during resolution.
    * Already-expanded URNs are passed through unchanged.
    */
@@ -77,7 +77,7 @@ export type ManifestSecretActions =
  *
  * - `false` → no auto-included permissions
  * - `true` → standard tier (KV + SQL read/write + capabilities:read)
- * - `"admin"` → standard + SQL ddl
+ * - `"admin"` → standard + SQL schema
  * - `"all"` → everything the SDK supports (including DuckDB)
  *
  * Unknown string values silently fall back to `true`. Values are normalized
@@ -351,7 +351,7 @@ const DEFAULT_STANDARD_ENTRIES: readonly PermissionEntry[] = [
 ];
 
 /**
- * Default permission entries for the `"admin"` tier: standard + sql/ddl.
+ * Default permission entries for the `"admin"` tier: standard + sql/schema.
  */
 const DEFAULT_ADMIN_ENTRIES: readonly PermissionEntry[] = [
   {
@@ -364,7 +364,7 @@ const DEFAULT_ADMIN_ENTRIES: readonly PermissionEntry[] = [
     service: "tinycloud.sql",
     space: DEFAULT_MANIFEST_SPACE,
     path: "/",
-    actions: ["read", "write", "ddl"],
+    actions: ["read", "write", "schema"],
   },
 ];
 
@@ -385,7 +385,7 @@ const DEFAULT_ALL_ENTRIES: readonly PermissionEntry[] = [
     service: "tinycloud.sql",
     space: DEFAULT_MANIFEST_SPACE,
     path: "/",
-    actions: ["read", "write", "ddl"],
+    actions: ["read", "write", "schema"],
   },
   {
     service: "tinycloud.duckdb",
@@ -1253,7 +1253,7 @@ function accountRegistryIndexPermission(): ResourceCapability {
     service: "tinycloud.sql",
     space: ACCOUNT_REGISTRY_SPACE,
     path: "account",
-    actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/ddl"],
+    actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"],
   };
 }
 

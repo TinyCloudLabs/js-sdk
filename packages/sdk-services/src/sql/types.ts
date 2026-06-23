@@ -149,7 +149,9 @@ export interface SqlMigrationApplyResponse {
 export const SQLAction = {
   READ: "tinycloud.sql/read",
   WRITE: "tinycloud.sql/write",
-  DDL: "tinycloud.sql/ddl",
+  SCHEMA: "tinycloud.sql/schema",
+  /** @deprecated Use SQLAction.SCHEMA. */
+  DDL: "tinycloud.sql/schema",
   ADMIN: "tinycloud.sql/admin",
   SELECT: "tinycloud.sql/select",
   INSERT: "tinycloud.sql/insert",
