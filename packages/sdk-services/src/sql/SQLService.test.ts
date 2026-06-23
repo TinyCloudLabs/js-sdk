@@ -80,6 +80,10 @@ function createContext(
 }
 
 describe("SQLService permissions", () => {
+  test("does not export the old DDL action alias", () => {
+    expect("DDL" in SQLAction).toBe(false);
+  });
+
   test("query signs SELECT statements with read permission", async () => {
     const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
     let requestInit: FetchRequestInit | undefined;
