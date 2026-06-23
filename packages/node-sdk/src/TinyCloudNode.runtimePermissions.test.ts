@@ -824,6 +824,57 @@ describe("TinyCloudNode runtime permission delegations", () => {
     );
   });
 
+  test("uses a single runtime SQL grant for migration-style ddl and write batches", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const secretsSpaceId = `tinycloud:pkh:eip155:1:${address}:secrets`;
+    const permission: PermissionEntry = {
+      service: "tinycloud.sql",
+      space: "secrets",
+      path: "default",
+      actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/ddl"],
+    };
+
+    await withActivatedDelegations(async () => {
+      await node.grantRuntimePermissions([permission]);
+    });
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: secretsSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeAnyWithRuntimePermissions(
+      fallback,
+      [
+        {
+          spaceId: secretsSpaceId,
+          service: "sql",
+          path: "default",
+          action: "tinycloud.sql/ddl",
+        },
+        {
+          spaceId: secretsSpaceId,
+          service: "sql",
+          path: "default",
+          action: "tinycloud.sql/write",
+        },
+      ],
+      [{}, {}],
+    );
+
+    const invokeAny = (node as any).wasmBindings.invokeAny;
+    expect(invokeAny.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "runtime-token",
+    );
+  });
+
   test("useDelegation installs encryption delegations as raw runtime grants", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,

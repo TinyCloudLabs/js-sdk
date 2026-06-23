@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { checkServerHealth, createClient, TEST_KEY } from "../setup";
-import type { TinyCloudNode } from "@tinycloud/node-sdk";
+import { checkServerHealth, createClient, SERVER_URL, TEST_KEY } from "../setup";
+import { TinyCloudNode, type Manifest } from "@tinycloud/node-sdk";
 
 const TABLE = `sdk_test_sql_users_${Date.now()}`;
 const ANALYTICS_TABLE = `sdk_test_sql_analytics_${Date.now()}`;
@@ -175,7 +175,70 @@ describe("SQL Basics", () => {
     });
   });
 
-  // PART 5: Delegated Access
+  // PART 5: Migration permission repair
+  describe("Migrations", () => {
+    test("runtime SQL ddl repair lets a legacy read/write session apply migrations", async () => {
+      const runId = Date.now();
+      const space = `secrets-e2e-${runId}`;
+      const table = `secret_metadata_${runId}`;
+      const legacyManifest: Manifest = {
+        manifest_version: 1,
+        app_id: "xyz.tinycloud.secrets.e2e",
+        name: "TinyCloud Secrets E2E",
+        space,
+        prefix: "",
+        defaults: false,
+        includePublicSpace: false,
+        permissions: [
+          {
+            service: "tinycloud.sql",
+            space,
+            path: "default",
+            actions: ["read", "write"],
+            skipPrefix: true,
+          },
+        ],
+      };
+      const legacy = new TinyCloudNode({
+        privateKey: TEST_KEY,
+        host: SERVER_URL,
+        prefix: space,
+        autoCreateSpace: true,
+        manifest: legacyManifest,
+      });
+
+      await legacy.signIn();
+      await legacy.grantRuntimePermissions([
+        {
+          service: "tinycloud.sql",
+          space,
+          path: "default",
+          actions: ["read", "write", "ddl"],
+          skipPrefix: true,
+        },
+      ]);
+
+      const result = await legacy.sql.db("default").migrations.apply({
+        namespace: "xyz.tinycloud.secrets",
+        migrations: [
+          {
+            id: "001_secret_metadata",
+            sql: [
+              `CREATE TABLE IF NOT EXISTS ${table} (scope TEXT NOT NULL, name TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (scope, name))`,
+            ],
+          },
+        ],
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data.status).toBe("applied");
+        expect(result.data.applied).toEqual(["001_secret_metadata"]);
+      }
+    });
+  });
+
+  // PART 6: Delegated Access
   describe("Delegated Access", () => {
     test("bob can query via read-only delegation", async () => {
       const bob = createClient("bob-sql");
@@ -217,7 +280,7 @@ describe("SQL Basics", () => {
     });
   });
 
-  // PART 6: Export
+  // PART 7: Export
   describe("Export", () => {
     test("export returns a Blob", async () => {
       const result = await alice.sql.db().export();
