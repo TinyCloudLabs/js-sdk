@@ -9,6 +9,7 @@ import { describe, expect, it } from "bun:test";
 
 import {
   DEFAULT_EXPIRY,
+  DEFAULT_KNOWLEDGE_ROOT,
   ManifestValidationError,
   applyPrefix,
   composeManifestRequest,
@@ -17,6 +18,7 @@ import {
   normalizeDefaults,
   parseExpiry,
   resolveManifest,
+  resolveManifestKnowledgeRoot,
   resourceCapabilitiesToSpaceAbilitiesMap,
   validateManifest,
   type Manifest,
@@ -198,6 +200,47 @@ describe("validateManifest", () => {
     expect(() => validateManifest(m)).not.toThrow();
   });
 
+  it("accepts concise knowledge pointers", () => {
+    expect(() =>
+      validateManifest({
+        app_id: "com.listen.app",
+        name: "Listen",
+        knowledge: true,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateManifest({
+        app_id: "com.listen.app",
+        name: "Listen",
+        knowledge: "knowledge/app.md",
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects legacy object-form knowledge pointers", () => {
+    expect(() =>
+      validateManifest({
+        app_id: "com.listen.app",
+        name: "Listen",
+        knowledge: {
+          format: "okf",
+          profile: "tinycloud.app.v1",
+          root: "knowledge/index.md",
+        },
+      } as unknown as Manifest),
+    ).toThrow(ManifestValidationError);
+  });
+
+  it("rejects knowledge paths outside knowledge markdown", () => {
+    expect(() =>
+      validateManifest({
+        app_id: "com.listen.app",
+        name: "Listen",
+        knowledge: "docs/index.md" as Manifest["knowledge"],
+      }),
+    ).toThrow(ManifestValidationError);
+  });
+
   it("throws on missing id", () => {
     expect(() => validateManifest({ name: "Listen" })).toThrow(
       ManifestValidationError,
@@ -249,6 +292,26 @@ describe("validateManifest", () => {
         },
       }),
     ).toThrow(ManifestValidationError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveManifestKnowledgeRoot
+// ---------------------------------------------------------------------------
+
+describe("resolveManifestKnowledgeRoot", () => {
+  it("maps true to the default root", () => {
+    expect(resolveManifestKnowledgeRoot(true)).toBe(DEFAULT_KNOWLEDGE_ROOT);
+  });
+
+  it("passes explicit knowledge markdown roots through", () => {
+    expect(resolveManifestKnowledgeRoot("knowledge/custom.md")).toBe(
+      "knowledge/custom.md",
+    );
+  });
+
+  it("returns undefined when omitted", () => {
+    expect(resolveManifestKnowledgeRoot(undefined)).toBeUndefined();
   });
 });
 

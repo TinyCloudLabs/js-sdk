@@ -1,3 +1,4 @@
+import { resolveManifestKnowledgeRoot } from "@tinycloud/sdk-core";
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import { ProfileManager } from "../config/profiles.js";
@@ -23,6 +24,7 @@ interface Manifest {
   description?: string;
   space?: string;
   defaults?: boolean;
+  knowledge?: true | string;
   permissions?: ManifestPermission[];
 }
 
@@ -78,6 +80,7 @@ the manifest against the active profile's address/chain so you know which
 
         const spaceName = parsed.space ?? DEFAULT_APP_SPACE;
         const spaceUri = await resolveSpaceUri(spaceName, ctx.profile);
+        const knowledgeRoot = resolveManifestKnowledgeRoot(parsed.knowledge);
 
         const permissions = (parsed.permissions ?? []).map((p) => {
           const resolvedPath = p.skipPrefix ? p.path : prefixWithAppId(p.path, parsed.app_id!);
@@ -100,6 +103,7 @@ the manifest against the active profile's address/chain so you know which
           app_id: parsed.app_id,
           name: parsed.name,
           manifest_version: parsed.manifest_version,
+          knowledgeRoot,
           space: {
             name: spaceName,
             uri: spaceUri,
@@ -120,6 +124,9 @@ the manifest against the active profile's address/chain so you know which
         process.stdout.write(`${theme.label("Space")}: ${theme.value(spaceName)}\n`);
         if (spaceUri) {
           process.stdout.write(`${theme.label("Space URI")}: ${theme.value(spaceUri)}\n`);
+        }
+        if (knowledgeRoot) {
+          process.stdout.write(`${theme.label("Knowledge")}: ${theme.value(knowledgeRoot)}\n`);
         }
 
         if (sqlDbs.length > 0) {

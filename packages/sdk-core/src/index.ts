@@ -429,6 +429,7 @@ export {
   // Types
   type Manifest,
   type ManifestDefaults,
+  type ManifestKnowledge,
   type ManifestSecretActions,
   type ComposeManifestOptions,
   type ComposedManifestRequest,
@@ -445,6 +446,7 @@ export {
   ACCOUNT_REGISTRY_SPACE,
   DEFAULT_DEFAULTS,
   DEFAULT_EXPIRY,
+  DEFAULT_KNOWLEDGE_ROOT,
   DEFAULT_MANIFEST_SPACE,
   DEFAULT_MANIFEST_VERSION,
   SERVICE_LONG_TO_SHORT,
@@ -464,6 +466,7 @@ export {
   manifestAbilitiesUnion,
   normalizeDefaults,
   parseExpiry,
+  resolveManifestKnowledgeRoot,
   resolveManifest,
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
