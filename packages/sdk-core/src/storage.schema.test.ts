@@ -154,6 +154,37 @@ describe("PersistedSessionDataSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  describe("tinycloudHosts (host rehydration)", () => {
+    it("round-trips tinycloudHosts through parse", () => {
+      const hosts = ["https://node.example.test", "https://backup.example.test"];
+      const data = { ...validPersistedSessionData, tinycloudHosts: hosts };
+      const result = PersistedSessionDataSchema.safeParse(data);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.tinycloudHosts).toEqual(hosts);
+      }
+    });
+
+    it("validates without tinycloudHosts (back-compat with old sessions)", () => {
+      const data = { ...validPersistedSessionData };
+      delete (data as Record<string, unknown>).tinycloudHosts;
+      const result = PersistedSessionDataSchema.safeParse(data);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.tinycloudHosts).toBeUndefined();
+      }
+    });
+
+    it("rejects non-string entries in tinycloudHosts", () => {
+      const data = {
+        ...validPersistedSessionData,
+        tinycloudHosts: ["https://ok.test", 42],
+      };
+      const result = PersistedSessionDataSchema.safeParse(data);
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe("address validation", () => {
     it("rejects address without 0x prefix", () => {
       const data = {

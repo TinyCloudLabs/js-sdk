@@ -107,6 +107,7 @@ import {
   verifyDidKeyEd25519Signature,
   canonicalizeAddress,
   pkhDid,
+  resolveTinyCloudHosts,
   principalDidEquals,
   parseNetworkId,
   type BuildDecryptInvocationInput,
@@ -1095,6 +1096,16 @@ export class TinyCloudNode {
      * for callers that need to round-trip the full session shape.
      */
     signature?: string;
+    /**
+     * The TinyCloud hosts this session was created against (from
+     * {@link PersistedSessionData.tinycloudHosts}). When present they are
+     * adopted so the restored session targets the same node as the
+     * original sign-in — without this, service calls fall back to the
+     * default host and the auth layer throws "TinyCloud hosts have not
+     * been resolved". When absent (old persisted session) hosts resolve
+     * lazily via the registry/fallback on the first host-needing call.
+     */
+    tinycloudHosts?: string[];
   }): Promise<void> {
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
@@ -1120,6 +1131,23 @@ export class TinyCloudNode {
     }
     if (sessionData.chainId) {
       this._chainId = sessionData.chainId;
+    }
+
+    // Resolve the host the restored session should target, mirroring what a
+    // fresh signIn() would have done. Priority:
+    //   1. explicitHost   — local dev / pinned node, never override
+    //   2. persisted hosts — the node this session was created against
+    //   3. registry/fallback resolution — old sessions that predate the
+    //      persisted tinycloudHosts field
+    // Without this, the ServiceContext below (and every service call) would
+    // silently target the default host instead of the user's actual node.
+    const resolvedHost = await this.resolveRestoredHost(
+      sessionData.tinycloudHosts,
+      restoredAddress,
+      sessionData.chainId,
+    );
+    if (resolvedHost) {
+      this.config.host = resolvedHost;
     }
 
     // Create service context
@@ -1191,11 +1219,52 @@ export class TinyCloudNode {
         signature: sessionData.signature ?? "",
       };
       if (this.auth) {
-        this.auth.setRestoredTinyCloudSession(tcSession);
+        // Pass the now-resolved host so the auth layer's host-needing
+        // methods (ensureSpaceExists/hostSpace) don't throw "hosts have
+        // not been resolved" on a restored session.
+        this.auth.setRestoredTinyCloudSession(
+          tcSession,
+          this.config.host ? [this.config.host] : undefined,
+        );
       } else {
         this._restoredTcSession = tcSession;
       }
     }
+  }
+
+  /**
+   * Resolve the host a restored session should target.
+   *
+   * Mirrors fresh sign-in host resolution but for the restore path:
+   * an explicit/pinned host always wins, then the hosts the session was
+   * persisted with, then a lazy registry/fallback resolution for sessions
+   * that predate the persisted `tinycloudHosts` field. Returns `undefined`
+   * only when there's nothing to resolve from (no explicit host, no
+   * persisted hosts, and no address/chainId) — in which case the existing
+   * `config.host` (default) is left in place.
+   *
+   * Resolution failures are surfaced, not swallowed: a genuinely broken
+   * registry lookup throws rather than silently falling back to a wrong host.
+   */
+  private async resolveRestoredHost(
+    persistedHosts: string[] | undefined,
+    address: string | undefined,
+    chainId: number | undefined,
+  ): Promise<string | undefined> {
+    if (this.explicitHost) {
+      return this.explicitHost;
+    }
+    if (persistedHosts && persistedHosts.length > 0) {
+      return persistedHosts[0];
+    }
+    if (address === undefined || chainId === undefined) {
+      return undefined;
+    }
+    const resolved = await resolveTinyCloudHosts(pkhDid(address, chainId), {
+      registryUrl: this.config.tinycloudRegistryUrl,
+      fallbackHosts: this.config.tinycloudFallbackHosts,
+    });
+    return resolved.hosts[0];
   }
 
   /**

@@ -330,12 +330,60 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * `siwe` is the load-bearing one because `extractSiweExpiration` returns
    * undefined for missing SIWEs and the SDK then treats the session as
    * expired-at-epoch-zero.
+   *
+   * @param hosts - The TinyCloud hosts this session was created against,
+   *   as persisted in {@link PersistedSessionData.tinycloudHosts}. When
+   *   present (and non-empty) they are adopted directly so the restored
+   *   session resolves to the same node as the original sign-in without
+   *   re-running registry/fallback resolution. When absent (old session)
+   *   hosts are resolved lazily on the first host-needing call via
+   *   {@link ensureTinyCloudHosts}.
    */
-  setRestoredTinyCloudSession(session: TinyCloudSession): void {
+  setRestoredTinyCloudSession(
+    session: TinyCloudSession,
+    hosts?: string[],
+  ): void {
     const address = canonicalizeAddress(session.address);
     this._tinyCloudSession = { ...session, address };
     this._address = address;
     this._chainId = session.chainId;
+    // Don't overwrite an explicitly-configured host (e.g. local dev) with a
+    // possibly-stale persisted value: only adopt persisted hosts when none
+    // are already set.
+    if (
+      (!this.tinycloudHosts || this.tinycloudHosts.length === 0) &&
+      hosts &&
+      hosts.length > 0
+    ) {
+      this.tinycloudHosts = [...hosts];
+    }
+  }
+
+  /**
+   * Ensure `tinycloudHosts` are resolved before a host-needing call.
+   *
+   * Fresh sign-in resolves hosts up front; a restored session may not have
+   * (old persisted sessions predate {@link PersistedSessionData.tinycloudHosts}).
+   * This guard makes a restored session resolve the node exactly like a fresh
+   * sign-in — persisted hosts are preferred (already set by
+   * {@link setRestoredTinyCloudSession}), otherwise the registry/fallback
+   * resolution runs lazily here. Idempotent: {@link resolveTinyCloudHostsForSignIn}
+   * early-returns when hosts are already set.
+   *
+   * Throws if hosts are unset and the restored session has no address/chainId
+   * to resolve from — a real failure that must surface, not be masked.
+   */
+  async ensureTinyCloudHosts(): Promise<void> {
+    if (this.tinycloudHosts && this.tinycloudHosts.length > 0) {
+      return;
+    }
+    if (this._address === undefined || this._chainId === undefined) {
+      throw new Error(
+        "Cannot resolve TinyCloud hosts: no address/chainId available. " +
+          "Sign in or restore a session first.",
+      );
+    }
+    await this.resolveTinyCloudHostsForSignIn(this._address, this._chainId);
   }
 
   private async resolveTinyCloudHostsForSignIn(
@@ -577,6 +625,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       throw new Error("Must be signed in to host space");
     }
 
+    await this.ensureTinyCloudHosts();
     const host = this.primaryTinyCloudHost;
     const spaceId = targetSpaceId ?? this._tinyCloudSession.spaceId;
 
@@ -632,6 +681,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       throw new Error("Must be signed in to ensure space exists");
     }
 
+    await this.ensureTinyCloudHosts();
     const host = this.primaryTinyCloudHost;
     const primarySpaceId = this._tinyCloudSession.spaceId;
 
@@ -890,6 +940,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       expiresAt: expirationTime.toISOString(),
       createdAt: now.toISOString(),
       version: "1.0",
+      tinycloudHosts: this.tinycloudHosts,
     };
     await this.sessionStorage.save(address, persistedData);
 
@@ -1134,6 +1185,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       expiresAt,
       createdAt,
       version: "1.0",
+      tinycloudHosts: this.tinycloudHosts,
     };
     await this.sessionStorage.save(address, persistedData);
 
