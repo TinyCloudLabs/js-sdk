@@ -176,8 +176,8 @@ export type {
 } from "./kv";
 
 // SQL service
-export { SQLService, DatabaseHandle, SQLAction } from "./sql";
-export type { ISQLService, IDatabaseHandle } from "./sql";
+export { SQLService, DatabaseHandle, SQLMigrations, SQLAction } from "./sql";
+export type { ISQLService, IDatabaseHandle, ISQLMigrations } from "./sql";
 export type {
   SQLServiceConfig,
   QueryOptions,
@@ -188,6 +188,9 @@ export type {
   QueryResponse,
   ExecuteResponse,
   BatchResponse,
+  SqlMigration,
+  SqlMigrationApplyOptions,
+  SqlMigrationApplyResponse,
   SQLActionType,
 } from "./sql";
 

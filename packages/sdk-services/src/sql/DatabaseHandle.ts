@@ -5,8 +5,9 @@
  */
 
 import type { Result } from "../types";
-import type { IDatabaseHandle } from "./ISQLService";
+import type { IDatabaseHandle, ISQLMigrations } from "./ISQLService";
 import type { SQLService } from "./SQLService";
+import { SQLMigrations } from "./SQLMigrations";
 import type {
   SqlValue,
   SqlStatement,
@@ -21,10 +22,12 @@ import type {
 export class DatabaseHandle implements IDatabaseHandle {
   private service: SQLService;
   public readonly name: string;
+  public readonly migrations: ISQLMigrations;
 
   constructor(service: SQLService, name: string) {
     this.service = service;
     this.name = name;
+    this.migrations = new SQLMigrations(service, name);
   }
 
   async query<T = Record<string, unknown>>(

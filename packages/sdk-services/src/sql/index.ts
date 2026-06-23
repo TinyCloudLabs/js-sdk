@@ -6,7 +6,8 @@
 
 export { SQLService } from "./SQLService";
 export { DatabaseHandle } from "./DatabaseHandle";
-export type { ISQLService, IDatabaseHandle } from "./ISQLService";
+export { SQLMigrations } from "./SQLMigrations";
+export type { ISQLService, IDatabaseHandle, ISQLMigrations } from "./ISQLService";
 export {
   SQLAction,
   type SQLActionType,
@@ -19,4 +20,7 @@ export {
   type QueryResponse,
   type ExecuteResponse,
   type BatchResponse,
+  type SqlMigration,
+  type SqlMigrationApplyOptions,
+  type SqlMigrationApplyResponse,
 } from "./types";
