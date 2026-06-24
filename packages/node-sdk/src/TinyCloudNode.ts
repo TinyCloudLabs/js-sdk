@@ -4234,6 +4234,7 @@ export class TinyCloudNode {
         delegation,
         targetHost,
         this.wasmBindings.invoke,
+        this.wasmBindings.invokeAny,
         this.config.telemetry,
       );
     }
@@ -4331,6 +4332,7 @@ export class TinyCloudNode {
       delegation,
       targetHost,
       this.wasmBindings.invoke,
+      this.wasmBindings.invokeAny,
       this.config.telemetry,
     );
   }
