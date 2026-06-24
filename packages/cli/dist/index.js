@@ -37854,7 +37854,7 @@ var DatabaseHandle = class {
 var SQLAction = {
   READ: "tinycloud.sql/read",
   WRITE: "tinycloud.sql/write",
-  DDL: "tinycloud.sql/ddl",
+  SCHEMA: "tinycloud.sql/schema",
   ADMIN: "tinycloud.sql/admin",
   SELECT: "tinycloud.sql/select",
   INSERT: "tinycloud.sql/insert",
@@ -37972,7 +37972,7 @@ var SQLService = class extends BaseService {
         const actions = [
           this.actionForSql(sql, SQLAction.WRITE),
           ...(options?.schema ?? []).map(
-            (statement) => this.actionForSql(statement, SQLAction.DDL)
+            (statement) => this.actionForSql(statement, SQLAction.SCHEMA)
           )
         ];
         const response = await this.invokeSQL(
@@ -38152,7 +38152,7 @@ var SQLService = class extends BaseService {
   actionForSql(sql, fallback) {
     const token = firstSqlToken(sql);
     if (token === "pragma") return SQLAction.ADMIN;
-    if (token !== void 0 && DDL_TOKENS.has(token)) return SQLAction.DDL;
+    if (token !== void 0 && DDL_TOKENS.has(token)) return SQLAction.SCHEMA;
     return fallback;
   }
   actionsForSqlBatch(statements) {

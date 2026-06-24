@@ -21,6 +21,7 @@
     "account-api-and-cli",
     "account-index-cache-policy",
     "account-index-ddl-permission",
+    "account-index-ensure",
     "account-registry-index-spaces",
     "applications-space-host",
     "auth-dx-host-request",

@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 2.4.0-beta.17
+
+### Patch Changes
+
+- 6622043: Expose `account.index.ensure()` and `tc account index ensure` for lightweight account SQLite schema bootstrap, and start schema bootstrap with background account registry sync.
+
 ## 2.4.0-beta.16
 
 ### Minor Changes

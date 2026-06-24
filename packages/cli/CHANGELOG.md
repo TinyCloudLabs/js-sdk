@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 0.7.0-beta.19
+
+### Patch Changes
+
+- 6622043: Expose `account.index.ensure()` and `tc account index ensure` for lightweight account SQLite schema bootstrap, and start schema bootstrap with background account registry sync.
+- Updated dependencies [6622043]
+  - @tinycloud/node-sdk@2.4.0-beta.17
+
 ## 0.7.0-beta.18
 
 ### Patch Changes
