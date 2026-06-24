@@ -77,6 +77,10 @@ export interface AccountIndexRebuildResult {
   syncedAt: string;
 }
 
+export interface AccountIndexEnsureResult {
+  database: string;
+}
+
 export interface AccountIndexedReadOptions {
   preferIndex?: boolean;
   refreshIndex?: boolean;
@@ -369,6 +373,16 @@ export class AccountService {
   };
 
   readonly index = {
+    ensure: async (): Promise<Result<AccountIndexEnsureResult>> => {
+      const dbResult = this.accountDb();
+      if (!dbResult.ok) return dbResult;
+
+      const schema = await this.ensureAccountIndex(dbResult.data);
+      if (!schema.ok) return schema;
+
+      return ok({ database: ACCOUNT_INDEX_DB });
+    },
+
     rebuild: async (): Promise<Result<AccountIndexRebuildResult>> => {
       const dbResult = this.accountDb();
       if (!dbResult.ok) return dbResult;

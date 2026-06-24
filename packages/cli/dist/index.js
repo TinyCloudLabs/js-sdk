@@ -37854,7 +37854,7 @@ var DatabaseHandle = class {
 var SQLAction = {
   READ: "tinycloud.sql/read",
   WRITE: "tinycloud.sql/write",
-  SCHEMA: "tinycloud.sql/schema",
+  DDL: "tinycloud.sql/ddl",
   ADMIN: "tinycloud.sql/admin",
   SELECT: "tinycloud.sql/select",
   INSERT: "tinycloud.sql/insert",
@@ -37972,7 +37972,7 @@ var SQLService = class extends BaseService {
         const actions = [
           this.actionForSql(sql, SQLAction.WRITE),
           ...(options?.schema ?? []).map(
-            (statement) => this.actionForSql(statement, SQLAction.SCHEMA)
+            (statement) => this.actionForSql(statement, SQLAction.DDL)
           )
         ];
         const response = await this.invokeSQL(
@@ -38152,7 +38152,7 @@ var SQLService = class extends BaseService {
   actionForSql(sql, fallback) {
     const token = firstSqlToken(sql);
     if (token === "pragma") return SQLAction.ADMIN;
-    if (token !== void 0 && DDL_TOKENS.has(token)) return SQLAction.SCHEMA;
+    if (token !== void 0 && DDL_TOKENS.has(token)) return SQLAction.DDL;
     return fallback;
   }
   actionsForSqlBatch(statements) {
@@ -50225,6 +50225,16 @@ function registerAccountCommand(program2) {
     }
   });
   const index = account.command("index").description("Manage the materialized account SQLite index");
+  index.command("ensure").description("Create account SQLite index tables if they are missing").action(async (_options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.index.ensure();
+      assertOk(result);
+      outputJson({ ...result.data, ensured: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
   index.command("status").description("Show account SQLite index sync status").action(async (_options, cmd) => {
     try {
       const node = await authenticatedNode(cmd);

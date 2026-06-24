@@ -283,6 +283,20 @@ export function registerAccountCommand(program: Command): void {
   const index = account.command("index").description("Manage the materialized account SQLite index");
 
   index
+    .command("ensure")
+    .description("Create account SQLite index tables if they are missing")
+    .action(async (_options, cmd) => {
+      try {
+        const node = await authenticatedNode(cmd);
+        const result = await node.account.index.ensure();
+        assertOk(result);
+        outputJson({ ...result.data, ensured: true });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  index
     .command("status")
     .description("Show account SQLite index sync status")
     .action(async (_options, cmd) => {

@@ -76,6 +76,7 @@ export type {
   AccountDelegation,
   AccountDelegationListOptions,
   AccountDelegationRevokeOptions,
+  AccountIndexEnsureResult,
   AccountIndexRebuildResult,
   AccountIndexStatus,
   AccountIndexedReadOptions,
