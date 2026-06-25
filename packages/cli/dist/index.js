@@ -42730,10 +42730,10 @@ function serviceFromActions(actions) {
 
 // src/lib/sdk.ts
 async function createSDKInstance(ctx, options) {
-  const profile = await ProfileManager.getProfile(ctx.profile);
+  const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile);
   const key2 = await ProfileManager.getKey(ctx.profile);
-  const effectivePrivateKey = options?.privateKey ?? profile.privateKey;
+  const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
   if (!key2 && !effectivePrivateKey) {
     throw new CLIError(
       "AUTH_REQUIRED",
@@ -42741,7 +42741,7 @@ async function createSDKInstance(ctx, options) {
       ExitCode.AUTH_REQUIRED
     );
   }
-  if (profile.authMethod === "local" && effectivePrivateKey) {
+  if (profile?.authMethod === "local" && effectivePrivateKey) {
     const node2 = new TinyCloudNode({
       host: ctx.host,
       privateKey: effectivePrivateKey
@@ -42752,7 +42752,7 @@ async function createSDKInstance(ctx, options) {
         delegationCid: session.delegationCid,
         spaceId: session.spaceId,
         jwk: session.jwk ?? key2,
-        verificationMethod: session.verificationMethod ?? profile.sessionDid ?? profile.did,
+        verificationMethod: session.verificationMethod ?? profile?.sessionDid ?? profile?.did,
         address: session.address,
         chainId: session.chainId,
         siwe: session.siwe,
@@ -42776,7 +42776,7 @@ async function createSDKInstance(ctx, options) {
       delegationCid: session.delegationCid,
       spaceId: session.spaceId,
       jwk: session.jwk ?? key2,
-      verificationMethod: session.verificationMethod ?? profile.did,
+      verificationMethod: session.verificationMethod ?? profile?.did,
       address: session.address,
       chainId: session.chainId,
       siwe: session.siwe,
@@ -42787,6 +42787,9 @@ async function createSDKInstance(ctx, options) {
   return node;
 }
 async function ensureAuthenticated(ctx, options) {
+  if (options?.privateKey) {
+    return createSDKInstance(ctx, options);
+  }
   const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
   if (profile?.authMethod === "local" && profile.privateKey) {
     return createSDKInstance(ctx, { privateKey: profile.privateKey });
