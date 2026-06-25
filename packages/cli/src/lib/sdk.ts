@@ -17,12 +17,16 @@ export async function createSDKInstance(
   ctx: CLIContext,
   options?: { privateKey?: string }
 ): Promise<TinyCloudNode> {
-  const profile = await ProfileManager.getProfile(ctx.profile);
+  // A headless delegate may pass a private key with no persisted profile at all.
+  // Only require a profile when we have no explicit key to fall back on.
+  const profile = options?.privateKey
+    ? await ProfileManager.getProfile(ctx.profile).catch(() => null)
+    : await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
   const key = await ProfileManager.getKey(ctx.profile);
 
   // For local auth, use the stored private key
-  const effectivePrivateKey = options?.privateKey ?? profile.privateKey;
+  const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
 
   if (!key && !effectivePrivateKey) {
     throw new CLIError(
@@ -32,7 +36,7 @@ export async function createSDKInstance(
     );
   }
 
-  if (profile.authMethod === "local" && effectivePrivateKey) {
+  if (profile?.authMethod === "local" && effectivePrivateKey) {
     // Local key auth: prefer the persisted TinyCloud session so the CLI
     // keeps the same session key DID across request/grant/import flows.
     const node = new TinyCloudNode({
@@ -46,7 +50,7 @@ export async function createSDKInstance(
         delegationCid: session.delegationCid as string,
         spaceId: session.spaceId as string,
         jwk: (session.jwk as object) ?? key,
-        verificationMethod: (session.verificationMethod as string) ?? profile.sessionDid ?? profile.did,
+        verificationMethod: (session.verificationMethod as string) ?? profile?.sessionDid ?? profile?.did,
         address: session.address as string | undefined,
         chainId: session.chainId as number | undefined,
         siwe: session.siwe as string | undefined,
@@ -75,7 +79,7 @@ export async function createSDKInstance(
       delegationCid: session.delegationCid as string,
       spaceId: session.spaceId as string,
       jwk: (session.jwk as object) ?? key,
-      verificationMethod: (session.verificationMethod as string) ?? profile.did,
+      verificationMethod: (session.verificationMethod as string) ?? profile?.did,
       address: session.address as string | undefined,
       chainId: session.chainId as number | undefined,
       siwe: session.siwe as string | undefined,
@@ -95,6 +99,13 @@ export async function ensureAuthenticated(
   ctx: CLIContext,
   options?: { privateKey?: string }
 ): Promise<TinyCloudNode> {
+  // An explicitly-provided private key (--private-key / TC_PRIVATE_KEY) is a
+  // first-class headless identity: accept it before any profile/session gate so
+  // delegates can authenticate with no persisted profile and no login session.
+  if (options?.privateKey) {
+    return createSDKInstance(ctx, options);
+  }
+
   const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
 
   // For local auth, we can sign in directly without a stored session
