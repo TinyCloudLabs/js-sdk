@@ -27,6 +27,7 @@
     "auth-dx-host-request",
     "cli-cross-user-auth-import",
     "cli-delegated-secret-reads",
+    "delegated-access-invokeany",
     "drop-sql-ddl",
     "encryption-network-signin-create",
     "ensure-owned-space-registry-check",

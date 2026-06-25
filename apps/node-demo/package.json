@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/node-demo",
-  "version": "0.0.19-beta.16",
+  "version": "0.0.19-beta.17",
   "private": true,
   "type": "module",
   "scripts": {
