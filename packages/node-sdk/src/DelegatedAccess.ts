@@ -12,7 +12,7 @@ import {
   ServiceContext,
   type TelemetryConfig,
 } from "@tinycloud/sdk-core";
-import type { InvokeFunction } from "@tinycloud/sdk-services";
+import type { InvokeFunction, InvokeAnyFunction } from "@tinycloud/sdk-services";
 import { PortableDelegation } from "./delegation";
 
 /**
@@ -58,15 +58,21 @@ export class DelegatedAccess {
     delegation: PortableDelegation,
     host: string,
     invoke: InvokeFunction,
+    invokeAny?: InvokeAnyFunction,
     telemetry?: TelemetryConfig,
   ) {
     this.session = session;
     this._delegation = delegation;
     this.host = host;
 
-    // Create service context
+    // Create service context. invokeAny is required for SQL operations whose
+    // statements span multiple actions in a single invocation (e.g. the
+    // migration runner batches a CREATE TABLE (ddl) with the tracking-row
+    // INSERT (write)); without it those calls throw "multi-resource
+    // invocations" not supported.
     this._serviceContext = new ServiceContext({
       invoke,
+      invokeAny,
       fetch: globalThis.fetch.bind(globalThis),
       hosts: [host],
       telemetry,
