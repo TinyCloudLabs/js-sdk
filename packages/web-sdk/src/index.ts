@@ -69,6 +69,13 @@ export {
   PersistedSessionData,
   PartialSiweMessage,
   AccountService,
+  TinyCloudDebugLogger,
+  tinyCloudDebugLogger,
+  enableTinyCloudDebug,
+  disableTinyCloudDebug,
+  getTinyCloudDebugLogs,
+  clearTinyCloudDebugLogs,
+  installTinyCloudDebugGlobals,
 } from "@tinycloud/sdk-core";
 export type {
   AccountApplication,
@@ -81,6 +88,10 @@ export type {
   AccountSpace,
   AccountStatus,
   SignInOptions,
+  TinyCloudDebugEvent,
+  TinyCloudDebugLevel,
+  TinyCloudDebugEnableOptions,
+  TinyCloudDebugTimer,
 } from "@tinycloud/sdk-core";
 
 // Re-export KV service types for direct usage

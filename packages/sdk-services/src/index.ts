@@ -72,6 +72,22 @@ export {
   serviceError,
 } from "./types";
 
+export {
+  TinyCloudDebugLogger,
+  tinyCloudDebugLogger,
+  enableTinyCloudDebug,
+  disableTinyCloudDebug,
+  getTinyCloudDebugLogs,
+  clearTinyCloudDebugLogs,
+  installTinyCloudDebugGlobals,
+} from "./debug";
+export type {
+  TinyCloudDebugEvent,
+  TinyCloudDebugLevel,
+  TinyCloudDebugEnableOptions,
+  TinyCloudDebugTimer,
+} from "./debug";
+
 // Zod schemas and validation
 export {
   // Schemas

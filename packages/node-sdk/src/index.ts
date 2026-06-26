@@ -62,6 +62,10 @@ export type {
   DidCacheKeyOptions,
   DidEqualsOptions,
   PkhDidParts,
+  TinyCloudDebugEvent,
+  TinyCloudDebugLevel,
+  TinyCloudDebugEnableOptions,
+  TinyCloudDebugTimer,
 } from "@tinycloud/sdk-core";
 
 // Re-export core values for extensibility
@@ -84,6 +88,13 @@ export {
   principalDid,
   principalDidEquals,
   parseCanonicalNetworkId,
+  TinyCloudDebugLogger,
+  tinyCloudDebugLogger,
+  enableTinyCloudDebug,
+  disableTinyCloudDebug,
+  getTinyCloudDebugLogs,
+  clearTinyCloudDebugLogs,
+  installTinyCloudDebugGlobals,
 } from "@tinycloud/sdk-core";
 
 // Signers

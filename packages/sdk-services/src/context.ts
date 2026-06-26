@@ -16,6 +16,7 @@ import {
   TelemetryEventHandler,
   TelemetryConfig,
 } from "./types";
+import { tinyCloudDebugLogger } from "./debug";
 
 /**
  * Configuration options for ServiceContext.
@@ -72,9 +73,11 @@ export class ServiceContext implements IServiceContext {
   private readonly _telemetryHandler?: TelemetryEventHandler;
 
   constructor(config: ServiceContextConfig) {
-    this._invoke = config.invoke;
-    this._invokeAny = config.invokeAny;
-    this._fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
+    this._invoke = this.wrapInvoke(config.invoke);
+    this._invokeAny = config.invokeAny
+      ? this.wrapInvokeAny(config.invokeAny)
+      : undefined;
+    this._fetch = this.wrapFetch(config.fetch ?? globalThis.fetch.bind(globalThis));
     this._hosts = config.hosts;
     this._session = config.session ?? null;
     this._retryPolicy = {
@@ -198,6 +201,8 @@ export class ServiceContext implements IServiceContext {
    * @param data - Event data
    */
   emit(event: string, data: unknown): void {
+    tinyCloudDebugLogger.log(event, data);
+
     if (this._telemetryEnabled && this._telemetryHandler) {
       try {
         this._telemetryHandler(event, data);
@@ -301,5 +306,85 @@ export class ServiceContext implements IServiceContext {
    */
   get retryPolicy(): RetryPolicy {
     return this._retryPolicy;
+  }
+
+  private wrapInvoke(invoke: InvokeFunction): InvokeFunction {
+    return (session, service, path, action, facts) => {
+      if (!tinyCloudDebugLogger.isEnabled()) {
+        return invoke(session, service, path, action, facts);
+      }
+
+      const timer = tinyCloudDebugLogger.startTimer("sdk.invoke", {
+        service,
+        path,
+        action,
+        facts,
+      });
+
+      try {
+        const result = invoke(session, service, path, action, facts);
+        timer.stop({ ok: true, service, path, action });
+        return result;
+      } catch (error) {
+        timer.stop({ ok: false, service, path, action, error });
+        throw error;
+      }
+    };
+  }
+
+  private wrapInvokeAny(invokeAny: InvokeAnyFunction): InvokeAnyFunction {
+    return (session, entries, facts) => {
+      if (!tinyCloudDebugLogger.isEnabled()) {
+        return invokeAny(session, entries, facts);
+      }
+
+      const timer = tinyCloudDebugLogger.startTimer("sdk.invokeAny", {
+        entries,
+        facts,
+      });
+
+      try {
+        const result = invokeAny(session, entries, facts);
+        timer.stop({ ok: true, entries });
+        return result;
+      } catch (error) {
+        timer.stop({ ok: false, entries, error });
+        throw error;
+      }
+    };
+  }
+
+  private wrapFetch(fetchFn: FetchFunction): FetchFunction {
+    return async (url, init) => {
+      if (!tinyCloudDebugLogger.isEnabled()) {
+        return fetchFn(url, init);
+      }
+
+      const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", {
+        url,
+        method: init?.method ?? "GET",
+        init,
+      });
+
+      try {
+        const response = await fetchFn(url, init);
+        timer.stop({
+          ok: response.ok,
+          url,
+          method: init?.method ?? "GET",
+          status: response.status,
+          statusText: response.statusText,
+        });
+        return response;
+      } catch (error) {
+        timer.stop({
+          ok: false,
+          url,
+          method: init?.method ?? "GET",
+          error,
+        });
+        throw error;
+      }
+    };
   }
 }
