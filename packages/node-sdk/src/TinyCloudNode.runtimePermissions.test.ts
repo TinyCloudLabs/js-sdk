@@ -734,6 +734,55 @@ describe("TinyCloudNode runtime permission delegations", () => {
     );
   });
 
+  test("useDelegation preserves multi-resource SQL and KV grants", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const spaceId = `tinycloud:pkh:eip155:1:${address}:default`;
+    const delegation = {
+      cid: "multi-resource-cid",
+      delegationHeader: { Authorization: "multi-resource-token" },
+      spaceId,
+      path: "com.listen.app/",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+      resources: [
+        {
+          service: "kv",
+          space: spaceId,
+          path: "com.listen.app/",
+          actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+        },
+        {
+          service: "sql",
+          space: spaceId,
+          path: "com.listen.app/data.sqlite",
+          actions: ["tinycloud.sql/read", "tinycloud.sql/write"],
+        },
+      ],
+      expiry: new Date(Date.now() + 3600_000),
+      delegateDID: "did:key:default",
+      ownerAddress: address,
+      chainId: 1,
+      host: "https://tinycloud.test",
+    };
+
+    await withActivatedDelegations(async () => {
+      await node.useDelegation(delegation as any);
+    });
+
+    const prepareSession = (node as any).wasmBindings.prepareSession;
+    expect(prepareSession.mock.calls[0][0].abilities).toEqual({
+      kv: {
+        "com.listen.app/": ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+      sql: {
+        "com.listen.app/data.sqlite": ["tinycloud.sql/read", "tinycloud.sql/write"],
+      },
+    });
+  });
+
   test("encryption discovery falls back to the well-known cache record", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,

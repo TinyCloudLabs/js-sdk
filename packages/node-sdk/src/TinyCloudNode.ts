@@ -868,6 +868,17 @@ export class TinyCloudNode {
   }
 
   /**
+   * Prepare a signed host delegation header for the current host and space
+   * without submitting it to the server.
+   */
+  async prepareHostDelegation(spaceId?: string): Promise<Record<string, string>> {
+    if (!this.auth) {
+      throw new Error("prepareHostDelegation requires wallet mode");
+    }
+    return this.auth.prepareHostDelegation(spaceId);
+  }
+
+  /**
    * Restore a previously established session from stored delegation data.
    *
    * This is used by the CLI to restore a session that was created via the
@@ -3571,9 +3582,13 @@ export class TinyCloudNode {
 
     // Build abilities for the delegation
     const abilities: Record<string, Record<string, string[]>> = {};
+    const spaceActions = params.actions.filter(a => a.startsWith("tinycloud.space/"));
     const kvActions = params.actions.filter(a => a.startsWith("tinycloud.kv/"));
     const sqlActions = params.actions.filter(a => a.startsWith("tinycloud.sql/"));
     const duckdbActions = params.actions.filter(a => a.startsWith("tinycloud.duckdb/"));
+    if (spaceActions.length > 0) {
+      abilities.space = { [params.path]: spaceActions };
+    }
     if (kvActions.length > 0) {
       abilities.kv = { [params.path]: kvActions };
     }
@@ -3747,7 +3762,12 @@ export class TinyCloudNode {
         delegation.expiry,
       );
 
-      return new DelegatedAccess(session, delegation, targetHost, this.wasmBindings.invoke);
+      return new DelegatedAccess(
+        session,
+        delegation,
+        targetHost,
+        this.invokeWithRuntimePermissions,
+      );
     }
 
     // Wallet mode: create a SIWE sub-delegation
@@ -3760,29 +3780,44 @@ export class TinyCloudNode {
     // We must use the same key that the delegation was created for
     const jwk = mySession.jwk;
 
-    // Build abilities from the delegation
+    // Build abilities from the full resource list when available so
+    // multi-resource delegations preserve every service/path pair.
+    // Fall back to the legacy flat shape when receiving older single-
+    // resource delegations.
+    const resources =
+      delegation.resources !== undefined && delegation.resources.length > 0
+        ? delegation.resources
+        : this.flatDelegationResources(delegation);
     const abilities: Record<string, Record<string, string[]>> = {};
-    const kvActions = delegation.actions.filter(a => a.startsWith("tinycloud.kv/"));
-    const sqlActions = delegation.actions.filter(a => a.startsWith("tinycloud.sql/"));
-    const duckdbActions = delegation.actions.filter(a => a.startsWith("tinycloud.duckdb/"));
-    const encryptionActions = delegation.actions.filter(a =>
-      a.startsWith("tinycloud.encryption/"),
-    );
     const rawAbilities: Record<string, string[]> = {};
-    if (kvActions.length > 0) {
-      abilities.kv = { [delegation.path]: kvActions };
-    }
-    if (sqlActions.length > 0) {
-      abilities.sql = { [delegation.path]: sqlActions };
-    }
-    if (duckdbActions.length > 0) {
-      abilities.duckdb = { [delegation.path]: duckdbActions };
-    }
-    if (
-      encryptionActions.length > 0 &&
-      delegation.path.startsWith("urn:tinycloud:encryption:")
-    ) {
-      rawAbilities[delegation.path] = encryptionActions;
+    for (const resource of resources) {
+      const actions = [...resource.actions];
+      if (
+        resource.service === "encryption" &&
+        resource.path.startsWith("urn:tinycloud:encryption:")
+      ) {
+        const existing = rawAbilities[resource.path] ?? [];
+        const seen = new Set(existing);
+        for (const action of actions) {
+          if (!seen.has(action)) {
+            existing.push(action);
+            seen.add(action);
+          }
+        }
+        rawAbilities[resource.path] = existing;
+        continue;
+      }
+
+      abilities[resource.service] ??= {};
+      const existing = abilities[resource.service][resource.path] ?? [];
+      const seen = new Set(existing);
+      for (const action of actions) {
+        if (!seen.has(action)) {
+          existing.push(action);
+          seen.add(action);
+        }
+      }
+      abilities[resource.service][resource.path] = existing;
     }
 
     const now = new Date();
@@ -3855,7 +3890,12 @@ export class TinyCloudNode {
       expirationTime,
     );
 
-    return new DelegatedAccess(session, delegation, targetHost, this.wasmBindings.invoke);
+    return new DelegatedAccess(
+      session,
+      delegation,
+      targetHost,
+      this.invokeWithRuntimePermissions,
+    );
   }
 
   /**
@@ -3922,9 +3962,13 @@ export class TinyCloudNode {
 
     // Build abilities for the sub-delegation
     const abilities: Record<string, Record<string, string[]>> = {};
+    const spaceActions = params.actions.filter(a => a.startsWith("tinycloud.space/"));
     const kvActions = params.actions.filter(a => a.startsWith("tinycloud.kv/"));
     const sqlActions = params.actions.filter(a => a.startsWith("tinycloud.sql/"));
     const duckdbActions = params.actions.filter(a => a.startsWith("tinycloud.duckdb/"));
+    if (spaceActions.length > 0) {
+      abilities.space = { [params.path]: spaceActions };
+    }
     if (kvActions.length > 0) {
       abilities.kv = { [params.path]: kvActions };
     }

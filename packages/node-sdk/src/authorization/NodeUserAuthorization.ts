@@ -543,7 +543,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * Create the space on the TinyCloud server (host delegation).
    * This registers the user as the owner of the space.
    */
-  private async hostSpace(targetSpaceId?: string): Promise<boolean> {
+  private async buildHostDelegationHeaders(
+    targetSpaceId?: string,
+  ): Promise<Record<string, string>> {
     if (!this._tinyCloudSession || !this._address || !this._chainId) {
       throw new Error("Must be signed in to host space");
     }
@@ -568,7 +570,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const signature = await this.signMessage(siwe);
 
     // Convert to delegation headers and submit
-    const headers = this.wasm.siweToDelegationHeaders({ siwe, signature });
+    return this.wasm.siweToDelegationHeaders({ siwe, signature });
+  }
+
+  async prepareHostDelegation(spaceId?: string): Promise<Record<string, string>> {
+    return this.buildHostDelegationHeaders(spaceId);
+  }
+
+  private async hostSpace(targetSpaceId?: string): Promise<boolean> {
+    const host = this.primaryTinyCloudHost;
+    const headers = await this.buildHostDelegationHeaders(targetSpaceId);
     const result = await submitHostDelegation(host, headers);
 
     return result.success;

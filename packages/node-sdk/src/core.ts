@@ -333,6 +333,6 @@ export type { KeyProvider } from "@tinycloud/sdk-core";
 // Key management for node-sdk
 export {
   WasmKeyProvider,
-  WasmKeyProviderConfig,
   createWasmKeyProvider,
 } from "./keys/WasmKeyProvider";
+export type { WasmKeyProviderConfig } from "./keys/WasmKeyProvider";

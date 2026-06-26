@@ -27,12 +27,12 @@ import { resolveSecretPath, SECRET_NAME_RE } from "@tinycloud/sdk-services";
  * in their `manifest.json` and the shape we compare against when performing
  * the capability-subset derivability check in the delegation flow.
  *
- * `service` uses the long form (e.g. `"tinycloud.kv"`, `"tinycloud.sql"`).
+ * `service` uses the long form (e.g. `"tinycloud.space"`, `"tinycloud.kv"`, `"tinycloud.sql"`).
  * `"tinycloud.vault"` is an SDK-only shorthand that expands to the KV
  * resources the vault service uses; it is never encoded as a recap service.
  */
 export interface PermissionEntry {
-  /** Service namespace, e.g. "tinycloud.kv", "tinycloud.sql", "tinycloud.duckdb", "tinycloud.capabilities". */
+  /** Service namespace, e.g. "tinycloud.space", "tinycloud.kv", "tinycloud.sql", "tinycloud.duckdb", "tinycloud.capabilities". */
   service: string;
   /** Space name or full space URI. Defaults to "applications" inside manifests. */
   space?: string;
@@ -279,6 +279,7 @@ interface VaultActionExpansion {
  */
 export const SERVICE_SHORT_TO_LONG: Readonly<Record<string, string>> =
   Object.freeze({
+    space: "tinycloud.space",
     kv: "tinycloud.kv",
     sql: "tinycloud.sql",
     duckdb: "tinycloud.duckdb",
