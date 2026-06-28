@@ -1,0 +1,44 @@
+{
+  "name": "@tinycloud/server",
+  "version": "2.4.0-beta.19",
+  "description": "Reusable TinyCloud server and agent integration helpers",
+  "author": "TinyCloud, Inc.",
+  "license": "EGPL",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "test": "bun test src/"
+  },
+  "dependencies": {
+    "@tinycloud/node-sdk": "2.4.0-beta.19",
+    "@tinycloud/sdk-core": "2.4.0-beta.19",
+    "viem": "^2.21.53"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tinycloudlabs/web-sdk"
+  }
+}
