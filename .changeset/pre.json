@@ -15,7 +15,8 @@
     "@tinycloud/sdk-services": "2.3.0",
     "@tinycloud/vfs": "0.1.1",
     "@tinycloud/web-sdk": "2.3.0",
-    "@tinycloud/sdk-services-test": "9.0.0"
+    "@tinycloud/sdk-services-test": "9.0.0",
+    "@tinycloud/server": "2.4.0-beta.19"
   },
   "changesets": [
     "account-api-and-cli",
@@ -42,6 +43,7 @@
     "restore-host-resolution",
     "runtime-grant-space-case-insensitive",
     "secrets-ddl-regression",
+    "server-agent-package",
     "sql-migrations-primitive",
     "sql-schema-action",
     "tinycloud-debug-logger",
