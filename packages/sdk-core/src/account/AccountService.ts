@@ -14,7 +14,7 @@ import {
   composeManifestRequest,
   type Manifest,
 } from "../manifest";
-import { ACCOUNT_INDEX_SCHEMA } from "../bootstrap/manifest";
+import { ACCOUNT_INDEX_SCHEMA } from "@tinycloud/bootstrap";
 import type { Delegation, SpaceInfo } from "../delegations/types";
 import type { ISpaceService } from "../spaces/SpaceService";
 

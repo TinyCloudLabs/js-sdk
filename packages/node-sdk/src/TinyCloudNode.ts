@@ -90,7 +90,6 @@ import {
   SECRET_RECORDS_SCHEMA,
   SECRETS_SPACE,
   TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
-  bootstrapEncryptionNetworkId,
   bootstrapSteps,
   type BootstrapSpaceName,
   type BootstrapStep,
@@ -639,9 +638,11 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: config.tinycloudFallbackHosts,
-      autoCreateSpace: config.autoCreateSpace,
+      autoCreateSpace: useBootstrapSignInRequest ? false : config.autoCreateSpace,
       enablePublicSpace: config.enablePublicSpace ?? true,
-      spaceCreationHandler: config.spaceCreationHandler,
+      spaceCreationHandler: useBootstrapSignInRequest
+        ? undefined
+        : config.spaceCreationHandler,
       nonce: config.nonce,
       siweConfig: config.siweConfig,
       manifest: useBootstrapSignInRequest ? undefined : config.manifest,
@@ -941,7 +942,6 @@ export class TinyCloudNode {
     const auth = this.auth as NodeUserAuthorization;
     const sessions = new Map<BootstrapSpaceName, TinyCloudSession>();
     const rawAbilitiesBySpace = new Map<BootstrapSpaceName, Record<string, string[]>>();
-    const networkId = bootstrapEncryptionNetworkId(this._address, this._chainId);
     const primarySession = auth.tinyCloudSession;
     const defaultSpaceId = this.ownedSpaceId("default");
     const canReusePrimaryBootstrapSession =
@@ -954,9 +954,7 @@ export class TinyCloudNode {
         sessions.set(step.space, primarySession);
         continue;
       }
-      const rawAbilities = step.includeEncryptionNetworkCreate
-        ? { [networkId]: [NETWORK_CREATE_ACTION] }
-        : undefined;
+      const rawAbilities = step.rawAbilities;
       if (rawAbilities) {
         rawAbilitiesBySpace.set(step.space, rawAbilities);
       }
@@ -1692,9 +1690,11 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
-      autoCreateSpace: this.config.autoCreateSpace,
+      autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
-      spaceCreationHandler: this.config.spaceCreationHandler,
+      spaceCreationHandler: useBootstrapSignInRequest
+        ? undefined
+        : this.config.spaceCreationHandler,
       nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
       manifest: useBootstrapSignInRequest ? undefined : this.config.manifest,
@@ -1751,9 +1751,11 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
-      autoCreateSpace: this.config.autoCreateSpace,
+      autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
-      spaceCreationHandler: this.config.spaceCreationHandler,
+      spaceCreationHandler: useBootstrapSignInRequest
+        ? undefined
+        : this.config.spaceCreationHandler,
       nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
       manifest: useBootstrapSignInRequest ? undefined : this.config.manifest,

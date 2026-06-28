@@ -33,6 +33,7 @@
     "@multiformats/multiaddr-to-uri": "^12.0.0",
     "@multiformats/uri-to-multiaddr": "^10.0.0",
     "@noble/curves": "^1.9.7",
+    "@tinycloud/bootstrap": "2.4.0-beta.19",
     "@tinycloud/sdk-services": "2.4.0-beta.19",
     "multiformats": "^13.4.1",
     "ms": "^2.1.3",

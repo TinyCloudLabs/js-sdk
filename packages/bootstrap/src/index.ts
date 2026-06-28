@@ -1,18 +1,77 @@
-import {
-  ACCOUNT_REGISTRY_SPACE,
-  DEFAULT_MANIFEST_SPACE,
-  composeManifestRequest,
-  makePkhSpaceId,
-  pkhDid,
-  type ComposedManifestRequest,
-  type Manifest,
-  type ResourceCapability,
-} from "@tinycloud/sdk-core";
+import { getAddress, isAddress } from "viem";
 
+export type ManifestDefaults = boolean | "admin" | "all";
+
+export interface PermissionEntry {
+  service: string;
+  space?: string;
+  path: string;
+  actions: string[];
+  skipPrefix?: boolean;
+  expiry?: string;
+  description?: string;
+}
+
+export interface Manifest {
+  manifest_version?: 1;
+  app_id: string;
+  name: string;
+  description?: string;
+  did?: string;
+  icon?: string;
+  appVersion?: string;
+  expiry?: string;
+  space?: string;
+  prefix?: string;
+  defaults?: ManifestDefaults | string;
+  includePublicSpace?: boolean;
+  knowledge?: true | string;
+  permissions?: PermissionEntry[];
+}
+
+export interface ResourceCapability {
+  service: string;
+  space: string;
+  path: string;
+  actions: string[];
+  expiryMs?: number;
+  description?: string;
+}
+
+export interface ManifestRegistryRecord {
+  key: string;
+  app_id: string;
+  manifests: Manifest[];
+}
+
+export interface ComposedManifestRequest {
+  manifests: Manifest[];
+  resources: ResourceCapability[];
+  delegationTargets: [];
+  registryRecords: ManifestRegistryRecord[];
+  expiryMs: number;
+  includePublicSpace: boolean;
+}
+
+export interface ComposeManifestOptions {
+  includeAccountRegistryPermissions?: boolean;
+}
+
+export const DEFAULT_MANIFEST_SPACE = "applications";
+export const ACCOUNT_REGISTRY_SPACE = "account";
+export const ACCOUNT_REGISTRY_PATH = "applications/";
 export const SECRETS_SPACE = "secrets";
 export const BOOTSTRAP_DEFAULT_SPACE = "default";
 export const BOOTSTRAP_PUBLIC_SPACE = "public";
 export const BOOTSTRAP_ENCRYPTION_NETWORK_NAME = "default";
+export const BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE =
+  `urn:tinycloud:encryption:{ownerDid}:${BOOTSTRAP_ENCRYPTION_NETWORK_NAME}` as const;
+
+const DEFAULT_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
+const VAULT_PERMISSION_SERVICE = "tinycloud.vault";
+const ENCRYPTION_PERMISSION_SERVICE = "tinycloud.encryption";
+const ENCRYPTION_MANIFEST_SPACE = "encryption";
+const NETWORK_CREATE_ACTION = "tinycloud.encryption/network.create";
 
 export const BOOTSTRAP_SPACE_NAMES = [
   BOOTSTRAP_DEFAULT_SPACE,
@@ -272,12 +331,243 @@ export const BOOTSTRAP_MANIFEST: BootstrapManifest = {
 
 export type BootstrapAllowlistKind = "session" | "space/host";
 
+export interface BootstrapRawAbilityAllowlistEntry {
+  service: "tinycloud.encryption";
+  resource: typeof BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE;
+  actions: readonly [typeof NETWORK_CREATE_ACTION];
+}
+
 export interface BootstrapAllowlistEntry {
   kind: BootstrapAllowlistKind;
   space: BootstrapSpaceName;
   service: "tinycloud.session" | "tinycloud.space";
   actions: readonly string[];
   resources?: readonly ResourceCapability[];
+  rawAbilities?: readonly BootstrapRawAbilityAllowlistEntry[];
+}
+
+function assertAddress(address: string): string {
+  if (!isAddress(address, { strict: false })) {
+    throw new Error(`Invalid EVM address: ${address}`);
+  }
+  return getAddress(address);
+}
+
+function assertChainId(chainId: number): void {
+  if (!Number.isSafeInteger(chainId) || chainId <= 0) {
+    throw new Error(`Invalid EIP-155 chain ID: ${chainId}`);
+  }
+}
+
+export function pkhDid(address: string, chainId: number = 1): string {
+  assertChainId(chainId);
+  return `did:pkh:eip155:${chainId}:${assertAddress(address)}`;
+}
+
+export function makePkhSpaceId(
+  address: string,
+  chainId: number,
+  name: string,
+): string {
+  assertChainId(chainId);
+  if (!name) {
+    throw new Error("Space name cannot be empty");
+  }
+  return `tinycloud:pkh:eip155:${chainId}:${assertAddress(address)}:${name}`;
+}
+
+function cloneManifest(manifest: Manifest): Manifest {
+  return {
+    ...manifest,
+    permissions: manifest.permissions?.map((permission) => ({
+      ...permission,
+      actions: [...permission.actions],
+    })),
+  };
+}
+
+function actionUrn(service: string, action: string): string {
+  return action.includes("/") ? action : `${service}/${action}`;
+}
+
+function applyPrefix(prefix: string, path: string, skipPrefix?: boolean): string {
+  if (skipPrefix === true || prefix === "" || path === "") {
+    return path;
+  }
+  if (path === "/") {
+    return `${prefix}/`;
+  }
+  const trimmedPrefix = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+  const trimmedPath = path.startsWith("/") ? path.slice(1) : path;
+  return `${trimmedPrefix}/${trimmedPath}`;
+}
+
+function expandVaultPermission(entry: PermissionEntry): PermissionEntry[] {
+  return entry.actions.map((action) => {
+    const normalized = action.startsWith("tinycloud.vault/")
+      ? action.slice("tinycloud.vault/".length)
+      : action.startsWith("tinycloud.kv/")
+        ? action.slice("tinycloud.kv/".length)
+        : action;
+    const mapped =
+      normalized === "read" || normalized === "get"
+        ? "tinycloud.kv/get"
+        : normalized === "write" || normalized === "put"
+          ? "tinycloud.kv/put"
+          : normalized === "delete" || normalized === "del"
+            ? "tinycloud.kv/del"
+            : normalized === "list"
+              ? "tinycloud.kv/list"
+              : normalized === "metadata"
+                ? "tinycloud.kv/metadata"
+                : undefined;
+    if (mapped === undefined) {
+      throw new Error(`unknown vault action ${JSON.stringify(action)}`);
+    }
+    const normalizedPath = entry.path.startsWith("/")
+      ? entry.path.slice(1)
+      : entry.path;
+    return {
+      ...entry,
+      service: "tinycloud.kv",
+      path: `vault/${normalizedPath}`,
+      actions: [mapped],
+      skipPrefix: true,
+    };
+  });
+}
+
+function expandPermissionEntry(
+  entry: PermissionEntry,
+  prefix: string,
+  inheritedSpace: string,
+): ResourceCapability[] {
+  if (entry.service === VAULT_PERMISSION_SERVICE) {
+    return expandVaultPermission(entry).flatMap((expanded) =>
+      expandPermissionEntry(expanded, prefix, inheritedSpace),
+    );
+  }
+  const skipPrefix =
+    entry.skipPrefix === true || entry.service === ENCRYPTION_PERMISSION_SERVICE;
+  return [
+    {
+      service: entry.service,
+      space:
+        entry.service === ENCRYPTION_PERMISSION_SERVICE
+          ? ENCRYPTION_MANIFEST_SPACE
+          : entry.space ?? inheritedSpace,
+      path: applyPrefix(prefix, entry.path, skipPrefix),
+      actions: entry.actions.map((action) => actionUrn(entry.service, action)),
+      ...(entry.description !== undefined ? { description: entry.description } : {}),
+    },
+  ];
+}
+
+function dedupeResources(resources: readonly ResourceCapability[]): ResourceCapability[] {
+  const byKey = new Map<string, ResourceCapability>();
+  for (const resource of resources) {
+    const key = `${resource.service}\u0000${resource.space}\u0000${resource.path}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { ...resource, actions: [...resource.actions] });
+      continue;
+    }
+    for (const action of resource.actions) {
+      if (!existing.actions.includes(action)) {
+        existing.actions.push(action);
+      }
+    }
+  }
+  return [...byKey.values()];
+}
+
+function withCapabilitiesReadForSpaces(
+  resources: readonly ResourceCapability[],
+): ResourceCapability[] {
+  const spaces = new Set(
+    resources
+      .filter((resource) => resource.service !== ENCRYPTION_PERMISSION_SERVICE)
+      .map((resource) => resource.space),
+  );
+  return dedupeResources([
+    ...resources,
+    ...[...spaces].map((space) => ({
+      service: "tinycloud.capabilities",
+      space,
+      path: "",
+      actions: ["tinycloud.capabilities/read"],
+    })),
+  ]);
+}
+
+function accountRegistryPermissions(): ResourceCapability[] {
+  return [
+    {
+      service: "tinycloud.kv",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path: ACCOUNT_REGISTRY_PATH,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
+    },
+    {
+      service: "tinycloud.kv",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path: "spaces/",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
+    },
+    {
+      service: "tinycloud.sql",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path: "account",
+      actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"],
+    },
+  ];
+}
+
+export function composeManifestRequest(
+  inputs: readonly Manifest[],
+  options: ComposeManifestOptions = {},
+): ComposedManifestRequest {
+  if (!Array.isArray(inputs) || inputs.length === 0) {
+    throw new Error("composeManifestRequest requires at least one manifest");
+  }
+
+  const includeAccountRegistryPermissions =
+    options.includeAccountRegistryPermissions ?? true;
+  const manifests = inputs.map(cloneManifest);
+  const resources = manifests.flatMap((manifest) => {
+    const prefix = manifest.prefix ?? manifest.app_id;
+    const space = manifest.space ?? DEFAULT_MANIFEST_SPACE;
+    const explicit = manifest.permissions ?? [];
+    return explicit.flatMap((entry) => expandPermissionEntry(entry, prefix, space));
+  });
+
+  if (includeAccountRegistryPermissions) {
+    resources.push(...accountRegistryPermissions());
+  }
+
+  const manifestsByAppId = new Map<string, Manifest[]>();
+  for (const manifest of manifests) {
+    const current = manifestsByAppId.get(manifest.app_id) ?? [];
+    current.push(cloneManifest(manifest));
+    manifestsByAppId.set(manifest.app_id, current);
+  }
+
+  return {
+    manifests,
+    resources: withCapabilitiesReadForSpaces(resources),
+    delegationTargets: [],
+    registryRecords: includeAccountRegistryPermissions
+      ? [...manifestsByAppId.entries()].map(([app_id, appManifests]) => ({
+          key: `${ACCOUNT_REGISTRY_PATH}${app_id}`,
+          app_id,
+          manifests: appManifests,
+        }))
+      : [],
+    expiryMs: DEFAULT_EXPIRY_MS,
+    includePublicSpace: manifests.some(
+      (manifest) => manifest.includePublicSpace ?? true,
+    ),
+  };
 }
 
 export function composeBootstrapSpaceManifest(
@@ -299,6 +589,15 @@ export const BOOTSTRAP_SESSION_REQUESTS: Readonly<
   ) as Record<BootstrapSpaceName, ComposedManifestRequest>,
 );
 
+const ACCOUNT_SESSION_RAW_ALLOWLIST: readonly BootstrapRawAbilityAllowlistEntry[] =
+  Object.freeze([
+    {
+      service: "tinycloud.encryption",
+      resource: BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE,
+      actions: [NETWORK_CREATE_ACTION],
+    },
+  ]);
+
 export const BOOTSTRAP_ALLOWLIST: readonly BootstrapAllowlistEntry[] =
   Object.freeze(
     BOOTSTRAP_SPACE_NAMES.flatMap((space) => [
@@ -308,6 +607,9 @@ export const BOOTSTRAP_ALLOWLIST: readonly BootstrapAllowlistEntry[] =
         space,
         actions: ["siwe"],
         resources: BOOTSTRAP_SESSION_REQUESTS[space].resources,
+        ...(space === ACCOUNT_REGISTRY_SPACE
+          ? { rawAbilities: ACCOUNT_SESSION_RAW_ALLOWLIST }
+          : {}),
       },
       {
         kind: "space/host" as const,
@@ -338,6 +640,7 @@ export interface BootstrapSpaceStep extends BootstrapStepBase {
   space: BootstrapSpaceName;
   spaceId: string;
   request?: ComposedManifestRequest;
+  rawAbilities?: Record<string, string[]>;
   includeEncryptionNetworkCreate?: boolean;
 }
 
@@ -399,6 +702,7 @@ export function bootstrapSteps(
   }));
   const account = spaces.find((space) => space.name === ACCOUNT_REGISTRY_SPACE)!;
   const secrets = spaces.find((space) => space.name === SECRETS_SPACE)!;
+  const networkId = bootstrapEncryptionNetworkId(address, chainId);
 
   return [
     ...spaces.map((space) => ({
@@ -408,6 +712,9 @@ export function bootstrapSteps(
       spaceId: space.spaceId,
       request: BOOTSTRAP_SESSION_REQUESTS[space.name],
       includeEncryptionNetworkCreate: space.name === ACCOUNT_REGISTRY_SPACE,
+      ...(space.name === ACCOUNT_REGISTRY_SPACE
+        ? { rawAbilities: { [networkId]: [NETWORK_CREATE_ACTION] } }
+        : {}),
     })),
     ...spaces.map((space) => ({
       id: `host:${space.name}`,
@@ -442,7 +749,7 @@ export function bootstrapSteps(
     {
       id: "encryption:network-create",
       kind: "encryption-network-create",
-      networkId: bootstrapEncryptionNetworkId(address, chainId),
+      networkId,
     },
     {
       id: "secrets:secret-records-schema",

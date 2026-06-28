@@ -8,5 +8,5 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   splitting: false,
-  external: [/^@tinycloud\/sdk-core(\/.*)?$/],
+  external: ["viem"],
 });

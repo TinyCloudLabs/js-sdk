@@ -496,6 +496,7 @@ export {
   BOOTSTRAP_ALLOWLIST,
   BOOTSTRAP_DEFAULT_SPACE,
   BOOTSTRAP_ENCRYPTION_NETWORK_NAME,
+  BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE,
   BOOTSTRAP_MANIFEST,
   BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS,
   BOOTSTRAP_PUBLIC_SPACE,
@@ -516,6 +517,7 @@ export {
   type BootstrapAllowlistKind,
   type BootstrapEncryptionNetworkStep,
   type BootstrapManifest,
+  type BootstrapRawAbilityAllowlistEntry,
   type BootstrapSchemaStep,
   type BootstrapSeedApplicationsStep,
   type BootstrapSeedSpacesStep,
@@ -524,7 +526,7 @@ export {
   type BootstrapSpaceStep,
   type BootstrapStep,
   type BootstrapStepKind,
-} from "./bootstrap";
+} from "@tinycloud/bootstrap";
 
 // TinyCloud location registry helpers
 export {

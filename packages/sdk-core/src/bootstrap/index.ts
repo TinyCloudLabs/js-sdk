@@ -1,1 +1,1 @@
-export * from "./manifest";
+export * from "@tinycloud/bootstrap";
