@@ -3,6 +3,7 @@
   "tag": "beta",
   "initialVersions": {
     "@tinycloud/node-demo": "0.0.18",
+    "@tinycloud/bootstrap": "2.4.0-beta.19",
     "tinycloud-openkey-example-app": "0.0.16",
     "openkey-vite": "0.0.14",
     "tinycloud-web-sdk-example-app": "0.0.2",
@@ -25,6 +26,7 @@
     "account-index-ensure",
     "account-registry-index-spaces",
     "applications-space-host",
+    "autosign-account-bootstrap-sdk",
     "auth-dx-host-request",
     "cli-cross-user-auth-import",
     "cli-delegate-key-headless-auth",

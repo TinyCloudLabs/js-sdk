@@ -272,7 +272,7 @@ export const ACCOUNT_REGISTRY_SPACE = "account";
 /** Account-space KV prefix used for installed-application registry records. */
 export const ACCOUNT_REGISTRY_PATH = "applications/";
 
-const SECRETS_SPACE = "secrets";
+export const SECRETS_SPACE = "secrets";
 
 /** SDK-only permission service for encrypted vault resources. */
 export const VAULT_PERMISSION_SERVICE = "tinycloud.vault";
