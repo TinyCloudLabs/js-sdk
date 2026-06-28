@@ -1,5 +1,14 @@
 # @tinycloudlabs/web-sdk
 
+## 2.4.0-beta.19
+
+### Patch Changes
+
+- 42f1235: Add an opt-in TinyCloud debug logger controlled by `TinyCloud_debug`. The logger keeps a 1000-event in-memory ring buffer, writes structured events to `console.debug` when enabled, exposes browser console helpers for enabling, disabling, inspecting, and clearing logs, persists browser debug mode through `localStorage`, and captures service events plus `fetch`, `invoke`, and `invokeAny` timings.
+- Updated dependencies [42f1235]
+  - @tinycloud/sdk-core@2.4.0-beta.19
+  - @tinycloud/node-sdk@2.4.0-beta.19
+
 ## 2.4.0-beta.18
 
 ### Patch Changes

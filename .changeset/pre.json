@@ -44,6 +44,7 @@
     "secrets-ddl-regression",
     "sql-migrations-primitive",
     "sql-schema-action",
+    "tinycloud-debug-logger",
     "usedelegation-multiresource",
     "web-sdk-space-scoped-services"
   ]
