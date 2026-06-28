@@ -22167,7 +22167,7 @@ var init_version18 = __esm({
 });
 
 // ../../node_modules/@ethersproject/random/lib.esm/random.js
-function getGlobal() {
+function getGlobal2() {
   if (typeof self !== "undefined") {
     return self;
   }
@@ -22195,7 +22195,7 @@ var init_random = __esm({
     init_lib();
     init_version18();
     logger23 = new Logger(version18);
-    anyGlobal = getGlobal();
+    anyGlobal = getGlobal2();
     crypto2 = anyGlobal.crypto || anyGlobal.msCrypto;
     if (!crypto2 || !crypto2.getRandomValues) {
       logger23.warn("WARNING: Missing strong random number source");
@@ -36544,6 +36544,200 @@ function serviceError(code2, message, service, options) {
     meta: options?.meta
   };
 }
+var DEBUG_FLAG = "TinyCloud_debug";
+var MAX_EVENTS = 1e3;
+function getGlobal() {
+  return globalThis;
+}
+function nowMs() {
+  const performanceNow = globalThis.performance?.now?.bind(globalThis.performance);
+  return typeof performanceNow === "function" ? performanceNow() : Date.now();
+}
+function isTrue(value) {
+  return value === true || value === "true" || value === "1";
+}
+function getProcessDebugFlag() {
+  const processLike = globalThis.process;
+  return processLike?.env?.[DEBUG_FLAG];
+}
+function isBrowserWindow() {
+  const global2 = getGlobal();
+  return global2.window === globalThis;
+}
+function getLocalStorage() {
+  if (!isBrowserWindow()) {
+    return void 0;
+  }
+  try {
+    return globalThis.localStorage;
+  } catch {
+    return void 0;
+  }
+}
+function getStoredDebugFlag() {
+  const storage = getLocalStorage();
+  if (!storage) {
+    return void 0;
+  }
+  try {
+    return storage.getItem(DEBUG_FLAG);
+  } catch {
+    return void 0;
+  }
+}
+function setStoredDebugFlag(enabled) {
+  const storage = getLocalStorage();
+  if (!storage) {
+    return;
+  }
+  try {
+    if (enabled) {
+      storage.setItem(DEBUG_FLAG, "true");
+    } else {
+      storage.removeItem(DEBUG_FLAG);
+    }
+  } catch {
+  }
+}
+function shouldStartEnabled() {
+  const global2 = getGlobal();
+  return isTrue(global2[DEBUG_FLAG]) || isTrue(getStoredDebugFlag()) || isTrue(getProcessDebugFlag());
+}
+var TinyCloudDebugLogger = class {
+  constructor() {
+    this.enabled = shouldStartEnabled();
+    this.sequence = 0;
+    this.events = [];
+    this.maxEvents = MAX_EVENTS;
+  }
+  isEnabled() {
+    return this.enabled || isTrue(getGlobal()[DEBUG_FLAG]) || isTrue(getProcessDebugFlag());
+  }
+  enable(options = {}) {
+    this.enabled = true;
+    getGlobal()[DEBUG_FLAG] = true;
+    if (options.persist !== false) {
+      setStoredDebugFlag(true);
+    }
+    this.log("debug.enabled", { persisted: options.persist !== false });
+  }
+  disable(options = {}) {
+    this.log("debug.disabled", { persisted: options.persist !== false });
+    this.enabled = false;
+    getGlobal()[DEBUG_FLAG] = false;
+    if (options.persist !== false) {
+      setStoredDebugFlag(false);
+    }
+  }
+  clear() {
+    this.events = [];
+  }
+  getLogs() {
+    return [...this.events];
+  }
+  log(event, data, message) {
+    if (!this.isEnabled()) {
+      return void 0;
+    }
+    return this.record({
+      event,
+      data,
+      message,
+      level: "debug",
+      timestamp: Date.now(),
+      timestampIso: (/* @__PURE__ */ new Date()).toISOString()
+    });
+  }
+  startTimer(event, data) {
+    if (!this.isEnabled()) {
+      return { stop: () => void 0 };
+    }
+    const startedAt = nowMs();
+    this.log(`${event}.start`, data);
+    return {
+      stop: (finishData) => {
+        const endedAt = nowMs();
+        return this.record({
+          event: `${event}.end`,
+          data: finishData,
+          durationMs: endedAt - startedAt,
+          startedAt,
+          endedAt,
+          level: "debug",
+          timestamp: Date.now(),
+          timestampIso: (/* @__PURE__ */ new Date()).toISOString()
+        });
+      }
+    };
+  }
+  async timeAsync(event, operation, data) {
+    if (!this.isEnabled()) {
+      return operation();
+    }
+    const timer2 = this.startTimer(event, data);
+    try {
+      const result = await operation();
+      timer2.stop({ ok: true });
+      return result;
+    } catch (error) {
+      timer2.stop({ ok: false, error });
+      throw error;
+    }
+  }
+  time(event, operation, data) {
+    if (!this.isEnabled()) {
+      return operation();
+    }
+    const timer2 = this.startTimer(event, data);
+    try {
+      const result = operation();
+      timer2.stop({ ok: true });
+      return result;
+    } catch (error) {
+      timer2.stop({ ok: false, error });
+      throw error;
+    }
+  }
+  record(event) {
+    const debugEvent = {
+      ...event,
+      sequence: ++this.sequence
+    };
+    this.events.push(debugEvent);
+    if (this.events.length > this.maxEvents) {
+      this.events.splice(0, this.events.length - this.maxEvents);
+    }
+    try {
+      globalThis.console?.debug?.("[TinyCloud]", debugEvent.event, debugEvent);
+    } catch {
+    }
+    return debugEvent;
+  }
+};
+var tinyCloudDebugLogger = new TinyCloudDebugLogger();
+function enableTinyCloudDebug(options) {
+  tinyCloudDebugLogger.enable(options);
+  return tinyCloudDebugLogger;
+}
+function disableTinyCloudDebug(options) {
+  tinyCloudDebugLogger.disable(options);
+  return tinyCloudDebugLogger;
+}
+function getTinyCloudDebugLogs() {
+  return tinyCloudDebugLogger.getLogs();
+}
+function clearTinyCloudDebugLogs() {
+  tinyCloudDebugLogger.clear();
+}
+function installTinyCloudDebugGlobals() {
+  const global2 = getGlobal();
+  global2.TinyCloudDebug = tinyCloudDebugLogger;
+  global2.enableTinyCloudDebug = enableTinyCloudDebug;
+  global2.disableTinyCloudDebug = disableTinyCloudDebug;
+  global2.getTinyCloudDebugLogs = getTinyCloudDebugLogs;
+  global2.clearTinyCloudDebugLogs = clearTinyCloudDebugLogs;
+}
+installTinyCloudDebugGlobals();
 var ServiceErrorSchema = external_exports.object({
   /** Error code for programmatic handling (e.g., 'KV_NOT_FOUND', 'AUTH_EXPIRED') */
   code: external_exports.string(),
