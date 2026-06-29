@@ -1,5 +1,5 @@
-import "./chunk-5CWOI54E.js";
-import "./chunk-43OSAOIQ.js";
+import "./chunk-TWMXCCSD.js";
+import "./chunk-725HE3UG.js";
 import {
   __commonJS,
   __esm,
@@ -5988,9 +5988,9 @@ var require_node_exports = __commonJS({
   }
 });
 
-// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/_u64.js
+// ../../node_modules/@noble/hashes/_u64.js
 var require_u64 = __commonJS({
-  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/_u64.js"(exports) {
+  "../../node_modules/@noble/hashes/_u64.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.toBig = exports.shrSL = exports.shrSH = exports.rotrSL = exports.rotrSH = exports.rotrBL = exports.rotrBH = exports.rotr32L = exports.rotr32H = exports.rotlSL = exports.rotlSH = exports.rotlBL = exports.rotlBH = exports.add5L = exports.add5H = exports.add4L = exports.add4H = exports.add3L = exports.add3H = void 0;
@@ -6084,9 +6084,9 @@ var require_u64 = __commonJS({
   }
 });
 
-// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/cryptoNode.js
+// ../../node_modules/@noble/hashes/cryptoNode.js
 var require_cryptoNode = __commonJS({
-  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/cryptoNode.js"(exports) {
+  "../../node_modules/@noble/hashes/cryptoNode.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.crypto = void 0;
@@ -6095,9 +6095,9 @@ var require_cryptoNode = __commonJS({
   }
 });
 
-// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/utils.js
+// ../../node_modules/@noble/hashes/utils.js
 var require_utils = __commonJS({
-  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/utils.js"(exports) {
+  "../../node_modules/@noble/hashes/utils.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.wrapXOFConstructorWithOpts = exports.wrapConstructorWithOpts = exports.wrapConstructor = exports.Hash = exports.nextTick = exports.swap32IfBE = exports.byteSwapIfBE = exports.swap8IfBE = exports.isLE = void 0;
@@ -6337,9 +6337,9 @@ var require_utils = __commonJS({
   }
 });
 
-// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/sha3.js
+// ../../node_modules/@noble/hashes/sha3.js
 var require_sha3 = __commonJS({
-  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/sha3.js"(exports) {
+  "../../node_modules/@noble/hashes/sha3.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.shake256 = exports.shake128 = exports.keccak_512 = exports.keccak_384 = exports.keccak_256 = exports.keccak_224 = exports.sha3_512 = exports.sha3_384 = exports.sha3_256 = exports.sha3_224 = exports.Keccak = void 0;
@@ -46738,6 +46738,432 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
 var import_siwe = __toESM(require_siwe(), 1);
 var import_ms2 = __toESM(require_ms(), 1);
 
+// ../bootstrap/dist/index.js
+var DEFAULT_MANIFEST_SPACE2 = "applications";
+var ACCOUNT_REGISTRY_SPACE = "account";
+var ACCOUNT_REGISTRY_PATH = "applications/";
+var SECRETS_SPACE3 = "secrets";
+var BOOTSTRAP_DEFAULT_SPACE = "default";
+var BOOTSTRAP_PUBLIC_SPACE = "public";
+var BOOTSTRAP_ENCRYPTION_NETWORK_NAME = "default";
+var BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE = `urn:tinycloud:encryption:{ownerDid}:${BOOTSTRAP_ENCRYPTION_NETWORK_NAME}`;
+var DEFAULT_EXPIRY_MS = 30 * 24 * 60 * 60 * 1e3;
+var VAULT_PERMISSION_SERVICE2 = "tinycloud.vault";
+var ENCRYPTION_PERMISSION_SERVICE2 = "tinycloud.encryption";
+var ENCRYPTION_MANIFEST_SPACE2 = "encryption";
+var NETWORK_CREATE_ACTION = "tinycloud.encryption/network.create";
+var BOOTSTRAP_SPACE_NAMES = [
+  BOOTSTRAP_DEFAULT_SPACE,
+  DEFAULT_MANIFEST_SPACE2,
+  ACCOUNT_REGISTRY_SPACE,
+  SECRETS_SPACE3,
+  BOOTSTRAP_PUBLIC_SPACE
+];
+var TINYCLOUD_DEFAULT_SPACE_MANIFEST = {
+  app_id: "xyz.tinycloud.default",
+  name: "TinyCloud Default Space",
+  space: BOOTSTRAP_DEFAULT_SPACE,
+  prefix: "",
+  defaults: false,
+  includePublicSpace: false,
+  permissions: [
+    {
+      service: "tinycloud.kv",
+      space: BOOTSTRAP_DEFAULT_SPACE,
+      path: "/",
+      actions: ["get", "put", "del", "list", "metadata"]
+    },
+    {
+      service: "tinycloud.sql",
+      space: BOOTSTRAP_DEFAULT_SPACE,
+      path: "/",
+      actions: ["read", "write"]
+    }
+  ]
+};
+var TINYCLOUD_APPLICATIONS_SPACE_MANIFEST = {
+  app_id: "xyz.tinycloud.applications",
+  name: "TinyCloud Applications Space",
+  space: DEFAULT_MANIFEST_SPACE2,
+  prefix: "",
+  defaults: false,
+  includePublicSpace: false,
+  permissions: [
+    {
+      service: "tinycloud.kv",
+      space: DEFAULT_MANIFEST_SPACE2,
+      path: "/",
+      actions: ["get", "put", "del", "list", "metadata"]
+    },
+    {
+      service: "tinycloud.sql",
+      space: DEFAULT_MANIFEST_SPACE2,
+      path: "/",
+      actions: ["read", "write"]
+    }
+  ]
+};
+var TINYCLOUD_ACCOUNT_SPACE_MANIFEST = {
+  app_id: "xyz.tinycloud.account",
+  name: "TinyCloud Account Registry",
+  space: ACCOUNT_REGISTRY_SPACE,
+  prefix: "",
+  defaults: false,
+  includePublicSpace: false,
+  permissions: [
+    {
+      service: "tinycloud.kv",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path: "applications/",
+      actions: ["get", "put", "list"]
+    },
+    {
+      service: "tinycloud.kv",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path: "spaces/",
+      actions: ["get", "put", "list"]
+    },
+    {
+      service: "tinycloud.sql",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path: "account",
+      actions: ["read", "write", "schema"]
+    }
+  ]
+};
+var TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST = {
+  app_id: "xyz.tinycloud.secrets",
+  name: "TinyCloud Secrets",
+  space: SECRETS_SPACE3,
+  prefix: "",
+  defaults: false,
+  includePublicSpace: false,
+  permissions: [
+    {
+      service: "tinycloud.vault",
+      space: SECRETS_SPACE3,
+      path: "secrets/",
+      actions: ["read"],
+      skipPrefix: true
+    },
+    {
+      service: "tinycloud.kv",
+      space: SECRETS_SPACE3,
+      path: "variables",
+      actions: ["list", "metadata"],
+      skipPrefix: true
+    },
+    {
+      service: "tinycloud.kv",
+      space: SECRETS_SPACE3,
+      path: "variables/",
+      actions: ["get", "put", "del", "list", "metadata"],
+      skipPrefix: true
+    },
+    {
+      service: "tinycloud.sql",
+      space: SECRETS_SPACE3,
+      path: "default",
+      actions: ["read", "write", "schema"],
+      skipPrefix: true
+    },
+    {
+      service: "tinycloud.capabilities",
+      space: SECRETS_SPACE3,
+      path: "",
+      actions: ["read"],
+      skipPrefix: true
+    }
+  ]
+};
+var TINYCLOUD_PUBLIC_SPACE_MANIFEST = {
+  app_id: "xyz.tinycloud.public",
+  name: "TinyCloud Public Space",
+  space: BOOTSTRAP_PUBLIC_SPACE,
+  prefix: "",
+  defaults: false,
+  includePublicSpace: false,
+  permissions: [
+    {
+      service: "tinycloud.kv",
+      space: BOOTSTRAP_PUBLIC_SPACE,
+      path: "/",
+      actions: ["get", "list", "metadata"]
+    }
+  ]
+};
+var BOOTSTRAP_SPACE_MANIFESTS = {
+  [BOOTSTRAP_DEFAULT_SPACE]: TINYCLOUD_DEFAULT_SPACE_MANIFEST,
+  [DEFAULT_MANIFEST_SPACE2]: TINYCLOUD_APPLICATIONS_SPACE_MANIFEST,
+  [ACCOUNT_REGISTRY_SPACE]: TINYCLOUD_ACCOUNT_SPACE_MANIFEST,
+  [SECRETS_SPACE3]: TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
+  [BOOTSTRAP_PUBLIC_SPACE]: TINYCLOUD_PUBLIC_SPACE_MANIFEST
+};
+var BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS = [
+  TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST
+];
+var ACCOUNT_INDEX_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS applications (
+    app_id TEXT PRIMARY KEY,
+    name TEXT,
+    description TEXT,
+    updated_at TEXT,
+    manifest_json TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS application_state (
+    app_id TEXT PRIMARY KEY,
+    manifest_hash TEXT NOT NULL,
+    indexed_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS spaces (
+    space_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_did TEXT NOT NULL,
+    type TEXT NOT NULL,
+    permissions_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    registered_at TEXT,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS delegations (
+    cid TEXT PRIMARY KEY,
+    direction TEXT NOT NULL,
+    space_id TEXT NOT NULL,
+    space_name TEXT,
+    counterparty_did TEXT NOT NULL,
+    delegate_did TEXT NOT NULL,
+    delegator_did TEXT,
+    path TEXT NOT NULL,
+    actions_json TEXT NOT NULL,
+    expiry TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS sync_state (
+    source TEXT PRIMARY KEY,
+    synced_at TEXT NOT NULL,
+    count INTEGER NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_delegations_direction ON delegations(direction)",
+  "CREATE INDEX IF NOT EXISTS idx_delegations_space ON delegations(space_id)",
+  "CREATE INDEX IF NOT EXISTS idx_delegations_counterparty ON delegations(counterparty_did)",
+  "CREATE INDEX IF NOT EXISTS idx_spaces_owner ON spaces(owner_did)",
+  "CREATE INDEX IF NOT EXISTS idx_spaces_type ON spaces(type)"
+];
+var SECRET_RECORDS_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS secret_records (
+    scope TEXT NOT NULL,
+    name TEXT NOT NULL,
+    provider_id TEXT,
+    custom_note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_tested TEXT,
+    test_status TEXT,
+    test_message TEXT,
+    PRIMARY KEY(scope, name)
+  )`
+];
+var BOOTSTRAP_MANIFEST = {
+  spaces: BOOTSTRAP_SPACE_NAMES.map((name2) => ({
+    name: name2,
+    manifest: BOOTSTRAP_SPACE_MANIFESTS[name2],
+    persistedAsApplication: name2 === SECRETS_SPACE3
+  })),
+  applications: BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS,
+  accountIndexSchema: ACCOUNT_INDEX_SCHEMA,
+  secretRecordsSchema: SECRET_RECORDS_SCHEMA,
+  encryptionNetwork: {
+    name: BOOTSTRAP_ENCRYPTION_NETWORK_NAME
+  }
+};
+function cloneManifest(manifest) {
+  return {
+    ...manifest,
+    permissions: manifest.permissions?.map((permission) => ({
+      ...permission,
+      actions: [...permission.actions]
+    }))
+  };
+}
+function actionUrn(service, action) {
+  return action.includes("/") ? action : `${service}/${action}`;
+}
+function applyPrefix2(prefix, path, skipPrefix) {
+  if (skipPrefix === true || prefix === "" || path === "") {
+    return path;
+  }
+  if (path === "/") {
+    return `${prefix}/`;
+  }
+  const trimmedPrefix = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+  const trimmedPath = path.startsWith("/") ? path.slice(1) : path;
+  return `${trimmedPrefix}/${trimmedPath}`;
+}
+function expandVaultPermission(entry) {
+  return entry.actions.map((action) => {
+    const normalized = action.startsWith("tinycloud.vault/") ? action.slice("tinycloud.vault/".length) : action.startsWith("tinycloud.kv/") ? action.slice("tinycloud.kv/".length) : action;
+    const mapped = normalized === "read" || normalized === "get" ? "tinycloud.kv/get" : normalized === "write" || normalized === "put" ? "tinycloud.kv/put" : normalized === "delete" || normalized === "del" ? "tinycloud.kv/del" : normalized === "list" ? "tinycloud.kv/list" : normalized === "metadata" ? "tinycloud.kv/metadata" : void 0;
+    if (mapped === void 0) {
+      throw new Error(`unknown vault action ${JSON.stringify(action)}`);
+    }
+    const normalizedPath = entry.path.startsWith("/") ? entry.path.slice(1) : entry.path;
+    return {
+      ...entry,
+      service: "tinycloud.kv",
+      path: `vault/${normalizedPath}`,
+      actions: [mapped],
+      skipPrefix: true
+    };
+  });
+}
+function expandPermissionEntry2(entry, prefix, inheritedSpace) {
+  if (entry.service === VAULT_PERMISSION_SERVICE2) {
+    return expandVaultPermission(entry).flatMap(
+      (expanded) => expandPermissionEntry2(expanded, prefix, inheritedSpace)
+    );
+  }
+  const skipPrefix = entry.skipPrefix === true || entry.service === ENCRYPTION_PERMISSION_SERVICE2;
+  return [
+    {
+      service: entry.service,
+      space: entry.service === ENCRYPTION_PERMISSION_SERVICE2 ? ENCRYPTION_MANIFEST_SPACE2 : entry.space ?? inheritedSpace,
+      path: applyPrefix2(prefix, entry.path, skipPrefix),
+      actions: entry.actions.map((action) => actionUrn(entry.service, action)),
+      ...entry.description !== void 0 ? { description: entry.description } : {}
+    }
+  ];
+}
+function dedupeResources2(resources) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const resource of resources) {
+    const key2 = `${resource.service}\0${resource.space}\0${resource.path}`;
+    const existing = byKey.get(key2);
+    if (!existing) {
+      byKey.set(key2, { ...resource, actions: [...resource.actions] });
+      continue;
+    }
+    for (const action of resource.actions) {
+      if (!existing.actions.includes(action)) {
+        existing.actions.push(action);
+      }
+    }
+  }
+  return [...byKey.values()];
+}
+function withCapabilitiesReadForSpaces2(resources) {
+  const spaces = new Set(
+    resources.filter((resource) => resource.service !== ENCRYPTION_PERMISSION_SERVICE2).map((resource) => resource.space)
+  );
+  return dedupeResources2([
+    ...resources,
+    ...[...spaces].map((space) => ({
+      service: "tinycloud.capabilities",
+      space,
+      path: "",
+      actions: ["tinycloud.capabilities/read"]
+    }))
+  ]);
+}
+function accountRegistryPermissions() {
+  return [
+    {
+      service: "tinycloud.kv",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path: ACCOUNT_REGISTRY_PATH,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"]
+    },
+    {
+      service: "tinycloud.kv",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path: "spaces/",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"]
+    },
+    {
+      service: "tinycloud.sql",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path: "account",
+      actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"]
+    }
+  ];
+}
+function composeManifestRequest(inputs, options = {}) {
+  if (!Array.isArray(inputs) || inputs.length === 0) {
+    throw new Error("composeManifestRequest requires at least one manifest");
+  }
+  const includeAccountRegistryPermissions = options.includeAccountRegistryPermissions ?? true;
+  const manifests = inputs.map(cloneManifest);
+  const resources = manifests.flatMap((manifest) => {
+    const prefix = manifest.prefix ?? manifest.app_id;
+    const space = manifest.space ?? DEFAULT_MANIFEST_SPACE2;
+    const explicit = manifest.permissions ?? [];
+    return explicit.flatMap((entry) => expandPermissionEntry2(entry, prefix, space));
+  });
+  if (includeAccountRegistryPermissions) {
+    resources.push(...accountRegistryPermissions());
+  }
+  const manifestsByAppId = /* @__PURE__ */ new Map();
+  for (const manifest of manifests) {
+    const current = manifestsByAppId.get(manifest.app_id) ?? [];
+    current.push(cloneManifest(manifest));
+    manifestsByAppId.set(manifest.app_id, current);
+  }
+  return {
+    manifests,
+    resources: withCapabilitiesReadForSpaces2(resources),
+    delegationTargets: [],
+    registryRecords: includeAccountRegistryPermissions ? [...manifestsByAppId.entries()].map(([app_id, appManifests]) => ({
+      key: `${ACCOUNT_REGISTRY_PATH}${app_id}`,
+      app_id,
+      manifests: appManifests
+    })) : [],
+    expiryMs: DEFAULT_EXPIRY_MS,
+    includePublicSpace: manifests.some(
+      (manifest) => manifest.includePublicSpace ?? true
+    )
+  };
+}
+function composeBootstrapSpaceManifest(space) {
+  return composeManifestRequest([BOOTSTRAP_SPACE_MANIFESTS[space]], {
+    includeAccountRegistryPermissions: false
+  });
+}
+var BOOTSTRAP_SESSION_REQUESTS = Object.freeze(
+  Object.fromEntries(
+    BOOTSTRAP_SPACE_NAMES.map((space) => [
+      space,
+      composeBootstrapSpaceManifest(space)
+    ])
+  )
+);
+var ACCOUNT_SESSION_RAW_ALLOWLIST = Object.freeze([
+  {
+    service: "tinycloud.encryption",
+    resource: BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE,
+    actions: [NETWORK_CREATE_ACTION]
+  }
+]);
+var BOOTSTRAP_ALLOWLIST = Object.freeze(
+  BOOTSTRAP_SPACE_NAMES.flatMap((space) => [
+    {
+      kind: "session",
+      service: "tinycloud.session",
+      space,
+      actions: ["siwe"],
+      resources: BOOTSTRAP_SESSION_REQUESTS[space].resources,
+      ...space === ACCOUNT_REGISTRY_SPACE ? { rawAbilities: ACCOUNT_SESSION_RAW_ALLOWLIST } : {}
+    },
+    {
+      kind: "space/host",
+      service: "tinycloud.space",
+      space,
+      actions: ["tinycloud.space/host"]
+    }
+  ])
+);
+
 // ../../node_modules/uint8arrays/dist/src/equals.js
 function equals(a, b) {
   if (a === b) {
@@ -49653,7 +50079,7 @@ var SharingServiceConfigSchema = external_exports.object({
     message: "Expected an onRootDelegationNeeded function or undefined"
   }).optional()
 });
-var DEFAULT_EXPIRY_MS = EXPIRY.SHARE_MS;
+var DEFAULT_EXPIRY_MS2 = EXPIRY.SHARE_MS;
 var AutoApproveSpaceCreationHandler = class {
   /**
    * Always returns true to auto-approve space creation.
