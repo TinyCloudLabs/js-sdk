@@ -25,7 +25,13 @@ export type {
   AutoSignStrategy,
   AutoRejectStrategy,
   CallbackStrategy,
+  OpenKeySigningStrategyOptions,
+  OpenKeySigningRequestBody,
+  OpenKeySigningResponseBody,
+  OpenKeyCallbackStrategy,
 } from "@tinycloud/sdk-core";
+
+export { createOpenKeyCallbackSigningStrategy } from "@tinycloud/sdk-core";
 
 /**
  * Node.js event emitter strategy: emits sign requests as events.

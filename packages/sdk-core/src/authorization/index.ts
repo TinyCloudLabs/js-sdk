@@ -53,6 +53,10 @@ export {
   SignRequest,
   SignResponse,
   SignCallback,
+  OpenKeySigningStrategyOptions,
+  OpenKeySigningRequestBody,
+  OpenKeySigningResponseBody,
+  OpenKeyCallbackStrategy,
   // Strategy types
   AutoSignStrategy,
   AutoRejectStrategy,
@@ -61,6 +65,7 @@ export {
   SignStrategy,
   // Default
   defaultSignStrategy,
+  createOpenKeyCallbackSigningStrategy,
 } from "./strategies";
 
 // Space creation handler types

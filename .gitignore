@@ -13,6 +13,7 @@ build
 
 # Package dist directories
 packages/node-sdk/dist/
+packages/bootstrap/dist/
 packages/sdk-core/dist/
 packages/sdk-rs/packages/web/dist/
 packages/sdk-rs/packages/node/dist/

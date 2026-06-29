@@ -6,6 +6,7 @@ import {
   type ISessionManager,
   type ISigner,
   type TinyCloudSession,
+  BOOTSTRAP_SESSION_REQUESTS,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
@@ -337,4 +338,115 @@ test("restored session with NO persisted hosts lazily resolves via registry/fall
   );
   expect(requests).toContain(`${DEFAULT_TINYCLOUD_FALLBACK_HOST}/delegate`);
   expect(signedMessages.length).toBe(0); // still no wallet flow
+});
+
+test("ensureSpaceExists records skipped spaces for fresh-account bootstrap detection", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const signedMessages: string[] = [];
+  const originalFetch = globalThis.fetch;
+  (globalThis as any).__originalFetch = originalFetch;
+  globalThis.fetch = async (input: any, init?: any) => {
+    const url = String(input);
+    if (url.endsWith("/info")) {
+      return new Response(
+        JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return new Response(
+        JSON.stringify({ activated: [], skipped: ["tinycloud:fresh"] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const auth = new NodeUserAuthorization({
+    signer: createSigner(signedMessages),
+    wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+  });
+
+  await auth.signIn();
+
+  expect(auth.lastActivationSkippedSpaceIds).toEqual(["tinycloud:fresh"]);
+});
+
+test("createBootstrapSession mints a signed single-space bootstrap session", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const signedMessages: string[] = [];
+  const originalFetch = globalThis.fetch;
+  (globalThis as any).__originalFetch = originalFetch;
+  globalThis.fetch = async (input: any, init?: any) => {
+    const url = String(input);
+    if (url.endsWith("/info")) {
+      return new Response(
+        JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return new Response(JSON.stringify({ activated: ["space"], skipped: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const auth = new NodeUserAuthorization({
+    signer: createSigner(signedMessages),
+    wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+  });
+
+  await auth.signIn();
+  const session = await auth.createBootstrapSession({
+    spaceId: "tinycloud:pkh:eip155:1:0x1234567890abcdef1234567890abcdef12345678:account",
+    capabilityRequest: BOOTSTRAP_SESSION_REQUESTS.account,
+    rawAbilities: {
+      "urn:tinycloud:encryption:did:pkh:eip155:1:0x1234567890abcdef1234567890abcdef12345678:default": [
+        "tinycloud.encryption/network.create",
+      ],
+    },
+  });
+
+  expect(session.spaceId).toContain(":account");
+  expect(session.delegationCid).toBe("bafy-session");
+  expect(captured.at(-1)?.abilities).toEqual({
+    kv: {
+      "applications/": [
+        "tinycloud.kv/get",
+        "tinycloud.kv/put",
+        "tinycloud.kv/list",
+      ],
+      "spaces/": [
+        "tinycloud.kv/get",
+        "tinycloud.kv/put",
+        "tinycloud.kv/list",
+      ],
+    },
+    sql: {
+      account: [
+        "tinycloud.sql/read",
+        "tinycloud.sql/write",
+        "tinycloud.sql/schema",
+      ],
+    },
+    capabilities: {
+      "": ["tinycloud.capabilities/read"],
+    },
+  });
+  expect(captured.at(-1)?.rawAbilities).toEqual({
+    "urn:tinycloud:encryption:did:pkh:eip155:1:0x1234567890abcdef1234567890abcdef12345678:default": [
+      "tinycloud.encryption/network.create",
+    ],
+  });
 });

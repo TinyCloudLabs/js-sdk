@@ -86,6 +86,13 @@ import {
   UnsupportedFeatureError,
   makePublicSpaceId,
   ACCOUNT_REGISTRY_SPACE,
+  BOOTSTRAP_SESSION_REQUESTS,
+  SECRET_RECORDS_SCHEMA,
+  SECRETS_SPACE,
+  TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
+  bootstrapSteps,
+  type BootstrapSpaceName,
+  type BootstrapStep,
   type ComposedManifestRequest,
   type ResolvedDelegate,
   // Capability-chain delegation
@@ -119,6 +126,7 @@ import {
   type NetworkDescriptor,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
@@ -147,6 +155,10 @@ const NETWORK_ADMIN_TYPE = "tinycloud.encryption.network-admin/v1";
  */
 const DEFAULT_SESSION_EXPIRATION_MS = EXPIRY.SESSION_MS;
 
+function isOpenKeyAutoSignStrategy(strategy: SignStrategy | undefined): boolean {
+  return (strategy as { openKeyAutoSign?: unknown } | undefined)?.openKeyAutoSign === true;
+}
+
 function didPrincipalMatches(actual: string, expected: string): boolean {
   try {
     return principalDidEquals(actual, expected);
@@ -164,6 +176,8 @@ export interface TinyCloudNodeConfig {
   privateKey?: string;
   /** Custom signer implementation. If provided, takes precedence over privateKey. */
   signer?: ISigner;
+  /** Strategy for root signature requests. Defaults to auto-sign for local keys. */
+  signStrategy?: SignStrategy;
   /** Explicit TinyCloud server URL. When omitted, signIn resolves the user's host. */
   host?: string;
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
@@ -219,6 +233,8 @@ export interface TinyCloudNodeConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Include implicit account registry permissions when composing `manifest`. Default true. */
   includeAccountRegistryPermissions?: boolean;
+  /** Run canonical first-account bootstrap when fresh account state is detected. Default true. */
+  autoBootstrapAccount?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
 }
@@ -610,9 +626,10 @@ export class TinyCloudNode {
    * @internal
    */
   private setupAuth(config: TinyCloudNodeConfig): void {
+    const useBootstrapSignInRequest = this.shouldUseBootstrapSignInRequest(config);
     this.auth = new NodeUserAuthorization({
       signer: this.signer!,
-      signStrategy: { type: "auto-sign" },
+      signStrategy: config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
@@ -621,20 +638,34 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: config.tinycloudFallbackHosts,
-      autoCreateSpace: config.autoCreateSpace,
+      autoCreateSpace: useBootstrapSignInRequest ? false : config.autoCreateSpace,
       enablePublicSpace: config.enablePublicSpace ?? true,
-      spaceCreationHandler: config.spaceCreationHandler,
+      spaceCreationHandler: useBootstrapSignInRequest
+        ? undefined
+        : config.spaceCreationHandler,
       nonce: config.nonce,
       siweConfig: config.siweConfig,
-      manifest: config.manifest,
-      capabilityRequest: config.capabilityRequest,
-      includeAccountRegistryPermissions: config.includeAccountRegistryPermissions,
+      manifest: useBootstrapSignInRequest ? undefined : config.manifest,
+      capabilityRequest: useBootstrapSignInRequest
+        ? BOOTSTRAP_SESSION_REQUESTS.default
+        : config.capabilityRequest,
+      includeAccountRegistryPermissions: useBootstrapSignInRequest
+        ? false
+        : config.includeAccountRegistryPermissions,
     });
 
     this.tc = new TinyCloud(this.auth, {
       invokeAny: this.invokeAnyWithRuntimePermissions,
       telemetry: config.telemetry,
     });
+  }
+
+  private shouldUseBootstrapSignInRequest(config: TinyCloudNodeConfig): boolean {
+    return config.autoBootstrapAccount !== false &&
+      config.manifest === undefined &&
+      config.capabilityRequest === undefined &&
+      (config.prefix ?? "default") === "default" &&
+      isOpenKeyAutoSignStrategy(config.signStrategy);
   }
 
   private syncResolvedHostFromAuth(): void {
@@ -826,13 +857,21 @@ export class TinyCloudNode {
     // Initialize service context with session
     this.initializeServices();
 
+    const bootstrapped = await this.bootstrapAccountIfNeeded();
+
     await this.ensureRequestedEncryptionNetworks();
 
-    if (this.config.manifest === undefined && this.config.capabilityRequest === undefined) {
-      await this.ensureOwnedSpaceHostedById(this.ownedSpaceId("secrets"));
+    if (
+      !bootstrapped &&
+      this.config.manifest === undefined &&
+      this.config.capabilityRequest === undefined
+    ) {
+      await this.ensureOwnedSpaceHostedById(this.ownedSpaceId(SECRETS_SPACE));
     }
 
-    this.scheduleAccountRegistrySync();
+    if (!bootstrapped) {
+      this.scheduleAccountRegistrySync();
+    }
 
     this.notificationHandler.success("Successfully signed in");
   }
@@ -842,6 +881,243 @@ export class TinyCloudNode {
       throw new Error("Cannot resolve owned space before sign-in");
     }
     return this.wasmBindings.makeSpaceId(this._address, this._chainId, name);
+  }
+
+  private async bootstrapAccountIfNeeded(): Promise<boolean> {
+    if (this.config.autoBootstrapAccount === false) {
+      return false;
+    }
+    if (!this.auth || !this._address) {
+      return false;
+    }
+
+    const steps = bootstrapSteps(this._address, this._chainId);
+    if (!(await this.isFreshBootstrapAccount(steps))) {
+      return false;
+    }
+
+    await this.runAccountBootstrap(steps);
+    return true;
+  }
+
+  private async isFreshBootstrapAccount(steps: BootstrapStep[]): Promise<boolean> {
+    const enshrinedSpaceIds = new Set<string>();
+    for (const step of steps) {
+      if (step.kind === "session") {
+        enshrinedSpaceIds.add(step.spaceId);
+      }
+    }
+    const skipped = (this.auth as NodeUserAuthorization).lastActivationSkippedSpaceIds;
+    if (skipped.some((spaceId) => enshrinedSpaceIds.has(spaceId))) {
+      return true;
+    }
+
+    try {
+      const indexed = await this.account.index.spaces.list();
+      if (indexed.ok && indexed.data.length === 0) {
+        return true;
+      }
+    } catch {
+      // A missing account index is expected before bootstrap; fall through to KV.
+    }
+
+    try {
+      const spaces = await this.account.spaces.list();
+      return spaces.ok && spaces.data.length === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private async runAccountBootstrap(steps: BootstrapStep[]): Promise<void> {
+    if (!this.auth || !this._address) {
+      throw new Error("Account bootstrap requires an active wallet session");
+    }
+
+    const host = this.hosts[0] ?? this.config.host;
+    if (!host) {
+      throw new Error("Account bootstrap requires a TinyCloud host");
+    }
+
+    const auth = this.auth as NodeUserAuthorization;
+    const sessions = new Map<BootstrapSpaceName, TinyCloudSession>();
+    const rawAbilitiesBySpace = new Map<BootstrapSpaceName, Record<string, string[]>>();
+    const primarySession = auth.tinyCloudSession;
+    const defaultSpaceId = this.ownedSpaceId("default");
+    const canReusePrimaryBootstrapSession =
+      primarySession?.spaceId === defaultSpaceId &&
+      auth.capabilityRequest === BOOTSTRAP_SESSION_REQUESTS.default;
+
+    for (const step of steps) {
+      if (step.kind !== "session") continue;
+      if (step.space === "default" && canReusePrimaryBootstrapSession && primarySession) {
+        sessions.set(step.space, primarySession);
+        continue;
+      }
+      const rawAbilities = step.rawAbilities;
+      if (rawAbilities) {
+        rawAbilitiesBySpace.set(step.space, rawAbilities);
+      }
+      const session = await auth.createBootstrapSession({
+        spaceId: step.spaceId,
+        capabilityRequest: step.request ?? BOOTSTRAP_SESSION_REQUESTS[step.space],
+        rawAbilities,
+      });
+      sessions.set(step.space, session);
+    }
+
+    for (const step of steps) {
+      if (step.kind !== "host") continue;
+      const hosted = await auth.hostOwnedSpace(step.spaceId);
+      if (!hosted) {
+        throw new Error(`Failed to host bootstrap space: ${step.spaceId}`);
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    for (const step of steps) {
+      if (step.kind !== "activate") continue;
+      const session = sessions.get(step.space);
+      if (!session) {
+        throw new Error(`Missing bootstrap session for ${step.space}`);
+      }
+      const activated = await activateSessionWithHost(host, session.delegationHeader);
+      if (!activated.success || activated.skipped?.includes(step.spaceId)) {
+        throw new Error(
+          `Failed to activate bootstrap session for ${step.spaceId}: ${
+            activated.error ?? "space was skipped"
+          }`,
+        );
+      }
+      this.registerBootstrapRuntimeGrant(
+        session,
+        BOOTSTRAP_SESSION_REQUESTS[step.space],
+        rawAbilitiesBySpace.get(step.space),
+      );
+    }
+
+    for (const step of steps) {
+      if (step.kind === "account-index-schema") {
+        const ensured = await this.account.index.ensure();
+        if (!ensured.ok) {
+          throw new Error(`Failed to create account index schema: ${ensured.error.message}`);
+        }
+      }
+
+      if (step.kind === "seed-spaces") {
+        for (const space of step.spaces) {
+          const registered = await this.account.spaces.register({
+            spaceId: space.spaceId,
+            name: space.name,
+            ownerDid: this.did,
+            type: "owned",
+            permissions: ["*"],
+            status: "active",
+          });
+          if (!registered.ok) {
+            throw new Error(
+              `Failed to seed account space ${space.spaceId}: ${registered.error.message}`,
+            );
+          }
+        }
+      }
+
+      if (step.kind === "seed-applications") {
+        const registered = await this.account.applications.register(
+          step.manifests.length > 0
+            ? [...step.manifests]
+            : TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
+        );
+        if (!registered.ok) {
+          throw new Error(`Failed to seed bootstrap applications: ${registered.error.message}`);
+        }
+      }
+
+      if (step.kind === "encryption-network-create") {
+        await this.ensureEncryptionNetwork(step.networkId);
+      }
+
+      if (step.kind === "secret-records-schema") {
+        const db = this.sqlForSpace(step.spaceId).db(step.database);
+        const migrated = await db.migrations.apply({
+          namespace: "tinycloud.secrets.records",
+          migrations: [
+            {
+              id: "001_initial",
+              sql: [...SECRET_RECORDS_SCHEMA],
+            },
+          ],
+        });
+        if (!migrated.ok) {
+          throw new Error(
+            `Failed to create secret_records schema: ${migrated.error.message}`,
+          );
+        }
+      }
+    }
+  }
+
+  private registerBootstrapRuntimeGrant(
+    session: TinyCloudSession,
+    request: { resources: readonly { service: string; space: string; path: string; actions: readonly string[] }[] },
+    rawAbilities?: Record<string, string[]>,
+  ): void {
+    const operations: RuntimePermissionOperation[] = [];
+    for (const resource of request.resources) {
+      const service = resource.service.startsWith("tinycloud.")
+        ? this.shortServiceName(resource.service)
+        : resource.service;
+      const spaceId = resource.space.startsWith("tinycloud:")
+        ? resource.space
+        : this.ownedSpaceId(resource.space);
+      for (const action of resource.actions) {
+        operations.push({
+          spaceId,
+          service,
+          path: resource.path,
+          action,
+        });
+      }
+    }
+    for (const [resource, actions] of Object.entries(rawAbilities ?? {})) {
+      for (const action of actions) {
+        operations.push({
+          resource,
+          service: "encryption",
+          path: resource,
+          action,
+        });
+      }
+    }
+
+    const expiresAt = extractSiweExpiration(session.siwe) ?? this.getSessionExpiry();
+    const actions = [...new Set(operations.map((operation) => operation.action))];
+    this.runtimePermissionGrants.push({
+      session: {
+        delegationHeader: session.delegationHeader,
+        delegationCid: session.delegationCid,
+        spaceId: session.spaceId,
+        verificationMethod: session.verificationMethod,
+        jwk: session.jwk,
+      },
+      delegation: {
+        cid: session.delegationCid,
+        delegationHeader: session.delegationHeader,
+        delegateDID: session.verificationMethod,
+        delegatorDID: this.did,
+        spaceId: session.spaceId,
+        path: "",
+        actions,
+        expiry: expiresAt,
+        allowSubDelegation: true,
+        ownerAddress: session.address,
+        chainId: session.chainId,
+        host: this.config.host,
+      },
+      operations,
+      expiresAt,
+    });
   }
 
   private async writeManifestRegistryRecords(): Promise<void> {
@@ -1401,9 +1677,11 @@ export class TinyCloudNode {
     this.signer = TinyCloudNode.nodeDefaults.createSigner(privateKey);
 
     // Create authorization handler
+    const authConfig = { ...this.config, prefix };
+    const useBootstrapSignInRequest = this.shouldUseBootstrapSignInRequest(authConfig);
     this.auth = new NodeUserAuthorization({
       signer: this.signer,
-      signStrategy: { type: "auto-sign" },
+      signStrategy: this.config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
@@ -1412,14 +1690,20 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
-      autoCreateSpace: this.config.autoCreateSpace,
+      autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
-      spaceCreationHandler: this.config.spaceCreationHandler,
+      spaceCreationHandler: useBootstrapSignInRequest
+        ? undefined
+        : this.config.spaceCreationHandler,
       nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
-      manifest: this.config.manifest,
-      capabilityRequest: this.config.capabilityRequest,
-      includeAccountRegistryPermissions: this.config.includeAccountRegistryPermissions,
+      manifest: useBootstrapSignInRequest ? undefined : this.config.manifest,
+      capabilityRequest: useBootstrapSignInRequest
+        ? BOOTSTRAP_SESSION_REQUESTS.default
+        : this.config.capabilityRequest,
+      includeAccountRegistryPermissions: useBootstrapSignInRequest
+        ? false
+        : this.config.includeAccountRegistryPermissions,
     });
 
     // Create TinyCloud instance
@@ -1454,9 +1738,11 @@ export class TinyCloudNode {
 
     this.signer = signer;
 
+    const authConfig = { ...this.config, prefix };
+    const useBootstrapSignInRequest = this.shouldUseBootstrapSignInRequest(authConfig);
     this.auth = new NodeUserAuthorization({
       signer: this.signer,
-      signStrategy: { type: "auto-sign" },
+      signStrategy: this.config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
@@ -1465,14 +1751,20 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
-      autoCreateSpace: this.config.autoCreateSpace,
+      autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
-      spaceCreationHandler: this.config.spaceCreationHandler,
+      spaceCreationHandler: useBootstrapSignInRequest
+        ? undefined
+        : this.config.spaceCreationHandler,
       nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
-      manifest: this.config.manifest,
-      capabilityRequest: this.config.capabilityRequest,
-      includeAccountRegistryPermissions: this.config.includeAccountRegistryPermissions,
+      manifest: useBootstrapSignInRequest ? undefined : this.config.manifest,
+      capabilityRequest: useBootstrapSignInRequest
+        ? BOOTSTRAP_SESSION_REQUESTS.default
+        : this.config.capabilityRequest,
+      includeAccountRegistryPermissions: useBootstrapSignInRequest
+        ? false
+        : this.config.includeAccountRegistryPermissions,
     });
 
     this.tc = new TinyCloud(this.auth, {

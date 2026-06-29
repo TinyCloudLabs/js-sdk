@@ -9,6 +9,7 @@ import {
   TinyCloudSession,
   SiweConfig,
   SignInOptions,
+  SpaceHostResult,
   fetchPeerId,
   submitHostDelegation,
   activateSessionWithHost,
@@ -135,6 +136,12 @@ export interface NodeUserAuthorizationConfig {
   includeAccountRegistryPermissions?: boolean;
 }
 
+export interface CreateBootstrapSessionOptions {
+  spaceId: string;
+  capabilityRequest: ComposedManifestRequest;
+  rawAbilities?: Record<string, string[]>;
+}
+
 /**
  * Node.js implementation of IUserAuthorization.
  *
@@ -202,6 +209,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private _address?: string;
   private _chainId?: number;
   private _nodeFeatures: string[] = [];
+  private _lastActivationSkippedSpaceIds: string[] = [];
 
   constructor(config: NodeUserAuthorizationConfig) {
     this.wasm = config.wasmBindings;
@@ -415,6 +423,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   get nodeFeatures(): string[] {
     return this._nodeFeatures;
+  }
+
+  get lastActivationSkippedSpaceIds(): string[] {
+    return [...this._lastActivationSkippedSpaceIds];
   }
 
   /**
@@ -690,6 +702,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       host,
       this._tinyCloudSession.delegationHeader,
     );
+    this.recordActivationSkippedSpaces(result, primarySpaceId);
 
     // Determine the effective space creation handler:
     // 1. Explicit spaceCreationHandler takes precedence
@@ -810,6 +823,79 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
 
     throw new Error(`Failed to activate session: ${result.error}`);
+  }
+
+  private recordActivationSkippedSpaces(
+    result: SpaceHostResult,
+    primarySpaceId: string,
+  ): void {
+    if (result.success) {
+      this._lastActivationSkippedSpaceIds = result.skipped ?? [];
+      return;
+    }
+    this._lastActivationSkippedSpaceIds = result.status === 404
+      ? [primarySpaceId]
+      : [];
+  }
+
+  async createBootstrapSession(
+    options: CreateBootstrapSessionOptions,
+  ): Promise<TinyCloudSession> {
+    if (!this._address || !this._chainId) {
+      throw new Error("Must be signed in before creating bootstrap sessions");
+    }
+
+    const address = this._address;
+    const chainId = this._chainId;
+    const keyId = `bootstrap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    this.sessionManager.createSessionKey(keyId);
+    const jwkString = this.sessionManager.jwk(keyId);
+    if (!jwkString) {
+      throw new Error("Failed to create bootstrap session key");
+    }
+    const jwk = JSON.parse(jwkString);
+    const now = new Date();
+    const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
+    const abilities = resourceCapabilitiesToAbilitiesMap(
+      options.capabilityRequest.resources,
+    );
+    const prepared = this.wasm.prepareSession({
+      abilities,
+      ...(options.rawAbilities !== undefined
+        ? { rawAbilities: options.rawAbilities }
+        : {}),
+      address,
+      chainId,
+      domain: this.domain,
+      issuedAt: now.toISOString(),
+      expirationTime: expirationTime.toISOString(),
+      spaceId: options.spaceId,
+      jwk,
+      ...this.buildSiweOverrides(),
+    });
+    const signature = await this.requestSignature({
+      address,
+      chainId,
+      message: prepared.siwe,
+      type: "siwe",
+    });
+    const session = this.wasm.completeSessionSetup({
+      ...prepared,
+      signature,
+    });
+
+    return {
+      address,
+      chainId,
+      sessionKey: keyId,
+      spaceId: options.spaceId,
+      delegationCid: session.delegationCid,
+      delegationHeader: session.delegationHeader,
+      verificationMethod: this.sessionManager.getDID(keyId),
+      jwk,
+      siwe: prepared.siwe,
+      signature,
+    };
   }
 
   /**

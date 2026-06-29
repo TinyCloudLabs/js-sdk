@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: ['src/index.ts', 'src/bootstrap/index.ts'],
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,
@@ -13,6 +13,7 @@ export default defineConfig({
     '@multiformats/multiaddr-to-uri',
     '@multiformats/uri-to-multiaddr',
     '@noble/curves/ed25519',
+    '@tinycloud/bootstrap',
     '@tinycloud/sdk-services',
     'multiformats/basics',
     'ms',

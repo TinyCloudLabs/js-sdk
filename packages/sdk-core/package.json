@@ -13,6 +13,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./bootstrap": {
+      "types": "./dist/bootstrap/index.d.ts",
+      "import": "./dist/bootstrap/index.js",
+      "require": "./dist/bootstrap/index.cjs"
     }
   },
   "files": [
@@ -28,6 +33,7 @@
     "@multiformats/multiaddr-to-uri": "^12.0.0",
     "@multiformats/uri-to-multiaddr": "^10.0.0",
     "@noble/curves": "^1.9.7",
+    "@tinycloud/bootstrap": "2.4.0-beta.19",
     "@tinycloud/sdk-services": "2.4.0-beta.19",
     "multiformats": "^13.4.1",
     "ms": "^2.1.3",

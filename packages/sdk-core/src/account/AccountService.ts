@@ -14,6 +14,7 @@ import {
   composeManifestRequest,
   type Manifest,
 } from "../manifest";
+import { ACCOUNT_INDEX_SCHEMA } from "@tinycloud/bootstrap";
 import type { Delegation, SpaceInfo } from "../delegations/types";
 import type { ISpaceService } from "../spaces/SpaceService";
 
@@ -843,7 +844,7 @@ export class AccountService {
       migrations: [
         {
           id: "001_initial",
-          sql: ACCOUNT_INDEX_SCHEMA,
+          sql: [...ACCOUNT_INDEX_SCHEMA],
         },
       ],
     });
@@ -851,57 +852,6 @@ export class AccountService {
     return ok(undefined);
   }
 }
-
-const ACCOUNT_INDEX_SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS applications (
-    app_id TEXT PRIMARY KEY,
-    name TEXT,
-    description TEXT,
-    updated_at TEXT,
-    manifest_json TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS application_state (
-    app_id TEXT PRIMARY KEY,
-    manifest_hash TEXT NOT NULL,
-    indexed_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS spaces (
-    space_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    owner_did TEXT NOT NULL,
-    type TEXT NOT NULL,
-    permissions_json TEXT NOT NULL,
-    status TEXT NOT NULL,
-    registered_at TEXT,
-    updated_at TEXT NOT NULL,
-    expires_at TEXT
-  )`,
-  `CREATE TABLE IF NOT EXISTS delegations (
-    cid TEXT PRIMARY KEY,
-    direction TEXT NOT NULL,
-    space_id TEXT NOT NULL,
-    space_name TEXT,
-    counterparty_did TEXT NOT NULL,
-    delegate_did TEXT NOT NULL,
-    delegator_did TEXT,
-    path TEXT NOT NULL,
-    actions_json TEXT NOT NULL,
-    expiry TEXT NOT NULL,
-    status TEXT NOT NULL,
-    created_at TEXT,
-    updated_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS sync_state (
-    source TEXT PRIMARY KEY,
-    synced_at TEXT NOT NULL,
-    count INTEGER NOT NULL
-  )`,
-  "CREATE INDEX IF NOT EXISTS idx_delegations_direction ON delegations(direction)",
-  "CREATE INDEX IF NOT EXISTS idx_delegations_space ON delegations(space_id)",
-  "CREATE INDEX IF NOT EXISTS idx_delegations_counterparty ON delegations(counterparty_did)",
-  "CREATE INDEX IF NOT EXISTS idx_spaces_owner ON spaces(owner_did)",
-  "CREATE INDEX IF NOT EXISTS idx_spaces_type ON spaces(type)",
-];
 
 interface StoredApplicationRecord {
   app_id?: string;

@@ -6,6 +6,7 @@
   "packageManager": "bun@1.2.0",
   "workspaces": [
     "packages/web-sdk",
+    "packages/bootstrap",
     "packages/sdk-core",
     "packages/sdk-services",
     "packages/sdk-rs",

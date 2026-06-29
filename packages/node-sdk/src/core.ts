@@ -84,7 +84,10 @@ export {
 } from "./authorization/NodeUserAuthorization";
 
 // Sign strategies — value exports
-export { defaultSignStrategy } from "./authorization/strategies";
+export {
+  createOpenKeyCallbackSigningStrategy,
+  defaultSignStrategy,
+} from "./authorization/strategies";
 
 // Sign strategies — type exports (re-exported from sdk-core + Node.js-specific types)
 export type {
@@ -94,6 +97,10 @@ export type {
   AutoSignStrategy,
   AutoRejectStrategy,
   CallbackStrategy,
+  OpenKeySigningStrategyOptions,
+  OpenKeySigningRequestBody,
+  OpenKeySigningResponseBody,
+  OpenKeyCallbackStrategy,
   NodeEventEmitterStrategy,
   SignStrategy,
 } from "./authorization/strategies";
