@@ -227,12 +227,12 @@ mock.module("@tinycloud/node-sdk", () => ({
     }
   },
   resolveSecretListPrefix: (options?: { scope?: string }) =>
-    options?.scope ? `vault/secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/` : "vault/secrets/",
+    options?.scope ? `secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/` : "secrets/",
   resolveSecretPath: (name: string, options?: { scope?: string }) => ({
     permissionPaths: {
-      vault: options?.scope
-        ? `vault/secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/${name}`
-        : `vault/secrets/${name}`,
+      secret: options?.scope
+        ? `secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/${name}`
+        : `secrets/${name}`,
     },
   }),
   principalDidEquals: (a: string, b: string) =>
@@ -477,7 +477,7 @@ describe("CLI secrets commands", () => {
         },
         secret: {
           name: "ANTHROPIC_API_KEY",
-          path: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+          path: "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
           scope: "food-tracker",
           exists: true,
           readable: true,
@@ -491,7 +491,7 @@ describe("CLI secrets commands", () => {
           {
             name: "Secret access",
             ok: true,
-            detail: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY readable",
+            detail: "secrets/scoped/food-tracker/ANTHROPIC_API_KEY readable",
           },
         ],
       },
@@ -593,7 +593,7 @@ describe("CLI secrets commands", () => {
           {
             service: "tinycloud.kv",
             space: "secrets",
-            path: "vault/secrets/",
+            path: "secrets/",
             actions: ["tinycloud.kv/list"],
             skipPrefix: true,
           },
@@ -624,7 +624,7 @@ describe("CLI secrets commands", () => {
           {
             service: "tinycloud.kv",
             space: "secrets",
-            path: "vault/secrets/",
+            path: "secrets/",
             actions: ["tinycloud.kv/list"],
             skipPrefix: true,
           },
@@ -665,7 +665,7 @@ describe("CLI secrets commands", () => {
           {
             service: "tinycloud.kv",
             space: "secrets",
-            path: "vault/secrets/ANTHROPIC_API_KEY",
+            path: "secrets/ANTHROPIC_API_KEY",
             actions: ["tinycloud.kv/get"],
             skipPrefix: true,
           },
@@ -727,5 +727,83 @@ describe("CLI secrets commands", () => {
     expect(error.code).toBe("PERMISSION_DENIED");
     expect(error.message).toBe("Permission denied while reading secret");
     expect(recorded.outputs).toEqual([]);
+  });
+
+  test("requests scoped put permission at secrets/scoped/<scope>/<name>", async () => {
+    currentNode = makeFakeNode({
+      putResult: [
+        {
+          ok: false,
+          error: {
+            code: "PERMISSION_DENIED",
+            service: "secrets",
+            message: "Cannot autosign tinycloud.kv/put for ANTHROPIC_API_KEY",
+          },
+        },
+        { ok: true, data: undefined },
+      ],
+    });
+
+    await runSecretsCommand([
+      "secrets",
+      "put",
+      "ANTHROPIC_API_KEY",
+      "super-secret",
+      "--scope",
+      "Food Tracker",
+    ]);
+
+    expect(recorded.permissionRequests).toEqual([
+      {
+        profile: "default",
+        requested: [
+          {
+            service: "tinycloud.kv",
+            space: "secrets",
+            path: "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+            actions: ["tinycloud.kv/put"],
+            skipPrefix: true,
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("--space overrides the permission-request space", async () => {
+    currentNode = makeFakeNode({
+      listError: [
+        Object.assign(
+          new Error("grantRuntimePermissions requires wallet mode with a signer or privateKey."),
+          { code: "PERMISSION_DENIED" },
+        ),
+      ],
+    });
+
+    await runSecretsCommand(["secrets", "list", "--space", "custom-vault"]);
+
+    expect(recorded.permissionRequests).toEqual([
+      {
+        profile: "default",
+        requested: [
+          {
+            service: "tinycloud.kv",
+            space: "custom-vault",
+            path: "secrets/",
+            actions: ["tinycloud.kv/list"],
+            skipPrefix: true,
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("--space is no longer aliased to --scope", async () => {
+    await runSecretsCommand(["secrets", "list", "--space", "custom-vault"]);
+
+    // --space must not silently feed into --scope.
+    expect(recorded.listCalls).toEqual([undefined]);
+    expect(recorded.outputs).toEqual([
+      { secrets: ["ANTHROPIC_API_KEY"], count: 1 },
+    ]);
   });
 });

@@ -1,0 +1,5 @@
+---
+"@tinycloud/cli": minor
+---
+
+Align `tc secrets get/put/delete/list/doctor` permission paths and default space with the TinyCloud Secret Manager web app. Secret paths now match `vaultSecretKey()` in secret-manager's `src/lib/tinycloud-manifest.ts`: `secrets/<NAME>` for global secrets and `secrets/scoped/<scope>/<NAME>` for scoped secrets (the leading `vault/` prefix is dropped — `vault` is a service name, not a path component). Permission-grant requests now always target the literal `secrets` space, regardless of the active profile's default space. `--space` is restored to a real flag (defaulting to `secrets`) instead of being a silent deprecated alias for `--scope`; `--scope` continues to add the logical scope path segment. This is a breaking change for any caller that depended on the previous `vault/secrets/...` permission paths or on `--space` aliasing `--scope`. Previously-stored secrets written by the old CLI can be migrated manually with `tc secrets get NAME && tc secrets put NAME ...`.

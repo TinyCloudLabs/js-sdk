@@ -17,6 +17,9 @@ import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { ensureDelegationAuthority, refreshOpenKeySession } from "./auth.js";
 
+// Mirrors `SECRETS_SPACE` in the secret-manager web app's tinycloud-manifest.ts.
+// Secrets always live in the literal "secrets" space regardless of the active
+// profile's default space; pass `--space` to override.
 const SECRETS_SPACE = "secrets";
 type SecretAction = "get" | "put" | "del" | "list";
 type SecretKvAbility =
@@ -36,6 +39,10 @@ type SecretResult<T> =
 
 interface SecretScopeOptions {
   scope?: string;
+}
+
+interface SecretSpaceOption {
+  space?: string;
 }
 
 interface DelegationCandidate {
@@ -88,9 +95,13 @@ function authOptions(options: { privateKey?: string }): { privateKey?: string } 
   return privateKey ? { privateKey } : undefined;
 }
 
-function resolveSecretScope(options: { scope?: string; space?: string }): { scope?: string } | undefined {
-  const scope = options.scope ?? options.space;
-  return scope ? { scope } : undefined;
+function resolveSecretScope(options: { scope?: string }): { scope?: string } | undefined {
+  return options.scope ? { scope: options.scope } : undefined;
+}
+
+function resolveSecretsSpace(options: SecretSpaceOption): string {
+  const space = options.space?.trim();
+  return space && space.length > 0 ? space : SECRETS_SPACE;
 }
 
 const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
@@ -133,10 +144,12 @@ function canonicalizeSecretScope(scope: string | undefined): string | undefined 
   return canonical;
 }
 
+// Matches `vaultSecretKey()` in secret-manager/src/lib/tinycloud-manifest.ts so
+// CLI-issued reads/writes land on the same KV paths the web app uses.
 function resolveSecretPath(
   name: string,
   options: SecretScopeOptions = {},
-): { name: string; scope?: string; vaultKey: string; permissionPaths: { vault: string } } {
+): { name: string; scope?: string; vaultKey: string; permissionPaths: { secret: string } } {
   const normalizedName = name.trim();
   if (!SECRET_NAME_RE.test(normalizedName)) {
     throw new CLIError(
@@ -156,7 +169,7 @@ function resolveSecretPath(
     ...(scope !== undefined ? { scope } : {}),
     vaultKey,
     permissionPaths: {
-      vault: `vault/${vaultKey}`,
+      secret: vaultKey,
     },
   };
 }
@@ -164,8 +177,8 @@ function resolveSecretPath(
 function resolveSecretListPrefix(options: SecretScopeOptions = {}): string {
   const scope = canonicalizeSecretScope(options.scope);
   return scope === undefined
-    ? "vault/secrets/"
-    : `vault/secrets/scoped/${scope}/`;
+    ? "secrets/"
+    : `secrets/scoped/${scope}/`;
 }
 
 function resolveProfilesDir(): string {
@@ -202,6 +215,7 @@ async function runSecretOperation<T>(params: {
   action: SecretAction;
   name?: string;
   scopeOptions?: SecretScopeOptions;
+  space?: string;
   label: string;
   operation: () => Promise<SecretResult<T>>;
 }): Promise<SecretResult<T>> {
@@ -219,6 +233,7 @@ async function runSecretOperation<T>(params: {
     action: params.action,
     name: params.name,
     options: params.scopeOptions,
+    space: params.space,
     node: params.node,
   });
   await withSpinner("Requesting secret permissions...", () =>
@@ -714,14 +729,15 @@ function secretPermissionEntries(params: {
   action: SecretAction;
   name?: string;
   options?: SecretScopeOptions;
+  space?: string;
   node: TinyCloudNode;
 }): PermissionEntry[] {
   const path = params.action === "list"
     ? resolveSecretListPrefix(params.options)
-    : resolveSecretPath(params.name ?? "", params.options).permissionPaths.vault;
+    : resolveSecretPath(params.name ?? "", params.options).permissionPaths.secret;
   const permissions: PermissionEntry[] = [{
     service: "tinycloud.kv",
-    space: SECRETS_SPACE,
+    space: params.space ?? SECRETS_SPACE,
     path,
     actions: [secretKvAbility(params.action)],
     skipPrefix: true,
@@ -826,7 +842,7 @@ export function registerSecretsCommand(program: Command): void {
     .command("doctor [name]")
     .description("Check secrets setup and optional secret access")
     .option("--scope <scope>", "Logical secret scope")
-    .option("--space <scope>", "Deprecated alias for --scope")
+    .option("--space <space>", "Override the secrets space (defaults to \"secrets\")")
     .option("--network <name>", "Encryption network name", "default")
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (name: string | undefined, options, cmd) => {
@@ -860,6 +876,7 @@ export function registerSecretsCommand(program: Command): void {
 
         if (name) {
           const scopeOptions = resolveSecretScope(options);
+          const space = resolveSecretsSpace(options);
           const resolved = resolveSecretPath(name, scopeOptions);
           const result = await runSecretOperation({
             ctx,
@@ -867,6 +884,7 @@ export function registerSecretsCommand(program: Command): void {
             action: "get",
             name,
             scopeOptions,
+            space,
             label: `Checking secret ${name}...`,
             operation: () => node.secrets.get(name, scopeOptions),
           });
@@ -874,7 +892,7 @@ export function registerSecretsCommand(program: Command): void {
           if (result.ok) {
             secret = {
               name: resolved.name,
-              path: resolved.permissionPaths.vault,
+              path: resolved.permissionPaths.secret,
               ...(resolved.scope ? { scope: resolved.scope } : {}),
               exists: true,
               readable: true,
@@ -882,13 +900,13 @@ export function registerSecretsCommand(program: Command): void {
             checks.push({
               name: "Secret access",
               ok: true,
-              detail: `${resolved.permissionPaths.vault} readable`,
+              detail: `${resolved.permissionPaths.secret} readable`,
             });
           } else {
             const notFound = result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND";
             secret = {
               name: resolved.name,
-              path: resolved.permissionPaths.vault,
+              path: resolved.permissionPaths.secret,
               ...(resolved.scope ? { scope: resolved.scope } : {}),
               exists: !notFound,
               readable: false,
@@ -896,7 +914,7 @@ export function registerSecretsCommand(program: Command): void {
             checks.push({
               name: "Secret access",
               ok: false,
-              detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
+              detail: notFound ? `${resolved.permissionPaths.secret} not found` : result.error.message,
               hint: notFound
                 ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} <value>`
                 : "Ask the owner profile to grant tinycloud.kv/get and tinycloud.encryption/decrypt.",
@@ -931,7 +949,7 @@ export function registerSecretsCommand(program: Command): void {
     .command("list")
     .description("List secrets")
     .option("--scope <scope>", "Logical secret scope")
-    .option("--space <scope>", "Deprecated alias for --scope")
+    .option("--space <space>", "Override the secrets space (defaults to \"secrets\")")
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (options, cmd) => {
       try {
@@ -939,11 +957,13 @@ export function registerSecretsCommand(program: Command): void {
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options);
         const scopeOptions = resolveSecretScope(options);
+        const space = resolveSecretsSpace(options);
         const result = await runSecretOperation({
           ctx,
           node,
           action: "list",
           scopeOptions,
+          space,
           label: "Listing secrets...",
           operation: () => node.secrets.list(scopeOptions),
         });
@@ -953,12 +973,11 @@ export function registerSecretsCommand(program: Command): void {
         }
 
         const secretNames = Array.isArray(result.data) ? result.data : [];
-        const scope = options.scope ?? options.space;
 
         outputJson({
           secrets: secretNames,
           count: secretNames.length,
-          ...(scope ? { scope } : {}),
+          ...(options.scope ? { scope: options.scope } : {}),
         });
       } catch (error) {
         handleError(error);
@@ -970,7 +989,7 @@ export function registerSecretsCommand(program: Command): void {
     .command("get <name>")
     .description("Get a secret value")
     .option("--scope <scope>", "Logical secret scope")
-    .option("--space <scope>", "Deprecated alias for --scope")
+    .option("--space <space>", "Override the secrets space (defaults to \"secrets\")")
     .option("--raw", "Output raw value (no JSON wrapping)")
     .option("--value-only", "Output only the secret value (alias for --raw)")
     .option("-o, --output <file>", "Write value to file")
@@ -981,7 +1000,8 @@ export function registerSecretsCommand(program: Command): void {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const scopeOptions = resolveSecretScope(options);
-        const secretPath = resolveSecretPath(name, scopeOptions).permissionPaths.vault;
+        const space = resolveSecretsSpace(options);
+        const secretPath = resolveSecretPath(name, scopeOptions).permissionPaths.secret;
 
         if (options.delegation) {
           const delegated = await resolveDelegatedSecretSource(options.delegation, secretPath);
@@ -1022,6 +1042,7 @@ export function registerSecretsCommand(program: Command): void {
           action: "get",
           name,
           scopeOptions,
+          space,
           label: `Getting secret ${name}...`,
           operation: () => node.secrets.get(name, scopeOptions),
         });
@@ -1060,7 +1081,7 @@ export function registerSecretsCommand(program: Command): void {
     .command("put <name> [value]")
     .description("Store a secret")
     .option("--scope <scope>", "Logical secret scope")
-    .option("--space <scope>", "Deprecated alias for --scope")
+    .option("--space <space>", "Override the secrets space (defaults to \"secrets\")")
     .option("--file <path>", "Read value from file")
     .option("--stdin", "Read value from stdin")
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
@@ -1090,12 +1111,14 @@ export function registerSecretsCommand(program: Command): void {
         }
 
         const scopeOptions = resolveSecretScope(options);
+        const space = resolveSecretsSpace(options);
         const result = await runSecretOperation({
           ctx,
           node,
           action: "put",
           name,
           scopeOptions,
+          space,
           label: `Storing secret ${name}...`,
           operation: () => node.secrets.put(name, secretValue, scopeOptions),
         });
@@ -1115,7 +1138,7 @@ export function registerSecretsCommand(program: Command): void {
     .command("delete <name>")
     .description("Delete a secret")
     .option("--scope <scope>", "Logical secret scope")
-    .option("--space <scope>", "Deprecated alias for --scope")
+    .option("--space <space>", "Override the secrets space (defaults to \"secrets\")")
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (name: string, options, cmd) => {
       try {
@@ -1123,12 +1146,14 @@ export function registerSecretsCommand(program: Command): void {
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options);
         const scopeOptions = resolveSecretScope(options);
+        const space = resolveSecretsSpace(options);
         const result = await runSecretOperation({
           ctx,
           node,
           action: "del",
           name,
           scopeOptions,
+          space,
           label: `Deleting secret ${name}...`,
           operation: () => node.secrets.delete(name, scopeOptions),
         });
