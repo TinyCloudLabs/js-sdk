@@ -19,7 +19,10 @@ import { ensureDelegationAuthority, refreshOpenKeySession } from "./auth.js";
 
 // Mirrors `SECRETS_SPACE` in the secret-manager web app's tinycloud-manifest.ts.
 // Secrets always live in the literal "secrets" space regardless of the active
-// profile's default space; pass `--space` to override.
+// profile's default space; pass `--space` to override the permission-grant
+// space (note: --space currently only affects permission-grant requests, not
+// the underlying node.secrets.* KV reads, which still resolve their own space
+// via the SDK — see resolveSecretsSpace below).
 const SECRETS_SPACE = "secrets";
 type SecretAction = "get" | "put" | "del" | "list";
 type SecretKvAbility =
@@ -99,6 +102,12 @@ function resolveSecretScope(options: { scope?: string }): { scope?: string } | u
   return options.scope ? { scope: options.scope } : undefined;
 }
 
+// Resolves the space used for permission-grant requests. Defaults to the
+// literal "secrets" space (matching the secret-manager web app); `--space`
+// overrides it. Note: this currently only flows through to permission grants
+// — the underlying node.secrets.get/put/delete/list calls still resolve their
+// own space via the SDK. Lighting `--space` up end-to-end requires SDK work
+// outside this CLI package.
 function resolveSecretsSpace(options: SecretSpaceOption): string {
   const space = options.space?.trim();
   return space && space.length > 0 ? space : SECRETS_SPACE;
@@ -144,12 +153,15 @@ function canonicalizeSecretScope(scope: string | undefined): string | undefined 
   return canonical;
 }
 
-// Matches `vaultSecretKey()` in secret-manager/src/lib/tinycloud-manifest.ts so
-// CLI-issued reads/writes land on the same KV paths the web app uses.
+// Mirrors `resolveSecretPath()` in @tinycloud/sdk-services/src/secrets/paths.ts.
+// The `vault/` prefix is the wire-level KV path that DataVaultService writes
+// to (see DataVaultService.put), and is what `tinycloud.vault` permissions
+// expand to via vaultActionExpansion() in sdk-core/src/manifest.ts. Keep this
+// helper in sync with the SDK's `permissionPaths.vault` shape.
 function resolveSecretPath(
   name: string,
   options: SecretScopeOptions = {},
-): { name: string; scope?: string; vaultKey: string; permissionPaths: { secret: string } } {
+): { name: string; scope?: string; vaultKey: string; permissionPaths: { vault: string } } {
   const normalizedName = name.trim();
   if (!SECRET_NAME_RE.test(normalizedName)) {
     throw new CLIError(
@@ -169,7 +181,7 @@ function resolveSecretPath(
     ...(scope !== undefined ? { scope } : {}),
     vaultKey,
     permissionPaths: {
-      secret: vaultKey,
+      vault: `vault/${vaultKey}`,
     },
   };
 }
@@ -177,8 +189,8 @@ function resolveSecretPath(
 function resolveSecretListPrefix(options: SecretScopeOptions = {}): string {
   const scope = canonicalizeSecretScope(options.scope);
   return scope === undefined
-    ? "secrets/"
-    : `secrets/scoped/${scope}/`;
+    ? "vault/secrets/"
+    : `vault/secrets/scoped/${scope}/`;
 }
 
 function resolveProfilesDir(): string {
@@ -734,7 +746,7 @@ function secretPermissionEntries(params: {
 }): PermissionEntry[] {
   const path = params.action === "list"
     ? resolveSecretListPrefix(params.options)
-    : resolveSecretPath(params.name ?? "", params.options).permissionPaths.secret;
+    : resolveSecretPath(params.name ?? "", params.options).permissionPaths.vault;
   const permissions: PermissionEntry[] = [{
     service: "tinycloud.kv",
     space: params.space ?? SECRETS_SPACE,
@@ -892,7 +904,7 @@ export function registerSecretsCommand(program: Command): void {
           if (result.ok) {
             secret = {
               name: resolved.name,
-              path: resolved.permissionPaths.secret,
+              path: resolved.permissionPaths.vault,
               ...(resolved.scope ? { scope: resolved.scope } : {}),
               exists: true,
               readable: true,
@@ -900,13 +912,13 @@ export function registerSecretsCommand(program: Command): void {
             checks.push({
               name: "Secret access",
               ok: true,
-              detail: `${resolved.permissionPaths.secret} readable`,
+              detail: `${resolved.permissionPaths.vault} readable`,
             });
           } else {
             const notFound = result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND";
             secret = {
               name: resolved.name,
-              path: resolved.permissionPaths.secret,
+              path: resolved.permissionPaths.vault,
               ...(resolved.scope ? { scope: resolved.scope } : {}),
               exists: !notFound,
               readable: false,
@@ -914,7 +926,7 @@ export function registerSecretsCommand(program: Command): void {
             checks.push({
               name: "Secret access",
               ok: false,
-              detail: notFound ? `${resolved.permissionPaths.secret} not found` : result.error.message,
+              detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
               hint: notFound
                 ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} <value>`
                 : "Ask the owner profile to grant tinycloud.kv/get and tinycloud.encryption/decrypt.",
@@ -1001,7 +1013,7 @@ export function registerSecretsCommand(program: Command): void {
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const scopeOptions = resolveSecretScope(options);
         const space = resolveSecretsSpace(options);
-        const secretPath = resolveSecretPath(name, scopeOptions).permissionPaths.secret;
+        const secretPath = resolveSecretPath(name, scopeOptions).permissionPaths.vault;
 
         if (options.delegation) {
           const delegated = await resolveDelegatedSecretSource(options.delegation, secretPath);

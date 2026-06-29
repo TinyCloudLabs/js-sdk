@@ -227,12 +227,12 @@ mock.module("@tinycloud/node-sdk", () => ({
     }
   },
   resolveSecretListPrefix: (options?: { scope?: string }) =>
-    options?.scope ? `secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/` : "secrets/",
+    options?.scope ? `vault/secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/` : "vault/secrets/",
   resolveSecretPath: (name: string, options?: { scope?: string }) => ({
     permissionPaths: {
-      secret: options?.scope
-        ? `secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/${name}`
-        : `secrets/${name}`,
+      vault: options?.scope
+        ? `vault/secrets/scoped/${options.scope.toLowerCase().replaceAll(/\s+/g, "-")}/${name}`
+        : `vault/secrets/${name}`,
     },
   }),
   principalDidEquals: (a: string, b: string) =>
@@ -477,7 +477,7 @@ describe("CLI secrets commands", () => {
         },
         secret: {
           name: "ANTHROPIC_API_KEY",
-          path: "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+          path: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
           scope: "food-tracker",
           exists: true,
           readable: true,
@@ -491,7 +491,7 @@ describe("CLI secrets commands", () => {
           {
             name: "Secret access",
             ok: true,
-            detail: "secrets/scoped/food-tracker/ANTHROPIC_API_KEY readable",
+            detail: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY readable",
           },
         ],
       },
@@ -593,7 +593,7 @@ describe("CLI secrets commands", () => {
           {
             service: "tinycloud.kv",
             space: "secrets",
-            path: "secrets/",
+            path: "vault/secrets/",
             actions: ["tinycloud.kv/list"],
             skipPrefix: true,
           },
@@ -624,7 +624,7 @@ describe("CLI secrets commands", () => {
           {
             service: "tinycloud.kv",
             space: "secrets",
-            path: "secrets/",
+            path: "vault/secrets/",
             actions: ["tinycloud.kv/list"],
             skipPrefix: true,
           },
@@ -665,7 +665,7 @@ describe("CLI secrets commands", () => {
           {
             service: "tinycloud.kv",
             space: "secrets",
-            path: "secrets/ANTHROPIC_API_KEY",
+            path: "vault/secrets/ANTHROPIC_API_KEY",
             actions: ["tinycloud.kv/get"],
             skipPrefix: true,
           },
@@ -760,7 +760,7 @@ describe("CLI secrets commands", () => {
           {
             service: "tinycloud.kv",
             space: "secrets",
-            path: "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+            path: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
             actions: ["tinycloud.kv/put"],
             skipPrefix: true,
           },
@@ -788,7 +788,7 @@ describe("CLI secrets commands", () => {
           {
             service: "tinycloud.kv",
             space: "custom-vault",
-            path: "secrets/",
+            path: "vault/secrets/",
             actions: ["tinycloud.kv/list"],
             skipPrefix: true,
           },
@@ -806,4 +806,55 @@ describe("CLI secrets commands", () => {
       { secrets: ["ANTHROPIC_API_KEY"], count: 1 },
     ]);
   });
+
+  test(
+    "tc secrets get pins the permission grant to the 'secrets' space even when the profile defaults to 'default'",
+    async () => {
+      // Profile defaults to spaceName "default", but the secret-manager web
+      // app stores secrets in the literal "secrets" space. The CLI must
+      // override the profile's default space when requesting permissions so
+      // CLI-issued grants line up with web-app-written secrets at
+      // vault/secrets/ASSEMBLYAI_API_KEY in space "secrets".
+      currentProfile = { ...currentProfile, spaceName: "default" };
+      currentNode = makeFakeNode({
+        getResult: [
+          {
+            ok: false,
+            error: {
+              code: "PERMISSION_DENIED",
+              service: "secrets",
+              message: "Cannot autosign tinycloud.kv/get for ASSEMBLYAI_API_KEY",
+            },
+          },
+          { ok: true, data: "secret-value-from-web-app" },
+        ],
+      });
+
+      await runSecretsCommand(["secrets", "get", "ASSEMBLYAI_API_KEY"]);
+
+      expect(recorded.permissionRequests).toEqual([
+        {
+          profile: "default",
+          requested: [
+            {
+              service: "tinycloud.kv",
+              space: "secrets",
+              path: "vault/secrets/ASSEMBLYAI_API_KEY",
+              actions: ["tinycloud.kv/get"],
+              skipPrefix: true,
+            },
+            {
+              service: "tinycloud.encryption",
+              path: DEFAULT_NETWORK_ID,
+              actions: ["tinycloud.encryption/decrypt"],
+              skipPrefix: true,
+            },
+          ],
+        },
+      ]);
+      expect(recorded.outputs).toEqual([
+        { name: "ASSEMBLYAI_API_KEY", value: "secret-value-from-web-app" },
+      ]);
+    },
+  );
 });
