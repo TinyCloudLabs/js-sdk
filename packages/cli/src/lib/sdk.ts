@@ -6,6 +6,36 @@ import { ExitCode } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
 
 /**
+ * Returns true when a JWK carries the private-key parameter required by the
+ * WASM signer. The CLI is OKP/EC-only (Ed25519, secp256k1) where `d` is the
+ * private scalar — RSA's `p`/`q`/etc. are out of scope.
+ *
+ * Defensive: a public-only JWK (e.g. one echoed back by OpenKey after the
+ * delegation flow stripped `d`) must not be used to construct the signer.
+ */
+export function jwkHasPrivateParameter(jwk: unknown): boolean {
+  if (!jwk || typeof jwk !== "object") return false;
+  const d = (jwk as Record<string, unknown>).d;
+  return typeof d === "string" && d.length > 0;
+}
+
+/**
+ * Pick the JWK to hand to the signer: the persisted session's JWK only if it
+ * carries the private parameter, otherwise the profile's `key.json` (which is
+ * always the full keypair). This guards against `session.json` containing a
+ * public-only JWK — e.g. when OpenKey echoes back the stripped delegation key.
+ */
+export function selectSignerJwk(
+  sessionJwk: unknown,
+  key: object | null,
+): object | undefined {
+  if (jwkHasPrivateParameter(sessionJwk)) {
+    return sessionJwk as object;
+  }
+  return key ?? undefined;
+}
+
+/**
  * Create a TinyCloudNode instance from the current CLI context.
  * Uses the profile's persisted session and key.
  *
@@ -49,7 +79,7 @@ export async function createSDKInstance(
         delegationHeader: session.delegationHeader as { Authorization: string },
         delegationCid: session.delegationCid as string,
         spaceId: session.spaceId as string,
-        jwk: (session.jwk as object) ?? key,
+        jwk: selectSignerJwk(session.jwk, key),
         verificationMethod: (session.verificationMethod as string) ?? profile?.sessionDid ?? profile?.did,
         address: session.address as string | undefined,
         chainId: session.chainId as number | undefined,
@@ -78,7 +108,7 @@ export async function createSDKInstance(
       delegationHeader: session.delegationHeader as { Authorization: string },
       delegationCid: session.delegationCid as string,
       spaceId: session.spaceId as string,
-      jwk: (session.jwk as object) ?? key,
+      jwk: selectSignerJwk(session.jwk, key),
       verificationMethod: (session.verificationMethod as string) ?? profile?.did,
       address: session.address as string | undefined,
       chainId: session.chainId as number | undefined,
