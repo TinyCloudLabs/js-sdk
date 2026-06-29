@@ -1347,6 +1347,45 @@ async function handleOpenKeyAuth(
   });
 }
 
+/**
+ * If the OpenKey callback returned a public-only JWK (no `d`), splice the
+ * private parameter from the profile's `key.json` back in so the persisted
+ * session is usable for WASM signing later.
+ *
+ * Why this exists: `browser-auth.ts:publicJwkForDelegation` strips `d` before
+ * sending the JWK to OpenKey, OpenKey echoes the public-only JWK back, and
+ * the previous code path persisted it verbatim. Downstream callers
+ * (`tc kv get`, `tc sql execute`) then hit `Missing private key parameter in
+ * JWK` because `sdk.ts` preferred `session.jwk` over `key.json`.
+ *
+ * Note: `key` here is the profile's full JWK (loaded from `key.json` above)
+ * and is exported with `d`. If the delegation flow ever evolves so OpenKey
+ * legitimately returns a session JWK with its own private parameter, this
+ * function leaves that JWK untouched.
+ */
+export function mergePrivateJwkIntoSession(
+  session: Record<string, unknown>,
+  key: object,
+): Record<string, unknown> {
+  const sessionJwk = session.jwk;
+  if (!sessionJwk || typeof sessionJwk !== "object") {
+    return session;
+  }
+  const sessionJwkRecord = sessionJwk as Record<string, unknown>;
+  const sessionD = sessionJwkRecord.d;
+  if (typeof sessionD === "string" && sessionD.length > 0) {
+    return session;
+  }
+  const keyD = (key as Record<string, unknown>).d;
+  if (typeof keyD !== "string" || keyD.length === 0) {
+    return session;
+  }
+  return {
+    ...session,
+    jwk: { ...sessionJwkRecord, d: keyD },
+  };
+}
+
 export async function refreshOpenKeySession(
   profileName: string,
   host: string,
@@ -1373,8 +1412,15 @@ export async function refreshOpenKeySession(
     openkeyHost: resolveOpenKeyHost(profile),
   });
 
+  // Defensive: OpenKey only ever receives the public JWK (see
+  // browser-auth.ts `publicJwkForDelegation`), so any JWK it echoes back is
+  // public-only. Persisting that verbatim shadows the full keypair in
+  // key.json and breaks anything that needs the WASM signer (kv/sql). Merge
+  // the private parameter from key.json back in before writing session.json.
+  const sanitizedSession = mergePrivateJwkIntoSession(delegationData, key);
+
   // Store session
-  await ProfileManager.setSession(profileName, delegationData);
+  await ProfileManager.setSession(profileName, sanitizedSession);
 
   // Update profile with owner DID if present
   const updatedProfile = {
@@ -1385,12 +1431,12 @@ export async function refreshOpenKeySession(
     authMethod: "openkey" as const,
   };
 
-  if (delegationData.spaceId) {
-    updatedProfile.spaceId = delegationData.spaceId;
-    updatedProfile.ownerDid = delegationData.ownerDid as string | undefined;
+  if (sanitizedSession.spaceId) {
+    updatedProfile.spaceId = sanitizedSession.spaceId as string;
+    updatedProfile.ownerDid = sanitizedSession.ownerDid as string | undefined;
   }
 
   await ProfileManager.setProfile(profileName, updatedProfile);
 
-  return { profile: updatedProfile, delegationData };
+  return { profile: updatedProfile, delegationData: sanitizedSession };
 }

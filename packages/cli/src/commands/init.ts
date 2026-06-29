@@ -5,6 +5,7 @@ import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode, DEFAULT_HOST, DEFAULT_CHAIN_ID } from "../config/constants.js";
 import { generateKey } from "../auth/local-key.js";
 import { startAuthFlow } from "../auth/browser-auth.js";
+import { mergePrivateJwkIntoSession } from "./auth.js";
 
 export function registerInitCommand(program: Command): void {
   program
@@ -85,21 +86,27 @@ export function registerInitCommand(program: Command): void {
           host,
         });
 
+        // Defensive: OpenKey only ever receives the public JWK (browser-auth.ts
+        // strips `d`), so any JWK it echoes back is public-only. Splice `d`
+        // back in from the freshly-generated JWK before persisting so the
+        // signer can find it on the next CLI invocation.
+        const sanitizedSession = mergePrivateJwkIntoSession(delegationData, jwk);
+
         // Store session
-        await ProfileManager.setSession(profileName, delegationData);
+        await ProfileManager.setSession(profileName, sanitizedSession);
 
         // Update profile with auth data
         await ProfileManager.setProfile(profileName, {
           ...profileConfig,
-          spaceId: delegationData.spaceId,
-          ownerDid: delegationData.ownerDid as string | undefined,
+          spaceId: sanitizedSession.spaceId as string,
+          ownerDid: sanitizedSession.ownerDid as string | undefined,
         });
 
         outputJson({
           profile: profileName,
           did,
           host,
-          spaceId: delegationData.spaceId,
+          spaceId: sanitizedSession.spaceId,
           authenticated: true,
         });
       } catch (error) {

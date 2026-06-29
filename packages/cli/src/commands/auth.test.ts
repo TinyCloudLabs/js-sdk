@@ -300,7 +300,7 @@ mock.module("../output/errors.js", () => ({
   setActiveProfileName: () => {},
 }));
 
-const { ensureDelegationAuthority, registerAuthCommand } = await import("./auth.js");
+const { ensureDelegationAuthority, mergePrivateJwkIntoSession, refreshOpenKeySession, registerAuthCommand } = await import("./auth.js");
 
 async function runAuthCommand(args: string[]): Promise<void> {
   const program = new Command();
@@ -618,5 +618,91 @@ describe("CLI auth import command", () => {
       activated: true,
       delegationCid: "bafy-self-session",
     });
+  });
+});
+
+describe("mergePrivateJwkIntoSession (write-side JWK sanitization)", () => {
+  const FULL_KEY = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+
+  test("splices `d` from key.json into a public-only session JWK", () => {
+    const session = {
+      delegationCid: "bafy",
+      spaceId: "tinycloud:space",
+      jwk: { kty: "OKP", crv: "Ed25519", x: "session-public" },
+    };
+    const merged = mergePrivateJwkIntoSession(session, FULL_KEY);
+    expect((merged.jwk as { d?: string }).d).toBe("key-private");
+    // Keeps everything else
+    expect((merged.jwk as { x?: string }).x).toBe("session-public");
+    expect(merged.spaceId).toBe("tinycloud:space");
+  });
+
+  test("does not overwrite a session JWK that already has `d`", () => {
+    const sessionJwk = { kty: "OKP", crv: "Ed25519", x: "session-public", d: "session-private" };
+    const session = { delegationCid: "bafy", jwk: sessionJwk };
+    const merged = mergePrivateJwkIntoSession(session, FULL_KEY);
+    expect((merged.jwk as { d?: string }).d).toBe("session-private");
+  });
+
+  test("returns the session unchanged when no `jwk` field is present", () => {
+    const session = { delegationCid: "bafy", spaceId: "tinycloud:space" };
+    const merged = mergePrivateJwkIntoSession(session, FULL_KEY);
+    expect(merged).toBe(session);
+  });
+});
+
+describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
+  beforeEach(() => {
+    resetState();
+  });
+
+  test("when OpenKey returns a public-only JWK, persisted session.json has `d` merged in from key.json", async () => {
+    const fullKey = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+    profiles.set("default", makeProfile({
+      did: "did:key:z6MkSession",
+      authMethod: "openkey",
+      posture: "owner-openkey",
+    }));
+    keys.set("default", fullKey);
+    openKeyDelegation = {
+      delegationHeader: { Authorization: "Bearer openkey-new" },
+      delegationCid: "bafy-openkey",
+      spaceId: "tinycloud:space",
+      ownerDid: "did:pkh:eip155:1:0xowner",
+      verificationMethod: "did:key:z6MkSession",
+      // The public-only JWK OpenKey echoes back (public-only because
+      // browser-auth.ts strips `d` before sending to OpenKey).
+      jwk: { kty: "OKP", crv: "Ed25519", x: "key-public" },
+    };
+
+    await refreshOpenKeySession("default", activeHost);
+
+    const persisted = sessions.get("default") as { jwk: { d?: string; x?: string } };
+    expect(persisted).toBeDefined();
+    expect(persisted.jwk.d).toBe("key-private");
+    expect(persisted.jwk.x).toBe("key-public");
+  });
+
+  test("when OpenKey returns a full JWK (with `d`), persisted session.json keeps OpenKey's `d`", async () => {
+    const fullKey = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+    profiles.set("default", makeProfile({
+      did: "did:key:z6MkSession",
+      authMethod: "openkey",
+      posture: "owner-openkey",
+    }));
+    keys.set("default", fullKey);
+    openKeyDelegation = {
+      delegationHeader: { Authorization: "Bearer openkey-new" },
+      delegationCid: "bafy-openkey",
+      spaceId: "tinycloud:space",
+      ownerDid: "did:pkh:eip155:1:0xowner",
+      verificationMethod: "did:key:z6MkSession",
+      jwk: { kty: "OKP", crv: "Ed25519", x: "key-public", d: "openkey-returned-private" },
+    };
+
+    await refreshOpenKeySession("default", activeHost);
+
+    const persisted = sessions.get("default") as { jwk: { d?: string } };
+    expect(persisted.jwk.d).toBe("openkey-returned-private");
   });
 });
