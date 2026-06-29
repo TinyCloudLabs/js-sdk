@@ -1,5 +1,19 @@
 # @tinycloud/cli
 
+## 0.7.0-beta.23
+
+### Minor Changes
+
+- 1f69109: `tc secrets {get,put,delete,list,doctor}` now targets the literal `secrets` space (matching the secret-manager web app's `SECRETS_SPACE` in `src/lib/tinycloud-manifest.ts`) instead of the active profile's default space, so CLI-issued permission grants line up with secrets stored by the web app. Restores `--space <space>` as a real flag distinct from `--scope <scope>` (previously `--space` was a silent alias for `--scope`); `--space` overrides the permission-grant space. Permission paths remain `vault/secrets/<NAME>` / `vault/secrets/scoped/<scope>/<NAME>` — the `vault/` prefix is the wire-level KV path that `DataVaultService` writes to and that `tinycloud.vault` permissions expand to via `vaultActionExpansion()` in `sdk-core`, not a CLI-only artifact.
+
+  Known limitation: `--space` currently only flows through to permission-grant requests; the underlying `node.secrets.{get,put,delete,list}` calls still resolve their own space via the SDK. Lighting `--space` up end-to-end requires SDK work outside this CLI package.
+
+### Patch Changes
+
+- 0219c37: Fix `tc kv` and `tc sql` failing with `Missing private key parameter in JWK` after an OpenKey login. The OpenKey delegation flow sends only the public JWK (no `d`) to OpenKey, and the public-only JWK that OpenKey echoes back was being persisted verbatim to `session.json`, shadowing the full keypair in `key.json` whenever the SDK reconstructed the WASM signer. Two-pronged fix: (1) on read, `sdk.ts` falls back to `key.json` whenever `session.jwk` lacks the `d` parameter, and (2) on write, `refreshOpenKeySession` merges `d` from `key.json` into the persisted session JWK so future invocations don't hit the same path. `tc auth status` and `tc secrets get` were unaffected because neither hits the WASM signer in this code path.
+
+  Affected users on existing installs can unblock without re-authenticating by jq-merging `key.json`'s `d` into `session.json`'s `.jwk` field.
+
 ## 0.7.0-beta.22
 
 ### Patch Changes

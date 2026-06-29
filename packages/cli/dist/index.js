@@ -32317,81 +32317,6 @@ Open this URL in a browser to authenticate:
   });
 }
 
-// src/commands/init.ts
-function registerInitCommand(program2) {
-  program2.command("init").description("Initialize a new TinyCloud profile").option("--name <profile>", "Profile name", "default").option("--key-only", "Only generate key, skip authentication").option("--host <url>", "TinyCloud node URL").option("--paste", "Use manual paste mode for authentication").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--default-space <name>", "Default space used when --space is omitted (e.g. applications)").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const profileName = options.name;
-      const host = options.host ?? globalOpts.host ?? DEFAULT_HOST;
-      const defaultSpace = options.defaultSpace;
-      if (defaultSpace !== void 0 && !/^[A-Za-z0-9_-]+$/.test(defaultSpace)) {
-        throw new CLIError(
-          "INVALID_SPACE",
-          `Invalid --default-space "${defaultSpace}". Use a short name ([A-Za-z0-9_-]).`,
-          ExitCode.USAGE_ERROR
-        );
-      }
-      if (await ProfileManager.profileExists(profileName)) {
-        throw new CLIError(
-          "PROFILE_EXISTS",
-          `Profile "${profileName}" already exists. Use \`tc profile delete ${profileName}\` first or choose a different name.`,
-          ExitCode.ERROR
-        );
-      }
-      await ProfileManager.ensureConfigDir();
-      const { jwk, did } = await withSpinner("Generating key...", async () => {
-        return generateKey();
-      });
-      await ProfileManager.setKey(profileName, jwk);
-      const profileConfig = {
-        name: profileName,
-        host,
-        chainId: DEFAULT_CHAIN_ID,
-        spaceName: "default",
-        did,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-        ...defaultSpace ? { defaultSpace } : {}
-      };
-      await ProfileManager.setProfile(profileName, profileConfig);
-      const config = await ProfileManager.getConfig();
-      if (profileName === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
-        await ProfileManager.setConfig({ ...config, defaultProfile: profileName });
-      }
-      if (options.keyOnly) {
-        outputJson({
-          profile: profileName,
-          did,
-          host,
-          authenticated: false
-        });
-        return;
-      }
-      const delegationData = await startAuthFlow(did, {
-        paste: options.paste,
-        noPopup: options.popup === false,
-        jwk,
-        host
-      });
-      await ProfileManager.setSession(profileName, delegationData);
-      await ProfileManager.setProfile(profileName, {
-        ...profileConfig,
-        spaceId: delegationData.spaceId,
-        ownerDid: delegationData.ownerDid
-      });
-      outputJson({
-        profile: profileName,
-        did,
-        host,
-        spaceId: delegationData.spaceId,
-        authenticated: true
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-}
-
 // src/commands/auth.ts
 import { get as httpGet } from "http";
 import { get as httpsGet } from "https";
@@ -42923,6 +42848,17 @@ function serviceFromActions(actions) {
 }
 
 // src/lib/sdk.ts
+function jwkHasPrivateParameter(jwk) {
+  if (!jwk || typeof jwk !== "object") return false;
+  const d = jwk.d;
+  return typeof d === "string" && d.length > 0;
+}
+function selectSignerJwk(sessionJwk, key2) {
+  if (jwkHasPrivateParameter(sessionJwk)) {
+    return sessionJwk;
+  }
+  return key2 ?? void 0;
+}
 async function createSDKInstance(ctx, options) {
   const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile);
@@ -42945,7 +42881,7 @@ async function createSDKInstance(ctx, options) {
         delegationHeader: session.delegationHeader,
         delegationCid: session.delegationCid,
         spaceId: session.spaceId,
-        jwk: session.jwk ?? key2,
+        jwk: selectSignerJwk(session.jwk, key2),
         verificationMethod: session.verificationMethod ?? profile?.sessionDid ?? profile?.did,
         address: session.address,
         chainId: session.chainId,
@@ -42969,7 +42905,7 @@ async function createSDKInstance(ctx, options) {
       delegationHeader: session.delegationHeader,
       delegationCid: session.delegationCid,
       spaceId: session.spaceId,
-      jwk: session.jwk ?? key2,
+      jwk: selectSignerJwk(session.jwk, key2),
       verificationMethod: session.verificationMethod ?? profile?.did,
       address: session.address,
       chainId: session.chainId,
@@ -43982,6 +43918,25 @@ async function handleOpenKeyAuth(profileName, host, options = {}) {
     authMethod: "openkey"
   });
 }
+function mergePrivateJwkIntoSession(session, key2) {
+  const sessionJwk = session.jwk;
+  if (!sessionJwk || typeof sessionJwk !== "object") {
+    return session;
+  }
+  const sessionJwkRecord = sessionJwk;
+  const sessionD = sessionJwkRecord.d;
+  if (typeof sessionD === "string" && sessionD.length > 0) {
+    return session;
+  }
+  const keyD = key2.d;
+  if (typeof keyD !== "string" || keyD.length === 0) {
+    return session;
+  }
+  return {
+    ...session,
+    jwk: { ...sessionJwkRecord, d: keyD }
+  };
+}
 async function refreshOpenKeySession(profileName, host, options = {}) {
   const key2 = await ProfileManager.getKey(profileName);
   if (!key2) {
@@ -43999,7 +43954,8 @@ async function refreshOpenKeySession(profileName, host, options = {}) {
     host,
     openkeyHost: resolveOpenKeyHost(profile)
   });
-  await ProfileManager.setSession(profileName, delegationData);
+  const sanitizedSession = mergePrivateJwkIntoSession(delegationData, key2);
+  await ProfileManager.setSession(profileName, sanitizedSession);
   const updatedProfile = {
     ...profile,
     sessionDid: profile.sessionDid ?? profile.did,
@@ -44007,12 +43963,88 @@ async function refreshOpenKeySession(profileName, host, options = {}) {
     operatorType: profile.operatorType ?? "human",
     authMethod: "openkey"
   };
-  if (delegationData.spaceId) {
-    updatedProfile.spaceId = delegationData.spaceId;
-    updatedProfile.ownerDid = delegationData.ownerDid;
+  if (sanitizedSession.spaceId) {
+    updatedProfile.spaceId = sanitizedSession.spaceId;
+    updatedProfile.ownerDid = sanitizedSession.ownerDid;
   }
   await ProfileManager.setProfile(profileName, updatedProfile);
-  return { profile: updatedProfile, delegationData };
+  return { profile: updatedProfile, delegationData: sanitizedSession };
+}
+
+// src/commands/init.ts
+function registerInitCommand(program2) {
+  program2.command("init").description("Initialize a new TinyCloud profile").option("--name <profile>", "Profile name", "default").option("--key-only", "Only generate key, skip authentication").option("--host <url>", "TinyCloud node URL").option("--paste", "Use manual paste mode for authentication").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--default-space <name>", "Default space used when --space is omitted (e.g. applications)").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const profileName = options.name;
+      const host = options.host ?? globalOpts.host ?? DEFAULT_HOST;
+      const defaultSpace = options.defaultSpace;
+      if (defaultSpace !== void 0 && !/^[A-Za-z0-9_-]+$/.test(defaultSpace)) {
+        throw new CLIError(
+          "INVALID_SPACE",
+          `Invalid --default-space "${defaultSpace}". Use a short name ([A-Za-z0-9_-]).`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      if (await ProfileManager.profileExists(profileName)) {
+        throw new CLIError(
+          "PROFILE_EXISTS",
+          `Profile "${profileName}" already exists. Use \`tc profile delete ${profileName}\` first or choose a different name.`,
+          ExitCode.ERROR
+        );
+      }
+      await ProfileManager.ensureConfigDir();
+      const { jwk, did } = await withSpinner("Generating key...", async () => {
+        return generateKey();
+      });
+      await ProfileManager.setKey(profileName, jwk);
+      const profileConfig = {
+        name: profileName,
+        host,
+        chainId: DEFAULT_CHAIN_ID,
+        spaceName: "default",
+        did,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        ...defaultSpace ? { defaultSpace } : {}
+      };
+      await ProfileManager.setProfile(profileName, profileConfig);
+      const config = await ProfileManager.getConfig();
+      if (profileName === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
+        await ProfileManager.setConfig({ ...config, defaultProfile: profileName });
+      }
+      if (options.keyOnly) {
+        outputJson({
+          profile: profileName,
+          did,
+          host,
+          authenticated: false
+        });
+        return;
+      }
+      const delegationData = await startAuthFlow(did, {
+        paste: options.paste,
+        noPopup: options.popup === false,
+        jwk,
+        host
+      });
+      const sanitizedSession = mergePrivateJwkIntoSession(delegationData, jwk);
+      await ProfileManager.setSession(profileName, sanitizedSession);
+      await ProfileManager.setProfile(profileName, {
+        ...profileConfig,
+        spaceId: sanitizedSession.spaceId,
+        ownerDid: sanitizedSession.ownerDid
+      });
+      outputJson({
+        profile: profileName,
+        did,
+        host,
+        spaceId: sanitizedSession.spaceId,
+        authenticated: true
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
 }
 
 // src/commands/kv.ts
@@ -45245,8 +45277,11 @@ function authOptions(options) {
   return privateKey ? { privateKey } : void 0;
 }
 function resolveSecretScope(options) {
-  const scope = options.scope ?? options.space;
-  return scope ? { scope } : void 0;
+  return options.scope ? { scope: options.scope } : void 0;
+}
+function resolveSecretsSpace(options) {
+  const space = options.space?.trim();
+  return space && space.length > 0 ? space : SECRETS_SPACE2;
 }
 var SECRET_NAME_RE2 = /^[A-Z][A-Z0-9_]*$/;
 var RESERVED_SECRET_SCOPES2 = /* @__PURE__ */ new Set(["default", "global"]);
@@ -45335,6 +45370,7 @@ async function runSecretOperation(params) {
     action: params.action,
     name: params.name,
     options: params.scopeOptions,
+    space: params.space,
     node: params.node
   });
   await withSpinner(
@@ -45712,7 +45748,7 @@ function secretPermissionEntries(params) {
   const path = params.action === "list" ? resolveSecretListPrefix(params.options) : resolveSecretPath2(params.name ?? "", params.options).permissionPaths.vault;
   const permissions = [{
     service: "tinycloud.kv",
-    space: SECRETS_SPACE2,
+    space: params.space ?? SECRETS_SPACE2,
     path,
     actions: [secretKvAbility(params.action)],
     skipPrefix: true
@@ -45792,7 +45828,7 @@ function registerSecretsCommand(program2) {
       handleError(error);
     }
   });
-  secrets.command("doctor [name]").description("Check secrets setup and optional secret access").option("--scope <scope>", "Logical secret scope").option("--space <scope>", "Deprecated alias for --scope").option("--network <name>", "Encryption network name", "default").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+  secrets.command("doctor [name]").description("Check secrets setup and optional secret access").option("--scope <scope>", "Logical secret scope").option("--space <space>", 'Override the secrets space (defaults to "secrets")').option("--network <name>", "Encryption network name", "default").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -45818,6 +45854,7 @@ function registerSecretsCommand(program2) {
       let secret;
       if (name2) {
         const scopeOptions = resolveSecretScope(options);
+        const space = resolveSecretsSpace(options);
         const resolved = resolveSecretPath2(name2, scopeOptions);
         const result = await runSecretOperation({
           ctx,
@@ -45825,6 +45862,7 @@ function registerSecretsCommand(program2) {
           action: "get",
           name: name2,
           scopeOptions,
+          space,
           label: `Checking secret ${name2}...`,
           operation: () => node.secrets.get(name2, scopeOptions)
         });
@@ -45879,17 +45917,19 @@ function registerSecretsCommand(program2) {
       handleError(error);
     }
   });
-  secrets.command("list").description("List secrets").option("--scope <scope>", "Logical secret scope").option("--space <scope>", "Deprecated alias for --scope").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
+  secrets.command("list").description("List secrets").option("--scope <scope>", "Logical secret scope").option("--space <space>", 'Override the secrets space (defaults to "secrets")').option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureSecretsNode(ctx, options);
       const scopeOptions = resolveSecretScope(options);
+      const space = resolveSecretsSpace(options);
       const result = await runSecretOperation({
         ctx,
         node,
         action: "list",
         scopeOptions,
+        space,
         label: "Listing secrets...",
         operation: () => node.secrets.list(scopeOptions)
       });
@@ -45897,21 +45937,21 @@ function registerSecretsCommand(program2) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
       }
       const secretNames = Array.isArray(result.data) ? result.data : [];
-      const scope = options.scope ?? options.space;
       outputJson({
         secrets: secretNames,
         count: secretNames.length,
-        ...scope ? { scope } : {}
+        ...options.scope ? { scope: options.scope } : {}
       });
     } catch (error) {
       handleError(error);
     }
   });
-  secrets.command("get <name>").description("Get a secret value").option("--scope <scope>", "Logical secret scope").option("--space <scope>", "Deprecated alias for --scope").option("--raw", "Output raw value (no JSON wrapping)").option("--value-only", "Output only the secret value (alias for --raw)").option("-o, --output <file>", "Write value to file").option("--delegation <source>", "Delegation file path or imported profile name").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+  secrets.command("get <name>").description("Get a secret value").option("--scope <scope>", "Logical secret scope").option("--space <space>", 'Override the secrets space (defaults to "secrets")').option("--raw", "Output raw value (no JSON wrapping)").option("--value-only", "Output only the secret value (alias for --raw)").option("-o, --output <file>", "Write value to file").option("--delegation <source>", "Delegation file path or imported profile name").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const scopeOptions = resolveSecretScope(options);
+      const space = resolveSecretsSpace(options);
       const secretPath = resolveSecretPath2(name2, scopeOptions).permissionPaths.vault;
       if (options.delegation) {
         const delegated = await resolveDelegatedSecretSource(options.delegation, secretPath);
@@ -45948,6 +45988,7 @@ function registerSecretsCommand(program2) {
         action: "get",
         name: name2,
         scopeOptions,
+        space,
         label: `Getting secret ${name2}...`,
         operation: () => node.secrets.get(name2, scopeOptions)
       });
@@ -45972,7 +46013,7 @@ function registerSecretsCommand(program2) {
       handleError(error);
     }
   });
-  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <scope>", "Deprecated alias for --scope").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, value, options, cmd) => {
+  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <space>", 'Override the secrets space (defaults to "secrets")').option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, value, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -45993,12 +46034,14 @@ function registerSecretsCommand(program2) {
         secretValue = value;
       }
       const scopeOptions = resolveSecretScope(options);
+      const space = resolveSecretsSpace(options);
       const result = await runSecretOperation({
         ctx,
         node,
         action: "put",
         name: name2,
         scopeOptions,
+        space,
         label: `Storing secret ${name2}...`,
         operation: () => node.secrets.put(name2, secretValue, scopeOptions)
       });
@@ -46010,18 +46053,20 @@ function registerSecretsCommand(program2) {
       handleError(error);
     }
   });
-  secrets.command("delete <name>").description("Delete a secret").option("--scope <scope>", "Logical secret scope").option("--space <scope>", "Deprecated alias for --scope").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+  secrets.command("delete <name>").description("Delete a secret").option("--scope <scope>", "Logical secret scope").option("--space <space>", 'Override the secrets space (defaults to "secrets")').option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureSecretsNode(ctx, options);
       const scopeOptions = resolveSecretScope(options);
+      const space = resolveSecretsSpace(options);
       const result = await runSecretOperation({
         ctx,
         node,
         action: "del",
         name: name2,
         scopeOptions,
+        space,
         label: `Deleting secret ${name2}...`,
         operation: () => node.secrets.delete(name2, scopeOptions)
       });
