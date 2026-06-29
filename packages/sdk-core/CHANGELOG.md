@@ -1,5 +1,98 @@
 # @tinycloudlabs/sdk-core
 
+## 2.4.0
+
+### Minor Changes
+
+- 6b554d6: Add shared account APIs for applications and delegations, expose them from the node and web SDK clients, and add the `tc account` CLI command group.
+- 75bebb1: Add account registry write-through indexing, account space registry APIs, and matching `tc account spaces` / `tc account index status` CLI commands.
+
+  Manifest registration now records an indexed manifest hash and skips durable KV rewrites when the indexed record is current. Sign-in schedules best-effort background registry sync for application manifests and accessible spaces, while every discovered or hosted space is written through to the account registry index.
+
+- eb44380: `ensureOwnedSpaceHosted` now consults the account spaces registry before hosting
+
+  Previously `TinyCloudNode.ensureOwnedSpaceHosted(name)` always delegated to
+  `hostOwnedSpace`, which unconditionally submits the host-SIWE delegation. Owners
+  who already had the space hosted (e.g. a git-haiku owner re-running TinyCloud
+  Secrets setup) were therefore prompted to "host" their `secrets` space on every
+  run.
+
+  `ensureOwnedSpaceHosted` now resolves the owned space id and first checks the
+  account spaces registry: the fast SQLite index (`account.index.spaces.list()`)
+  as a best-effort short-circuit, falling back to the canonical, recap-readable KV
+  record `account/spaces/{space_id}` (`account.spaces.get`). If the space is
+  already registered/hosted it returns the id WITHOUT submitting a host delegation
+  (no redundant signature). Only when the space is absent — or the registry check
+  fails in any way (e.g. a cold index reporting `no such table: spaces`) — does it
+  fall through to `hostOwnedSpace`. After hosting it durably write-through
+  registers the space so subsequent calls short-circuit on the registry.
+
+  `hostOwnedSpace` (always-host) is unchanged for callers that explicitly want it.
+  The KV path is used rather than `syncAccessible()` because a manifest/recap
+  session can read `account/spaces/` under the recap but does not hold
+  `tinycloud.space/list`.
+
+- 27f97d8: Add a public `ensureOwnedSpaceHosted(name)` method to `TinyCloudNode` and `TinyCloudWeb` for hosting an owner's owned space (e.g. `"secrets"`) from a session created with a manifest / capabilityRequest.
+
+  A full-authority sign-in auto-hosts the owner's `secrets` space, but a session created with a manifest / capabilityRequest does not. Such a session could hold valid `tinycloud.kv/*` capabilities for the owned `secrets` space yet still fail its first scoped `secrets.put(...)` with `404 Space not found`, because the space was never registered on the node. `ensureOwnedSpaceHosted(name)` resolves the name to the owner's owned-space URI and hosts it via the host-SIWE delegation flow (one signature, idempotent server-side), so subsequent scoped secret writes succeed.
+
+- aa050d1: Resolve and rehydrate `tinycloudHosts` on restored sessions.
+
+  A restored session never resolved its TinyCloud hosts: the restore path
+  rehydrated the delegation/address/chainId but never set the hosts, and the
+  hosts a session was created with weren't persisted. The first kv/secrets/
+  space/encryption call on a restored session therefore threw "TinyCloud
+  hosts have not been resolved. Call signIn() first." (notably when
+  `signIn()` short-circuited to a restored session).
+
+  Fix (three parts):
+  - Persist the hosts: `PersistedSessionData` gains an optional
+    `tinycloudHosts` field (back-compat — old persisted sessions still
+    validate), and both sign-in save paths write the just-resolved hosts.
+  - Rehydrate on restore: `TinyCloudNode.restoreSession` accepts the
+    persisted `tinycloudHosts`, adopts them for the service context and the
+    auth layer (`setRestoredTinyCloudSession`), and the web SDK threads the
+    field through `restoreDataFromPersisted`.
+  - Lazy fallback: sessions persisted before this field re-resolve their
+    hosts lazily (registry → `node.tinycloud.xyz` fallback) on the first
+    host-needing call, exactly like a fresh sign-in. Resolution failures
+    surface rather than being masked.
+
+  A restored session now targets the same node as the original sign-in, so
+  apps no longer need to pass `tinycloudHosts` explicitly or call
+  `clearPersistedSession()` before sign-in.
+
+### Patch Changes
+
+- 0d397a8: Treat the account SQLite index as a materialized cache for user-facing account reads. Account application, space, and delegation list calls can now prefer the index while falling back to canonical account data when index tables are missing or empty, and account writes no longer fail when a best-effort index update fails.
+- 895804a: Include `tinycloud.sql/ddl` in the implicit account registry index permission and legacy default SQL grant so account registry writes can create their SQLite tables and indexes on first use. SQL execute and batch calls now sign DDL statements with `tinycloud.sql/ddl`, and mixed batches sign with every required SQL action instead of collapsing to write-only.
+- 6622043: Expose `account.index.ensure()` and `tc account index ensure` for lightweight account SQLite schema bootstrap, and start schema bootstrap with background account registry sync.
+- 79dd26c: Add the canonical account bootstrap manifest package, shared bootstrap schemas/allowlist, OpenKey callback signing strategy, and first-sign-in SDK bootstrap orchestration for enshrined spaces.
+- 7603d1f: Support concise app manifest knowledge pointers. The SDK now validates `knowledge: true` and `knowledge/*.md` roots, exposes a helper for resolving the effective knowledge root, and `tc manifest resolve` includes that root in its output.
+- d4a0a69: Add a SQL migrations helper on database handles: `sql.db(name).migrations.apply({ namespace, migrations })`. The helper records applied migration ids in a TinyCloud-managed table, signs migration DDL/write/read actions through the SQL service, and returns whether migrations were applied or already current.
+
+  The account registry index now uses the migrations helper for its schema setup, and SQL/DuckDB service errors sanitize non-JSON proxy HTML pages into concise retryable messages while preserving a bounded debug snippet in error metadata.
+
+- a22a7f0: Rename the SDK-emitted SQL schema-change permission from `tinycloud.sql/ddl` to `tinycloud.sql/schema`, including manifest defaults and account-registry grants.
+
+  TinyCloudWeb now treats a restored persisted session as stale when it does not cover the currently configured manifest permissions, then runs the normal manifest sign-in flow instead of letting apps request those manifest permissions separately after login.
+
+- 42f1235: Add an opt-in TinyCloud debug logger controlled by `TinyCloud_debug`. The logger keeps a 1000-event in-memory ring buffer, writes structured events to `console.debug` when enabled, exposes browser console helpers for enabling, disabling, inspecting, and clearing logs, persists browser debug mode through `localStorage`, and captures service events plus `fetch`, `invoke`, and `invokeAny` timings.
+- Updated dependencies [895804a]
+- Updated dependencies [934534d]
+- Updated dependencies [79dd26c]
+- Updated dependencies [bd8a60f]
+- Updated dependencies [eb44380]
+- Updated dependencies [c94b81b]
+- Updated dependencies [27f97d8]
+- Updated dependencies [aa050d1]
+- Updated dependencies [fa4a7c7]
+- Updated dependencies [d4a0a69]
+- Updated dependencies [a22a7f0]
+- Updated dependencies [42f1235]
+  - @tinycloud/sdk-services@2.4.0
+  - @tinycloud/bootstrap@2.4.0
+
 ## 2.4.0-beta.19
 
 ### Patch Changes

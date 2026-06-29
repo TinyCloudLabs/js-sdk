@@ -1,5 +1,121 @@
 # @tinycloudlabs/node-sdk
 
+## 2.4.0
+
+### Minor Changes
+
+- 6b554d6: Add shared account APIs for applications and delegations, expose them from the node and web SDK clients, and add the `tc account` CLI command group.
+- 75bebb1: Add account registry write-through indexing, account space registry APIs, and matching `tc account spaces` / `tc account index status` CLI commands.
+
+  Manifest registration now records an indexed manifest hash and skips durable KV rewrites when the indexed record is current. Sign-in schedules best-effort background registry sync for application manifests and accessible spaces, while every discovered or hosted space is written through to the account registry index.
+
+- 0e8ccc6: Add `TinyCloudNode.hostOwnedSpace(name)` and wire `tc space create`/`tc space host` to it.
+
+  Hosting an owned space (e.g. `applications`) by name now registers it on the server via the host-SIWE delegation flow, so subsequent KV/SQL writes to that space succeed instead of returning `404 - Space not found`. Unlike the internal `ensureOwnedSpaceHosted`, this always submits the host delegation rather than inferring hosting from session activation — a space the current session has never referenced is reported neither `activated` nor `skipped`, which previously caused the host to be silently skipped. The host SIWE is idempotent server-side, so re-hosting an existing space is a safe no-op.
+
+  The `tc space create <name>` command (which previously POSTed the unsupported `tinycloud.space/create` action and failed with `401 Unauthorized`) now hosts the caller's owned space; `tc space host <name>` is added as an alias.
+
+- 934534d: Auth/hosting developer experience for the delegate-asks-owner-to-host model.
+  - **`tc space host-request <name> --emit <file>`** (delegate-only): emits a `tinycloud.host.request` artifact naming the space and its resolved owner DID so an agent can surface it to the owner, who then runs `tc space host <name>`. If the caller IS the root authority of the resolved space, it refuses (`ALREADY_ROOT_AUTHORITY`) and tells them to host directly — no request is emitted. The command is a pure local emit and never contacts the node.
+  - **Identity-aware `SPACE_NOT_HOSTED`**: an unhosted-space write/read previously surfaced as an opaque `404 - Space not found`. The kv and sql commands now normalize **only** that exact condition (404 + "Space not found" body) to a `SPACE_NOT_HOSTED` error carrying an identity-aware `hint`. The branch key `is_root_authority(space, active session)` is computed locally from the profile address + space DID (no network): the owner is told to run `tc space host <name>`, a delegate is told they cannot host and to emit `tc space host-request <name> --emit`. A wrong db/table/path or permission error is left untouched. A `delegate-session` profile is never treated as the root authority even when its stored ownerDid is the space owner, so a delegate always gets the host-request hint. `KVService` get/head/delete now preserve the `Space not found` 404 body (previously collapsed to `KV_NOT_FOUND` before the body was read), so unhosted-space **reads** normalize too, while a genuine missing key still reports `KV_NOT_FOUND`.
+  - **SDK `grantAuthRequest(authority, request, options?)`** (`@tinycloud/node-sdk`): takes a delegation request artifact and returns a grant artifact (`tinycloud.auth.delegation`) by signing through `delegateTo`, so the request→grant handshake is callable programmatically. `tc auth grant` is now a thin wrapper over it. Adds the `AuthRequestArtifact`, `AuthDelegationArtifact`, and `DelegationAuthority` types.
+
+- eb44380: `ensureOwnedSpaceHosted` now consults the account spaces registry before hosting
+
+  Previously `TinyCloudNode.ensureOwnedSpaceHosted(name)` always delegated to
+  `hostOwnedSpace`, which unconditionally submits the host-SIWE delegation. Owners
+  who already had the space hosted (e.g. a git-haiku owner re-running TinyCloud
+  Secrets setup) were therefore prompted to "host" their `secrets` space on every
+  run.
+
+  `ensureOwnedSpaceHosted` now resolves the owned space id and first checks the
+  account spaces registry: the fast SQLite index (`account.index.spaces.list()`)
+  as a best-effort short-circuit, falling back to the canonical, recap-readable KV
+  record `account/spaces/{space_id}` (`account.spaces.get`). If the space is
+  already registered/hosted it returns the id WITHOUT submitting a host delegation
+  (no redundant signature). Only when the space is absent — or the registry check
+  fails in any way (e.g. a cold index reporting `no such table: spaces`) — does it
+  fall through to `hostOwnedSpace`. After hosting it durably write-through
+  registers the space so subsequent calls short-circuit on the registry.
+
+  `hostOwnedSpace` (always-host) is unchanged for callers that explicitly want it.
+  The KV path is used rather than `syncAccessible()` because a manifest/recap
+  session can read `account/spaces/` under the recap but does not hold
+  `tinycloud.space/list`.
+
+- 27f97d8: Add a public `ensureOwnedSpaceHosted(name)` method to `TinyCloudNode` and `TinyCloudWeb` for hosting an owner's owned space (e.g. `"secrets"`) from a session created with a manifest / capabilityRequest.
+
+  A full-authority sign-in auto-hosts the owner's `secrets` space, but a session created with a manifest / capabilityRequest does not. Such a session could hold valid `tinycloud.kv/*` capabilities for the owned `secrets` space yet still fail its first scoped `secrets.put(...)` with `404 Space not found`, because the space was never registered on the node. `ensureOwnedSpaceHosted(name)` resolves the name to the owner's owned-space URI and hosts it via the host-SIWE delegation flow (one signature, idempotent server-side), so subsequent scoped secret writes succeed.
+
+- aa050d1: Resolve and rehydrate `tinycloudHosts` on restored sessions.
+
+  A restored session never resolved its TinyCloud hosts: the restore path
+  rehydrated the delegation/address/chainId but never set the hosts, and the
+  hosts a session was created with weren't persisted. The first kv/secrets/
+  space/encryption call on a restored session therefore threw "TinyCloud
+  hosts have not been resolved. Call signIn() first." (notably when
+  `signIn()` short-circuited to a restored session).
+
+  Fix (three parts):
+  - Persist the hosts: `PersistedSessionData` gains an optional
+    `tinycloudHosts` field (back-compat — old persisted sessions still
+    validate), and both sign-in save paths write the just-resolved hosts.
+  - Rehydrate on restore: `TinyCloudNode.restoreSession` accepts the
+    persisted `tinycloudHosts`, adopts them for the service context and the
+    auth layer (`setRestoredTinyCloudSession`), and the web SDK threads the
+    field through `restoreDataFromPersisted`.
+  - Lazy fallback: sessions persisted before this field re-resolve their
+    hosts lazily (registry → `node.tinycloud.xyz` fallback) on the first
+    host-needing call, exactly like a fresh sign-in. Resolution failures
+    surface rather than being masked.
+
+  A restored session now targets the same node as the original sign-in, so
+  apps no longer need to pass `tinycloudHosts` explicitly or call
+  `clearPersistedSession()` before sign-in.
+
+### Patch Changes
+
+- 0d397a8: Treat the account SQLite index as a materialized cache for user-facing account reads. Account application, space, and delegation list calls can now prefer the index while falling back to canonical account data when index tables are missing or empty, and account writes no longer fail when a best-effort index update fails.
+- 895804a: Include `tinycloud.sql/ddl` in the implicit account registry index permission and legacy default SQL grant so account registry writes can create their SQLite tables and indexes on first use. SQL execute and batch calls now sign DDL statements with `tinycloud.sql/ddl`, and mixed batches sign with every required SQL action instead of collapsing to write-only.
+- 6622043: Expose `account.index.ensure()` and `tc account index ensure` for lightweight account SQLite schema bootstrap, and start schema bootstrap with background account registry sync.
+- 79dd26c: Add the canonical account bootstrap manifest package, shared bootstrap schemas/allowlist, OpenKey callback signing strategy, and first-sign-in SDK bootstrap orchestration for enshrined spaces.
+- 08e292d: Thread `invokeAny` into `DelegatedAccess` so delegated sessions can form multi-action SQL invocations. `DelegatedAccess` previously built its `ServiceContext` with only the single-action `invoke`, so any SQL operation needing more than one action in a single `/invoke` — e.g. the migration runner's `ensureMigrationsTable`, which bundles a `CREATE TABLE` schema action with the tracking-row `write` — threw `SQL operation requires multiple permissions ... but this SDK runtime does not support multi-resource invocations`. `DelegatedAccess` now accepts an optional `invokeAny`, and both `TinyCloudNode` construction sites pass `wasmBindings.invokeAny`, mirroring how the top-level node session already wires it.
+- 7c5fe21: Automatically ensure owner-owned encryption networks exist during manifest-driven sign-in. When a requested `tinycloud.encryption/decrypt` permission targets the signed-in user's network ID, the SDK adds a separate scoped `tinycloud.encryption/network.create` sign-in grant and `signIn()` creates the network if the node reports it missing.
+- 8e8f7e8: Fix runtime permission grants silently failing to match across EIP-155 address-case differences.
+
+  `TinyCloudNode.operationCovers` compared a runtime grant's `spaceId` against the requested operation's `spaceId` byte-for-byte. Stored runtime delegations (e.g. from `tc auth request --grant`, replayed on every node create) keep the EIP-55 **checksummed** address, while a space URI built by the CLI is **lowercased** — so a valid granted capability never matched and the invocation fell back to the base session, surfacing as a spurious `401 AUTH_UNAUTHORIZED` ("active session missing capability") even though `tc auth caps` showed the cap.
+
+  Ethereum addresses are case-insensitive; space comparison now lowercases ONLY the `eip155:<chain>:0x<addr>` address segment before comparing, leaving the case-sensitive space NAME byte-exact. This is the runtime-grant analogue of the CLI-layer `OPENKEY_SCOPE_MISMATCH` fix (`normalizeSpaceForCompare`).
+
+- fa4a7c7: Add regression coverage for SQL migration batches that require both `tinycloud.sql/ddl` and `tinycloud.sql/write`, including the legacy-session runtime permission repair path used by TinyCloud Secrets.
+- d4a0a69: Add a SQL migrations helper on database handles: `sql.db(name).migrations.apply({ namespace, migrations })`. The helper records applied migration ids in a TinyCloud-managed table, signs migration DDL/write/read actions through the SQL service, and returns whether migrations were applied or already current.
+
+  The account registry index now uses the migrations helper for its schema setup, and SQL/DuckDB service errors sanitize non-JSON proxy HTML pages into concise retryable messages while preserving a bounded debug snippet in error metadata.
+
+- a22a7f0: Rename the SDK-emitted SQL schema-change permission from `tinycloud.sql/ddl` to `tinycloud.sql/schema`, including manifest defaults and account-registry grants.
+
+  TinyCloudWeb now treats a restored persisted session as stale when it does not cover the currently configured manifest permissions, then runs the normal manifest sign-in flow instead of letting apps request those manifest permissions separately after login.
+
+- 42f1235: Add an opt-in TinyCloud debug logger controlled by `TinyCloud_debug`. The logger keeps a 1000-event in-memory ring buffer, writes structured events to `console.debug` when enabled, exposes browser console helpers for enabling, disabling, inspecting, and clearing logs, persists browser debug mode through `localStorage`, and captures service events plus `fetch`, `invoke`, and `invokeAny` timings.
+- b6c3fd8: Fix wallet-mode `useDelegation` dropping every resource except the top-level one. A multi-resource delegation (e.g. `[{tinycloud.kv get vault/secrets/X}, {tinycloud.encryption decrypt <networkId>}]`) carries each grant in `delegation.resources[]`, but the flat top-level `path`/`actions` mirror only the first resource. `useDelegation` built the activation sub-delegation's abilities from those flat fields alone, so for multi-resource delegations every other resource was silently dropped — the activated session held only the encryption cap and a subsequent `access.kv.get(...)` failed with `Unauthorized Action: .../tinycloud.kv/get`. Wallet-mode `useDelegation` now builds the activated abilities from the full `resources[]` set (kv/sql/duckdb scoped to the delegation space, encryption network URNs as raw abilities), so one `useDelegation` call grants every resource's capabilities.
+
+  Also export the type-only barrel names `WasmKeyProviderConfig` and `NodeUserAuthorizationConfig` as `export type`, so importing node-sdk as raw TypeScript (e.g. via bun) no longer throws `SyntaxError: export 'X' not found`.
+
+- Updated dependencies [6b554d6]
+- Updated dependencies [0d397a8]
+- Updated dependencies [895804a]
+- Updated dependencies [6622043]
+- Updated dependencies [75bebb1]
+- Updated dependencies [79dd26c]
+- Updated dependencies [eb44380]
+- Updated dependencies [7603d1f]
+- Updated dependencies [27f97d8]
+- Updated dependencies [aa050d1]
+- Updated dependencies [d4a0a69]
+- Updated dependencies [a22a7f0]
+- Updated dependencies [42f1235]
+  - @tinycloud/sdk-core@2.4.0
+
 ## 2.4.0-beta.19
 
 ### Patch Changes
