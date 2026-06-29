@@ -728,4 +728,133 @@ describe("CLI secrets commands", () => {
     expect(error.message).toBe("Permission denied while reading secret");
     expect(recorded.outputs).toEqual([]);
   });
+
+  test("requests scoped put permission at secrets/scoped/<scope>/<name>", async () => {
+    currentNode = makeFakeNode({
+      putResult: [
+        {
+          ok: false,
+          error: {
+            code: "PERMISSION_DENIED",
+            service: "secrets",
+            message: "Cannot autosign tinycloud.kv/put for ANTHROPIC_API_KEY",
+          },
+        },
+        { ok: true, data: undefined },
+      ],
+    });
+
+    await runSecretsCommand([
+      "secrets",
+      "put",
+      "ANTHROPIC_API_KEY",
+      "super-secret",
+      "--scope",
+      "Food Tracker",
+    ]);
+
+    expect(recorded.permissionRequests).toEqual([
+      {
+        profile: "default",
+        requested: [
+          {
+            service: "tinycloud.kv",
+            space: "secrets",
+            path: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+            actions: ["tinycloud.kv/put"],
+            skipPrefix: true,
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("--space overrides the permission-request space", async () => {
+    currentNode = makeFakeNode({
+      listError: [
+        Object.assign(
+          new Error("grantRuntimePermissions requires wallet mode with a signer or privateKey."),
+          { code: "PERMISSION_DENIED" },
+        ),
+      ],
+    });
+
+    await runSecretsCommand(["secrets", "list", "--space", "custom-vault"]);
+
+    expect(recorded.permissionRequests).toEqual([
+      {
+        profile: "default",
+        requested: [
+          {
+            service: "tinycloud.kv",
+            space: "custom-vault",
+            path: "vault/secrets/",
+            actions: ["tinycloud.kv/list"],
+            skipPrefix: true,
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("--space is no longer aliased to --scope", async () => {
+    await runSecretsCommand(["secrets", "list", "--space", "custom-vault"]);
+
+    // --space must not silently feed into --scope.
+    expect(recorded.listCalls).toEqual([undefined]);
+    expect(recorded.outputs).toEqual([
+      { secrets: ["ANTHROPIC_API_KEY"], count: 1 },
+    ]);
+  });
+
+  test(
+    "tc secrets get pins the permission grant to the 'secrets' space even when the profile defaults to 'default'",
+    async () => {
+      // Profile defaults to spaceName "default", but the secret-manager web
+      // app stores secrets in the literal "secrets" space. The CLI must
+      // override the profile's default space when requesting permissions so
+      // CLI-issued grants line up with web-app-written secrets at
+      // vault/secrets/ASSEMBLYAI_API_KEY in space "secrets".
+      currentProfile = { ...currentProfile, spaceName: "default" };
+      currentNode = makeFakeNode({
+        getResult: [
+          {
+            ok: false,
+            error: {
+              code: "PERMISSION_DENIED",
+              service: "secrets",
+              message: "Cannot autosign tinycloud.kv/get for ASSEMBLYAI_API_KEY",
+            },
+          },
+          { ok: true, data: "secret-value-from-web-app" },
+        ],
+      });
+
+      await runSecretsCommand(["secrets", "get", "ASSEMBLYAI_API_KEY"]);
+
+      expect(recorded.permissionRequests).toEqual([
+        {
+          profile: "default",
+          requested: [
+            {
+              service: "tinycloud.kv",
+              space: "secrets",
+              path: "vault/secrets/ASSEMBLYAI_API_KEY",
+              actions: ["tinycloud.kv/get"],
+              skipPrefix: true,
+            },
+            {
+              service: "tinycloud.encryption",
+              path: DEFAULT_NETWORK_ID,
+              actions: ["tinycloud.encryption/decrypt"],
+              skipPrefix: true,
+            },
+          ],
+        },
+      ]);
+      expect(recorded.outputs).toEqual([
+        { name: "ASSEMBLYAI_API_KEY", value: "secret-value-from-web-app" },
+      ]);
+    },
+  );
 });
