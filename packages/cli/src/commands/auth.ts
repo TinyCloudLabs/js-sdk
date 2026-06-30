@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation } from "@tinycloud/node-sdk";
+import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
@@ -342,6 +342,7 @@ export function registerAuthCommand(program: Command): void {
           requested,
           expiryOption !== undefined ? { expiry: expiryOption } : undefined,
         );
+        await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession);
         const delegationCids: string[] = [];
         let expiry: string | undefined;
         for (const delegation of delegations) {
@@ -1230,6 +1231,35 @@ function outputRotationResult(
     authMethod,
     spaceId: profile.spaceId ?? null,
   });
+}
+
+async function persistCurrentLocalSession(
+  profileName: string,
+  profile: ProfileConfig,
+  session: TinyCloudSession | undefined,
+): Promise<void> {
+  if (!session) return;
+
+  await ProfileManager.setSession(profileName, {
+    authMethod: "local",
+    address: session.address,
+    chainId: session.chainId,
+    spaceId: session.spaceId,
+    delegationHeader: session.delegationHeader,
+    delegationCid: session.delegationCid,
+    jwk: session.jwk,
+    verificationMethod: session.verificationMethod,
+    siwe: session.siwe,
+    signature: session.signature,
+  });
+
+  if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId) {
+    await ProfileManager.setProfile(profileName, {
+      ...profile,
+      sessionDid: session.verificationMethod,
+      spaceId: session.spaceId,
+    });
+  }
 }
 
 type LocalAuthResult = {
