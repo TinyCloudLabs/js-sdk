@@ -78,6 +78,9 @@ let sessions = new Map<string, object>();
 let generatedKeys: GeneratedKey[] = [];
 let openKeyDelegation: Record<string, unknown>;
 let localSignInResult: LocalSignInResult;
+let authNodeHasRuntimePermissions: boolean;
+let authNodeRestorableSession: Record<string, unknown> | undefined;
+let authNodeGrantDelegations: Array<{ cid: string; expiry: Date }>;
 
 function resetState(): void {
   recorded.outputs.length = 0;
@@ -103,6 +106,7 @@ function resetState(): void {
     spaceId: "space-openkey-new",
     ownerDid: "did:pkh:eip155:1:0xowner",
     verificationMethod: "did:key:new-openkey",
+    expiry: "2026-07-07T00:00:00.000Z",
   };
   localSignInResult = {
     spaceId: "space-local-new",
@@ -115,6 +119,9 @@ function resetState(): void {
     siwe: "local-siwe",
     signature: "0xsig",
   };
+  authNodeHasRuntimePermissions = true;
+  authNodeRestorableSession = undefined;
+  authNodeGrantDelegations = [];
 }
 
 function makeProfile(overrides: Partial<ProfileLike> = {}): ProfileLike {
@@ -209,7 +216,11 @@ const importRecorded = {
 
 mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async () => ({
-    hasRuntimePermissions: () => true,
+    hasRuntimePermissions: () => authNodeHasRuntimePermissions,
+    grantRuntimePermissions: async () => authNodeGrantDelegations,
+    get restorableSession() {
+      return authNodeRestorableSession;
+    },
     getRuntimePermissionDelegations: () => [],
     get sessionDid() {
       return importSessionDid;
@@ -486,6 +497,7 @@ describe("CLI auth rotate command", () => {
       spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:secrets",
       ownerDid: "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412",
       verificationMethod: "did:key:openkey-session",
+      expiry: "2026-07-07T00:00:00.000Z",
     };
     const node = {
       hasRuntimePermissions: mock(() => false),
@@ -651,6 +663,87 @@ describe("mergePrivateJwkIntoSession (write-side JWK sanitization)", () => {
   });
 });
 
+describe("CLI auth request command", () => {
+  beforeEach(() => {
+    resetState();
+  });
+
+  test("persists the active local session after granting runtime permissions", async () => {
+    const sessionJwk = {
+      kty: "OKP",
+      crv: "Ed25519",
+      x: "runtime-session",
+      d: "runtime-private",
+    };
+    profiles.set("default", makeProfile({
+      did: "did:pkh:eip155:1:0xLocalOwner",
+      sessionDid: "did:key:old-local-session",
+      authMethod: "local",
+      posture: "local-owner-key",
+      privateKey: "0xowner-private",
+      address: "0xLocalOwner",
+      spaceId: "space-local-old",
+    }));
+    sessions.set("default", {
+      authMethod: "local",
+      address: "0xLocalOwner",
+      chainId: 1,
+      spaceId: "space-local-old",
+    });
+    authNodeHasRuntimePermissions = false;
+    authNodeGrantDelegations = [
+      { cid: "bafy-runtime-grant", expiry: new Date("2026-07-07T00:00:00.000Z") },
+    ];
+    authNodeRestorableSession = {
+      address: "0xLocalOwner",
+      chainId: 1,
+      sessionKey: JSON.stringify(sessionJwk),
+      spaceId: "space-local-new",
+      delegationHeader: { Authorization: "Bearer runtime-session" },
+      delegationCid: "bafy-runtime-session",
+      jwk: sessionJwk,
+      verificationMethod: "did:key:runtime-session",
+      siwe: "runtime-siwe",
+      signature: "0xruntime",
+    };
+
+    await runAuthCommand([
+      "auth",
+      "request",
+      "--grant",
+      "--yes",
+      "--cap",
+      "tinycloud.kv:default/:list",
+    ]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(sessions.get("default")).toEqual({
+      authMethod: "local",
+      address: "0xLocalOwner",
+      chainId: 1,
+      spaceId: "space-local-new",
+      delegationHeader: { Authorization: "Bearer runtime-session" },
+      delegationCid: "bafy-runtime-session",
+      jwk: sessionJwk,
+      verificationMethod: "did:key:runtime-session",
+      siwe: "runtime-siwe",
+      signature: "0xruntime",
+    });
+    expect(profiles.get("default")).toEqual(expect.objectContaining({
+      sessionDid: "did:key:runtime-session",
+      spaceId: "space-local-new",
+    }));
+    expect(recorded.outputs).toEqual([
+      expect.objectContaining({
+        changed: true,
+        delegationCid: "bafy-runtime-grant",
+        delegationCids: ["bafy-runtime-grant"],
+        expiry: "2026-07-07T00:00:00.000Z",
+      }),
+    ]);
+  });
+});
+
 describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
   beforeEach(() => {
     resetState();
@@ -670,6 +763,7 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
       spaceId: "tinycloud:space",
       ownerDid: "did:pkh:eip155:1:0xowner",
       verificationMethod: "did:key:z6MkSession",
+      expiry: "2026-07-07T00:00:00.000Z",
       // The public-only JWK OpenKey echoes back (public-only because
       // browser-auth.ts strips `d` before sending to OpenKey).
       jwk: { kty: "OKP", crv: "Ed25519", x: "key-public" },
@@ -697,6 +791,7 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
       spaceId: "tinycloud:space",
       ownerDid: "did:pkh:eip155:1:0xowner",
       verificationMethod: "did:key:z6MkSession",
+      expiry: "2026-07-07T00:00:00.000Z",
       jwk: { kty: "OKP", crv: "Ed25519", x: "key-public", d: "openkey-returned-private" },
     };
 

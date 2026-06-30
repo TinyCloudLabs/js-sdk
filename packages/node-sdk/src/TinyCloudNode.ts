@@ -819,6 +819,14 @@ export class TinyCloudNode {
   }
 
   /**
+   * Get the currently active session in the shape callers can persist and later
+   * pass back to {@link restoreSession}.
+   */
+  get restorableSession(): TinyCloudSession | undefined {
+    return this.currentTinyCloudSession();
+  }
+
+  /**
    * Sign in and create a new session.
    * This creates the user's space if it doesn't exist.
    * Requires wallet mode (privateKey in config).
