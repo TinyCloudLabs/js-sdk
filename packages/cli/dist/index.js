@@ -43165,6 +43165,7 @@ function registerAuthCommand(program2) {
         requested,
         expiryOption !== void 0 ? { expiry: expiryOption } : void 0
       );
+      await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession);
       const delegationCids = [];
       let expiry;
       for (const delegation of delegations) {
@@ -43845,6 +43846,28 @@ function outputRotationResult(profile, profileName, oldDid, authMethod) {
     authMethod,
     spaceId: profile.spaceId ?? null
   });
+}
+async function persistCurrentLocalSession(profileName, profile, session) {
+  if (!session) return;
+  await ProfileManager.setSession(profileName, {
+    authMethod: "local",
+    address: session.address,
+    chainId: session.chainId,
+    spaceId: session.spaceId,
+    delegationHeader: session.delegationHeader,
+    delegationCid: session.delegationCid,
+    jwk: session.jwk,
+    verificationMethod: session.verificationMethod,
+    siwe: session.siwe,
+    signature: session.signature
+  });
+  if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId) {
+    await ProfileManager.setProfile(profileName, {
+      ...profile,
+      sessionDid: session.verificationMethod,
+      spaceId: session.spaceId
+    });
+  }
 }
 async function handleLocalAuth(profileName, host, options = {}) {
   const profile = await ProfileManager.getProfile(profileName).catch(() => null);
