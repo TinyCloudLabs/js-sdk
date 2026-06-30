@@ -1862,6 +1862,25 @@ export class TinyCloudNode {
     return `urn:tinycloud:encryption:${this.did}:${name}`;
   }
 
+  getEncryptionNetworkIdForSpace(
+    spaceId: string,
+    name = DEFAULT_ENCRYPTION_NETWORK_NAME,
+  ): string {
+    const ownerDid = this.ownerDidFromSpaceId(spaceId) ?? this.did;
+    return `urn:tinycloud:encryption:${ownerDid}:${name}`;
+  }
+
+  private ownerDidFromSpaceId(spaceId: string): string | undefined {
+    if (!spaceId.startsWith("tinycloud:")) return undefined;
+    const body = spaceId.slice("tinycloud:".length);
+    const lastSeparator = body.lastIndexOf(":");
+    if (lastSeparator <= 0) return undefined;
+    const owner = body.slice(0, lastSeparator);
+    if (owner.startsWith("did:")) return owner;
+    if (!owner.includes(":")) return undefined;
+    return `did:${owner}`;
+  }
+
   private requireServiceSession(): ServiceSession {
     const session = this._serviceContext?.session;
     if (!session) {
@@ -2066,7 +2085,7 @@ export class TinyCloudNode {
       spaceId,
       crypto: vaultCrypto,
       encryption: {
-        networkId: this.getDefaultEncryptionNetworkId(),
+        networkId: this.getEncryptionNetworkIdForSpace(spaceId),
         service: this.getEncryptionService(),
         decryptCapabilityProof: () => ({
           proofs: [this.requireServiceSession().delegationCid],
@@ -2685,7 +2704,8 @@ export class TinyCloudNode {
         hasPermissions: (permissions) => this.hasRuntimePermissions(permissions),
         grantPermissions: (additional) => this.grantRuntimePermissions(additional),
         canEscalate: () => this.signer !== undefined && this.tc !== undefined,
-        getEncryptionNetworkId: () => this.getDefaultEncryptionNetworkId(),
+        getEncryptionNetworkId: () => this.getEncryptionNetworkIdForSpace(resolvedSpace),
+        resolveSpace: (space) => space.startsWith("tinycloud:") ? space : this.ownedSpaceId(space),
         getUnlockSigner: () => this.signer ?? undefined,
       });
       this._secrets.set(resolvedSpace, secrets);

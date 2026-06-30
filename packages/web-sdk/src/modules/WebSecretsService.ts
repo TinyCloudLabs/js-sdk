@@ -64,12 +64,19 @@ function secretPermissionEntries(
   ];
 }
 
-function spaceMatches(granted: string | undefined, requested: string | undefined): boolean {
+function normalizeSpace(space: string | undefined, resolveSpace?: (space: string) => string): string | undefined {
+  if (!space) return undefined;
+  if (space.startsWith("tinycloud:")) return space;
+  return resolveSpace?.(space) ?? space;
+}
+
+function spaceMatches(
+  granted: string | undefined,
+  requested: string | undefined,
+  resolveSpace?: (space: string) => string,
+): boolean {
   if (!granted || !requested) return false;
-  if (granted === requested) return true;
-  if (!granted.startsWith("tinycloud:") && requested.endsWith(`:${granted}`)) return true;
-  if (!requested.startsWith("tinycloud:") && granted.endsWith(`:${requested}`)) return true;
-  return false;
+  return normalizeSpace(granted, resolveSpace) === normalizeSpace(requested, resolveSpace);
 }
 
 export interface WebSecretsServiceConfig {
@@ -77,6 +84,7 @@ export interface WebSecretsServiceConfig {
   space?: string;
   getManifest: () => Manifest | Manifest[] | undefined;
   requestPermissions: RequestPermissions;
+  resolveSpace?: (space: string) => string;
   getUnlockSigner?: () => unknown;
 }
 
@@ -223,7 +231,7 @@ export class WebSecretsService implements ISecretsService {
       return resolved.resources.some(
         (resource) =>
           resource.service === "tinycloud.kv" &&
-          spaceMatches(resource.space, this.space) &&
+          spaceMatches(resource.space, this.space, this.config.resolveSpace) &&
           resource.path === secretPath.permissionPaths.vault &&
           resource.actions.includes(requiredAction),
       );

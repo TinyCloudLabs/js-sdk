@@ -138,6 +138,44 @@ describe("WebSecretsService", () => {
     expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret");
   });
 
+  it("does not match short manifest spaces against a different owner", async () => {
+    const base = makeBaseSecrets();
+    const requestPermissions = mock(async () => ({ approved: true }));
+    const secrets = new WebSecretsService({
+      getService: () => base,
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000002:secrets",
+      getManifest: () => ({
+        ...readOnlyManifest(),
+        permissions: [
+          {
+            service: "tinycloud.kv",
+            space: "secrets",
+            path: "vault/secrets/ANTHROPIC_API_KEY",
+            actions: ["put"],
+            skipPrefix: true,
+          },
+        ],
+      }),
+      requestPermissions,
+      resolveSpace: (space) => space.startsWith("tinycloud:")
+        ? space
+        : `tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:${space}`,
+    });
+
+    const result = await secrets.put("ANTHROPIC_API_KEY", "secret");
+
+    expect(result.ok).toBe(true);
+    expect(requestPermissions).toHaveBeenCalledWith([
+      {
+        service: "tinycloud.kv",
+        space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000002:secrets",
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["put"],
+        skipPrefix: true,
+      },
+    ]);
+  });
+
   it("skips escalation when the manifest includes the scoped mutation action", async () => {
     const base = makeBaseSecrets();
     const requestPermissions = mock(async () => ({ approved: true }));

@@ -45467,10 +45467,7 @@ function delegationCoversPath(permissions, path, space = SECRETS_SPACE2) {
   });
 }
 function spaceMatches(granted, requested) {
-  if (granted === requested) return true;
-  if (!granted.startsWith("tinycloud:") && requested.endsWith(`:${granted}`)) return true;
-  if (!requested.startsWith("tinycloud:") && granted.endsWith(`:${requested}`)) return true;
-  return false;
+  return granted === requested;
 }
 function permissionTargetsSpace(permission, expectedSpace) {
   if (permission.service !== "tinycloud.kv") return false;
@@ -45770,6 +45767,10 @@ function parseDate(value) {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value;
   }
+  if (typeof value === "number") {
+    const date2 = new Date(value < 1e10 ? value * 1e3 : value);
+    return Number.isNaN(date2.getTime()) ? null : date2;
+  }
   if (typeof value !== "string" || value.trim() === "") return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
@@ -45787,9 +45788,10 @@ function secretPermissionEntries(params) {
     skipPrefix: true
   }];
   if (params.action === "get") {
+    const networkId = "getEncryptionNetworkIdForSpace" in params.node && typeof params.node.getEncryptionNetworkIdForSpace === "function" ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE2) : params.node.getDefaultEncryptionNetworkId();
     permissions.push({
       service: "tinycloud.encryption",
-      path: params.node.getDefaultEncryptionNetworkId(),
+      path: networkId,
       actions: ["tinycloud.encryption/decrypt"],
       skipPrefix: true
     });

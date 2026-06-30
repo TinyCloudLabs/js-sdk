@@ -138,6 +138,9 @@ describe("NodeSecretsService", () => {
       }),
       grantPermissions,
       canEscalate: () => true,
+      resolveSpace: (space) => space.startsWith("tinycloud:")
+        ? space
+        : `tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:${space}`,
     });
 
     const result = await secrets.put("ANTHROPIC_API_KEY", "secret");
@@ -145,6 +148,48 @@ describe("NodeSecretsService", () => {
     expect(result.ok).toBe(true);
     expect(grantPermissions).not.toHaveBeenCalled();
     expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret");
+  });
+
+  it("does not match short manifest spaces against a different owner", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000002:other",
+      getManifest: () => ({
+        app_id: "com.food.app",
+        name: "Food",
+        defaults: false,
+        prefix: "",
+        permissions: [
+          {
+            service: "tinycloud.kv",
+            space: "other",
+            path: "vault/secrets/ANTHROPIC_API_KEY",
+            actions: ["put"],
+            skipPrefix: true,
+          },
+        ],
+      }),
+      grantPermissions,
+      canEscalate: () => true,
+      resolveSpace: (space) => space.startsWith("tinycloud:")
+        ? space
+        : `tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:${space}`,
+    });
+
+    const result = await secrets.put("ANTHROPIC_API_KEY", "secret");
+
+    expect(result.ok).toBe(true);
+    expect(grantPermissions).toHaveBeenCalledWith([
+      {
+        service: "tinycloud.kv",
+        space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000002:other",
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["put"],
+        skipPrefix: true,
+      },
+    ] satisfies PermissionEntry[]);
   });
 
   it("grants scoped write permission before putting a scoped secret", async () => {

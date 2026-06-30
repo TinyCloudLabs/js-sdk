@@ -36,6 +36,7 @@ type NetworkDescriptorLike = {
 type FakeNode = {
   did: string;
   getDefaultEncryptionNetworkId(name?: string): string;
+  getEncryptionNetworkIdForSpace(spaceId: string, name?: string): string;
   secretsForSpace(spaceId: string): FakeNode["secrets"];
   secrets: {
     list(options?: { scope?: string }): Promise<{ ok: true; data: string[] } | { ok: false; error: { code: string; message: string; service?: string } }>;
@@ -183,6 +184,12 @@ function makeFakeNode(overrides: {
   return {
     did: DEFAULT_NODE_DID,
     getDefaultEncryptionNetworkId(name = "default") {
+      return `urn:tinycloud:encryption:${DEFAULT_NODE_DID}:${name}`;
+    },
+    getEncryptionNetworkIdForSpace(spaceId: string, name = "default") {
+      if (spaceId.startsWith("tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:")) {
+        return `urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:${name}`;
+      }
       return `urn:tinycloud:encryption:${DEFAULT_NODE_DID}:${name}`;
     },
     secretsForSpace(spaceId: string) {
@@ -478,6 +485,7 @@ describe("CLI secrets commands", () => {
 
   test("routes --space operations and permission requests to the requested TinyCloud space", async () => {
     const targetSpace = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:other";
+    const targetNetwork = "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
     currentNode = makeFakeNode({
       getResult: [
         {
@@ -512,7 +520,7 @@ describe("CLI secrets commands", () => {
           },
           {
             service: "tinycloud.encryption",
-            path: DEFAULT_NETWORK_ID,
+            path: targetNetwork,
             actions: ["tinycloud.encryption/decrypt"],
             skipPrefix: true,
           },
@@ -609,6 +617,19 @@ describe("CLI secrets commands", () => {
       "Refreshing TinyCloud session...",
       "Listing secrets...",
     ]);
+  });
+
+  test("refreshes an expired owner OpenKey session with numeric seconds expiry", async () => {
+    currentSession = {
+      expirationTime: 1,
+    };
+
+    await runSecretsCommand(["secrets", "list"]);
+
+    expect(recorded.sessionRefreshes).toEqual([
+      { profile: "default", host: "https://tinycloud.test" },
+    ]);
+    expect(recorded.listCalls).toEqual([undefined]);
   });
 
   test("queries the authoritative encryption network before reporting it", async () => {

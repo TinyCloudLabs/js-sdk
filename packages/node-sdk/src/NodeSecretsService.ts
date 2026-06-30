@@ -87,12 +87,19 @@ function secretPermissionEntries(
   return entries;
 }
 
-function spaceMatches(granted: string | undefined, requested: string | undefined): boolean {
+function normalizeSpace(space: string | undefined, resolveSpace?: (space: string) => string): string | undefined {
+  if (!space) return undefined;
+  if (space.startsWith("tinycloud:")) return space;
+  return resolveSpace?.(space) ?? space;
+}
+
+function spaceMatches(
+  granted: string | undefined,
+  requested: string | undefined,
+  resolveSpace?: (space: string) => string,
+): boolean {
   if (!granted || !requested) return false;
-  if (granted === requested) return true;
-  if (!granted.startsWith("tinycloud:") && requested.endsWith(`:${granted}`)) return true;
-  if (!requested.startsWith("tinycloud:") && granted.endsWith(`:${requested}`)) return true;
-  return false;
+  return normalizeSpace(granted, resolveSpace) === normalizeSpace(requested, resolveSpace);
 }
 
 export interface NodeSecretsServiceConfig {
@@ -103,6 +110,7 @@ export interface NodeSecretsServiceConfig {
   grantPermissions: (additional: PermissionEntry[]) => Promise<unknown>;
   canEscalate: () => boolean;
   getEncryptionNetworkId?: () => string;
+  resolveSpace?: (space: string) => string;
   getUnlockSigner?: () => unknown;
 }
 
@@ -261,7 +269,7 @@ export class NodeSecretsService implements ISecretsService {
         return resolved.resources.some(
           (resource) =>
             resource.service === entry.service &&
-            spaceMatches(resource.space, entry.space) &&
+            spaceMatches(resource.space, entry.space, this.config.resolveSpace) &&
             resource.path === entry.path &&
             entry.actions.every((action) => resource.actions.includes(action)),
         );
