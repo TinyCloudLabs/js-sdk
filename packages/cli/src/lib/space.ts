@@ -91,12 +91,14 @@ function resolveChainId(profile: ProfileConfig, session: Record<string, unknown>
 export async function resolveSpaceUri(
   input: string | undefined,
   profileName: string,
+  options: { useProfileDefault?: boolean } = {},
 ): Promise<string | undefined> {
   const profile = await ProfileManager.getProfile(profileName);
 
   // Explicit --space overrides; otherwise fall back to the profile default.
   // When neither is set, return undefined so the caller routes to the primary space.
-  const effective = input || profile.defaultSpace;
+  const useProfileDefault = options.useProfileDefault ?? true;
+  const effective = input || (useProfileDefault ? profile.defaultSpace : undefined);
   if (!effective) return undefined;
 
   if (effective.startsWith("tinycloud:")) {

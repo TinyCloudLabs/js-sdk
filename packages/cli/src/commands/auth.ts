@@ -1124,12 +1124,37 @@ export function portableFromOpenKeyDelegation(
 }
 
 function inferDelegationExpiry(data: Record<string, unknown>): Date {
-  const direct = data.expiry ?? data.expiresAt;
-  if (typeof direct === "string") {
-    const parsed = new Date(direct);
+  for (const key of ["expiry", "expiresAt", "expirationTime"]) {
+    const parsed = parseDelegationExpiryField(data[key]);
+    if (parsed) return parsed;
+  }
+
+  if (typeof data.siwe === "string") {
+    const match = data.siwe.match(/^Expiration Time:\s*(.+)$/im);
+    const parsed = match ? parseDelegationExpiryField(match[1]?.trim()) : null;
+    if (parsed) return parsed;
+  }
+
+  throw new CLIError(
+    "OPENKEY_EXPIRY_MISSING",
+    "OpenKey delegation response did not include expiry, expiresAt, expirationTime, or a SIWE Expiration Time.",
+    ExitCode.ERROR,
+  );
+}
+
+function parseDelegationExpiryField(value: unknown): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "number") {
+    const parsed = new Date(value < 10_000_000_000 ? value * 1000 : value);
     if (!Number.isNaN(parsed.getTime())) return parsed;
   }
-  return new Date(Date.now() + 60 * 60 * 1000);
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return null;
 }
 
 async function rotateAuthKey(

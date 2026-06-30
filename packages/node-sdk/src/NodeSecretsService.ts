@@ -58,6 +58,7 @@ function secretPermissionEntries(
   name: string,
   options: SecretScopeOptions | undefined,
   action: SecretAction,
+  space: string,
   encryptionNetworkId?: string,
 ): PermissionEntry[] {
   const entries: PermissionEntry[] = [];
@@ -68,7 +69,7 @@ function secretPermissionEntries(
 
   entries.push({
     service: "tinycloud.kv",
-    space: SECRETS_SPACE,
+    space,
     path,
     actions: [secretActionName(action)],
     skipPrefix: true,
@@ -86,8 +87,17 @@ function secretPermissionEntries(
   return entries;
 }
 
+function spaceMatches(granted: string | undefined, requested: string | undefined): boolean {
+  if (!granted || !requested) return false;
+  if (granted === requested) return true;
+  if (!granted.startsWith("tinycloud:") && requested.endsWith(`:${granted}`)) return true;
+  if (!requested.startsWith("tinycloud:") && granted.endsWith(`:${requested}`)) return true;
+  return false;
+}
+
 export interface NodeSecretsServiceConfig {
   getService: () => ISecretsService;
+  space?: string;
   getManifest: () => Manifest | Manifest[] | undefined;
   hasPermissions?: (permissions: PermissionEntry[]) => boolean;
   grantPermissions: (additional: PermissionEntry[]) => Promise<unknown>;
@@ -101,6 +111,10 @@ export class NodeSecretsService implements ISecretsService {
   private shouldRestoreUnlock = false;
 
   constructor(private readonly config: NodeSecretsServiceConfig) {}
+
+  private get space(): string {
+    return this.config.space ?? SECRETS_SPACE;
+  }
 
   get vault(): IDataVaultService {
     return this.service.vault;
@@ -182,6 +196,7 @@ export class NodeSecretsService implements ISecretsService {
         name,
         options,
         action,
+        this.space,
         action === "get" ? this.config.getEncryptionNetworkId?.() : undefined,
       );
     } catch (error) {
@@ -246,7 +261,7 @@ export class NodeSecretsService implements ISecretsService {
         return resolved.resources.some(
           (resource) =>
             resource.service === entry.service &&
-            resource.space === entry.space &&
+            spaceMatches(resource.space, entry.space) &&
             resource.path === entry.path &&
             entry.actions.every((action) => resource.actions.includes(action)),
         );

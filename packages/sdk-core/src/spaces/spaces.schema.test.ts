@@ -24,6 +24,7 @@ const validSpaceConfig = {
   name: "default",
   createKV: mockFunction,
   createVault: mockFunction,
+  createSecrets: mockFunction,
   createDelegations: mockFunction,
   createSharing: mockFunction,
   getInfo: mockAsyncFunction,
@@ -37,6 +38,7 @@ const validSpaceServiceConfig = {
   capabilityRegistry: {},
   createKVService: mockFunction,
   createVaultService: mockFunction,
+  createSecretsService: mockFunction,
   userDid: "did:pkh:eip155:1:0x1234567890123456789012345678901234567890",
   sharingService: {},
   createDelegation: mockAsyncFunction,
@@ -78,10 +80,18 @@ describe("SpaceConfigSchema", () => {
         ...validSpaceConfig,
         createKV: (spaceId: string) => ({ spaceId }),
         createVault: (spaceId: string) => ({ spaceId }),
+        createSecrets: (spaceId: string) => ({ spaceId }),
         createDelegations: (spaceId: string) => ({ spaceId }),
         createSharing: (spaceId: string) => ({ spaceId }),
         getInfo: async (spaceId: string) => ({ ok: true, data: { id: spaceId } }),
       };
+      const result = SpaceConfigSchema.safeParse(data);
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts config without optional createSecrets factory", () => {
+      const data = { ...validSpaceConfig };
+      delete (data as Record<string, unknown>).createSecrets;
       const result = SpaceConfigSchema.safeParse(data);
       expect(result.success).toBe(true);
     });
@@ -145,6 +155,12 @@ describe("SpaceConfigSchema", () => {
 
     it("rejects non-function createVault", () => {
       const data = { ...validSpaceConfig, createVault: "not a function" };
+      const result = SpaceConfigSchema.safeParse(data);
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects non-function createSecrets", () => {
+      const data = { ...validSpaceConfig, createSecrets: "not a function" };
       const result = SpaceConfigSchema.safeParse(data);
       expect(result.success).toBe(false);
     });

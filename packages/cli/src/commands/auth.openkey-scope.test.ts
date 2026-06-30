@@ -84,6 +84,83 @@ describe("portableFromOpenKeyDelegation (scope mismatch)", () => {
     expect(portable.resources?.length).toBe(2);
   });
 
+  test("uses OpenKey expirationTime when expiry aliases are absent", () => {
+    const expirationTime = "2099-01-01T00:00:00.000Z";
+    const permissions = [
+      cap("tinycloud.sql", SPACE_LOWER, "xyz.tinycloud.listen/conversations", ["read"]),
+    ];
+    const data = {
+      spaceId: SPACE_CHECKSUM,
+      delegationCid: "bafyTEST-expiration",
+      delegationHeader: { Authorization: "Bearer x" },
+      verificationMethod: "did:key:zTest",
+      address: ADDR_CHECKSUM,
+      chainId: 1,
+      expirationTime,
+    };
+
+    const portable = portableFromOpenKeyDelegation(data, permissions, "https://host");
+
+    expect(portable.expiry.toISOString()).toBe(expirationTime);
+  });
+
+  test("uses SIWE Expiration Time when direct expiry fields are absent", () => {
+    const expirationTime = "2099-02-01T00:00:00.000Z";
+    const permissions = [
+      cap("tinycloud.sql", SPACE_LOWER, "xyz.tinycloud.listen/conversations", ["read"]),
+    ];
+    const data = {
+      spaceId: SPACE_CHECKSUM,
+      delegationCid: "bafyTEST-siwe",
+      delegationHeader: { Authorization: "Bearer x" },
+      verificationMethod: "did:key:zTest",
+      address: ADDR_CHECKSUM,
+      chainId: 1,
+      siwe: `example.com wants you to sign in\nExpiration Time: ${expirationTime}`,
+    };
+
+    const portable = portableFromOpenKeyDelegation(data, permissions, "https://host");
+
+    expect(portable.expiry.toISOString()).toBe(expirationTime);
+  });
+
+  test("treats numeric expiry values as Unix seconds", () => {
+    const permissions = [
+      cap("tinycloud.sql", SPACE_LOWER, "xyz.tinycloud.listen/conversations", ["read"]),
+    ];
+    const data = {
+      spaceId: SPACE_CHECKSUM,
+      delegationCid: "bafyTEST-numeric-expiry",
+      delegationHeader: { Authorization: "Bearer x" },
+      verificationMethod: "did:key:zTest",
+      address: ADDR_CHECKSUM,
+      chainId: 1,
+      expirationTime: 4_071_849_600,
+    };
+
+    const portable = portableFromOpenKeyDelegation(data, permissions, "https://host");
+
+    expect(portable.expiry.toISOString()).toBe("2099-01-01T00:00:00.000Z");
+  });
+
+  test("throws instead of silently defaulting when OpenKey omits expiry", () => {
+    const permissions = [
+      cap("tinycloud.sql", SPACE_LOWER, "xyz.tinycloud.listen/conversations", ["read"]),
+    ];
+    const data = {
+      spaceId: SPACE_CHECKSUM,
+      delegationCid: "bafyTEST-no-expiry",
+      delegationHeader: { Authorization: "Bearer x" },
+      verificationMethod: "did:key:zTest",
+      address: ADDR_CHECKSUM,
+      chainId: 1,
+    };
+
+    expect(() => portableFromOpenKeyDelegation(data, permissions, "https://host")).toThrow(
+      /did not include expiry/,
+    );
+  });
+
   test("still throws when OpenKey returns a genuinely different space", () => {
     const permissions = [
       cap("tinycloud.sql", SPACE_LOWER, "xyz.tinycloud.listen/conversations", ["read"]),

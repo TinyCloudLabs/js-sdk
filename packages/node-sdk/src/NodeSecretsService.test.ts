@@ -90,6 +90,63 @@ describe("NodeSecretsService", () => {
     expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret");
   });
 
+  it("uses configured space for permission requests", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:other",
+      getManifest: () => undefined,
+      grantPermissions,
+      canEscalate: () => true,
+    });
+
+    const result = await secrets.put("ANTHROPIC_API_KEY", "secret");
+
+    expect(result.ok).toBe(true);
+    expect(grantPermissions).toHaveBeenCalledWith([
+      {
+        service: "tinycloud.kv",
+        space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:other",
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["put"],
+        skipPrefix: true,
+      },
+    ] satisfies PermissionEntry[]);
+  });
+
+  it("matches short manifest spaces against configured full space URIs", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:other",
+      getManifest: () => ({
+        app_id: "com.food.app",
+        name: "Food",
+        defaults: false,
+        prefix: "",
+        permissions: [
+          {
+            service: "tinycloud.kv",
+            space: "other",
+            path: "vault/secrets/ANTHROPIC_API_KEY",
+            actions: ["put"],
+            skipPrefix: true,
+          },
+        ],
+      }),
+      grantPermissions,
+      canEscalate: () => true,
+    });
+
+    const result = await secrets.put("ANTHROPIC_API_KEY", "secret");
+
+    expect(result.ok).toBe(true);
+    expect(grantPermissions).not.toHaveBeenCalled();
+    expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret");
+  });
+
   it("grants scoped write permission before putting a scoped secret", async () => {
     const base = makeBaseSecrets();
     const grantPermissions = mock(async () => {});

@@ -45,6 +45,8 @@ export const SpaceConfigSchema = z.object({
   createKV: z.function(),
   /** Factory function to create a space-scoped Data Vault service */
   createVault: z.function(),
+  /** Optional factory function to create a space-scoped secrets service */
+  createSecrets: z.function().optional(),
   /** Factory function to create space-scoped delegations */
   createDelegations: z.function(),
   /** Factory function to create space-scoped sharing */
@@ -80,6 +82,8 @@ export const SpaceServiceConfigSchema = z.object({
   createKVService: z.function().optional(),
   /** Factory function to create a space-scoped Data Vault service */
   createVaultService: z.function().optional(),
+  /** Factory function to create a space-scoped secrets service */
+  createSecretsService: z.function().optional(),
   /** User's PKH DID (derived from address or provided explicitly) */
   userDid: z.string().optional(),
   /** Optional SharingService for v2 sharing links (client-side) */

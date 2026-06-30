@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Command } from "commander";
 
 const DEFAULT_NETWORK_ID =
@@ -33,12 +36,27 @@ type NetworkDescriptorLike = {
 type FakeNode = {
   did: string;
   getDefaultEncryptionNetworkId(name?: string): string;
+  secretsForSpace(spaceId: string): FakeNode["secrets"];
   secrets: {
     list(options?: { scope?: string }): Promise<{ ok: true; data: string[] } | { ok: false; error: { code: string; message: string; service?: string } }>;
     get(name: string, options?: { scope?: string }): Promise<{ ok: true; data: string } | { ok: false; error: { code: string; message: string; service?: string } }>;
     put(name: string, value: string, options?: { scope?: string }): Promise<{ ok: true; data: undefined } | { ok: false; error: { code: string; message: string; service?: string } }>;
     delete(name: string, options?: { scope?: string }): Promise<{ ok: true; data: undefined } | { ok: false; error: { code: string; message: string; service?: string } }>;
   };
+  encryption: {
+    decryptEnvelope(
+      envelope: unknown,
+      options: { proofs: string[] },
+    ): Promise<{ ok: true; data: Uint8Array }>;
+  };
+  useDelegation(delegation: unknown): Promise<{
+    kv: {
+      get(
+        path: string,
+        options: { raw: boolean; prefix: string },
+      ): Promise<{ ok: true; data: { data: string } }>;
+    };
+  }>;
   getEncryptionNetwork(nameOrNetworkId: string): Promise<NetworkDescriptorLike | null>;
   ensureEncryptionNetwork(name: string): Promise<NetworkDescriptorLike>;
   delegateTo(
@@ -68,6 +86,7 @@ const recorded = {
   getCalls: [] as Array<{ name: string; options?: { scope?: string } }>,
   putCalls: [] as Array<{ name: string; value: string; options?: { scope?: string } }>,
   deleteCalls: [] as Array<{ name: string; options?: { scope?: string } }>,
+  secretsForSpaceCalls: [] as string[],
   networkShowCalls: [] as string[],
   networkInitCalls: [] as string[],
   delegateCalls: [] as Array<{
@@ -89,10 +108,16 @@ const recorded = {
     }>;
   }>,
   sessionRefreshes: [] as Array<{ profile: string; host: string }>,
+  delegatedKvGets: [] as Array<{ path: string; options: { raw: boolean; prefix: string } }>,
+  decryptEnvelopeCalls: [] as Array<{ envelope: unknown; options: { proofs: string[] } }>,
 };
 
 let currentNode: FakeNode;
-let currentSession: object | null = { expiresAt: "2099-01-01T00:00:00.000Z" };
+let currentSession: object | null = {
+  expiresAt: "2099-01-01T00:00:00.000Z",
+  address: "0x0000000000000000000000000000000000000001",
+  chainId: 1,
+};
 let currentProfile = {
   name: "default",
   host: "https://tinycloud.test",
@@ -115,11 +140,14 @@ function resetRecorded(): void {
   recorded.getCalls.length = 0;
   recorded.putCalls.length = 0;
   recorded.deleteCalls.length = 0;
+  recorded.secretsForSpaceCalls.length = 0;
   recorded.networkShowCalls.length = 0;
   recorded.networkInitCalls.length = 0;
   recorded.delegateCalls.length = 0;
   recorded.permissionRequests.length = 0;
   recorded.sessionRefreshes.length = 0;
+  recorded.delegatedKvGets.length = 0;
+  recorded.decryptEnvelopeCalls.length = 0;
 }
 
 function makeDescriptor(
@@ -157,6 +185,10 @@ function makeFakeNode(overrides: {
     getDefaultEncryptionNetworkId(name = "default") {
       return `urn:tinycloud:encryption:${DEFAULT_NODE_DID}:${name}`;
     },
+    secretsForSpace(spaceId: string) {
+      recorded.secretsForSpaceCalls.push(spaceId);
+      return this.secrets;
+    },
     secrets: {
       async list(options?: { scope?: string }) {
         recorded.listCalls.push(options);
@@ -176,6 +208,30 @@ function makeFakeNode(overrides: {
         recorded.deleteCalls.push({ name, options });
         return nextResult(overrides.deleteResult, { ok: true as const, data: undefined });
       },
+    },
+    encryption: {
+      async decryptEnvelope(envelope: unknown, options: { proofs: string[] }) {
+        recorded.decryptEnvelopeCalls.push({ envelope, options });
+        return {
+          ok: true as const,
+          data: new TextEncoder().encode(JSON.stringify({ value: "delegated-value" })),
+        };
+      },
+    },
+    async useDelegation() {
+      return {
+        kv: {
+          async get(path: string, options: { raw: boolean; prefix: string }) {
+            recorded.delegatedKvGets.push({ path, options });
+            return {
+              ok: true as const,
+              data: {
+                data: JSON.stringify({ networkId: DEFAULT_NETWORK_ID }),
+              },
+            };
+          },
+        },
+      };
     },
     async getEncryptionNetwork(nameOrNetworkId: string) {
       recorded.networkShowCalls.push(nameOrNetworkId);
@@ -367,7 +423,11 @@ async function runSecretsCommand(args: string[]): Promise<void> {
 beforeEach(() => {
   resetRecorded();
   currentNode = makeFakeNode();
-  currentSession = { expiresAt: "2099-01-01T00:00:00.000Z" };
+  currentSession = {
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    address: "0x0000000000000000000000000000000000000001",
+    chainId: 1,
+  };
   currentProfile = {
     name: "default",
     host: "https://tinycloud.test",
@@ -413,6 +473,117 @@ describe("CLI secrets commands", () => {
       "Getting secret ANTHROPIC_API_KEY...",
       "Storing secret ANTHROPIC_API_KEY...",
       "Deleting secret ANTHROPIC_API_KEY...",
+    ]);
+  });
+
+  test("routes --space operations and permission requests to the requested TinyCloud space", async () => {
+    const targetSpace = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:other";
+    currentNode = makeFakeNode({
+      getResult: [
+        {
+          ok: false,
+          error: {
+            code: "PERMISSION_DENIED",
+            service: "secrets",
+            message: "Cannot autosign tinycloud.kv/get for ANTHROPIC_API_KEY",
+          },
+        },
+        { ok: true, data: "stored-value" },
+      ],
+    });
+
+    await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "--space", "other"]);
+
+    expect(recorded.secretsForSpaceCalls).toEqual([targetSpace]);
+    expect(recorded.getCalls).toEqual([
+      { name: "ANTHROPIC_API_KEY", options: undefined },
+      { name: "ANTHROPIC_API_KEY", options: undefined },
+    ]);
+    expect(recorded.permissionRequests).toEqual([
+      {
+        profile: "default",
+        requested: [
+          {
+            service: "tinycloud.kv",
+            space: targetSpace,
+            path: "vault/secrets/ANTHROPIC_API_KEY",
+            actions: ["tinycloud.kv/get"],
+            skipPrefix: true,
+          },
+          {
+            service: "tinycloud.encryption",
+            path: DEFAULT_NETWORK_ID,
+            actions: ["tinycloud.encryption/decrypt"],
+            skipPrefix: true,
+          },
+        ],
+      },
+    ]);
+    expect(recorded.outputs).toEqual([
+      { name: "ANTHROPIC_API_KEY", value: "stored-value" },
+    ]);
+  });
+
+  test("delegated get honors --space when selecting delegation resources", async () => {
+    const targetSpace = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:other";
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-"));
+    const source = join(dir, "delegation.json");
+
+    await writeFile(source, JSON.stringify({
+      delegation: {
+        cid: "bafy-delegated-other",
+        spaceId: targetSpace,
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["tinycloud.kv/get"],
+        delegateDID: "did:key:z6MkDelegate",
+        ownerAddress: "0x0000000000000000000000000000000000000001",
+        chainId: 1,
+        expiry: "2099-01-01T00:00:00.000Z",
+        delegationHeader: { Authorization: "Bearer delegated" },
+      },
+      permissions: [
+        {
+          service: "tinycloud.kv",
+          space: targetSpace,
+          path: "vault/secrets/ANTHROPIC_API_KEY",
+          actions: ["tinycloud.kv/get"],
+        },
+        {
+          service: "tinycloud.encryption",
+          path: DEFAULT_NETWORK_ID,
+          actions: ["tinycloud.encryption/decrypt"],
+        },
+      ],
+    }));
+
+    try {
+      await runSecretsCommand([
+        "secrets",
+        "get",
+        "ANTHROPIC_API_KEY",
+        "--space",
+        "other",
+        "--delegation",
+        source,
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    expect(recorded.delegatedKvGets).toEqual([
+      {
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        options: { raw: true, prefix: "" },
+      },
+    ]);
+    expect(recorded.decryptEnvelopeCalls).toEqual([
+      {
+        envelope: { networkId: DEFAULT_NETWORK_ID },
+        options: { proofs: ["bafy-delegated-other"] },
+      },
+    ]);
+    expect(recorded.outputs).toEqual([
+      { name: "ANTHROPIC_API_KEY", value: "delegated-value" },
     ]);
   });
 
@@ -769,7 +940,8 @@ describe("CLI secrets commands", () => {
     ]);
   });
 
-  test("--space overrides the permission-request space", async () => {
+  test("--space routes operations and permission requests to the requested space", async () => {
+    const targetSpace = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:custom-vault";
     currentNode = makeFakeNode({
       listError: [
         Object.assign(
@@ -787,7 +959,7 @@ describe("CLI secrets commands", () => {
         requested: [
           {
             service: "tinycloud.kv",
-            space: "custom-vault",
+            space: targetSpace,
             path: "vault/secrets/",
             actions: ["tinycloud.kv/list"],
             skipPrefix: true,
@@ -803,7 +975,11 @@ describe("CLI secrets commands", () => {
     // --space must not silently feed into --scope.
     expect(recorded.listCalls).toEqual([undefined]);
     expect(recorded.outputs).toEqual([
-      { secrets: ["ANTHROPIC_API_KEY"], count: 1 },
+      {
+        secrets: ["ANTHROPIC_API_KEY"],
+        count: 1,
+        space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:custom-vault",
+      },
     ]);
   });
 
