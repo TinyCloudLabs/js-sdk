@@ -9,6 +9,7 @@
 
 import type {
   IDataVaultService,
+  ISecretsService,
   IKVService,
   Result,
   ServiceError,
@@ -95,6 +96,11 @@ export interface ISpace {
   readonly vault: IDataVaultService;
 
   /**
+   * Secrets operations scoped to this space.
+   */
+  readonly secrets: ISecretsService;
+
+  /**
    * Delegation operations scoped to this space.
    */
   readonly delegations: ISpaceScopedDelegations;
@@ -135,6 +141,11 @@ export interface SpaceConfig {
   createVault: (spaceId: string) => IDataVaultService;
 
   /**
+   * Factory function to create a space-scoped secrets service.
+   */
+  createSecrets?: (spaceId: string) => ISecretsService;
+
+  /**
    * Factory function to create space-scoped delegations.
    */
   createDelegations: (spaceId: string) => ISpaceScopedDelegations;
@@ -148,6 +159,16 @@ export interface SpaceConfig {
    * Function to get space info.
    */
   getInfo: (spaceId: string) => Promise<Result<SpaceInfo, ServiceError>>;
+}
+
+function unavailableSecretsService(): ISecretsService {
+  return new Proxy({} as ISecretsService, {
+    get: () => {
+      throw new Error(
+        "Secrets service factory not configured. Provide createSecrets in SpaceConfig."
+      );
+    },
+  });
 }
 
 /**
@@ -177,6 +198,7 @@ export class Space implements ISpace {
   private readonly _name: string;
   private readonly _kv: IKVService;
   private readonly _vault: IDataVaultService;
+  private readonly _secrets: ISecretsService;
   private readonly _delegations: ISpaceScopedDelegations;
   private readonly _sharing: ISpaceScopedSharing;
   private readonly _getInfo: (spaceId: string) => Promise<Result<SpaceInfo, ServiceError>>;
@@ -191,6 +213,7 @@ export class Space implements ISpace {
     this._name = config.name;
     this._kv = config.createKV(config.id);
     this._vault = config.createVault(config.id);
+    this._secrets = config.createSecrets?.(config.id) ?? unavailableSecretsService();
     this._delegations = config.createDelegations(config.id);
     this._sharing = config.createSharing(config.id);
     this._getInfo = config.getInfo;
@@ -222,6 +245,13 @@ export class Space implements ISpace {
    */
   get vault(): IDataVaultService {
     return this._vault;
+  }
+
+  /**
+   * Secrets operations scoped to this space.
+   */
+  get secrets(): ISecretsService {
+    return this._secrets;
   }
 
   /**

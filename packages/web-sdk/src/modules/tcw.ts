@@ -262,7 +262,7 @@ export class TinyCloudWeb {
   private walletSigner?: BrowserWalletSigner;
   private sessionStorage?: ISessionStorage;
   private _sessionRestoreStatus: SessionRestoreStatus = "idle";
-  private _secrets?: ISecretsService;
+  private _secrets = new Map<string, ISecretsService>();
 
   /** Promise that resolves when WASM + node are ready */
   private _initPromise: Promise<void>;
@@ -281,6 +281,10 @@ export class TinyCloudWeb {
    */
   private _manifest?: Manifest | Manifest[];
   private _capabilityRequest?: ComposedManifestRequest;
+
+  private resetSessionScopedCaches(): void {
+    this._secrets.clear();
+  }
 
   /**
    * Test hook — override the modal shower and sign-in function used by
@@ -432,15 +436,25 @@ export class TinyCloudWeb {
   get encryption(): IEncryptionService { return this.node.encryption; }
   get vault(): IDataVaultService { return this.node.vault; }
   get secrets(): ISecretsService {
-    if (!this._secrets) {
-      this._secrets = new WebSecretsService({
-        getService: () => this.node.secrets,
+    return this.secretsForSpace("secrets");
+  }
+  secretsForSpace(spaceId: string): ISecretsService {
+    const resolvedSpace = spaceId.startsWith("tinycloud:")
+      ? spaceId
+      : this.node.spaces.get(spaceId).id;
+    let secrets = this._secrets.get(resolvedSpace);
+    if (!secrets) {
+      secrets = new WebSecretsService({
+        getService: () => this.node.secretsForSpace(resolvedSpace),
+        space: resolvedSpace,
         getManifest: () => this._manifest,
         requestPermissions: (additional) => this.requestPermissions(additional),
+        resolveSpace: (space) => space.startsWith("tinycloud:") ? space : this.node.spaces.get(space).id,
         getUnlockSigner: () => this.walletSigner,
       });
+      this._secrets.set(resolvedSpace, secrets);
     }
-    return this._secrets;
+    return secrets;
   }
   get spaces(): ISpaceService { return this.node.spaces; }
   get sharing(): ISharingService { return this.node.sharing; }
@@ -547,6 +561,7 @@ export class TinyCloudWeb {
     try {
       const node = await this.ensureNode();
       await node.restoreSession(restoreDataFromPersisted(loaded.data));
+      this.resetSessionScopedCaches();
       this._sessionRestoreStatus = "restored";
       return {
         status: "restored",
@@ -604,6 +619,7 @@ export class TinyCloudWeb {
     this._sessionRestoreStatus = "logging-in";
     const node = await this.ensureNode();
     await node.signIn(options);
+    this.resetSessionScopedCaches();
     const session = node.session;
     if (!session) throw new Error("Sign-in completed but no session available");
     return {
@@ -618,6 +634,7 @@ export class TinyCloudWeb {
 
   signOut = async (): Promise<void> => {
     await this.clearPersistedSession();
+    this.resetSessionScopedCaches();
     this.notificationHandler.cleanup?.();
   };
 

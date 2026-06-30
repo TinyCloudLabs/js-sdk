@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type {
   IDataVaultService,
+  ISecretsService,
   IKVService,
   Result,
   ServiceError,
@@ -17,7 +18,7 @@ const session = {
 };
 
 function makeConfig(
-  calls: { kv: string[]; vault: string[] },
+  calls: { kv: string[]; vault: string[]; secrets: string[] },
 ): SpaceServiceConfig {
   return {
     hosts: ["https://node.tinycloud.xyz"],
@@ -31,6 +32,10 @@ function makeConfig(
     createVaultService: (spaceId) => {
       calls.vault.push(spaceId);
       return { spaceId } as unknown as IDataVaultService;
+    },
+    createSecretsService: (spaceId) => {
+      calls.secrets.push(spaceId);
+      return { spaceId } as unknown as ISecretsService;
     },
     createDelegation: async () =>
       ({
@@ -46,7 +51,7 @@ function makeConfig(
 
 describe("SpaceService space factories", () => {
   it("creates a space-scoped vault", () => {
-    const calls = { kv: [] as string[], vault: [] as string[] };
+    const calls = { kv: [] as string[], vault: [] as string[], secrets: [] as string[] };
     const spaces = new SpaceService(makeConfig(calls));
 
     const secrets = spaces.get("secrets");
@@ -57,6 +62,9 @@ describe("SpaceService space factories", () => {
     expect((secrets.vault as unknown as { spaceId: string }).spaceId).toBe(
       "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets",
     );
+    expect((secrets.secrets as unknown as { spaceId: string }).spaceId).toBe(
+      "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets",
+    );
     expect(calls).toEqual({
       kv: [
         "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets",
@@ -64,15 +72,19 @@ describe("SpaceService space factories", () => {
       vault: [
         "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets",
       ],
+      secrets: [
+        "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets",
+      ],
     });
   });
 
   it("caches space instances with their scoped services", () => {
-    const calls = { kv: [] as string[], vault: [] as string[] };
+    const calls = { kv: [] as string[], vault: [] as string[], secrets: [] as string[] };
     const spaces = new SpaceService(makeConfig(calls));
 
     expect(spaces.get("secrets")).toBe(spaces.get("secrets"));
     expect(calls.kv).toHaveLength(1);
     expect(calls.vault).toHaveLength(1);
+    expect(calls.secrets).toHaveLength(1);
   });
 });

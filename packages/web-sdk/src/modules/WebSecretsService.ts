@@ -50,12 +50,13 @@ function secretPermissionEntries(
   name: string,
   options: SecretScopeOptions | undefined,
   action: "put" | "del",
+  space: string,
 ): PermissionEntry[] {
   const secretPath = resolveSecretPath(name, options);
   return [
     {
       service: "tinycloud.kv",
-      space: SECRETS_SPACE,
+      space,
       path: secretPath.permissionPaths.vault,
       actions: [action],
       skipPrefix: true,
@@ -63,10 +64,27 @@ function secretPermissionEntries(
   ];
 }
 
+function normalizeSpace(space: string | undefined, resolveSpace?: (space: string) => string): string | undefined {
+  if (!space) return undefined;
+  if (space.startsWith("tinycloud:")) return space;
+  return resolveSpace?.(space) ?? space;
+}
+
+function spaceMatches(
+  granted: string | undefined,
+  requested: string | undefined,
+  resolveSpace?: (space: string) => string,
+): boolean {
+  if (!granted || !requested) return false;
+  return normalizeSpace(granted, resolveSpace) === normalizeSpace(requested, resolveSpace);
+}
+
 export interface WebSecretsServiceConfig {
   getService: () => ISecretsService;
+  space?: string;
   getManifest: () => Manifest | Manifest[] | undefined;
   requestPermissions: RequestPermissions;
+  resolveSpace?: (space: string) => string;
   getUnlockSigner?: () => unknown;
 }
 
@@ -75,6 +93,10 @@ export class WebSecretsService implements ISecretsService {
   private shouldRestoreUnlock = false;
 
   constructor(private readonly config: WebSecretsServiceConfig) {}
+
+  private get space(): string {
+    return this.config.space ?? SECRETS_SPACE;
+  }
 
   get vault(): IDataVaultService {
     return this.service.vault;
@@ -147,7 +169,7 @@ export class WebSecretsService implements ISecretsService {
   ): Promise<Result<void, ServiceError | VaultError>> {
     let permissionEntries: PermissionEntry[];
     try {
-      permissionEntries = secretPermissionEntries(name, options, action);
+      permissionEntries = secretPermissionEntries(name, options, action, this.space);
     } catch (error) {
       return secretsError(
         ErrorCodes.INVALID_INPUT,
@@ -209,7 +231,7 @@ export class WebSecretsService implements ISecretsService {
       return resolved.resources.some(
         (resource) =>
           resource.service === "tinycloud.kv" &&
-          resource.space === SECRETS_SPACE &&
+          spaceMatches(resource.space, this.space, this.config.resolveSpace) &&
           resource.path === secretPath.permissionPaths.vault &&
           resource.actions.includes(requiredAction),
       );

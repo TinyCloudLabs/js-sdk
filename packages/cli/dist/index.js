@@ -1,5 +1,5 @@
-import "./chunk-TWMXCCSD.js";
-import "./chunk-725HE3UG.js";
+import "./chunk-5CWOI54E.js";
+import "./chunk-43OSAOIQ.js";
 import {
   __commonJS,
   __esm,
@@ -5988,9 +5988,9 @@ var require_node_exports = __commonJS({
   }
 });
 
-// ../../node_modules/@noble/hashes/_u64.js
+// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/_u64.js
 var require_u64 = __commonJS({
-  "../../node_modules/@noble/hashes/_u64.js"(exports) {
+  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/_u64.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.toBig = exports.shrSL = exports.shrSH = exports.rotrSL = exports.rotrSH = exports.rotrBL = exports.rotrBH = exports.rotr32L = exports.rotr32H = exports.rotlSL = exports.rotlSH = exports.rotlBL = exports.rotlBH = exports.add5L = exports.add5H = exports.add4L = exports.add4H = exports.add3L = exports.add3H = void 0;
@@ -6084,9 +6084,9 @@ var require_u64 = __commonJS({
   }
 });
 
-// ../../node_modules/@noble/hashes/cryptoNode.js
+// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/cryptoNode.js
 var require_cryptoNode = __commonJS({
-  "../../node_modules/@noble/hashes/cryptoNode.js"(exports) {
+  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/cryptoNode.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.crypto = void 0;
@@ -6095,9 +6095,9 @@ var require_cryptoNode = __commonJS({
   }
 });
 
-// ../../node_modules/@noble/hashes/utils.js
+// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/utils.js
 var require_utils = __commonJS({
-  "../../node_modules/@noble/hashes/utils.js"(exports) {
+  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/utils.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.wrapXOFConstructorWithOpts = exports.wrapConstructorWithOpts = exports.wrapConstructor = exports.Hash = exports.nextTick = exports.swap32IfBE = exports.byteSwapIfBE = exports.swap8IfBE = exports.isLE = void 0;
@@ -6337,9 +6337,9 @@ var require_utils = __commonJS({
   }
 });
 
-// ../../node_modules/@noble/hashes/sha3.js
+// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/sha3.js
 var require_sha3 = __commonJS({
-  "../../node_modules/@noble/hashes/sha3.js"(exports) {
+  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/sha3.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.shake256 = exports.shake128 = exports.keccak_512 = exports.keccak_384 = exports.keccak_256 = exports.keccak_224 = exports.sha3_512 = exports.sha3_384 = exports.sha3_256 = exports.sha3_224 = exports.Keccak = void 0;
@@ -42497,9 +42497,10 @@ function resolveChainId(profile, session) {
   if (typeof sessChain === "number" && Number.isFinite(sessChain)) return sessChain;
   return profile.chainId;
 }
-async function resolveSpaceUri(input, profileName) {
+async function resolveSpaceUri(input, profileName, options = {}) {
   const profile = await ProfileManager.getProfile(profileName);
-  const effective = input || profile.defaultSpace;
+  const useProfileDefault = options.useProfileDefault ?? true;
+  const effective = input || (useProfileDefault ? profile.defaultSpace : void 0);
   if (!effective) return void 0;
   if (effective.startsWith("tinycloud:")) {
     const parsed = parseSpaceUri(effective);
@@ -43758,12 +43759,34 @@ function portableFromOpenKeyDelegation(data, permissions, host) {
   };
 }
 function inferDelegationExpiry(data) {
-  const direct = data.expiry ?? data.expiresAt;
-  if (typeof direct === "string") {
-    const parsed = new Date(direct);
+  for (const key2 of ["expiry", "expiresAt", "expirationTime"]) {
+    const parsed = parseDelegationExpiryField(data[key2]);
+    if (parsed) return parsed;
+  }
+  if (typeof data.siwe === "string") {
+    const match = data.siwe.match(/^Expiration Time:\s*(.+)$/im);
+    const parsed = match ? parseDelegationExpiryField(match[1]?.trim()) : null;
+    if (parsed) return parsed;
+  }
+  throw new CLIError(
+    "OPENKEY_EXPIRY_MISSING",
+    "OpenKey delegation response did not include expiry, expiresAt, expirationTime, or a SIWE Expiration Time.",
+    ExitCode.ERROR
+  );
+}
+function parseDelegationExpiryField(value) {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "number") {
+    const parsed = new Date(value < 1e10 ? value * 1e3 : value);
     if (!Number.isNaN(parsed.getTime())) return parsed;
   }
-  return new Date(Date.now() + 60 * 60 * 1e3);
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return null;
 }
 async function rotateAuthKey(profileName, host, options = {}) {
   const profile = await ProfileManager.getProfile(profileName);
@@ -45279,9 +45302,11 @@ function authOptions(options) {
 function resolveSecretScope(options) {
   return options.scope ? { scope: options.scope } : void 0;
 }
-function resolveSecretsSpace(options) {
-  const space = options.space?.trim();
-  return space && space.length > 0 ? space : SECRETS_SPACE2;
+async function resolveSecretSpace(input, profileName) {
+  return resolveSpaceUri(input, profileName, { useProfileDefault: false });
+}
+function secretsServiceForSpace(node, spaceUri) {
+  return spaceUri ? node.secretsForSpace(spaceUri) : node.secrets;
 }
 var SECRET_NAME_RE2 = /^[A-Z][A-Z0-9_]*$/;
 var RESERVED_SECRET_SCOPES2 = /* @__PURE__ */ new Set(["default", "global"]);
@@ -45433,20 +45458,23 @@ function hasPermissionAction(actions, action) {
     (entry) => entry === action || entry.endsWith(`/${action.split("/").at(-1)}`) || entry === action.split("/").at(-1)
   );
 }
-function delegationCoversPath(permissions, path) {
+function delegationCoversPath(permissions, path, space = SECRETS_SPACE2) {
   return permissions.some((permission) => {
     if (permission.service !== "tinycloud.kv") return false;
-    if (!permissionTargetsSecretsSpace(permission)) return false;
+    if (!permissionTargetsSpace(permission, space)) return false;
     if (!hasPermissionAction(permission.actions, "tinycloud.kv/get")) return false;
     return permission.path === path || permission.path.endsWith("/") && path.startsWith(permission.path);
   });
 }
-function permissionTargetsSecretsSpace(permission) {
+function spaceMatches(granted, requested) {
+  return granted === requested;
+}
+function permissionTargetsSpace(permission, expectedSpace) {
   if (permission.service !== "tinycloud.kv") return false;
   if (typeof permission.space !== "string") return false;
-  const space = permission.space.trim().toLowerCase();
+  const space = permission.space.trim();
   if (space === "") return false;
-  return space === SECRETS_SPACE2 || space.endsWith(`:${SECRETS_SPACE2}`);
+  return spaceMatches(space, expectedSpace);
 }
 function delegationCoversDecrypt(permissions, networkId) {
   return permissions.some((permission) => {
@@ -45574,7 +45602,7 @@ async function loadDelegationCandidates(source) {
     );
   }
 }
-function selectDelegationCandidate(candidates, source, secretPath) {
+function selectDelegationCandidate(candidates, source, secretPath, space = SECRETS_SPACE2) {
   const liveCandidates = candidates.filter((candidate) => candidate.delegation.expiry.getTime() > Date.now());
   if (liveCandidates.length === 0) {
     throw new CLIError(
@@ -45584,16 +45612,18 @@ function selectDelegationCandidate(candidates, source, secretPath) {
     );
   }
   const secretsSpaceCandidates = liveCandidates.filter(
-    (candidate) => candidate.permissions.some(permissionTargetsSecretsSpace)
+    (candidate) => candidate.permissions.some((permission) => permissionTargetsSpace(permission, space))
   );
   if (secretsSpaceCandidates.length === 0) {
     throw new CLIError(
       "PERMISSION_DENIED",
-      `Delegation source "${source}" does not target the secrets space.`,
+      `Delegation source "${source}" does not target secrets space "${space}".`,
       ExitCode.PERMISSION_DENIED
     );
   }
-  const exact = secretsSpaceCandidates.find((candidate) => delegationCoversPath(candidate.permissions, secretPath));
+  const exact = secretsSpaceCandidates.find(
+    (candidate) => delegationCoversPath(candidate.permissions, secretPath, space)
+  );
   if (exact) {
     return exact;
   }
@@ -45603,7 +45633,7 @@ function selectDelegationCandidate(candidates, source, secretPath) {
     ExitCode.PERMISSION_DENIED
   );
 }
-async function resolveDelegatedSecretSource(source, secretPath) {
+async function resolveDelegatedSecretSource(source, secretPath, space = SECRETS_SPACE2) {
   const candidates = await loadDelegationCandidates(source);
   if (candidates.length === 0) {
     throw new CLIError(
@@ -45612,7 +45642,7 @@ async function resolveDelegatedSecretSource(source, secretPath) {
       ExitCode.PERMISSION_DENIED
     );
   }
-  const selected = selectDelegationCandidate(candidates, source, secretPath);
+  const selected = selectDelegationCandidate(candidates, source, secretPath, space);
   return { ...selected, source };
 }
 function mapEncryptionResultError(error) {
@@ -45642,7 +45672,7 @@ function parseDecryptedSecretPayload(data, secretPath) {
   return parsed.value;
 }
 async function readDelegatedSecretValue(params) {
-  if (!delegationCoversPath(params.permissions, params.secretPath)) {
+  if (!delegationCoversPath(params.permissions, params.secretPath, params.space ?? SECRETS_SPACE2)) {
     throw new CLIError(
       "PERMISSION_DENIED",
       `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
@@ -45737,6 +45767,10 @@ function parseDate(value) {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value;
   }
+  if (typeof value === "number") {
+    const date2 = new Date(value < 1e10 ? value * 1e3 : value);
+    return Number.isNaN(date2.getTime()) ? null : date2;
+  }
   if (typeof value !== "string" || value.trim() === "") return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
@@ -45754,9 +45788,10 @@ function secretPermissionEntries(params) {
     skipPrefix: true
   }];
   if (params.action === "get") {
+    const networkId = "getEncryptionNetworkIdForSpace" in params.node && typeof params.node.getEncryptionNetworkIdForSpace === "function" ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE2) : params.node.getDefaultEncryptionNetworkId();
     permissions.push({
       service: "tinycloud.encryption",
-      path: params.node.getDefaultEncryptionNetworkId(),
+      path: networkId,
       actions: ["tinycloud.encryption/decrypt"],
       skipPrefix: true
     });
@@ -45828,7 +45863,7 @@ function registerSecretsCommand(program2) {
       handleError(error);
     }
   });
-  secrets.command("doctor [name]").description("Check secrets setup and optional secret access").option("--scope <scope>", "Logical secret scope").option("--space <space>", 'Override the secrets space (defaults to "secrets")').option("--network <name>", "Encryption network name", "default").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+  secrets.command("doctor [name]").description("Check secrets setup and optional secret access").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--network <name>", "Encryption network name", "default").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -45854,7 +45889,8 @@ function registerSecretsCommand(program2) {
       let secret;
       if (name2) {
         const scopeOptions = resolveSecretScope(options);
-        const space = resolveSecretsSpace(options);
+        const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+        const secrets2 = secretsServiceForSpace(node, spaceUri);
         const resolved = resolveSecretPath2(name2, scopeOptions);
         const result = await runSecretOperation({
           ctx,
@@ -45862,9 +45898,9 @@ function registerSecretsCommand(program2) {
           action: "get",
           name: name2,
           scopeOptions,
-          space,
+          space: spaceUri,
           label: `Checking secret ${name2}...`,
-          operation: () => node.secrets.get(name2, scopeOptions)
+          operation: () => secrets2.get(name2, scopeOptions)
         });
         if (result.ok) {
           secret = {
@@ -45917,21 +45953,22 @@ function registerSecretsCommand(program2) {
       handleError(error);
     }
   });
-  secrets.command("list").description("List secrets").option("--scope <scope>", "Logical secret scope").option("--space <space>", 'Override the secrets space (defaults to "secrets")').option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
+  secrets.command("list").description("List secrets").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureSecretsNode(ctx, options);
       const scopeOptions = resolveSecretScope(options);
-      const space = resolveSecretsSpace(options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const secrets2 = secretsServiceForSpace(node, spaceUri);
       const result = await runSecretOperation({
         ctx,
         node,
         action: "list",
         scopeOptions,
-        space,
+        space: spaceUri,
         label: "Listing secrets...",
-        operation: () => node.secrets.list(scopeOptions)
+        operation: () => secrets2.list(scopeOptions)
       });
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
@@ -45940,21 +45977,26 @@ function registerSecretsCommand(program2) {
       outputJson({
         secrets: secretNames,
         count: secretNames.length,
-        ...options.scope ? { scope: options.scope } : {}
+        ...options.scope ? { scope: options.scope } : {},
+        ...spaceUri ? { space: spaceUri } : {}
       });
     } catch (error) {
       handleError(error);
     }
   });
-  secrets.command("get <name>").description("Get a secret value").option("--scope <scope>", "Logical secret scope").option("--space <space>", 'Override the secrets space (defaults to "secrets")').option("--raw", "Output raw value (no JSON wrapping)").option("--value-only", "Output only the secret value (alias for --raw)").option("-o, --output <file>", "Write value to file").option("--delegation <source>", "Delegation file path or imported profile name").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+  secrets.command("get <name>").description("Get a secret value").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--raw", "Output raw value (no JSON wrapping)").option("--value-only", "Output only the secret value (alias for --raw)").option("-o, --output <file>", "Write value to file").option("--delegation <source>", "Delegation file path or imported profile name").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const scopeOptions = resolveSecretScope(options);
-      const space = resolveSecretsSpace(options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
       const secretPath = resolveSecretPath2(name2, scopeOptions).permissionPaths.vault;
       if (options.delegation) {
-        const delegated = await resolveDelegatedSecretSource(options.delegation, secretPath);
+        const delegated = await resolveDelegatedSecretSource(
+          options.delegation,
+          secretPath,
+          spaceUri ?? SECRETS_SPACE2
+        );
         const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
         const delegatedCtx = { ...ctx, host: effectiveHost };
         const node2 = await ensureSecretsNode(delegatedCtx, options);
@@ -45966,6 +46008,7 @@ function registerSecretsCommand(program2) {
             delegationCid: delegated.delegation.cid,
             permissions: delegated.permissions,
             secretPath,
+            space: spaceUri ?? SECRETS_SPACE2,
             name: name2
           })
         );
@@ -45982,15 +46025,16 @@ function registerSecretsCommand(program2) {
         return;
       }
       const node = await ensureSecretsNode(ctx, options);
+      const secrets2 = secretsServiceForSpace(node, spaceUri);
       const result = await runSecretOperation({
         ctx,
         node,
         action: "get",
         name: name2,
         scopeOptions,
-        space,
+        space: spaceUri,
         label: `Getting secret ${name2}...`,
-        operation: () => node.secrets.get(name2, scopeOptions)
+        operation: () => secrets2.get(name2, scopeOptions)
       });
       if (!result.ok) {
         if (result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND") {
@@ -46013,11 +46057,13 @@ function registerSecretsCommand(program2) {
       handleError(error);
     }
   });
-  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <space>", 'Override the secrets space (defaults to "secrets")').option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, value, options, cmd) => {
+  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, value, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureSecretsNode(ctx, options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const secrets2 = secretsServiceForSpace(node, spaceUri);
       let secretValue;
       const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
       if (sources.length === 0) {
@@ -46034,16 +46080,15 @@ function registerSecretsCommand(program2) {
         secretValue = value;
       }
       const scopeOptions = resolveSecretScope(options);
-      const space = resolveSecretsSpace(options);
       const result = await runSecretOperation({
         ctx,
         node,
         action: "put",
         name: name2,
         scopeOptions,
-        space,
+        space: spaceUri,
         label: `Storing secret ${name2}...`,
-        operation: () => node.secrets.put(name2, secretValue, scopeOptions)
+        operation: () => secrets2.put(name2, secretValue, scopeOptions)
       });
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
@@ -46053,22 +46098,23 @@ function registerSecretsCommand(program2) {
       handleError(error);
     }
   });
-  secrets.command("delete <name>").description("Delete a secret").option("--scope <scope>", "Logical secret scope").option("--space <space>", 'Override the secrets space (defaults to "secrets")').option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+  secrets.command("delete <name>").description("Delete a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureSecretsNode(ctx, options);
       const scopeOptions = resolveSecretScope(options);
-      const space = resolveSecretsSpace(options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const secrets2 = secretsServiceForSpace(node, spaceUri);
       const result = await runSecretOperation({
         ctx,
         node,
         action: "del",
         name: name2,
         scopeOptions,
-        space,
+        space: spaceUri,
         label: `Deleting secret ${name2}...`,
-        operation: () => node.secrets.delete(name2, scopeOptions)
+        operation: () => secrets2.delete(name2, scopeOptions)
       });
       if (!result.ok) {
         throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
@@ -49871,6 +49917,8 @@ var SpaceConfigSchema = external_exports.object({
   createKV: external_exports.function(),
   /** Factory function to create a space-scoped Data Vault service */
   createVault: external_exports.function(),
+  /** Optional factory function to create a space-scoped secrets service */
+  createSecrets: external_exports.function().optional(),
   /** Factory function to create space-scoped delegations */
   createDelegations: external_exports.function(),
   /** Factory function to create space-scoped sharing */
@@ -49893,6 +49941,8 @@ var SpaceServiceConfigSchema = external_exports.object({
   createKVService: external_exports.function().optional(),
   /** Factory function to create a space-scoped Data Vault service */
   createVaultService: external_exports.function().optional(),
+  /** Factory function to create a space-scoped secrets service */
+  createSecretsService: external_exports.function().optional(),
   /** User's PKH DID (derived from address or provided explicitly) */
   userDid: external_exports.string().optional(),
   /** Optional SharingService for v2 sharing links (client-side) */
