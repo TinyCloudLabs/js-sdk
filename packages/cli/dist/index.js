@@ -1,5 +1,5 @@
-import "./chunk-5CWOI54E.js";
-import "./chunk-43OSAOIQ.js";
+import "./chunk-TWMXCCSD.js";
+import "./chunk-725HE3UG.js";
 import {
   __commonJS,
   __esm,
@@ -5988,9 +5988,9 @@ var require_node_exports = __commonJS({
   }
 });
 
-// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/_u64.js
+// ../../node_modules/@noble/hashes/_u64.js
 var require_u64 = __commonJS({
-  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/_u64.js"(exports) {
+  "../../node_modules/@noble/hashes/_u64.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.toBig = exports.shrSL = exports.shrSH = exports.rotrSL = exports.rotrSH = exports.rotrBL = exports.rotrBH = exports.rotr32L = exports.rotr32H = exports.rotlSL = exports.rotlSH = exports.rotlBL = exports.rotlBH = exports.add5L = exports.add5H = exports.add4L = exports.add4H = exports.add3L = exports.add3H = void 0;
@@ -6084,9 +6084,9 @@ var require_u64 = __commonJS({
   }
 });
 
-// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/cryptoNode.js
+// ../../node_modules/@noble/hashes/cryptoNode.js
 var require_cryptoNode = __commonJS({
-  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/cryptoNode.js"(exports) {
+  "../../node_modules/@noble/hashes/cryptoNode.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.crypto = void 0;
@@ -6095,9 +6095,9 @@ var require_cryptoNode = __commonJS({
   }
 });
 
-// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/utils.js
+// ../../node_modules/@noble/hashes/utils.js
 var require_utils = __commonJS({
-  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/utils.js"(exports) {
+  "../../node_modules/@noble/hashes/utils.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.wrapXOFConstructorWithOpts = exports.wrapConstructorWithOpts = exports.wrapConstructor = exports.Hash = exports.nextTick = exports.swap32IfBE = exports.byteSwapIfBE = exports.swap8IfBE = exports.isLE = void 0;
@@ -6337,9 +6337,9 @@ var require_utils = __commonJS({
   }
 });
 
-// ../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/sha3.js
+// ../../node_modules/@noble/hashes/sha3.js
 var require_sha3 = __commonJS({
-  "../../node_modules/@spruceid/siwe-parser/node_modules/@noble/hashes/sha3.js"(exports) {
+  "../../node_modules/@noble/hashes/sha3.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.shake256 = exports.shake128 = exports.keccak_512 = exports.keccak_384 = exports.keccak_256 = exports.keccak_224 = exports.sha3_512 = exports.sha3_384 = exports.sha3_256 = exports.sha3_224 = exports.Keccak = void 0;
