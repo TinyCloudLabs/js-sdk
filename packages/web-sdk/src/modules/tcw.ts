@@ -17,6 +17,7 @@ import {
   type DelegateToResult,
   type ISessionStorage,
   type PersistedSessionData,
+  type SignStrategy,
 } from "@tinycloud/node-sdk/core";
 import {
   IKVService,
@@ -52,7 +53,6 @@ import {
   type NetworkDescriptor,
   SignInOptions,
   composeManifestRequest,
-  type SignStrategy,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
 import {
