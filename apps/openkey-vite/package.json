@@ -1,7 +1,7 @@
 {
   "name": "openkey-vite",
   "private": true,
-  "version": "0.0.16-beta.1",
+  "version": "0.0.16",
   "type": "module",
   "scripts": {
     "dev": "vite",
