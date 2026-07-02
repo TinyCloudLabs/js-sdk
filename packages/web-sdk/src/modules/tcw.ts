@@ -52,6 +52,7 @@ import {
   type NetworkDescriptor,
   SignInOptions,
   composeManifestRequest,
+  type SignStrategy,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
 import {
@@ -155,6 +156,8 @@ export interface Config extends ClientConfig {
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
   capabilityRequest?: ComposedManifestRequest;
+  /** Strategy for TinyCloud root signature requests. */
+  signStrategy?: SignStrategy;
   /** Include implicit account registry permissions when composing `manifest`. Default true. */
   includeAccountRegistryPermissions?: boolean;
   /** Default-off service telemetry. */
@@ -366,6 +369,7 @@ export class TinyCloudWeb {
       // actual `abilities` map passed to `prepareSession`.
       manifest: this._manifest,
       capabilityRequest: this._capabilityRequest,
+      signStrategy: this.config.signStrategy,
       includeAccountRegistryPermissions:
         this.config.includeAccountRegistryPermissions,
       telemetry: this.config.telemetry,

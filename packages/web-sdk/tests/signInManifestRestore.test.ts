@@ -72,6 +72,19 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
 
 const { TinyCloudWeb } = require("../src/modules/tcw");
 
+test("forwards signStrategy to the underlying TinyCloudNode", async () => {
+  const signStrategy = {
+    type: "callback",
+    openKeyAutoSign: true,
+    handler: mock(async () => ({ approved: true, signature: "0x1234" })),
+  };
+  const tcw = new TinyCloudWeb({ signStrategy });
+
+  await (tcw as any)._initPromise;
+
+  expect((tcw as any)._node.config.signStrategy).toBe(signStrategy);
+});
+
 test("signIn refreshes a restored session that does not cover the configured manifest", async () => {
   const tcw = new TinyCloudWeb({
     manifest: {
