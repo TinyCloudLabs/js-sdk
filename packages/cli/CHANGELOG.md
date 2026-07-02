@@ -1,5 +1,88 @@
 # @tinycloud/cli
 
+## 0.7.0
+
+### Minor Changes
+
+- 6b554d6: Add shared account APIs for applications and delegations, expose them from the node and web SDK clients, and add the `tc account` CLI command group.
+- 75bebb1: Add account registry write-through indexing, account space registry APIs, and matching `tc account spaces` / `tc account index status` CLI commands.
+
+  Manifest registration now records an indexed manifest hash and skips durable KV rewrites when the indexed record is current. Sign-in schedules best-effort background registry sync for application manifests and accessible spaces, while every discovered or hosted space is written through to the account registry index.
+
+- 0e8ccc6: Add `TinyCloudNode.hostOwnedSpace(name)` and wire `tc space create`/`tc space host` to it.
+
+  Hosting an owned space (e.g. `applications`) by name now registers it on the server via the host-SIWE delegation flow, so subsequent KV/SQL writes to that space succeed instead of returning `404 - Space not found`. Unlike the internal `ensureOwnedSpaceHosted`, this always submits the host delegation rather than inferring hosting from session activation — a space the current session has never referenced is reported neither `activated` nor `skipped`, which previously caused the host to be silently skipped. The host SIWE is idempotent server-side, so re-hosting an existing space is a safe no-op.
+
+  The `tc space create <name>` command (which previously POSTed the unsupported `tinycloud.space/create` action and failed with `401 Unauthorized`) now hosts the caller's owned space; `tc space host <name>` is added as an alias.
+
+- 934534d: Auth/hosting developer experience for the delegate-asks-owner-to-host model.
+  - **`tc space host-request <name> --emit <file>`** (delegate-only): emits a `tinycloud.host.request` artifact naming the space and its resolved owner DID so an agent can surface it to the owner, who then runs `tc space host <name>`. If the caller IS the root authority of the resolved space, it refuses (`ALREADY_ROOT_AUTHORITY`) and tells them to host directly — no request is emitted. The command is a pure local emit and never contacts the node.
+  - **Identity-aware `SPACE_NOT_HOSTED`**: an unhosted-space write/read previously surfaced as an opaque `404 - Space not found`. The kv and sql commands now normalize **only** that exact condition (404 + "Space not found" body) to a `SPACE_NOT_HOSTED` error carrying an identity-aware `hint`. The branch key `is_root_authority(space, active session)` is computed locally from the profile address + space DID (no network): the owner is told to run `tc space host <name>`, a delegate is told they cannot host and to emit `tc space host-request <name> --emit`. A wrong db/table/path or permission error is left untouched. A `delegate-session` profile is never treated as the root authority even when its stored ownerDid is the space owner, so a delegate always gets the host-request hint. `KVService` get/head/delete now preserve the `Space not found` 404 body (previously collapsed to `KV_NOT_FOUND` before the body was read), so unhosted-space **reads** normalize too, while a genuine missing key still reports `KV_NOT_FOUND`.
+  - **SDK `grantAuthRequest(authority, request, options?)`** (`@tinycloud/node-sdk`): takes a delegation request artifact and returns a grant artifact (`tinycloud.auth.delegation`) by signing through `delegateTo`, so the request→grant handshake is callable programmatically. `tc auth grant` is now a thin wrapper over it. Adds the `AuthRequestArtifact`, `AuthDelegationArtifact`, and `DelegationAuthority` types.
+
+- 5737b67: Add `tc secrets get <NAME> --delegation <file-or-imported-profile>` for reading a secret you were delegated access to. The `--delegation` source can be a delegation JSON file or the name of a profile that imported the delegation (resolved from `additional-delegations.json`). The read path validates that the delegation covers both the secret's `tinycloud.kv/get` path and the envelope's `tinycloud.encryption/decrypt` network, then activates the delegation in wallet mode via `node.useDelegation(...)` to fetch and decrypt the value. Adds a `smoke:delegated-secrets` script that exercises the full owner-delegate flow against a live node.
+- 1f69109: `tc secrets {get,put,delete,list,doctor}` now targets the literal `secrets` space (matching the secret-manager web app's `SECRETS_SPACE` in `src/lib/tinycloud-manifest.ts`) instead of the active profile's default space, so CLI-issued permission grants line up with secrets stored by the web app. Restores `--space <space>` as a real flag distinct from `--scope <scope>` (previously `--space` was a silent alias for `--scope`); `--space` overrides the permission-grant space. Permission paths remain `vault/secrets/<NAME>` / `vault/secrets/scoped/<scope>/<NAME>` — the `vault/` prefix is the wire-level KV path that `DataVaultService` writes to and that `tinycloud.vault` permissions expand to via `vaultActionExpansion()` in `sdk-core`, not a CLI-only artifact.
+
+  Known limitation: `--space` currently only flows through to permission-grant requests; the underlying `node.secrets.{get,put,delete,list}` calls still resolve their own space via the SDK. Lighting `--space` up end-to-end requires SDK work outside this CLI package.
+
+### Patch Changes
+
+- 0d397a8: Treat the account SQLite index as a materialized cache for user-facing account reads. Account application, space, and delegation list calls can now prefer the index while falling back to canonical account data when index tables are missing or empty, and account writes no longer fail when a best-effort index update fails.
+- 6622043: Expose `account.index.ensure()` and `tc account index ensure` for lightweight account SQLite schema bootstrap, and start schema bootstrap with background account registry sync.
+- 5737b67: Fix `tc auth import` rejecting cross-user delegations. Import unconditionally called `node.useRuntimeDelegation(...)`, which requires the delegation to target the active session key and so threw `Runtime delegation targets did:pkh:... but this session key is did:key:...` for a delegation received from another user (audience = your stable identity DID). Import now routes by audience: a delegation that targets the active session key is still installed as a runtime grant, while a cross-user delegation is persisted to `additional-delegations.json` and later activated at read time via `node.useDelegation(...)`. The `imported` output now includes an `activated` flag indicating whether a runtime grant was installed.
+- a61f935: Delegate-mode secrets commands now honor `TC_PRIVATE_KEY` / `--private-key` for headless auth. Previously `tc secrets get --delegation` (and the other `--private-key`-advertising secrets commands) threw `AUTH_REQUIRED` when only an explicit private key was supplied, because `ensureAuthenticated` consulted `options.privateKey` only after its profile/session gate. An explicitly provided private key is now treated as a first-class headless identity and accepted before that gate, so a delegate can authenticate with no persisted profile and no login session — exactly what the flags and env var already advertised.
+- 0219c37: Fix `tc kv` and `tc sql` failing with `Missing private key parameter in JWK` after an OpenKey login. The OpenKey delegation flow sends only the public JWK (no `d`) to OpenKey, and the public-only JWK that OpenKey echoes back was being persisted verbatim to `session.json`, shadowing the full keypair in `key.json` whenever the SDK reconstructed the WASM signer. Two-pronged fix: (1) on read, `sdk.ts` falls back to `key.json` whenever `session.jwk` lacks the `d` parameter, and (2) on write, `refreshOpenKeySession` merges `d` from `key.json` into the persisted session JWK so future invocations don't hit the same path. `tc auth status` and `tc secrets get` were unaffected because neither hits the WASM signer in this code path.
+
+  Affected users on existing installs can unblock without re-authenticating by jq-merging `key.json`'s `d` into `session.json`'s `.jwk` field.
+
+- bd8a60f: Remove the deprecated `SQLAction.DDL` export and the `tinycloud.sql/ddl` permission display path. SQL schema changes use `SQLAction.SCHEMA` and `tinycloud.sql/schema`.
+- c94b81b: Fix `tc kv put`/`kv delete --space` and binary KV round-trips.
+  - `tc kv put` and `tc kv delete` now accept `--space <name|uri>`, routing through
+    the space-scoped KV (`kvForSpace`) like `get`/`list`/`head` already did. KV
+    writes to a non-primary space (e.g. an `applications` space) are now possible
+    from the CLI.
+  - Binary KV values now round-trip byte-identically. `KVService.put` sends
+    Blob/ArrayBuffer/typed-array/Buffer values as raw bytes
+    (`application/octet-stream`, honoring an explicit `contentType`) instead of
+    JSON-stringifying them into `{"type":"Buffer","data":[...]}`. A new
+    `KVGetOptions.binary` returns the raw response bytes as a `Uint8Array`, and the
+    CLI's `kv get -o <file>` / `--raw` use it so images and other binaries are
+    written out unchanged.
+
+- 7603d1f: Support concise app manifest knowledge pointers. The SDK now validates `knowledge: true` and `knowledge/*.md` roots, exposes a helper for resolving the effective knowledge root, and `tc manifest resolve` includes that root in its output.
+- cdcb227: Send a user-facing `reason` when TinyCloud CLI opens OpenKey permission approval flows, so the consent page can show why the requested capabilities are needed.
+- 0187e64: Fix `OPENKEY_SCOPE_MISMATCH` on `tc auth request --grant` for OpenKey profiles, and batch multiple `--cap` on one space into a single OpenKey round-trip.
+
+  The CLI compared the space the OpenKey node returned against the space it built for the request byte-for-byte. OpenKey returns the EIP-55 **checksummed** eip155 address (`0xd559CCd9...dE93cf412`) while the CLI builds the **lowercase** form, so a grant for a valid space spuriously failed with `OPENKEY_SCOPE_MISMATCH`. Ethereum addresses are case-insensitive; space comparison now normalizes (lowercases) the address segment on both sides.
+
+  The same normalization is applied when grouping requested caps by space, so multiple `--cap` for the same space — even if one is typed checksummed and another lowercase — batch into a single OpenKey browser round-trip instead of one per casing.
+
+- e2c3bb1: Add `tc secrets doctor` and include default secrets decrypt permissions when app manifests request readable secrets.
+- a22a7f0: Rename the SDK-emitted SQL schema-change permission from `tinycloud.sql/ddl` to `tinycloud.sql/schema`, including manifest defaults and account-registry grants.
+
+  TinyCloudWeb now treats a restored persisted session as stale when it does not cover the currently configured manifest permissions, then runs the normal manifest sign-in flow instead of letting apps request those manifest permissions separately after login.
+
+- Updated dependencies [6b554d6]
+- Updated dependencies [0d397a8]
+- Updated dependencies [895804a]
+- Updated dependencies [6622043]
+- Updated dependencies [75bebb1]
+- Updated dependencies [0e8ccc6]
+- Updated dependencies [934534d]
+- Updated dependencies [79dd26c]
+- Updated dependencies [08e292d]
+- Updated dependencies [7c5fe21]
+- Updated dependencies [eb44380]
+- Updated dependencies [27f97d8]
+- Updated dependencies [aa050d1]
+- Updated dependencies [8e8f7e8]
+- Updated dependencies [fa4a7c7]
+- Updated dependencies [d4a0a69]
+- Updated dependencies [a22a7f0]
+- Updated dependencies [42f1235]
+- Updated dependencies [b6c3fd8]
+  - @tinycloud/node-sdk@2.4.0
+
 ## 0.7.0-beta.23
 
 ### Minor Changes

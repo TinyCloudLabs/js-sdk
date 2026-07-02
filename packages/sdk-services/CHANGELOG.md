@@ -1,5 +1,95 @@
 # @tinycloudlabs/sdk-services
 
+## 2.4.0
+
+### Minor Changes
+
+- eb44380: `ensureOwnedSpaceHosted` now consults the account spaces registry before hosting
+
+  Previously `TinyCloudNode.ensureOwnedSpaceHosted(name)` always delegated to
+  `hostOwnedSpace`, which unconditionally submits the host-SIWE delegation. Owners
+  who already had the space hosted (e.g. a git-haiku owner re-running TinyCloud
+  Secrets setup) were therefore prompted to "host" their `secrets` space on every
+  run.
+
+  `ensureOwnedSpaceHosted` now resolves the owned space id and first checks the
+  account spaces registry: the fast SQLite index (`account.index.spaces.list()`)
+  as a best-effort short-circuit, falling back to the canonical, recap-readable KV
+  record `account/spaces/{space_id}` (`account.spaces.get`). If the space is
+  already registered/hosted it returns the id WITHOUT submitting a host delegation
+  (no redundant signature). Only when the space is absent — or the registry check
+  fails in any way (e.g. a cold index reporting `no such table: spaces`) — does it
+  fall through to `hostOwnedSpace`. After hosting it durably write-through
+  registers the space so subsequent calls short-circuit on the registry.
+
+  `hostOwnedSpace` (always-host) is unchanged for callers that explicitly want it.
+  The KV path is used rather than `syncAccessible()` because a manifest/recap
+  session can read `account/spaces/` under the recap but does not hold
+  `tinycloud.space/list`.
+
+- 27f97d8: Add a public `ensureOwnedSpaceHosted(name)` method to `TinyCloudNode` and `TinyCloudWeb` for hosting an owner's owned space (e.g. `"secrets"`) from a session created with a manifest / capabilityRequest.
+
+  A full-authority sign-in auto-hosts the owner's `secrets` space, but a session created with a manifest / capabilityRequest does not. Such a session could hold valid `tinycloud.kv/*` capabilities for the owned `secrets` space yet still fail its first scoped `secrets.put(...)` with `404 Space not found`, because the space was never registered on the node. `ensureOwnedSpaceHosted(name)` resolves the name to the owner's owned-space URI and hosts it via the host-SIWE delegation flow (one signature, idempotent server-side), so subsequent scoped secret writes succeed.
+
+- aa050d1: Resolve and rehydrate `tinycloudHosts` on restored sessions.
+
+  A restored session never resolved its TinyCloud hosts: the restore path
+  rehydrated the delegation/address/chainId but never set the hosts, and the
+  hosts a session was created with weren't persisted. The first kv/secrets/
+  space/encryption call on a restored session therefore threw "TinyCloud
+  hosts have not been resolved. Call signIn() first." (notably when
+  `signIn()` short-circuited to a restored session).
+
+  Fix (three parts):
+  - Persist the hosts: `PersistedSessionData` gains an optional
+    `tinycloudHosts` field (back-compat — old persisted sessions still
+    validate), and both sign-in save paths write the just-resolved hosts.
+  - Rehydrate on restore: `TinyCloudNode.restoreSession` accepts the
+    persisted `tinycloudHosts`, adopts them for the service context and the
+    auth layer (`setRestoredTinyCloudSession`), and the web SDK threads the
+    field through `restoreDataFromPersisted`.
+  - Lazy fallback: sessions persisted before this field re-resolve their
+    hosts lazily (registry → `node.tinycloud.xyz` fallback) on the first
+    host-needing call, exactly like a fresh sign-in. Resolution failures
+    surface rather than being masked.
+
+  A restored session now targets the same node as the original sign-in, so
+  apps no longer need to pass `tinycloudHosts` explicitly or call
+  `clearPersistedSession()` before sign-in.
+
+### Patch Changes
+
+- 895804a: Include `tinycloud.sql/ddl` in the implicit account registry index permission and legacy default SQL grant so account registry writes can create their SQLite tables and indexes on first use. SQL execute and batch calls now sign DDL statements with `tinycloud.sql/ddl`, and mixed batches sign with every required SQL action instead of collapsing to write-only.
+- 934534d: Auth/hosting developer experience for the delegate-asks-owner-to-host model.
+  - **`tc space host-request <name> --emit <file>`** (delegate-only): emits a `tinycloud.host.request` artifact naming the space and its resolved owner DID so an agent can surface it to the owner, who then runs `tc space host <name>`. If the caller IS the root authority of the resolved space, it refuses (`ALREADY_ROOT_AUTHORITY`) and tells them to host directly — no request is emitted. The command is a pure local emit and never contacts the node.
+  - **Identity-aware `SPACE_NOT_HOSTED`**: an unhosted-space write/read previously surfaced as an opaque `404 - Space not found`. The kv and sql commands now normalize **only** that exact condition (404 + "Space not found" body) to a `SPACE_NOT_HOSTED` error carrying an identity-aware `hint`. The branch key `is_root_authority(space, active session)` is computed locally from the profile address + space DID (no network): the owner is told to run `tc space host <name>`, a delegate is told they cannot host and to emit `tc space host-request <name> --emit`. A wrong db/table/path or permission error is left untouched. A `delegate-session` profile is never treated as the root authority even when its stored ownerDid is the space owner, so a delegate always gets the host-request hint. `KVService` get/head/delete now preserve the `Space not found` 404 body (previously collapsed to `KV_NOT_FOUND` before the body was read), so unhosted-space **reads** normalize too, while a genuine missing key still reports `KV_NOT_FOUND`.
+  - **SDK `grantAuthRequest(authority, request, options?)`** (`@tinycloud/node-sdk`): takes a delegation request artifact and returns a grant artifact (`tinycloud.auth.delegation`) by signing through `delegateTo`, so the request→grant handshake is callable programmatically. `tc auth grant` is now a thin wrapper over it. Adds the `AuthRequestArtifact`, `AuthDelegationArtifact`, and `DelegationAuthority` types.
+
+- bd8a60f: Remove the deprecated `SQLAction.DDL` export and the `tinycloud.sql/ddl` permission display path. SQL schema changes use `SQLAction.SCHEMA` and `tinycloud.sql/schema`.
+- c94b81b: Fix `tc kv put`/`kv delete --space` and binary KV round-trips.
+  - `tc kv put` and `tc kv delete` now accept `--space <name|uri>`, routing through
+    the space-scoped KV (`kvForSpace`) like `get`/`list`/`head` already did. KV
+    writes to a non-primary space (e.g. an `applications` space) are now possible
+    from the CLI.
+  - Binary KV values now round-trip byte-identically. `KVService.put` sends
+    Blob/ArrayBuffer/typed-array/Buffer values as raw bytes
+    (`application/octet-stream`, honoring an explicit `contentType`) instead of
+    JSON-stringifying them into `{"type":"Buffer","data":[...]}`. A new
+    `KVGetOptions.binary` returns the raw response bytes as a `Uint8Array`, and the
+    CLI's `kv get -o <file>` / `--raw` use it so images and other binaries are
+    written out unchanged.
+
+- fa4a7c7: Add regression coverage for SQL migration batches that require both `tinycloud.sql/ddl` and `tinycloud.sql/write`, including the legacy-session runtime permission repair path used by TinyCloud Secrets.
+- d4a0a69: Add a SQL migrations helper on database handles: `sql.db(name).migrations.apply({ namespace, migrations })`. The helper records applied migration ids in a TinyCloud-managed table, signs migration DDL/write/read actions through the SQL service, and returns whether migrations were applied or already current.
+
+  The account registry index now uses the migrations helper for its schema setup, and SQL/DuckDB service errors sanitize non-JSON proxy HTML pages into concise retryable messages while preserving a bounded debug snippet in error metadata.
+
+- a22a7f0: Rename the SDK-emitted SQL schema-change permission from `tinycloud.sql/ddl` to `tinycloud.sql/schema`, including manifest defaults and account-registry grants.
+
+  TinyCloudWeb now treats a restored persisted session as stale when it does not cover the currently configured manifest permissions, then runs the normal manifest sign-in flow instead of letting apps request those manifest permissions separately after login.
+
+- 42f1235: Add an opt-in TinyCloud debug logger controlled by `TinyCloud_debug`. The logger keeps a 1000-event in-memory ring buffer, writes structured events to `console.debug` when enabled, exposes browser console helpers for enabling, disabling, inspecting, and clearing logs, persists browser debug mode through `localStorage`, and captures service events plus `fetch`, `invoke`, and `invokeAny` timings.
+
 ## 2.4.0-beta.19
 
 ### Patch Changes
