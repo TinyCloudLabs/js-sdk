@@ -335,14 +335,19 @@ describe("bootstrap gate — abort on first rejection", () => {
       return true;
     });
 
-    await expect(node.signIn()).rejects.toThrow(
-      /Account bootstrap aborted.*Sign request rejected/,
-    );
+    // Bootstrap failure degrades to skipped — signIn() itself resolves.
+    await node.signIn();
 
     // Only one createBootstrapSession call — the abort prevents further calls.
     expect(createBootstrapCallCount).toBe(1);
     // hostOwnedSpace must never be called — the abort happened before phase 2.
     expect(hostOwnedSpaceCallCount).toBe(0);
+    // The outcome is surfaced instead of thrown.
+    expect(node.bootstrapSkipped).toBe(true);
+    expect(node.bootstrapStatus.skipped).toBe(true);
+    expect(node.bootstrapStatus.reason).toMatch(
+      /Account bootstrap aborted.*Sign request rejected/,
+    );
   });
 
   test("error message includes space name and original cause", async () => {
@@ -369,15 +374,68 @@ describe("bootstrap gate — abort on first rejection", () => {
     });
     auth.hostOwnedSpace = mock(async () => true);
 
-    let thrownError: Error | undefined;
-    try {
-      await node.signIn();
-    } catch (err) {
-      thrownError = err as Error;
-    }
+    // signIn() resolves; the cause is preserved in bootstrapStatus.reason.
+    await node.signIn();
 
-    expect(thrownError).toBeDefined();
-    expect(thrownError!.message).toContain("Account bootstrap aborted");
-    expect(thrownError!.message).toContain("auto-sign rejected");
+    expect(node.bootstrapStatus.skipped).toBe(true);
+    expect(node.bootstrapStatus.reason).toContain("Account bootstrap aborted");
+    expect(node.bootstrapStatus.reason).toContain("auto-sign rejected");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (e) Purpose tagging — strategies can tell bootstrap signs from user signs
+// ---------------------------------------------------------------------------
+
+describe("sign request purpose tagging", () => {
+  function makeCapturingNode() {
+    const captured: any[] = [];
+    const wasm = makeFakeWasmBindings();
+    const node = new TinyCloudNode({
+      wasmBindings: wasm,
+      signer: makeExternalSigner() as any,
+      signStrategy: {
+        type: "callback",
+        handler: async (request: any) => {
+          captured.push(request);
+          return { approved: true, signature: "0x" + "ee".repeat(65) };
+        },
+      } as any,
+      host: "https://tinycloud.test",
+    });
+    const auth = (node as any).auth;
+    auth._address = FAKE_ADDRESS;
+    auth._chainId = 1;
+    return { captured, auth };
+  }
+
+  test("createBootstrapSession tags purpose=bootstrap-session", async () => {
+    const { captured, auth } = makeCapturingNode();
+
+    await auth.createBootstrapSession({
+      spaceId: "tinycloud:pkh:eip155:1:" + FAKE_ADDRESS + ":account",
+      capabilityRequest: { resources: [] },
+    });
+
+    expect(captured.length).toBe(1);
+    expect(captured[0].purpose).toBe("bootstrap-session");
+  });
+
+  test("signMessage passes an explicit purpose through", async () => {
+    const { captured, auth } = makeCapturingNode();
+
+    await auth.signMessage("host siwe", "bootstrap-host");
+
+    expect(captured.length).toBe(1);
+    expect(captured[0].purpose).toBe("bootstrap-host");
+  });
+
+  test("signMessage without purpose stays untagged", async () => {
+    const { captured, auth } = makeCapturingNode();
+
+    await auth.signMessage("plain message");
+
+    expect(captured.length).toBe(1);
+    expect(captured[0].purpose).toBeUndefined();
   });
 });

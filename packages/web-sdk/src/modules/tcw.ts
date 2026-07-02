@@ -431,6 +431,11 @@ export class TinyCloudWeb {
   get kv(): IKVService { return this.node.kv; }
   get sql(): ISQLService { return this.node.sql; }
 
+  /** Whether the last signIn() skipped client-side account bootstrap. */
+  get bootstrapSkipped(): boolean { return this.node.bootstrapSkipped; }
+  /** Outcome of the last signIn()'s account-bootstrap attempt. */
+  get bootstrapStatus(): { skipped: boolean; reason?: string } { return this.node.bootstrapStatus; }
+
   /** Space-scoped SQL service for a non-primary space (e.g. the owner's `applications` space). */
   sqlForSpace(spaceId: string): ISQLService { return this.node.sqlForSpace(spaceId); }
   /** Space-scoped KV service for a non-primary space (e.g. the owner's `applications` space). */

@@ -491,10 +491,25 @@ export class TinyCloudNode {
    */
   private _bootstrapSkipped = false;
 
+  /**
+   * Outcome of the last signIn()'s account-bootstrap attempt. `skipped` is
+   * true when bootstrap did not complete (interactive signer, auto-sign
+   * denied, or a bootstrap step failed); `reason` carries the cause so apps
+   * can surface a "finish account setup" call-to-action.
+   */
+  private _bootstrapStatus: { skipped: boolean; reason?: string } = {
+    skipped: false,
+  };
+
   /** Whether the last signIn() skipped client-side bootstrap because the
    * signer is interactive (browser wallet / EIP-1193 provider). */
   get bootstrapSkipped(): boolean {
     return this._bootstrapSkipped;
+  }
+
+  /** Outcome of the last signIn()'s account-bootstrap attempt. */
+  get bootstrapStatus(): { skipped: boolean; reason?: string } {
+    return this._bootstrapStatus;
   }
 
   private get nodeFeatures(): string[] {
@@ -931,6 +946,7 @@ export class TinyCloudNode {
 
   private async bootstrapAccountIfNeeded(): Promise<boolean> {
     this._bootstrapSkipped = false;
+    this._bootstrapStatus = { skipped: false };
 
     if (this.config.autoBootstrapAccount === false) {
       return false;
@@ -950,6 +966,7 @@ export class TinyCloudNode {
         "Server-side bootstrap (OpenKey) is expected to have provisioned the account.",
       );
       this._bootstrapSkipped = true;
+      this._bootstrapStatus = { skipped: true, reason: "interactive-signer" };
       return false;
     }
 
@@ -958,7 +975,21 @@ export class TinyCloudNode {
       return false;
     }
 
-    await this.runAccountBootstrap(steps);
+    try {
+      await this.runAccountBootstrap(steps);
+    } catch (err) {
+      // Bootstrap is provisioning, not a precondition of the session the
+      // user just signed: never fail signIn() because of it. Surface the
+      // outcome instead so apps can offer a "finish account setup" action.
+      const reason = err instanceof Error ? err.message : String(err);
+      this._bootstrapSkipped = true;
+      this._bootstrapStatus = { skipped: true, reason };
+      this.notificationHandler.warning(
+        `Account bootstrap did not complete: ${reason}`,
+      );
+      console.warn(`[TinyCloudNode] account bootstrap failed: ${reason}`);
+      return false;
+    }
     return true;
   }
 
@@ -1040,7 +1071,7 @@ export class TinyCloudNode {
 
     for (const step of steps) {
       if (step.kind !== "host") continue;
-      const hosted = await auth.hostOwnedSpace(step.spaceId);
+      const hosted = await auth.hostOwnedSpace(step.spaceId, "bootstrap-host");
       if (!hosted) {
         throw new Error(`Failed to host bootstrap space: ${step.spaceId}`);
       }
