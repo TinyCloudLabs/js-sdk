@@ -17,6 +17,7 @@ import {
   type DelegateToResult,
   type ISessionStorage,
   type PersistedSessionData,
+  type SignStrategy,
 } from "@tinycloud/node-sdk/core";
 import {
   IKVService,
@@ -155,6 +156,8 @@ export interface Config extends ClientConfig {
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
   capabilityRequest?: ComposedManifestRequest;
+  /** Strategy for TinyCloud root signature requests. */
+  signStrategy?: SignStrategy;
   /** Include implicit account registry permissions when composing `manifest`. Default true. */
   includeAccountRegistryPermissions?: boolean;
   /** Default-off service telemetry. */
@@ -366,6 +369,7 @@ export class TinyCloudWeb {
       // actual `abilities` map passed to `prepareSession`.
       manifest: this._manifest,
       capabilityRequest: this._capabilityRequest,
+      signStrategy: this.config.signStrategy,
       includeAccountRegistryPermissions:
         this.config.includeAccountRegistryPermissions,
       telemetry: this.config.telemetry,
@@ -426,6 +430,11 @@ export class TinyCloudWeb {
 
   get kv(): IKVService { return this.node.kv; }
   get sql(): ISQLService { return this.node.sql; }
+
+  /** Whether the last signIn() skipped client-side account bootstrap. */
+  get bootstrapSkipped(): boolean { return this.node.bootstrapSkipped; }
+  /** Outcome of the last signIn()'s account-bootstrap attempt. */
+  get bootstrapStatus(): { skipped: boolean; reason?: string } { return this.node.bootstrapStatus; }
 
   /** Space-scoped SQL service for a non-primary space (e.g. the owner's `applications` space). */
   sqlForSpace(spaceId: string): ISQLService { return this.node.sqlForSpace(spaceId); }

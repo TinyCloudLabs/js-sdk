@@ -159,6 +159,31 @@ function isOpenKeyAutoSignStrategy(strategy: SignStrategy | undefined): boolean 
   return (strategy as { openKeyAutoSign?: unknown } | undefined)?.openKeyAutoSign === true;
 }
 
+/**
+ * Returns true when the signer is an external/interactive signer (browser
+ * wallet, EIP-1193 provider, etc.) that will open a UI prompt for every
+ * `signMessage()` call.
+ *
+ * Detection: the config provides a `signer` but NOT a `privateKey`, and the
+ * `signStrategy` is neither the OpenKey auto-sign callback nor the auto-sign
+ * strategy backed by a local key. In practice:
+ * - `privateKey` present → local PrivateKeySigner → non-interactive
+ * - `signStrategy.openKeyAutoSign === true` → OpenKey /api/delegate/sign → non-interactive
+ * - `signer` only, no `privateKey`, no OpenKey strategy → interactive (browser wallet)
+ */
+function isInteractiveSigner(config: TinyCloudNodeConfig): boolean {
+  if (config.privateKey) {
+    // Local key: always non-interactive.
+    return false;
+  }
+  if (isOpenKeyAutoSignStrategy(config.signStrategy)) {
+    // OpenKey auto-sign path: non-interactive.
+    return false;
+  }
+  // External signer with no auto-sign strategy. Treat as interactive.
+  return config.signer !== undefined;
+}
+
 function didPrincipalMatches(actual: string, expected: string): boolean {
   try {
     return principalDidEquals(actual, expected);
@@ -476,6 +501,34 @@ export class TinyCloudNode {
    * {@link currentTinyCloudSession} as a fallback for `auth.tinyCloudSession`.
    */
   private _restoredTcSession?: TinyCloudSession;
+
+  /**
+   * True when the last signIn() detected an interactive signer and skipped
+   * client-side bootstrap. Apps can read this to know whether bootstrap was
+   * deferred to the server (OpenKey) or requires a separate user action.
+   */
+  private _bootstrapSkipped = false;
+
+  /**
+   * Outcome of the last signIn()'s account-bootstrap attempt. `skipped` is
+   * true when bootstrap did not complete (interactive signer, auto-sign
+   * denied, or a bootstrap step failed); `reason` carries the cause so apps
+   * can surface a "finish account setup" call-to-action.
+   */
+  private _bootstrapStatus: { skipped: boolean; reason?: string } = {
+    skipped: false,
+  };
+
+  /** Whether the last signIn() skipped client-side bootstrap because the
+   * signer is interactive (browser wallet / EIP-1193 provider). */
+  get bootstrapSkipped(): boolean {
+    return this._bootstrapSkipped;
+  }
+
+  /** Outcome of the last signIn()'s account-bootstrap attempt. */
+  get bootstrapStatus(): { skipped: boolean; reason?: string } {
+    return this._bootstrapStatus;
+  }
 
   private get nodeFeatures(): string[] {
     return this.auth?.nodeFeatures ?? [];
@@ -910,10 +963,28 @@ export class TinyCloudNode {
   }
 
   private async bootstrapAccountIfNeeded(): Promise<boolean> {
+    this._bootstrapSkipped = false;
+    this._bootstrapStatus = { skipped: false };
+
     if (this.config.autoBootstrapAccount === false) {
       return false;
     }
     if (!this.auth || !this._address) {
+      return false;
+    }
+
+    // Interactive signers (browser wallet / EIP-1193) prompt the user for
+    // every signMessage() call. Running bootstrap through an interactive
+    // signer would open 10+ sequential sign prompts. Skip client-side
+    // bootstrap entirely: the server (OpenKey) handles bootstrap inside
+    // POST /api/keys/{keyId}/sign before returning the first signature.
+    if (isInteractiveSigner(this.config)) {
+      console.debug(
+        "[TinyCloudNode] bootstrap skipped: interactive signer detected. " +
+        "Server-side bootstrap (OpenKey) is expected to have provisioned the account.",
+      );
+      this._bootstrapSkipped = true;
+      this._bootstrapStatus = { skipped: true, reason: "interactive-signer" };
       return false;
     }
 
@@ -922,7 +993,21 @@ export class TinyCloudNode {
       return false;
     }
 
-    await this.runAccountBootstrap(steps);
+    try {
+      await this.runAccountBootstrap(steps);
+    } catch (err) {
+      // Bootstrap is provisioning, not a precondition of the session the
+      // user just signed: never fail signIn() because of it. Surface the
+      // outcome instead so apps can offer a "finish account setup" action.
+      const reason = err instanceof Error ? err.message : String(err);
+      this._bootstrapSkipped = true;
+      this._bootstrapStatus = { skipped: true, reason };
+      this.notificationHandler.warning(
+        `Account bootstrap did not complete: ${reason}`,
+      );
+      console.warn(`[TinyCloudNode] account bootstrap failed: ${reason}`);
+      return false;
+    }
     return true;
   }
 
@@ -984,17 +1069,27 @@ export class TinyCloudNode {
       if (rawAbilities) {
         rawAbilitiesBySpace.set(step.space, rawAbilities);
       }
-      const session = await auth.createBootstrapSession({
-        spaceId: step.spaceId,
-        capabilityRequest: step.request ?? BOOTSTRAP_SESSION_REQUESTS[step.space],
-        rawAbilities,
-      });
+      let session: TinyCloudSession;
+      try {
+        session = await auth.createBootstrapSession({
+          spaceId: step.spaceId,
+          capabilityRequest: step.request ?? BOOTSTRAP_SESSION_REQUESTS[step.space],
+          rawAbilities,
+        });
+      } catch (err) {
+        // Abort immediately — do not cascade into remaining bootstrap steps.
+        // A single clear error is surfaced instead of one error per space.
+        throw new Error(
+          `Account bootstrap aborted: signature rejected for space "${step.space}". ` +
+          `Cause: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
       sessions.set(step.space, session);
     }
 
     for (const step of steps) {
       if (step.kind !== "host") continue;
-      const hosted = await auth.hostOwnedSpace(step.spaceId);
+      const hosted = await auth.hostOwnedSpace(step.spaceId, "bootstrap-host");
       if (!hosted) {
         throw new Error(`Failed to host bootstrap space: ${step.spaceId}`);
       }

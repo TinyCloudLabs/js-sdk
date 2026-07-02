@@ -21,6 +21,12 @@ export interface SignRequest {
   message: string;
   /** Type of sign operation */
   type: "siwe" | "message";
+  /**
+   * What the signature is for. Lets strategies apply different policies to
+   * account-bootstrap signatures (which may be auto-signed server-side)
+   * versus the user-initiated sign-in. Absent on requests from older SDKs.
+   */
+  purpose?: "sign-in" | "bootstrap-session" | "bootstrap-host" | "message";
 }
 
 /**

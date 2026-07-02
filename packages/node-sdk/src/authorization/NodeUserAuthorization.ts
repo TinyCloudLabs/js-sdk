@@ -632,7 +632,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * Create the space on the TinyCloud server (host delegation).
    * This registers the user as the owner of the space.
    */
-  private async hostSpace(targetSpaceId?: string): Promise<boolean> {
+  private async hostSpace(
+    targetSpaceId?: string,
+    purpose?: SignRequest["purpose"],
+  ): Promise<boolean> {
     if (!this._tinyCloudSession || !this._address || !this._chainId) {
       throw new Error("Must be signed in to host space");
     }
@@ -655,7 +658,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     });
 
     // Sign the message
-    const signature = await this.signMessage(siwe);
+    const signature = await this.signMessage(siwe, purpose);
 
     // Convert to delegation headers and submit
     const headers = this.wasm.siweToDelegationHeaders({ siwe, signature });
@@ -676,8 +679,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * Create a specific owned space on the server via host delegation.
    * Used by manifest registry setup for the account space.
    */
-  async hostOwnedSpace(spaceId: string): Promise<boolean> {
-    return this.hostSpace(spaceId);
+  async hostOwnedSpace(
+    spaceId: string,
+    purpose?: SignRequest["purpose"],
+  ): Promise<boolean> {
+    return this.hostSpace(spaceId, purpose);
   }
 
   /**
@@ -878,6 +884,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       chainId,
       message: prepared.siwe,
       type: "siwe",
+      purpose: "bootstrap-session",
     });
     const session = this.wasm.completeSessionSetup({
       ...prepared,
@@ -966,6 +973,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       chainId,
       message: prepared.siwe,
       type: "siwe",
+      purpose: "sign-in",
     });
 
     // Complete session setup with the prepared session + signature
@@ -1083,7 +1091,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
   /**
    * Sign a message with the connected signer.
    */
-  async signMessage(message: string): Promise<string> {
+  async signMessage(
+    message: string,
+    purpose?: SignRequest["purpose"],
+  ): Promise<string> {
     if (!this._address) {
       this._address = canonicalizeAddress(await this.signer.getAddress());
     }
@@ -1096,6 +1107,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       chainId: this._chainId,
       message,
       type: "message",
+      ...(purpose ? { purpose } : {}),
     });
   }
 
