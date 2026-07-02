@@ -167,6 +167,24 @@ function didPrincipalMatches(actual: string, expected: string): boolean {
   }
 }
 
+function sharingActionsToAbilities(path: string, actions: string[]): AbilitiesMap | undefined {
+  const abilities: AbilitiesMap = {};
+
+  for (const action of actions) {
+    const slash = action.indexOf("/");
+    if (slash === -1) return undefined;
+
+    const shortService = SERVICE_LONG_TO_SHORT[action.slice(0, slash)];
+    if (shortService === undefined) return undefined;
+
+    abilities[shortService] ??= {};
+    abilities[shortService][path] ??= [];
+    abilities[shortService][path].push(action);
+  }
+
+  return Object.keys(abilities).length > 0 ? abilities : undefined;
+}
+
 /**
  * Configuration for TinyCloudNode.
  * All fields are optional - TinyCloudNode can work with zero configuration.
@@ -2390,12 +2408,10 @@ export class TinyCloudNode {
       const host = this.config.host!;
       const now = new Date();
 
-      // Build abilities for the share key
-      const abilities: Record<string, Record<string, string[]>> = {
-        kv: {
-          [params.path]: params.actions,
-        },
-      };
+      const abilities = sharingActionsToAbilities(params.path, params.actions);
+      if (!abilities) {
+        return undefined;
+      }
 
       // Prepare a direct delegation to the share key (no parents = root delegation)
       const prepared = this.wasmBindings.prepareSession({
