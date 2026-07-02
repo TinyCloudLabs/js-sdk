@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 2.5.0-beta.1
+
+### Minor Changes
+
+- dda499e: TC-86: browser auto-sign bootstrap support. `TinyCloudWeb` config accepts `signStrategy` and forwards it to `TinyCloudNode`, sign requests carry a `purpose` tag (`sign-in` / `bootstrap-session` / `bootstrap-host` / `message`) so strategies can route bootstrap signatures to OpenKey's server-side signer, and account-bootstrap failures degrade to a skipped bootstrap surfaced via `bootstrapStatus` instead of failing `signIn()`.
+
 ## 2.4.0
 
 ### Minor Changes

@@ -20,6 +20,7 @@
     "@tinycloud/sdk-services-test": "10.0.0"
   },
   "changesets": [
-    "sql-sharing-root-service"
+    "sql-sharing-root-service",
+    "tc-86-autosign-strategy"
   ]
 }
