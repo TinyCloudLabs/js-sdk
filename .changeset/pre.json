@@ -1,0 +1,25 @@
+{
+  "mode": "pre",
+  "tag": "beta",
+  "initialVersions": {
+    "@tinycloud/node-demo": "0.0.19",
+    "tinycloud-openkey-example-app": "0.0.17",
+    "openkey-vite": "0.0.15",
+    "tinycloud-web-sdk-example-app": "0.0.2",
+    "@tinycloud/bootstrap": "2.4.0",
+    "@tinycloud/cli": "0.7.0",
+    "@tinycloud/node-sdk": "2.4.0",
+    "@tinycloud/sdk-core": "2.4.0",
+    "@tinycloud/sdk-rs": "1.0.0",
+    "@tinycloud/node-sdk-wasm": "1.7.4",
+    "@tinycloud/web-sdk-wasm": "1.7.4",
+    "@tinycloud/sdk-services": "2.4.0",
+    "@tinycloud/server": "2.4.0",
+    "@tinycloud/vfs": "0.1.2",
+    "@tinycloud/web-sdk": "2.4.0",
+    "@tinycloud/sdk-services-test": "10.0.0"
+  },
+  "changesets": [
+    "sql-sharing-root-service"
+  ]
+}

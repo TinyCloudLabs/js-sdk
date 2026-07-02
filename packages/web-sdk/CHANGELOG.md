@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk
 
+## 2.4.1-beta.0
+
+### Patch Changes
+
+- cbd5dcc: Fix root sharing delegations to infer the delegated service from action URNs instead of always minting KV resources. Long-lived SQL share links now sign `tinycloud.sql/*` capabilities under the SQL service path.
+- Updated dependencies [cbd5dcc]
+  - @tinycloud/node-sdk@2.4.1-beta.0
+
 ## 2.4.0
 
 ### Minor Changes
