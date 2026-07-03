@@ -529,6 +529,8 @@ export class SQLService extends BaseService implements ISQLService {
         return ErrorCodes.SQL_DATABASE_NOT_FOUND;
       case 413:
         return ErrorCodes.SQL_RESPONSE_TOO_LARGE;
+      case 402:
+        return ErrorCodes.SQL_QUOTA_EXCEEDED;
       case 429:
         return ErrorCodes.SQL_QUOTA_EXCEEDED;
       default:

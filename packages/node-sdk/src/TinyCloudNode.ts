@@ -124,6 +124,8 @@ import {
   type DecryptTransport,
   type EncryptionCrypto,
   type NetworkDescriptor,
+  type AccountSpace,
+  type SpaceInfo,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import type { SignStrategy } from "./authorization/strategies";
@@ -530,6 +532,99 @@ export class TinyCloudNode {
     return this._bootstrapStatus;
   }
 
+  /**
+   * Outcome of the last signIn()'s account-registry sync. `synced` is false
+   * when the registry records (the `account/spaces/{id}` KV entries the
+   * Overview/Spaces UI reads via the account index) could not be durably
+   * written; `reason` carries the cause. This is non-fatal — signIn() always
+   * succeeds — so apps can surface a "refresh account index" call-to-action.
+   */
+  private _registryStatus: { synced: boolean; reason?: string } = {
+    synced: true,
+  };
+
+  /** Outcome of the last signIn()'s account-registry sync. */
+  get registryStatus(): { synced: boolean; reason?: string } {
+    return this._registryStatus;
+  }
+
+  /**
+   * Owned-space registry records whose durable write has not been confirmed.
+   * Keyed by space id. Populated by every registration site (space hosting,
+   * create-path callback) and flushed — awaited, with results checked — by
+   * syncAccountRegistry() inside signIn(). This is the durability backstop:
+   * a recap/manifest session does not hold `tinycloud.space/list`, so
+   * `spaces.syncAccessible()` cannot rediscover owned spaces whose immediate
+   * registration attempt failed.
+   */
+  private pendingSpaceRegistrations = new Map<string, SpaceInfo | AccountSpace>();
+
+  private static spaceRegistrationKey(record: SpaceInfo | AccountSpace): string {
+    return "spaceId" in record ? record.spaceId : record.id;
+  }
+
+  /**
+   * The owned spaces this session is expected to have registry records for:
+   * the primary and account spaces plus every owned space named by the
+   * composed manifest resources. Used by syncAccountRegistry() to RECONCILE —
+   * an account whose records were dropped by the legacy fire-and-forget
+   * writes never re-creates its spaces on sign-in, so pending-registration
+   * tracking alone can never heal it.
+   */
+  private expectedOwnedSpaces(): Map<string, string> {
+    const expected = new Map<string, string>();
+    const ownerAddress = this._address?.toLowerCase();
+    if (!ownerAddress) return expected;
+
+    const add = (nameOrUri: string | undefined) => {
+      if (!nameOrUri) return;
+      const spaceId = nameOrUri.includes(":")
+        ? nameOrUri
+        : this.ownedSpaceId(nameOrUri);
+      const segments = spaceId.split(":");
+      const name = segments[segments.length - 1];
+      const address = segments[segments.length - 2];
+      if (!name || address?.toLowerCase() !== ownerAddress) return;
+      expected.set(spaceId, name);
+    };
+
+    add(this.spaceId);
+    add(this.accountSpaceId);
+    for (const resource of this.capabilityRequest?.resources ?? []) {
+      add(resource.space);
+    }
+    return expected;
+  }
+
+  /**
+   * Attempt an owned-space registry write without failing the caller. The
+   * record stays pending until a register() call CONFIRMS success — service
+   * methods report failures as `{ok:false}` Results, not exceptions, so a
+   * bare await/.catch() cannot be trusted to notice them.
+   */
+  private async attemptSpaceRegistration(
+    record: SpaceInfo | AccountSpace,
+  ): Promise<void> {
+    const key = TinyCloudNode.spaceRegistrationKey(record);
+    this.pendingSpaceRegistrations.set(key, record);
+    try {
+      const result = await this.account.spaces.register(record);
+      if (result.ok) {
+        this.pendingSpaceRegistrations.delete(key);
+        return;
+      }
+      console.warn(
+        `[TinyCloudNode] registry write for ${key} failed (kept pending): ${result.error.message}`,
+      );
+    } catch (err) {
+      console.warn(
+        `[TinyCloudNode] registry write for ${key} failed (kept pending): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
   private get nodeFeatures(): string[] {
     return this.auth?.nodeFeatures ?? [];
   }
@@ -929,6 +1024,7 @@ export class TinyCloudNode {
     this._spaceService = undefined;
     this._serviceContext = undefined;
     this.runtimePermissionGrants = [];
+    this._registryStatus = { synced: true };
 
     await this.tc.signIn(options);
     this.syncResolvedHostFromAuth();
@@ -949,7 +1045,11 @@ export class TinyCloudNode {
     }
 
     if (!bootstrapped) {
-      this.scheduleAccountRegistrySync();
+      // Await the registry sync inside signIn: the account-spaces registry is
+      // what the Overview/Spaces UI reads, and the app has no async refresh
+      // path — records must be durably written before signIn() resolves so the
+      // first render populates. This never throws (see syncAccountRegistry).
+      await this.syncAccountRegistry();
     }
 
     this.notificationHandler.success("Successfully signed in");
@@ -1261,15 +1361,76 @@ export class TinyCloudNode {
     }
   }
 
-  private scheduleAccountRegistrySync(): void {
-    void this.withAccountRegistryRetry(async () => {
-      void this.account.index.ensure();
-      await this.writeManifestRegistryRecords();
-      const spaces = await this.account.spaces.syncAccessible();
-      if (!spaces.ok) {
-        throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+  private async syncAccountRegistry(): Promise<void> {
+    this._registryStatus = { synced: true };
+    try {
+      // Proactively host the account space before writing to it. The registry
+      // records (account/spaces/{id}) and the account index both live in the
+      // account space's KV/SQL; if it is not yet hosted, index.ensure() and
+      // syncAccessible() 404. The legacy floating `void index.ensure()` hid
+      // exactly this failure, leaving fresh accounts with an empty Overview.
+      if (this.accountSpaceId) {
+        await this.ensureOwnedSpaceHostedById(this.accountSpaceId);
       }
-    });
+
+      await this.withAccountRegistryRetry(async () => {
+        const ensured = await this.account.index.ensure();
+        if (!ensured.ok) {
+          throw new Error(
+            `Failed to ensure account index: ${ensured.error.message}`,
+          );
+        }
+        // Durably write the owned-space registry records. This is what
+        // actually populates `account/spaces/{id}`:
+        // writeManifestRegistryRecords() covers the APPLICATIONS registry and
+        // syncAccessible() cannot see owned spaces at all under a
+        // recap/manifest session (no `tinycloud.space/list` capability).
+        // Two sources:
+        // 1) pending records whose earlier best-effort attempt is unconfirmed;
+        // 2) expected owned spaces (session + manifest resources) whose
+        //    record is missing — RECONCILIATION, healing accounts whose
+        //    records were dropped by the legacy fire-and-forget writes
+        //    (sign-in never re-creates their spaces, so no registration
+        //    site fires for them).
+        const toRegister = new Map<string, SpaceInfo | AccountSpace>(
+          this.pendingSpaceRegistrations,
+        );
+        for (const [spaceId, name] of this.expectedOwnedSpaces()) {
+          if (toRegister.has(spaceId)) continue;
+          if (await this.isOwnedSpaceRegistered(spaceId)) continue;
+          toRegister.set(spaceId, {
+            spaceId,
+            name,
+            ownerDid: this.did,
+            type: "owned",
+            permissions: ["*"],
+            status: "active",
+          });
+        }
+        for (const [key, record] of Array.from(toRegister.entries())) {
+          const registered = await this.account.spaces.register(record);
+          if (!registered.ok) {
+            throw new Error(
+              `Failed to register owned space ${key}: ${registered.error.message}`,
+            );
+          }
+          this.pendingSpaceRegistrations.delete(key);
+        }
+        await this.writeManifestRegistryRecords();
+        const spaces = await this.account.spaces.syncAccessible();
+        if (!spaces.ok) {
+          throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+        }
+      });
+    } catch (error) {
+      // Registry sync is index maintenance, never a precondition of the
+      // session the user just signed (notably an at-cap 402 on the registry
+      // write must not lock the user out): never fail signIn(). Surface a
+      // non-fatal status so apps can offer a "refresh account index" action.
+      const reason = error instanceof Error ? error.message : String(error);
+      this._registryStatus = { synced: false, reason };
+      console.warn(`[TinyCloudNode] account registry sync failed: ${reason}`);
+    }
   }
 
   private async withAccountRegistryRetry(task: () => Promise<void>): Promise<void> {
@@ -1287,10 +1448,11 @@ export class TinyCloudNode {
       }
     }
 
-    console.warn(
-      "TinyCloud account registry sync failed after retries",
-      lastError,
-    );
+    // De-swallowed: propagate the final failure to the caller so it can be
+    // surfaced as a non-fatal registryStatus instead of a silent console.warn.
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`Account registry sync failed after retries: ${String(lastError)}`);
   }
 
   private requestedEncryptionNetworkIds(): string[] {
@@ -1424,16 +1586,16 @@ export class TinyCloudNode {
       );
     }
 
-    void this.account.spaces
-      .register({
-        spaceId,
-        name,
-        ownerDid: this.did,
-        type: "owned",
-        permissions: ["*"],
-        status: "active",
-      })
-      .catch(() => {});
+    // Best-effort immediate write; kept pending until confirmed so the awaited
+    // syncAccountRegistry() flush (inside signIn) durably retries it.
+    void this.attemptSpaceRegistration({
+      spaceId,
+      name,
+      ownerDid: this.did,
+      type: "owned",
+      permissions: ["*"],
+      status: "active",
+    });
 
     return spaceId;
   }
@@ -1484,18 +1646,14 @@ export class TinyCloudNode {
     // record is durably present and a subsequent ensure short-circuits on the
     // registry instead of re-hosting. The host already succeeded, so a failed
     // registry write must not fail this call.
-    try {
-      await this.account.spaces.register({
-        spaceId,
-        name,
-        ownerDid: this.did,
-        type: "owned",
-        permissions: ["*"],
-        status: "active",
-      });
-    } catch {
-      // Registry write is best-effort; the space is hosted regardless.
-    }
+    await this.attemptSpaceRegistration({
+      spaceId,
+      name,
+      ownerDid: this.did,
+      type: "owned",
+      permissions: ["*"],
+      status: "active",
+    });
 
     return hosted;
   }
@@ -1966,6 +2124,7 @@ export class TinyCloudNode {
     if (this._serviceContext) {
       const spaceScopedContext = new ServiceContext({
         invoke: this._serviceContext.invoke,
+        invokeAny: this.invokeAnyWithRuntimePermissions,
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
@@ -2393,8 +2552,67 @@ export class TinyCloudNode {
           };
         }
       },
+      // Enable space.create() via the host-activation ceremony (register the
+      // space owner-side, then activate the current session on it). Uses the
+      // same host the session's delegationHeader was minted against.
+      hostSpace: async (spaceId: string) => {
+        try {
+          const created = await (
+            this.auth as NodeUserAuthorization
+          ).hostPublicSpace(spaceId); // routes to hostSpace(spaceId)
+          if (!created) {
+            return {
+              ok: false as const,
+              error: {
+                code: "SPACE_CREATION_FAILED",
+                message: `Failed to host space: ${spaceId}`,
+                service: "space",
+              },
+            };
+          }
+
+          const host = this.hosts[0] ?? this.config.host;
+          const tcSession = this.auth?.tinyCloudSession;
+          if (!host || !tcSession) {
+            return {
+              ok: false as const,
+              error: {
+                code: "SPACE_CREATION_FAILED",
+                message: "Space hosting requires an active session and host",
+                service: "space",
+              },
+            };
+          }
+
+          const act = await activateSessionWithHost(
+            host,
+            tcSession.delegationHeader,
+          );
+          if (!act.success) {
+            return {
+              ok: false as const,
+              error: {
+                code: "SPACE_CREATION_FAILED",
+                message: `Activation failed: ${act.error ?? act.status}`,
+                service: "space",
+              },
+            };
+          }
+
+          return { ok: true as const, data: undefined };
+        } catch (error) {
+          return {
+            ok: false as const,
+            error: {
+              code: "NETWORK_ERROR",
+              message: error instanceof Error ? error.message : String(error),
+              service: "space",
+            },
+          };
+        }
+      },
       onSpaceRegistered: async (space) => {
-        await this.account.spaces.register(space);
+        await this.attemptSpaceRegistration(space);
       },
     });
 
@@ -2634,6 +2852,7 @@ export class TinyCloudNode {
     const sql = new SQLService({});
     const spaceScopedContext = new ServiceContext({
       invoke: this._serviceContext.invoke,
+      invokeAny: this.invokeAnyWithRuntimePermissions,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
       telemetry: this.config.telemetry,
@@ -2665,6 +2884,7 @@ export class TinyCloudNode {
     const kv = new KVService({});
     const spaceScopedContext = new ServiceContext({
       invoke: this._serviceContext.invoke,
+      invokeAny: this.invokeAnyWithRuntimePermissions,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
     });

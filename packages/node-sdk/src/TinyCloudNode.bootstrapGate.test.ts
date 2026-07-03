@@ -141,7 +141,7 @@ function stubNodeForSignIn(
   // Stub post-bootstrap helpers that would hit the network.
   (node as any).ensureRequestedEncryptionNetworks = async () => {};
   (node as any).ensureOwnedSpaceHostedById = async () => {};
-  (node as any).scheduleAccountRegistrySync = () => {};
+  (node as any).syncAccountRegistry = async () => {};
 }
 
 /**
@@ -318,7 +318,7 @@ describe("bootstrap gate — abort on first rejection", () => {
     stubNodeForSignIn(node, { freshAccount: true });
     (node as any).ensureRequestedEncryptionNetworks = async () => {};
     (node as any).ensureOwnedSpaceHostedById = async () => {};
-    (node as any).scheduleAccountRegistrySync = () => {};
+    (node as any).syncAccountRegistry = async () => {};
 
     // Stub auth.createBootstrapSession to reject on the first call.
     const auth = (node as any).auth;
@@ -366,7 +366,7 @@ describe("bootstrap gate — abort on first rejection", () => {
     stubNodeForSignIn(node, { freshAccount: true });
     (node as any).ensureRequestedEncryptionNetworks = async () => {};
     (node as any).ensureOwnedSpaceHostedById = async () => {};
-    (node as any).scheduleAccountRegistrySync = () => {};
+    (node as any).syncAccountRegistry = async () => {};
 
     const auth = (node as any).auth;
     auth.createBootstrapSession = mock(async () => {

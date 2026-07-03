@@ -39,7 +39,6 @@ import {
 import {
   validateServerDelegationsResponse,
   validateServerOwnedSpacesResponse,
-  validateServerCreateSpaceResponse,
   validateServerSpaceInfoResponse,
   type ServerDelegationsResponse,
 } from "./spaces.schema.js";
@@ -111,6 +110,18 @@ export type CreateDelegationFunction = (
 ) => Promise<Result<Delegation, ServiceError>>;
 
 /**
+ * Function type for hosting (provisioning) a space on the node.
+ *
+ * Performs the full host-activation ceremony for the given space ID:
+ * `peer/generate` → wallet-owner host SIWE → `POST /delegate` (registers the
+ * space owner-side) → session activation. Platform SDKs (web-sdk, node-sdk)
+ * provide this using their WASM bindings and wallet signer.
+ */
+export type HostSpaceFunction = (
+  spaceId: string
+) => Promise<Result<void, ServiceError>>;
+
+/**
  * Configuration for SpaceService.
  */
 export interface SpaceServiceConfig {
@@ -140,6 +151,12 @@ export interface SpaceServiceConfig {
    * Required for space.delegations.create() to work.
    */
   createDelegation?: CreateDelegationFunction;
+  /**
+   * Function to host (provision) a space on the node using the host-activation
+   * ceremony. Platform SDKs (web-sdk, node-sdk) provide this using their WASM
+   * bindings. Required for space.create() to work.
+   */
+  hostSpace?: HostSpaceFunction;
   /** Optional best-effort hook after the SDK discovers or creates a space. */
   onSpaceRegistered?: (space: SpaceInfo) => void | Promise<void>;
 }
@@ -383,6 +400,7 @@ export class SpaceService implements ISpaceService {
   private _userDid?: string;
   private sharingService?: ISharingService;
   private createDelegationFn?: CreateDelegationFunction;
+  private hostSpaceFn?: HostSpaceFunction;
   private onSpaceRegisteredFn?: (space: SpaceInfo) => void | Promise<void>;
 
   /** Cache of created Space objects */
@@ -411,6 +429,7 @@ export class SpaceService implements ISpaceService {
     this._userDid = config.userDid;
     this.sharingService = config.sharingService;
     this.createDelegationFn = config.createDelegation;
+    this.hostSpaceFn = config.hostSpace;
     this.onSpaceRegisteredFn = config.onSpaceRegistered;
   }
 
@@ -429,6 +448,7 @@ export class SpaceService implements ISpaceService {
     if (config.userDid !== undefined) this._userDid = config.userDid;
     if (config.sharingService) this.sharingService = config.sharingService;
     if (config.createDelegation) this.createDelegationFn = config.createDelegation;
+    if (config.hostSpace) this.hostSpaceFn = config.hostSpace;
     if (config.onSpaceRegistered) this.onSpaceRegisteredFn = config.onSpaceRegistered;
 
     // Clear caches when config changes
@@ -681,57 +701,45 @@ export class SpaceService implements ISpaceService {
       );
     }
 
+    // Host-activation ceremony is platform-provided (WASM + wallet signer).
+    // Without it we cannot provision the space; never fall back to a bare
+    // session-key invocation (that writes an epoch event with no backing
+    // space row → server FK error → "404 - Space not found").
+    if (!this.hostSpaceFn) {
+      return err(
+        serviceError(
+          SpaceErrorCodes.NOT_INITIALIZED,
+          "Space creation requires a hostSpace function. " +
+            "This should be provided by the platform SDK (web-sdk or node-sdk).",
+          SERVICE_NAME
+        )
+      );
+    }
+
+    // Compute the full space ID (matches the ceremony's target and, for the
+    // primary space, the active session's spaceId).
+    const spaceId = this.userDid ? buildSpaceUri(this.userDid, name) : this.resolveSpaceId(name);
+
     try {
-      const headers = this.invoke(this.session, "space", name, "tinycloud.space/create");
-
-      const response = await this.fetchFn(`${this.host}/invoke`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ name }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-
-        if (response.status === 409) {
-          return err(
-            serviceError(
-              SpaceErrorCodes.ALREADY_EXISTS,
-              `Space "${name}" already exists`,
-              SERVICE_NAME
-            )
-          );
-        }
-
+      // Run the host-activation ceremony (registers the space owner-side and
+      // activates the current session on it). Re-running on an existing space
+      // is safe — the owner delegation dedupes server-side.
+      const hosted = await this.hostSpaceFn(spaceId);
+      if (!hosted.ok) {
         return err(
           serviceError(
             SpaceErrorCodes.CREATION_FAILED,
-            `Failed to create space: ${response.status} - ${errorText}`,
+            hosted.error.message,
             SERVICE_NAME,
-            { meta: { status: response.status } }
-          )
-        );
-      }
-
-      const rawData = await response.json();
-
-      // Validate server response
-      const validationResult = validateServerCreateSpaceResponse(rawData);
-      if (!validationResult.ok) {
-        return err(
-          serviceError(
-            SpaceErrorCodes.CREATION_FAILED,
-            validationResult.error.message,
-            SERVICE_NAME,
-            { meta: validationResult.error.meta }
+            { meta: hosted.error.meta }
           )
         );
       }
 
       const spaceInfo: SpaceInfo = {
-        id: validationResult.data.id,
-        name: validationResult.data.name || name,
-        owner: validationResult.data.owner || this.userDid || "",
+        id: spaceId,
+        name,
+        owner: this.userDid ?? "",
         type: "owned",
         permissions: ["*"],
       };
@@ -755,9 +763,15 @@ export class SpaceService implements ISpaceService {
 
   private notifySpaceRegistered(space: SpaceInfo): void {
     if (!this.onSpaceRegisteredFn) return;
-    void Promise.resolve(this.onSpaceRegisteredFn(space)).catch(() => {
+    void Promise.resolve(this.onSpaceRegisteredFn(space)).catch((error) => {
       // Account-space registration is an index maintenance side effect; it must
-      // not make the canonical space operation fail.
+      // not make the canonical space operation fail. But a silently-swallowed
+      // failure leaves the newly created space missing from the account
+      // registry (empty Overview), so surface it as a log instead of hiding it.
+      console.warn(
+        `[SpaceService] account registry write for ${space.id} failed:`,
+        error instanceof Error ? error.message : String(error)
+      );
     });
   }
 

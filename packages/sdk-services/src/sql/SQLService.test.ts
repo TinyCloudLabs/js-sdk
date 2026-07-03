@@ -4,6 +4,7 @@ import type {
   FetchResponse,
   IServiceContext,
 } from "../types";
+import { ErrorCodes } from "../types";
 import { SQLService } from "./SQLService";
 import { SQLAction } from "./types";
 
@@ -416,6 +417,27 @@ describe("SQLService permissions", () => {
       expect(result.error.message).toBe("SQL execute failed: upstream request timed out. Please retry.");
       expect(result.error.message).not.toContain("<!DOCTYPE html>");
       expect(result.error.meta?.responseSnippet).toContain("<!DOCTYPE html>");
+    }
+  });
+
+  test("maps 402 quota responses to SQL_QUOTA_EXCEEDED (not NETWORK_ERROR)", async () => {
+    const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
+
+    const service = new SQLService();
+    service.initialize(
+      createContext(async () => response(false, 402,
+        "Storage quota exceeded. Used: 134060 bytes, Limit: 131072 bytes",
+        "Payment Required",
+      ), invokeCalls),
+    );
+
+    const result = await service.execute("CREATE TABLE IF NOT EXISTS notes (body TEXT)");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Node returns a plain-text 402 for a storage-quota write; apps switch on
+      // code, so it must map to the quota code (parity with KV), not NETWORK_ERROR.
+      expect(result.error.code).toBe(ErrorCodes.SQL_QUOTA_EXCEEDED);
     }
   });
 });

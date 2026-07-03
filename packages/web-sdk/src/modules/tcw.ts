@@ -121,6 +121,9 @@ export interface Config extends ClientConfig {
   /** Whether to auto-create space on sign-in (default: true) */
   autoCreateSpace?: boolean;
 
+  /** Whether to auto-bootstrap the account after sign-in (default: true) */
+  autoBootstrapAccount?: boolean;
+
   /** Space creation handler (default: ModalSpaceCreationHandler) */
   spaceCreationHandler?: ISpaceCreationHandler;
 
@@ -356,6 +359,7 @@ export class TinyCloudWeb {
       domain: this.config.domain ?? (typeof window !== 'undefined' ? window.location.hostname : 'app.tinycloud.xyz'),
       prefix: this.config.spacePrefix,
       autoCreateSpace: this.config.autoCreateSpace ?? true,
+      autoBootstrapAccount: this.config.autoBootstrapAccount,
       sessionExpirationMs: this.config.sessionExpirationMs,
       sessionStorage: this.sessionStorage,
       notificationHandler: this.notificationHandler,
