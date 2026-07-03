@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/bootstrap",
-  "version": "2.4.0",
+  "version": "2.4.1-beta.0",
   "description": "Canonical TinyCloud account bootstrap manifest and allowlist",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",

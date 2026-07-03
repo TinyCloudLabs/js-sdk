@@ -19,5 +19,7 @@
     "@tinycloud/web-sdk": "2.5.0",
     "@tinycloud/sdk-services-test": "10.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "tidy-bootstrap-root-paths"
+  ]
 }
