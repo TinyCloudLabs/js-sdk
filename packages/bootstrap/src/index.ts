@@ -94,13 +94,16 @@ export const TINYCLOUD_DEFAULT_SPACE_MANIFEST: Manifest = {
     {
       service: "tinycloud.kv",
       space: BOOTSTRAP_DEFAULT_SPACE,
-      path: "/",
+      // Empty path = whole service on this space. Do NOT use "/": the recap
+      // encoder joins it as `<space>/<service>//`, which the node's byte-prefix
+      // resource matching can never extend (real paths start `<service>/x…`).
+      path: "",
       actions: ["get", "put", "del", "list", "metadata"],
     },
     {
       service: "tinycloud.sql",
       space: BOOTSTRAP_DEFAULT_SPACE,
-      path: "/",
+      path: "",
       actions: ["read", "write"],
     },
   ],
@@ -117,13 +120,16 @@ export const TINYCLOUD_APPLICATIONS_SPACE_MANIFEST: Manifest = {
     {
       service: "tinycloud.kv",
       space: DEFAULT_MANIFEST_SPACE,
-      path: "/",
+      // Empty path = whole service on this space. Do NOT use "/": the recap
+      // encoder joins it as `<space>/<service>//`, which the node's byte-prefix
+      // resource matching can never extend (real paths start `<service>/x…`).
+      path: "",
       actions: ["get", "put", "del", "list", "metadata"],
     },
     {
       service: "tinycloud.sql",
       space: DEFAULT_MANIFEST_SPACE,
-      path: "/",
+      path: "",
       actions: ["read", "write"],
     },
   ],
@@ -215,7 +221,7 @@ export const TINYCLOUD_PUBLIC_SPACE_MANIFEST: Manifest = {
     {
       service: "tinycloud.kv",
       space: BOOTSTRAP_PUBLIC_SPACE,
-      path: "/",
+      path: "",
       actions: ["get", "list", "metadata"],
     },
   ],
