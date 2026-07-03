@@ -124,6 +124,8 @@ import {
   type DecryptTransport,
   type EncryptionCrypto,
   type NetworkDescriptor,
+  type AccountSpace,
+  type SpaceInfo,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import type { SignStrategy } from "./authorization/strategies";
@@ -544,6 +546,50 @@ export class TinyCloudNode {
   /** Outcome of the last signIn()'s account-registry sync. */
   get registryStatus(): { synced: boolean; reason?: string } {
     return this._registryStatus;
+  }
+
+  /**
+   * Owned-space registry records whose durable write has not been confirmed.
+   * Keyed by space id. Populated by every registration site (space hosting,
+   * create-path callback) and flushed — awaited, with results checked — by
+   * syncAccountRegistry() inside signIn(). This is the durability backstop:
+   * a recap/manifest session does not hold `tinycloud.space/list`, so
+   * `spaces.syncAccessible()` cannot rediscover owned spaces whose immediate
+   * registration attempt failed.
+   */
+  private pendingSpaceRegistrations = new Map<string, SpaceInfo | AccountSpace>();
+
+  private static spaceRegistrationKey(record: SpaceInfo | AccountSpace): string {
+    return "spaceId" in record ? record.spaceId : record.id;
+  }
+
+  /**
+   * Attempt an owned-space registry write without failing the caller. The
+   * record stays pending until a register() call CONFIRMS success — service
+   * methods report failures as `{ok:false}` Results, not exceptions, so a
+   * bare await/.catch() cannot be trusted to notice them.
+   */
+  private async attemptSpaceRegistration(
+    record: SpaceInfo | AccountSpace,
+  ): Promise<void> {
+    const key = TinyCloudNode.spaceRegistrationKey(record);
+    this.pendingSpaceRegistrations.set(key, record);
+    try {
+      const result = await this.account.spaces.register(record);
+      if (result.ok) {
+        this.pendingSpaceRegistrations.delete(key);
+        return;
+      }
+      console.warn(
+        `[TinyCloudNode] registry write for ${key} failed (kept pending): ${result.error.message}`,
+      );
+    } catch (err) {
+      console.warn(
+        `[TinyCloudNode] registry write for ${key} failed (kept pending): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   private get nodeFeatures(): string[] {
@@ -1301,6 +1347,23 @@ export class TinyCloudNode {
             `Failed to ensure account index: ${ensured.error.message}`,
           );
         }
+        // Durably write the owned-space registry records that earlier
+        // best-effort attempts could not confirm. This is what actually
+        // populates `account/spaces/{id}` for a fresh account:
+        // writeManifestRegistryRecords() covers the APPLICATIONS registry and
+        // syncAccessible() cannot see owned spaces at all under a
+        // recap/manifest session (no `tinycloud.space/list` capability).
+        for (const [key, record] of Array.from(
+          this.pendingSpaceRegistrations.entries(),
+        )) {
+          const registered = await this.account.spaces.register(record);
+          if (!registered.ok) {
+            throw new Error(
+              `Failed to register owned space ${key}: ${registered.error.message}`,
+            );
+          }
+          this.pendingSpaceRegistrations.delete(key);
+        }
         await this.writeManifestRegistryRecords();
         const spaces = await this.account.spaces.syncAccessible();
         if (!spaces.ok) {
@@ -1471,25 +1534,16 @@ export class TinyCloudNode {
       );
     }
 
-    void this.account.spaces
-      .register({
-        spaceId,
-        name,
-        ownerDid: this.did,
-        type: "owned",
-        permissions: ["*"],
-        status: "active",
-      })
-      .catch((err) => {
-        // Best-effort: the durable registry write happens via the awaited
-        // syncAccountRegistry()/ensureOwnedSpaceHosted() paths. De-swallowed to
-        // a log so a silently-missing registry record is at least traceable.
-        console.warn(
-          `[TinyCloudNode] best-effort registry write for ${spaceId} failed: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      });
+    // Best-effort immediate write; kept pending until confirmed so the awaited
+    // syncAccountRegistry() flush (inside signIn) durably retries it.
+    void this.attemptSpaceRegistration({
+      spaceId,
+      name,
+      ownerDid: this.did,
+      type: "owned",
+      permissions: ["*"],
+      status: "active",
+    });
 
     return spaceId;
   }
@@ -1540,18 +1594,14 @@ export class TinyCloudNode {
     // record is durably present and a subsequent ensure short-circuits on the
     // registry instead of re-hosting. The host already succeeded, so a failed
     // registry write must not fail this call.
-    try {
-      await this.account.spaces.register({
-        spaceId,
-        name,
-        ownerDid: this.did,
-        type: "owned",
-        permissions: ["*"],
-        status: "active",
-      });
-    } catch {
-      // Registry write is best-effort; the space is hosted regardless.
-    }
+    await this.attemptSpaceRegistration({
+      spaceId,
+      name,
+      ownerDid: this.did,
+      type: "owned",
+      permissions: ["*"],
+      status: "active",
+    });
 
     return hosted;
   }
@@ -2510,7 +2560,7 @@ export class TinyCloudNode {
         }
       },
       onSpaceRegistered: async (space) => {
-        await this.account.spaces.register(space);
+        await this.attemptSpaceRegistration(space);
       },
     });
 

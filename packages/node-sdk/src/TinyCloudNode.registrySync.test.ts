@@ -111,7 +111,10 @@ function makeExternalSigner() {
 
 interface FakeAccount {
   index: { ensure: ReturnType<typeof mock> };
-  spaces: { syncAccessible: ReturnType<typeof mock> };
+  spaces: {
+    syncAccessible: ReturnType<typeof mock>;
+    register: ReturnType<typeof mock>;
+  };
 }
 
 /**
@@ -121,7 +124,10 @@ interface FakeAccount {
  */
 function makeRegistryNode(opts: {
   hostImpl?: (spaceId: string) => Promise<void>;
-  account?: Partial<FakeAccount>;
+  account?: {
+    index?: Partial<FakeAccount["index"]>;
+    spaces?: Partial<FakeAccount["spaces"]>;
+  };
 } = {}): {
   node: TinyCloudNode;
   callLog: string[];
@@ -134,14 +140,19 @@ function makeRegistryNode(opts: {
         callLog.push("index.ensure");
         return { ok: true, data: undefined } as any;
       }),
+      ...(opts.account?.index ?? {}),
     },
     spaces: {
       syncAccessible: mock(async () => {
         callLog.push("spaces.syncAccessible");
         return { ok: true, data: [] } as any;
       }),
+      register: mock(async (record: any) => {
+        callLog.push(`spaces.register:${record.spaceId ?? record.id}`);
+        return { ok: true, data: record } as any;
+      }),
+      ...(opts.account?.spaces ?? {}),
     },
-    ...opts.account,
   };
 
   const node = new TinyCloudNode({
@@ -340,5 +351,99 @@ describe("withAccountRegistryRetry", () => {
     } finally {
       (globalThis as any).setTimeout = realSetTimeout;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (f) owned-space registrations are durably flushed by the awaited sync
+// ---------------------------------------------------------------------------
+
+const PENDING_SPACE = {
+  spaceId: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:applications",
+  name: "applications",
+  ownerDid: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+  type: "owned" as const,
+  permissions: ["*"],
+  status: "active" as const,
+};
+
+describe("account registry sync — durable owned-space registration flush", () => {
+  test("a register() failure reported as {ok:false} keeps the record pending (no throw to notice)", async () => {
+    const { node, account } = makeRegistryNode();
+    account.spaces.register.mockImplementationOnce(async () => ({
+      ok: false,
+      error: { message: "404 space not found" },
+    }));
+
+    await (node as any).attemptSpaceRegistration(PENDING_SPACE);
+
+    expect((node as any).pendingSpaceRegistrations.size).toBe(1);
+  });
+
+  test("signIn's awaited sync flushes a previously failed registration", async () => {
+    const { node, account, callLog } = makeRegistryNode();
+    // Best-effort attempt fails as a Result — the pre-fix code silently
+    // dropped this record forever (the .catch never fires on {ok:false}).
+    account.spaces.register.mockImplementationOnce(async () => ({
+      ok: false,
+      error: { message: "404 space not found" },
+    }));
+    await (node as any).attemptSpaceRegistration(PENDING_SPACE);
+    expect((node as any).pendingSpaceRegistrations.size).toBe(1);
+
+    await node.signIn();
+
+    expect((node as any).pendingSpaceRegistrations.size).toBe(0);
+    // 1 failed best-effort + 1 successful flush inside the sync
+    expect(account.spaces.register).toHaveBeenCalledTimes(2);
+    expect(node.registryStatus.synced).toBe(true);
+    // The flush happens inside the retry block, after index.ensure and
+    // before syncAccessible.
+    const flushIdx = callLog.indexOf(`spaces.register:${PENDING_SPACE.spaceId}`);
+    const ensureIdx = callLog.indexOf("index.ensure");
+    const syncIdx = callLog.indexOf("spaces.syncAccessible");
+    expect(flushIdx).toBeGreaterThan(ensureIdx);
+    expect(flushIdx).toBeLessThan(syncIdx);
+  });
+
+  test("a flush that keeps failing surfaces registryStatus, keeps the record pending, and signIn resolves", async () => {
+    const { node, account } = makeRegistryNode();
+    account.spaces.register.mockImplementation(async () => ({
+      ok: false,
+      error: { message: "Storage quota exceeded (402)" },
+    }));
+    (node as any).withAccountRegistryRetry = async (task: () => Promise<void>) => {
+      await task();
+    };
+
+    await (node as any).attemptSpaceRegistration(PENDING_SPACE);
+    await node.signIn(); // must NOT throw
+
+    expect(node.registryStatus.synced).toBe(false);
+    expect(node.registryStatus.reason).toContain("402");
+    // Still pending: the next signIn retries it (retry-on-signIn policy).
+    expect((node as any).pendingSpaceRegistrations.size).toBe(1);
+  });
+
+  test("the create-path callback keeps SpaceInfo-shaped records pending on failure", async () => {
+    const { node, account } = makeRegistryNode();
+    account.spaces.register.mockImplementationOnce(async () => ({
+      ok: false,
+      error: { message: "404 space not found" },
+    }));
+
+    await (node as any).attemptSpaceRegistration({
+      id: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+      name: "default",
+      owner: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+      type: "owned",
+      permissions: ["*"],
+    });
+
+    expect(
+      (node as any).pendingSpaceRegistrations.has(
+        "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+      ),
+    ).toBe(true);
   });
 });
