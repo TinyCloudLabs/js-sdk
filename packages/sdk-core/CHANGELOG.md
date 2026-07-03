@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-core
 
+## 2.5.1
+
+### Patch Changes
+
+- Updated dependencies [3b23940]
+  - @tinycloud/bootstrap@2.4.1
+  - @tinycloud/sdk-services@2.4.2
+
 ## 2.5.1-beta.0
 
 ### Patch Changes
