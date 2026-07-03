@@ -763,9 +763,15 @@ export class SpaceService implements ISpaceService {
 
   private notifySpaceRegistered(space: SpaceInfo): void {
     if (!this.onSpaceRegisteredFn) return;
-    void Promise.resolve(this.onSpaceRegisteredFn(space)).catch(() => {
+    void Promise.resolve(this.onSpaceRegisteredFn(space)).catch((error) => {
       // Account-space registration is an index maintenance side effect; it must
-      // not make the canonical space operation fail.
+      // not make the canonical space operation fail. But a silently-swallowed
+      // failure leaves the newly created space missing from the account
+      // registry (empty Overview), so surface it as a log instead of hiding it.
+      console.warn(
+        `[SpaceService] account registry write for ${space.id} failed:`,
+        error instanceof Error ? error.message : String(error)
+      );
     });
   }
 

@@ -616,6 +616,15 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       },
     });
 
+    // The account-registry sync is now awaited inside signIn (durable G2 fix):
+    // stub the index ensure + accessible-spaces sync (both make real fetches)
+    // so the sync completes in one pass and reaches the manifest-record write,
+    // which is what this test asserts. signIn does not reset _account, so
+    // pre-warming here survives into the sync.
+    const acct = (node as any).account;
+    acct.index.ensure = mock(async () => ({ ok: true, data: { created: false } }));
+    acct.spaces.syncAccessible = mock(async () => ({ ok: true, data: [] }));
+
     await withFetchResponses(
       [
         new Response(

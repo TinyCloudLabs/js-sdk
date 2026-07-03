@@ -530,6 +530,22 @@ export class TinyCloudNode {
     return this._bootstrapStatus;
   }
 
+  /**
+   * Outcome of the last signIn()'s account-registry sync. `synced` is false
+   * when the registry records (the `account/spaces/{id}` KV entries the
+   * Overview/Spaces UI reads via the account index) could not be durably
+   * written; `reason` carries the cause. This is non-fatal — signIn() always
+   * succeeds — so apps can surface a "refresh account index" call-to-action.
+   */
+  private _registryStatus: { synced: boolean; reason?: string } = {
+    synced: true,
+  };
+
+  /** Outcome of the last signIn()'s account-registry sync. */
+  get registryStatus(): { synced: boolean; reason?: string } {
+    return this._registryStatus;
+  }
+
   private get nodeFeatures(): string[] {
     return this.auth?.nodeFeatures ?? [];
   }
@@ -929,6 +945,7 @@ export class TinyCloudNode {
     this._spaceService = undefined;
     this._serviceContext = undefined;
     this.runtimePermissionGrants = [];
+    this._registryStatus = { synced: true };
 
     await this.tc.signIn(options);
     this.syncResolvedHostFromAuth();
@@ -949,7 +966,11 @@ export class TinyCloudNode {
     }
 
     if (!bootstrapped) {
-      this.scheduleAccountRegistrySync();
+      // Await the registry sync inside signIn: the account-spaces registry is
+      // what the Overview/Spaces UI reads, and the app has no async refresh
+      // path — records must be durably written before signIn() resolves so the
+      // first render populates. This never throws (see syncAccountRegistry).
+      await this.syncAccountRegistry();
     }
 
     this.notificationHandler.success("Successfully signed in");
@@ -1261,15 +1282,40 @@ export class TinyCloudNode {
     }
   }
 
-  private scheduleAccountRegistrySync(): void {
-    void this.withAccountRegistryRetry(async () => {
-      void this.account.index.ensure();
-      await this.writeManifestRegistryRecords();
-      const spaces = await this.account.spaces.syncAccessible();
-      if (!spaces.ok) {
-        throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+  private async syncAccountRegistry(): Promise<void> {
+    this._registryStatus = { synced: true };
+    try {
+      // Proactively host the account space before writing to it. The registry
+      // records (account/spaces/{id}) and the account index both live in the
+      // account space's KV/SQL; if it is not yet hosted, index.ensure() and
+      // syncAccessible() 404. The legacy floating `void index.ensure()` hid
+      // exactly this failure, leaving fresh accounts with an empty Overview.
+      if (this.accountSpaceId) {
+        await this.ensureOwnedSpaceHostedById(this.accountSpaceId);
       }
-    });
+
+      await this.withAccountRegistryRetry(async () => {
+        const ensured = await this.account.index.ensure();
+        if (!ensured.ok) {
+          throw new Error(
+            `Failed to ensure account index: ${ensured.error.message}`,
+          );
+        }
+        await this.writeManifestRegistryRecords();
+        const spaces = await this.account.spaces.syncAccessible();
+        if (!spaces.ok) {
+          throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+        }
+      });
+    } catch (error) {
+      // Registry sync is index maintenance, never a precondition of the
+      // session the user just signed (notably an at-cap 402 on the registry
+      // write must not lock the user out): never fail signIn(). Surface a
+      // non-fatal status so apps can offer a "refresh account index" action.
+      const reason = error instanceof Error ? error.message : String(error);
+      this._registryStatus = { synced: false, reason };
+      console.warn(`[TinyCloudNode] account registry sync failed: ${reason}`);
+    }
   }
 
   private async withAccountRegistryRetry(task: () => Promise<void>): Promise<void> {
@@ -1287,10 +1333,11 @@ export class TinyCloudNode {
       }
     }
 
-    console.warn(
-      "TinyCloud account registry sync failed after retries",
-      lastError,
-    );
+    // De-swallowed: propagate the final failure to the caller so it can be
+    // surfaced as a non-fatal registryStatus instead of a silent console.warn.
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`Account registry sync failed after retries: ${String(lastError)}`);
   }
 
   private requestedEncryptionNetworkIds(): string[] {
@@ -1433,7 +1480,16 @@ export class TinyCloudNode {
         permissions: ["*"],
         status: "active",
       })
-      .catch(() => {});
+      .catch((err) => {
+        // Best-effort: the durable registry write happens via the awaited
+        // syncAccountRegistry()/ensureOwnedSpaceHosted() paths. De-swallowed to
+        // a log so a silently-missing registry record is at least traceable.
+        console.warn(
+          `[TinyCloudNode] best-effort registry write for ${spaceId} failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
 
     return spaceId;
   }
