@@ -648,7 +648,12 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
 
     await waitFor(() => put.mock.calls.length > 0);
     expect(ensureOwnedSpaceHostedById).toHaveBeenCalledWith(accountSpaceId);
-    expect(put).toHaveBeenCalledTimes(1);
+    // The sync also reconciles owned-space registry records (`spaces/...`
+    // puts); this test only pins the APPLICATIONS registry write.
+    const manifestPuts = put.mock.calls.filter((call: any[]) =>
+      String(call[0]).startsWith("applications/"),
+    );
+    expect(manifestPuts.length).toBe(1);
     expect(put).toHaveBeenCalledWith("applications/com.listen.app", {
       app_id: "com.listen.app",
       manifests: [manifest],

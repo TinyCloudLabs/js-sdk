@@ -394,8 +394,12 @@ describe("account registry sync — durable owned-space registration flush", () 
     await node.signIn();
 
     expect((node as any).pendingSpaceRegistrations.size).toBe(0);
-    // 1 failed best-effort + 1 successful flush inside the sync
-    expect(account.spaces.register).toHaveBeenCalledTimes(2);
+    // The failed best-effort is retried during the sync (plus reconciliation
+    // registers for the session's expected spaces).
+    const flushCalls = account.spaces.register.mock.calls.filter(
+      (call: any[]) => (call[0].spaceId ?? call[0].id) === PENDING_SPACE.spaceId,
+    );
+    expect(flushCalls.length).toBe(2); // 1 failed best-effort + 1 successful flush
     expect(node.registryStatus.synced).toBe(true);
     // The flush happens inside the retry block, after index.ensure and
     // before syncAccessible.
@@ -445,5 +449,44 @@ describe("account registry sync — durable owned-space registration flush", () 
         "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
       ),
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (g) reconciliation heals accounts whose registry records were dropped
+// ---------------------------------------------------------------------------
+
+describe("account registry sync — reconciliation of missing records", () => {
+  test("registers expected session spaces whose records are missing (no pending needed)", async () => {
+    const { node, account, callLog } = makeRegistryNode();
+    // Nothing pending — this account's spaces already exist server-side (the
+    // legacy-bricked case) so no creation/hosting site fires on sign-in. The
+    // fake account has no index/get fastpath, so isOwnedSpaceRegistered
+    // resolves "not registered" and reconciliation must register them.
+    await node.signIn();
+
+    expect((node as any).pendingSpaceRegistrations.size).toBe(0);
+    const registeredIds = account.spaces.register.mock.calls.map(
+      (call: any[]) => call[0].spaceId ?? call[0].id,
+    );
+    expect(registeredIds).toContain(node.accountSpaceId!);
+    expect(node.registryStatus.synced).toBe(true);
+    // Reconciliation happens inside the retry block, before syncAccessible.
+    const firstRegisterIdx = callLog.findIndex((entry) =>
+      entry.startsWith("spaces.register:"),
+    );
+    expect(firstRegisterIdx).toBeGreaterThan(callLog.indexOf("index.ensure"));
+    expect(firstRegisterIdx).toBeLessThan(callLog.indexOf("spaces.syncAccessible"));
+  });
+
+  test("skips spaces whose registry record already exists", async () => {
+    const { node, account } = makeRegistryNode();
+    // Make the canonical KV check say "registered" for every space.
+    (node as any).isOwnedSpaceRegistered = async () => true;
+
+    await node.signIn();
+
+    expect(account.spaces.register).toHaveBeenCalledTimes(0);
+    expect(node.registryStatus.synced).toBe(true);
   });
 });

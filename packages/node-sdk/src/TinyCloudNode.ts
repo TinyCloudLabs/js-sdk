@@ -564,6 +564,39 @@ export class TinyCloudNode {
   }
 
   /**
+   * The owned spaces this session is expected to have registry records for:
+   * the primary and account spaces plus every owned space named by the
+   * composed manifest resources. Used by syncAccountRegistry() to RECONCILE —
+   * an account whose records were dropped by the legacy fire-and-forget
+   * writes never re-creates its spaces on sign-in, so pending-registration
+   * tracking alone can never heal it.
+   */
+  private expectedOwnedSpaces(): Map<string, string> {
+    const expected = new Map<string, string>();
+    const ownerAddress = this._address?.toLowerCase();
+    if (!ownerAddress) return expected;
+
+    const add = (nameOrUri: string | undefined) => {
+      if (!nameOrUri) return;
+      const spaceId = nameOrUri.includes(":")
+        ? nameOrUri
+        : this.ownedSpaceId(nameOrUri);
+      const segments = spaceId.split(":");
+      const name = segments[segments.length - 1];
+      const address = segments[segments.length - 2];
+      if (!name || address?.toLowerCase() !== ownerAddress) return;
+      expected.set(spaceId, name);
+    };
+
+    add(this.spaceId);
+    add(this.accountSpaceId);
+    for (const resource of this.capabilityRequest?.resources ?? []) {
+      add(resource.space);
+    }
+    return expected;
+  }
+
+  /**
    * Attempt an owned-space registry write without failing the caller. The
    * record stays pending until a register() call CONFIRMS success — service
    * methods report failures as `{ok:false}` Results, not exceptions, so a
@@ -1347,15 +1380,34 @@ export class TinyCloudNode {
             `Failed to ensure account index: ${ensured.error.message}`,
           );
         }
-        // Durably write the owned-space registry records that earlier
-        // best-effort attempts could not confirm. This is what actually
-        // populates `account/spaces/{id}` for a fresh account:
+        // Durably write the owned-space registry records. This is what
+        // actually populates `account/spaces/{id}`:
         // writeManifestRegistryRecords() covers the APPLICATIONS registry and
         // syncAccessible() cannot see owned spaces at all under a
         // recap/manifest session (no `tinycloud.space/list` capability).
-        for (const [key, record] of Array.from(
-          this.pendingSpaceRegistrations.entries(),
-        )) {
+        // Two sources:
+        // 1) pending records whose earlier best-effort attempt is unconfirmed;
+        // 2) expected owned spaces (session + manifest resources) whose
+        //    record is missing — RECONCILIATION, healing accounts whose
+        //    records were dropped by the legacy fire-and-forget writes
+        //    (sign-in never re-creates their spaces, so no registration
+        //    site fires for them).
+        const toRegister = new Map<string, SpaceInfo | AccountSpace>(
+          this.pendingSpaceRegistrations,
+        );
+        for (const [spaceId, name] of this.expectedOwnedSpaces()) {
+          if (toRegister.has(spaceId)) continue;
+          if (await this.isOwnedSpaceRegistered(spaceId)) continue;
+          toRegister.set(spaceId, {
+            spaceId,
+            name,
+            ownerDid: this.did,
+            type: "owned",
+            permissions: ["*"],
+            status: "active",
+          });
+        }
+        for (const [key, record] of Array.from(toRegister.entries())) {
           const registered = await this.account.spaces.register(record);
           if (!registered.ok) {
             throw new Error(
