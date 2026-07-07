@@ -420,15 +420,15 @@ function expandVaultPermission(entry: PermissionEntry): PermissionEntry[] {
         : action;
     const mapped =
       normalized === "read" || normalized === "get"
-        ? "tinycloud.kv/get"
+        ? KV.GET
         : normalized === "write" || normalized === "put"
-          ? "tinycloud.kv/put"
+          ? KV.PUT
           : normalized === "delete" || normalized === "del"
-            ? "tinycloud.kv/del"
+            ? KV.DEL
             : normalized === "list"
-              ? "tinycloud.kv/list"
+              ? KV.LIST
               : normalized === "metadata"
-                ? "tinycloud.kv/metadata"
+                ? KV.METADATA
                 : undefined;
     if (mapped === undefined) {
       throw new Error(`unknown vault action ${JSON.stringify(action)}`);
