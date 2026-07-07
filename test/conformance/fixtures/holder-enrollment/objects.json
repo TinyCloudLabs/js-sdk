@@ -1,0 +1,714 @@
+{
+  "description": "Canonical TinyCloud signed objects (control-plane only). GrantPresentation is nonce-bound and lives in test-vectors/grant-presentation/; it is NOT a signed-object-profile wrapper.",
+  "objects": [
+    {
+      "object_type": "Policy",
+      "id_field": "policyId",
+      "id": "pol_zkeogyy27jzggzg2bnl5rrvnhcqz55szsemlbjzpkqrgdgoe7pga",
+      "domain": "xyz.tinycloud.policy/policy/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.policy/policy/v0",
+        "ownerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "signingKeyDid": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+        "createdAt": "2026-06-01T00:00:00Z",
+        "resource": {
+          "resourceType": "notebook-slice",
+          "resourceId": "nb_project_notes",
+          "permissionsCeiling": [
+            {
+              "service": "tinycloud.kv",
+              "space": "applications",
+              "path": "notebooks/nb_project_notes/docs/",
+              "actions": [
+                "tinycloud.kv/get",
+                "tinycloud.kv/list",
+                "tinycloud.kv/metadata"
+              ]
+            }
+          ]
+        },
+        "when": {
+          "subject": {
+            "did": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac"
+          }
+        },
+        "grant": {
+          "output": "portable-delegation",
+          "maxTtlSeconds": 300,
+          "delegationMode": "terminal",
+          "revocation": "active_cutoff"
+        }
+      },
+      "unsigned_jcs_utf8_hex": "7b22637265617465644174223a22323032362d30362d30315430303a30303a30305a222c226772616e74223a7b2264656c65676174696f6e4d6f6465223a227465726d696e616c222c226d617854746c5365636f6e6473223a3330302c226f7574707574223a22706f727461626c652d64656c65676174696f6e222c227265766f636174696f6e223a226163746976655f6375746f6666227d2c226f776e6572446964223a226469643a706b683a6569703135353a313a307837653566343535323039316136393132356435646663623762386332363539303239333935626466222c227265736f75726365223a7b227065726d697373696f6e734365696c696e67223a5b7b22616374696f6e73223a5b2274696e79636c6f75642e6b762f676574222c2274696e79636c6f75642e6b762f6c697374222c2274696e79636c6f75642e6b762f6d65746164617461225d2c2270617468223a226e6f7465626f6f6b732f6e625f70726f6a6563745f6e6f7465732f646f63732f222c2273657276696365223a2274696e79636c6f75642e6b76222c227370616365223a226170706c69636174696f6e73227d5d2c227265736f757263654964223a226e625f70726f6a6563745f6e6f746573222c227265736f7572636554797065223a226e6f7465626f6f6b2d736c696365227d2c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f706f6c6963792f7630222c227369676e696e674b6579446964223a226469643a6b65793a7a364d6b74554c75645474417341685265675950695a363633315256337669763132716434475146387a317842323253222c227768656e223a7b227375626a656374223a7b22646964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163227d7d7d",
+      "digest_hex": "ca88e3631afa726364da0b57d8c6ad38a19ef6599118b0a72f54226199c4fbcc",
+      "signature": {
+        "suite": "eddsa-ed25519-sha256-jcs-v1",
+        "signerDid": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+        "value": "Qg8f69RmSfZ0odFvtupyoKD9WFv9j1rNwExjGwEisagArWbUAcbS7spq8fG-tXkvy48K4GhrNT7frMTY0uUXDg"
+      }
+    },
+    {
+      "object_type": "Policy",
+      "id_field": "policyId",
+      "id": "pol_eiqepppd6uutcnvuqlsb2bqmjkjmshabylama4c3jepqd54hycjq",
+      "domain": "xyz.tinycloud.policy/policy/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.policy/policy/v0",
+        "ownerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "signingKeyDid": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+        "createdAt": "2026-06-01T00:00:00Z",
+        "resource": {
+          "resourceType": "collection",
+          "resourceId": "conv_456",
+          "permissionsCeiling": [
+            {
+              "service": "tinycloud.sql",
+              "space": "applications",
+              "path": "xyz.tinycloud.listen/conversations",
+              "actions": [
+                "tinycloud.sql/read"
+              ],
+              "caveats": {
+                "mode": "constrained-statements",
+                "readOnly": true,
+                "statements": [
+                  {
+                    "name": "listen.getConversation",
+                    "sql": "SELECT id, title, source, source_id, source_url, started_at, ended_at, duration_secs, summary, metadata, transcript_json, transcript_text, created_at, updated_at FROM conversation WHERE id = ?",
+                    "fixedParams": [
+                      {
+                        "index": 0,
+                        "value": "conv_456"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "listen.listParticipants",
+                    "sql": "SELECT id, name, email, speaker_label FROM participant WHERE conversation_id = ? ORDER BY COALESCE(speaker_label, name), id",
+                    "fixedParams": [
+                      {
+                        "index": 0,
+                        "value": "conv_456"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "when": {
+          "evidence": {
+            "requirementId": "email-domain-allowed",
+            "verifier": "w3c.vc/credential/v1",
+            "requirements": {
+              "type": "EmailVerification",
+              "vct": "tinycloud.email/v1",
+              "subject": {
+                "binding": "sub-equals-eligibleSubjectDid"
+              },
+              "claims": {
+                "emailDomain": {
+                  "oneOf": [
+                    "tinycloud.xyz",
+                    "example.org"
+                  ]
+                }
+              }
+            },
+            "authority": {
+              "acceptedIssuers": [
+                "did:web:issuer.tinycloud.xyz"
+              ]
+            }
+          }
+        },
+        "grant": {
+          "output": "portable-delegation",
+          "maxTtlSeconds": 300,
+          "delegationMode": "terminal",
+          "revocation": "active_cutoff"
+        }
+      },
+      "unsigned_jcs_utf8_hex": "7b22637265617465644174223a22323032362d30362d30315430303a30303a30305a222c226772616e74223a7b2264656c65676174696f6e4d6f6465223a227465726d696e616c222c226d617854746c5365636f6e6473223a3330302c226f7574707574223a22706f727461626c652d64656c65676174696f6e222c227265766f636174696f6e223a226163746976655f6375746f6666227d2c226f776e6572446964223a226469643a706b683a6569703135353a313a307837653566343535323039316136393132356435646663623762386332363539303239333935626466222c227265736f75726365223a7b227065726d697373696f6e734365696c696e67223a5b7b22616374696f6e73223a5b2274696e79636c6f75642e73716c2f72656164225d2c2263617665617473223a7b226d6f6465223a22636f6e73747261696e65642d73746174656d656e7473222c22726561644f6e6c79223a747275652c2273746174656d656e7473223a5b7b226669786564506172616d73223a5b7b22696e646578223a302c2276616c7565223a22636f6e765f343536227d5d2c226e616d65223a226c697374656e2e676574436f6e766572736174696f6e222c2273716c223a2253454c4543542069642c207469746c652c20736f757263652c20736f757263655f69642c20736f757263655f75726c2c20737461727465645f61742c20656e6465645f61742c206475726174696f6e5f736563732c2073756d6d6172792c206d657461646174612c207472616e7363726970745f6a736f6e2c207472616e7363726970745f746578742c20637265617465645f61742c20757064617465645f61742046524f4d20636f6e766572736174696f6e205748455245206964203d203f227d2c7b226669786564506172616d73223a5b7b22696e646578223a302c2276616c7565223a22636f6e765f343536227d5d2c226e616d65223a226c697374656e2e6c6973745061727469636970616e7473222c2273716c223a2253454c4543542069642c206e616d652c20656d61696c2c20737065616b65725f6c6162656c2046524f4d207061727469636970616e7420574845524520636f6e766572736174696f6e5f6964203d203f204f5244455220425920434f414c4553434528737065616b65725f6c6162656c2c206e616d65292c206964227d5d7d2c2270617468223a2278797a2e74696e79636c6f75642e6c697374656e2f636f6e766572736174696f6e73222c2273657276696365223a2274696e79636c6f75642e73716c222c227370616365223a226170706c69636174696f6e73227d5d2c227265736f757263654964223a22636f6e765f343536222c227265736f7572636554797065223a22636f6c6c656374696f6e227d2c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f706f6c6963792f7630222c227369676e696e674b6579446964223a226469643a6b65793a7a364d6b74554c75645474417341685265675950695a363633315256337669763132716434475146387a317842323253222c227768656e223a7b2265766964656e6365223a7b22617574686f72697479223a7b22616363657074656449737375657273223a5b226469643a7765623a6973737565722e74696e79636c6f75642e78797a225d7d2c22726571756972656d656e744964223a22656d61696c2d646f6d61696e2d616c6c6f776564222c22726571756972656d656e7473223a7b22636c61696d73223a7b22656d61696c446f6d61696e223a7b226f6e654f66223a5b2274696e79636c6f75642e78797a222c226578616d706c652e6f7267225d7d7d2c227375626a656374223a7b2262696e64696e67223a227375622d657175616c732d656c696769626c655375626a656374446964227d2c2274797065223a22456d61696c566572696669636174696f6e222c22766374223a2274696e79636c6f75642e656d61696c2f7631227d2c227665726966696572223a227733632e76632f63726564656e7469616c2f7631227d7d7d",
+      "digest_hex": "222047bde3f5293136b482e41d060c4a92c91c01c2c0c0705b491f01f787c093",
+      "signature": {
+        "suite": "eddsa-ed25519-sha256-jcs-v1",
+        "signerDid": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+        "value": "IYm_H4V-uoil3Of6sKZXgDtChICUlz6Yz5jdFM2AQQGRPg68F5Yu5UnGS6I_PpDL10EQRlSnGGeFxeEbwSgJCA"
+      }
+    },
+    {
+      "object_type": "PolicyStatus",
+      "id_field": "statusId",
+      "id": "polst_kcuvrzepd3hze7tvrobdewhy5fbknfaobedoeydtblhl25w4elza",
+      "domain": "xyz.tinycloud.policy/status/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.policy/status/v0",
+        "policyId": "pol_zkeogyy27jzggzg2bnl5rrvnhcqz55szsemlbjzpkqrgdgoe7pga",
+        "ownerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "sequence": 1,
+        "disposition": "active",
+        "effectiveAt": "2026-06-01T00:00:00Z",
+        "signingKeyDid": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S"
+      },
+      "unsigned_jcs_utf8_hex": "7b22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30362d30315430303a30303a30305a222c226f776e6572446964223a226469643a706b683a6569703135353a313a307837653566343535323039316136393132356435646663623762386332363539303239333935626466222c22706f6c6963794964223a22706f6c5f7a6b656f67797932376a7a67677a6732626e6c357272766e6863717a3535737a73656d6c626a7a706b71726764676f6537706761222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f7374617475732f7630222c2273657175656e6365223a312c227369676e696e674b6579446964223a226469643a6b65793a7a364d6b74554c75645474417341685265675950695a363633315256337669763132716434475146387a317842323253227d",
+      "digest_hex": "50a958e48f1ecf927e758b823258f8e942a6940e0906e260730acebd76dc22f2",
+      "signature": {
+        "suite": "eddsa-ed25519-sha256-jcs-v1",
+        "signerDid": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+        "value": "YUkNMTPMKm6GjrgHcbE0ylMn4_O1LeaGAiD7z22S9ROrUilgaq16F-S5Vj3iQT76FSiXIDbzPi-ryeAU8ZAyDg"
+      }
+    },
+    {
+      "object_type": "PolicyStatus",
+      "id_field": "statusId",
+      "id": "polst_a3i6osvzpgu6id4lbhbmowjk4mozm4oortubys4dkrgy4c4wm6ba",
+      "domain": "xyz.tinycloud.policy/status/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.policy/status/v0",
+        "policyId": "pol_zkeogyy27jzggzg2bnl5rrvnhcqz55szsemlbjzpkqrgdgoe7pga",
+        "ownerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "sequence": 2,
+        "disposition": "revoked",
+        "effectiveAt": "2026-06-12T00:00:00Z",
+        "reasonCode": "owner-revoked",
+        "signingKeyDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+      },
+      "unsigned_jcs_utf8_hex": "7b22646973706f736974696f6e223a227265766f6b6564222c226566666563746976654174223a22323032362d30362d31325430303a30303a30305a222c226f776e6572446964223a226469643a706b683a6569703135353a313a307837653566343535323039316136393132356435646663623762386332363539303239333935626466222c22706f6c6963794964223a22706f6c5f7a6b656f67797932376a7a67677a6732626e6c357272766e6863717a3535737a73656d6c626a7a706b71726764676f6537706761222c22726561736f6e436f6465223a226f776e65722d7265766f6b6564222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f7374617475732f7630222c2273657175656e6365223a322c227369676e696e674b6579446964223a226469643a706b683a6569703135353a313a307837653566343535323039316136393132356435646663623762386332363539303239333935626466227d",
+      "digest_hex": "06d1e74ab979a9e40f8b09c2c7592ae31d9671ce8ce81c4b83544d8e0b966782",
+      "signature": {
+        "suite": "eip191-secp256k1-sha256-jcs-v1",
+        "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "value": "-3d8dadhnMpzo8PE1S3CmNYyGnN-trnJ8YsqIk1fBeotYWtyX0KzsWphw7VKiifb6WYAdOF6tZk-giO75YuwhBs"
+      }
+    },
+    {
+      "object_type": "OperationalKeyAuthorization",
+      "id_field": "authorizationId",
+      "id": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+      "domain": "xyz.tinycloud.auth/key-authorization/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.auth/key-authorization/v0",
+        "ownerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "keyDid": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+        "roles": [
+          "policy-signer"
+        ],
+        "notBefore": "2026-05-01T00:00:00Z"
+      },
+      "unsigned_jcs_utf8_hex": "7b226b6579446964223a226469643a6b65793a7a364d6b74554c75645474417341685265675950695a363633315256337669763132716434475146387a317842323253222c226e6f744265666f7265223a22323032362d30352d30315430303a30303a30305a222c226f776e6572446964223a226469643a706b683a6569703135353a313a307837653566343535323039316136393132356435646663623762386332363539303239333935626466222c22726f6c6573223a5b22706f6c6963792d7369676e6572225d2c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d617574686f72697a6174696f6e2f7630227d",
+      "digest_hex": "02aa52d9f1ad690cc304a6b959b5e7ca777689f761c7ac656a5fe8e3191e3be7",
+      "signature": {
+        "suite": "eip191-secp256k1-sha256-jcs-v1",
+        "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "value": "tNPyPwsJ-_xE-PL9wVh-XM-zDazifaL6T8GMpnZ5Wlwbe04c7ti7rTBvnrdE0gidIp9i2eus-fVDacrymZdtkRs"
+      }
+    },
+    {
+      "object_type": "OperationalKeyAuthorization",
+      "id_field": "authorizationId",
+      "id": "opka_qoxwouy7n4hve5ychhovbeuazsll3rrmj3gydx3vmcomswa3efca",
+      "domain": "xyz.tinycloud.auth/key-authorization/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.auth/key-authorization/v0",
+        "ownerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "keyDid": "did:key:z6MkqGC3nWZhYieEVTVDKW5v588CiGfsDSmRVG9ZwwWTvLSK",
+        "roles": [
+          "grant-issuer"
+        ],
+        "notBefore": "2026-05-01T00:00:00Z"
+      },
+      "unsigned_jcs_utf8_hex": "7b226b6579446964223a226469643a6b65793a7a364d6b714743336e575a6859696545565456444b573576353838436947667344536d525647395a77775754764c534b222c226e6f744265666f7265223a22323032362d30352d30315430303a30303a30305a222c226f776e6572446964223a226469643a706b683a6569703135353a313a307837653566343535323039316136393132356435646663623762386332363539303239333935626466222c22726f6c6573223a5b226772616e742d697373756572225d2c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d617574686f72697a6174696f6e2f7630227d",
+      "digest_hex": "83af67531f6f0f52770239dd509280cc96bdc62c4ecd81df75609cc9581b2144",
+      "signature": {
+        "suite": "eip191-secp256k1-sha256-jcs-v1",
+        "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "value": "Ph1EAGynkVvvCdqG5wScbsaOlmGpneFVGEBf5qEkwCkmqd1sfjqI13G1xKmkU_64iDwsEzoM6vnoooDcZEfNXxs"
+      }
+    },
+    {
+      "object_type": "OperationalKeyAuthorization",
+      "id_field": "authorizationId",
+      "id": "opka_mas7ubvgfsgv6e6q6r4zk2cot5xafdgicswkhf2re24n6dtex27q",
+      "domain": "xyz.tinycloud.auth/key-authorization/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.auth/key-authorization/v0",
+        "ownerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "keyDid": "did:key:z6MkqGC3nWZhYieEVTVDKW5v588CiGfsDSmRVG9ZwwWTvLSK",
+        "roles": [
+          "trust-issuer"
+        ],
+        "trustIssuerScope": {
+          "contextPrefixes": [
+            "/a/b"
+          ]
+        },
+        "notBefore": "2026-05-01T00:00:00Z"
+      },
+      "unsigned_jcs_utf8_hex": "7b226b6579446964223a226469643a6b65793a7a364d6b714743336e575a6859696545565456444b573576353838436947667344536d525647395a77775754764c534b222c226e6f744265666f7265223a22323032362d30352d30315430303a30303a30305a222c226f776e6572446964223a226469643a706b683a6569703135353a313a307837653566343535323039316136393132356435646663623762386332363539303239333935626466222c22726f6c6573223a5b2274727573742d697373756572225d2c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d617574686f72697a6174696f6e2f7630222c22747275737449737375657253636f7065223a7b22636f6e746578745072656669786573223a5b222f612f62225d7d7d",
+      "digest_hex": "6025fa06a62c8d5f13d0f47995684e9f6e028cc814aca3975126b8df0e64bebf",
+      "signature": {
+        "suite": "eip191-secp256k1-sha256-jcs-v1",
+        "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "value": "xOBA0d2-WPswR5kZmWKKl3cPYs58snJW_Bmdu1kKBxFODsXqGvQC40YLfWlkOo8yu_vWF-q9X8Z8iEnEDoPMuBs"
+      }
+    },
+    {
+      "object_type": "OperationalKeyStatus",
+      "id_field": "statusId",
+      "id": "opks_odp337ukie4x5yjokvmtg4ehd7eruzcj62tovycaxsjbzqg4anva",
+      "domain": "xyz.tinycloud.auth/key-status/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.auth/key-status/v0",
+        "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+        "sequence": 1,
+        "disposition": "active",
+        "effectiveAt": "2026-05-01T00:00:00Z"
+      },
+      "unsigned_jcs_utf8_hex": "7b22617574686f72697a6174696f6e4964223a226f706b615f616b766666777072767675717a71796575323476746e70687a6a33786e6370786d686432797a6c6b6c37756f6767693668707471222c22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30352d30315430303a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d7374617475732f7630222c2273657175656e6365223a317d",
+      "digest_hex": "70dfbdfe8a41397ee12e55593370871fc91a6449f6a6eae040bc921cc0dc036a",
+      "signature": {
+        "suite": "eip191-secp256k1-sha256-jcs-v1",
+        "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "value": "LodCFCQD177IHRE8Az7H6kb25hfGp4_XGTbSD-3P-jNQvMpG4uPTJzIq-T95haOoR0DGB8b1qLlnIbr8N1AkWxw"
+      }
+    },
+    {
+      "object_type": "OperationalKeyStatus",
+      "id_field": "statusId",
+      "id": "opks_xyadifkav2onhmjbbcqu3teeqysyizfapcn5myzeq6c7ebelp3ka",
+      "domain": "xyz.tinycloud.auth/key-status/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.auth/key-status/v0",
+        "authorizationId": "opka_qoxwouy7n4hve5ychhovbeuazsll3rrmj3gydx3vmcomswa3efca",
+        "sequence": 1,
+        "disposition": "active",
+        "effectiveAt": "2026-05-01T00:00:00Z"
+      },
+      "unsigned_jcs_utf8_hex": "7b22617574686f72697a6174696f6e4964223a226f706b615f716f78776f7579376e3468766535796368686f76626575617a736c6c3372726d6a336779647833766d636f6d7377613365666361222c22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30352d30315430303a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d7374617475732f7630222c2273657175656e6365223a317d",
+      "digest_hex": "be00341540ae9cd3b12108a14dcc8486258464a0789bd663248785f2048b7ed4",
+      "signature": {
+        "suite": "eip191-secp256k1-sha256-jcs-v1",
+        "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "value": "At44nFD_Q5McbgtFC_m3pKz74NSFdDhlkouexnaUgTBsSekXxOH9gATq5xT0PhC0QOdJexFK_tSKFyJDPl41wRs"
+      }
+    },
+    {
+      "object_type": "OperationalKeyStatus",
+      "id_field": "statusId",
+      "id": "opks_wfzke55y4oh7nwz5jap7i4tf3ippmgux2e35mhsc7w4jqrak6sta",
+      "domain": "xyz.tinycloud.auth/key-status/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.auth/key-status/v0",
+        "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+        "sequence": 2,
+        "disposition": "retired",
+        "effectiveAt": "2026-06-10T00:00:00Z"
+      },
+      "unsigned_jcs_utf8_hex": "7b22617574686f72697a6174696f6e4964223a226f706b615f616b766666777072767675717a71796575323476746e70687a6a33786e6370786d686432797a6c6b6c37756f6767693668707471222c22646973706f736974696f6e223a2272657469726564222c226566666563746976654174223a22323032362d30362d31305430303a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d7374617475732f7630222c2273657175656e6365223a327d",
+      "digest_hex": "b172a277b8e38ff6db3d481ff47265da1ef61a97d137d61e42fdb898440af4a6",
+      "signature": {
+        "suite": "eip191-secp256k1-sha256-jcs-v1",
+        "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "value": "CVqjkbQWVZKp4n36K42tE3kETqSUP7gJYcU4tT_N7lUvNNR-egpFzj8M__MggygBDISRekUit77BT9MyoaVZwBs"
+      }
+    },
+    {
+      "object_type": "OperationalKeyStatus",
+      "id_field": "statusId",
+      "id": "opks_obnugs64cwvzgdruhoh5tebld7gyyan7y6bdn7spn2tcj4rh3pia",
+      "domain": "xyz.tinycloud.auth/key-status/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.auth/key-status/v0",
+        "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+        "sequence": 3,
+        "disposition": "retired",
+        "effectiveAt": "2026-06-10T01:00:00Z"
+      },
+      "unsigned_jcs_utf8_hex": "7b22617574686f72697a6174696f6e4964223a226f706b615f616b766666777072767675717a71796575323476746e70687a6a33786e6370786d686432797a6c6b6c37756f6767693668707471222c22646973706f736974696f6e223a2272657469726564222c226566666563746976654174223a22323032362d30362d31305430313a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d7374617475732f7630222c2273657175656e6365223a337d",
+      "digest_hex": "705b434bdc15ab930e343b8fd9902b1fcd8c01bfc78236fe4f6ea624f227dbd0",
+      "signature": {
+        "suite": "eip191-secp256k1-sha256-jcs-v1",
+        "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "value": "lla1M-yQa-Pawx9fPze3AcNVxmJDz2ZHQ6cWzgd-F0MQNLJOcpNBukQUWSmfWsjb0VhViEIxLWr_0gWaMheJUxw"
+      }
+    },
+    {
+      "object_type": "OperationalKeyStatus",
+      "id_field": "statusId",
+      "id": "opks_vavufdyeg5r6qdy7ae32iiw5dav6aa72732fbx643uifo6aepsaq",
+      "domain": "xyz.tinycloud.auth/key-status/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.auth/key-status/v0",
+        "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+        "sequence": 3,
+        "disposition": "compromised",
+        "effectiveAt": "2026-06-11T00:00:00Z"
+      },
+      "unsigned_jcs_utf8_hex": "7b22617574686f72697a6174696f6e4964223a226f706b615f616b766666777072767675717a71796575323476746e70687a6a33786e6370786d686432797a6c6b6c37756f6767693668707471222c22646973706f736974696f6e223a22636f6d70726f6d69736564222c226566666563746976654174223a22323032362d30362d31315430303a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d7374617475732f7630222c2273657175656e6365223a337d",
+      "digest_hex": "a82b428f043763e80f1f0137a422dd182be003fafef450dfdcdd105778047c81",
+      "signature": {
+        "suite": "eip191-secp256k1-sha256-jcs-v1",
+        "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "value": "zFQTVr9x8VBdRUWf6rQNcu0f6Uvze2HMdxDK7yQ7yjRived48KvK_ywSWIzfiLMcxj8Vz3Pp5lFoUrvfKkrVwhs"
+      }
+    },
+    {
+      "object_type": "PolicyEngineRecord",
+      "id_field": "engineRecordId",
+      "id": "peng_u6guwylrot74a3re25luboyhb2zijejmphkqhx5ciw5mt3fturna",
+      "domain": "xyz.tinycloud.policy/engine-record/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.policy/engine-record/v0",
+        "ownerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "endpoint": "https://policy-engine.example/v0",
+        "audience": "https://policy-engine.example/v0",
+        "supportedPolicyVersions": [
+          "v0"
+        ],
+        "supportedEvidenceVerifiers": [
+          "w3c.vc/credential/v1",
+          "tinycloud.trust/direct-edge/v1"
+        ],
+        "grantIssuerDid": "did:key:z6MkqGC3nWZhYieEVTVDKW5v588CiGfsDSmRVG9ZwwWTvLSK",
+        "expiresAt": "2027-06-01T00:00:00Z"
+      },
+      "unsigned_jcs_utf8_hex": "7b2261756469656e6365223a2268747470733a2f2f706f6c6963792d656e67696e652e6578616d706c652f7630222c22656e64706f696e74223a2268747470733a2f2f706f6c6963792d656e67696e652e6578616d706c652f7630222c22657870697265734174223a22323032372d30362d30315430303a30303a30305a222c226772616e74497373756572446964223a226469643a6b65793a7a364d6b714743336e575a6859696545565456444b573576353838436947667344536d525647395a77775754764c534b222c226f776e6572446964223a226469643a706b683a6569703135353a313a307837653566343535323039316136393132356435646663623762386332363539303239333935626466222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f656e67696e652d7265636f72642f7630222c22737570706f7274656445766964656e6365566572696669657273223a5b227733632e76632f63726564656e7469616c2f7631222c2274696e79636c6f75642e74727573742f6469726563742d656467652f7631225d2c22737570706f72746564506f6c69637956657273696f6e73223a5b227630225d7d",
+      "digest_hex": "a78d4b617174ffc06e24d75740bb070eb284912c79d503dfa245bac9ecb3a45a",
+      "signature": {
+        "suite": "eddsa-ed25519-sha256-jcs-v1",
+        "signerDid": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+        "value": "nxM_cOUM4F20djikJt2J4mN5UFRqE_yzPzsFsidfEnP4YN2LN2jXuxePuC8Dc1yFdoFuwKhLIf5W-RZNG9UeBA"
+      }
+    },
+    {
+      "object_type": "HolderEnrollment",
+      "id_field": "enrollmentId",
+      "id": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+      "domain": "xyz.tinycloud.policy/holder-enrollment/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.policy/holder-enrollment/v0",
+        "eligibleSubjectDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac",
+        "holderDid": "did:key:z6Mkg49NtQR2LyYRDCQFK4w1VVHqhypZSSRo7HsyuN7SV7v5",
+        "scope": {
+          "policyIds": [
+            "pol_eiqepppd6uutcnvuqlsb2bqmjkjmshabylama4c3jepqd54hycjq"
+          ],
+          "resourceIds": [
+            "conv_456"
+          ]
+        },
+        "notBefore": "2026-06-01T00:00:00Z",
+        "expiresAt": "2026-07-01T00:00:00Z",
+        "signingKeyDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac"
+      },
+      "unsigned_jcs_utf8_hex": "7b22656c696769626c655375626a656374446964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163222c22657870697265734174223a22323032362d30372d30315430303a30303a30305a222c22686f6c646572446964223a226469643a6b65793a7a364d6b6734394e745152324c795952444351464b347731565648716879705a5353526f37487379754e375356377635222c226e6f744265666f7265223a22323032362d30362d30315430303a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f686f6c6465722d656e726f6c6c6d656e742f7630222c2273636f7065223a7b22706f6c696379496473223a5b22706f6c5f656971657070706436757574636e7675716c73623262716d6a6b6a6d73686162796c616d613463336a6570716435346879636a71225d2c227265736f75726365496473223a5b22636f6e765f343536225d7d2c227369676e696e674b6579446964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163227d",
+      "digest_hex": "c30a3b55f34cb95664ab80bfd255387cfde3d4b7124f382ede47e1402fa4abe2",
+      "signature": {
+        "suite": "eip191-secp256k1-sha256-jcs-v1",
+        "signerDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac",
+        "value": "LzjYyhtikfk-dlI0DJS7NUtucEOlBxxL8KCtuiuu2Tc62qDqsQv4FghWRxSFidpndiVblgQIPyMJMx4XtDqMRxs"
+      }
+    },
+    {
+      "object_type": "HolderEnrollmentStatus",
+      "id_field": "statusId",
+      "id": "henrst_elx37wt63f42hrrxhdr45ad4k7vgsqqpf5be3khzuqf6ebbuie4a",
+      "domain": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+        "enrollmentId": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+        "sequence": 1,
+        "disposition": "active",
+        "effectiveAt": "2026-06-01T00:00:00Z",
+        "signingKeyDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac"
+      },
+      "unsigned_jcs_utf8_hex": "7b22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30362d30315430303a30303a30305a222c22656e726f6c6c6d656e744964223a2268656e725f796d6664777670746a7334766d7a666c7163373565766a797074363668766678636a6874716c773669377175616c356576707261222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f686f6c6465722d656e726f6c6c6d656e742d7374617475732f7630222c2273657175656e6365223a312c227369676e696e674b6579446964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163227d",
+      "digest_hex": "22efbfda7ed979a3c63738e3ce807c57ea69420f2f424da8f9a40be204344138",
+      "signature": {
+        "suite": "eip191-secp256k1-sha256-jcs-v1",
+        "signerDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac",
+        "value": "ZeMEjJZEYQ7I3p9toYsDNWc2Zu54hcMEUL7UgupSzL95CiKqhpURiyz2bEE96NUuFgvAYNItQMnFz4ZiaJMTzxs"
+      }
+    },
+    {
+      "object_type": "GrantChallenge",
+      "id_field": "challengeId",
+      "id": "gchal_fe7yk5huu4iddtxcjwfjhlepr7xzhqmesnqdr4ck5z433yxvehra",
+      "domain": "xyz.tinycloud.policy/challenge/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.policy/challenge/v0",
+        "policyId": "pol_eiqepppd6uutcnvuqlsb2bqmjkjmshabylama4c3jepqd54hycjq",
+        "audience": "https://policy-engine.example/v0",
+        "nonce": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU",
+        "challengeExpiresAt": "2026-06-12T00:05:00Z",
+        "acceptedSuites": [
+          "eddsa-ed25519-sha256-jcs-v1"
+        ]
+      },
+      "unsigned_jcs_utf8_hex": "7b226163636570746564537569746573223a5b2265646473612d656432353531392d7368613235362d6a63732d7631225d2c2261756469656e6365223a2268747470733a2f2f706f6c6963792d656e67696e652e6578616d706c652f7630222c226368616c6c656e6765457870697265734174223a22323032362d30362d31325430303a30353a30305a222c226e6f6e6365223a2256565656565656565656565656565656565656565656565656565656565656565656565656565656565655222c22706f6c6963794964223a22706f6c5f656971657070706436757574636e7675716c73623262716d6a6b6a6d73686162796c616d613463336a6570716435346879636a71222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f6368616c6c656e67652f7630227d",
+      "digest_hex": "293f8574f4a71031cee24d8a93ac8f8fef93c184936038f04aee79bde2f521e2",
+      "signature": {
+        "suite": "eddsa-ed25519-sha256-jcs-v1",
+        "signerDid": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+        "value": "i-spFiAtndYO_AWCbIzwHWU0nAapcLovLjoorBGAmNktme0PIrZ_TiXV0-3IR0WS0Oe3hjtwcFWxA8Lx4DqFAw"
+      }
+    },
+    {
+      "object_type": "GrantChallenge",
+      "id_field": "challengeId",
+      "id": "gchal_ytiykpwetaklw4ozgsmzpztsvkco2hz7d4fb2d35op6ewuvwykaq",
+      "domain": "xyz.tinycloud.policy/challenge/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.policy/challenge/v0",
+        "policyId": "pol_zkeogyy27jzggzg2bnl5rrvnhcqz55szsemlbjzpkqrgdgoe7pga",
+        "audience": "https://policy-engine.example/v0",
+        "nonce": "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY",
+        "challengeExpiresAt": "2026-06-12T00:05:00Z",
+        "acceptedSuites": [
+          "eddsa-ed25519-sha256-jcs-v1"
+        ]
+      },
+      "unsigned_jcs_utf8_hex": "7b226163636570746564537569746573223a5b2265646473612d656432353531392d7368613235362d6a63732d7631225d2c2261756469656e6365223a2268747470733a2f2f706f6c6963792d656e67696e652e6578616d706c652f7630222c226368616c6c656e6765457870697265734174223a22323032362d30362d31325430303a30353a30305a222c226e6f6e6365223a225a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d59222c22706f6c6963794964223a22706f6c5f7a6b656f67797932376a7a67677a6732626e6c357272766e6863717a3535737a73656d6c626a7a706b71726764676f6537706761222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f6368616c6c656e67652f7630227d",
+      "digest_hex": "c4d1853ec49814bb71d9349997e672aa84ed1f3f1f0a1d0f7d73fc4b52b6c281",
+      "signature": {
+        "suite": "eddsa-ed25519-sha256-jcs-v1",
+        "signerDid": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+        "value": "2eHR6w5DL21SXl9KRtzCRjtwf5tMQx-Z9giH2oKG0URTIgSvlOedvyvhUxL_zP6O14CSTJPbQMf-cbnwzAOXDQ"
+      }
+    },
+    {
+      "object_type": "GrantChallenge",
+      "id_field": "challengeId",
+      "id": "gchal_ch52yaald5dr7xrgn537nwuf5hlbauamproem6roog2hlmu227kq",
+      "domain": "xyz.tinycloud.policy/challenge/v0",
+      "unsigned": {
+        "schema": "xyz.tinycloud.policy/challenge/v0",
+        "policyId": "pol_zkeogyy27jzggzg2bnl5rrvnhcqz55szsemlbjzpkqrgdgoe7pga",
+        "audience": "https://policy-engine.example/v0",
+        "nonce": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3c",
+        "challengeExpiresAt": "2026-06-12T00:05:00Z",
+        "acceptedSuites": [
+          "eddsa-ed25519-sha256-jcs-v1"
+        ]
+      },
+      "unsigned_jcs_utf8_hex": "7b226163636570746564537569746573223a5b2265646473612d656432353531392d7368613235362d6a63732d7631225d2c2261756469656e6365223a2268747470733a2f2f706f6c6963792d656e67696e652e6578616d706c652f7630222c226368616c6c656e6765457870697265734174223a22323032362d30362d31325430303a30353a30305a222c226e6f6e6365223a2264336433643364336433643364336433643364336433643364336433643364336433643364336433643363222c22706f6c6963794964223a22706f6c5f7a6b656f67797932376a7a67677a6732626e6c357272766e6863717a3535737a73656d6c626a7a706b71726764676f6537706761222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f6368616c6c656e67652f7630227d",
+      "digest_hex": "11fbac000b1f471fde266f77f6da85e9d610500c7c5c467a2e71b475b29ad7d5",
+      "signature": {
+        "suite": "eddsa-ed25519-sha256-jcs-v1",
+        "signerDid": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+        "value": "js4k-WcPJerLIJDSvcM2T_Y5HaVvPHaMS4eM-kAHvGRknYBn1wcFJtWelu-VTe29lU7Ye7vnVT0c5yAMN-0mBQ"
+      }
+    }
+  ],
+  "signatureHexNormalizationChecks": [
+    {
+      "name": "holder-enrollment-eip191-mixed-case-signature-hex-normalizes",
+      "object_type": "HolderEnrollment",
+      "object_id": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+      "suite": "eip191-secp256k1-sha256-jcs-v1",
+      "signature_hex": "2F38D8cA1b6291F93E7652340C94BB354b6E7043A5071c4Bf0A0ADbA2bAEd9373AdAA0EAb10bF816085647148589Da6776255B9604083F2309331e17b43a8C471b",
+      "normalized_signature_hex": "2f38d8ca1b6291f93e7652340c94bb354b6e7043a5071c4bf0a0adba2baed9373adaa0eab10bf816085647148589da6776255b9604083f2309331e17b43a8c471b",
+      "normalization": "lowercase-hex-before-byte-decode",
+      "expected": "accept"
+    }
+  ],
+  "trustIssuerScopeChecks": [
+    {
+      "name": "trust-issuer-context-exact-prefix",
+      "authorizationId": "opka_mas7ubvgfsgv6e6q6r4zk2cot5xafdgicswkhf2re24n6dtex27q",
+      "context": "/a/b",
+      "expected": "accept"
+    },
+    {
+      "name": "trust-issuer-context-descendant",
+      "authorizationId": "opka_mas7ubvgfsgv6e6q6r4zk2cot5xafdgicswkhf2re24n6dtex27q",
+      "context": "/a/b/c",
+      "expected": "accept"
+    },
+    {
+      "name": "trust-issuer-context-outside-prefix",
+      "authorizationId": "opka_mas7ubvgfsgv6e6q6r4zk2cot5xafdgicswkhf2re24n6dtex27q",
+      "context": "/a/c",
+      "expected": "reject",
+      "rejection_code": "trust-issuer-context-out-of-scope"
+    },
+    {
+      "name": "trust-issuer-context-sibling-prefix",
+      "authorizationId": "opka_mas7ubvgfsgv6e6q6r4zk2cot5xafdgicswkhf2re24n6dtex27q",
+      "context": "/a/bad",
+      "expected": "reject",
+      "rejection_code": "trust-issuer-context-out-of-scope"
+    }
+  ],
+  "operationalKeyStatusTrace": [
+    {
+      "apply": {
+        "object_type": "OperationalKeyStatus",
+        "id_field": "statusId",
+        "id": "opks_odp337ukie4x5yjokvmtg4ehd7eruzcj62tovycaxsjbzqg4anva",
+        "domain": "xyz.tinycloud.auth/key-status/v0",
+        "unsigned": {
+          "schema": "xyz.tinycloud.auth/key-status/v0",
+          "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+          "sequence": 1,
+          "disposition": "active",
+          "effectiveAt": "2026-05-01T00:00:00Z"
+        },
+        "unsigned_jcs_utf8_hex": "7b22617574686f72697a6174696f6e4964223a226f706b615f616b766666777072767675717a71796575323476746e70687a6a33786e6370786d686432797a6c6b6c37756f6767693668707471222c22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30352d30315430303a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d7374617475732f7630222c2273657175656e6365223a317d",
+        "digest_hex": "70dfbdfe8a41397ee12e55593370871fc91a6449f6a6eae040bc921cc0dc036a",
+        "signature": {
+          "suite": "eip191-secp256k1-sha256-jcs-v1",
+          "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+          "value": "LodCFCQD177IHRE8Az7H6kb25hfGp4_XGTbSD-3P-jNQvMpG4uPTJzIq-T95haOoR0DGB8b1qLlnIbr8N1AkWxw"
+        }
+      },
+      "expected": "accept",
+      "lastAcceptedSequence_after": 1
+    },
+    {
+      "apply": {
+        "object_type": "OperationalKeyStatus",
+        "id_field": "statusId",
+        "id": "opks_wfzke55y4oh7nwz5jap7i4tf3ippmgux2e35mhsc7w4jqrak6sta",
+        "domain": "xyz.tinycloud.auth/key-status/v0",
+        "unsigned": {
+          "schema": "xyz.tinycloud.auth/key-status/v0",
+          "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+          "sequence": 2,
+          "disposition": "retired",
+          "effectiveAt": "2026-06-10T00:00:00Z"
+        },
+        "unsigned_jcs_utf8_hex": "7b22617574686f72697a6174696f6e4964223a226f706b615f616b766666777072767675717a71796575323476746e70687a6a33786e6370786d686432797a6c6b6c37756f6767693668707471222c22646973706f736974696f6e223a2272657469726564222c226566666563746976654174223a22323032362d30362d31305430303a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d7374617475732f7630222c2273657175656e6365223a327d",
+        "digest_hex": "b172a277b8e38ff6db3d481ff47265da1ef61a97d137d61e42fdb898440af4a6",
+        "signature": {
+          "suite": "eip191-secp256k1-sha256-jcs-v1",
+          "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+          "value": "CVqjkbQWVZKp4n36K42tE3kETqSUP7gJYcU4tT_N7lUvNNR-egpFzj8M__MggygBDISRekUit77BT9MyoaVZwBs"
+        }
+      },
+      "expected": "accept",
+      "lastAcceptedSequence_after": 2
+    },
+    {
+      "apply": {
+        "object_type": "OperationalKeyStatus",
+        "id_field": "statusId",
+        "id": "opks_odp337ukie4x5yjokvmtg4ehd7eruzcj62tovycaxsjbzqg4anva",
+        "domain": "xyz.tinycloud.auth/key-status/v0",
+        "unsigned": {
+          "schema": "xyz.tinycloud.auth/key-status/v0",
+          "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+          "sequence": 1,
+          "disposition": "active",
+          "effectiveAt": "2026-05-01T00:00:00Z"
+        },
+        "unsigned_jcs_utf8_hex": "7b22617574686f72697a6174696f6e4964223a226f706b615f616b766666777072767675717a71796575323476746e70687a6a33786e6370786d686432797a6c6b6c37756f6767693668707471222c22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30352d30315430303a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d7374617475732f7630222c2273657175656e6365223a317d",
+        "digest_hex": "70dfbdfe8a41397ee12e55593370871fc91a6449f6a6eae040bc921cc0dc036a",
+        "signature": {
+          "suite": "eip191-secp256k1-sha256-jcs-v1",
+          "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+          "value": "LodCFCQD177IHRE8Az7H6kb25hfGp4_XGTbSD-3P-jNQvMpG4uPTJzIq-T95haOoR0DGB8b1qLlnIbr8N1AkWxw"
+        }
+      },
+      "expected": "reject",
+      "rejection_code": "operational-key-status-rollback",
+      "lastAcceptedSequence_after": 2
+    },
+    {
+      "apply": {
+        "object_type": "OperationalKeyStatus",
+        "id_field": "statusId",
+        "id": "opks_obnugs64cwvzgdruhoh5tebld7gyyan7y6bdn7spn2tcj4rh3pia",
+        "domain": "xyz.tinycloud.auth/key-status/v0",
+        "unsigned": {
+          "schema": "xyz.tinycloud.auth/key-status/v0",
+          "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+          "sequence": 3,
+          "disposition": "retired",
+          "effectiveAt": "2026-06-10T01:00:00Z"
+        },
+        "unsigned_jcs_utf8_hex": "7b22617574686f72697a6174696f6e4964223a226f706b615f616b766666777072767675717a71796575323476746e70687a6a33786e6370786d686432797a6c6b6c37756f6767693668707471222c22646973706f736974696f6e223a2272657469726564222c226566666563746976654174223a22323032362d30362d31305430313a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d7374617475732f7630222c2273657175656e6365223a337d",
+        "digest_hex": "705b434bdc15ab930e343b8fd9902b1fcd8c01bfc78236fe4f6ea624f227dbd0",
+        "signature": {
+          "suite": "eip191-secp256k1-sha256-jcs-v1",
+          "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+          "value": "lla1M-yQa-Pawx9fPze3AcNVxmJDz2ZHQ6cWzgd-F0MQNLJOcpNBukQUWSmfWsjb0VhViEIxLWr_0gWaMheJUxw"
+        }
+      },
+      "expected": "reject",
+      "rejection_code": "operational-key-retired-irreversible",
+      "lastAcceptedSequence_after": 2
+    },
+    {
+      "apply": {
+        "object_type": "OperationalKeyStatus",
+        "id_field": "statusId",
+        "id": "opks_vavufdyeg5r6qdy7ae32iiw5dav6aa72732fbx643uifo6aepsaq",
+        "domain": "xyz.tinycloud.auth/key-status/v0",
+        "unsigned": {
+          "schema": "xyz.tinycloud.auth/key-status/v0",
+          "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+          "sequence": 3,
+          "disposition": "compromised",
+          "effectiveAt": "2026-06-11T00:00:00Z"
+        },
+        "unsigned_jcs_utf8_hex": "7b22617574686f72697a6174696f6e4964223a226f706b615f616b766666777072767675717a71796575323476746e70687a6a33786e6370786d686432797a6c6b6c37756f6767693668707471222c22646973706f736974696f6e223a22636f6d70726f6d69736564222c226566666563746976654174223a22323032362d30362d31315430303a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e617574682f6b65792d7374617475732f7630222c2273657175656e6365223a337d",
+        "digest_hex": "a82b428f043763e80f1f0137a422dd182be003fafef450dfdcdd105778047c81",
+        "signature": {
+          "suite": "eip191-secp256k1-sha256-jcs-v1",
+          "signerDid": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+          "value": "zFQTVr9x8VBdRUWf6rQNcu0f6Uvze2HMdxDK7yQ7yjRived48KvK_ywSWIzfiLMcxj8Vz3Pp5lFoUrvfKkrVwhs"
+        }
+      },
+      "expected": "accept",
+      "lastAcceptedSequence_after": 3
+    }
+  ],
+  "operationalKeyStatusChecks": [
+    {
+      "name": "retired-key-before-retirement-valid-until-artifact-expiry",
+      "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+      "statusId": "opks_wfzke55y4oh7nwz5jap7i4tf3ippmgux2e35mhsc7w4jqrak6sta",
+      "requiredRole": "policy-signer",
+      "signedAt": "2026-06-09T23:59:00Z",
+      "artifactExpiresAt": "2026-06-12T00:00:00Z",
+      "now": "2026-06-11T00:00:00Z",
+      "expected": "accept"
+    },
+    {
+      "name": "retired-key-signature-after-retirement-rejected",
+      "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+      "statusId": "opks_wfzke55y4oh7nwz5jap7i4tf3ippmgux2e35mhsc7w4jqrak6sta",
+      "requiredRole": "policy-signer",
+      "signedAt": "2026-06-10T00:00:00Z",
+      "artifactExpiresAt": "2026-06-12T00:00:00Z",
+      "now": "2026-06-11T00:00:00Z",
+      "expected": "reject",
+      "rejection_code": "operational-key-retired"
+    },
+    {
+      "name": "retired-key-artifact-after-own-expiry-rejected",
+      "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+      "statusId": "opks_wfzke55y4oh7nwz5jap7i4tf3ippmgux2e35mhsc7w4jqrak6sta",
+      "requiredRole": "policy-signer",
+      "signedAt": "2026-06-09T23:59:00Z",
+      "artifactExpiresAt": "2026-06-12T00:00:00Z",
+      "now": "2026-06-12T00:00:01Z",
+      "expected": "reject",
+      "rejection_code": "operational-key-artifact-expired"
+    },
+    {
+      "name": "compromised-key-rejects-before-effective-time",
+      "authorizationId": "opka_akvffwprvvuqzqyeu24vtnphzj3xncpxmhd2yzlkl7uoggi6hptq",
+      "statusId": "opks_vavufdyeg5r6qdy7ae32iiw5dav6aa72732fbx643uifo6aepsaq",
+      "requiredRole": "policy-signer",
+      "signedAt": "2026-06-09T23:59:00Z",
+      "artifactExpiresAt": "2026-06-12T00:00:00Z",
+      "now": "2026-06-11T00:00:00Z",
+      "expected": "reject",
+      "rejection_code": "operational-key-compromised"
+    }
+  ]
+}

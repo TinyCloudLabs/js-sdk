@@ -1,0 +1,36 @@
+{
+  "description": "Scope-bound enrollments admit matching policy/resource only.",
+  "enrollment_scoped": {
+    "enrollmentId": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+    "scope": {
+      "policyIds": [
+        "pol_eiqepppd6uutcnvuqlsb2bqmjkjmshabylama4c3jepqd54hycjq"
+      ],
+      "resourceIds": [
+        "conv_456"
+      ]
+    }
+  },
+  "checks": [
+    {
+      "name": "in-scope-policy-and-resource",
+      "presentation_policyId": "pol_eiqepppd6uutcnvuqlsb2bqmjkjmshabylama4c3jepqd54hycjq",
+      "resourceId": "conv_456",
+      "expected": "accept"
+    },
+    {
+      "name": "out-of-scope-policy",
+      "presentation_policyId": "pol_zkeogyy27jzggzg2bnl5rrvnhcqz55szsemlbjzpkqrgdgoe7pga",
+      "resourceId": "conv_456",
+      "expected": "reject",
+      "rejection_code": "enrollment-out-of-scope"
+    },
+    {
+      "name": "out-of-scope-resource",
+      "presentation_policyId": "pol_eiqepppd6uutcnvuqlsb2bqmjkjmshabylama4c3jepqd54hycjq",
+      "resourceId": "conv_other",
+      "expected": "reject",
+      "rejection_code": "enrollment-out-of-scope"
+    }
+  ]
+}
