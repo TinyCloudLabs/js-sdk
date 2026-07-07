@@ -149,8 +149,10 @@ export interface SqlMigrationApplyResponse {
  * SQL service action types.
  *
  * URNs derive from the canonical capability registry in `@tinycloud/bootstrap`
- * (TC-112 single source of truth). SELECT/INSERT/UPDATE/DELETE are reserved —
- * the SDK does not dispatch them — but kept here for a stable public shape.
+ * (TC-112 single source of truth). `insert`/`update` were dropped — zero client
+ * refs and never accepted node-side. `select` is a deprecated alias of `read`;
+ * `delete` is reserved. The SDK does not dispatch SELECT/DELETE but they are
+ * kept so validators recognize inbound legacy grants.
  */
 export const SQLAction = {
   READ: SQL.READ,
@@ -158,8 +160,6 @@ export const SQLAction = {
   SCHEMA: SQL.SCHEMA,
   ADMIN: SQL.ADMIN,
   SELECT: SQL.SELECT,
-  INSERT: SQL.INSERT,
-  UPDATE: SQL.UPDATE,
   DELETE: SQL.DELETE,
   EXECUTE: SQL.EXECUTE,
   EXPORT: SQL.EXPORT,

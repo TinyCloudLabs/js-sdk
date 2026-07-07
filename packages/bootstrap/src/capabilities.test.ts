@@ -55,13 +55,20 @@ test("known-active SQL/DuckDB actions the SDK dispatches are marked active", () 
   expect(status(DUCKDB.IMPORT)).toBe("active");
 });
 
-test("undispatched SQL row-verbs are marked reserved", () => {
-  const status = (urn: string) =>
-    CAPABILITY_REGISTRY.find((e) => e.urn === urn)?.status;
-  expect(status(SQL.SELECT)).toBe("reserved");
-  expect(status(SQL.INSERT)).toBe("reserved");
-  expect(status(SQL.UPDATE)).toBe("reserved");
-  expect(status(SQL.DELETE)).toBe("reserved");
+test("dropped SQL phantoms are absent; select is a deprecated read alias", () => {
+  const urns = CAPABILITY_REGISTRY.map((e) => e.urn);
+  // insert/update were dropped (zero refs + never node-accepted).
+  expect(urns).not.toContain("tinycloud.sql/insert");
+  expect(urns).not.toContain("tinycloud.sql/update");
+  expect(SQL).not.toHaveProperty("INSERT");
+  expect(SQL).not.toHaveProperty("UPDATE");
+
+  const select = CAPABILITY_REGISTRY.find((e) => e.urn === SQL.SELECT);
+  expect(select?.status).toBe("deprecated-alias");
+  expect(select?.aliasOf).toBe(SQL.READ);
+
+  const del = CAPABILITY_REGISTRY.find((e) => e.urn === SQL.DELETE);
+  expect(del?.status).toBe("reserved");
 });
 
 test("space create/list/info are active (SDK dispatches them)", () => {

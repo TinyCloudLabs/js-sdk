@@ -22,7 +22,16 @@
  * a narrower concern than this URN registry.
  */
 
-export type CapabilityStatus = "active" | "reserved";
+/**
+ * - `active`           — the SDK dispatches this action against a node service.
+ * - `deprecated-alias` — accepted by the node as a legacy alias of another
+ *                        action (see `aliasOf`); kept so serializers/validators
+ *                        still recognize inbound legacy grants.
+ * - `reserved`         — declared for forward-compat, not dispatched today.
+ *
+ * Mirrors the tinycloud-node registry status vocabulary (TC-112).
+ */
+export type CapabilityStatus = "active" | "deprecated-alias" | "reserved";
 
 export interface CapabilityRegistryEntry {
   /** Full ability URN, e.g. `tinycloud.kv/get`. */
@@ -31,8 +40,10 @@ export interface CapabilityRegistryEntry {
   service: string;
   /** Action segment, e.g. `get`. */
   action: string;
-  /** Whether the SDK dispatches this action today. */
+  /** Status per the node registry vocabulary. */
   status: CapabilityStatus;
+  /** For `deprecated-alias` entries, the canonical URN this aliases. */
+  aliasOf?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -50,10 +61,12 @@ export const KV = {
 // ---------------------------------------------------------------------------
 // SQL
 //
-// SELECT/INSERT/UPDATE/DELETE are reserved: the SDK does not dispatch them
-// (row-level writes all go through `write`). See TC-112 audit. EXECUTE/EXPORT
-// are active — SQLService dispatches them. The `*` wildcard is active: the
-// node-sdk root delegation grants it.
+// `insert`/`update` were dropped (TC-112): zero client refs and the node never
+// accepted them. `select` is kept as a deprecated alias of `read` (the node
+// accepts it as legacy). `delete` is reserved — not dispatched, but the node
+// may still see legacy grants. EXECUTE/EXPORT are active (SQLService dispatches
+// them). The `*` wildcard is active: the node-sdk root delegation grants it and
+// the node matches `sql/*` in admin checks.
 // ---------------------------------------------------------------------------
 
 export const SQL = {
@@ -64,8 +77,6 @@ export const SQL = {
   EXECUTE: "tinycloud.sql/execute",
   EXPORT: "tinycloud.sql/export",
   SELECT: "tinycloud.sql/select",
-  INSERT: "tinycloud.sql/insert",
-  UPDATE: "tinycloud.sql/update",
   DELETE: "tinycloud.sql/delete",
   ALL: "tinycloud.sql/*",
 } as const;
@@ -147,9 +158,7 @@ export const CAPABILITY_REGISTRY: readonly CapabilityRegistryEntry[] = Object.fr
   { urn: SQL.EXECUTE, service: "sql", action: "execute", status: "active" },
   { urn: SQL.EXPORT, service: "sql", action: "export", status: "active" },
   { urn: SQL.ALL, service: "sql", action: "*", status: "active" },
-  { urn: SQL.SELECT, service: "sql", action: "select", status: "reserved" },
-  { urn: SQL.INSERT, service: "sql", action: "insert", status: "reserved" },
-  { urn: SQL.UPDATE, service: "sql", action: "update", status: "reserved" },
+  { urn: SQL.SELECT, service: "sql", action: "select", status: "deprecated-alias", aliasOf: SQL.READ },
   { urn: SQL.DELETE, service: "sql", action: "delete", status: "reserved" },
 
   { urn: DUCKDB.READ, service: "duckdb", action: "read", status: "active" },
