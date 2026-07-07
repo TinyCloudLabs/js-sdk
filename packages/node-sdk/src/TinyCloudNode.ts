@@ -334,6 +334,15 @@ interface RuntimePermissionGrant {
   delegation: PortableDelegation;
   operations: RuntimePermissionOperation[];
   expiresAt: Date;
+  /**
+   * Where this grant came from. Drives precedence in
+   * {@link TinyCloudNode.findGrantForOperations} (a `"primary"` grant — the
+   * synthetic representation of the base session's own recap — always
+   * out-ranks other covering grants) and gates the public-surface guardrails
+   * that must never surface the synthetic primary grant. Optional so existing
+   * test constructors and older call sites remain valid.
+   */
+  provenance?: "primary" | "bootstrap" | "delegated" | "runtime";
 }
 
 type CanonicalizableEncryptionJson = CanonicalJson;
@@ -493,6 +502,12 @@ export class TinyCloudNode {
   private _delegationManager?: DelegationManager;
   private _spaceService?: SpaceService;
   private runtimePermissionGrants: RuntimePermissionGrant[] = [];
+  /**
+   * Memoized `recapOperationsFromSession` result, keyed by the exact SIWE it
+   * was parsed from. The primary session is stable for the life of a sign-in,
+   * so this avoids re-parsing the recap on every registration.
+   */
+  private _recapOperationsCache?: { siwe: string; operations: RuntimePermissionOperation[] };
 
   /**
    * TinyCloudSession captured by {@link restoreSession} when there's no
@@ -936,6 +951,18 @@ export class TinyCloudNode {
     // Initialize service context with session
     this.initializeServices();
 
+    // Register the primary session's own recap as the highest-trust
+    // (`provenance: "primary"`) runtime grant so it always wins invocation
+    // selection over broader bootstrap/delegated grants (TC-111). Must run
+    // after the primary session is established and after grants were cleared
+    // above, so no dupes. `lastActivationSkippedSpaceIds` was already
+    // populated by the auth layer's session activation inside `tc.signIn`
+    // above, so the skipped-activation exclusion sees the real skip set here.
+    const primarySession = this.currentTinyCloudSession();
+    if (primarySession) {
+      this.registerPrimarySessionGrant(primarySession);
+    }
+
     const bootstrapped = await this.bootstrapAccountIfNeeded();
 
     await this.ensureRequestedEncryptionNetworks();
@@ -1238,6 +1265,117 @@ export class TinyCloudNode {
       },
       operations,
       expiresAt,
+      provenance: "bootstrap",
+    });
+  }
+
+  /**
+   * Map the base session's OWN recap into runtime permission operations.
+   *
+   * Uses the RAW `parseRecapFromSiwe` binding — NOT `parseRecapCapabilities`,
+   * whose `normalizeSpace` collapses `tinycloud:pkh:...:<owner>:<space>` to a
+   * bare short name and would conflate two owners' identically-named spaces.
+   * We must keep the full owner-scoped URI so a synthetic primary grant can
+   * never cover an operation on a different owner's space.
+   *
+   * Mirrors {@link operationsFromDelegation}'s op shape: encryption network
+   * entries (`urn:tinycloud:encryption:` paths) become `resource` ops; every
+   * other entry becomes a `spaceId` op carrying the raw recap `space` URI.
+   * One op per action.
+   *
+   * Returns `[]` for session-only / restored-without-siwe modes and for any
+   * unparseable SIWE — the primary grant is simply not registered in that case.
+   */
+  private recapOperationsFromSession(
+    session: TinyCloudSession,
+  ): RuntimePermissionOperation[] {
+    const siwe = session.siwe;
+    if (!siwe) {
+      return [];
+    }
+    if (this._recapOperationsCache?.siwe === siwe) {
+      return this._recapOperationsCache.operations;
+    }
+    let operations: RuntimePermissionOperation[] = [];
+    try {
+      const entries = this.wasmBindings.parseRecapFromSiwe(siwe);
+      if (Array.isArray(entries)) {
+        operations = entries.flatMap((entry) => {
+          const service = this.invocationServiceName(entry.service);
+          return entry.actions.map((action) => ({
+            ...(this.isEncryptionNetworkOperation(service, entry.path)
+              ? { resource: entry.path }
+              : { spaceId: entry.space }),
+            service,
+            path: entry.path,
+            action,
+          }));
+        });
+      }
+    } catch {
+      operations = [];
+    }
+    this._recapOperationsCache = { siwe, operations };
+    return operations;
+  }
+
+  /**
+   * Register the base (primary) session's own recap as a synthetic runtime
+   * grant tagged `provenance: "primary"` so it always out-ranks other covering
+   * grants in {@link findGrantForOperations}. This closes the selection-design
+   * hazard where a broad — possibly broken — bootstrap/delegated grant could
+   * hijack an operation the primary session itself already authorized (TC-111).
+   *
+   * Two safety exclusions:
+   *  - Ops whose space is in `lastActivationSkippedSpaceIds` are dropped: the
+   *    node refused to activate those spaces this sign-in even though the recap
+   *    claims them. Including them would let the synthetic primary out-rank a
+   *    working grant and 401 (the "skipped-activation inverted hijack").
+   *  - Encryption `resource` ops are kept as-is (space-independent).
+   *
+   * No-ops when nothing remains after exclusion. Callers (`signIn`,
+   * `restoreSession`) clear `runtimePermissionGrants` first, so no dupes.
+   */
+  private registerPrimarySessionGrant(session: TinyCloudSession): void {
+    const skipped = this.auth
+      ? (this.auth as NodeUserAuthorization).lastActivationSkippedSpaceIds ?? []
+      : [];
+    const operations = this.recapOperationsFromSession(session).filter(
+      (operation) =>
+        operation.spaceId === undefined ||
+        !skipped.some((spaceId) => this.spaceIdsEqual(spaceId, operation.spaceId!)),
+    );
+    if (operations.length === 0) {
+      return;
+    }
+
+    const expiresAt = extractSiweExpiration(session.siwe) ?? this.getSessionExpiry();
+    const actions = [...new Set(operations.map((operation) => operation.action))];
+    this.runtimePermissionGrants.push({
+      session: {
+        delegationHeader: session.delegationHeader,
+        delegationCid: session.delegationCid,
+        spaceId: session.spaceId,
+        verificationMethod: session.verificationMethod,
+        jwk: session.jwk,
+      },
+      delegation: {
+        cid: session.delegationCid,
+        delegationHeader: session.delegationHeader,
+        delegateDID: session.verificationMethod,
+        delegatorDID: this.did,
+        spaceId: session.spaceId,
+        path: "",
+        actions,
+        expiry: expiresAt,
+        allowSubDelegation: true,
+        ownerAddress: session.address,
+        chainId: session.chainId,
+        host: this.config.host,
+      },
+      operations,
+      expiresAt,
+      provenance: "primary",
     });
   }
 
@@ -1709,6 +1847,11 @@ export class TinyCloudNode {
       } else {
         this._restoredTcSession = tcSession;
       }
+
+      // Register the restored primary session's own recap as the highest-trust
+      // runtime grant, mirroring signIn() (TC-111). Grants were cleared above,
+      // so no dupes. Only runs when the restored session carries a `siwe`.
+      this.registerPrimarySessionGrant(tcSession);
     }
   }
 
@@ -2960,7 +3103,12 @@ export class TinyCloudNode {
   ): PortableDelegation[] {
     this.pruneExpiredRuntimePermissionGrants();
     if (permissions === undefined) {
-      return this.runtimePermissionGrants.map((grant) => grant.delegation);
+      // Exclude the synthetic primary grant: it represents the base session's
+      // own recap, not an installed runtime delegation. Per this method's
+      // contract, base-session manifest permissions are not represented here.
+      return this.runtimePermissionGrants
+        .filter((grant) => grant.provenance !== "primary")
+        .map((grant) => grant.delegation);
     }
 
     const session = this.currentTinyCloudSession();
@@ -3134,6 +3282,7 @@ export class TinyCloudNode {
         delegation,
         operations: this.permissionOperations(delegatedEntries, spaceId),
         expiresAt,
+        provenance: "runtime",
       });
       delegations.push(delegation);
     }
@@ -3590,6 +3739,10 @@ export class TinyCloudNode {
     const { subset, missing } = isCapabilitySubset(expandedEntries, granted);
 
     if (!subset) {
+      // This branch only runs when the session recap is NOT a superset of the
+      // requested entries. The synthetic primary grant is built from that same
+      // recap, so it can never cover an entry the recap itself doesn't — it can
+      // never be selected here. No `excludePrimary` guard is needed.
       const runtimeGrant = this.findGrantForOperations(
         this.permissionEntriesToOperations(expandedEntries, session),
       );
@@ -4001,7 +4154,12 @@ export class TinyCloudNode {
     }
 
     for (const operation of operations) {
-      const grant = this.findGrantForOperation(operation);
+      // Public surface: never surface the synthetic primary grant. It exists
+      // only to win runtime invocation selection; the base session's own recap
+      // is not an installed runtime delegation, so excluding it keeps the
+      // `getRuntimePermissionDelegations` contract (base-session manifest
+      // permissions are not represented here) airtight.
+      const grant = this.findGrantForOperation(operation, { excludePrimary: true });
       if (!grant) {
         return [];
       }
@@ -4056,6 +4214,7 @@ export class TinyCloudNode {
       delegation,
       operations,
       expiresAt: delegation.expiry,
+      provenance: "delegated",
     };
   }
 
@@ -4078,6 +4237,7 @@ export class TinyCloudNode {
       delegation,
       operations,
       expiresAt,
+      provenance: "delegated",
     });
   }
 
@@ -4216,24 +4376,38 @@ export class TinyCloudNode {
 
   private findGrantForOperations(
     operations: RuntimePermissionOperation[],
+    options?: { excludePrimary?: boolean },
   ): RuntimePermissionGrant | undefined {
     if (operations.length === 0) {
       return undefined;
     }
     this.pruneExpiredRuntimePermissionGrants();
-    return this.runtimePermissionGrants.find((grant) => {
+    const covering = this.runtimePermissionGrants.filter((grant) => {
+      if (options?.excludePrimary && grant.provenance === "primary") {
+        return false;
+      }
       return operations.every((operation) =>
         grant.operations.some((granted) =>
           this.operationCovers(granted, operation),
         ),
       );
     });
+    if (covering.length === 0) {
+      return undefined;
+    }
+    // Provenance ranking: the synthetic primary grant (the base session's own
+    // recap) always wins when it covers every op, so a broad bootstrap or
+    // delegated grant can never hijack an operation the primary session itself
+    // authorizes (TC-111). Otherwise fall back to insertion order — the same
+    // semantics as the previous `.find`.
+    return covering.find((grant) => grant.provenance === "primary") ?? covering[0];
   }
 
   private findGrantForOperation(
     operation: RuntimePermissionOperation,
+    options?: { excludePrimary?: boolean },
   ): RuntimePermissionGrant | undefined {
-    return this.findGrantForOperations([operation]);
+    return this.findGrantForOperations([operation], options);
   }
 
   private pruneExpiredRuntimePermissionGrants(): void {

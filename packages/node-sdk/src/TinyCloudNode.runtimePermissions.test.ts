@@ -1222,3 +1222,424 @@ describe("TinyCloudNode runtime permission delegations", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// TC-111: the primary session's own recap must out-rank any other covering
+// runtime grant so a broad/broken bootstrap or delegated grant can never
+// hijack an operation the primary session itself already authorizes.
+// ---------------------------------------------------------------------------
+describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
+  const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+
+  // The TinyCloudSession the harness installs on `node.auth`. Full-URI space,
+  // matching what `parseRecapFromSiwe` emits for the primary recap.
+  function primarySession(node: TinyCloudNode) {
+    return (node as any).auth.tinyCloudSession;
+  }
+
+  // Install a broad hijacking grant (path "" covers everything on the space)
+  // that a broken bootstrap/delegated flow might have registered. We push
+  // directly to mirror an already-installed grant without going through the
+  // activation machinery.
+  function installBroadGrant(
+    node: TinyCloudNode,
+    spaceId: string,
+    service: string,
+    action: string,
+    provenance: "bootstrap" | "delegated" | "runtime" = "bootstrap",
+  ): void {
+    (node as any).runtimePermissionGrants.push({
+      session: {
+        delegationHeader: { Authorization: "hijack-token" },
+        delegationCid: "hijack-cid",
+        spaceId,
+        verificationMethod: "did:key:hijack",
+        jwk: { kty: "OKP" },
+      },
+      delegation: {
+        cid: "hijack-cid",
+        delegationHeader: { Authorization: "hijack-token" },
+        delegateDID: "did:key:hijack",
+        delegatorDID: node.did,
+        spaceId,
+        path: "",
+        actions: [action],
+        expiry: new Date(Date.now() + 3600_000),
+        allowSubDelegation: true,
+        ownerAddress: ADDRESS,
+        chainId: 1,
+        host: "https://tinycloud.test",
+      },
+      operations: [{ spaceId, service, path: "", action }],
+      expiresAt: new Date(Date.now() + 3600_000),
+      provenance,
+    });
+  }
+
+  test("primary session wins over a broad covering grant (hijack regression)", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const defaultSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+
+    // Broken bootstrap grant registered FIRST — under insertion-order `.find`
+    // it would have been selected and hijacked the operation.
+    installBroadGrant(node, defaultSpaceId, "kv", "tinycloud.kv/put");
+
+    // The primary session's own recap covers this native op.
+    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+      {
+        service: "kv",
+        space: defaultSpaceId,
+        path: "vault/",
+        actions: ["tinycloud.kv/put"],
+      },
+    ]);
+    (node as any).registerPrimarySessionGrant(primarySession(node));
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: defaultSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeWithRuntimePermissions(
+      fallback,
+      "kv",
+      "vault/foo",
+      "tinycloud.kv/put",
+    );
+    // Must mint with the PRIMARY (base) session, not the hijacking grant.
+    expect(invoke.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "base-token",
+    );
+  });
+
+  test("primary session wins over a broad covering grant via invokeAny", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const defaultSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+
+    installBroadGrant(node, defaultSpaceId, "sql", "tinycloud.sql/write");
+
+    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+      {
+        service: "sql",
+        space: defaultSpaceId,
+        path: "default",
+        actions: ["tinycloud.sql/write"],
+      },
+    ]);
+    (node as any).registerPrimarySessionGrant(primarySession(node));
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: defaultSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeAnyWithRuntimePermissions(
+      fallback,
+      [
+        {
+          spaceId: defaultSpaceId,
+          service: "sql",
+          path: "default",
+          action: "tinycloud.sql/write",
+        },
+      ],
+      [{}],
+    );
+
+    const invokeAny = (node as any).wasmBindings.invokeAny;
+    expect(invokeAny.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "base-token",
+    );
+  });
+
+  test("grant is still selected when the primary recap does not cover the op", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const defaultSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+    const secretsSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:secrets`;
+
+    // Real grant covers the SECRETS space.
+    installBroadGrant(node, secretsSpaceId, "kv", "tinycloud.kv/put", "delegated");
+
+    // Primary recap only covers the DEFAULT space — so the op on `secrets`
+    // is not covered by the synthetic primary and the grant must win.
+    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+      {
+        service: "kv",
+        space: defaultSpaceId,
+        path: "vault/",
+        actions: ["tinycloud.kv/put"],
+      },
+    ]);
+    (node as any).registerPrimarySessionGrant(primarySession(node));
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: secretsSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeWithRuntimePermissions(
+      fallback,
+      "kv",
+      "vault/secrets/X",
+      "tinycloud.kv/put",
+    );
+    expect(invoke.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "hijack-token",
+    );
+  });
+
+  test("primary recap for owner B never covers an op on owner A's space", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const aliceSpaceId = "tinycloud:pkh:eip155:1:0xAAAA000000000000000000000000000000000000:default";
+    const bobSpaceId = "tinycloud:pkh:eip155:1:0xBBBB000000000000000000000000000000000000:default";
+
+    // A grant covers Alice's space.
+    installBroadGrant(node, aliceSpaceId, "kv", "tinycloud.kv/put", "delegated");
+
+    // Primary recap claims Bob's identically-named "default" space. Because we
+    // build primary ops from the RAW full URI, the owner is preserved and the
+    // synthetic primary must NOT cover an op on Alice's space.
+    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+      {
+        service: "kv",
+        space: bobSpaceId,
+        path: "",
+        actions: ["tinycloud.kv/put"],
+      },
+    ]);
+    (node as any).registerPrimarySessionGrant(primarySession(node));
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: aliceSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeWithRuntimePermissions(
+      fallback,
+      "kv",
+      "vault/x",
+      "tinycloud.kv/put",
+    );
+    // The Alice-space grant wins; the Bob-space primary recap must not.
+    expect(invoke.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "hijack-token",
+    );
+  });
+
+  test("skipped-activation space is excluded from the synthetic primary grant", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const defaultSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+
+    // A bootstrap grant that actually works covers the space.
+    installBroadGrant(node, defaultSpaceId, "kv", "tinycloud.kv/put", "bootstrap");
+
+    // The node REFUSED to activate this space this sign-in, so even though the
+    // recap claims it, the synthetic primary must NOT include it — otherwise
+    // the (non-working) primary would out-rank the working bootstrap grant.
+    (node as any).auth.lastActivationSkippedSpaceIds = [defaultSpaceId];
+    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+      {
+        service: "kv",
+        space: defaultSpaceId,
+        path: "",
+        actions: ["tinycloud.kv/put"],
+      },
+    ]);
+    (node as any).registerPrimarySessionGrant(primarySession(node));
+
+    // No primary grant should have been registered (only the bootstrap grant).
+    const grants = (node as any).runtimePermissionGrants;
+    expect(grants.some((g: any) => g.provenance === "primary")).toBe(false);
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: defaultSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeWithRuntimePermissions(
+      fallback,
+      "kv",
+      "vault/x",
+      "tinycloud.kv/put",
+    );
+    // The working bootstrap grant wins.
+    expect(invoke.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "hijack-token",
+    );
+  });
+
+  test("invokeAny: primary wins when it covers all entries, grant when it doesn't", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const defaultSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+    const secretsSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:secrets`;
+
+    // A single delegated grant that covers BOTH spaces (two operations), so a
+    // multi-space batch can be satisfied by one grant.
+    (node as any).runtimePermissionGrants.push({
+      session: {
+        delegationHeader: { Authorization: "hijack-token" },
+        delegationCid: "hijack-cid",
+        spaceId: defaultSpaceId,
+        verificationMethod: "did:key:hijack",
+        jwk: { kty: "OKP" },
+      },
+      delegation: {
+        cid: "hijack-cid",
+        delegationHeader: { Authorization: "hijack-token" },
+        delegateDID: "did:key:hijack",
+        delegatorDID: node.did,
+        spaceId: defaultSpaceId,
+        path: "",
+        actions: ["tinycloud.sql/write"],
+        expiry: new Date(Date.now() + 3600_000),
+        allowSubDelegation: true,
+        ownerAddress: ADDRESS,
+        chainId: 1,
+        host: "https://tinycloud.test",
+      },
+      operations: [
+        { spaceId: defaultSpaceId, service: "sql", path: "", action: "tinycloud.sql/write" },
+        { spaceId: secretsSpaceId, service: "sql", path: "", action: "tinycloud.sql/write" },
+      ],
+      expiresAt: new Date(Date.now() + 3600_000),
+      provenance: "delegated",
+    });
+
+    // Primary recap only covers the DEFAULT space.
+    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+      {
+        service: "sql",
+        space: defaultSpaceId,
+        path: "default",
+        actions: ["tinycloud.sql/write"],
+      },
+    ]);
+    (node as any).registerPrimarySessionGrant(primarySession(node));
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: defaultSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    // All entries covered by primary -> primary wins.
+    (node as any).invokeAnyWithRuntimePermissions(
+      fallback,
+      [
+        {
+          spaceId: defaultSpaceId,
+          service: "sql",
+          path: "default",
+          action: "tinycloud.sql/write",
+        },
+      ],
+      [{}],
+    );
+    const invokeAny = (node as any).wasmBindings.invokeAny;
+    expect(invokeAny.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "base-token",
+    );
+
+    // One entry only covered by a grant (secrets space) -> grant wins.
+    (node as any).invokeAnyWithRuntimePermissions(
+      fallback,
+      [
+        {
+          spaceId: defaultSpaceId,
+          service: "sql",
+          path: "default",
+          action: "tinycloud.sql/write",
+        },
+        {
+          spaceId: secretsSpaceId,
+          service: "sql",
+          path: "default",
+          action: "tinycloud.sql/write",
+        },
+      ],
+      [{}, {}],
+    );
+    expect(invokeAny.mock.calls[1][0].delegationHeader.Authorization).toBe(
+      "hijack-token",
+    );
+  });
+
+  test("getRuntimePermissionDelegations never returns the synthetic primary grant", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const defaultSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+
+    // One real delegated grant plus the synthetic primary.
+    installBroadGrant(node, defaultSpaceId, "kv", "tinycloud.kv/put", "delegated");
+    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+      {
+        service: "kv",
+        space: defaultSpaceId,
+        path: "",
+        actions: ["tinycloud.kv/put"],
+      },
+    ]);
+    (node as any).registerPrimarySessionGrant(primarySession(node));
+
+    // Sanity: the synthetic primary IS registered.
+    expect(
+      (node as any).runtimePermissionGrants.some(
+        (g: any) => g.provenance === "primary",
+      ),
+    ).toBe(true);
+
+    // Unfiltered public listing must exclude it (only the delegated grant).
+    const delegations = node.getRuntimePermissionDelegations();
+    expect(delegations).toHaveLength(1);
+    expect(delegations[0].cid).toBe("hijack-cid");
+
+    // Permission-filtered public listing must also exclude it: even though the
+    // primary recap covers this op, only the delegated grant is returned.
+    const filtered = node.getRuntimePermissionDelegations([
+      {
+        service: "tinycloud.kv",
+        space: "default",
+        path: "vault/x",
+        actions: ["tinycloud.kv/put"],
+      },
+    ]);
+    expect(filtered.every((d) => d.cid !== "base-cid")).toBe(true);
+  });
+});
