@@ -1,0 +1,133 @@
+{
+  "description": "Monotonic anti-rollback. Engine tracks lastAcceptedSequence.",
+  "enrollmentId": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+  "trace": [
+    {
+      "apply": {
+        "object_type": "HolderEnrollmentStatus",
+        "id_field": "statusId",
+        "id": "henrst_elx37wt63f42hrrxhdr45ad4k7vgsqqpf5be3khzuqf6ebbuie4a",
+        "domain": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+        "unsigned": {
+          "schema": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+          "enrollmentId": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+          "sequence": 1,
+          "disposition": "active",
+          "effectiveAt": "2026-06-01T00:00:00Z",
+          "signingKeyDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac"
+        },
+        "unsigned_jcs_utf8_hex": "7b22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30362d30315430303a30303a30305a222c22656e726f6c6c6d656e744964223a2268656e725f796d6664777670746a7334766d7a666c7163373565766a797074363668766678636a6874716c773669377175616c356576707261222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f686f6c6465722d656e726f6c6c6d656e742d7374617475732f7630222c2273657175656e6365223a312c227369676e696e674b6579446964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163227d",
+        "digest_hex": "22efbfda7ed979a3c63738e3ce807c57ea69420f2f424da8f9a40be204344138",
+        "signature": {
+          "suite": "eip191-secp256k1-sha256-jcs-v1",
+          "signerDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac",
+          "value": "ZeMEjJZEYQ7I3p9toYsDNWc2Zu54hcMEUL7UgupSzL95CiKqhpURiyz2bEE96NUuFgvAYNItQMnFz4ZiaJMTzxs"
+        }
+      },
+      "expected": "accept",
+      "lastAcceptedSequence_after": 1
+    },
+    {
+      "apply": {
+        "object_type": "HolderEnrollmentStatus",
+        "id_field": "statusId",
+        "id": "henrst_j2lnpbqgeh36cesc6esf5stx424bgy6eoinxfemhzuumrlw4td3q",
+        "domain": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+        "unsigned": {
+          "schema": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+          "enrollmentId": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+          "sequence": 2,
+          "disposition": "active",
+          "effectiveAt": "2026-06-05T00:00:00Z",
+          "signingKeyDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac"
+        },
+        "unsigned_jcs_utf8_hex": "7b22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30362d30355430303a30303a30305a222c22656e726f6c6c6d656e744964223a2268656e725f796d6664777670746a7334766d7a666c7163373565766a797074363668766678636a6874716c773669377175616c356576707261222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f686f6c6465722d656e726f6c6c6d656e742d7374617475732f7630222c2273657175656e6365223a322c227369676e696e674b6579446964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163227d",
+        "digest_hex": "4e96d7860621f7e11242f1245eca77e6b81363c4721b729187cd28c8aedc98f7",
+        "signature": {
+          "suite": "eip191-secp256k1-sha256-jcs-v1",
+          "signerDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac",
+          "value": "XxutdEwlGBbU8fVttNCl5FI9PDN0MvKbmBGb8TJ3-xEcvkGzbWH4VAccwNs-pkMyA3mixwxSODzazQuDuRMjOhs"
+        }
+      },
+      "expected": "accept",
+      "lastAcceptedSequence_after": 2
+    },
+    {
+      "apply": {
+        "object_type": "HolderEnrollmentStatus",
+        "id_field": "statusId",
+        "id": "henrst_prvedfyzsotztouhww5gzlwjua26hxz3vupnteww3jryonzu2wmq",
+        "domain": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+        "unsigned": {
+          "schema": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+          "enrollmentId": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+          "sequence": 1,
+          "disposition": "active",
+          "effectiveAt": "2026-06-06T00:00:00Z",
+          "signingKeyDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac"
+        },
+        "unsigned_jcs_utf8_hex": "7b22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30362d30365430303a30303a30305a222c22656e726f6c6c6d656e744964223a2268656e725f796d6664777670746a7334766d7a666c7163373565766a797074363668766678636a6874716c773669377175616c356576707261222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f686f6c6465722d656e726f6c6c6d656e742d7374617475732f7630222c2273657175656e6365223a312c227369676e696e674b6579446964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163227d",
+        "digest_hex": "7c6a41971993a799ba87b5ba6caec9a035e3df3bad1ed992d6da63873734d599",
+        "signature": {
+          "suite": "eip191-secp256k1-sha256-jcs-v1",
+          "signerDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac",
+          "value": "qBTlrGsm022G22VLJUkXkSRu9u8cAhxC5q0uUVoe_mpR2llL9H3UM2saqGuIOsVUk7DmXz4kuoXDLM7UlobM3Rw"
+        }
+      },
+      "expected": "reject",
+      "rejection_code": "enrollment-status-rollback",
+      "lastAcceptedSequence_after": 2
+    },
+    {
+      "apply": {
+        "object_type": "HolderEnrollmentStatus",
+        "id_field": "statusId",
+        "id": "henrst_4jsboxxepjngq3ikrhicjkwhzout2jwfejt3imheqvxlxic6kdaa",
+        "domain": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+        "unsigned": {
+          "schema": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+          "enrollmentId": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+          "sequence": 2,
+          "disposition": "active",
+          "effectiveAt": "2026-06-07T00:00:00Z",
+          "signingKeyDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac"
+        },
+        "unsigned_jcs_utf8_hex": "7b22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30362d30375430303a30303a30305a222c22656e726f6c6c6d656e744964223a2268656e725f796d6664777670746a7334766d7a666c7163373565766a797074363668766678636a6874716c773669377175616c356576707261222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f686f6c6465722d656e726f6c6c6d656e742d7374617475732f7630222c2273657175656e6365223a322c227369676e696e674b6579446964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163227d",
+        "digest_hex": "e264175ee47a5a686d0a89d024aac7cba93d26c52267b430e4856ebba05e50c0",
+        "signature": {
+          "suite": "eip191-secp256k1-sha256-jcs-v1",
+          "signerDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac",
+          "value": "ZXFCoik8dtMRUm2ZjOuiUEvfXbdLt5Hti88Cr4cexmpkGx8YWpqxxgSwQ1L9OOhNQY9CJILU7DFT4ZMpGNQPchw"
+        }
+      },
+      "expected": "reject",
+      "rejection_code": "enrollment-status-rollback",
+      "lastAcceptedSequence_after": 2
+    },
+    {
+      "apply": {
+        "object_type": "HolderEnrollmentStatus",
+        "id_field": "statusId",
+        "id": "henrst_vmwrliilxlzpl5sht7eurdrwzbzrrmydaj7ckhprodfp7szw4sba",
+        "domain": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+        "unsigned": {
+          "schema": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+          "enrollmentId": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+          "sequence": 3,
+          "disposition": "active",
+          "effectiveAt": "2026-06-08T00:00:00Z",
+          "signingKeyDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac"
+        },
+        "unsigned_jcs_utf8_hex": "7b22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30362d30385430303a30303a30305a222c22656e726f6c6c6d656e744964223a2268656e725f796d6664777670746a7334766d7a666c7163373565766a797074363668766678636a6874716c773669377175616c356576707261222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f686f6c6465722d656e726f6c6c6d656e742d7374617475732f7630222c2273657175656e6365223a332c227369676e696e674b6579446964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163227d",
+        "digest_hex": "ab2d15a10bbaf2f5f6479fc9488e36c87318b303027e251df170caffcb36e482",
+        "signature": {
+          "suite": "eip191-secp256k1-sha256-jcs-v1",
+          "signerDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac",
+          "value": "CNjw2voX1G7K1cGkFgTzSyexbYV7PLA5voC3f6PIOM9DXZYeTSt6ZsGf9dtC8rqsPGyIs5js4dtC6eadrYJ6ERs"
+        }
+      },
+      "expected": "accept",
+      "lastAcceptedSequence_after": 3
+    }
+  ]
+}

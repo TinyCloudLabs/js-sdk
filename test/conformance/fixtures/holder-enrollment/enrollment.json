@@ -1,0 +1,53 @@
+{
+  "description": "Canonical HolderEnrollment + active HolderEnrollmentStatus.",
+  "enrollment": {
+    "object_type": "HolderEnrollment",
+    "id_field": "enrollmentId",
+    "id": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+    "domain": "xyz.tinycloud.policy/holder-enrollment/v0",
+    "unsigned": {
+      "schema": "xyz.tinycloud.policy/holder-enrollment/v0",
+      "eligibleSubjectDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac",
+      "holderDid": "did:key:z6Mkg49NtQR2LyYRDCQFK4w1VVHqhypZSSRo7HsyuN7SV7v5",
+      "scope": {
+        "policyIds": [
+          "pol_eiqepppd6uutcnvuqlsb2bqmjkjmshabylama4c3jepqd54hycjq"
+        ],
+        "resourceIds": [
+          "conv_456"
+        ]
+      },
+      "notBefore": "2026-06-01T00:00:00Z",
+      "expiresAt": "2026-07-01T00:00:00Z",
+      "signingKeyDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac"
+    },
+    "unsigned_jcs_utf8_hex": "7b22656c696769626c655375626a656374446964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163222c22657870697265734174223a22323032362d30372d30315430303a30303a30305a222c22686f6c646572446964223a226469643a6b65793a7a364d6b6734394e745152324c795952444351464b347731565648716879705a5353526f37487379754e375356377635222c226e6f744265666f7265223a22323032362d30362d30315430303a30303a30305a222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f686f6c6465722d656e726f6c6c6d656e742f7630222c2273636f7065223a7b22706f6c696379496473223a5b22706f6c5f656971657070706436757574636e7675716c73623262716d6a6b6a6d73686162796c616d613463336a6570716435346879636a71225d2c227265736f75726365496473223a5b22636f6e765f343536225d7d2c227369676e696e674b6579446964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163227d",
+    "digest_hex": "c30a3b55f34cb95664ab80bfd255387cfde3d4b7124f382ede47e1402fa4abe2",
+    "signature": {
+      "suite": "eip191-secp256k1-sha256-jcs-v1",
+      "signerDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac",
+      "value": "LzjYyhtikfk-dlI0DJS7NUtucEOlBxxL8KCtuiuu2Tc62qDqsQv4FghWRxSFidpndiVblgQIPyMJMx4XtDqMRxs"
+    }
+  },
+  "active_status": {
+    "object_type": "HolderEnrollmentStatus",
+    "id_field": "statusId",
+    "id": "henrst_elx37wt63f42hrrxhdr45ad4k7vgsqqpf5be3khzuqf6ebbuie4a",
+    "domain": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+    "unsigned": {
+      "schema": "xyz.tinycloud.policy/holder-enrollment-status/v0",
+      "enrollmentId": "henr_ymfdwvptjs4vmzflqc75evjypt66hvfxcjhtqlw6i7qual5evpra",
+      "sequence": 1,
+      "disposition": "active",
+      "effectiveAt": "2026-06-01T00:00:00Z",
+      "signingKeyDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac"
+    },
+    "unsigned_jcs_utf8_hex": "7b22646973706f736974696f6e223a22616374697665222c226566666563746976654174223a22323032362d30362d30315430303a30303a30305a222c22656e726f6c6c6d656e744964223a2268656e725f796d6664777670746a7334766d7a666c7163373565766a797074363668766678636a6874716c773669377175616c356576707261222c22736368656d61223a2278797a2e74696e79636c6f75642e706f6c6963792f686f6c6465722d656e726f6c6c6d656e742d7374617475732f7630222c2273657175656e6365223a312c227369676e696e674b6579446964223a226469643a706b683a6569703135353a313a307837353634313035653937373531366335336265333337333134633765353338333839363762646163227d",
+    "digest_hex": "22efbfda7ed979a3c63738e3ce807c57ea69420f2f424da8f9a40be204344138",
+    "signature": {
+      "suite": "eip191-secp256k1-sha256-jcs-v1",
+      "signerDid": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac",
+      "value": "ZeMEjJZEYQ7I3p9toYsDNWc2Zu54hcMEUL7UgupSzL95CiKqhpURiyz2bEE96NUuFgvAYNItQMnFz4ZiaJMTzxs"
+    }
+  }
+}
