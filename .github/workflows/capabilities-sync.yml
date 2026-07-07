@@ -2,11 +2,15 @@
 #
 # The canonical registry lives in tinycloud-node and is vendored VERBATIM into
 # `packages/bootstrap/src/generated/capabilities.ts`. This job fetches the
-# generated file from tinycloud-node at the pinned rev and fails on any diff, so
-# the SDK's single source of truth can never silently drift from the enforcer.
+# generated file from tinycloud-node at the rev the vendored copy was generated
+# from and fails on any diff, so the SDK's single source of truth can never
+# silently drift from the enforcer. It fetches-and-diffs; it does NOT regenerate.
 #
-# It fetches-and-diffs; it does NOT regenerate. Keep TINYCLOUD_NODE_REV in sync
-# with the tinycloud-node pin in packages/sdk-rs/Cargo.toml.
+# The rev is read FROM the vendored file itself (`REGISTRY_SOURCE_GIT_SHA`), so
+# this check is anchored to the registry, NOT to the WASM-build pin in
+# packages/sdk-rs/Cargo.toml. A separate warn-only step flags when the two
+# diverge — that is the signal to bump the Cargo pin through the normal release
+# flow once a tinycloud-node release ships the registry.
 name: capabilities-sync
 
 on:
@@ -27,11 +31,15 @@ permissions:
   contents: read
 
 env:
-  # tinycloud-node rev the vendored registry was generated from. Must match the
-  # pin in packages/sdk-rs/Cargo.toml.
-  TINYCLOUD_NODE_REV: c9d031b96eea2b87a7cd79a969870dbc72e45533
+  NODE_REPO: tinycloudlabs/tinycloud-node
   VENDORED: packages/bootstrap/src/generated/capabilities.ts
   UPSTREAM_PATH: generated/capabilities.ts
+  # Fallback rev used only until the codegen header carries a
+  # REGISTRY_SOURCE_GIT_SHA export (requested from caps-node-dev, tinycloud-node
+  # codegen). Once present, the "Resolve source rev" step reads it from the
+  # vendored file and this value is ignored.
+  # TODO(tc-112): drop once REGISTRY_SOURCE_GIT_SHA is emitted by codegen.
+  FALLBACK_NODE_REV: c9d031b96eea2b87a7cd79a969870dbc72e45533
 
 jobs:
   diff:
@@ -39,10 +47,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch upstream generated/capabilities.ts
+      - name: Resolve source rev from the vendored file
+        id: rev
         run: |
           set -euo pipefail
-          URL="https://raw.githubusercontent.com/tinycloudlabs/tinycloud-node/${TINYCLOUD_NODE_REV}/${UPSTREAM_PATH}"
+          # Prefer the git source sha embedded in the generated header; fall back
+          # to FALLBACK_NODE_REV until codegen emits it.
+          SHA="$(grep -oE 'REGISTRY_SOURCE_GIT_SHA[^"]*"[0-9a-f]{40}"' "$VENDORED" \
+                   | grep -oE '[0-9a-f]{40}' || true)"
+          if [ -z "$SHA" ]; then
+            echo "REGISTRY_SOURCE_GIT_SHA not found in $VENDORED; using FALLBACK_NODE_REV."
+            SHA="$FALLBACK_NODE_REV"
+          fi
+          echo "Resolved tinycloud-node rev: $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch upstream generated/capabilities.ts at that rev
+        run: |
+          set -euo pipefail
+          URL="https://raw.githubusercontent.com/${NODE_REPO}/${{ steps.rev.outputs.sha }}/${UPSTREAM_PATH}"
           echo "Fetching $URL"
           curl -fsSL "$URL" -o upstream-capabilities.ts
 
@@ -50,9 +73,25 @@ jobs:
         run: |
           set -euo pipefail
           if ! diff -u upstream-capabilities.ts "$VENDORED"; then
-            echo "::error::Vendored capability registry ($VENDORED) is out of sync with"
-            echo "::error::tinycloud-node@${TINYCLOUD_NODE_REV} ($UPSTREAM_PATH)."
-            echo "::error::Re-vendor the generated file and bump the pin, or update TINYCLOUD_NODE_REV."
+            echo "::error::Vendored capability registry ($VENDORED) is out of sync"
+            echo "::error::with ${NODE_REPO}@${{ steps.rev.outputs.sha }} ($UPSTREAM_PATH)."
+            echo "::error::Re-vendor the generated file byte-identical from that rev."
             exit 1
           fi
-          echo "Vendored registry matches tinycloud-node@${TINYCLOUD_NODE_REV}."
+          echo "Vendored registry matches ${NODE_REPO}@${{ steps.rev.outputs.sha }}."
+
+      - name: Warn if the sdk-rs Cargo pin diverges from the registry rev
+        run: |
+          set -euo pipefail
+          # The Cargo pin governs the WASM build and may lag the registry rev
+          # (e.g. it tracks a release tag). Divergence is expected between a
+          # registry bump and the next tinycloud-node release; warn, do not fail.
+          PIN="$(grep -oE 'tinycloud-sdk-rs = \{[^}]*\}' packages/sdk-rs/Cargo.toml || true)"
+          REGISTRY_REV="${{ steps.rev.outputs.sha }}"
+          if echo "$PIN" | grep -q "$REGISTRY_REV"; then
+            echo "sdk-rs Cargo pin matches the registry rev ($REGISTRY_REV)."
+          else
+            echo "::warning::sdk-rs Cargo pin does not reference the registry rev ${REGISTRY_REV}."
+            echo "::warning::Pin: ${PIN}"
+            echo "::warning::Expected once tinycloud-node ships a release containing the registry — bump the pin through the normal release flow."
+          fi
