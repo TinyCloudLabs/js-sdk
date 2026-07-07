@@ -14,6 +14,14 @@
  */
 
 import type { PermissionEntry } from "@tinycloud/sdk-core";
+import {
+  KV,
+  SQL,
+  DUCKDB,
+  CAPABILITIES,
+  HOOKS,
+  ENCRYPTION,
+} from "@tinycloud/sdk-core";
 
 export interface PermissionRequestModalOptions {
   /** Display name of the app requesting permissions (from the manifest). */
@@ -430,162 +438,162 @@ const SERVICE_LABELS: Record<string, string> = {
 };
 
 const CAPABILITY_DESCRIPTIONS: Record<string, CapabilityDescription> = {
-  "tinycloud.encryption/decrypt": {
+  [ENCRYPTION.DECRYPT]: {
     title: "Decrypt data keys for this network",
     description:
       "Allows this app to ask a TinyCloud node to unwrap encrypted data keys for data encrypted to this network. The app still needs separate data-read permission to fetch encrypted records.",
   },
-  "tinycloud.encryption/network.create": {
+  [ENCRYPTION.NETWORK_CREATE]: {
     title: "Create an encryption network",
     description:
       "Allows this app to create or initialize an encryption network that data can be encrypted to. The network key is managed by TinyCloud nodes and used later for delegated decrypt requests.",
   },
-  "tinycloud.encryption/network.revoke": {
+  [ENCRYPTION.NETWORK_REVOKE]: {
     title: "Revoke an encryption network",
     description:
       "Allows this app to revoke or disable an encryption network so future decrypt requests for that network are denied.",
   },
-  "tinycloud.kv/get": {
+  [KV.GET]: {
     title: "Read key-value data",
     description:
       "Allows this app to read values at the selected key or key prefix in the requested space.",
   },
-  "tinycloud.kv/put": {
+  [KV.PUT]: {
     title: "Write key-value data",
     description:
       "Allows this app to create or replace values at the selected key or key prefix in the requested space.",
   },
-  "tinycloud.kv/del": {
+  [KV.DEL]: {
     title: "Delete key-value data",
     description:
       "Allows this app to remove values at the selected key or key prefix in the requested space.",
   },
-  "tinycloud.kv/list": {
+  [KV.LIST]: {
     title: "List key-value entries",
     description:
       "Allows this app to list keys under the selected key-value prefix in the requested space.",
   },
-  "tinycloud.kv/metadata": {
+  [KV.METADATA]: {
     title: "Read key-value metadata",
     description:
       "Allows this app to inspect metadata for keys without necessarily reading the stored value.",
   },
-  "tinycloud.sql/read": {
+  [SQL.READ]: {
     title: "Read SQL data",
     description:
       "Allows this app to read rows and query results from the selected SQL database in the requested space.",
   },
-  "tinycloud.sql/write": {
+  [SQL.WRITE]: {
     title: "Write SQL data",
     description:
       "Allows this app to insert, update, or delete rows in the selected SQL database.",
   },
-  "tinycloud.sql/schema": {
+  [SQL.SCHEMA]: {
     title: "Change SQL schema",
     description:
       "Allows this app to create, alter, or drop SQL tables, indexes, and schema objects.",
   },
-  "tinycloud.sql/admin": {
+  [SQL.ADMIN]: {
     title: "Administer SQL storage",
     description:
       "Allows this app to perform administrative SQL operations for the selected database.",
   },
-  "tinycloud.sql/select": {
+  [SQL.SELECT]: {
     title: "Select SQL rows",
     description:
       "Allows this app to run SELECT queries against the selected SQL database.",
   },
-  "tinycloud.sql/insert": {
+  [SQL.INSERT]: {
     title: "Insert SQL rows",
     description:
       "Allows this app to insert rows into the selected SQL database.",
   },
-  "tinycloud.sql/update": {
+  [SQL.UPDATE]: {
     title: "Update SQL rows",
     description:
       "Allows this app to update rows in the selected SQL database.",
   },
-  "tinycloud.sql/delete": {
+  [SQL.DELETE]: {
     title: "Delete SQL rows",
     description:
       "Allows this app to delete rows from the selected SQL database.",
   },
-  "tinycloud.sql/execute": {
+  [SQL.EXECUTE]: {
     title: "Execute SQL statements",
     description:
       "Allows this app to execute SQL statements against the selected database.",
   },
-  "tinycloud.sql/export": {
+  [SQL.EXPORT]: {
     title: "Export SQL data",
     description:
       "Allows this app to export data from the selected SQL database.",
   },
-  "tinycloud.sql/*": {
+  [SQL.ALL]: {
     title: "Full SQL access",
     description:
       "Allows this app to read, write, administer, and export the selected SQL database.",
   },
-  "tinycloud.duckdb/read": {
+  [DUCKDB.READ]: {
     title: "Read DuckDB data",
     description:
       "Allows this app to read data and query results from the selected DuckDB database.",
   },
-  "tinycloud.duckdb/write": {
+  [DUCKDB.WRITE]: {
     title: "Write DuckDB data",
     description:
       "Allows this app to write data to the selected DuckDB database.",
   },
-  "tinycloud.duckdb/admin": {
+  [DUCKDB.ADMIN]: {
     title: "Administer DuckDB storage",
     description:
       "Allows this app to perform administrative operations for the selected DuckDB database.",
   },
-  "tinycloud.duckdb/describe": {
+  [DUCKDB.DESCRIBE]: {
     title: "Describe DuckDB data",
     description:
       "Allows this app to inspect tables, columns, and metadata in the selected DuckDB database.",
   },
-  "tinycloud.duckdb/export": {
+  [DUCKDB.EXPORT]: {
     title: "Export DuckDB data",
     description:
       "Allows this app to export data from the selected DuckDB database.",
   },
-  "tinycloud.duckdb/import": {
+  [DUCKDB.IMPORT]: {
     title: "Import DuckDB data",
     description:
       "Allows this app to import data into the selected DuckDB database.",
   },
-  "tinycloud.duckdb/execute": {
+  [DUCKDB.EXECUTE]: {
     title: "Execute DuckDB statements",
     description:
       "Allows this app to execute statements against the selected DuckDB database.",
   },
-  "tinycloud.duckdb/*": {
+  [DUCKDB.ALL]: {
     title: "Full DuckDB access",
     description:
       "Allows this app to read, write, administer, import, export, and execute statements on the selected DuckDB database.",
   },
-  "tinycloud.capabilities/read": {
+  [CAPABILITIES.READ]: {
     title: "Read delegated capabilities",
     description:
       "Allows this app to read capability and delegation records for the selected scope.",
   },
-  "tinycloud.hooks/subscribe": {
+  [HOOKS.SUBSCRIBE]: {
     title: "Subscribe to hooks",
     description:
       "Allows this app to receive hook events for the selected hook scope.",
   },
-  "tinycloud.hooks/register": {
+  [HOOKS.REGISTER]: {
     title: "Register hooks",
     description:
       "Allows this app to register hook handlers for the selected hook scope.",
   },
-  "tinycloud.hooks/list": {
+  [HOOKS.LIST]: {
     title: "List hooks",
     description:
       "Allows this app to list registered hooks for the selected hook scope.",
   },
-  "tinycloud.hooks/unregister": {
+  [HOOKS.UNREGISTER]: {
     title: "Unregister hooks",
     description:
       "Allows this app to remove registered hook handlers for the selected hook scope.",

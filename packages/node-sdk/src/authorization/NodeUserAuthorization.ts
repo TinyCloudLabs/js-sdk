@@ -33,6 +33,12 @@ import {
   canonicalizeAddress,
   makePkhSpaceId,
   pkhDid,
+  KV,
+  SQL,
+  DUCKDB,
+  CAPABILITIES,
+  HOOKS,
+  ENCRYPTION,
 } from "@tinycloud/sdk-core";
 import {
   SignStrategy,
@@ -42,8 +48,8 @@ import {
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 
-const DECRYPT_ACTION = "tinycloud.encryption/decrypt";
-const NETWORK_CREATE_ACTION = "tinycloud.encryption/network.create";
+const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
+const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 
 function didPrincipalMatches(actual: string, expected: string): boolean {
   try {
@@ -223,44 +229,27 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.spacePrefix = config.spacePrefix ?? "default";
     this.defaultActions = config.defaultActions ?? {
       kv: {
-        "": [
-          "tinycloud.kv/put",
-          "tinycloud.kv/get",
-          "tinycloud.kv/del",
-          "tinycloud.kv/list",
-          "tinycloud.kv/metadata",
-        ],
+        "": [KV.PUT, KV.GET, KV.DEL, KV.LIST, KV.METADATA],
       },
       sql: {
-        "": [
-          "tinycloud.sql/read",
-          "tinycloud.sql/write",
-          "tinycloud.sql/schema",
-          "tinycloud.sql/admin",
-          "tinycloud.sql/export",
-        ],
+        "": [SQL.READ, SQL.WRITE, SQL.SCHEMA, SQL.ADMIN, SQL.EXPORT],
       },
       duckdb: {
         "": [
-          "tinycloud.duckdb/read",
-          "tinycloud.duckdb/write",
-          "tinycloud.duckdb/admin",
-          "tinycloud.duckdb/describe",
-          "tinycloud.duckdb/export",
-          "tinycloud.duckdb/import",
-          "tinycloud.duckdb/execute",
+          DUCKDB.READ,
+          DUCKDB.WRITE,
+          DUCKDB.ADMIN,
+          DUCKDB.DESCRIBE,
+          DUCKDB.EXPORT,
+          DUCKDB.IMPORT,
+          DUCKDB.EXECUTE,
         ],
       },
       capabilities: {
-        "": ["tinycloud.capabilities/read"],
+        "": [CAPABILITIES.READ],
       },
       hooks: {
-        "": [
-          "tinycloud.hooks/subscribe",
-          "tinycloud.hooks/register",
-          "tinycloud.hooks/list",
-          "tinycloud.hooks/unregister",
-        ],
+        "": [HOOKS.SUBSCRIBE, HOOKS.REGISTER, HOOKS.LIST, HOOKS.UNREGISTER],
       },
     };
     this.sessionExpirationMs = config.sessionExpirationMs ?? EXPIRY.SESSION_MS;
@@ -505,20 +494,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
           [secretsSpaceId]: {
             kv: {
               "vault/secrets/": [
-                "tinycloud.kv/get",
-                "tinycloud.kv/put",
-                "tinycloud.kv/del",
-                "tinycloud.kv/list",
-                "tinycloud.kv/metadata",
+                KV.GET,
+                KV.PUT,
+                KV.DEL,
+                KV.LIST,
+                KV.METADATA,
               ],
             },
           },
         },
         rawAbilities: {
-          [defaultNetworkId]: [
-            "tinycloud.encryption/decrypt",
-            "tinycloud.encryption/network.create",
-          ],
+          [defaultNetworkId]: [DECRYPT_ACTION, NETWORK_CREATE_ACTION],
         },
       };
     }

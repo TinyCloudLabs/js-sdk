@@ -1,4 +1,7 @@
 import { getAddress, isAddress } from "viem";
+import { KV, SQL, CAPABILITIES, SPACE, ENCRYPTION } from "./capabilities";
+
+export * from "./capabilities";
 
 export type ManifestDefaults = boolean | "admin" | "all";
 
@@ -71,7 +74,7 @@ const DEFAULT_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
 const VAULT_PERMISSION_SERVICE = "tinycloud.vault";
 const ENCRYPTION_PERMISSION_SERVICE = "tinycloud.encryption";
 const ENCRYPTION_MANIFEST_SPACE = "encryption";
-const NETWORK_CREATE_ACTION = "tinycloud.encryption/network.create";
+const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 
 export const BOOTSTRAP_SPACE_NAMES = [
   BOOTSTRAP_DEFAULT_SPACE,
@@ -501,7 +504,7 @@ function withCapabilitiesReadForSpaces(
       service: "tinycloud.capabilities",
       space,
       path: "",
-      actions: ["tinycloud.capabilities/read"],
+      actions: [CAPABILITIES.READ],
     })),
   ]);
 }
@@ -512,19 +515,19 @@ function accountRegistryPermissions(): ResourceCapability[] {
       service: "tinycloud.kv",
       space: ACCOUNT_REGISTRY_SPACE,
       path: ACCOUNT_REGISTRY_PATH,
-      actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
+      actions: [KV.GET, KV.PUT, KV.LIST],
     },
     {
       service: "tinycloud.kv",
       space: ACCOUNT_REGISTRY_SPACE,
       path: "spaces/",
-      actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
+      actions: [KV.GET, KV.PUT, KV.LIST],
     },
     {
       service: "tinycloud.sql",
       space: ACCOUNT_REGISTRY_SPACE,
       path: "account",
-      actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"],
+      actions: [SQL.READ, SQL.WRITE, SQL.SCHEMA],
     },
   ];
 }
@@ -621,7 +624,7 @@ export const BOOTSTRAP_ALLOWLIST: readonly BootstrapAllowlistEntry[] =
         kind: "space/host" as const,
         service: "tinycloud.space" as const,
         space,
-        actions: ["tinycloud.space/host"],
+        actions: [SPACE.HOST],
       },
     ]),
   );
