@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
+import { verifyMessage, type Hex } from "viem";
 
 // Policy-engine integration vector pin:
 // 0713e57454920630aec7c8447fd629787794a81e
@@ -13,7 +14,7 @@ const OBJECTS_FIXTURE = new URL(
 );
 
 describe("HolderEnrollment conformance vectors", () => {
-  test("accepts mixed-case EIP-191 signature hex after lowercase normalization", () => {
+  test("accepts mixed-case EIP-191 signature hex after lowercase normalization", async () => {
     const fixture = loadObjectsFixture();
     expect(VECTOR_COMMIT_SHA).toBe("0713e57454920630aec7c8447fd629787794a81e");
 
@@ -33,66 +34,30 @@ describe("HolderEnrollment conformance vectors", () => {
     expect(object).toBeDefined();
     expect(object?.signature.suite).toBe(check.suite);
     expect(object?.signature.signerDid).toBe(object?.unsigned.signingKeyDid);
+    expect(object?.domain).toBe("xyz.tinycloud.policy/holder-enrollment/v0");
 
-    const accepted = acceptNormalizedEnrollmentSignature(check, object!);
+    expect(check.signature_hex).toMatch(/[A-F]/);
+    expect(check.signature_hex).toMatch(/^[0-9A-Fa-f]+$/);
 
-    expect(accepted.object_type).toBe("HolderEnrollment");
-    expect(accepted.signature.value).toBe(object?.signature.value);
-    expect(accepted.signature.signerDid).toBe(object?.signature.signerDid);
-    expect(accepted.enrollmentId).toBe(object?.id);
+    const normalizedSignatureHex = check.signature_hex.toLowerCase();
+    expect(normalizedSignatureHex).toBe(check.normalized_signature_hex);
+
+    const signatureBytes = Buffer.from(normalizedSignatureHex, "hex");
+    expect(signatureBytes).toHaveLength(65);
+
+    const signatureValue = signatureBytes.toString("base64url");
+    expect(signatureValue).toBe(object?.signature.value);
+
+    const signerAddress = pkhDidAddress(object!.signature.signerDid);
+    const accepted = await verifyMessage({
+      address: signerAddress,
+      message: { raw: `0x${object!.digest_hex}` as Hex },
+      signature: `0x${normalizedSignatureHex}` as Hex,
+    });
+
+    expect(accepted).toBe(true);
   });
 });
-
-function acceptNormalizedEnrollmentSignature(
-  check: SignatureHexNormalizationCheck,
-  object: SignedObjectVector,
-) {
-  if (object.object_type !== "HolderEnrollment") {
-    throw new Error(`expected HolderEnrollment, got ${object.object_type}`);
-  }
-  if (check.expected !== "accept") {
-    throw new Error(`unexpected vector disposition: ${check.expected}`);
-  }
-
-  expect(check.signature_hex).toMatch(/[A-F]/);
-  expect(check.signature_hex).toMatch(/^[0-9A-Fa-f]+$/);
-
-  const normalizedSignatureHex = normalizeSignatureHex(check.signature_hex);
-  expect(normalizedSignatureHex).toBe(check.normalized_signature_hex);
-
-  const signatureBytes = Buffer.from(normalizedSignatureHex, "hex");
-  expect(signatureBytes).toHaveLength(65);
-
-  const signatureValue = base64UrlNoPad(signatureBytes);
-  expect(signatureValue).toBe(object.signature.value);
-
-  return {
-    ...object.unsigned,
-    [object.id_field]: object.id,
-    object_type: object.object_type,
-    signature: {
-      suite: check.suite,
-      signerDid: object.signature.signerDid,
-      value: signatureValue,
-    },
-  };
-}
-
-function normalizeSignatureHex(value: string): string {
-  const hex = value.startsWith("0x") || value.startsWith("0X") ? value.slice(2) : value;
-  if (hex.length % 2 !== 0 || !/^[0-9A-Fa-f]+$/.test(hex)) {
-    throw new Error("signature hex must contain full bytes");
-  }
-  return hex.toLowerCase();
-}
-
-function base64UrlNoPad(bytes: Uint8Array): string {
-  return Buffer.from(bytes)
-    .toString("base64")
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/u, "");
-}
 
 function loadObjectsFixture(): ObjectsFixture {
   return JSON.parse(readFileSync(OBJECTS_FIXTURE, "utf8")) as ObjectsFixture;
@@ -119,6 +84,8 @@ interface SignedObjectVector {
   id_field: string;
   id: string;
   domain: string;
+  unsigned_jcs_utf8_hex: string;
+  digest_hex: string;
   unsigned: {
     signingKeyDid?: string;
     [key: string]: unknown;
@@ -128,4 +95,12 @@ interface SignedObjectVector {
     signerDid: string;
     value: string;
   };
+}
+
+function pkhDidAddress(did: string): Hex {
+  const address = did.split(":").at(-1);
+  if (!address || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    throw new Error(`expected did:pkh signer address, got ${did}`);
+  }
+  return address as Hex;
 }
