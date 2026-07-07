@@ -1,188 +1,153 @@
 /**
  * Canonical TinyCloud capability URN registry (js-sdk side).
  *
- * Single source of truth for every ability URN the SDK emits. Until the
- * tinycloud-node codegen (TC-112) lands, this module is hand-maintained but
- * consolidated: the bootstrap manifests, the node-sdk default abilities, the
- * SQL/DuckDB service action tables, and the web-sdk permission-modal labels all
- * derive from the constants declared here instead of repeating raw strings.
+ * TC-112 single source of truth: the registry is defined in tinycloud-node
+ * (`capabilities.json` + codegen) and vendored here VERBATIM as
+ * `./generated/capabilities.ts` — the ONE copy in this repo. A CI job
+ * (`.github/workflows/capabilities-sync.yml`) fetches the generated file from
+ * tinycloud-node at the rev pinned in `packages/sdk-rs/Cargo.toml` and fails on
+ * any diff against the vendored copy, so this module can never silently drift
+ * from the enforcer.
  *
- * Phase B (post caps-node-dev): the generated `capabilities.ts` gets vendored
- * in and this module re-exports/derives from it, with a CI check asserting the
- * vendored copy matches the registry at the pinned tinycloud-node rev.
+ * Everything below is DERIVED from the vendored registry by mechanical string
+ * transform — there is no second hand-maintained action list. The bootstrap
+ * manifests, the node-sdk default abilities, the SQL/DuckDB service action
+ * tables, and the web-sdk permission-modal labels all consume the constants
+ * declared here.
  *
- * Status semantics mirror the node registry design:
- * - `active`      — the SDK dispatches this action against a node service.
- * - `reserved`    — declared for forward-compat / recap parsing, not dispatched
- *                   by the SDK today (may have no node handler either).
- *
- * Long form (`tinycloud.<service>/<action>`) is what action URNs and manifest
- * entries use. The short↔long service bridge (`SERVICE_SHORT_TO_LONG`) lives in
- * `sdk-core/manifest.ts` because it encodes the recap-encodable service subset,
- * a narrower concern than this URN registry.
+ * The only hand-authored URNs are the four request-kind artifacts
+ * (`sql/execute`, `sql/export`, `duckdb/describe`, `duckdb/execute`): the node
+ * routes these by request-body kind gated by read/write/admin — they are NOT
+ * grantable capabilities and are intentionally absent from the vendored
+ * registry. The SDK keeps them as exported constants because the service
+ * clients send them as the invocation ability today (wire alignment tracked in
+ * TC-114). They are excluded from `CAPABILITY_REGISTRY`.
  */
+
+import {
+  CAPABILITIES as GENERATED_CAPABILITIES,
+  type CapabilityEntry,
+  type CapabilityStatus,
+} from "./generated/capabilities";
+
+export type { CapabilityStatus };
 
 /**
- * - `active`           — the SDK dispatches this action against a node service.
- * - `deprecated-alias` — accepted by the node as a legacy alias of another
- *                        action (see `aliasOf`); kept so serializers/validators
- *                        still recognize inbound legacy grants.
- * - `reserved`         — declared for forward-compat, not dispatched today.
- *
- * Mirrors the tinycloud-node registry status vocabulary (TC-112).
+ * A single registry entry. Alias of the vendored `CapabilityEntry` so the
+ * public type name stays stable while the shape tracks the node registry
+ * (long-form `service`, optional `aliasOf`/`implies`).
  */
-export type CapabilityStatus = "active" | "deprecated-alias" | "reserved";
+export type CapabilityRegistryEntry = CapabilityEntry;
 
-export interface CapabilityRegistryEntry {
-  /** Full ability URN, e.g. `tinycloud.kv/get`. */
-  urn: string;
-  /** Short service segment, e.g. `kv`. */
-  service: string;
-  /** Action segment, e.g. `get`. */
-  action: string;
-  /** Status per the node registry vocabulary. */
-  status: CapabilityStatus;
-  /** For `deprecated-alias` entries, the canonical URN this aliases. */
-  aliasOf?: string;
+// ---------------------------------------------------------------------------
+// Derivation
+//
+// Each registry URN is `tinycloud.<service>/<action>`. The per-service constant
+// objects below are built by stripping the `tinycloud.<service>/` prefix and
+// upper-casing the action into a key (`.` -> `_`, `*` -> `ALL`). This is a pure
+// string transform over the vendored registry — no action is named twice.
+// ---------------------------------------------------------------------------
+
+function actionKey(action: string): string {
+  if (action === "*") return "ALL";
+  return action.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+}
+
+function serviceOf(urn: string): string {
+  // "tinycloud.sql/read" -> "sql"
+  return urn.slice("tinycloud.".length, urn.indexOf("/"));
+}
+
+function actionOf(urn: string): string {
+  return urn.slice(urn.indexOf("/") + 1);
+}
+
+function deriveServiceConstants(service: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const entry of GENERATED_CAPABILITIES) {
+    if (serviceOf(entry.urn) !== service) continue;
+    out[actionKey(actionOf(entry.urn))] = entry.urn;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
-// KV
+// Per-service constants (long-form `tinycloud.<service>/<action>` URNs).
 // ---------------------------------------------------------------------------
 
-export const KV = {
-  GET: "tinycloud.kv/get",
-  PUT: "tinycloud.kv/put",
-  DEL: "tinycloud.kv/del",
-  LIST: "tinycloud.kv/list",
-  METADATA: "tinycloud.kv/metadata",
-} as const;
+export const KV = deriveServiceConstants("kv") as {
+  GET: "tinycloud.kv/get";
+  LIST: "tinycloud.kv/list";
+  METADATA: "tinycloud.kv/metadata";
+  PUT: "tinycloud.kv/put";
+  DEL: "tinycloud.kv/del";
+  DELETE: "tinycloud.kv/delete";
+};
 
-// ---------------------------------------------------------------------------
-// SQL
-//
-// `insert`/`update` were dropped (TC-112): zero client refs and the node never
-// accepted them. `select` is kept as a deprecated alias of `read` (the node
-// accepts it as legacy). `delete` is reserved — not dispatched, but the node
-// may still see legacy grants. EXECUTE/EXPORT are active (SQLService dispatches
-// them). The `*` wildcard is active: the node-sdk root delegation grants it and
-// the node matches `sql/*` in admin checks.
-// ---------------------------------------------------------------------------
-
+// `execute`/`export` are request-kind artifacts, not registry capabilities —
+// hand-authored (see module header, TC-114).
 export const SQL = {
-  READ: "tinycloud.sql/read",
-  WRITE: "tinycloud.sql/write",
-  SCHEMA: "tinycloud.sql/schema",
-  ADMIN: "tinycloud.sql/admin",
+  ...deriveServiceConstants("sql"),
   EXECUTE: "tinycloud.sql/execute",
   EXPORT: "tinycloud.sql/export",
-  SELECT: "tinycloud.sql/select",
-  DELETE: "tinycloud.sql/delete",
-  ALL: "tinycloud.sql/*",
-} as const;
+} as {
+  READ: "tinycloud.sql/read";
+  SELECT: "tinycloud.sql/select";
+  WRITE: "tinycloud.sql/write";
+  SCHEMA: "tinycloud.sql/schema";
+  ADMIN: "tinycloud.sql/admin";
+  ALL: "tinycloud.sql/*";
+  EXECUTE: "tinycloud.sql/execute";
+  EXPORT: "tinycloud.sql/export";
+};
 
-// ---------------------------------------------------------------------------
-// DuckDB
-// ---------------------------------------------------------------------------
-
+// `describe`/`execute` are request-kind artifacts, not registry capabilities —
+// hand-authored (see module header, TC-114).
 export const DUCKDB = {
-  READ: "tinycloud.duckdb/read",
-  WRITE: "tinycloud.duckdb/write",
-  ADMIN: "tinycloud.duckdb/admin",
+  ...deriveServiceConstants("duckdb"),
   DESCRIBE: "tinycloud.duckdb/describe",
-  EXPORT: "tinycloud.duckdb/export",
-  IMPORT: "tinycloud.duckdb/import",
   EXECUTE: "tinycloud.duckdb/execute",
-  ALL: "tinycloud.duckdb/*",
-} as const;
+} as {
+  READ: "tinycloud.duckdb/read";
+  WRITE: "tinycloud.duckdb/write";
+  ADMIN: "tinycloud.duckdb/admin";
+  IMPORT: "tinycloud.duckdb/import";
+  EXPORT: "tinycloud.duckdb/export";
+  SELECT: "tinycloud.duckdb/select";
+  ALL: "tinycloud.duckdb/*";
+  DESCRIBE: "tinycloud.duckdb/describe";
+  EXECUTE: "tinycloud.duckdb/execute";
+};
 
-// ---------------------------------------------------------------------------
-// Capabilities
-// ---------------------------------------------------------------------------
+export const CAPABILITIES = deriveServiceConstants("capabilities") as {
+  READ: "tinycloud.capabilities/read";
+};
 
-export const CAPABILITIES = {
-  READ: "tinycloud.capabilities/read",
-} as const;
+export const HOOKS = deriveServiceConstants("hooks") as {
+  SUBSCRIBE: "tinycloud.hooks/subscribe";
+  REGISTER: "tinycloud.hooks/register";
+  LIST: "tinycloud.hooks/list";
+  UNREGISTER: "tinycloud.hooks/unregister";
+};
 
-// ---------------------------------------------------------------------------
-// Hooks
-// ---------------------------------------------------------------------------
+export const ENCRYPTION = deriveServiceConstants("encryption") as {
+  DECRYPT: "tinycloud.encryption/decrypt";
+  NETWORK_CREATE: "tinycloud.encryption/network.create";
+  NETWORK_REVOKE: "tinycloud.encryption/network.revoke";
+};
 
-export const HOOKS = {
-  SUBSCRIBE: "tinycloud.hooks/subscribe",
-  REGISTER: "tinycloud.hooks/register",
-  LIST: "tinycloud.hooks/list",
-  UNREGISTER: "tinycloud.hooks/unregister",
-} as const;
-
-// ---------------------------------------------------------------------------
-// Encryption
-// ---------------------------------------------------------------------------
-
-export const ENCRYPTION = {
-  DECRYPT: "tinycloud.encryption/decrypt",
-  NETWORK_CREATE: "tinycloud.encryption/network.create",
-  NETWORK_REVOKE: "tinycloud.encryption/network.revoke",
-} as const;
-
-// ---------------------------------------------------------------------------
-// Space
-//
-// space/{create,list,info} are LIVE (SpaceService + TinyCloud lazy public-space
-// creation dispatch them against the node's /invoke endpoint). space/host is
-// used by the bootstrap allowlist.
-// ---------------------------------------------------------------------------
-
-export const SPACE = {
-  HOST: "tinycloud.space/host",
-  CREATE: "tinycloud.space/create",
-  LIST: "tinycloud.space/list",
-  INFO: "tinycloud.space/info",
-} as const;
+export const SPACE = deriveServiceConstants("space") as {
+  HOST: "tinycloud.space/host";
+  CREATE: "tinycloud.space/create";
+  LIST: "tinycloud.space/list";
+  INFO: "tinycloud.space/info";
+};
 
 /**
- * The full registry with per-URN status, used by the canonical-set test and
- * (Phase B) the CI cross-check against the generated node artifact.
+ * The full registry with per-URN status/alias/implication metadata. Re-exported
+ * verbatim from the vendored node artifact — used by the canonical-set test and
+ * the CI cross-check. The four request-kind artifacts are intentionally NOT
+ * present here (see module header).
  */
-export const CAPABILITY_REGISTRY: readonly CapabilityRegistryEntry[] = Object.freeze([
-  { urn: KV.GET, service: "kv", action: "get", status: "active" },
-  { urn: KV.PUT, service: "kv", action: "put", status: "active" },
-  { urn: KV.DEL, service: "kv", action: "del", status: "active" },
-  { urn: KV.LIST, service: "kv", action: "list", status: "active" },
-  { urn: KV.METADATA, service: "kv", action: "metadata", status: "active" },
-
-  { urn: SQL.READ, service: "sql", action: "read", status: "active" },
-  { urn: SQL.WRITE, service: "sql", action: "write", status: "active" },
-  { urn: SQL.SCHEMA, service: "sql", action: "schema", status: "active" },
-  { urn: SQL.ADMIN, service: "sql", action: "admin", status: "active" },
-  { urn: SQL.EXECUTE, service: "sql", action: "execute", status: "active" },
-  { urn: SQL.EXPORT, service: "sql", action: "export", status: "active" },
-  { urn: SQL.ALL, service: "sql", action: "*", status: "active" },
-  { urn: SQL.SELECT, service: "sql", action: "select", status: "deprecated-alias", aliasOf: SQL.READ },
-  { urn: SQL.DELETE, service: "sql", action: "delete", status: "reserved" },
-
-  { urn: DUCKDB.READ, service: "duckdb", action: "read", status: "active" },
-  { urn: DUCKDB.WRITE, service: "duckdb", action: "write", status: "active" },
-  { urn: DUCKDB.ADMIN, service: "duckdb", action: "admin", status: "active" },
-  { urn: DUCKDB.DESCRIBE, service: "duckdb", action: "describe", status: "active" },
-  { urn: DUCKDB.EXPORT, service: "duckdb", action: "export", status: "active" },
-  { urn: DUCKDB.IMPORT, service: "duckdb", action: "import", status: "active" },
-  { urn: DUCKDB.EXECUTE, service: "duckdb", action: "execute", status: "active" },
-  { urn: DUCKDB.ALL, service: "duckdb", action: "*", status: "active" },
-
-  { urn: CAPABILITIES.READ, service: "capabilities", action: "read", status: "active" },
-
-  { urn: HOOKS.SUBSCRIBE, service: "hooks", action: "subscribe", status: "active" },
-  { urn: HOOKS.REGISTER, service: "hooks", action: "register", status: "active" },
-  { urn: HOOKS.LIST, service: "hooks", action: "list", status: "active" },
-  { urn: HOOKS.UNREGISTER, service: "hooks", action: "unregister", status: "active" },
-
-  { urn: ENCRYPTION.DECRYPT, service: "encryption", action: "decrypt", status: "active" },
-  { urn: ENCRYPTION.NETWORK_CREATE, service: "encryption", action: "network.create", status: "active" },
-  { urn: ENCRYPTION.NETWORK_REVOKE, service: "encryption", action: "network.revoke", status: "reserved" },
-
-  { urn: SPACE.HOST, service: "space", action: "host", status: "active" },
-  { urn: SPACE.CREATE, service: "space", action: "create", status: "active" },
-  { urn: SPACE.LIST, service: "space", action: "list", status: "active" },
-  { urn: SPACE.INFO, service: "space", action: "info", status: "active" },
-]);
+export const CAPABILITY_REGISTRY: readonly CapabilityRegistryEntry[] =
+  GENERATED_CAPABILITIES;

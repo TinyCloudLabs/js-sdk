@@ -503,11 +503,6 @@ const CAPABILITY_DESCRIPTIONS: Record<string, CapabilityDescription> = {
     description:
       "Allows this app to run SELECT queries against the selected SQL database.",
   },
-  [SQL.DELETE]: {
-    title: "Delete SQL rows",
-    description:
-      "Allows this app to delete rows from the selected SQL database.",
-  },
   [SQL.EXECUTE]: {
     title: "Execute SQL statements",
     description:

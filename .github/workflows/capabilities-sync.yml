@@ -1,0 +1,58 @@
+# Cross-check the vendored capability registry against tinycloud-node (TC-112).
+#
+# The canonical registry lives in tinycloud-node and is vendored VERBATIM into
+# `packages/bootstrap/src/generated/capabilities.ts`. This job fetches the
+# generated file from tinycloud-node at the pinned rev and fails on any diff, so
+# the SDK's single source of truth can never silently drift from the enforcer.
+#
+# It fetches-and-diffs; it does NOT regenerate. Keep TINYCLOUD_NODE_REV in sync
+# with the tinycloud-node pin in packages/sdk-rs/Cargo.toml.
+name: capabilities-sync
+
+on:
+  pull_request:
+    paths:
+      - "packages/bootstrap/src/generated/capabilities.ts"
+      - "packages/sdk-rs/Cargo.toml"
+      - ".github/workflows/capabilities-sync.yml"
+  push:
+    branches: [master]
+    paths:
+      - "packages/bootstrap/src/generated/capabilities.ts"
+      - "packages/sdk-rs/Cargo.toml"
+      - ".github/workflows/capabilities-sync.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # tinycloud-node rev the vendored registry was generated from. Must match the
+  # pin in packages/sdk-rs/Cargo.toml.
+  TINYCLOUD_NODE_REV: c9d031b96eea2b87a7cd79a969870dbc72e45533
+  VENDORED: packages/bootstrap/src/generated/capabilities.ts
+  UPSTREAM_PATH: generated/capabilities.ts
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch upstream generated/capabilities.ts
+        run: |
+          set -euo pipefail
+          URL="https://raw.githubusercontent.com/tinycloudlabs/tinycloud-node/${TINYCLOUD_NODE_REV}/${UPSTREAM_PATH}"
+          echo "Fetching $URL"
+          curl -fsSL "$URL" -o upstream-capabilities.ts
+
+      - name: Diff vendored copy against upstream
+        run: |
+          set -euo pipefail
+          if ! diff -u upstream-capabilities.ts "$VENDORED"; then
+            echo "::error::Vendored capability registry ($VENDORED) is out of sync with"
+            echo "::error::tinycloud-node@${TINYCLOUD_NODE_REV} ($UPSTREAM_PATH)."
+            echo "::error::Re-vendor the generated file and bump the pin, or update TINYCLOUD_NODE_REV."
+            exit 1
+          fi
+          echo "Vendored registry matches tinycloud-node@${TINYCLOUD_NODE_REV}."
