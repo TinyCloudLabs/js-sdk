@@ -22,6 +22,7 @@
   "changesets": [
     "tc-111-primary-session-grant",
     "tc-112-capability-constants",
-    "tc-114-dispatchable-abilities"
+    "tc-114-dispatchable-abilities",
+    "tc-119-node-v1.4.5-pin"
   ]
 }
