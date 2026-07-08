@@ -613,7 +613,12 @@ export class TinyCloudNode {
         return operation ? [operation] : [];
       }),
     );
-    return this.wasmBindings.invokeAny(grant?.session ?? session, entries, facts);
+    // When the primary grant wins, invoke with the PASSED session (its scoped
+    // target `spaceId`), not the stored primary `ServiceSession` — see
+    // `selectInvocationSession` for the wrong-space rationale (TC-111 follow-up).
+    const invocationSession =
+      !grant || grant.provenance === "primary" ? session : grant.session;
+    return this.wasmBindings.invokeAny(invocationSession, entries, facts);
   };
 
   /**
@@ -3783,10 +3788,16 @@ export class TinyCloudNode {
     if (!subset) {
       // This branch only runs when the session recap is NOT a superset of the
       // requested entries. The synthetic primary grant is built from that same
-      // recap, so it can never cover an entry the recap itself doesn't — it can
-      // never be selected here. No `excludePrimary` guard is needed.
+      // recap, so it should never cover an entry the recap itself doesn't —
+      // but `operationCovers` is strictly more permissive than
+      // `isCapabilitySubset` (action `/*` and path `/*`/`/**` wildcards), so a
+      // wildcard-bearing recap could slip through and mint a delegation with
+      // the primary session's spaceId (the wrong-space class). Exclude the
+      // primary explicitly; failure then degrades to
+      // PermissionNotInManifestError instead of a wrong-space delegation.
       const runtimeGrant = this.findGrantForOperations(
         this.permissionEntriesToOperations(expandedEntries, session),
+        { excludePrimary: true },
       );
       if (runtimeGrant) {
         const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;
@@ -4413,7 +4424,17 @@ export class TinyCloudNode {
       path,
       action,
     });
-    return grant?.session ?? fallback;
+    if (!grant) {
+      return fallback;
+    }
+    // "Primary wins" means the caller's own session already authorizes the op:
+    // use the PASSED session, not the stored primary `ServiceSession`. The stored
+    // primary carries the primary space's `spaceId`, but a multi-space recap can
+    // cover scoped ops on OTHER spaces whose fallback session carries the correct
+    // target `spaceId`. Returning `grant.session` there would mint the invocation
+    // against the wrong space (TC-111 follow-up). Non-primary grants keep their
+    // own session.
+    return grant.provenance === "primary" ? fallback : grant.session;
   }
 
   private findGrantForOperations(
