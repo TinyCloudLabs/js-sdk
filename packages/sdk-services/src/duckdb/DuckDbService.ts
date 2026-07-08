@@ -264,9 +264,17 @@ export class DuckDbService extends BaseService implements IDuckDbService {
       }
 
       try {
+        // TC-114: mint the dispatchable ability, not the literal method name.
+        // The node has no `tinycloud.duckdb/execute` capability — it routes an
+        // `executeStatement` request by body kind and classifies write-class
+        // from the RESOLVED named statement's SQL
+        // (tinycloud-node-server/src/routes/mod.rs:1698-1701). Mirroring the SQL
+        // path, `write` is the ability that works for both read-only and
+        // mutating named statements and is contained in a normal read+write
+        // delegation.
         const response = await this.invokeDuckDb(
           dbName,
-          DuckDbAction.EXECUTE,
+          DuckDbAction.WRITE,
           { action: "executeStatement", name, params: params ?? [] },
           options?.signal
         );
@@ -295,9 +303,14 @@ export class DuckDbService extends BaseService implements IDuckDbService {
       }
 
       try {
+        // TC-114: mint the dispatchable ability, not the literal method name.
+        // The node has no `tinycloud.duckdb/describe` capability — it routes a
+        // `describe` request by body kind and authorizes it as a READ
+        // (`DuckDbRequest::Describe` is non-write:
+        // tinycloud-node-server/src/routes/mod.rs:1705, see comment :1680).
         const response = await this.invokeDuckDb(
           dbName,
-          DuckDbAction.DESCRIBE,
+          DuckDbAction.READ,
           { action: "describe" },
           options?.signal
         );

@@ -260,9 +260,19 @@ export class SQLService extends BaseService implements ISQLService {
       }
 
       try {
+        // TC-114: mint the dispatchable ability, not the literal method name.
+        // The node has no `tinycloud.sql/execute` capability — it routes an
+        // `execute_statement` request by body kind and classifies write-class
+        // from the RESOLVED named statement's SQL
+        // (tinycloud-node-server/src/routes/mod.rs:1168-1171). A named statement
+        // may mutate, and the SQL parser rejects writes under a read/select
+        // ability (tinycloud-core/src/sql/parser.rs:135) while permitting reads
+        // under write (write ⊇ read), so `write` is the ability that works for
+        // both read-only and mutating statements and is contained in a normal
+        // read+write delegation.
         const response = await this.invokeSQL(
           dbName,
-          SQLAction.EXECUTE,
+          SQLAction.WRITE,
           { action: "execute_statement", name, params: params ?? [] },
           options?.signal
         );
@@ -291,9 +301,14 @@ export class SQLService extends BaseService implements ISQLService {
       }
 
       try {
+        // TC-114: mint the dispatchable ability, not the literal method name.
+        // The node has no `tinycloud.sql/export` capability — it routes an
+        // `export` request by body kind and authorizes it as a READ
+        // (`SqlRequest::Export` is non-write:
+        // tinycloud-node-server/src/routes/mod.rs:1172, see comment :1155).
         const response = await this.invokeSQL(
           dbName,
-          SQLAction.EXPORT,
+          SQLAction.READ,
           { action: "export" },
           options?.signal
         );

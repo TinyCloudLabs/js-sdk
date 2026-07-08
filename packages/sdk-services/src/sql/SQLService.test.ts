@@ -398,6 +398,60 @@ describe("SQLService permissions", () => {
     expect(bodies.map((body) => body.action)).toEqual(["batch", "query"]);
   });
 
+  // TC-114: the client must mint the ability the node actually dispatches, not
+  // the literal method name. `export` is authorized as a read and
+  // `execute_statement` as a write (see SQLService for node file:line
+  // grounding), so a narrowly-delegated read+write session works.
+  test("export signs with read permission (TC-114)", async () => {
+    const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
+    let requestInit: FetchRequestInit | undefined;
+
+    const service = new SQLService();
+    service.initialize(
+      createContext(async (_url, init) => {
+        requestInit = init;
+        return response(true, 200, "sqlite-bytes");
+      }, invokeCalls),
+    );
+
+    const result = await service.exportDb("default");
+
+    expect(result.ok).toBe(true);
+    expect(invokeCalls).toEqual([
+      { service: "sql", path: "default", action: SQLAction.READ },
+    ]);
+    expect(JSON.parse(requestInit?.body as string)).toEqual({
+      action: "export",
+    });
+  });
+
+  test("executeStatement signs with write permission (TC-114)", async () => {
+    const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
+    let requestInit: FetchRequestInit | undefined;
+
+    const service = new SQLService();
+    service.initialize(
+      createContext(async (_url, init) => {
+        requestInit = init;
+        return response(true, 200, { columns: [], rows: [], rowCount: 0 });
+      }, invokeCalls),
+    );
+
+    const result = await service.executeStatementOnDb("default", "insert_note", [
+      "hello",
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(invokeCalls).toEqual([
+      { service: "sql", path: "default", action: SQLAction.WRITE },
+    ]);
+    expect(JSON.parse(requestInit?.body as string)).toEqual({
+      action: "execute_statement",
+      name: "insert_note",
+      params: ["hello"],
+    });
+  });
+
   test("SQL errors sanitize proxy HTML pages", async () => {
     const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
 
