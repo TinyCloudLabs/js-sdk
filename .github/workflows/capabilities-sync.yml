@@ -6,11 +6,20 @@
 # from and fails on any diff, so the SDK's single source of truth can never
 # silently drift from the enforcer. It fetches-and-diffs; it does NOT regenerate.
 #
-# The rev is read FROM the vendored file itself (`REGISTRY_SOURCE_GIT_SHA`), so
-# this check is anchored to the registry, NOT to the WASM-build pin in
-# packages/sdk-rs/Cargo.toml. A separate warn-only step flags when the two
-# diverge — that is the signal to bump the Cargo pin through the normal release
-# flow once a tinycloud-node release ships the registry.
+# ANCHOR (TC-121): the diff is anchored to ANCHOR_NODE_REV — the EXACT
+# tinycloud-node commit the vendored copy was taken from (the release-tag commit
+# it was re-vendored at). This is the single authoritative source rev, kept in
+# lockstep with the identity test's EXPECTED_NODE_REV and the sdk-rs Cargo pin's
+# release tag.
+#
+# Why NOT the header's REGISTRY_SOURCE_GIT_SHA: the generated file carries a
+# REGISTRY_SOURCE_GIT_SHA export, but when the artifact is generated locally that
+# value is the PARENT of the commit that ends up containing it (a documented
+# chicken-egg — the sha is stamped before the artifact is committed). The value
+# embedded in the currently-vendored file is that generation parent, NOT the
+# commit the file actually lives at, so fetching `generated/capabilities.ts` at
+# the header sha would pull the WRONG (older) artifact. The header sha is
+# therefore a WARN-ONLY cross-check below, never the diff anchor.
 name: capabilities-sync
 
 on:
@@ -34,12 +43,13 @@ env:
   NODE_REPO: tinycloudlabs/tinycloud-node
   VENDORED: packages/bootstrap/src/generated/capabilities.ts
   UPSTREAM_PATH: generated/capabilities.ts
-  # Fallback rev used only until the codegen header carries a
-  # REGISTRY_SOURCE_GIT_SHA export (requested from caps-node-dev, tinycloud-node
-  # codegen). Once present, the "Resolve source rev" step reads it from the
-  # vendored file and this value is ignored.
-  # TODO(tc-112): drop once REGISTRY_SOURCE_GIT_SHA is emitted by codegen.
-  FALLBACK_NODE_REV: e9be8963aef608b2e7cd61df500c84a6104df62a
+  # Authoritative diff anchor: the exact tinycloud-node commit the vendored
+  # registry was taken from. This is the release-tag commit for v1.4.5
+  # (git tag v1.4.5 == a20b48f14ccb56eb849c60529a28b5657765faef). Bump this in
+  # lockstep with a re-vendor + the identity test's EXPECTED_NODE_REV + the
+  # sdk-rs Cargo pin tag. Do NOT derive it from the header's
+  # REGISTRY_SOURCE_GIT_SHA (see the header note above).
+  ANCHOR_NODE_REV: a20b48f14ccb56eb849c60529a28b5657765faef
 
 jobs:
   diff:
@@ -47,25 +57,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve source rev from the vendored file
-        id: rev
+      - name: Fetch upstream generated/capabilities.ts at the anchor rev
         run: |
           set -euo pipefail
-          # Prefer the git source sha embedded in the generated header; fall back
-          # to FALLBACK_NODE_REV until codegen emits it.
-          SHA="$(grep -oE 'REGISTRY_SOURCE_GIT_SHA[^"]*"[0-9a-f]{40}"' "$VENDORED" \
-                   | grep -oE '[0-9a-f]{40}' || true)"
-          if [ -z "$SHA" ]; then
-            echo "REGISTRY_SOURCE_GIT_SHA not found in $VENDORED; using FALLBACK_NODE_REV."
-            SHA="$FALLBACK_NODE_REV"
-          fi
-          echo "Resolved tinycloud-node rev: $SHA"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Fetch upstream generated/capabilities.ts at that rev
-        run: |
-          set -euo pipefail
-          URL="https://raw.githubusercontent.com/${NODE_REPO}/${{ steps.rev.outputs.sha }}/${UPSTREAM_PATH}"
+          URL="https://raw.githubusercontent.com/${NODE_REPO}/${ANCHOR_NODE_REV}/${UPSTREAM_PATH}"
           echo "Fetching $URL"
           curl -fsSL "$URL" -o upstream-capabilities.ts
 
@@ -74,24 +69,61 @@ jobs:
           set -euo pipefail
           if ! diff -u upstream-capabilities.ts "$VENDORED"; then
             echo "::error::Vendored capability registry ($VENDORED) is out of sync"
-            echo "::error::with ${NODE_REPO}@${{ steps.rev.outputs.sha }} ($UPSTREAM_PATH)."
+            echo "::error::with ${NODE_REPO}@${ANCHOR_NODE_REV} ($UPSTREAM_PATH)."
             echo "::error::Re-vendor the generated file byte-identical from that rev."
             exit 1
           fi
-          echo "Vendored registry matches ${NODE_REPO}@${{ steps.rev.outputs.sha }}."
+          echo "Vendored registry matches ${NODE_REPO}@${ANCHOR_NODE_REV}."
 
-      - name: Warn if the sdk-rs Cargo pin diverges from the registry rev
+      - name: Cross-check the header REGISTRY_SOURCE_GIT_SHA (warn only)
         run: |
           set -euo pipefail
-          # The Cargo pin governs the WASM build and may lag the registry rev
-          # (e.g. it tracks a release tag). Divergence is expected between a
-          # registry bump and the next tinycloud-node release; warn, do not fail.
-          PIN="$(grep -oE 'tinycloud-sdk-rs = \{[^}]*\}' packages/sdk-rs/Cargo.toml || true)"
-          REGISTRY_REV="${{ steps.rev.outputs.sha }}"
-          if echo "$PIN" | grep -q "$REGISTRY_REV"; then
-            echo "sdk-rs Cargo pin matches the registry rev ($REGISTRY_REV)."
+          # The header sha is the artifact's GENERATION PARENT when generated
+          # locally, not necessarily the commit it lives at, so it is NOT the
+          # diff anchor. Surface it for humans and warn if it happens to equal
+          # the anchor (that only holds for CI-generated artifacts) — never fail.
+          HEADER_SHA="$(grep -oE 'REGISTRY_SOURCE_GIT_SHA[^"]*"[0-9a-f]{40}"' "$VENDORED" \
+                         | grep -oE '[0-9a-f]{40}' || true)"
+          if [ -z "$HEADER_SHA" ]; then
+            echo "::warning::No REGISTRY_SOURCE_GIT_SHA found in $VENDORED (older artifact?)."
+          elif [ "$HEADER_SHA" = "$ANCHOR_NODE_REV" ]; then
+            echo "Header REGISTRY_SOURCE_GIT_SHA equals the anchor rev (CI-generated artifact)."
           else
-            echo "::warning::sdk-rs Cargo pin does not reference the registry rev ${REGISTRY_REV}."
+            echo "::warning::Header REGISTRY_SOURCE_GIT_SHA ($HEADER_SHA) != anchor rev ${ANCHOR_NODE_REV}."
+            echo "::warning::Expected for a locally-generated artifact: the header sha is the"
+            echo "::warning::generation PARENT, not the commit the artifact lives at. The diff is"
+            echo "::warning::anchored to ANCHOR_NODE_REV, so this is informational only."
+          fi
+
+      - name: Warn if the sdk-rs Cargo pin diverges from the anchor rev
+        run: |
+          set -euo pipefail
+          # The Cargo pin governs the WASM build. With the registry now shipped
+          # on a release tag, the pin and the anchor should point at the SAME
+          # tinycloud-node commit. The pin references a release TAG (e.g.
+          # v1.4.5) while the anchor is that tag's COMMIT sha, so resolve the tag
+          # via ls-remote (dereferencing annotated tags) before comparing.
+          # Warn-only: divergence is a signal to re-align the pin, never a hard
+          # failure (a re-vendor may briefly precede the release-tag bump).
+          PIN="$(grep -oE 'tinycloud-sdk-rs = \{[^}]*\}' packages/sdk-rs/Cargo.toml || true)"
+          PIN_TAG="$(echo "$PIN" | grep -oE 'tag = "[^"]*"' | sed -E 's/.*"([^"]*)".*/\1/' || true)"
+          PIN_REV="$(echo "$PIN" | grep -oE 'rev = "[0-9a-f]{7,40}"' | grep -oE '[0-9a-f]{7,40}' || true)"
+          RESOLVED=""
+          if [ -n "$PIN_TAG" ]; then
+            # Prefer the dereferenced tag (^{}) so annotated tags resolve to the
+            # underlying commit, matching what Cargo checks out.
+            RESOLVED="$(git ls-remote "https://github.com/${NODE_REPO}.git" "refs/tags/${PIN_TAG}^{}" 2>/dev/null | awk '{print $1}' || true)"
+            if [ -z "$RESOLVED" ]; then
+              RESOLVED="$(git ls-remote "https://github.com/${NODE_REPO}.git" "refs/tags/${PIN_TAG}" 2>/dev/null | awk '{print $1}' || true)"
+            fi
+          elif [ -n "$PIN_REV" ]; then
+            RESOLVED="$PIN_REV"
+          fi
+          PIN_DESC="${PIN_TAG:-${PIN_REV:-unknown}}"
+          if [ -n "$RESOLVED" ] && [ "$RESOLVED" = "$ANCHOR_NODE_REV" ]; then
+            echo "sdk-rs Cargo pin (${PIN_DESC}) resolves to the anchor rev (${ANCHOR_NODE_REV})."
+          else
+            echo "::warning::sdk-rs Cargo pin (${PIN_DESC}) resolves to '${RESOLVED:-unresolved}', not the anchor rev ${ANCHOR_NODE_REV}."
             echo "::warning::Pin: ${PIN}"
-            echo "::warning::Expected once tinycloud-node ships a release containing the registry — bump the pin through the normal release flow."
+            echo "::warning::Re-align the pin's release tag with the re-vendor anchor through the normal release flow."
           fi
