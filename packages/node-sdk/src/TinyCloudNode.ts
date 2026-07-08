@@ -3788,10 +3788,16 @@ export class TinyCloudNode {
     if (!subset) {
       // This branch only runs when the session recap is NOT a superset of the
       // requested entries. The synthetic primary grant is built from that same
-      // recap, so it can never cover an entry the recap itself doesn't — it can
-      // never be selected here. No `excludePrimary` guard is needed.
+      // recap, so it should never cover an entry the recap itself doesn't —
+      // but `operationCovers` is strictly more permissive than
+      // `isCapabilitySubset` (action `/*` and path `/*`/`/**` wildcards), so a
+      // wildcard-bearing recap could slip through and mint a delegation with
+      // the primary session's spaceId (the wrong-space class). Exclude the
+      // primary explicitly; failure then degrades to
+      // PermissionNotInManifestError instead of a wrong-space delegation.
       const runtimeGrant = this.findGrantForOperations(
         this.permissionEntriesToOperations(expandedEntries, session),
+        { excludePrimary: true },
       );
       if (runtimeGrant) {
         const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;

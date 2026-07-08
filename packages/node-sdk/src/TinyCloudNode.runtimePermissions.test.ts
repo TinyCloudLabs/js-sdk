@@ -1676,6 +1676,13 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
       },
     ]);
     (node as any).registerPrimarySessionGrant(primarySession(node));
+    // A broad non-primary grant also covers the op. This makes the three
+    // outcomes distinguishable: "scoped-token" = correct (primary won, caller
+    // session used), "base-token" = call-site regression (primary session
+    // returned), "hijack-token" = ranking regression (primary registration or
+    // coverage silently broken, grant won). Without it, a primary-registration
+    // failure would fall through to the fallback and pass vacuously.
+    installBroadGrant(node, accountSpaceId, "kv", "tinycloud.kv/put", "delegated");
 
     // The caller passes a SCOPED fallback session for the account space: same
     // primary delegation, but the correct target `spaceId` and a distinct token.
@@ -1726,6 +1733,9 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
       },
     ]);
     (node as any).registerPrimarySessionGrant(primarySession(node));
+    // Broad non-primary grant covering the op — see the single-invoke test
+    // above for why this keeps the test non-vacuous.
+    installBroadGrant(node, accountSpaceId, "kv", "tinycloud.kv/put", "delegated");
 
     const scopedFallback = {
       delegationHeader: { Authorization: "scoped-token" },
