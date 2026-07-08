@@ -2,24 +2,22 @@
   "mode": "pre",
   "tag": "beta",
   "initialVersions": {
-    "@tinycloud/node-demo": "0.0.23",
-    "tinycloud-openkey-example-app": "0.0.21",
-    "openkey-vite": "0.0.19",
+    "@tinycloud/node-demo": "0.0.24",
+    "tinycloud-openkey-example-app": "0.0.22",
+    "openkey-vite": "0.0.20",
     "tinycloud-web-sdk-example-app": "0.0.2",
     "@tinycloud/bootstrap": "2.5.1",
-    "@tinycloud/cli": "0.7.4",
-    "@tinycloud/node-sdk": "2.6.1",
-    "@tinycloud/sdk-core": "2.6.1",
+    "@tinycloud/cli": "0.7.5",
+    "@tinycloud/node-sdk": "2.6.2",
+    "@tinycloud/sdk-core": "2.6.2",
     "@tinycloud/sdk-rs": "1.0.0",
     "@tinycloud/node-sdk-wasm": "1.7.4",
     "@tinycloud/web-sdk-wasm": "1.7.4",
-    "@tinycloud/sdk-services": "2.6.1",
-    "@tinycloud/server": "2.4.4",
-    "@tinycloud/vfs": "0.1.6",
-    "@tinycloud/web-sdk": "2.6.1",
-    "@tinycloud/sdk-services-test": "11.0.1"
+    "@tinycloud/sdk-services": "2.6.2",
+    "@tinycloud/server": "2.4.5",
+    "@tinycloud/vfs": "0.1.7",
+    "@tinycloud/web-sdk": "2.6.2",
+    "@tinycloud/sdk-services-test": "11.0.2"
   },
-  "changesets": [
-    "tc-111-fallback-session-fix"
-  ]
+  "changesets": []
 }
