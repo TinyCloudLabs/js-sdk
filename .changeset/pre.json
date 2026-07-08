@@ -20,6 +20,7 @@
     "@tinycloud/sdk-services-test": "10.0.0"
   },
   "changesets": [
+    "tc-111-primary-session-grant",
     "tc-112-capability-constants"
   ]
 }
