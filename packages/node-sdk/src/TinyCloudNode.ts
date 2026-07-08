@@ -1432,11 +1432,52 @@ export class TinyCloudNode {
     void this.withAccountRegistryRetry(async () => {
       void this.account.index.ensure();
       await this.writeManifestRegistryRecords();
-      const spaces = await this.account.spaces.syncAccessible();
-      if (!spaces.ok) {
-        throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+
+      if (this.currentSessionCanListSpaces()) {
+        const spaces = await this.account.spaces.syncAccessible();
+        if (!spaces.ok) {
+          throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+        }
       }
+      // Else: the current session carries a recap that does not grant
+      // `tinycloud.space/list` (every manifest/recap session, and the default
+      // non-manifest recap alike — its abilities table has no `space` service).
+      // `syncAccessible()` depends on `tinycloud.space/list`, which such a
+      // session does not hold — see {@link isOwnedSpaceRegistered} — so the
+      // owned-space listing is a doomed request that 401s on the wire
+      // (`Unauthorized Action: …/space/ tinycloud.space/list`). The account
+      // spaces registry is instead maintained by bootstrap seeding +
+      // `spaces.register()`, so we skip the invoke entirely rather than emit it.
     });
+  }
+
+  /**
+   * Whether the current primary session may invoke `tinycloud.space/list`.
+   *
+   * A session with NO parseable recap (session-only / restored-without-siwe)
+   * yields zero recap operations — we preserve today's behavior and let
+   * `syncAccessible()` run. A session whose parseable recap has entries but
+   * none granting `tinycloud.space/list` cannot list owned spaces; the guard
+   * skips. Every wallet SIWE session in this stack carries a recap (manifest
+   * sessions and the default non-manifest recap alike), and none grant
+   * `space/list`, so all of them skip.
+   *
+   * Reuses the TC-111 {@link recapOperationsFromSession} primitive — no second
+   * recap parser.
+   */
+  private currentSessionCanListSpaces(): boolean {
+    const session = this.currentTinyCloudSession();
+    const operations = session
+      ? this.recapOperationsFromSession(session)
+      : [];
+    if (operations.length === 0) {
+      return true;
+    }
+    return operations.some(
+      (operation) =>
+        operation.service === "space" &&
+        this.actionContains(operation.action, "tinycloud.space/list"),
+    );
   }
 
   private async withAccountRegistryRetry(task: () => Promise<void>): Promise<void> {
@@ -1447,6 +1488,18 @@ export class TinyCloudNode {
         await task();
         return;
       } catch (error) {
+        // Authorization verdicts are deterministic, not transient: retrying an
+        // `Unauthorized Action` / 401 only re-emits the doomed request (the
+        // 2026-07-03 recap-storm incident). Warn once and stop; generic errors
+        // still get the full retry budget below.
+        const message = error instanceof Error ? error.message : String(error);
+        if (/Unauthorized Action|\b401\b/.test(message)) {
+          console.warn(
+            "TinyCloud account registry sync stopped: authorization verdict is not retryable",
+            error,
+          );
+          return;
+        }
         lastError = error;
         if (attempt < delays.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
