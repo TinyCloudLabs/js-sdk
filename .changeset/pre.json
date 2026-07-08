@@ -19,5 +19,7 @@
     "@tinycloud/web-sdk": "2.6.0",
     "@tinycloud/sdk-services-test": "11.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "tc-110-recap-gated-spaces-sync"
+  ]
 }
