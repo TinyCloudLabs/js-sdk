@@ -613,7 +613,12 @@ export class TinyCloudNode {
         return operation ? [operation] : [];
       }),
     );
-    return this.wasmBindings.invokeAny(grant?.session ?? session, entries, facts);
+    // When the primary grant wins, invoke with the PASSED session (its scoped
+    // target `spaceId`), not the stored primary `ServiceSession` — see
+    // `selectInvocationSession` for the wrong-space rationale (TC-111 follow-up).
+    const invocationSession =
+      !grant || grant.provenance === "primary" ? session : grant.session;
+    return this.wasmBindings.invokeAny(invocationSession, entries, facts);
   };
 
   /**
@@ -4413,7 +4418,17 @@ export class TinyCloudNode {
       path,
       action,
     });
-    return grant?.session ?? fallback;
+    if (!grant) {
+      return fallback;
+    }
+    // "Primary wins" means the caller's own session already authorizes the op:
+    // use the PASSED session, not the stored primary `ServiceSession`. The stored
+    // primary carries the primary space's `spaceId`, but a multi-space recap can
+    // cover scoped ops on OTHER spaces whose fallback session carries the correct
+    // target `spaceId`. Returning `grant.session` there would mint the invocation
+    // against the wrong space (TC-111 follow-up). Non-primary grants keep their
+    // own session.
+    return grant.provenance === "primary" ? fallback : grant.session;
   }
 
   private findGrantForOperations(
