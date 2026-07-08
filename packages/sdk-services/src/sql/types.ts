@@ -4,6 +4,8 @@
  * Type definitions for the SQL service operations.
  */
 
+import { SQL } from "@tinycloud/bootstrap";
+
 /**
  * Configuration for SQLService.
  */
@@ -145,19 +147,24 @@ export interface SqlMigrationApplyResponse {
 
 /**
  * SQL service action types.
+ *
+ * URNs derive from the canonical capability registry in `@tinycloud/bootstrap`
+ * (TC-112 single source of truth, vendored from tinycloud-node). `insert`,
+ * `update`, and `delete` were dropped — zero client refs and never accepted
+ * node-side. `select` is a deprecated alias of `read`. `execute`/`export` are
+ * request-kind artifacts, not grantable capabilities: the node routes them by
+ * request-body kind, so they are absent from the registry but kept here as the
+ * invocation ability the client sends today (wire alignment tracked in TC-114).
  */
 export const SQLAction = {
-  READ: "tinycloud.sql/read",
-  WRITE: "tinycloud.sql/write",
-  SCHEMA: "tinycloud.sql/schema",
-  ADMIN: "tinycloud.sql/admin",
-  SELECT: "tinycloud.sql/select",
-  INSERT: "tinycloud.sql/insert",
-  UPDATE: "tinycloud.sql/update",
-  DELETE: "tinycloud.sql/delete",
-  EXECUTE: "tinycloud.sql/execute",
-  EXPORT: "tinycloud.sql/export",
-  ALL: "tinycloud.sql/*",
+  READ: SQL.READ,
+  WRITE: SQL.WRITE,
+  SCHEMA: SQL.SCHEMA,
+  ADMIN: SQL.ADMIN,
+  SELECT: SQL.SELECT,
+  EXECUTE: SQL.EXECUTE,
+  EXPORT: SQL.EXPORT,
+  ALL: SQL.ALL,
 } as const;
 
 export type SQLActionType = (typeof SQLAction)[keyof typeof SQLAction];

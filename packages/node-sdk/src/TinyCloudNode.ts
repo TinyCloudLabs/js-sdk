@@ -108,6 +108,10 @@ import {
   type AbilitiesMap,
   resourceCapabilitiesToAbilitiesMap,
   SERVICE_LONG_TO_SHORT,
+  KV,
+  SQL,
+  DUCKDB,
+  ENCRYPTION,
   EXPIRY,
   canonicalHashHex,
   canonicalizeEncryptionJson,
@@ -143,9 +147,34 @@ import { NodeSecretsService } from "./NodeSecretsService";
 /** Default TinyCloud host */
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
 const DEFAULT_ENCRYPTION_NETWORK_NAME = "default";
-const NETWORK_CREATE_ACTION = "tinycloud.encryption/network.create";
-const DECRYPT_ACTION = "tinycloud.encryption/decrypt";
+const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
+const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
 const NETWORK_ADMIN_TYPE = "tinycloud.encryption.network-admin/v1";
+
+/**
+ * Full actions the session key's root delegation grants over a space. Used for
+ * both the primary space and any additional (e.g. public) spaces registered in
+ * {@link TinyCloudNode.initializeV2Services}. URNs come from the canonical
+ * capability registry in `@tinycloud/bootstrap` (TC-112).
+ */
+const ROOT_DELEGATION_ACTIONS: string[] = [
+  KV.PUT,
+  KV.GET,
+  KV.DEL,
+  KV.LIST,
+  KV.METADATA,
+  SQL.READ,
+  SQL.WRITE,
+  SQL.ADMIN,
+  SQL.ALL,
+  DUCKDB.READ,
+  DUCKDB.WRITE,
+  DUCKDB.ADMIN,
+  DUCKDB.DESCRIBE,
+  DUCKDB.EXPORT,
+  DUCKDB.IMPORT,
+  DUCKDB.ALL,
+];
 
 /**
  * Default lifetime of a SIWE session when {@link TinyCloudNodeConfig.sessionExpirationMs}
@@ -2260,24 +2289,7 @@ export class TinyCloudNode {
         delegateDID: tcSession.verificationMethod,
         spaceId: tcSession.spaceId,
         path: "", // Root access
-        actions: [
-          "tinycloud.kv/put",
-          "tinycloud.kv/get",
-          "tinycloud.kv/del",
-          "tinycloud.kv/list",
-          "tinycloud.kv/metadata",
-          "tinycloud.sql/read",
-          "tinycloud.sql/write",
-          "tinycloud.sql/admin",
-          "tinycloud.sql/*",
-          "tinycloud.duckdb/read",
-          "tinycloud.duckdb/write",
-          "tinycloud.duckdb/admin",
-          "tinycloud.duckdb/describe",
-          "tinycloud.duckdb/export",
-          "tinycloud.duckdb/import",
-          "tinycloud.duckdb/*",
-        ],
+        actions: [...ROOT_DELEGATION_ACTIONS],
         expiry: this.getSessionExpiry(),
         isRevoked: false,
         allowSubDelegation: true,
@@ -2294,24 +2306,7 @@ export class TinyCloudNode {
             delegateDID: tcSession.verificationMethod,
             spaceId,
             path: "",
-            actions: [
-              "tinycloud.kv/put",
-              "tinycloud.kv/get",
-              "tinycloud.kv/del",
-              "tinycloud.kv/list",
-              "tinycloud.kv/metadata",
-              "tinycloud.sql/read",
-              "tinycloud.sql/write",
-              "tinycloud.sql/admin",
-              "tinycloud.sql/*",
-              "tinycloud.duckdb/read",
-              "tinycloud.duckdb/write",
-              "tinycloud.duckdb/admin",
-              "tinycloud.duckdb/describe",
-              "tinycloud.duckdb/export",
-              "tinycloud.duckdb/import",
-              "tinycloud.duckdb/*",
-            ],
+            actions: [...ROOT_DELEGATION_ACTIONS],
             expiry: this.getSessionExpiry(),
             isRevoked: false,
             allowSubDelegation: true,
@@ -3290,13 +3285,7 @@ export class TinyCloudNode {
     // This mirrors the primary session flow (prepareSession with jwk), ensuring
     // the delegation targets the session key — not the PKH DID — so that
     // invoke() requests signed by the session key are properly authorized.
-    const kvActions = [
-      "tinycloud.kv/put",
-      "tinycloud.kv/get",
-      "tinycloud.kv/del",
-      "tinycloud.kv/list",
-      "tinycloud.kv/metadata",
-    ];
+    const kvActions = [KV.PUT, KV.GET, KV.DEL, KV.LIST, KV.METADATA];
     const abilities = { kv: { "": kvActions } };
     const now = new Date();
     // EPHEMERAL tier — this sub-delegation is auto-derived from the
@@ -4585,7 +4574,7 @@ export class TinyCloudNode {
         this.wasmBindings.ensureEip55(session.address), session.chainId
       );
       const publicAbilities: Record<string, Record<string, string[]>> = {
-        kv: { "": ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/metadata"] },
+        kv: { "": [KV.GET, KV.PUT, KV.METADATA] },
       };
       const publicPrepared = this.wasmBindings.prepareSession({
         abilities: publicAbilities,
@@ -4615,7 +4604,7 @@ export class TinyCloudNode {
           delegationHeader: publicSession.delegationHeader,
           spaceId: publicSpaceId,
           path: "",
-          actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/metadata"],
+          actions: [KV.GET, KV.PUT, KV.METADATA],
           disableSubDelegation: params.disableSubDelegation ?? false,
           expiry: expirationTime,
           delegateDID: params.delegateDID,

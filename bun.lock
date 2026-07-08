@@ -266,6 +266,7 @@
       "name": "@tinycloud/sdk-services",
       "version": "2.4.2",
       "dependencies": {
+        "@tinycloud/bootstrap": "workspace:*",
         "zod": "^3.23.0",
       },
       "devDependencies": {

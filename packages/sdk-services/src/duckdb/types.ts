@@ -4,6 +4,8 @@
  * Type definitions for the DuckDB service operations.
  */
 
+import { DUCKDB } from "@tinycloud/bootstrap";
+
 /**
  * Configuration for DuckDbService.
  */
@@ -160,16 +162,19 @@ export interface ViewInfo {
 
 /**
  * DuckDB service action types.
+ *
+ * URNs derive from the canonical capability registry in `@tinycloud/bootstrap`
+ * (TC-112 single source of truth).
  */
 export const DuckDbAction = {
-  READ: "tinycloud.duckdb/read",
-  WRITE: "tinycloud.duckdb/write",
-  ADMIN: "tinycloud.duckdb/admin",
-  DESCRIBE: "tinycloud.duckdb/describe",
-  EXPORT: "tinycloud.duckdb/export",
-  IMPORT: "tinycloud.duckdb/import",
-  EXECUTE: "tinycloud.duckdb/execute",
-  ALL: "tinycloud.duckdb/*",
+  READ: DUCKDB.READ,
+  WRITE: DUCKDB.WRITE,
+  ADMIN: DUCKDB.ADMIN,
+  DESCRIBE: DUCKDB.DESCRIBE,
+  EXPORT: DUCKDB.EXPORT,
+  IMPORT: DUCKDB.IMPORT,
+  EXECUTE: DUCKDB.EXECUTE,
+  ALL: DUCKDB.ALL,
 } as const;
 
 export type DuckDbActionType = (typeof DuckDbAction)[keyof typeof DuckDbAction];
