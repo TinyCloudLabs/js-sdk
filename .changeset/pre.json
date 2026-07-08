@@ -19,5 +19,7 @@
     "@tinycloud/web-sdk": "2.6.1",
     "@tinycloud/sdk-services-test": "11.0.1"
   },
-  "changesets": []
+  "changesets": [
+    "tc-111-fallback-session-fix"
+  ]
 }
