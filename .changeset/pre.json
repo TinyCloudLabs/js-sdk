@@ -20,6 +20,7 @@
     "@tinycloud/sdk-services-test": "11.0.0"
   },
   "changesets": [
+    "fix-bootstrap-esm-extensions",
     "tc-110-recap-gated-spaces-sync"
   ]
 }
