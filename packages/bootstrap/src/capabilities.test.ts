@@ -122,3 +122,27 @@ test("registry URNs are unique", () => {
   const urns = registryUrns();
   expect(new Set(urns).size).toBe(urns.length);
 });
+
+// The `as { KEY: "urn" }` casts on the constant groups assert keys the runtime
+// never verifies: if a re-vendor drops a registry entry, the derived constant
+// silently becomes `undefined` (Object.values-based tests can't see a missing
+// key). Lock the exact key set per group and assert every value resolves.
+test("every constant-group key is present and resolves to a URN", () => {
+  const groups: Record<string, [Record<string, string>, string[]]> = {
+    KV: [KV, ["GET", "LIST", "METADATA", "PUT", "DEL", "DELETE"]],
+    SQL: [SQL, ["READ", "SELECT", "WRITE", "SCHEMA", "ADMIN", "ALL", "EXECUTE", "EXPORT"]],
+    DUCKDB: [DUCKDB, ["READ", "WRITE", "ADMIN", "IMPORT", "EXPORT", "SELECT", "ALL", "DESCRIBE", "EXECUTE"]],
+    CAPABILITIES: [CAPABILITIES, ["READ"]],
+    HOOKS: [HOOKS, ["SUBSCRIBE", "REGISTER", "LIST", "UNREGISTER"]],
+    ENCRYPTION: [ENCRYPTION, ["DECRYPT", "NETWORK_CREATE", "NETWORK_REVOKE"]],
+    SPACE: [SPACE, ["HOST", "CREATE", "LIST", "INFO"]],
+  };
+  for (const [name, [group, expectedKeys]] of Object.entries(groups)) {
+    expect(Object.keys(group).sort()).toEqual([...expectedKeys].sort());
+    for (const key of expectedKeys) {
+      const value = group[key];
+      expect(value, `${name}.${key} must resolve to a URN`).toBeTruthy();
+      expect(value.startsWith("tinycloud.")).toBe(true);
+    }
+  }
+});

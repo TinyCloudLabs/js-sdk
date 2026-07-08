@@ -1,5 +1,5 @@
 ---
-"@tinycloud/bootstrap": patch
+"@tinycloud/bootstrap": minor
 "@tinycloud/sdk-services": minor
 "@tinycloud/sdk-core": minor
 "@tinycloud/node-sdk": minor
