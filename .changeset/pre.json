@@ -19,5 +19,7 @@
     "@tinycloud/web-sdk": "2.5.1",
     "@tinycloud/sdk-services-test": "10.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "tc-112-capability-constants"
+  ]
 }
