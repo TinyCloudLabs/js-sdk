@@ -38644,7 +38644,7 @@ var SQLService = class extends BaseService {
       try {
         const response = await this.invokeSQL(
           dbName,
-          SQLAction.EXECUTE,
+          SQLAction.WRITE,
           { action: "execute_statement", name: name2, params: params ?? [] },
           options?.signal
         );
@@ -38666,7 +38666,7 @@ var SQLService = class extends BaseService {
       try {
         const response = await this.invokeSQL(
           dbName,
-          SQLAction.EXPORT,
+          SQLAction.READ,
           { action: "export" },
           options?.signal
         );
@@ -39120,7 +39120,7 @@ var DuckDbService = class extends BaseService {
       try {
         const response = await this.invokeDuckDb(
           dbName,
-          DuckDbAction.EXECUTE,
+          DuckDbAction.WRITE,
           { action: "executeStatement", name: name2, params: params ?? [] },
           options?.signal
         );
@@ -39142,7 +39142,7 @@ var DuckDbService = class extends BaseService {
       try {
         const response = await this.invokeDuckDb(
           dbName,
-          DuckDbAction.DESCRIBE,
+          DuckDbAction.READ,
           { action: "describe" },
           options?.signal
         );

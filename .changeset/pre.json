@@ -21,6 +21,7 @@
   },
   "changesets": [
     "tc-111-primary-session-grant",
-    "tc-112-capability-constants"
+    "tc-112-capability-constants",
+    "tc-114-dispatchable-abilities"
   ]
 }
