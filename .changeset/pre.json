@@ -2,25 +2,22 @@
   "mode": "pre",
   "tag": "beta",
   "initialVersions": {
-    "@tinycloud/node-demo": "0.0.22",
-    "tinycloud-openkey-example-app": "0.0.20",
-    "openkey-vite": "0.0.18",
+    "@tinycloud/node-demo": "0.0.23",
+    "tinycloud-openkey-example-app": "0.0.21",
+    "openkey-vite": "0.0.19",
     "tinycloud-web-sdk-example-app": "0.0.2",
-    "@tinycloud/bootstrap": "2.5.0",
-    "@tinycloud/cli": "0.7.3",
-    "@tinycloud/node-sdk": "2.6.0",
-    "@tinycloud/sdk-core": "2.6.0",
+    "@tinycloud/bootstrap": "2.5.1",
+    "@tinycloud/cli": "0.7.4",
+    "@tinycloud/node-sdk": "2.6.1",
+    "@tinycloud/sdk-core": "2.6.1",
     "@tinycloud/sdk-rs": "1.0.0",
     "@tinycloud/node-sdk-wasm": "1.7.4",
     "@tinycloud/web-sdk-wasm": "1.7.4",
-    "@tinycloud/sdk-services": "2.6.0",
-    "@tinycloud/server": "2.4.3",
-    "@tinycloud/vfs": "0.1.5",
-    "@tinycloud/web-sdk": "2.6.0",
-    "@tinycloud/sdk-services-test": "11.0.0"
+    "@tinycloud/sdk-services": "2.6.1",
+    "@tinycloud/server": "2.4.4",
+    "@tinycloud/vfs": "0.1.6",
+    "@tinycloud/web-sdk": "2.6.1",
+    "@tinycloud/sdk-services-test": "11.0.1"
   },
-  "changesets": [
-    "fix-bootstrap-esm-extensions",
-    "tc-110-recap-gated-spaces-sync"
-  ]
+  "changesets": []
 }
