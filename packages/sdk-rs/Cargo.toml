@@ -22,19 +22,24 @@ console_error_panic_hook = "0.1"
 hex = "0.4.3"
 iri-string = "0.7.12"
 js-sys = "0.3.59"
-# Includes TinyCloudLabs/tinycloud-node#71 via the v1.4.2 release.
+# WASM-build pin. Tracks tinycloud-node RELEASE TAGS (never unreleased revs).
 #
-# TC-112: this WASM-build pin intentionally stays on the v1.4.2 RELEASE TAG and
-# is deliberately decoupled from the capability-registry rev. The registry sync
-# is anchored elsewhere (the vendored packages/bootstrap/src/generated/
-# capabilities.ts + capabilities-sync CI fetch-and-diff + FALLBACK_NODE_REV +
-# the identity test), so the build pin need not move to an unreleased rev.
-# MERGE GATE: do NOT merge this branch until tinycloud-node#98 is merged. Swap
-# this pin to a release tag as a follow-up once the node cuts a release that
-# contains the registry (that release-flow bump + re-vendor is tracked in the
-# TC-112 PR body; TC-121 covers the codegen source-sha upgrade).
-tinycloud-sdk-rs = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", tag = "v1.4.2" }
-tinycloud-sdk-wasm = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", tag = "v1.4.2" }
+# v1.4.5 is the first release tag that both CONTAINS the TC-112 capability
+# registry AND wires it into the live /invoke//delegate chain-containment paths
+# (TC-119: alias/implication-aware models/delegation.rs + models/invocation.rs).
+# So unlike the v1.4.2 pin — where the registry was decoupled and the compiled
+# WASM was unaffected — bumping to v1.4.5 can genuinely change the compiled WASM,
+# and that is intended. tinycloud-node#98 (the registry) is merged and released.
+#
+# The capability registry sync stays anchored to the vendored
+# packages/bootstrap/src/generated/capabilities.ts + the capabilities-sync CI
+# fetch-and-diff (anchored to the release-tag rev) + the identity test. The pin
+# and that anchor now point at the SAME release, but the anchor — not this pin —
+# remains the authoritative registry source. Bump this pin only to newer node
+# release tags, in lockstep with the re-vendor + anchor update (TC-121 covers the
+# codegen source-sha headers those steps rely on).
+tinycloud-sdk-rs = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", tag = "v1.4.5" }
+tinycloud-sdk-wasm = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", tag = "v1.4.5" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.150"
 serde-wasm-bindgen = "0.6.5"
