@@ -39,7 +39,7 @@ env:
   # codegen). Once present, the "Resolve source rev" step reads it from the
   # vendored file and this value is ignored.
   # TODO(tc-112): drop once REGISTRY_SOURCE_GIT_SHA is emitted by codegen.
-  FALLBACK_NODE_REV: c9d031b96eea2b87a7cd79a969870dbc72e45533
+  FALLBACK_NODE_REV: e9be8963aef608b2e7cd61df500c84a6104df62a
 
 jobs:
   diff:

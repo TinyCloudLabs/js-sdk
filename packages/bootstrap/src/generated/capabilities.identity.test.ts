@@ -14,7 +14,7 @@ import { REGISTRY_SOURCE_SHA256, REGISTRY_VERSION } from "./capabilities";
 const EXPECTED_VERSION = 1;
 const EXPECTED_SOURCE_SHA256 =
   "3850f17a9771600b4a0f7bfa38ccaed8464f3ee391342f5d5b627276e614a8ff";
-const EXPECTED_NODE_REV = "c9d031b96eea2b87a7cd79a969870dbc72e45533";
+const EXPECTED_NODE_REV = "e9be8963aef608b2e7cd61df500c84a6104df62a";
 
 const WORKFLOW = join(
   import.meta.dir,
