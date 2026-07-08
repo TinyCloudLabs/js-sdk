@@ -1,5 +1,92 @@
 # @tinycloudlabs/node-sdk
 
+## 2.6.0
+
+### Minor Changes
+
+- 2f31800: Consolidate hand-written capability URN lists into a single source of truth
+  (`@tinycloud/bootstrap` `capabilities` module, TC-112). The registry is defined
+  in tinycloud-node and vendored verbatim as
+  `@tinycloud/bootstrap/src/generated/capabilities.ts`; the per-service constants
+  (`KV`, `SQL`, `DUCKDB`, …), `CAPABILITY_REGISTRY`, `SQLAction`, `DuckDbAction`,
+  the node-sdk default abilities and root-delegation grants, the bootstrap
+  manifests, and the web-sdk permission-modal labels are all derived from it. A CI
+  job diffs the vendored copy against the node registry at the pinned rev so the
+  SDK can never silently drift from the enforcer.
+
+  BREAKING (minor, pre-1.0): `SQLAction.INSERT`, `SQLAction.UPDATE`, and
+  `SQLAction.DELETE` are removed — they were never dispatched by the SDK nor
+  accepted by the node. `SQLAction.SELECT` is retained as a deprecated alias of
+  `read`. `SQLAction.EXECUTE`/`EXPORT` and `DuckDbAction.DESCRIBE`/`EXECUTE` are
+  retained as exported constants but are request-kind artifacts, not registry
+  capabilities (the node routes them by request-body kind; wire alignment tracked
+  in TC-114). All other action shapes are unchanged.
+
+### Patch Changes
+
+- ac48f85: Fix runtime permission selection so the primary session's own recap always
+  out-ranks any other covering runtime grant (TC-111).
+
+  Previously `selectInvocationSession`/`invokeAnyWithRuntimePermissions` picked the
+  first covering grant in insertion order, so a broad — possibly broken —
+  bootstrap or delegated grant could hijack an operation the primary session
+  itself already authorized and 401. The primary session is now registered as a
+  synthetic highest-trust (`provenance: "primary"`) runtime grant built from the
+  raw SIWE recap (full owner-scoped space URIs, so owners can never be conflated),
+  and grant selection filters covering grants then prefers the primary. Spaces the
+  node skipped activating this sign-in are excluded from the synthetic grant so it
+  can never out-rank a working grant. The synthetic primary grant is never exposed
+  through `getRuntimePermissionDelegations`/`hasRuntimePermissions`.
+
+- 3ad0635: Mint the ability the node actually dispatches for SQL/DuckDB
+  `execute`/`export`/`describe` (TC-114).
+
+  `SQLService.executeStatementOnDb`/`exportDb` and
+  `DuckDbService.executeStatementOnDb`/`describeDb` were sending the literal method
+  name as the invocation ability (`tinycloud.sql/execute`,
+  `tinycloud.sql/export`, `tinycloud.duckdb/execute`, `tinycloud.duckdb/describe`).
+  The node has no such capabilities — it routes these requests by request-body
+  kind gated by read/write/admin — so under chain containment a narrowly-delegated
+  session (read+write, no `sql/*`/`duckdb/*` wildcard) 401s on these calls. They
+  worked previously only because real grants carry the service wildcard.
+
+  Each method now mints the dispatchable ability grounded in the node's routing:
+  `export`/`describe` are authorized as reads (`tinycloud.{sql,duckdb}/read`) and
+  named-statement execution as a write (`tinycloud.{sql,duckdb}/write`, which the
+  SQL parser accepts for both read-only and mutating statements). Public method
+  signatures and the exported `SQLAction`/`DuckDbAction` request-kind constants are
+  unchanged. Narrowly-delegated sessions with no service wildcard now get working
+  `export`, `executeStatement`, and `describe`.
+
+- e07823b: Bump the tinycloud-node WASM-build pin to the v1.4.5 release tag and re-vendor
+  the capability registry artifact (TC-119 / TC-121).
+
+  `packages/sdk-rs/Cargo.toml` now pins `tinycloud-sdk-rs`/`tinycloud-sdk-wasm` to
+  `tag = "v1.4.5"` (was `v1.4.2`). v1.4.5 is the first release that both contains
+  the TC-112 capability registry AND wires it into the live `/invoke`//`/delegate`
+  chain-containment paths (TC-119: alias/implication-aware delegation and
+  invocation models). Unlike the v1.4.2 pin — where the registry was decoupled and
+  the compiled WASM was unaffected — the WASM compiled from this pin genuinely
+  changes (the `tinycloud-auth` crate it links in gained the W1 UCAN revocation
+  handling shipped across v1.4.3–v1.4.5), so the published `web-sdk-wasm`/
+  `node-sdk-wasm` binaries move.
+
+  The vendored `@tinycloud/bootstrap` registry
+  (`src/generated/capabilities.ts`) is re-vendored byte-identical from
+  tinycloud-node@v1.4.5; the registry CONTENT (`REGISTRY_SOURCE_SHA256`,
+  `CAPABILITIES`, `ALIASES`, `IMPLICATIONS`) is unchanged — only the new
+  TC-121 `REGISTRY_SOURCE_REPO`/`REGISTRY_SOURCE_GIT_SHA` header exports and their
+  doc comments are added. The capabilities-sync CI now anchors its fetch-and-diff
+  to the explicit release-tag commit (`ANCHOR_NODE_REV`) rather than the header
+  sha (which, for a locally-generated artifact, names the generation parent and
+  would fetch the wrong artifact).
+
+- Updated dependencies [ac48f85]
+- Updated dependencies [2f31800]
+- Updated dependencies [3ad0635]
+- Updated dependencies [e07823b]
+  - @tinycloud/sdk-core@2.6.0
+
 ## 2.6.0-beta.3
 
 ### Patch Changes
