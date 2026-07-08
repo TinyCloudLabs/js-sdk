@@ -1,7 +1,7 @@
 import { getAddress, isAddress } from "viem";
-import { KV, SQL, CAPABILITIES, SPACE, ENCRYPTION } from "./capabilities";
+import { KV, SQL, CAPABILITIES, SPACE, ENCRYPTION } from "./capabilities.js";
 
-export * from "./capabilities";
+export * from "./capabilities.js";
 
 export type ManifestDefaults = boolean | "admin" | "all";
 
