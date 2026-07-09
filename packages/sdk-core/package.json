@@ -18,6 +18,11 @@
       "types": "./dist/bootstrap/index.d.ts",
       "import": "./dist/bootstrap/index.js",
       "require": "./dist/bootstrap/index.cjs"
+    },
+    "./policy": {
+      "types": "./dist/policy/index.d.ts",
+      "import": "./dist/policy/index.js",
+      "require": "./dist/policy/index.cjs"
     }
   },
   "files": [
