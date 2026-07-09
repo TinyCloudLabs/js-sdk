@@ -266,8 +266,11 @@ function validateRawPath(path: string, options: NormalizeOptions): void {
     throw new PolicyCapabilityError("policy-capability-malformed-path", "$.path is a prefix form");
   }
   const segments = path.split("/");
-  for (const segment of segments) {
-    if (segment.length === 0 && !(options.allowPrefixPaths && segment === segments.at(-1))) {
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index]!;
+    const isTrailingPrefixSegment =
+      options.allowPrefixPaths && index === segments.length - 1 && segment.length === 0;
+    if (segment.length === 0 && !isTrailingPrefixSegment) {
       throw new PolicyCapabilityError("policy-capability-malformed-path", "$.path has an empty segment");
     }
     if (segment === "." || segment === "..") {

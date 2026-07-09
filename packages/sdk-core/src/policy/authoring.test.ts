@@ -52,6 +52,15 @@ const objectsFixture = (await Bun.file(
   "test-fixtures/policy-engine-vectors/signed-object-profile/objects.json",
 ).json()) as { objects: Array<{ object_type: string; unsigned: Record<string, unknown> }> };
 
+function concretePolicyVector() {
+  return objectsFixture.objects.find(
+    (entry) =>
+      entry.object_type === "Policy" &&
+      entry.unsigned.resource !== undefined &&
+      ((entry.unsigned.resource as { resourceId?: unknown }).resourceId === "conv_456"),
+  )!;
+}
+
 function hexToBytes(hex: string): Uint8Array {
   return Uint8Array.from(Buffer.from(hex, "hex"));
 }
@@ -212,6 +221,19 @@ describe("strict authoring capability validation", () => {
     }
   });
 
+  it("rejects empty path segments through the exported canonicalizer", () => {
+    for (const path of ["items//", "notebooks//docs/"]) {
+      expectCapabilityFailure(
+        () =>
+          canonicalizePolicyCapability({
+            ...exactKvCapability,
+            path,
+          }),
+        "policy-capability-malformed-path",
+      );
+    }
+  });
+
   it("rejects capability inputs that would require authoring-time canonicalization", () => {
     for (const capability of [
       { ...exactKvCapability, actions: ["tinycloud.kv/list", "tinycloud.kv/get"] },
@@ -342,7 +364,7 @@ describe("policy and bootstrap authoring", () => {
   });
 
   it("refuses invented delegationMode and revocation strings before signing", async () => {
-    const policy = objectsFixture.objects.find((entry) => entry.object_type === "Policy")!;
+    const policy = concretePolicyVector();
     await expect(createAndSignPolicy(
       {
         ...policy.unsigned,
@@ -392,6 +414,22 @@ describe("policy and bootstrap authoring", () => {
         ),
       "policy-authoring-malformed",
     );
+  });
+
+  it("refuses malformed capability paths through exported Policy signing", async () => {
+    const policy = concretePolicyVector();
+    for (const path of ["items/", "items//child", "items//"]) {
+      await expect(createAndSignPolicy(
+        {
+          ...policy.unsigned,
+          resource: {
+            ...(policy.unsigned.resource as object),
+            permissionsCeiling: [{ ...exactKvCapability, path }],
+          },
+        },
+        edSigner("policy_signer"),
+      )).rejects.toThrow();
+    }
   });
 
   it("refuses to author malformed PolicyEngineRecord fields with typed errors", async () => {
