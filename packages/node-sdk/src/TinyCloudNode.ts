@@ -2830,6 +2830,7 @@ export class TinyCloudNode {
     const sql = new SQLService({});
     const spaceScopedContext = new ServiceContext({
       invoke: this._serviceContext.invoke,
+      invokeAny: this._serviceContext.invokeAny,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
       telemetry: this.config.telemetry,
@@ -2861,6 +2862,7 @@ export class TinyCloudNode {
     const kv = new KVService({});
     const spaceScopedContext = new ServiceContext({
       invoke: this._serviceContext.invoke,
+      invokeAny: this._serviceContext.invokeAny,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
     });

@@ -17,9 +17,14 @@
 
 import { describe, expect, mock, test } from "bun:test";
 
-import type { IWasmBindings, ISessionManager, ClientSession } from "@tinycloud/sdk-core";
+import type {
+  IWasmBindings,
+  ISessionManager,
+  ClientSession,
+  ServiceSession,
+} from "@tinycloud/sdk-core";
 import { TinyCloudNode } from "./TinyCloudNode";
-import { createOpenKeyCallbackSigningStrategy } from "@tinycloud/sdk-core";
+import { createOpenKeyCallbackSigningStrategy, ServiceContext } from "@tinycloud/sdk-core";
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -380,6 +385,92 @@ describe("bootstrap gate — abort on first rejection", () => {
     expect(node.bootstrapStatus.skipped).toBe(true);
     expect(node.bootstrapStatus.reason).toContain("Account bootstrap aborted");
     expect(node.bootstrapStatus.reason).toContain("auto-sign rejected");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (f) Regression: account-index-schema migration must thread invokeAny (issue #300)
+//
+// The account-index-schema bootstrap step calls account.index.ensure(), which
+// runs a migration whose batch dedupes to multiple actions
+// (tinycloud.sql/schema + tinycloud.sql/write). A multi-action batch requires
+// context.invokeAny. sqlForSpace() previously cloned only {invoke, fetch,
+// hosts, telemetry} from the primary service context and DROPPED invokeAny, so
+// the very first bootstrap migration threw
+// "SQL operation requires multiple permissions ... does not support
+// multi-resource invocations". This drives the real sqlForSpace + AccountService
+// + SQLService migration path (no runAccountBootstrap stub), so it fails on
+// master and passes once invokeAny is threaded.
+// ---------------------------------------------------------------------------
+
+describe("account bootstrap — sqlForSpace threads invokeAny (issue #300)", () => {
+  test("account.index.ensure() runs the multi-action migration through invokeAny", async () => {
+    // Spy on the WASM-level invokeAny so we can prove the multi-action path
+    // actually minted a header instead of throwing for lack of invokeAny.
+    const invokeAnySpy = mock(() => ({ Authorization: "Bearer any" }) as any);
+    const wasm = makeFakeWasmBindings({ invokeAny: invokeAnySpy as any });
+
+    const openKeyStrategy = createOpenKeyCallbackSigningStrategy({
+      endpoint: "https://openkey.test/api/delegate/sign",
+    });
+    const node = new TinyCloudNode({
+      wasmBindings: wasm,
+      signer: makeExternalSigner() as any,
+      signStrategy: openKeyStrategy,
+      host: "https://tinycloud.test",
+    });
+
+    // Identity used by accountSpaceId / did (normally set during signIn()).
+    (node as any)._address = FAKE_ADDRESS;
+    (node as any)._chainId = 1;
+    const accountSpaceId: string = (node as any).accountSpaceId;
+    expect(accountSpaceId).toContain(":account");
+
+    // Fake SQL /invoke endpoint: query → empty rows (all migrations pending),
+    // batch → ok. Everything 200 so the fixed path reaches success.
+    const fetchSpy = mock(async (_url: string | URL, init: any) => {
+      const body = JSON.parse(init.body as string);
+      const payload =
+        body.action === "query" ? { rows: [], columns: [] } : { results: [] };
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    // Build the primary service context exactly as initializeServices() does:
+    // both invoke AND invokeAny wired. Threading invokeAny is the precondition
+    // the bug dropped inside sqlForSpace().
+    const session: ServiceSession = {
+      delegationHeader: { Authorization: "Bearer primary" },
+      delegationCid: "bafyprimary",
+      spaceId: accountSpaceId,
+      verificationMethod: "did:key:z6MkTestSession",
+      jwk: { kty: "OKP" },
+    };
+    const ctx = new ServiceContext({
+      invoke: (node as any).invokeWithRuntimePermissions,
+      invokeAny: (node as any).invokeAnyWithRuntimePermissions,
+      fetch: fetchSpy as any,
+      hosts: ["https://tinycloud.test"],
+    });
+    ctx.setSession(session);
+    (node as any)._serviceContext = ctx;
+
+    // Exercise the exact bootstrap call (runAccountBootstrap's
+    // "account-index-schema" step is `await this.account.index.ensure()`).
+    const ensured = await node.account.index.ensure();
+
+    // FAILS on master: invokeAny dropped by sqlForSpace → the migration batch
+    // throws "requires multiple permissions" and ensure() returns { ok: false }.
+    expect(ensured.ok).toBe(true);
+    // The multi-action migration minted its header via invokeAny.
+    expect(invokeAnySpy).toHaveBeenCalled();
+    // The invokeAny entries targeted the sql service on the account space.
+    const [, entries] = invokeAnySpy.mock.calls[0] as [unknown, any[]];
+    expect(Array.isArray(entries)).toBe(true);
+    expect(entries.some((e) => e.service === "sql")).toBe(true);
+    expect(entries.length).toBeGreaterThan(1);
   });
 });
 
