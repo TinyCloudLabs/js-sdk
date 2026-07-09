@@ -478,7 +478,7 @@ function caveatsContain(authority: JsonObject | undefined, request: JsonObject |
     return request === undefined;
   }
   if (request === undefined) {
-    return true;
+    return Object.keys(authority).length === 0;
   }
   if (authority.mode !== "constrained-statements" || request.mode !== "constrained-statements") {
     return false;

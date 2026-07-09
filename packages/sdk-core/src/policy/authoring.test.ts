@@ -172,6 +172,13 @@ describe("policy capability frozen vectors", () => {
       );
     }
   });
+
+  it("does not widen constrained SQL authority when the request omits caveats", () => {
+    const uncaveatedRequest = { ...sqlCapability };
+    delete (uncaveatedRequest as { caveats?: unknown }).caveats;
+
+    expect(policyCapabilityContains(sqlCapability, uncaveatedRequest)).toBe(false);
+  });
 });
 
 describe("strict authoring capability validation", () => {
@@ -613,6 +620,45 @@ describe("requester-side PolicyEngineRecord verification", () => {
           now: "2026-06-01T00:00:00Z",
         }),
       "policy-engine-record-owner-mismatch",
+    );
+  });
+
+  it("returns distinct typed failures for grant issuer, policy version, and evidence verifier mismatch", async () => {
+    const record = await signedEngineRecord();
+    await expectAuthoringFailure(
+      () =>
+        verifyPolicyEngineRecordForRequester({
+          signedRecord: record,
+          ownerDid: OWNER_DID,
+          audience: "did:web:requester.example",
+          grantIssuerDid: suitesFixture.ed25519.policy_signer.did,
+          now: "2026-06-01T00:00:00Z",
+        }),
+      "policy-engine-record-grant-issuer-mismatch",
+    );
+    await expectAuthoringFailure(
+      () =>
+        verifyPolicyEngineRecordForRequester({
+          signedRecord: record,
+          ownerDid: OWNER_DID,
+          audience: "did:web:requester.example",
+          grantIssuerDid: suitesFixture.ed25519.grant_issuer.did,
+          now: "2026-06-01T00:00:00Z",
+          requiredPolicyVersion: "v1",
+        }),
+      "policy-engine-record-policy-version-unsupported",
+    );
+    await expectAuthoringFailure(
+      () =>
+        verifyPolicyEngineRecordForRequester({
+          signedRecord: record,
+          ownerDid: OWNER_DID,
+          audience: "did:web:requester.example",
+          grantIssuerDid: suitesFixture.ed25519.grant_issuer.did,
+          now: "2026-06-01T00:00:00Z",
+          requiredEvidenceVerifier: "jwt/v1",
+        }),
+      "policy-engine-record-evidence-verifier-unsupported",
     );
   });
 
