@@ -2,6 +2,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
 import { bytesToHex, sha256, verifyMessage } from "viem";
 import { parsePkhDid } from "../identity";
+import { canonicalizePolicyCapability } from "./capability";
 import {
   SignatureMaterialError,
   SignatureVerificationError,
@@ -548,20 +549,18 @@ function validatePolicyResource(input: unknown, path: string): void {
 
 function validatePolicyCapability(input: unknown, path: string): void {
   const object = expectJsonObject(input, path);
-  assertExactKeys(object, ["service", "space", "path", "actions", "caveats"], path);
-  expectOneOf(requiredString(object, "service", path), [
-    "tinycloud.kv",
-    "tinycloud.sql",
-    "tinycloud.vfs",
-  ], `${path}.service`);
-  requiredString(object, "space", path);
-  requireStringType(requiredValue(object, "path", path), `${path}.path`);
-  const actions = requiredArray(object, "actions", path, 1);
-  for (let index = 0; index < actions.length; index++) {
-    requireStringType(actions[index], `${path}.actions[${index}]`);
-  }
-  if (hasOwn(object, "caveats")) {
-    expectJsonObject(requiredValue(object, "caveats", path), `${path}.caveats`);
+  try {
+    const canonical = canonicalizePolicyCapability(object);
+    if (jcsCanonicalize(object) !== jcsCanonicalize(canonical)) {
+      throw new SignedObjectSchemaError(`${path} must be canonical PolicyCapability JSON`);
+    }
+  } catch (error) {
+    if (error instanceof SignedObjectSchemaError) {
+      throw error;
+    }
+    throw new SignedObjectSchemaError(
+      error instanceof Error ? error.message : String(error),
+    );
   }
 }
 

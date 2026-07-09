@@ -20,6 +20,34 @@ export {
 } from "./jcs";
 
 export {
+  PolicyCapabilityError,
+  canonicalizePolicyCapability,
+  normalizePolicyCapability,
+  policyCapabilityContains,
+  policyCapabilityDigestHex,
+  type PolicyCapability,
+  type PolicyCapabilityErrorCode,
+} from "./capability";
+
+export {
+  POLICY_VERSION_V0,
+  PolicyAuthoringError,
+  TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA,
+  W3C_VC_CREDENTIAL_VERIFIER,
+  composeTranscriptShareBootstrap,
+  createAndSignRequesterPolicyEngineRecord,
+  createAndSignTranscriptSharePolicy,
+  createUnsignedPolicyEngineRecord,
+  verifyPolicyEngineRecordForRequester,
+  type ComposeTranscriptShareBootstrapInput,
+  type CreatePolicyEngineRecordInput,
+  type CreateTranscriptSharePolicyInput,
+  type PolicyAuthoringErrorCode,
+  type TranscriptShareBootstrap,
+  type VerifyPolicyEngineRecordOptions,
+} from "./authoring";
+
+export {
   ED25519_JCS_SIGNATURE_SUITE,
   EIP191_JCS_SIGNATURE_SUITE,
   POLICY_ENGINE_RECORD_SCHEMA,

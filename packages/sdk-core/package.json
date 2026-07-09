@@ -29,6 +29,7 @@
     "dist"
   ],
   "scripts": {
+    "prebuild": "cd ../bootstrap && bun run build && cd ../sdk-services && bun run build",
     "build": "tsup",
     "clean": "rm -rf dist",
     "test": "bun test"
