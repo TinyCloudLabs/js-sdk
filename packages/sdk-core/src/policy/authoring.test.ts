@@ -13,6 +13,7 @@ import {
   createAndSignPolicy,
   createAndSignRequesterPolicyEngineRecord,
   createAndSignTranscriptSharePolicy,
+  createUnsignedPolicyEngineRecord,
   deriveSignedObjectMaterial,
   jcsCanonicalize,
   normalizePolicyCapability,
@@ -211,6 +212,22 @@ describe("strict authoring capability validation", () => {
     }
   });
 
+  it("rejects capability inputs that would require authoring-time canonicalization", () => {
+    for (const capability of [
+      { ...exactKvCapability, actions: ["tinycloud.kv/list", "tinycloud.kv/get"] },
+      { ...exactKvCapability, actions: ["tinycloud.kv/get", "tinycloud.kv/get"] },
+      { ...exactKvCapability, path: "notebooks/cafe\u0301/notes" },
+      { ...exactKvCapability, path: "notebooks/nb%2Dproject/docs" },
+    ]) {
+      expectCapabilityFailure(
+        () => normalizePolicyCapability(capability),
+        capability.path !== exactKvCapability.path
+          ? "policy-capability-malformed-path"
+          : "policy-capability-malformed-action",
+      );
+    }
+  });
+
   it("rejects wildcard, prefix, empty, empty-segment, and traversal paths", () => {
     for (const path of [
       "items/*",
@@ -340,6 +357,76 @@ describe("policy and bootstrap authoring", () => {
       },
       edSigner("policy_signer"),
     )).rejects.toThrow();
+
+    await expectAuthoringFailure(
+      () =>
+        createAndSignTranscriptSharePolicy(
+          {
+            ownerDid: OWNER_DID,
+            signingKeyDid: suitesFixture.ed25519.policy_signer.did,
+            createdAt: "2026-06-01T00:00:00Z",
+            resourceType: "conversation",
+            resourceId: "conv_456",
+            permissionsCeiling: [sqlCapability],
+            when: { subject: { did: SUBJECT_DID } },
+            grant: { ...baseGrant, delegationMode: "relay" },
+          },
+          edSigner("policy_signer"),
+        ),
+      "policy-authoring-malformed",
+    );
+    await expectAuthoringFailure(
+      () =>
+        createAndSignTranscriptSharePolicy(
+          {
+            ownerDid: OWNER_DID,
+            signingKeyDid: suitesFixture.ed25519.policy_signer.did,
+            createdAt: "2026-06-01T00:00:00Z",
+            resourceType: "conversation",
+            resourceId: "conv_456",
+            permissionsCeiling: [sqlCapability],
+            when: { subject: { did: SUBJECT_DID } },
+            grant: { ...baseGrant, revocation: "eventual" },
+          },
+          edSigner("policy_signer"),
+        ),
+      "policy-authoring-malformed",
+    );
+  });
+
+  it("refuses to author malformed PolicyEngineRecord fields with typed errors", async () => {
+    const baseRecord = {
+      ownerDid: OWNER_DID,
+      endpoint: "https://policy.example/resolve",
+      audience: "did:web:requester.example",
+      grantIssuerDid: suitesFixture.ed25519.grant_issuer.did,
+      expiresAt: "2026-07-01T00:00:00Z",
+    };
+    expect(createUnsignedPolicyEngineRecord(baseRecord)).toMatchObject({
+      schema: POLICY_ENGINE_RECORD_SCHEMA,
+      supportedPolicyVersions: ["v0"],
+      supportedEvidenceVerifiers: [W3C_VC_CREDENTIAL_VERIFIER],
+    });
+    await expectAuthoringFailure(
+      () => createUnsignedPolicyEngineRecord({ ...baseRecord, expiresAt: "not-a-date" }),
+      "policy-engine-record-date-invalid",
+    );
+    await expectAuthoringFailure(
+      () =>
+        createUnsignedPolicyEngineRecord({
+          ...baseRecord,
+          supportedPolicyVersions: ["v1"],
+        }),
+      "policy-authoring-malformed",
+    );
+    await expectAuthoringFailure(
+      () =>
+        createUnsignedPolicyEngineRecord({
+          ...baseRecord,
+          supportedEvidenceVerifiers: ["jwt/v1"],
+        }),
+      "policy-authoring-malformed",
+    );
   });
 
   it("composes a bootstrap record that is not authority", async () => {

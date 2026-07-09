@@ -37,6 +37,7 @@ export type JsonObject = { readonly [key: string]: JsonValue };
 
 interface NormalizeOptions {
   readonly allowPrefixPaths?: boolean;
+  readonly requireCanonical?: boolean;
 }
 
 const objectHasOwn: (object: object, propertyKey: PropertyKey) => boolean =
@@ -71,7 +72,7 @@ for (const entry of CAPABILITY_REGISTRY) {
  * manifest-shaped permission payloads before any Policy is signed.
  */
 export function normalizePolicyCapability(input: unknown): PolicyCapability {
-  return normalizePolicyCapabilityWithOptions(input, {});
+  return normalizePolicyCapabilityWithOptions(input, { requireCanonical: true });
 }
 
 /**
@@ -132,13 +133,27 @@ function normalizePolicyCapabilityWithOptions(
   }
   const space = requiredString(object, "space", "$", "policy-capability-malformed-space");
   validateConcreteSpace(space);
+  const canonicalSpace = space.normalize("NFC");
+  if (options.requireCanonical && canonicalSpace !== space) {
+    throw new PolicyCapabilityError(
+      "policy-capability-malformed-space",
+      "$.space must already be canonical NFC",
+    );
+  }
   const rawPath = requiredString(object, "path", "$", "policy-capability-malformed-path");
   validateRawPath(rawPath, options);
   const path = normalizePath(rawPath);
+  if (options.requireCanonical && path !== rawPath) {
+    throw new PolicyCapabilityError(
+      "policy-capability-malformed-path",
+      "$.path must already be canonical",
+    );
+  }
   validateRawPath(path, options);
   const actions = normalizeActions(
     requiredArray(object, "actions", "$", "policy-capability-malformed-action"),
     service,
+    options,
   );
   const output = Object.create(null) as {
     service: PolicyCapability["service"];
@@ -148,7 +163,7 @@ function normalizePolicyCapabilityWithOptions(
     caveats?: JsonObject;
   };
   output.service = service as PolicyCapability["service"];
-  output.space = space.normalize("NFC");
+  output.space = canonicalSpace;
   output.path = path;
   output.actions = actions;
   if (hasOwn(object, "caveats")) {
@@ -281,7 +296,11 @@ function decodeUnreserved(path: string): string {
   });
 }
 
-function normalizeActions(actions: readonly JsonValue[], service: string): string[] {
+function normalizeActions(
+  actions: readonly JsonValue[],
+  service: string,
+  options: NormalizeOptions,
+): string[] {
   const accepted = GRANTABLE_ACTIONS.get(service);
   if (accepted === undefined) {
     throw new PolicyCapabilityError(
@@ -290,6 +309,7 @@ function normalizeActions(actions: readonly JsonValue[], service: string): strin
     );
   }
   const unique = new Set<string>();
+  const rawActions: string[] = [];
   for (let index = 0; index < actions.length; index++) {
     const action = actions[index];
     if (typeof action !== "string" || action.length === 0) {
@@ -304,6 +324,7 @@ function normalizeActions(actions: readonly JsonValue[], service: string): strin
         `$.actions[${index}] is not a grantable action URN`,
       );
     }
+    rawActions.push(action);
     unique.add(action);
   }
   if (unique.size === 0) {
@@ -312,7 +333,18 @@ function normalizeActions(actions: readonly JsonValue[], service: string): strin
       "$.actions must not be empty",
     );
   }
-  return [...unique].sort();
+  const normalizedActions = [...unique].sort();
+  if (
+    options.requireCanonical &&
+    (rawActions.length !== normalizedActions.length ||
+      rawActions.some((action, index) => action !== normalizedActions[index]))
+  ) {
+    throw new PolicyCapabilityError(
+      "policy-capability-malformed-action",
+      "$.actions must already be sorted, deduplicated canonical action URNs",
+    );
+  }
+  return normalizedActions;
 }
 
 function validateCaveats(input: JsonValue, service: PolicyCapability["service"]): JsonObject {

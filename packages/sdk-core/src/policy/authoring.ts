@@ -184,19 +184,34 @@ export function createUnsignedPolicyEngineRecord(
     ],
     "$",
   );
+  const supportedPolicyVersions = hasOwn(normalized, "supportedPolicyVersions")
+    ? requiredStringArray(normalized, "supportedPolicyVersions", "$")
+    : [POLICY_VERSION_V0];
+  validateSupportedPolicyVersions(supportedPolicyVersions, "$.supportedPolicyVersions");
+  const supportedEvidenceVerifiers = hasOwn(normalized, "supportedEvidenceVerifiers")
+    ? requiredStringArray(normalized, "supportedEvidenceVerifiers", "$")
+    : [W3C_VC_CREDENTIAL_VERIFIER];
+  validateSupportedEvidenceVerifiers(
+    supportedEvidenceVerifiers,
+    "$.supportedEvidenceVerifiers",
+  );
+  const expiresAt = fieldString(
+    normalized,
+    "expiresAt",
+    "$",
+    "policy-engine-record-date-invalid",
+  );
+  parseStrictRfc3339(expiresAt, "$.expiresAt");
+
   return {
     schema: POLICY_ENGINE_RECORD_SCHEMA,
     ownerDid: requiredString(normalized, "ownerDid", "$"),
     endpoint: requiredString(normalized, "endpoint", "$"),
     audience: requiredString(normalized, "audience", "$"),
-    supportedPolicyVersions: hasOwn(normalized, "supportedPolicyVersions")
-      ? requiredStringArray(normalized, "supportedPolicyVersions", "$")
-      : [POLICY_VERSION_V0],
-    supportedEvidenceVerifiers: hasOwn(normalized, "supportedEvidenceVerifiers")
-      ? requiredStringArray(normalized, "supportedEvidenceVerifiers", "$")
-      : [W3C_VC_CREDENTIAL_VERIFIER],
+    supportedPolicyVersions,
+    supportedEvidenceVerifiers,
     grantIssuerDid: requiredString(normalized, "grantIssuerDid", "$"),
-    expiresAt: requiredString(normalized, "expiresAt", "$"),
+    expiresAt,
   };
 }
 
@@ -280,7 +295,7 @@ export async function verifyPolicyEngineRecordForRequester(
   }
   const recordObject = signedRecord as JsonObject;
   const expiresAt = fieldString(recordObject, "expiresAt", "$.signedRecord", "policy-engine-record-date-invalid");
-  const now = requiredString(normalized, "now", "$");
+  const now = fieldString(normalized, "now", "$", "policy-engine-record-date-invalid");
   const expiresMs = parseStrictRfc3339(expiresAt, "$.signedRecord.expiresAt");
   const nowMs = parseStrictRfc3339(now, "$.now");
   if (expiresMs <= nowMs) {
@@ -446,6 +461,40 @@ function requiredStringArray(object: JsonObject, key: string, path: string): str
   });
 }
 
+function validateSupportedPolicyVersions(values: readonly string[], path: string): void {
+  if (values.length === 0) {
+    throw new PolicyAuthoringError(
+      "policy-authoring-malformed",
+      `${path} must not be empty`,
+    );
+  }
+  for (let index = 0; index < values.length; index++) {
+    if (values[index] !== POLICY_VERSION_V0) {
+      throw new PolicyAuthoringError(
+        "policy-authoring-malformed",
+        `${path}[${index}] is unsupported`,
+      );
+    }
+  }
+}
+
+function validateSupportedEvidenceVerifiers(values: readonly string[], path: string): void {
+  if (values.length === 0) {
+    throw new PolicyAuthoringError(
+      "policy-authoring-malformed",
+      `${path} must not be empty`,
+    );
+  }
+  for (let index = 0; index < values.length; index++) {
+    if (values[index] !== W3C_VC_CREDENTIAL_VERIFIER) {
+      throw new PolicyAuthoringError(
+        "policy-authoring-malformed",
+        `${path}[${index}] is unsupported`,
+      );
+    }
+  }
+}
+
 function wrapCapabilityError<T>(fn: () => T): T {
   try {
     return fn();
@@ -464,9 +513,10 @@ function wrapSignedObjectError(error: unknown): Error {
   if (error instanceof SignedObjectSchemaError || error instanceof SignedObjectProfileError) {
     return new PolicyAuthoringError("policy-authoring-malformed", error.message);
   }
-  return error instanceof Error
-    ? error
-    : new PolicyAuthoringError("policy-authoring-malformed", String(error));
+  return new PolicyAuthoringError(
+    "policy-authoring-malformed",
+    error instanceof Error ? error.message : String(error),
+  );
 }
 
 function parseStrictRfc3339(value: string, path: string): number {
