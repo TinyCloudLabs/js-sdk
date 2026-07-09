@@ -298,7 +298,22 @@ describe("strict authoring capability validation", () => {
 
   it("rejects non-native or loose caveat shapes", () => {
     expectCapabilityFailure(
+      () => normalizePolicyCapability({ ...exactKvCapability, caveats: {} }),
+      "policy-capability-malformed-caveats",
+    );
+    expectCapabilityFailure(
       () => normalizePolicyCapability({ ...exactKvCapability, caveats: { extra: true } }),
+      "policy-capability-malformed-caveats",
+    );
+    expectCapabilityFailure(
+      () =>
+        normalizePolicyCapability({
+          service: "tinycloud.vfs",
+          space: "applications",
+          path: "files/report.txt",
+          actions: ["tinycloud.vfs/get"],
+          caveats: {},
+        }),
       "policy-capability-malformed-caveats",
     );
     expectCapabilityFailure(

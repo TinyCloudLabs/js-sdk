@@ -360,13 +360,10 @@ function validateCaveats(input: JsonValue, service: PolicyCapability["service"])
   if (service === "tinycloud.sql") {
     return validateSqlCaveats(input as JsonObject);
   }
-  if (Object.keys(input).length !== 0) {
-    throw new PolicyCapabilityError(
-      "policy-capability-malformed-caveats",
-      "$.caveats are not defined for this service",
-    );
-  }
-  return input as JsonObject;
+  throw new PolicyCapabilityError(
+    "policy-capability-malformed-caveats",
+    "$.caveats are not defined for this service",
+  );
 }
 
 function validateSqlCaveats(input: JsonObject): JsonObject {
