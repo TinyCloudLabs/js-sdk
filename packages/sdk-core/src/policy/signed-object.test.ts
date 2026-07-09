@@ -109,6 +109,15 @@ function eipSigner(name: string): SignedObjectSigner {
   };
 }
 
+function concretePolicyVector(): VectorObject {
+  return coveredVectors.find(
+    (entry) =>
+      entry.object_type === "Policy" &&
+      entry.unsigned.resource !== undefined &&
+      ((entry.unsigned.resource as { resourceId?: unknown }).resourceId === "conv_456"),
+  )!;
+}
+
 async function expectTypedFailure(
   action: () => unknown | Promise<unknown>,
   expected?: new (...args: never[]) => SignedObjectProfileError,
@@ -232,7 +241,7 @@ describe("JCS canonicalization", () => {
 
 describe("create and verify signing-key binding", () => {
   it("strips stale id and signature before signing", async () => {
-    const policy = coveredVectors.find((entry) => entry.object_type === "Policy")!;
+    const policy = concretePolicyVector();
     const signed = await createAndSignPolicy(
       {
         ...policy.unsigned,
@@ -250,7 +259,7 @@ describe("create and verify signing-key binding", () => {
   });
 
   it("refuses create signing when signerDid differs from signingKeyDid", async () => {
-    const policy = coveredVectors.find((entry) => entry.object_type === "Policy")!;
+    const policy = concretePolicyVector();
     await expectTypedFailure(
       () => createAndSignPolicy(policy.unsigned, edSigner("grant_issuer")),
       SigningKeyBindingError,
@@ -277,7 +286,7 @@ describe("create and verify signing-key binding", () => {
   });
 
   it("refuses create signing when the signer DID does not match the suite", async () => {
-    const policy = coveredVectors.find((entry) => entry.object_type === "Policy")!;
+    const policy = concretePolicyVector();
     await expectTypedFailure(
       () =>
         createAndSignPolicy(

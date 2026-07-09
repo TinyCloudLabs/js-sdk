@@ -2,6 +2,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
 import { bytesToHex, sha256, verifyMessage } from "viem";
 import { parsePkhDid } from "../identity";
+import { canonicalizePolicyCapability, normalizePolicyCapability } from "./capability";
 import {
   SignatureMaterialError,
   SignatureVerificationError,
@@ -185,6 +186,9 @@ export async function createAndSignSignedObject(
   const descriptor = descriptorForUnsigned(normalized);
   const stripped = stripOwnIdAndSignature(normalized, descriptor);
   const unsigned = validateUnsignedForDescriptor(stripped, descriptor);
+  if (descriptor.kind === "Policy") {
+    validatePolicyPermissionsCeilingForSigning(unsigned);
+  }
   assertSupportedSignatureSuite(signer.suite);
   requireStringType(signer.signerDid, "$.signer.signerDid");
   assertSignerDidMatchesSuite(signer.signerDid, signer.suite);
@@ -546,22 +550,48 @@ function validatePolicyResource(input: unknown, path: string): void {
   }
 }
 
+function validatePolicyPermissionsCeilingForSigning(input: JsonObject): void {
+  const resource = expectJsonObject(requiredValue(input, "resource", "$"), "$.resource");
+  const ceiling = requiredArray(resource, "permissionsCeiling", "$.resource", 1);
+  for (let index = 0; index < ceiling.length; index++) {
+    validatePolicyCapabilityForSigning(
+      ceiling[index],
+      `$.resource.permissionsCeiling[${index}]`,
+    );
+  }
+}
+
 function validatePolicyCapability(input: unknown, path: string): void {
   const object = expectJsonObject(input, path);
-  assertExactKeys(object, ["service", "space", "path", "actions", "caveats"], path);
-  expectOneOf(requiredString(object, "service", path), [
-    "tinycloud.kv",
-    "tinycloud.sql",
-    "tinycloud.vfs",
-  ], `${path}.service`);
-  requiredString(object, "space", path);
-  requireStringType(requiredValue(object, "path", path), `${path}.path`);
-  const actions = requiredArray(object, "actions", path, 1);
-  for (let index = 0; index < actions.length; index++) {
-    requireStringType(actions[index], `${path}.actions[${index}]`);
+  try {
+    const canonical = canonicalizePolicyCapability(object);
+    if (jcsCanonicalize(object) !== jcsCanonicalize(canonical)) {
+      throw new SignedObjectSchemaError(`${path} must be canonical PolicyCapability JSON`);
+    }
+  } catch (error) {
+    if (error instanceof SignedObjectSchemaError) {
+      throw error;
+    }
+    throw new SignedObjectSchemaError(
+      error instanceof Error ? error.message : String(error),
+    );
   }
-  if (hasOwn(object, "caveats")) {
-    expectJsonObject(requiredValue(object, "caveats", path), `${path}.caveats`);
+}
+
+function validatePolicyCapabilityForSigning(input: unknown, path: string): void {
+  const object = expectJsonObject(input, path);
+  try {
+    const canonical = normalizePolicyCapability(object);
+    if (jcsCanonicalize(object) !== jcsCanonicalize(canonical)) {
+      throw new SignedObjectSchemaError(`${path} must be strict canonical PolicyCapability JSON`);
+    }
+  } catch (error) {
+    if (error instanceof SignedObjectSchemaError) {
+      throw error;
+    }
+    throw new SignedObjectSchemaError(
+      error instanceof Error ? error.message : String(error),
+    );
   }
 }
 
