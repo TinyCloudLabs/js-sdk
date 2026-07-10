@@ -38,10 +38,12 @@ export const POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES = [
   "presentation-expired",
   "presentation-audience-mismatch",
   "presentation-evidence-missing",
+  "digest-mismatch",
   "evidence-requirement-unknown",
   "evidence-requirement-duplicate",
   "holder-signature-invalid",
   "holder-signature-signer-mismatch",
+  "id-mismatch",
   "requested-capabilities-exceeded",
   "requested-capabilities-hash-mismatch",
   "evidence-authority-missing",
@@ -77,8 +79,11 @@ export const POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES = [
   "holder-signature-invalid",
   "owner-mismatch",
   "policy-expired",
+  "policy-inactive",
   "policy-not-found",
+  "policy-not-satisfied",
   "policy-revoked",
+  "policy-status-rollback",
   "rate-limited",
 ] as const;
 
@@ -1076,7 +1081,10 @@ function errorForDenial(
   denial: { code: PolicyEngineGrantPresentationDenialCode; message?: string },
   status?: number,
 ): TranscriptRequesterError {
-  const accessEnded = denial.code === "policy-revoked" || denial.code === "policy-expired";
+  const accessEnded =
+    denial.code === "policy-inactive" ||
+    denial.code === "policy-revoked" ||
+    denial.code === "policy-expired";
   return new TranscriptRequesterError(
     `policy-engine-denied-${denial.code}`,
     denial.message ?? `policy engine denied ${denial.code}`,

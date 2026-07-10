@@ -1,11 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
 import { createHash } from "crypto";
+import { readdir } from "fs/promises";
 import {
   HOLDER_KEY_BINDING_PRESENTATION_SCHEMA,
   LISTEN_SQL_STATEMENT_CATALOG,
   POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA,
   POLICY_ENGINE_DENIAL_SCHEMA,
+  POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES,
   TranscriptRequesterError,
   createTranscriptRequester,
   type RequesterHttpRequest,
@@ -34,10 +36,50 @@ const wireManifest = (await Bun.file("test-fixtures/policy-engine-wire/manifest.
   label: string;
 };
 
+const denialWireManifest = (await Bun.file(
+  "test-fixtures/policy-engine-denial-wire/wire-denials/manifest.json",
+).json()) as {
+  fixtures: Record<string, { code: string; sha256: string; testRef: string }>;
+  label: string;
+  producerCommit: string;
+};
+
+type DenialMatrixRow = {
+  code: string;
+  layer: string;
+  reachability?: string;
+  httpStatus?: number;
+  cpFRecord?: string;
+};
+
+const denialMatrix = (await Bun.file(
+  "test-fixtures/policy-engine-denial-wire/denial-matrix-v0.json",
+).json()) as DenialMatrixRow[];
+
+const credentialDenialManifest = (await Bun.file(
+  "test-fixtures/launch-credential-denials/manifest.json",
+).json()) as {
+  files: Array<{ path: string; sha256: string }>;
+  fixedInvalidClasses: string[];
+  schema: string;
+};
+
 type WireFixture = {
   name: string;
   request: { method: "POST"; path: string; body: unknown };
   response: { status: number; body: unknown };
+};
+
+type DenialWireFixture = {
+  body: unknown;
+  status: number;
+};
+
+type CredentialDenialFixture = {
+  fixtureClass: string;
+  expected: "accept" | "reject";
+  expectedEngineWireCode: { code: string };
+  evidencePresentation?: unknown;
 };
 
 const wireFixtures = new Map<string, WireFixture>();
@@ -47,6 +89,33 @@ for (const item of wireManifest.cases) {
     (await Bun.file(`test-fixtures/policy-engine-wire/${item.file}`).json()) as WireFixture,
   );
 }
+
+const denialWireFixtures = new Map<string, DenialWireFixture>();
+for (const file of Object.keys(denialWireManifest.fixtures)) {
+  denialWireFixtures.set(
+    file,
+    (await Bun.file(`test-fixtures/policy-engine-denial-wire/wire-denials/${file}`).json()) as DenialWireFixture,
+  );
+}
+
+const credentialDenialFixtures = new Map<string, CredentialDenialFixture>();
+for (const item of credentialDenialManifest.files) {
+  if (!item.path.endsWith(".json") || item.path === "manifest.json") {
+    continue;
+  }
+  credentialDenialFixtures.set(
+    item.path,
+    (await Bun.file(`test-fixtures/launch-credential-denials/${item.path}`).json()) as CredentialDenialFixture,
+  );
+}
+
+const credentialDenialEntries = [...credentialDenialFixtures.values()].filter((fixture) => fixture.expected === "reject");
+const credentialRepresentativeFixtureClassByCode = new Map<string, string>([
+  ["enrollment-binding-mismatch", "enrollment-binding-mismatch"],
+  ["evidence-credential-invalid", "expired"],
+  ["evidence-issuer-untrusted", "untrusted-issuer-did"],
+  ["evidence-presentation-invalid", "malformed-presentation"],
+]);
 
 const NOW = new Date("2026-07-09T12:00:00Z");
 const OWNER_DID = "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf";
@@ -269,6 +338,41 @@ function denial(code: string, status = 403): RequesterHttpResponse {
       message: `denied ${code}`,
     },
   };
+}
+
+function denialWireResponse(code: string): RequesterHttpResponse {
+  const entry = Object.entries(denialWireManifest.fixtures).find(([, fixture]) => fixture.code === code);
+  if (entry === undefined) {
+    throw new Error(`missing denial wire fixture for ${code}`);
+  }
+  const fixture = denialWireFixtures.get(entry[0]);
+  if (fixture === undefined) {
+    throw new Error(`unloaded denial wire fixture ${entry[0]}`);
+  }
+  return {
+    status: fixture.status,
+    body: fixture.body,
+  };
+}
+
+function nonceFor(label: string): string {
+  return `nonce-${label.replaceAll("-", "")}-0000000000000000`.slice(0, 32);
+}
+
+const mountedRuntimeMatrixByCode = new Map(
+  denialMatrix
+    .filter((row) => row.reachability === "mounted-runtime")
+    .map((row) => [row.code, row]),
+);
+
+const frozenVocabularyNonruntimeCodes = new Set(
+  denialMatrix
+    .filter((row) => row.layer === "FROZEN-VOCABULARY" && row.reachability !== "mounted-runtime")
+    .map((row) => row.code),
+);
+
+function expectedStateForMatrixCode(code: string): "denied" | "access-ended" {
+  return code === "policy-inactive" || code === "policy-expired" ? "access-ended" : "denied";
 }
 
 async function requester(transport: RequesterTransport, input = {}) {
@@ -499,6 +603,73 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
     ]);
   });
 
+  it("retries resolve transport failures with fresh challenges and then surfaces unreachable", async () => {
+    const transport = new FixtureTransport([
+      challenge("nonce-timeout-000001"),
+      new Error("timeout 1"),
+      challenge("nonce-timeout-000002"),
+      new Error("timeout 2"),
+      challenge("nonce-timeout-000003"),
+      new Error("timeout 3"),
+    ]);
+    const client = await createTranscriptRequester({
+      bootstrap: await bootstrap(),
+      requesterDid: REQUESTER_DID,
+      ownerDid: OWNER_DID,
+      audience: AUDIENCE,
+      grantIssuerDid: GRANT_ISSUER_DID,
+      transport,
+      signingCapability: signingCapability(),
+      now: () => NOW,
+      sleep: async () => {},
+      random: () => 0,
+      engineRetryAttempts: 3,
+    });
+
+    const error = await expectRequesterFailure(() => client.readSql("listen.getConversation"), "requester-engine-unreachable");
+    expect(error.state).toBe("unreachable");
+    expect(transport.calls.filter((call) => call.url.endsWith("/challenge"))).toHaveLength(3);
+    expect(transport.calls.filter((call) => call.url.endsWith("/resolve"))).toHaveLength(3);
+    expect(
+      transport.calls
+        .filter((call) => call.url.endsWith("/resolve"))
+        .map((call) => (call.body as { presentation: { nonce: string } }).presentation.nonce),
+    ).toEqual(["nonce-timeout-000001", "nonce-timeout-000002", "nonce-timeout-000003"]);
+  });
+
+  it("does not retry a parseable 4xx denial or reuse its nonce", async () => {
+    const transport = new FixtureTransport([
+      challenge("nonce-denied-000001"),
+      denialWireResponse("requested-capabilities-exceeded"),
+    ]);
+    const client = await createTranscriptRequester({
+      bootstrap: await bootstrap(),
+      requesterDid: REQUESTER_DID,
+      ownerDid: OWNER_DID,
+      audience: AUDIENCE,
+      grantIssuerDid: GRANT_ISSUER_DID,
+      transport,
+      signingCapability: signingCapability(),
+      now: () => NOW,
+      sleep: async () => {},
+      random: () => 0,
+      engineRetryAttempts: 3,
+    });
+
+    const error = await expectRequesterFailure(
+      () => client.readSql("listen.getConversation"),
+      "policy-engine-denied-requested-capabilities-exceeded",
+    );
+    expect(error.state).toBe("denied");
+    expect(transport.calls.map((call) => call.url)).toEqual([
+      `${ENDPOINT}/policy/v0/challenge`,
+      `${ENDPOINT}/policy/v0/resolve`,
+    ]);
+    expect((transport.calls[1]!.body as { presentation: { nonce: string } }).presentation.nonce).toBe(
+      "nonce-denied-000001",
+    );
+  });
+
   it("surfaces typed renewal-required when no permitted signing capability is available", async () => {
     const transport = new FixtureTransport([]);
     const client = await createTranscriptRequester({
@@ -508,6 +679,24 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
       audience: AUDIENCE,
       grantIssuerDid: GRANT_ISSUER_DID,
       transport,
+      now: () => NOW,
+    });
+
+    const error = await expectRequesterFailure(() => client.readSql("listen.getConversation"), "requester-renewal-required");
+    expect(error.state).toBe("renewal-required");
+    expect(transport.calls).toHaveLength(0);
+  });
+
+  it("surfaces renewal-required for a mismatched signing capability without egress", async () => {
+    const transport = new FixtureTransport([]);
+    const client = await createTranscriptRequester({
+      bootstrap: await bootstrap(),
+      requesterDid: REQUESTER_DID,
+      ownerDid: OWNER_DID,
+      audience: AUDIENCE,
+      grantIssuerDid: GRANT_ISSUER_DID,
+      transport,
+      signingCapability: signingCapability(OWNER_DID),
       now: () => NOW,
     });
 
@@ -578,6 +767,42 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
       `${ENDPOINT}/read/sql/named`,
     ]);
   });
+
+  it("renews at the near-expiry window with a fresh nonce after an unreachable renewal attempt", async () => {
+    let current = NOW;
+    const transport = new FixtureTransport([
+      challenge("nonce-initial-00001"),
+      resolve([sqlCapability], { expiresAt: "2026-07-09T12:00:40Z" }),
+      { status: 200, body: { rows: [] } },
+      challenge("nonce-renewal-0001"),
+      { status: 503, body: { error: "temporarily down" } },
+      challenge("nonce-renewal-0002"),
+      resolve([sqlCapability]),
+      { status: 200, body: { rows: [{ renewed: true }] } },
+    ]);
+    const client = await createTranscriptRequester({
+      bootstrap: await bootstrap(),
+      requesterDid: REQUESTER_DID,
+      ownerDid: OWNER_DID,
+      audience: AUDIENCE,
+      grantIssuerDid: GRANT_ISSUER_DID,
+      transport,
+      signingCapability: signingCapability(),
+      now: () => current,
+      sleep: async () => {},
+      random: () => 0,
+      engineRetryAttempts: 2,
+    });
+
+    await expect(client.readSql("listen.getConversation")).resolves.toEqual({ rows: [] });
+    current = new Date("2026-07-09T12:00:10Z");
+    await expect(client.readSql("listen.getConversation")).resolves.toEqual({ rows: [{ renewed: true }] });
+    expect(
+      transport.calls
+        .filter((call) => call.url.endsWith("/resolve"))
+        .map((call) => (call.body as { presentation: { nonce: string } }).presentation.nonce),
+    ).toEqual(["nonce-initial-00001", "nonce-renewal-0001", "nonce-renewal-0002"]);
+  });
 });
 
 describe("TranscriptRequester delegation import and containment", () => {
@@ -625,7 +850,7 @@ describe("TranscriptRequester delegation import and containment", () => {
     );
   });
 
-  it("maps server-side denial, unreachable, and revoked renewal distinctly", async () => {
+  it("maps server-side denial, unreachable, and policy-inactive renewal distinctly", async () => {
     await expectRequesterFailure(async () => {
       const client = await requester(new FixtureTransport([challenge(), resolve([sqlCapability]), denial("capability-not-contained")]));
       await client.readSql("listen.getConversation");
@@ -637,19 +862,20 @@ describe("TranscriptRequester delegation import and containment", () => {
     }, "requester-access-unreachable");
 
     let current = NOW;
+    const transport = new FixtureTransport([
+      challenge("nonce-before-revoke"),
+      resolve([sqlCapability], { expiresAt: "2026-07-09T12:00:40Z" }),
+      { status: 200, body: { rows: [] } },
+      challenge("nonce-after-revoke"),
+      denialWireResponse("policy-inactive"),
+    ]);
     const client = await createTranscriptRequester({
       bootstrap: await bootstrap(),
       requesterDid: REQUESTER_DID,
       ownerDid: OWNER_DID,
       audience: AUDIENCE,
       grantIssuerDid: GRANT_ISSUER_DID,
-      transport: new FixtureTransport([
-        challenge("nonce-before-revoke"),
-        resolve([sqlCapability], { expiresAt: "2026-07-09T12:00:40Z" }),
-        { status: 200, body: { rows: [] } },
-        challenge("nonce-after-revoke"),
-        denial("policy-revoked"),
-      ]),
+      transport,
       signingCapability: signingCapability(),
       now: () => current,
       sleep: async () => {},
@@ -657,9 +883,11 @@ describe("TranscriptRequester delegation import and containment", () => {
     });
     await client.readSql("listen.getConversation");
     current = new Date("2026-07-09T12:00:41Z");
-    await expectRequesterFailure(() => client.readSql("listen.getConversation"), "policy-engine-denied-policy-revoked");
+    await expectRequesterFailure(() => client.readSql("listen.getConversation"), "policy-engine-denied-policy-inactive");
     expect(client.accessState).toBe("access-ended");
+    const callsAfterPolicyInactive = transport.calls.length;
     await expectRequesterFailure(() => client.readSql("listen.getConversation"), "requester-access-ended");
+    expect(transport.calls).toHaveLength(callsAfterPolicyInactive);
   });
 });
 
@@ -811,6 +1039,146 @@ describe("TranscriptRequester fixture conformance", () => {
     }
   });
 
+  it("maps every mounted-runtime layer-E denial fixture to its matrix state", async () => {
+    for (const [file, manifestEntry] of Object.entries(denialWireManifest.fixtures)) {
+      const matrix = mountedRuntimeMatrixByCode.get(manifestEntry.code);
+      expect(matrix, `${manifestEntry.code} must be mounted-runtime in denial-matrix-v0`).toBeDefined();
+      const fixture = denialWireFixtures.get(file)!;
+      expect(fixture.status).toBe(matrix!.httpStatus);
+      expect(fixture.status).toBeLessThan(500);
+
+      const transport = new FixtureTransport([
+        challenge(nonceFor(manifestEntry.code)),
+        { status: fixture.status, body: fixture.body },
+      ]);
+      const client = await createTranscriptRequester({
+        bootstrap: await bootstrap(),
+        requesterDid: REQUESTER_DID,
+        ownerDid: OWNER_DID,
+        audience: AUDIENCE,
+        grantIssuerDid: GRANT_ISSUER_DID,
+        transport,
+        signingCapability: signingCapability(),
+        now: () => NOW,
+        sleep: async () => {},
+        random: () => 0,
+        engineRetryAttempts: 3,
+      });
+
+      const error = await expectRequesterFailure(
+        () => client.readSql("listen.getConversation"),
+        `policy-engine-denied-${manifestEntry.code}`,
+      );
+      expect(error.state).toBe(expectedStateForMatrixCode(manifestEntry.code));
+      expect(error.state).not.toBe("unreachable");
+      expect(error.denialCode).toBe(manifestEntry.code);
+      expect(error.status).toBe(fixture.status);
+      expect(transport.calls.map((call) => call.url)).toEqual([
+        `${ENDPOINT}/policy/v0/challenge`,
+        `${ENDPOINT}/policy/v0/resolve`,
+      ]);
+    }
+  });
+
+  it("keeps requester denial expectations to mounted-runtime producible codes", () => {
+    const fixtureCodes = new Set(Object.values(denialWireManifest.fixtures).map((fixture) => fixture.code));
+    const credentialExpectedCodes = new Set(
+      credentialDenialEntries.map((fixture) => fixture.expectedEngineWireCode.code),
+    );
+
+    for (const row of denialMatrix.filter((item) => item.reachability === "mounted-runtime")) {
+      expect(POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES).toContain(row.code);
+      expect(fixtureCodes.has(row.code)).toBe(true);
+    }
+    for (const frozen of frozenVocabularyNonruntimeCodes) {
+      expect(fixtureCodes.has(frozen)).toBe(false);
+      expect(credentialExpectedCodes.has(frozen)).toBe(false);
+    }
+  });
+
+  it("surfaces one credential-evidence representative per expected engine wire code", async () => {
+    expect([...credentialRepresentativeFixtureClassByCode.keys()].sort()).toEqual([
+      "enrollment-binding-mismatch",
+      "evidence-credential-invalid",
+      "evidence-issuer-untrusted",
+      "evidence-presentation-invalid",
+    ]);
+
+    for (const [code, fixtureClass] of credentialRepresentativeFixtureClassByCode) {
+      const fixture = credentialDenialEntries.find((item) => item.fixtureClass === fixtureClass);
+      expect(fixture, `${fixtureClass} must exist as the ${code} representative`).toBeDefined();
+      expect(fixture!.expectedEngineWireCode.code).toBe(code);
+      const transport = new FixtureTransport([
+        challenge(nonceFor(`cred-${code}`)),
+        denialWireResponse(code),
+      ]);
+      const client = await createTranscriptRequester({
+        bootstrap: await bootstrap(),
+        requesterDid: REQUESTER_DID,
+        ownerDid: OWNER_DID,
+        audience: AUDIENCE,
+        grantIssuerDid: GRANT_ISSUER_DID,
+        transport,
+        signingCapability: signingCapability(),
+        evidence: fixture!.evidencePresentation === undefined ? undefined : [fixture!.evidencePresentation],
+        now: () => NOW,
+        sleep: async () => {},
+        random: () => 0,
+      });
+
+      const error = await expectRequesterFailure(
+        () => client.readSql("listen.getConversation"),
+        `policy-engine-denied-${code}`,
+      );
+      expect(error.state).toBe(expectedStateForMatrixCode(code));
+      expect(error.denialCode).toBe(code);
+    }
+  });
+
+  it("covers every launch credential fixture mapping with exactly one representative per engine code", () => {
+    const manifestInvalidClasses = new Set(credentialDenialManifest.fixedInvalidClasses);
+    const mappingByClass = new Map<string, string>();
+    const classesByCode = new Map<string, Set<string>>();
+    const representativeCountsByCode = new Map<string, number>();
+
+    for (const fixture of credentialDenialEntries) {
+      expect(manifestInvalidClasses.has(fixture.fixtureClass), `${fixture.fixtureClass} must be manifest-listed`).toBe(true);
+      expect(mappingByClass.has(fixture.fixtureClass), `${fixture.fixtureClass} must map once`).toBe(false);
+      const code = fixture.expectedEngineWireCode.code;
+      mappingByClass.set(fixture.fixtureClass, code);
+
+      if (credentialRepresentativeFixtureClassByCode.get(code) === fixture.fixtureClass) {
+        representativeCountsByCode.set(code, (representativeCountsByCode.get(code) ?? 0) + 1);
+      }
+
+      const classes = classesByCode.get(code) ?? new Set<string>();
+      classes.add(fixture.fixtureClass);
+      classesByCode.set(code, classes);
+    }
+
+    expect([...mappingByClass.keys()].sort()).toEqual([...manifestInvalidClasses].sort());
+    expect(Object.fromEntries([...mappingByClass].sort())).toEqual({
+      "enrollment-binding-mismatch": "enrollment-binding-mismatch",
+      expired: "evidence-credential-invalid",
+      "malformed-presentation": "evidence-presentation-invalid",
+      "missing-required-disclosure": "evidence-credential-invalid",
+      "not-yet-valid": "evidence-credential-invalid",
+      "subject-mismatch": "evidence-credential-invalid",
+      "untrusted-issuer-did": "evidence-issuer-untrusted",
+      "wrong-issuer-signature": "evidence-credential-invalid",
+      "wrong-vct": "evidence-credential-invalid",
+    });
+
+    for (const [code, classes] of classesByCode) {
+      expect(mountedRuntimeMatrixByCode.has(code), `${code} must be a mounted-runtime denial code`).toBe(true);
+      expect(representativeCountsByCode.get(code), `${code} must have exactly one representative case`).toBe(1);
+      expect(credentialDenialEntries.filter((fixture) => fixture.expectedEngineWireCode.code === code)).toHaveLength(
+        classes.size,
+      );
+    }
+    expect(credentialRepresentativeFixtureClassByCode.size).toBe(classesByCode.size);
+  });
+
   it("consumes every policy-engine-wire manifest case and pins fixture bytes", async () => {
     expect(wireManifest.label).toBe("confirmed from code: policy-engine service implementation @ 8c4cabbf5");
     const consumed = new Set([
@@ -827,6 +1195,33 @@ describe("TranscriptRequester fixture conformance", () => {
     for (const item of wireManifest.cases) {
       expect(consumed.has(item.name)).toBe(true);
       const bytes = await Bun.file(`test-fixtures/policy-engine-wire/${item.file}`).arrayBuffer();
+      expect(createHash("sha256").update(Buffer.from(bytes)).digest("hex")).toBe(item.sha256);
+    }
+  });
+
+  it("pins policy-engine-denial-wire manifest completeness and fixture bytes", async () => {
+    expect(denialWireManifest.producerCommit).toBe("8c4cabbf56e51c7e37484c060ffd4a6d51521101");
+    const actualFiles = (await readdir("test-fixtures/policy-engine-denial-wire/wire-denials"))
+      .filter((file) => file.endsWith(".json") && file !== "manifest.json")
+      .sort();
+    expect(actualFiles).toEqual(Object.keys(denialWireManifest.fixtures).sort());
+
+    for (const [file, fixture] of Object.entries(denialWireManifest.fixtures)) {
+      const bytes = await Bun.file(`test-fixtures/policy-engine-denial-wire/wire-denials/${file}`).arrayBuffer();
+      expect(createHash("sha256").update(Buffer.from(bytes)).digest("hex")).toBe(fixture.sha256);
+      expect((denialWireFixtures.get(file)!.body as { error: { code: string } }).error.code).toBe(fixture.code);
+    }
+  });
+
+  it("pins launch-credential-denials manifest completeness and fixture bytes", async () => {
+    expect(credentialDenialManifest.schema).toBe("xyz.tinycloud.opencredentials/m1-denial-credential-manifest/v0");
+    const actualFiles = (await readdir("test-fixtures/launch-credential-denials"))
+      .filter((file) => file !== "manifest.json" && file !== "PROVENANCE.md")
+      .sort();
+    expect(actualFiles).toEqual(credentialDenialManifest.files.map((file) => file.path).sort());
+
+    for (const item of credentialDenialManifest.files) {
+      const bytes = await Bun.file(`test-fixtures/launch-credential-denials/${item.path}`).arrayBuffer();
       expect(createHash("sha256").update(Buffer.from(bytes)).digest("hex")).toBe(item.sha256);
     }
   });
