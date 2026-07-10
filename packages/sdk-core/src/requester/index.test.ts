@@ -314,7 +314,7 @@ describe("TranscriptRequester bootstrap gate", () => {
     ]);
   });
 
-  it("fails closed before egress for tampered signature, owner mismatch, audience mismatch, and endpoint substitution", async () => {
+  it("fails closed before egress for tampered signature, owner mismatch, audience mismatch, and endpoint/audience substitution", async () => {
     const base = await bootstrap();
     const tampered = structuredClone(base);
     tampered.policyEngine.signedRecord.signature.value = `${tampered.policyEngine.signedRecord.signature.value.slice(0, -1)}A`;
@@ -348,6 +348,13 @@ describe("TranscriptRequester bootstrap gate", () => {
         }),
       "requester-engine-record-endpoint-mismatch",
     );
+    await expectRequesterFailure(
+      () =>
+        requester(transport, {
+          bootstrap: { policyEngine: { ...base.policyEngine, audience: "evil-audience" } },
+        }),
+      "requester-engine-record-audience-mismatch",
+    );
     expect(transport.calls).toHaveLength(0);
   });
 });
@@ -371,6 +378,24 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
     expect(resolveBody.presentation.schema).toBe(HOLDER_KEY_BINDING_PRESENTATION_SCHEMA);
     expect(resolveBody.presentation.nonce).toBe("nonce-fresh-0000001");
     expect(resolveBody.presentation.holderSignature.value).toContain("nonce-fresh-0000001");
+  });
+
+  it("rejects a challenge response whose audience is not the bootstrap audience", async () => {
+    const transport = new FixtureTransport([
+      {
+        ...challenge("nonce-wrong-audience"),
+        body: {
+          challenge: {
+            ...challenge("nonce-wrong-audience").body.challenge,
+            audience: "wrong-audience",
+          },
+        },
+      },
+    ]);
+    const client = await requester(transport);
+
+    await expectRequesterFailure(() => client.readSql("listen.getConversation"), "requester-engine-response-invalid");
+    expect(transport.calls.map((call) => call.url)).toEqual([`${ENDPOINT}/policy/v0/challenge`]);
   });
 
   it("restarts at /challenge after resolve 503 and never re-posts a burned presentation", async () => {
@@ -566,6 +591,7 @@ describe("TranscriptRequester delegation import and containment", () => {
 
     for (const [overrides, code] of [
       [{ holderDid: OWNER_DID }, "requester-delegation-wrong-holder"],
+      [{ issuerDid: OWNER_DID }, "requester-delegation-invalid"],
       [{ expiresAt: "2026-07-09T12:05:01Z" }, "requester-delegation-ttl-excessive"],
     ] as const) {
       await expectRequesterFailure(async () => {

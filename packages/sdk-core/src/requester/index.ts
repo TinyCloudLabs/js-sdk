@@ -477,6 +477,13 @@ export class TranscriptRequester {
         "bootstrap-invalid",
       );
     }
+    if (record.audience !== bootstrap.policyEngine.audience) {
+      throw new TranscriptRequesterError(
+        "requester-engine-record-audience-mismatch",
+        "policy engine record audience does not match bootstrap audience",
+        "bootstrap-invalid",
+      );
+    }
     const requestedCapabilities = bootstrap.resourceHint.requestedCapabilities.map((capability, index) =>
       parsePolicyCapability(capability, `$.resourceHint.requestedCapabilities[${index}]`),
     );
@@ -618,7 +625,11 @@ export class TranscriptRequester {
   private async mintPresentation(
     challenge: z.infer<typeof ChallengeSchema>,
   ): Promise<HolderKeyBindingPresentation> {
-    if (challenge.policyId !== this.bootstrap.policyId || challenge.audience !== this.audience) {
+    if (
+      challenge.policyId !== this.bootstrap.policyId ||
+      challenge.audience !== this.bootstrap.policyEngine.audience ||
+      challenge.audience !== this.audience
+    ) {
       throw new TranscriptRequesterError(
         "requester-engine-response-invalid",
         "challenge response binding does not match requester context",
@@ -698,6 +709,12 @@ export class TranscriptRequester {
       throw new TranscriptRequesterError(
         "requester-delegation-wrong-holder",
         "portable delegation is not targeted at the requester DID",
+      );
+    }
+    if (parsed.issuerDid !== this.grantIssuerDid) {
+      throw new TranscriptRequesterError(
+        "requester-delegation-invalid",
+        "portable delegation issuer does not match the verified grant issuer DID",
       );
     }
     if (parsed.maxTtlSeconds > 300) {
