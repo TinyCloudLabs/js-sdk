@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-core",
-  "version": "2.6.2",
+  "version": "2.6.3-beta.0",
   "description": "Core TinyCloud SDK - shared interfaces and TinyCloud class",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -34,7 +34,7 @@
     "@multiformats/uri-to-multiaddr": "^10.0.0",
     "@noble/curves": "^1.9.7",
     "@tinycloud/bootstrap": "2.5.1",
-    "@tinycloud/sdk-services": "2.6.2",
+    "@tinycloud/sdk-services": "2.6.3-beta.0",
     "multiformats": "^13.4.1",
     "ms": "^2.1.3",
     "siwe": "^3.0.0",

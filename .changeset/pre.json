@@ -19,5 +19,7 @@
     "@tinycloud/web-sdk": "2.6.2",
     "@tinycloud/sdk-services-test": "11.0.2"
   },
-  "changesets": []
+  "changesets": [
+    "fix-bootstrap-invokeany-300"
+  ]
 }
