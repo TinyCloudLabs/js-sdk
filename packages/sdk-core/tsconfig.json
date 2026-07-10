@@ -8,14 +8,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "rootDir": "..",
-    "baseUrl": ".",
-    "paths": {
-      "@tinycloud/bootstrap": ["../bootstrap/src/index.ts"],
-      "@tinycloud/bootstrap/*": ["../bootstrap/src/*"],
-      "@tinycloud/sdk-services": ["../sdk-services/src/index.ts"],
-      "@tinycloud/sdk-services/*": ["../sdk-services/src/*"]
-    },
+    "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

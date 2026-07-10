@@ -78,7 +78,7 @@ type DenialWireFixture = {
 type CredentialDenialFixture = {
   fixtureClass: string;
   expected: "accept" | "reject";
-  expectedEngineWireCode: { code: string } | "accept";
+  expectedEngineWireCode: { code: string };
   evidencePresentation?: unknown;
 };
 
@@ -108,6 +108,14 @@ for (const item of credentialDenialManifest.files) {
     (await Bun.file(`test-fixtures/launch-credential-denials/${item.path}`).json()) as CredentialDenialFixture,
   );
 }
+
+const credentialDenialEntries = [...credentialDenialFixtures.values()].filter((fixture) => fixture.expected === "reject");
+const credentialRepresentativeFixtureClassByCode = new Map<string, string>([
+  ["enrollment-binding-mismatch", "enrollment-binding-mismatch"],
+  ["evidence-credential-invalid", "expired"],
+  ["evidence-issuer-untrusted", "untrusted-issuer-did"],
+  ["evidence-presentation-invalid", "malformed-presentation"],
+]);
 
 const NOW = new Date("2026-07-09T12:00:00Z");
 const OWNER_DID = "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf";
@@ -1075,9 +1083,7 @@ describe("TranscriptRequester fixture conformance", () => {
   it("keeps requester denial expectations to mounted-runtime producible codes", () => {
     const fixtureCodes = new Set(Object.values(denialWireManifest.fixtures).map((fixture) => fixture.code));
     const credentialExpectedCodes = new Set(
-      [...credentialDenialFixtures.values()]
-        .filter((fixture) => fixture.expected === "reject")
-        .map((fixture) => (fixture.expectedEngineWireCode as { code: string }).code),
+      credentialDenialEntries.map((fixture) => fixture.expectedEngineWireCode.code),
     );
 
     for (const row of denialMatrix.filter((item) => item.reachability === "mounted-runtime")) {
@@ -1091,25 +1097,17 @@ describe("TranscriptRequester fixture conformance", () => {
   });
 
   it("surfaces one credential-evidence representative per expected engine wire code", async () => {
-    const representatives = new Map<string, CredentialDenialFixture>();
-    for (const fixture of credentialDenialFixtures.values()) {
-      if (fixture.expected !== "reject") {
-        continue;
-      }
-      const code = (fixture.expectedEngineWireCode as { code: string }).code;
-      if (!representatives.has(code)) {
-        representatives.set(code, fixture);
-      }
-    }
-
-    expect([...representatives.keys()].sort()).toEqual([
+    expect([...credentialRepresentativeFixtureClassByCode.keys()].sort()).toEqual([
       "enrollment-binding-mismatch",
       "evidence-credential-invalid",
       "evidence-issuer-untrusted",
       "evidence-presentation-invalid",
     ]);
 
-    for (const [code, fixture] of representatives) {
+    for (const [code, fixtureClass] of credentialRepresentativeFixtureClassByCode) {
+      const fixture = credentialDenialEntries.find((item) => item.fixtureClass === fixtureClass);
+      expect(fixture, `${fixtureClass} must exist as the ${code} representative`).toBeDefined();
+      expect(fixture!.expectedEngineWireCode.code).toBe(code);
       const transport = new FixtureTransport([
         challenge(nonceFor(`cred-${code}`)),
         denialWireResponse(code),
@@ -1122,7 +1120,7 @@ describe("TranscriptRequester fixture conformance", () => {
         grantIssuerDid: GRANT_ISSUER_DID,
         transport,
         signingCapability: signingCapability(),
-        evidence: fixture.evidencePresentation === undefined ? undefined : [fixture.evidencePresentation],
+        evidence: fixture!.evidencePresentation === undefined ? undefined : [fixture!.evidencePresentation],
         now: () => NOW,
         sleep: async () => {},
         random: () => 0,
@@ -1138,24 +1136,47 @@ describe("TranscriptRequester fixture conformance", () => {
   });
 
   it("covers every launch credential fixture mapping with exactly one representative per engine code", () => {
-    const representativeByCode = new Map<string, string>();
-    for (const fixture of credentialDenialFixtures.values()) {
-      if (fixture.expected !== "reject") {
-        continue;
+    const manifestInvalidClasses = new Set(credentialDenialManifest.fixedInvalidClasses);
+    const mappingByClass = new Map<string, string>();
+    const classesByCode = new Map<string, Set<string>>();
+    const representativeCountsByCode = new Map<string, number>();
+
+    for (const fixture of credentialDenialEntries) {
+      expect(manifestInvalidClasses.has(fixture.fixtureClass), `${fixture.fixtureClass} must be manifest-listed`).toBe(true);
+      expect(mappingByClass.has(fixture.fixtureClass), `${fixture.fixtureClass} must map once`).toBe(false);
+      const code = fixture.expectedEngineWireCode.code;
+      mappingByClass.set(fixture.fixtureClass, code);
+
+      if (credentialRepresentativeFixtureClassByCode.get(code) === fixture.fixtureClass) {
+        representativeCountsByCode.set(code, (representativeCountsByCode.get(code) ?? 0) + 1);
       }
-      const code = (fixture.expectedEngineWireCode as { code: string }).code;
-      if (!representativeByCode.has(code)) {
-        representativeByCode.set(code, fixture.fixtureClass);
-      }
+
+      const classes = classesByCode.get(code) ?? new Set<string>();
+      classes.add(fixture.fixtureClass);
+      classesByCode.set(code, classes);
     }
 
-    expect(new Set(representativeByCode.keys()).size).toBe(representativeByCode.size);
-    for (const fixtureClass of credentialDenialManifest.fixedInvalidClasses) {
-      const fixture = [...credentialDenialFixtures.values()].find((item) => item.fixtureClass === fixtureClass);
-      expect(fixture, `${fixtureClass} must exist in the credential denial fixture set`).toBeDefined();
-      const code = (fixture!.expectedEngineWireCode as { code: string }).code;
-      expect(representativeByCode.has(code)).toBe(true);
+    expect([...mappingByClass.keys()].sort()).toEqual([...manifestInvalidClasses].sort());
+    expect(Object.fromEntries([...mappingByClass].sort())).toEqual({
+      "enrollment-binding-mismatch": "enrollment-binding-mismatch",
+      expired: "evidence-credential-invalid",
+      "malformed-presentation": "evidence-presentation-invalid",
+      "missing-required-disclosure": "evidence-credential-invalid",
+      "not-yet-valid": "evidence-credential-invalid",
+      "subject-mismatch": "evidence-credential-invalid",
+      "untrusted-issuer-did": "evidence-issuer-untrusted",
+      "wrong-issuer-signature": "evidence-credential-invalid",
+      "wrong-vct": "evidence-credential-invalid",
+    });
+
+    for (const [code, classes] of classesByCode) {
+      expect(mountedRuntimeMatrixByCode.has(code), `${code} must be a mounted-runtime denial code`).toBe(true);
+      expect(representativeCountsByCode.get(code), `${code} must have exactly one representative case`).toBe(1);
+      expect(credentialDenialEntries.filter((fixture) => fixture.expectedEngineWireCode.code === code)).toHaveLength(
+        classes.size,
+      );
     }
+    expect(credentialRepresentativeFixtureClassByCode.size).toBe(classesByCode.size);
   });
 
   it("consumes every policy-engine-wire manifest case and pins fixture bytes", async () => {
