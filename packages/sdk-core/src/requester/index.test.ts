@@ -242,11 +242,10 @@ function delegation(capabilities: readonly PolicyCapability[], overrides: Record
     policyId: "pol_test_requester_flow",
     issuerDid: GRANT_ISSUER_DID,
     holderDid: REQUESTER_DID,
-    audience: AUDIENCE,
     issuedAt: "2026-07-09T12:00:00Z",
     expiresAt: "2026-07-09T12:04:00Z",
     terminal: true,
-    maxTtlSeconds: 300,
+    encoded: `tc-pdel-v0.${delegationCounter}`,
     capabilities,
     ...overrides,
   };
@@ -256,7 +255,7 @@ function resolve(capabilities: readonly PolicyCapability[], overrides: Record<st
   return {
     status: 200,
     body: {
-      portableDelegation: delegation(capabilities, overrides),
+      delegation: delegation(capabilities, overrides),
     },
   };
 }
@@ -496,7 +495,7 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
     let current = NOW;
     const transport = new FixtureTransport([
       challenge("nonce-reused-000001"),
-      resolve([sqlCapability], { expiresAt: "2026-07-09T12:00:40Z", maxTtlSeconds: 60 }),
+      resolve([sqlCapability], { expiresAt: "2026-07-09T12:00:40Z" }),
       { status: 200, body: { rows: [] } },
       challenge("nonce-reused-000001"),
     ]);
@@ -523,7 +522,7 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
     let current = NOW;
     const transport = new FixtureTransport([
       challenge("nonce-old-000000001"),
-      resolve([sqlCapability], { expiresAt: "2026-07-09T12:00:40Z", maxTtlSeconds: 60 }),
+      resolve([sqlCapability], { expiresAt: "2026-07-09T12:00:40Z" }),
       { status: 200, body: { rows: [] } },
       challenge("nonce-new-000000001"),
       resolve([sqlCapability]),
@@ -557,7 +556,7 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
 });
 
 describe("TranscriptRequester delegation import and containment", () => {
-  it("rejects wider capability, wrong holder, non-refresh_only, and excessive TTL", async () => {
+  it("rejects wider capability, wrong holder, and excessive TTL", async () => {
     await expectRequesterFailure(async () => {
       const client = await requester(new FixtureTransport([challenge(), resolve([
         { ...kvCapability, path: "notebooks/nb_project_notes/docs/bob-note.md" },
@@ -567,8 +566,7 @@ describe("TranscriptRequester delegation import and containment", () => {
 
     for (const [overrides, code] of [
       [{ holderDid: OWNER_DID }, "requester-delegation-wrong-holder"],
-      [{ terminal: false }, "requester-delegation-not-refresh-only"],
-      [{ maxTtlSeconds: 301, expiresAt: "2026-07-09T12:05:01Z" }, "requester-delegation-ttl-excessive"],
+      [{ expiresAt: "2026-07-09T12:05:01Z" }, "requester-delegation-ttl-excessive"],
     ] as const) {
       await expectRequesterFailure(async () => {
         const client = await requester(new FixtureTransport([challenge(), resolve([sqlCapability], overrides)]));
@@ -621,7 +619,7 @@ describe("TranscriptRequester delegation import and containment", () => {
       grantIssuerDid: GRANT_ISSUER_DID,
       transport: new FixtureTransport([
         challenge("nonce-before-revoke"),
-        resolve([sqlCapability], { expiresAt: "2026-07-09T12:00:40Z", maxTtlSeconds: 60 }),
+        resolve([sqlCapability], { expiresAt: "2026-07-09T12:00:40Z" }),
         { status: 200, body: { rows: [] } },
         challenge("nonce-after-revoke"),
         denial("policy-revoked"),
@@ -663,9 +661,47 @@ describe("TranscriptRequester fixture conformance", () => {
     expect(delegation).not.toHaveProperty("maxTtlSeconds");
   });
 
+  it("derives renewal timing from serialized issuedAt/expiresAt fields, not terminal", async () => {
+    let current = NOW;
+    const transport = new FixtureTransport([
+      challenge("nonce-terminal-false-old"),
+      resolve([sqlCapability], { terminal: false, expiresAt: "2026-07-09T12:00:40Z" }),
+      { status: 200, body: { rows: [] } },
+      challenge("nonce-terminal-false-new"),
+      resolve([sqlCapability], { terminal: false }),
+      { status: 200, body: { rows: [{ renewed: true }] } },
+    ]);
+    const client = await createTranscriptRequester({
+      bootstrap: await bootstrap(),
+      requesterDid: REQUESTER_DID,
+      ownerDid: OWNER_DID,
+      audience: AUDIENCE,
+      grantIssuerDid: GRANT_ISSUER_DID,
+      transport,
+      signingCapability: signingCapability(),
+      now: () => current,
+      sleep: async () => {},
+      random: () => 0,
+    });
+
+    await expect(client.readSql("listen.getConversation")).resolves.toEqual({ rows: [] });
+    current = new Date("2026-07-09T12:00:11Z");
+    await expect(client.readSql("listen.getConversation")).resolves.toEqual({ rows: [{ renewed: true }] });
+  });
+
+  it("rejects unvendored resolve response envelopes", async () => {
+    const client = await requester(new FixtureTransport([
+      challenge(),
+      { status: 200, body: { portableDelegation: delegation([sqlCapability]) } },
+    ]));
+
+    await expectRequesterFailure(() => client.readSql("listen.getConversation"), "requester-engine-response-invalid");
+  });
+
   it("matches the producer-derived resolve-happy request and response wire bodies exactly", async () => {
     const happy = wireFixtures.get("resolve-happy")!;
     const presentation = (happy.request.body as { presentation: Record<string, unknown> }).presentation;
+    let current = new Date("2026-06-12T00:03:00Z");
     const transport = new FixtureTransport([
       challengeForPresentation(presentation),
       happy.response,
@@ -692,7 +728,7 @@ describe("TranscriptRequester fixture conformance", () => {
       holderBinding: presentation.holderBinding,
       eligibleSubjectDid: presentation.eligibleSubjectDid as string,
       presentationTtlSeconds: 90,
-      now: () => new Date("2026-06-12T00:03:00Z"),
+      now: () => current,
       sleep: async () => {},
       random: () => 0,
     });
@@ -700,6 +736,9 @@ describe("TranscriptRequester fixture conformance", () => {
     await expect(client.readSql("listen.getConversation")).resolves.toEqual({ rows: [{ wire: true }] });
     expect(transport.calls[0]!.body).toEqual(wireFixtures.get("challenge-happy")!.request.body);
     expect(transport.calls[1]!.body).toEqual(happy.request.body);
+    expect(client.accessState).toBe("active");
+    current = new Date("2026-06-12T00:04:01Z");
+    expect(client.accessState).toBe("needs-renewal");
   });
 
   it("maps every producer-derived denial fixture to its distinct typed denial", async () => {
@@ -739,6 +778,7 @@ describe("TranscriptRequester fixture conformance", () => {
         await client.readSql("listen.getConversation");
       }, expectedCode);
       expect(error.state).toBe("denied");
+      expect(error.status).toBe(fixture.response.status);
       expect(error.denialCode).toBe(
         (fixture.response.body as { error: { code: string } }).error.code,
       );

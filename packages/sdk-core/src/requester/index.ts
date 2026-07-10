@@ -122,18 +122,21 @@ export class TranscriptRequesterError extends Error {
   public readonly code: TranscriptRequesterErrorCode;
   public readonly state: TranscriptRequesterErrorState;
   public readonly denialCode?: PolicyEngineGrantPresentationDenialCode;
+  public readonly status?: number;
 
   constructor(
     code: TranscriptRequesterErrorCode,
     message: string,
     state: TranscriptRequesterErrorState = "invalid",
     denialCode?: PolicyEngineGrantPresentationDenialCode,
+    status?: number,
   ) {
     super(message);
     this.name = "TranscriptRequesterError";
     this.code = code;
     this.state = state;
     this.denialCode = denialCode;
+    this.status = status;
   }
 }
 
@@ -217,7 +220,7 @@ export interface PortableDelegation {
   readonly audience?: string;
   readonly issuedAt: string;
   readonly expiresAt: string;
-  readonly terminal: true;
+  readonly terminal: boolean;
   readonly maxTtlSeconds: number;
   readonly capabilities: readonly PolicyCapability[];
   readonly encoded?: string;
@@ -366,23 +369,6 @@ const CapabilitySchema = z
   })
   .strict();
 
-const PortableDelegationSchema = z
-  .object({
-    schema: z.literal(PORTABLE_DELEGATION_SCHEMA).optional(),
-    delegationId: z.string(),
-    issuerDid: z.string(),
-    holderDid: z.string(),
-    policyId: z.string(),
-    audience: z.string().optional(),
-    issuedAt: Rfc3339Schema,
-    expiresAt: Rfc3339Schema,
-    terminal: z.boolean(),
-    maxTtlSeconds: z.number().int().positive(),
-    capabilities: z.array(CapabilitySchema).min(1),
-    encoded: z.string().optional(),
-  })
-  .strict();
-
 const WireDelegationSchema = z
   .object({
     delegationId: z.string(),
@@ -397,13 +383,7 @@ const WireDelegationSchema = z
   })
   .strict();
 
-const ResolveResponseSchema = z.union([
-  z.object({
-    portableDelegation: PortableDelegationSchema,
-  })
-    .strict(),
-  z.object({ delegation: WireDelegationSchema }).strict(),
-]);
+const ResolveResponseSchema = z.object({ delegation: WireDelegationSchema }).strict();
 
 const SqlReadResponseSchema = z.object({ rows: z.array(JsonValueSchema) }).strict();
 const KvReadResponseSchema = z.object({ value: JsonValueSchema }).strict();
@@ -423,6 +403,9 @@ export const LISTEN_SQL_STATEMENT_CATALOG = [
 
 export type ListenSqlStatementName = (typeof LISTEN_SQL_STATEMENT_CATALOG)[number]["name"];
 type ListenSqlStatement = (typeof LISTEN_SQL_STATEMENT_CATALOG)[number];
+type NormalizedWireDelegation = Omit<PortableDelegation, "capabilities"> & {
+  readonly capabilities: readonly z.infer<typeof CapabilitySchema>[];
+};
 
 const LISTEN_SQL_STATEMENT_BY_NAME: ReadonlyMap<string, ListenSqlStatement> = new Map(
   LISTEN_SQL_STATEMENT_CATALOG.map((statement) => [statement.name, statement]),
@@ -700,13 +683,11 @@ export class TranscriptRequester {
       body: { presentation },
     });
     const parsed = parseEngineSuccess(response.body, ResolveResponseSchema, "resolve response");
-    return this.importPortableDelegation(
-      "portableDelegation" in parsed ? parsed.portableDelegation : normalizeWireDelegation(parsed.delegation),
-    );
+    return this.importPortableDelegation(parsed.delegation);
   }
 
   private importPortableDelegation(input: unknown): PortableDelegation {
-    const parsed = parseEngineSuccess(input, PortableDelegationSchema, "portable delegation");
+    const parsed = normalizeWireDelegation(parseEngineSuccess(input, WireDelegationSchema, "portable delegation"));
     if (parsed.policyId !== this.bootstrap.policyId) {
       throw new TranscriptRequesterError(
         "requester-delegation-invalid",
@@ -717,12 +698,6 @@ export class TranscriptRequester {
       throw new TranscriptRequesterError(
         "requester-delegation-wrong-holder",
         "portable delegation is not targeted at the requester DID",
-      );
-    }
-    if (parsed.terminal !== true) {
-      throw new TranscriptRequesterError(
-        "requester-delegation-not-refresh-only",
-        "portable delegation is not refresh_only",
       );
     }
     if (parsed.maxTtlSeconds > 300) {
@@ -740,7 +715,7 @@ export class TranscriptRequester {
       );
     }
     const capabilities = parsed.capabilities.map((capability, index) =>
-      parsePolicyCapability(capability, `$.portableDelegation.capabilities[${index}]`),
+      parsePolicyCapability(capability, `$.delegation.capabilities[${index}]`),
     );
     for (const granted of capabilities) {
       if (!this.requestedCapabilities.some((requested) => policyCapabilityContains(requested, granted))) {
@@ -820,7 +795,7 @@ export class TranscriptRequester {
         } else if (response.status >= 400) {
           const denial = parseDenialBody(response.body);
           if (denial !== undefined) {
-            throw errorForDenial(denial);
+            throw errorForDenial(denial, response.status);
           }
           throw new TranscriptRequesterError(
             "requester-engine-response-invalid",
@@ -859,7 +834,7 @@ export class TranscriptRequester {
       if (response.status >= 400) {
         const denial = parseDenialBody(response.body);
         if (denial !== undefined) {
-          throw errorForDenial(denial);
+          throw errorForDenial(denial, response.status);
         }
         throw new TranscriptRequesterError(
           "requester-engine-response-invalid",
@@ -995,7 +970,7 @@ function requestedCapabilitiesHash(capabilities: readonly PolicyCapability[]): s
 
 function normalizeWireDelegation(
   delegation: z.infer<typeof WireDelegationSchema>,
-): z.infer<typeof PortableDelegationSchema> {
+): NormalizedWireDelegation {
   const issuedAt = parseStrictRfc3339(delegation.issuedAt)!;
   const expiresAt = parseStrictRfc3339(delegation.expiresAt)!;
   return {
@@ -1048,7 +1023,7 @@ function parseDataResponse<T>(
     const normalized = normalizeExternal(response.body, "requester-access-denied");
     const denial = parseDenialBody(normalized);
     if (denial !== undefined) {
-      throw errorForDenial(denial);
+      throw errorForDenial(denial, response.status);
     }
     throw new TranscriptRequesterError(
       "requester-access-denied",
@@ -1080,13 +1055,17 @@ function parseDenialBody(input: unknown): { code: PolicyEngineGrantPresentationD
   return undefined;
 }
 
-function errorForDenial(denial: { code: PolicyEngineGrantPresentationDenialCode; message?: string }): TranscriptRequesterError {
+function errorForDenial(
+  denial: { code: PolicyEngineGrantPresentationDenialCode; message?: string },
+  status?: number,
+): TranscriptRequesterError {
   const accessEnded = denial.code === "policy-revoked" || denial.code === "policy-expired";
   return new TranscriptRequesterError(
     `policy-engine-denied-${denial.code}`,
     denial.message ?? `policy engine denied ${denial.code}`,
     accessEnded ? "access-ended" : "denied",
     denial.code,
+    status,
   );
 }
 
