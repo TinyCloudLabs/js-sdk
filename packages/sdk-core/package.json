@@ -23,6 +23,11 @@
       "types": "./dist/policy/index.d.ts",
       "import": "./dist/policy/index.js",
       "require": "./dist/policy/index.cjs"
+    },
+    "./requester": {
+      "types": "./dist/requester/index.d.ts",
+      "import": "./dist/requester/index.js",
+      "require": "./dist/requester/index.cjs"
     }
   },
   "files": [

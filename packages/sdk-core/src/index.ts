@@ -59,6 +59,36 @@ export {
   type PkhDidParts,
 } from "./identity";
 
+export {
+  HOLDER_KEY_BINDING_PRESENTATION_SCHEMA,
+  LISTEN_SQL_STATEMENT_CATALOG,
+  POLICY_ENGINE_CHALLENGE_REQUEST_SCHEMA,
+  POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA,
+  POLICY_ENGINE_DENIAL_SCHEMA,
+  POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES,
+  POLICY_ENGINE_RESOLVE_REQUEST_SCHEMA,
+  PORTABLE_DELEGATION_SCHEMA,
+  REQUESTER_ENGINE_RETRY_ATTEMPTS,
+  REQUESTER_ENGINE_RETRY_MAX_DELAY_MS,
+  REQUESTER_NEAR_EXPIRY_SECONDS,
+  TranscriptRequester,
+  TranscriptRequesterError,
+  createTranscriptRequester,
+  type HolderKeyBindingPresentation,
+  type ListenSqlStatementName,
+  type PolicyEngineGrantPresentationDenialCode,
+  type PortableDelegation,
+  type RequesterHttpRequest,
+  type RequesterHttpResponse,
+  type RequesterSigningCapability,
+  type RequesterTransport,
+  type TranscriptRequesterErrorCode,
+  type TranscriptRequesterErrorState,
+  type TranscriptRequesterOptions,
+  type TranscriptRequesterReadKvResult,
+  type TranscriptRequesterReadSqlResult,
+} from "./requester";
+
 // Encryption network identity helpers
 export {
   canonicalizeNetworkId,
