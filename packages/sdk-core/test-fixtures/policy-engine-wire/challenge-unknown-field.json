@@ -1,0 +1,21 @@
+{
+  "name": "challenge-unknown-field",
+  "note": "Unknown request fields fail closed with the schema-invalid envelope.",
+  "request": {
+    "body": {
+      "extra": true,
+      "policyId": "pol_wire_fixture"
+    },
+    "method": "POST",
+    "path": "/policy/v0/challenge"
+  },
+  "response": {
+    "body": {
+      "error": {
+        "code": "schema-invalid",
+        "message": "schema-invalid"
+      }
+    },
+    "status": 422
+  }
+}

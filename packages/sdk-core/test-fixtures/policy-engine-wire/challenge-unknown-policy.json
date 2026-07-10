@@ -1,0 +1,20 @@
+{
+  "name": "challenge-unknown-policy",
+  "note": "Denial envelope for an unknown policyId (frozen lifecycle code as emitted by the service).",
+  "request": {
+    "body": {
+      "policyId": "pol_wire_fixture_missing"
+    },
+    "method": "POST",
+    "path": "/policy/v0/challenge"
+  },
+  "response": {
+    "body": {
+      "error": {
+        "code": "policy-not-found",
+        "message": "policy-not-found"
+      }
+    },
+    "status": 404
+  }
+}

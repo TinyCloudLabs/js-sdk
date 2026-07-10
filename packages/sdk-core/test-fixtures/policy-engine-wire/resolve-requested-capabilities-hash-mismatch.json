@@ -1,0 +1,61 @@
+{
+  "name": "resolve-requested-capabilities-hash-mismatch",
+  "note": "Well-formed but wrong requestedCapabilitiesHash over a valid signature: rev 3.20 amended 422-class denial; nonce is consumed (evaluated attempt).",
+  "request": {
+    "body": {
+      "presentation": {
+        "audience": "https://policy-engine.example/v0",
+        "eligibleSubjectDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+        "expiresAt": "2026-06-12T00:04:30Z",
+        "holderBinding": {
+          "enrollment": {
+            "eligibleSubjectDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+            "enrollmentId": "henr_bipz3aq7khvb3enatc2qvnjxwdzgg5d4dedmmgb7nmpimtfakmfa",
+            "expiresAt": "2026-07-01T00:00:00Z",
+            "holderDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+            "notBefore": "2026-06-01T00:00:00Z",
+            "schema": "xyz.tinycloud.policy/holder-enrollment/v0",
+            "signature": {
+              "signerDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+              "suite": "eddsa-ed25519-sha256-jcs-v1",
+              "value": "D_Ry4f9NKy01XEpx8ojjvBqPcom_2h-5NxBh9fbRMb113EOhSANzWmr8a8a5bhMXEODjLdvtSHXkHRst37mNDw"
+            },
+            "signingKeyDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z"
+          },
+          "type": "enrolled-agent"
+        },
+        "holderDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+        "holderSignature": {
+          "signerDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+          "suite": "eddsa-ed25519-sha256-jcs-v1",
+          "value": "PXIHOkN6VoNr3UftJ42vWDqWLRaNkRvNIMQ9FuLScUQjfQ7EBTbYig4QfPiD6D_myZGfeqLzTxgl0LA7EVlxDA"
+        },
+        "nonce": "eYsL1-feds4oaB8pOLPwDmrAPRlo4w7MfN06alt76qM",
+        "policyId": "pol_wire_fixture",
+        "requestedCapabilities": [
+          {
+            "actions": [
+              "tinycloud.sql/read"
+            ],
+            "path": "xyz.tinycloud.listen/conversations",
+            "service": "tinycloud.sql",
+            "space": "applications"
+          }
+        ],
+        "requestedCapabilitiesHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "schema": "xyz.tinycloud.policy/presentation/v0"
+      }
+    },
+    "method": "POST",
+    "path": "/policy/v0/resolve"
+  },
+  "response": {
+    "body": {
+      "error": {
+        "code": "requested-capabilities-hash-mismatch",
+        "message": "requested-capabilities-hash-mismatch"
+      }
+    },
+    "status": 422
+  }
+}

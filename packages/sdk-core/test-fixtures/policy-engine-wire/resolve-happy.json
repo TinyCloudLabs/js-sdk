@@ -1,0 +1,77 @@
+{
+  "name": "resolve-happy",
+  "note": "ResolveResponse envelope: delegation carries policyId, delegationId, encoded (signed PortableDelegation), and refresh/expiry fields exactly as serialized here.",
+  "request": {
+    "body": {
+      "presentation": {
+        "audience": "https://policy-engine.example/v0",
+        "eligibleSubjectDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+        "expiresAt": "2026-06-12T00:04:30Z",
+        "holderBinding": {
+          "enrollment": {
+            "eligibleSubjectDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+            "enrollmentId": "henr_bipz3aq7khvb3enatc2qvnjxwdzgg5d4dedmmgb7nmpimtfakmfa",
+            "expiresAt": "2026-07-01T00:00:00Z",
+            "holderDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+            "notBefore": "2026-06-01T00:00:00Z",
+            "schema": "xyz.tinycloud.policy/holder-enrollment/v0",
+            "signature": {
+              "signerDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+              "suite": "eddsa-ed25519-sha256-jcs-v1",
+              "value": "D_Ry4f9NKy01XEpx8ojjvBqPcom_2h-5NxBh9fbRMb113EOhSANzWmr8a8a5bhMXEODjLdvtSHXkHRst37mNDw"
+            },
+            "signingKeyDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z"
+          },
+          "type": "enrolled-agent"
+        },
+        "holderDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+        "holderSignature": {
+          "signerDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+          "suite": "eddsa-ed25519-sha256-jcs-v1",
+          "value": "JbJ-KDL5WrSjZRP1dOZFjamf0N-E61Ybz7DwK9IfGJWjL7E3M3b4HjZC0W9-XC-IOQJdgNr2gxNKnkXYA-MhCQ"
+        },
+        "nonce": "WDBpGzTohCT84vVP4TowW5fbVW0iXdJOwT-CcJ-kANs",
+        "policyId": "pol_wire_fixture",
+        "requestedCapabilities": [
+          {
+            "actions": [
+              "tinycloud.sql/read"
+            ],
+            "path": "xyz.tinycloud.listen/conversations",
+            "service": "tinycloud.sql",
+            "space": "applications"
+          }
+        ],
+        "requestedCapabilitiesHash": "9d3adc26984df12a53573df824e8045f991d4c4500f625bf391ef1c4f9765304",
+        "schema": "xyz.tinycloud.policy/presentation/v0"
+      }
+    },
+    "method": "POST",
+    "path": "/policy/v0/resolve"
+  },
+  "response": {
+    "body": {
+      "delegation": {
+        "capabilities": [
+          {
+            "actions": [
+              "tinycloud.sql/read"
+            ],
+            "path": "xyz.tinycloud.listen/conversations",
+            "service": "tinycloud.sql",
+            "space": "applications"
+          }
+        ],
+        "delegationId": "pdel_hCQCrrDSqDTQ1GV7qecFPN3Ic99wGa1jYjtlwy5BEKQ",
+        "encoded": "tc-pdel-v0.eyJjYXBhYmlsaXRpZXMiOlt7ImFjdGlvbnMiOlsidGlueWNsb3VkLnNxbC9yZWFkIl0sInBhdGgiOiJ4eXoudGlueWNsb3VkLmxpc3Rlbi9jb252ZXJzYXRpb25zIiwic2VydmljZSI6InRpbnljbG91ZC5zcWwiLCJzcGFjZSI6ImFwcGxpY2F0aW9ucyJ9XSwiZGVsZWdhdGlvbklkIjoicGRlbF9oQ1FDcnJEU3FEVFExR1Y3cWVjRlBOM0ljOTl3R2ExallqdGx3eTVCRUtRIiwiZXhwaXJlc0F0IjoiMjAyNi0wNi0xMlQwMDowNDozMFoiLCJob2xkZXJEaWQiOiJkaWQ6a2V5Ono2TWt2RHFHVDU0Y1hlc1lHdkFCcEYxVWFwVk53akNxUmNhZmk0UHg2VGh2NVQzWiIsImlzc3VlZEF0IjoiMjAyNi0wNi0xMlQwMDowMzowMFoiLCJpc3N1ZXJEaWQiOiJkaWQ6a2V5Ono2TWttdFd0WTYzR1FWQnJwTXlSSldFenNueGZzR2tlbXU2Q3RNRHdHVHY0UllqMiIsInBvbGljeUlkIjoicG9sX3dpcmVfZml4dHVyZSIsInNjaGVtYSI6Inh5ei50aW55Y2xvdWQucG9saWN5L3BvcnRhYmxlLWRlbGVnYXRpb24vdjAiLCJzZXJpYWwiOiIxLWxVX3QxZ3NPemF5NE9va0gtS09yOUZ1WjhFRkxKZ2E1VjJWSFphLXJ5OU0iLCJzaWduYXR1cmUiOnsic2lnbmVyRGlkIjoiZGlkOmtleTp6Nk1rbXRXdFk2M0dRVkJycE15UkpXRXpzbnhmc0drZW11NkN0TUR3R1R2NFJZajIiLCJzdWl0ZSI6ImVkZHNhLWVkMjU1MTktc2hhMjU2LWpjcy12MSIsInZhbHVlIjoiODNrVUdzU1pNRW5Sb3RibFdrMTJudjItNTdNSTRRVmVLaVFyanMwLTdWSVo2ZXdYVGt6UmEwMFZhYTlTb3pJeTUxWG9oeHk0T3ZFWDg3bHVnQTJSQUEifSwidGVybWluYWwiOnRydWV9",
+        "expiresAt": "2026-06-12T00:04:30Z",
+        "holderDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+        "issuedAt": "2026-06-12T00:03:00Z",
+        "issuerDid": "did:key:z6MkmtWtY63GQVBrpMyRJWEzsnxfsGkemu6CtMDwGTv4RYj2",
+        "policyId": "pol_wire_fixture",
+        "terminal": true
+      }
+    },
+    "status": 200
+  }
+}
