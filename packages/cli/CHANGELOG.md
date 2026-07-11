@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 0.7.7-beta.4
+
+### Patch Changes
+
+- 28e4ae8: Allow a fresh `delegate-session` profile to request permissions using logical space names before it knows the granting owner's address.
+
 ## 0.7.7-beta.3
 
 ### Patch Changes
