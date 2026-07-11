@@ -1381,15 +1381,24 @@ function isPublicIp(value: string): boolean {
       (a === 192 && b === 0) ||
       (a === 192 && b === 168) ||
       (a === 198 && (b === 18 || b === 19)) ||
+      (a === 198 && b === 51 && parts[2] === "100") ||
+      (a === 203 && b === 0 && parts[2] === "113") ||
       a >= 224
     );
   }
   if (!ip.includes(":")) return false;
-  if (ip === "::" || ip === "::1" || ip.startsWith("fe8") || ip.startsWith("fe9") ||
+  if (ip === "::" || ip === "::1" || ip.startsWith("2001:db8:") || ip.startsWith("fe8") || ip.startsWith("fe9") ||
       ip.startsWith("fea") || ip.startsWith("feb") || ip.startsWith("fc") || ip.startsWith("fd") ||
       ip.startsWith("ff")) return false;
   const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  return mapped === null ? true : isPublicIp(mapped[1]!);
+  if (mapped !== null) return isPublicIp(mapped[1]!);
+  const mappedHex = ip.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex !== null) {
+    const high = Number.parseInt(mappedHex[1]!, 16);
+    const low = Number.parseInt(mappedHex[2]!, 16);
+    return isPublicIp(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+  }
+  return true;
 }
 
 function parseDenialBody(input: unknown): { code: PolicyEngineGrantPresentationDenialCode; message?: string } | undefined {
@@ -1420,13 +1429,6 @@ function errorForDenial(
     denial.code,
     status,
   );
-}
-
-function delegationHeaders(delegation: PortableDelegation): Readonly<Record<string, string>> {
-  return {
-    "Content-Type": "application/json",
-    "TinyCloud-Delegation-Id": delegation.delegationId,
-  };
 }
 
 function retryDelay(attempt: number, random: number): number {

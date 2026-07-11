@@ -572,6 +572,12 @@ describe("TranscriptRequester native bridge conformance", () => {
       } } }),
       "requester-owner-node-endpoint-invalid",
     );
+    await expectRequesterFailure(
+      () => requester(new FixtureTransport([]), { bootstrap: { ownerNode: {
+        schema: "xyz.tinycloud.exchange/owner-node-endpoint/v1", endpoint: "https://user:secret@node.example", spaceId: OWNER_SPACE_ID,
+      } } }),
+      "requester-owner-node-endpoint-invalid",
+    );
     const missingResolver: RequesterTransport = { request: async () => ({ status: 500, body: {} }) };
     await expectRequesterFailure(() => requester(missingResolver), "requester-owner-node-endpoint-invalid");
 
@@ -600,6 +606,18 @@ describe("TranscriptRequester native bridge conformance", () => {
     }
     const rebound = new RebindTransport([challenge(), resolve([sqlCapability])]);
     await expectRequesterFailure(async () => (await requester(rebound)).readSql("listen.getConversation"), "requester-owner-node-endpoint-invalid");
+
+    class MissingMetadataTransport extends FixtureTransport {
+      override async request(request: RequesterHttpRequest): Promise<RequesterHttpResponse> {
+        const response = await super.request(request);
+        return request.url.endsWith("/delegate") ? { status: response.status, body: response.body } : response;
+      }
+    }
+    const missingMetadata = new MissingMetadataTransport([challenge(), resolve([sqlCapability])]);
+    await expectRequesterFailure(
+      async () => (await requester(missingMetadata)).readSql("listen.getConversation"),
+      "requester-owner-node-endpoint-invalid",
+    );
   });
 });
 
