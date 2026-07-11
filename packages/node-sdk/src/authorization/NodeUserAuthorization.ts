@@ -110,6 +110,8 @@ export interface NodeUserAuthorizationConfig {
   enablePublicSpace?: boolean;
   /** WASM bindings for cryptographic operations. Required. */
   wasmBindings: IWasmBindings;
+  /** Existing session manager to share with a higher-level SDK client. */
+  sessionManager?: ISessionManager;
   /**
    * SIWE nonce override. If omitted, the WASM layer generates a random nonce.
    * If `siweConfig.nonce` is also provided, `siweConfig.nonce` wins.
@@ -209,6 +211,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly includeAccountRegistryPermissions: boolean;
 
   private sessionManager: ISessionManager;
+  private activeSessionKeyId = "default";
   private extensions: Extension[] = [];
   private _session?: ClientSession;
   private _tinyCloudSession?: TinyCloudSession;
@@ -266,8 +269,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
 
-    // Initialize session manager via WASM bindings
-    this.sessionManager = this.wasm.createSessionManager();
+    // Reuse the caller's manager when authorization is owned by a higher-level
+    // client so both layers address the same session keys.
+    this.sessionManager = config.sessionManager ?? this.wasm.createSessionManager();
   }
 
   /**
@@ -914,7 +918,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     // Create a session key
     const keyId = `session-${Date.now()}`;
-    this.sessionManager.renameSessionKeyId("default", keyId);
+    this.sessionManager.renameSessionKeyId(this.activeSessionKeyId, keyId);
+    this.activeSessionKeyId = keyId;
 
     // Get JWK for session key
     const jwkString = this.sessionManager.jwk(keyId);
@@ -1128,7 +1133,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     // Create a session key
     const keyId = `session-${Date.now()}`;
-    this.sessionManager.renameSessionKeyId("default", keyId);
+    this.sessionManager.renameSessionKeyId(this.activeSessionKeyId, keyId);
+    this.activeSessionKeyId = keyId;
 
     // Get JWK for session key
     const jwkString = this.sessionManager.jwk(keyId);

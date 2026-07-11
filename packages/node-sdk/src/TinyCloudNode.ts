@@ -751,6 +751,7 @@ export class TinyCloudNode {
       signer: this.signer!,
       signStrategy: config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
+      sessionManager: this.sessionManager,
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: config.prefix,
@@ -981,6 +982,15 @@ export class TinyCloudNode {
 
     await this.tc.signIn(options);
     this.syncResolvedHostFromAuth();
+
+    // NodeUserAuthorization renames the constructor's "default" key when it
+    // creates the signed-in session. Keep node-level key accessors in sync so
+    // sessionDid and delegation flows use the active key instead of the old ID.
+    const signedInSession = this.currentTinyCloudSession();
+    if (signedInSession) {
+      this.sessionKeyId = signedInSession.sessionKey;
+      this.sessionKeyJwk = signedInSession.jwk;
+    }
 
     // Initialize service context with session
     this.initializeServices();
@@ -2034,6 +2044,7 @@ export class TinyCloudNode {
       signer: this.signer,
       signStrategy: this.config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
+      sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: prefix,
@@ -2095,6 +2106,7 @@ export class TinyCloudNode {
       signer: this.signer,
       signStrategy: this.config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
+      sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: prefix,
