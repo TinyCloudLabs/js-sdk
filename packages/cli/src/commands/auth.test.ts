@@ -122,6 +122,7 @@ function resetState(): void {
   authNodeHasRuntimePermissions = true;
   authNodeRestorableSession = undefined;
   authNodeGrantDelegations = [];
+  ensureAuthenticatedError = null;
 }
 
 function makeProfile(overrides: Partial<ProfileLike> = {}): ProfileLike {
@@ -212,23 +213,35 @@ let importSessionDid = "did:key:z6MkSession#z6MkSession";
 const importRecorded = {
   useRuntimeDelegation: [] as Array<{ cid: string }>,
   appendedDelegations: [] as Array<{ delegation: { cid: string }; permissions: unknown[] }>,
+  bootstrappedDelegations: [] as Array<{ cid: string }>,
+};
+
+let ensureAuthenticatedError: Error | null = null;
+
+const importedNode = {
+  hasRuntimePermissions: () => authNodeHasRuntimePermissions,
+  grantRuntimePermissions: async () => authNodeGrantDelegations,
+  get restorableSession() {
+    return authNodeRestorableSession;
+  },
+  getRuntimePermissionDelegations: () => [],
+  get sessionDid() {
+    return importSessionDid;
+  },
+  useRuntimeDelegation: async (delegation: { cid: string }) => {
+    importRecorded.useRuntimeDelegation.push({ cid: delegation.cid });
+  },
 };
 
 mock.module("../lib/sdk.js", () => ({
-  ensureAuthenticated: async () => ({
-    hasRuntimePermissions: () => authNodeHasRuntimePermissions,
-    grantRuntimePermissions: async () => authNodeGrantDelegations,
-    get restorableSession() {
-      return authNodeRestorableSession;
-    },
-    getRuntimePermissionDelegations: () => [],
-    get sessionDid() {
-      return importSessionDid;
-    },
-    useRuntimeDelegation: async (delegation: { cid: string }) => {
-      importRecorded.useRuntimeDelegation.push({ cid: delegation.cid });
-    },
-  }),
+  ensureAuthenticated: async () => {
+    if (ensureAuthenticatedError) throw ensureAuthenticatedError;
+    return importedNode;
+  },
+  bootstrapDelegatedSession: async (_ctx: unknown, delegation: { cid: string }) => {
+    importRecorded.bootstrappedDelegations.push({ cid: delegation.cid });
+    return importedNode;
+  },
 }));
 
 mock.module("../lib/permissions.js", () => ({
@@ -580,6 +593,8 @@ describe("CLI auth import command", () => {
     resetState();
     importRecorded.useRuntimeDelegation.length = 0;
     importRecorded.appendedDelegations.length = 0;
+    importRecorded.bootstrappedDelegations.length = 0;
+    ensureAuthenticatedError = null;
     importSessionDid = "did:key:z6MkSession#z6MkSession";
     tempDir = await mkdtemp(join(tmpdir(), "tc-auth-import-"));
   });
@@ -630,6 +645,25 @@ describe("CLI auth import command", () => {
       activated: true,
       delegationCid: "bafy-self-session",
     });
+  });
+
+  test("bootstraps a fresh delegate-session profile from its first imported delegation", async () => {
+    profiles.set("default", makeProfile({ posture: "delegate-session" }));
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "delegate", d: "private" });
+    ensureAuthenticatedError = new Error("Not authenticated");
+    const delegation = makePortableDelegation({
+      delegateDID: "did:key:z6MkSession",
+      cid: "bafy-first-delegation",
+    });
+    const source = join(tempDir, "first-delegation.json");
+    await writeFile(source, JSON.stringify(delegation), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(importRecorded.bootstrappedDelegations).toEqual([{ cid: "bafy-first-delegation" }]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([{ cid: "bafy-first-delegation" }]);
+    expect(recorded.outputs[0]).toMatchObject({ imported: true, activated: true });
   });
 });
 

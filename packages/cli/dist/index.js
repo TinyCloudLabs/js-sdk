@@ -43446,6 +43446,43 @@ async function createSDKInstance(ctx, options) {
   await replayAdditionalDelegations(node, ctx.profile);
   return node;
 }
+async function bootstrapDelegatedSession(ctx, delegation) {
+  const profile = await ProfileManager.getProfile(ctx.profile);
+  if (resolveProfilePosture(profile) !== "delegate-session") {
+    throw new CLIError(
+      "AUTH_REQUIRED",
+      `Profile "${ctx.profile}" is not a delegate-session profile.`,
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  const sessionDid = profile.sessionDid ?? profile.did;
+  if (delegation.delegateDID.split("#", 1)[0] !== sessionDid.split("#", 1)[0]) {
+    throw new CLIError(
+      "DELEGATION_AUDIENCE_MISMATCH",
+      `Delegation targets ${delegation.delegateDID}, but profile "${ctx.profile}" uses ${sessionDid}.`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const key2 = await ProfileManager.getKey(ctx.profile);
+  const jwk = signerJwkForProfile(ctx.profile, void 0, key2);
+  await ProfileManager.setSession(ctx.profile, {
+    delegationHeader: delegation.delegationHeader,
+    delegationCid: delegation.cid,
+    spaceId: delegation.spaceId,
+    jwk,
+    verificationMethod: sessionDid,
+    address: delegation.ownerAddress,
+    chainId: delegation.chainId,
+    siwe: "",
+    signature: ""
+  });
+  await ProfileManager.setProfile(ctx.profile, {
+    ...profile,
+    sessionDid,
+    spaceId: delegation.spaceId
+  });
+  return createSDKInstance(ctx);
+}
 async function ensureAuthenticated(ctx, options) {
   if (options?.privateKey) {
     return createSDKInstance(ctx, options);
@@ -43745,7 +43782,15 @@ function registerAuthCommand(program2) {
         return;
       }
       const imported = normalizeDelegationImport(parsed);
-      const node = await ensureAuthenticated(ctx);
+      let node;
+      try {
+        node = await ensureAuthenticated(ctx);
+      } catch (error) {
+        const profile = await ProfileManager.getProfile(ctx.profile);
+        const session = await ProfileManager.getSession(ctx.profile);
+        if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
+        node = await bootstrapDelegatedSession(ctx, imported.delegation);
+      }
       await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
         imported.delegation,
         imported.permissions
