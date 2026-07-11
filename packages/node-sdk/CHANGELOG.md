@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk
 
+## 2.6.4-beta.1
+
+### Patch Changes
+
+- 367c17c: Normalize session verification-method DID URLs to principal DIDs at the WASM delegation boundary so session-key delegations accept persisted `did:key:...#key-id` identities.
+
 ## 2.6.4-beta.0
 
 ### Patch Changes

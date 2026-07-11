@@ -20,6 +20,7 @@
     "@tinycloud/sdk-services-test": "11.0.3"
   },
   "changesets": [
+    "calm-keys-delegate",
     "cli-private-jwk-auth-error",
     "fuzzy-feeds-share-session-key"
   ]
