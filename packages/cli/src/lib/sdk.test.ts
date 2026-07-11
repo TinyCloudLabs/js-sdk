@@ -194,4 +194,18 @@ describe("ensureAuthenticated restoreSession uses full keypair from key.json", (
     expect(restoreCalls).toHaveLength(1);
     expect(restoreCalls[0]!.jwk).toBe(FULL_KEY_JWK);
   });
+
+  test("an unrecoverable public-only session is rejected as auth state before restore", async () => {
+    profile = { authMethod: "openkey", did: "did:key:zSession" };
+    session = { ...sessionShell, jwk: PUBLIC_ONLY_SESSION_JWK };
+    key = { kty: "OKP", crv: "Ed25519", x: "key-public" };
+
+    const error = await ensureAuthenticated(ctx).catch((cause) => cause as CLIError);
+    expect(error.code).toBe("AUTH_REQUIRED");
+    expect(error.exitCode).toBe(3);
+    expect(error.metadata?.hint).toBe(
+      "Sign in again with: tc --profile tc-sdk-test-headless auth login --method openkey",
+    );
+    expect(restoreCalls).toHaveLength(0);
+  });
 });
