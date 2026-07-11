@@ -700,6 +700,12 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
     expect(resolveBody.presentation.schema).toBe(HOLDER_KEY_BINDING_PRESENTATION_SCHEMA);
     expect(resolveBody.presentation.nonce).toBe("nonce-fresh-0000001");
     expect(resolveBody.presentation.holderSignature.value).toContain("nonce-fresh-0000001");
+    const sqlAuthorization = transport.calls[3]!.headers?.Authorization!;
+    const kvAuthorization = transport.calls[4]!.headers?.Authorization!;
+    expect(sqlAuthorization).toContain(":sql:xyz.tinycloud.listen/conversations:tinycloud.sql/read");
+    expect(kvAuthorization).toContain(":kv:notebooks/nb_project_notes/docs/alice-note.md:tinycloud.kv/get");
+    expect(sqlAuthorization).not.toContain("write");
+    expect(sqlAuthorization.split(":")[1]).toBe(kvAuthorization.split(":")[1]);
   });
 
   it("rejects a challenge response whose audience is not the bootstrap audience", async () => {
