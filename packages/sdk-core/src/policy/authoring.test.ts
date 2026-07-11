@@ -503,6 +503,8 @@ describe("policy and bootstrap authoring", () => {
     const bootstrap = composeTranscriptShareBootstrap({
       policyId: "pol_example",
       policyEngineRecord: record,
+      ownerNodeEndpoint: "https://node.example",
+      ownerSpaceId: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:applications",
       resourceHint: { conversationId: "conv_456" },
     });
     expect(bootstrap.schema).toBe(TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA);
@@ -530,6 +532,8 @@ describe("policy and bootstrap authoring", () => {
         composeTranscriptShareBootstrap({
           policyId: "pol_example",
           policyEngineRecord: { ...record, extra: true },
+          ownerNodeEndpoint: "https://node.example",
+          ownerSpaceId: "space",
           resourceHint: { conversationId: "conv_456" },
         }),
       "transcript-share-bootstrap-malformed",
@@ -541,6 +545,8 @@ describe("policy and bootstrap authoring", () => {
             JSON.stringify({
               policyId: "pol_example",
               policyEngineRecord: record,
+              ownerNodeEndpoint: "https://node.example",
+              ownerSpaceId: "space",
               resourceHint: { conversationId: "conv_456" },
             }).replace('"policyId"', '"__proto__":{"policyId":"pol_bad"},"policyId"'),
           ),

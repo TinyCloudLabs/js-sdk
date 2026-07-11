@@ -1,8 +1,13 @@
 import { bytesToHex, sha256 } from "viem";
+import { blake3 } from "@noble/hashes/blake3";
+import { CID } from "multiformats/cid";
+import { create as createDigest } from "multiformats/hashes/digest";
+import type { InvokeFunction, ServiceHeaders, ServiceSession } from "@tinycloud/sdk-services";
 import { z } from "zod";
 import {
   POLICY_VERSION_V0,
   TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA,
+  OWNER_NODE_ENDPOINT_SCHEMA,
   W3C_VC_CREDENTIAL_VERIFIER,
   jcsCanonicalize,
   normalizePolicyCapability,
@@ -108,6 +113,13 @@ export type TranscriptRequesterErrorCode =
   | "requester-delegation-not-refresh-only"
   | "requester-delegation-ttl-excessive"
   | "requester-delegation-capability-wider"
+  | "requester-owner-node-endpoint-invalid"
+  | "requester-delegation-import-failed"
+  | "requester-invocation-signer-required"
+  | "requester-invocation-signer-mismatch"
+  | "requester-node-denied"
+  | "requester-node-unreachable"
+  | "requester-node-response-invalid"
   | "requester-access-not-contained"
   | "requester-access-denied"
   | "requester-access-unreachable"
@@ -155,10 +167,27 @@ export interface RequesterHttpRequest {
 export interface RequesterHttpResponse {
   readonly status: number;
   readonly body: unknown;
+  /** Required for owner-node requests; the transport reports the non-redirected final URL. */
+  readonly finalUrl?: string;
+  /** Required for owner-node requests; the transport reports the actual connected IP. */
+  readonly resolvedAddress?: string;
+}
+
+export interface RequesterEndpointResolution {
+  readonly addresses: readonly string[];
 }
 
 export interface RequesterTransport {
   request(request: RequesterHttpRequest): Promise<RequesterHttpResponse>;
+  /** Resolve before egress so the requester can pin public addresses and detect rebinding. */
+  resolveEndpoint?(endpoint: string): Promise<RequesterEndpointResolution>;
+}
+
+export interface RequesterInvocationCapability {
+  readonly holderDid: string;
+  readonly verificationMethod: string;
+  readonly jwk: object;
+  readonly invoke: InvokeFunction;
 }
 
 export interface HolderKeyBindingPresentation {
@@ -239,6 +268,7 @@ export interface TranscriptRequesterOptions {
   readonly grantIssuerDid: string;
   readonly transport: RequesterTransport;
   readonly signingCapability?: RequesterSigningCapability;
+  readonly invocationCapability?: RequesterInvocationCapability;
   readonly eligibleSubjectDid?: string;
   readonly holderBinding?: unknown;
   readonly evidence?: readonly unknown[];
@@ -304,6 +334,14 @@ const PolicyEngineSchema = z
   })
   .strict();
 
+const OwnerNodeSchema = z
+  .object({
+    schema: z.literal(OWNER_NODE_ENDPOINT_SCHEMA),
+    endpoint: z.string().url(),
+    spaceId: z.string().min(1),
+  })
+  .strict();
+
 const ResourceHintSchema = z
   .object({
     resourceType: z.string(),
@@ -317,6 +355,7 @@ const BootstrapSchema = z
     schema: z.literal(TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA),
     policyId: z.string(),
     policyEngine: PolicyEngineSchema,
+    ownerNode: OwnerNodeSchema,
     resourceHint: ResourceHintSchema,
   })
   .strict();
@@ -380,7 +419,10 @@ const WireDelegationSchema = z
     issuerDid: z.string(),
     holderDid: z.string(),
     policyId: z.string(),
-    capabilities: z.array(CapabilitySchema).min(1),
+    capabilities: z.array(CapabilitySchema).min(1).optional(),
+    issuanceId: z.string().optional(),
+    capabilityHashHex: z.string().optional(),
+    revocationMode: z.literal("refresh_only").optional(),
     issuedAt: Rfc3339Schema,
     expiresAt: Rfc3339Schema,
     terminal: z.boolean(),
@@ -389,6 +431,9 @@ const WireDelegationSchema = z
   .strict();
 
 const ResolveResponseSchema = z.object({ delegation: WireDelegationSchema }).strict();
+const DelegateReceiptSchema = z
+  .object({ cid: z.string().min(1), activated: z.array(z.string()), skipped: z.array(z.string()) })
+  .strict();
 
 const SqlReadResponseSchema = z.object({ rows: z.array(JsonValueSchema) }).strict();
 const KvReadResponseSchema = z.object({ value: JsonValueSchema }).strict();
@@ -424,6 +469,8 @@ export class TranscriptRequester {
   private readonly grantIssuerDid: string;
   private readonly transport: RequesterTransport;
   private readonly signingCapability?: RequesterSigningCapability;
+  private readonly invocationCapability?: RequesterInvocationCapability;
+  private readonly ownerNodeAddresses: ReadonlySet<string>;
   private readonly now: () => Date;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly random: () => number;
@@ -436,12 +483,14 @@ export class TranscriptRequester {
   private readonly presentationTtlSeconds: number;
   private readonly usedChallengeNonces = new Set<string>();
   private importedDelegation?: PortableDelegation;
+  private importedDelegationCid?: string;
   private accessEnded = false;
 
   private constructor(
     bootstrap: TranscriptShareBootstrap,
     requestedCapabilities: readonly PolicyCapability[],
     requestedCapabilitiesHash: string,
+    ownerNodeAddresses: ReadonlySet<string>,
     options: TranscriptRequesterOptions,
   ) {
     this.bootstrap = bootstrap;
@@ -453,6 +502,8 @@ export class TranscriptRequester {
     this.grantIssuerDid = options.grantIssuerDid;
     this.transport = options.transport;
     this.signingCapability = options.signingCapability;
+    this.invocationCapability = options.invocationCapability;
+    this.ownerNodeAddresses = ownerNodeAddresses;
     this.eligibleSubjectDid =
       options.eligibleSubjectDid ?? options.signingCapability?.eligibleSubjectDid ?? options.requesterDid;
     this.holderBinding =
@@ -474,6 +525,7 @@ export class TranscriptRequester {
 
   static async create(options: TranscriptRequesterOptions): Promise<TranscriptRequester> {
     const bootstrap = parseBootstrap(options.bootstrap);
+    const ownerNodeAddresses = await validateAndResolveOwnerNode(bootstrap.ownerNode.endpoint, options.transport);
     const record = await verifyRecordBeforeEgress(bootstrap, options);
     if (record.endpoint !== bootstrap.policyEngine.endpoint) {
       throw new TranscriptRequesterError(
@@ -496,6 +548,7 @@ export class TranscriptRequester {
       bootstrap,
       requestedCapabilities,
       requestedCapabilitiesHash(requestedCapabilities),
+      ownerNodeAddresses,
       options,
     );
   }
@@ -519,16 +572,13 @@ export class TranscriptRequester {
       const delegation = await this.ensureFreshDelegation();
       const requested = this.sqlAccessCapabilityForDelegation(delegation, statement);
       this.assertContainedByDelegation(delegation, requested);
-      const response = await this.transport.request({
-        method: "POST",
-        url: `${trimTrailingSlash(this.bootstrap.policyEngine.endpoint)}/read/sql/named`,
-        headers: delegationHeaders(delegation),
-        body: {
-          statementName: statement.name,
-          fixedParams: statement.fixedParams,
-        },
-      });
-      return parseDataResponse(response, SqlReadResponseSchema, "SQL read") as TranscriptRequesterReadSqlResult;
+      const response = await this.nativeInvoke(
+        "sql",
+        requested.path,
+        "tinycloud.sql/read",
+        { action: "execute_statement", name: statement.name, params: statement.fixedParams.map((item) => item.value) },
+      );
+      return parseNodeDataResponse(response, SqlReadResponseSchema, "SQL read") as TranscriptRequesterReadSqlResult;
     } catch (error) {
       this.recordAccessEnded(error);
       throw error;
@@ -537,28 +587,69 @@ export class TranscriptRequester {
 
   async readKv(path: string): Promise<TranscriptRequesterReadKvResult> {
     try {
+      const delegation = await this.ensureFreshDelegation();
+      const grantedKv = delegation.capabilities.find(
+        (capability) => capability.service === "tinycloud.kv" && capability.path === path && capability.actions.includes("tinycloud.kv/get"),
+      );
       const requested = parsePolicyCapability(
         {
           service: "tinycloud.kv",
-          space: "applications",
+          space: grantedKv?.space ?? "applications",
           path,
           actions: ["tinycloud.kv/get"],
         },
         "$.kvRead",
       );
-      const delegation = await this.ensureFreshDelegation();
       this.assertContainedByDelegation(delegation, requested);
-      const response = await this.transport.request({
-        method: "POST",
-        url: `${trimTrailingSlash(this.bootstrap.policyEngine.endpoint)}/read/kv/exact`,
-        headers: delegationHeaders(delegation),
-        body: { path },
-      });
-      return parseDataResponse(response, KvReadResponseSchema, "KV read") as TranscriptRequesterReadKvResult;
+      const response = await this.nativeInvoke("kv", path, "tinycloud.kv/get");
+      return parseNodeDataResponse(response, KvReadResponseSchema, "KV read") as TranscriptRequesterReadKvResult;
     } catch (error) {
       this.recordAccessEnded(error);
       throw error;
     }
+  }
+
+  private async nativeInvoke(
+    service: "sql" | "kv",
+    path: string,
+    action: "tinycloud.sql/read" | "tinycloud.kv/get",
+    body?: unknown,
+  ): Promise<RequesterHttpResponse> {
+    const capability = this.invocationCapability;
+    if (capability === undefined) {
+      throw new TranscriptRequesterError(
+        "requester-invocation-signer-required",
+        "holder invocation capability is required for native reads",
+      );
+    }
+    if (capability.holderDid !== this.requesterDid || capability.holderDid !== this.signingCapability?.holderDid) {
+      throw new TranscriptRequesterError(
+        "requester-invocation-signer-mismatch",
+        "invocation signer must be the presentation key-binding holder",
+      );
+    }
+    if (this.importedDelegationCid === undefined || this.importedDelegation === undefined) {
+      throw new TranscriptRequesterError(
+        "requester-delegation-import-failed",
+        "native read requires a confirmed delegation import",
+      );
+    }
+    const session: ServiceSession = {
+      delegationHeader: { Authorization: this.importedDelegation.encoded! },
+      delegationCid: this.importedDelegationCid,
+      spaceId: this.bootstrap.ownerNode.spaceId,
+      verificationMethod: capability.verificationMethod,
+      jwk: capability.jwk,
+    };
+    const headers = headersRecord(capability.invoke(session, service, path, action));
+    const response = await this.transport.request({
+      method: "POST",
+      url: `${trimTrailingSlash(this.bootstrap.ownerNode.endpoint)}/invoke`,
+      headers,
+      ...(body === undefined ? {} : { body }),
+    });
+    this.assertOwnerNodeResponse(response, "/invoke");
+    return response;
   }
 
   private async ensureFreshDelegation(): Promise<PortableDelegation> {
@@ -702,7 +793,7 @@ export class TranscriptRequester {
     return this.importPortableDelegation(parsed.delegation);
   }
 
-  private importPortableDelegation(input: unknown): PortableDelegation {
+  private async importPortableDelegation(input: unknown): Promise<PortableDelegation> {
     const parsed = normalizeWireDelegation(parseEngineSuccess(input, WireDelegationSchema, "portable delegation"));
     if (parsed.policyId !== this.bootstrap.policyId) {
       throw new TranscriptRequesterError(
@@ -747,7 +838,46 @@ export class TranscriptRequester {
         );
       }
     }
-    return { ...parsed, capabilities } as PortableDelegation;
+    if (typeof parsed.encoded !== "string" || parsed.encoded.split(".").length !== 3) {
+      throw new TranscriptRequesterError("requester-delegation-invalid", "portable delegation is not a compact-JWS UCAN");
+    }
+    const delegation = { ...parsed, capabilities } as PortableDelegation;
+    const response = await this.transport.request({
+      method: "POST",
+      url: `${trimTrailingSlash(this.bootstrap.ownerNode.endpoint)}/delegate`,
+      headers: { Authorization: parsed.encoded },
+    });
+    this.assertOwnerNodeResponse(response, "/delegate");
+    const receipt = parseDelegateReceipt(response);
+    const target = this.bootstrap.ownerNode.spaceId;
+    if (!receipt.activated.includes(target) || receipt.skipped.includes(target)) {
+      throw new TranscriptRequesterError(
+        "requester-delegation-import-failed",
+        receipt.activated.includes(target) && receipt.skipped.includes(target)
+          ? "owner node returned a contradictory delegation receipt"
+          : "owner node did not activate the target owner space",
+      );
+    }
+    this.importedDelegationCid = deriveDelegationCid(parsed.encoded);
+    return delegation;
+  }
+
+  private assertOwnerNodeResponse(response: RequesterHttpResponse, path: string): void {
+    const expected = `${trimTrailingSlash(this.bootstrap.ownerNode.endpoint)}${path}`;
+    if (response.finalUrl !== expected || response.resolvedAddress === undefined) {
+      throw new TranscriptRequesterError(
+        "requester-owner-node-endpoint-invalid",
+        "owner-node transport metadata is missing or indicates a redirect",
+        "bootstrap-invalid",
+      );
+    }
+    if (!this.ownerNodeAddresses.has(normalizeIp(response.resolvedAddress))) {
+      throw new TranscriptRequesterError(
+        "requester-owner-node-endpoint-invalid",
+        "owner-node address changed after endpoint validation",
+        "bootstrap-invalid",
+      );
+    }
   }
 
   private assertContainedByDelegation(
@@ -774,28 +904,29 @@ export class TranscriptRequester {
     delegation: PortableDelegation,
     statement: ListenSqlStatement,
   ): PolicyCapability {
-    const hasStatementCaveat = delegation.capabilities.some(
-      (capability) =>
-        capability.service === "tinycloud.sql" &&
-        capability.space === "applications" &&
-        capability.path === "xyz.tinycloud.listen/conversations" &&
-        capability.caveats !== undefined,
+    const grantedSql = delegation.capabilities.find(
+      (capability) => capability.service === "tinycloud.sql" && capability.actions.includes("tinycloud.sql/read"),
     );
+    if (grantedSql === undefined) {
+      throw new TranscriptRequesterError("requester-access-not-contained", "delegation has no SQL read grant", "not-contained");
+    }
+    if (grantedSql.caveats !== undefined) {
+      const statements = (grantedSql.caveats as { statements?: readonly { name?: unknown }[] }).statements;
+      if (!statements?.some((candidate) => candidate.name === statement.name)) {
+        throw new TranscriptRequesterError(
+          "requester-access-not-contained",
+          "SQL statement is outside the delegated named-statement caveat",
+          "not-contained",
+        );
+      }
+      return grantedSql;
+    }
     return parsePolicyCapability(
       {
         service: "tinycloud.sql",
-        space: "applications",
-        path: "xyz.tinycloud.listen/conversations",
+        space: grantedSql.space,
+        path: grantedSql.path,
         actions: ["tinycloud.sql/read"],
-        ...(hasStatementCaveat
-          ? {
-              caveats: {
-                mode: "constrained-statements",
-                readOnly: true,
-                statements: [statement],
-              },
-            }
-          : {}),
       },
       "$.sqlRead",
     );
@@ -1004,9 +1135,59 @@ function normalizeWireDelegation(
     expiresAt: delegation.expiresAt,
     terminal: delegation.terminal,
     maxTtlSeconds: Math.ceil((expiresAt - issuedAt) / 1000),
-    capabilities: delegation.capabilities,
+    capabilities: delegation.capabilities ?? capabilitiesFromCompactJws(delegation.encoded),
     encoded: delegation.encoded,
   };
+}
+
+function capabilitiesFromCompactJws(encoded: string): z.infer<typeof CapabilitySchema>[] {
+  try {
+    const parts = encoded.split(".");
+    if (parts.length !== 3) throw new Error("not compact JWS");
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[1]!))) as {
+      att?: Record<string, Record<string, readonly unknown[]>>;
+    };
+    if (payload.att === undefined) throw new Error("UCAN att is absent");
+    const capabilities: z.infer<typeof CapabilitySchema>[] = [];
+    for (const [resource, abilities] of Object.entries(payload.att)) {
+      const marker = resource.indexOf("/sql/");
+      if (!resource.startsWith("tinycloud:") || marker < 0) throw new Error("unsupported UCAN resource");
+      const space = resource.slice(0, marker);
+      const path = resource.slice(marker + "/sql/".length);
+      for (const [action, caveats] of Object.entries(abilities)) {
+        const service = action.startsWith("tinycloud.sql/")
+          ? "tinycloud.sql"
+          : action.startsWith("tinycloud.kv/")
+            ? "tinycloud.kv"
+            : undefined;
+        if (service === undefined || caveats.length === 0) throw new Error("unsupported UCAN ability");
+        const first = caveats[0];
+        capabilities.push({
+          service,
+          space,
+          path,
+          actions: [action],
+          ...(first !== null && typeof first === "object" && !Array.isArray(first) && Object.keys(first).length > 0
+            ? { caveats: first as z.infer<typeof CapabilitySchema>["caveats"] }
+            : {}),
+        });
+      }
+    }
+    if (capabilities.length === 0) throw new Error("UCAN att is empty");
+    return capabilities;
+  } catch (error) {
+    throw new TranscriptRequesterError(
+      "requester-delegation-invalid",
+      `node-native compact-JWS capabilities are invalid: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function base64UrlBytes(value: string): Uint8Array {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
 function parseEngineSuccess<T>(
@@ -1064,6 +1245,162 @@ function parseDataResponse<T>(
   return parsed.data;
 }
 
+function parseDelegateReceipt(response: RequesterHttpResponse): z.infer<typeof DelegateReceiptSchema> {
+  if (response.status !== 200) {
+    throw new TranscriptRequesterError(
+      "requester-delegation-import-failed",
+      `owner node delegation import returned ${response.status}`,
+      response.status >= 500 ? "invalid" : "denied",
+      undefined,
+      response.status,
+    );
+  }
+  const normalized = normalizeExternal(response.body, "requester-delegation-import-failed");
+  const parsed = DelegateReceiptSchema.safeParse(normalized);
+  if (!parsed.success) {
+    throw new TranscriptRequesterError(
+      "requester-delegation-import-failed",
+      `owner node delegation receipt failed validation: ${parsed.error.message}`,
+    );
+  }
+  return parsed.data;
+}
+
+function parseNodeDataResponse<T>(
+  response: RequesterHttpResponse,
+  schema: z.ZodType<T>,
+  label: string,
+): T {
+  if (response.status >= 500) {
+    throw new TranscriptRequesterError(
+      "requester-node-unreachable",
+      `${label} node returned ${response.status}: ${nodeErrorMessage(response.body)}`,
+      "unreachable",
+      undefined,
+      response.status,
+    );
+  }
+  if (response.status >= 400) {
+    throw new TranscriptRequesterError(
+      "requester-node-denied",
+      `${label} node denied: ${nodeErrorMessage(response.body)}`,
+      "denied",
+      undefined,
+      response.status,
+    );
+  }
+  const normalized = normalizeExternal(response.body, "requester-node-response-invalid");
+  const parsed = schema.safeParse(normalized);
+  if (!parsed.success) {
+    throw new TranscriptRequesterError(
+      "requester-node-response-invalid",
+      `${label} node response failed validation: ${parsed.error.message}`,
+    );
+  }
+  return parsed.data;
+}
+
+function nodeErrorMessage(body: unknown): string {
+  if (typeof body === "string") return body;
+  if (body !== null && typeof body === "object") {
+    const record = body as Record<string, unknown>;
+    const code = typeof record.code === "string" ? record.code : undefined;
+    const message = typeof record.message === "string" ? record.message : undefined;
+    if (code !== undefined) return message === undefined ? code : `${code}: ${message}`;
+  }
+  return "native node refusal";
+}
+
+export function deriveDelegationCid(encoded: string): string {
+  const digest = createDigest(0x1e, blake3(new TextEncoder().encode(encoded)));
+  return CID.createV1(0x55, digest).toString();
+}
+
+function headersRecord(headers: ServiceHeaders): Record<string, string> {
+  return Array.isArray(headers) ? Object.fromEntries(headers) : headers;
+}
+
+async function validateAndResolveOwnerNode(
+  endpoint: string,
+  transport: RequesterTransport,
+): Promise<ReadonlySet<string>> {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw ownerEndpointError("owner-node endpoint is not a URL");
+  }
+  if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.hash !== "") {
+    throw ownerEndpointError("owner-node endpoint must use HTTPS without credentials or fragments");
+  }
+  if (transport.resolveEndpoint === undefined) {
+    throw ownerEndpointError("owner-node endpoint resolution metadata is required");
+  }
+  let resolution: RequesterEndpointResolution;
+  try {
+    resolution = await transport.resolveEndpoint(url.origin);
+  } catch (error) {
+    throw ownerEndpointError(`owner-node endpoint resolution failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (resolution.addresses.length === 0) {
+    throw ownerEndpointError("owner-node endpoint resolved to no addresses");
+  }
+  const addresses = new Set<string>();
+  for (const address of resolution.addresses) {
+    const normalized = normalizeIp(address);
+    if (!isPublicIp(normalized)) {
+      throw ownerEndpointError(`owner-node endpoint resolved to a non-public address: ${address}`);
+    }
+    addresses.add(normalized);
+  }
+  return addresses;
+}
+
+function ownerEndpointError(message: string): TranscriptRequesterError {
+  return new TranscriptRequesterError(
+    "requester-owner-node-endpoint-invalid",
+    message,
+    "bootstrap-invalid",
+  );
+}
+
+function normalizeIp(value: string): string {
+  return value.toLowerCase().replace(/^\[|\]$/g, "");
+}
+
+function isPublicIp(value: string): boolean {
+  const ip = normalizeIp(value);
+  const parts = ip.split(".");
+  if (parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255)) {
+    const [a, b] = parts.map(Number) as [number, number, number, number];
+    return !(
+      a === 0 || a === 10 || a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 0) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      (a === 198 && b === 51 && parts[2] === "100") ||
+      (a === 203 && b === 0 && parts[2] === "113") ||
+      a >= 224
+    );
+  }
+  if (!ip.includes(":")) return false;
+  if (ip === "::" || ip === "::1" || ip.startsWith("2001:db8:") || ip.startsWith("fe8") || ip.startsWith("fe9") ||
+      ip.startsWith("fea") || ip.startsWith("feb") || ip.startsWith("fc") || ip.startsWith("fd") ||
+      ip.startsWith("ff")) return false;
+  const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped !== null) return isPublicIp(mapped[1]!);
+  const mappedHex = ip.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex !== null) {
+    const high = Number.parseInt(mappedHex[1]!, 16);
+    const low = Number.parseInt(mappedHex[2]!, 16);
+    return isPublicIp(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+  }
+  return true;
+}
+
 function parseDenialBody(input: unknown): { code: PolicyEngineGrantPresentationDenialCode; message?: string } | undefined {
   const normalized = normalizeExternal(input, "requester-engine-response-invalid");
   const direct = DenialSchema.safeParse(normalized);
@@ -1092,13 +1429,6 @@ function errorForDenial(
     denial.code,
     status,
   );
-}
-
-function delegationHeaders(delegation: PortableDelegation): Readonly<Record<string, string>> {
-  return {
-    "Content-Type": "application/json",
-    "TinyCloud-Delegation-Id": delegation.delegationId,
-  };
 }
 
 function retryDelay(attempt: number, random: number): number {

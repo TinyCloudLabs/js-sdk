@@ -16,9 +16,9 @@
    "sha256": "ccfbf6d706f8e7819d7d89f78e7b3d59fc52adadac7c3da41541afe5013d8d4b"
   },
   {
-   "file": "resolve-happy.json",
-   "name": "resolve-happy",
-   "sha256": "14e979afb56402ca95d5617e30f9651a7727c218a1b4c0d830ce8b6cc7943b69"
+   "file": "resolve-happy-native.json",
+   "name": "resolve-happy-native",
+   "sha256": "0033ecf7d2883ac1fe337926f08eb81de3b34c2b2503a303634a9f0f29114a76"
   },
   {
    "file": "resolve-replay-consumed-nonce.json",

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
+import { blake3 } from "@noble/hashes/blake3";
+import { CID } from "multiformats/cid";
 import { createHash } from "crypto";
 import { readdir } from "fs/promises";
 import {
@@ -10,9 +12,11 @@ import {
   POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES,
   TranscriptRequesterError,
   createTranscriptRequester,
+  deriveDelegationCid,
   type RequesterHttpRequest,
   type RequesterHttpResponse,
   type RequesterSigningCapability,
+  type RequesterInvocationCapability,
   type RequesterTransport,
 } from ".";
 import {
@@ -34,6 +38,10 @@ const listenCatalogFixture = (await Bun.file(
 const wireManifest = (await Bun.file("test-fixtures/policy-engine-wire/manifest.json").json()) as {
   cases: Array<{ file: string; name: string; sha256: string }>;
   label: string;
+};
+
+const grantOutputVector = (await Bun.file("test-vectors/grant-output-vendored/accept.json").json()) as {
+  cases: Array<Record<string, any>>;
 };
 
 const denialWireManifest = (await Bun.file(
@@ -189,6 +197,18 @@ class FixtureTransport implements RequesterTransport {
 
   async request(request: RequesterHttpRequest): Promise<RequesterHttpResponse> {
     this.calls.push(request);
+    if (request.url.endsWith("/delegate")) {
+      const encoded = request.headers?.Authorization;
+      const activatedSpace = encoded?.startsWith("ey")
+        ? capabilitiesFromFixtureJws(encoded)[0]?.space ?? OWNER_SPACE_ID
+        : OWNER_SPACE_ID;
+      return {
+        status: 200,
+        body: { cid: "bafy-commit-event", activated: [activatedSpace], skipped: [] },
+        finalUrl: request.url,
+        resolvedAddress: "8.8.8.8",
+      };
+    }
     const next = this.queue.shift();
     if (next === undefined) {
       throw new Error(`unexpected request ${request.url}`);
@@ -196,8 +216,41 @@ class FixtureTransport implements RequesterTransport {
     if (next instanceof Error) {
       throw next;
     }
-    return next;
+    return request.url.endsWith("/invoke")
+      ? { ...next, finalUrl: request.url, resolvedAddress: "8.8.8.8" }
+      : next;
   }
+
+  async resolveEndpoint(): Promise<{ addresses: readonly string[] }> {
+    return { addresses: ["8.8.8.8"] };
+  }
+}
+
+class DelegateReceiptTransport extends FixtureTransport {
+  constructor(queue: Array<RequesterHttpResponse | Error>, private readonly receipt: RequesterHttpResponse) {
+    super(queue);
+  }
+
+  override async request(request: RequesterHttpRequest): Promise<RequesterHttpResponse> {
+    if (request.url.endsWith("/delegate")) {
+      this.calls.push(request);
+      return { ...this.receipt, finalUrl: request.url, resolvedAddress: "8.8.8.8" };
+    }
+    return super.request(request);
+  }
+}
+
+const OWNER_SPACE_ID = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:applications";
+
+function invocationCapability(holderDid = REQUESTER_DID): RequesterInvocationCapability {
+  return {
+    holderDid,
+    verificationMethod: `${holderDid}#device-1`,
+    jwk: { kty: "OKP", crv: "Ed25519", x: "fixture" },
+    invoke: (session, service, path, action) => ({
+      Authorization: `invoke:${session.delegationCid}:${service}:${path}:${action}`,
+    }),
+  };
 }
 
 async function bootstrap(overrides: Record<string, unknown> = {}) {
@@ -221,6 +274,11 @@ async function bootstrap(overrides: Record<string, unknown> = {}) {
       supportedEvidenceVerifiers: ["w3c.vc/credential/v1"],
       signedRecord: record,
     },
+    ownerNode: {
+      schema: "xyz.tinycloud.exchange/owner-node-endpoint/v1",
+      endpoint: ENDPOINT,
+      spaceId: OWNER_SPACE_ID,
+    },
     resourceHint: {
       resourceType: "listen.conversation",
       resourceId: "conv_456",
@@ -232,18 +290,50 @@ async function bootstrap(overrides: Record<string, unknown> = {}) {
 
 async function wireBootstrap(resolveFixture: WireFixture) {
   const presentation = (resolveFixture.request.body as { presentation: Record<string, unknown> }).presentation;
+  const delegation = (resolveFixture.response.body as { delegation: Record<string, unknown> }).delegation;
+  const requestedCapabilities = capabilitiesFromFixtureJws(delegation.encoded as string);
   const endpoint = "https://policy-engine.example/v0";
   const record = await createAndSignRequesterPolicyEngineRecord(
     {
       ownerDid: OWNER_DID,
       endpoint,
       audience: presentation.audience as string,
-      grantIssuerDid: (resolveFixture.response.body as { delegation: { issuerDid: string } }).delegation
-        .issuerDid,
-      expiresAt: "2026-06-12T00:10:00Z",
+      grantIssuerDid: delegation.issuerDid as string,
+      expiresAt: "2026-07-11T00:10:00Z",
     },
     edSigner("policy_signer"),
   );
+  return {
+    schema: TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA,
+    policyId: delegation.policyId,
+    policyEngine: {
+      endpoint,
+      audience: presentation.audience,
+      supportedEvidenceVerifiers: ["w3c.vc/credential/v1"],
+      signedRecord: record,
+    },
+    ownerNode: {
+      schema: "xyz.tinycloud.exchange/owner-node-endpoint/v1",
+      endpoint,
+      spaceId: requestedCapabilities[0]!.space,
+    },
+    resourceHint: {
+      resourceType: "listen.conversation",
+      resourceId: "conv_wire",
+      requestedCapabilities,
+    },
+  };
+}
+
+async function presentationBootstrap(presentation: Record<string, unknown>, grantIssuerDid: string) {
+  const endpoint = "https://policy-engine.example/v0";
+  const record = await createAndSignRequesterPolicyEngineRecord({
+    ownerDid: OWNER_DID,
+    endpoint,
+    audience: presentation.audience as string,
+    grantIssuerDid,
+    expiresAt: "2026-07-11T00:10:00Z",
+  }, edSigner("policy_signer"));
   return {
     schema: TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA,
     policyId: presentation.policyId,
@@ -253,12 +343,36 @@ async function wireBootstrap(resolveFixture: WireFixture) {
       supportedEvidenceVerifiers: ["w3c.vc/credential/v1"],
       signedRecord: record,
     },
+    ownerNode: {
+      schema: "xyz.tinycloud.exchange/owner-node-endpoint/v1",
+      endpoint,
+      spaceId: OWNER_SPACE_ID,
+    },
     resourceHint: {
       resourceType: "listen.conversation",
       resourceId: "conv_wire",
       requestedCapabilities: presentation.requestedCapabilities,
     },
   };
+}
+
+function capabilitiesFromFixtureJws(encoded: string): PolicyCapability[] {
+  const payload = JSON.parse(Buffer.from(encoded.split(".")[1]!, "base64url").toString("utf8")) as {
+    att: Record<string, Record<string, Array<Record<string, unknown>>>>;
+  };
+  if (payload.att === undefined) return [];
+  return Object.entries(payload.att).flatMap(([resource, abilities]) => {
+    const marker = resource.indexOf("/sql/");
+    const space = resource.slice(0, marker);
+    const path = resource.slice(marker + 5);
+    return Object.entries(abilities).map(([action, caveats]) => ({
+      service: action.startsWith("tinycloud.sql/") ? "tinycloud.sql" as const : "tinycloud.kv" as const,
+      space,
+      path,
+      actions: [action],
+      ...(Object.keys(caveats[0] ?? {}).length === 0 ? {} : { caveats: caveats[0] }),
+    }));
+  });
 }
 
 function challenge(nonce = "nonce-1234567890abcdef") {
@@ -314,7 +428,7 @@ function delegation(capabilities: readonly PolicyCapability[], overrides: Record
     issuedAt: "2026-07-09T12:00:00Z",
     expiresAt: "2026-07-09T12:04:00Z",
     terminal: true,
-    encoded: `tc-pdel-v0.${delegationCounter}`,
+    encoded: `eyJhbGciOiJFZERTQSJ9.eyJub25jZSI6IiR7ZGVsZWdhdGlvbkNvdW50ZXJ9In0.c2lnbmF0dXJl`,
     capabilities,
     ...overrides,
   };
@@ -384,6 +498,7 @@ async function requester(transport: RequesterTransport, input = {}) {
     grantIssuerDid: GRANT_ISSUER_DID,
     transport,
     signingCapability: signingCapability(),
+    invocationCapability: invocationCapability(),
     now: () => NOW,
     sleep: async () => {},
     random: () => 0,
@@ -404,6 +519,108 @@ async function expectRequesterFailure(
   throw new Error(`expected requester failure ${code}`);
 }
 
+describe("TranscriptRequester native bridge conformance", () => {
+  it("independently hashes the exact frozen signed-JWS bytes with the node CID framing", () => {
+    const vector = grantOutputVector.cases.find((item) => item.case === "deterministic-native-identity-and-ledger-link")!;
+    const encoded = vector.issuanceRecord.encoded as string;
+    const expectedBytes = Buffer.from(vector.expectedDelegationIdBytesHex as string, "hex");
+    const digest = blake3(new TextEncoder().encode(encoded));
+
+    expect(Buffer.from(digest).equals(expectedBytes.subarray(4))).toBe(true);
+    expect(Buffer.from(CID.parse(deriveDelegationCid(encoded)).bytes).equals(expectedBytes)).toBe(true);
+    expect(deriveDelegationCid(encoded)).toBe(vector.expectedDelegationId);
+  });
+
+  it("requires the same holder invocation identity and does not accept presentation signing alone", async () => {
+    const queue = [challenge(), resolve([sqlCapability]), { status: 200, body: { rows: [] } }];
+    const noInvoke = await createTranscriptRequester({
+      bootstrap: await bootstrap(), requesterDid: REQUESTER_DID, ownerDid: OWNER_DID,
+      audience: AUDIENCE, grantIssuerDid: GRANT_ISSUER_DID,
+      transport: new FixtureTransport(queue), signingCapability: signingCapability(), now: () => NOW,
+    });
+    await expectRequesterFailure(() => noInvoke.readSql("listen.getConversation"), "requester-invocation-signer-required");
+
+    const mismatch = await createTranscriptRequester({
+      bootstrap: await bootstrap(), requesterDid: REQUESTER_DID, ownerDid: OWNER_DID,
+      audience: AUDIENCE, grantIssuerDid: GRANT_ISSUER_DID,
+      transport: new FixtureTransport(queue), signingCapability: signingCapability(),
+      invocationCapability: invocationCapability(OWNER_DID), now: () => NOW,
+    });
+    await expectRequesterFailure(() => mismatch.readSql("listen.getConversation"), "requester-invocation-signer-mismatch");
+  });
+
+  it("fails closed before invoke for every non-confirming delegation receipt", async () => {
+    const receipts: RequesterHttpResponse[] = [
+      { status: 500, body: {} },
+      { status: 200, body: { cid: "event", activated: [], skipped: [] } },
+      { status: 200, body: { cid: "event", activated: [], skipped: [OWNER_SPACE_ID] } },
+      { status: 200, body: { cid: "event", activated: [OWNER_SPACE_ID], skipped: [OWNER_SPACE_ID] } },
+      { status: 200, body: { activated: [OWNER_SPACE_ID], skipped: [] } },
+    ];
+    for (const receipt of receipts) {
+      const transport = new DelegateReceiptTransport([challenge(), resolve([sqlCapability])], receipt);
+      const client = await requester(transport);
+      await expectRequesterFailure(() => client.readSql("listen.getConversation"), "requester-delegation-import-failed");
+      expect(transport.calls.some((call) => call.url.endsWith("/invoke"))).toBe(false);
+    }
+  });
+
+  it("rejects unsafe endpoints, missing resolution metadata, redirects, and DNS rebinding", async () => {
+    await expectRequesterFailure(
+      () => requester(new FixtureTransport([]), { bootstrap: { ownerNode: {
+        schema: "xyz.tinycloud.exchange/owner-node-endpoint/v1", endpoint: "http://node.example", spaceId: OWNER_SPACE_ID,
+      } } }),
+      "requester-owner-node-endpoint-invalid",
+    );
+    await expectRequesterFailure(
+      () => requester(new FixtureTransport([]), { bootstrap: { ownerNode: {
+        schema: "xyz.tinycloud.exchange/owner-node-endpoint/v1", endpoint: "https://user:secret@node.example", spaceId: OWNER_SPACE_ID,
+      } } }),
+      "requester-owner-node-endpoint-invalid",
+    );
+    const missingResolver: RequesterTransport = { request: async () => ({ status: 500, body: {} }) };
+    await expectRequesterFailure(() => requester(missingResolver), "requester-owner-node-endpoint-invalid");
+
+    for (const address of ["127.0.0.1", "10.0.0.1", "169.254.1.1", "::1", "fe80::1", "fd00::1"]) {
+      const unsafe: RequesterTransport = {
+        request: async () => ({ status: 500, body: {} }),
+        resolveEndpoint: async () => ({ addresses: [address] }),
+      };
+      await expectRequesterFailure(() => requester(unsafe), "requester-owner-node-endpoint-invalid");
+    }
+
+    class RedirectTransport extends FixtureTransport {
+      override async request(request: RequesterHttpRequest): Promise<RequesterHttpResponse> {
+        const response = await super.request(request);
+        return request.url.endsWith("/delegate") ? { ...response, finalUrl: `${ENDPOINT}/elsewhere` } : response;
+      }
+    }
+    const redirected = new RedirectTransport([challenge(), resolve([sqlCapability])]);
+    await expectRequesterFailure(async () => (await requester(redirected)).readSql("listen.getConversation"), "requester-owner-node-endpoint-invalid");
+
+    class RebindTransport extends FixtureTransport {
+      override async request(request: RequesterHttpRequest): Promise<RequesterHttpResponse> {
+        const response = await super.request(request);
+        return request.url.endsWith("/delegate") ? { ...response, resolvedAddress: "1.1.1.1" } : response;
+      }
+    }
+    const rebound = new RebindTransport([challenge(), resolve([sqlCapability])]);
+    await expectRequesterFailure(async () => (await requester(rebound)).readSql("listen.getConversation"), "requester-owner-node-endpoint-invalid");
+
+    class MissingMetadataTransport extends FixtureTransport {
+      override async request(request: RequesterHttpRequest): Promise<RequesterHttpResponse> {
+        const response = await super.request(request);
+        return request.url.endsWith("/delegate") ? { status: response.status, body: response.body } : response;
+      }
+    }
+    const missingMetadata = new MissingMetadataTransport([challenge(), resolve([sqlCapability])]);
+    await expectRequesterFailure(
+      async () => (await requester(missingMetadata)).readSql("listen.getConversation"),
+      "requester-owner-node-endpoint-invalid",
+    );
+  });
+});
+
 describe("TranscriptRequester bootstrap gate", () => {
   it("does not call /challenge until the signed policy engine record is verified", async () => {
     const transport = new FixtureTransport([challenge(), resolve([sqlCapability]), { status: 200, body: { rows: [] } }]);
@@ -414,7 +631,8 @@ describe("TranscriptRequester bootstrap gate", () => {
     expect(transport.calls.map((call) => call.url)).toEqual([
       `${ENDPOINT}/policy/v0/challenge`,
       `${ENDPOINT}/policy/v0/resolve`,
-      `${ENDPOINT}/read/sql/named`,
+      `${ENDPOINT}/delegate`,
+      `${ENDPOINT}/invoke`,
     ]);
   });
 
@@ -482,6 +700,12 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
     expect(resolveBody.presentation.schema).toBe(HOLDER_KEY_BINDING_PRESENTATION_SCHEMA);
     expect(resolveBody.presentation.nonce).toBe("nonce-fresh-0000001");
     expect(resolveBody.presentation.holderSignature.value).toContain("nonce-fresh-0000001");
+    const sqlAuthorization = transport.calls[3]!.headers?.Authorization!;
+    const kvAuthorization = transport.calls[4]!.headers?.Authorization!;
+    expect(sqlAuthorization).toContain(":sql:xyz.tinycloud.listen/conversations:tinycloud.sql/read");
+    expect(kvAuthorization).toContain(":kv:notebooks/nb_project_notes/docs/alice-note.md:tinycloud.kv/get");
+    expect(sqlAuthorization).not.toContain("write");
+    expect(sqlAuthorization.split(":")[1]).toBe(kvAuthorization.split(":")[1]);
   });
 
   it("rejects a challenge response whose audience is not the bootstrap audience", async () => {
@@ -518,6 +742,7 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
       grantIssuerDid: GRANT_ISSUER_DID,
       transport,
       signingCapability: signingCapability(),
+      invocationCapability: invocationCapability(),
       now: () => NOW,
       sleep: async () => {},
       random: () => 0,
@@ -530,7 +755,8 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
       `${ENDPOINT}/policy/v0/resolve`,
       `${ENDPOINT}/policy/v0/challenge`,
       `${ENDPOINT}/policy/v0/resolve`,
-      `${ENDPOINT}/read/sql/named`,
+      `${ENDPOINT}/delegate`,
+      `${ENDPOINT}/invoke`,
     ]);
     const resolveBodies = transport.calls
       .filter((call) => call.url.endsWith("/resolve"))
@@ -558,6 +784,7 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
       grantIssuerDid: GRANT_ISSUER_DID,
       transport,
       signingCapability: signingCapability(),
+      invocationCapability: invocationCapability(),
       now: () => NOW,
       sleep: async () => {},
       random: () => 0,
@@ -570,7 +797,8 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
       `${ENDPOINT}/policy/v0/resolve`,
       `${ENDPOINT}/policy/v0/challenge`,
       `${ENDPOINT}/policy/v0/resolve`,
-      `${ENDPOINT}/read/sql/named`,
+      `${ENDPOINT}/delegate`,
+      `${ENDPOINT}/invoke`,
     ]);
   });
 
@@ -721,6 +949,7 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
       grantIssuerDid: GRANT_ISSUER_DID,
       transport,
       signingCapability: signingCapability(),
+      invocationCapability: invocationCapability(),
       now: () => current,
       sleep: async () => {},
       random: () => 0,
@@ -750,6 +979,7 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
       grantIssuerDid: GRANT_ISSUER_DID,
       transport,
       signingCapability: signingCapability(),
+      invocationCapability: invocationCapability(),
       now: () => current,
       sleep: async () => {},
       random: () => 0,
@@ -761,10 +991,12 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
     expect(transport.calls.map((call) => call.url)).toEqual([
       `${ENDPOINT}/policy/v0/challenge`,
       `${ENDPOINT}/policy/v0/resolve`,
-      `${ENDPOINT}/read/sql/named`,
+      `${ENDPOINT}/delegate`,
+      `${ENDPOINT}/invoke`,
       `${ENDPOINT}/policy/v0/challenge`,
       `${ENDPOINT}/policy/v0/resolve`,
-      `${ENDPOINT}/read/sql/named`,
+      `${ENDPOINT}/delegate`,
+      `${ENDPOINT}/invoke`,
     ]);
   });
 
@@ -788,6 +1020,7 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
       grantIssuerDid: GRANT_ISSUER_DID,
       transport,
       signingCapability: signingCapability(),
+      invocationCapability: invocationCapability(),
       now: () => current,
       sleep: async () => {},
       random: () => 0,
@@ -854,12 +1087,12 @@ describe("TranscriptRequester delegation import and containment", () => {
     await expectRequesterFailure(async () => {
       const client = await requester(new FixtureTransport([challenge(), resolve([sqlCapability]), denial("capability-not-contained")]));
       await client.readSql("listen.getConversation");
-    }, "policy-engine-denied-capability-not-contained");
+    }, "requester-node-denied");
 
     await expectRequesterFailure(async () => {
       const client = await requester(new FixtureTransport([challenge(), resolve([sqlCapability]), { status: 503, body: {} }]));
       await client.readSql("listen.getConversation");
-    }, "requester-access-unreachable");
+    }, "requester-node-unreachable");
 
     let current = NOW;
     const transport = new FixtureTransport([
@@ -877,6 +1110,7 @@ describe("TranscriptRequester delegation import and containment", () => {
       grantIssuerDid: GRANT_ISSUER_DID,
       transport,
       signingCapability: signingCapability(),
+      invocationCapability: invocationCapability(),
       now: () => current,
       sleep: async () => {},
       random: () => 0,
@@ -896,18 +1130,20 @@ describe("TranscriptRequester fixture conformance", () => {
     expect(LISTEN_SQL_STATEMENT_CATALOG).toEqual(listenCatalogFixture.catalog);
   });
 
-  it("pins refresh semantics to the vendored resolve-happy delegation fields", () => {
-    const happy = wireFixtures.get("resolve-happy")!;
+  it("pins refresh semantics to the vendored resolve-happy-native delegation fields", () => {
+    const happy = wireFixtures.get("resolve-happy-native")!;
     const delegation = (happy.response.body as { delegation: Record<string, unknown> }).delegation;
     expect(Object.keys(delegation).sort()).toEqual([
-      "capabilities",
+      "capabilityHashHex",
       "delegationId",
       "encoded",
       "expiresAt",
       "holderDid",
+      "issuanceId",
       "issuedAt",
       "issuerDid",
       "policyId",
+      "revocationMode",
       "terminal",
     ]);
     expect(delegation.terminal).toBe(true);
@@ -933,6 +1169,7 @@ describe("TranscriptRequester fixture conformance", () => {
       grantIssuerDid: GRANT_ISSUER_DID,
       transport,
       signingCapability: signingCapability(),
+      invocationCapability: invocationCapability(),
       now: () => current,
       sleep: async () => {},
       random: () => 0,
@@ -952,25 +1189,33 @@ describe("TranscriptRequester fixture conformance", () => {
     await expectRequesterFailure(() => client.readSql("listen.getConversation"), "requester-engine-response-invalid");
   });
 
-  it("matches the producer-derived resolve-happy request and response wire bodies exactly", async () => {
-    const happy = wireFixtures.get("resolve-happy")!;
+  it("submits the producer-derived node-native resolve bytes exactly and invokes with their local CID", async () => {
+    const happy = wireFixtures.get("resolve-happy-native")!;
     const presentation = (happy.request.body as { presentation: Record<string, unknown> }).presentation;
-    let current = new Date("2026-06-12T00:03:00Z");
+    const delegation = (happy.response.body as { delegation: Record<string, unknown> }).delegation;
+    const nativePresentation = {
+      ...presentation,
+      policyId: delegation.policyId,
+      holderDid: delegation.holderDid,
+      eligibleSubjectDid: delegation.holderDid,
+      requestedCapabilities: capabilitiesFromFixtureJws(delegation.encoded as string),
+    };
+    let current = new Date("2026-07-10T12:01:00Z");
     const transport = new FixtureTransport([
-      challengeForPresentation(presentation),
+      challengeForPresentation(nativePresentation),
       happy.response,
       { status: 200, body: { rows: [{ wire: true }] } },
     ]);
     const client = await createTranscriptRequester({
       bootstrap: await wireBootstrap(happy),
-      requesterDid: presentation.holderDid as string,
+      requesterDid: delegation.holderDid as string,
       ownerDid: OWNER_DID,
       audience: presentation.audience as string,
       grantIssuerDid: (happy.response.body as { delegation: { issuerDid: string } }).delegation.issuerDid,
       transport,
       signingCapability: {
-        holderDid: presentation.holderDid as string,
-        keyId: `${presentation.holderDid as string}#fixture`,
+        holderDid: delegation.holderDid as string,
+        keyId: `${delegation.holderDid as string}#fixture`,
         suite: (presentation.holderSignature as { suite: string }).suite,
         holderBinding: presentation.holderBinding,
         eligibleSubjectDid: presentation.eligibleSubjectDid as string,
@@ -979,6 +1224,7 @@ describe("TranscriptRequester fixture conformance", () => {
           throw new Error("signGrantPresentation should be used for fixture conformance");
         },
       },
+      invocationCapability: invocationCapability(delegation.holderDid as string),
       holderBinding: presentation.holderBinding,
       eligibleSubjectDid: presentation.eligibleSubjectDid as string,
       presentationTtlSeconds: 90,
@@ -987,11 +1233,12 @@ describe("TranscriptRequester fixture conformance", () => {
       random: () => 0,
     });
 
-    await expect(client.readSql("listen.getConversation")).resolves.toEqual({ rows: [{ wire: true }] });
-    expect(transport.calls[0]!.body).toEqual(wireFixtures.get("challenge-happy")!.request.body);
-    expect(transport.calls[1]!.body).toEqual(happy.request.body);
+    const nativeResult = await client.readSql("listen.getConversation");
+    expect(nativeResult).toEqual({ rows: [{ wire: true }] });
+    expect(transport.calls[2]!.headers?.Authorization).toBe(delegation.encoded);
+    expect(transport.calls[3]!.headers?.Authorization).toContain(delegation.delegationId as string);
     expect(client.accessState).toBe("active");
-    current = new Date("2026-06-12T00:04:01Z");
+    current = new Date("2026-07-10T12:04:31Z");
     expect(client.accessState).toBe("needs-renewal");
   });
 
@@ -1013,14 +1260,14 @@ describe("TranscriptRequester fixture conformance", () => {
           await client.readSql("listen.getConversation");
           return;
         }
-        const resolveHappy = wireFixtures.get("resolve-happy")!;
+        const resolveHappy = wireFixtures.get("resolve-happy-native")!;
         const presentation = (resolveHappy.request.body as { presentation: Record<string, unknown> }).presentation;
         const client = await createTranscriptRequester({
-          bootstrap: await wireBootstrap(resolveHappy),
+          bootstrap: await presentationBootstrap(presentation, GRANT_ISSUER_DID),
           requesterDid: presentation.holderDid as string,
           ownerDid: OWNER_DID,
           audience: presentation.audience as string,
-          grantIssuerDid: (resolveHappy.response.body as { delegation: { issuerDid: string } }).delegation.issuerDid,
+          grantIssuerDid: GRANT_ISSUER_DID,
           transport: new FixtureTransport([challengeForPresentation(presentation), fixture.response]),
           signingCapability: signingCapability(presentation.holderDid as string),
           holderBinding: presentation.holderBinding,
@@ -1185,7 +1432,7 @@ describe("TranscriptRequester fixture conformance", () => {
       "challenge-happy",
       "challenge-unknown-field",
       "challenge-unknown-policy",
-      "resolve-happy",
+      "resolve-happy-native",
       "resolve-replay-consumed-nonce",
       "resolve-unknown-field",
       "resolve-nonce-substituted-without-resign",
@@ -1273,9 +1520,10 @@ describe("TranscriptRequester external input hardening", () => {
     });
 
     await client.readSql("listen.getConversation");
-    expect(transport.calls[2]!.body).toEqual({
-      statementName: "listen.getConversation",
-      fixedParams: sqlStatement.fixedParams,
+    expect(transport.calls[3]!.body).toEqual({
+      action: "execute_statement",
+      name: "listen.getConversation",
+      params: sqlStatement.fixedParams.map((item) => item.value),
     });
   });
 });

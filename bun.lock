@@ -217,6 +217,7 @@
         "@multiformats/multiaddr-to-uri": "^12.0.0",
         "@multiformats/uri-to-multiaddr": "^10.0.0",
         "@noble/curves": "^1.9.7",
+        "@noble/hashes": "1.8.0",
         "@tinycloud/bootstrap": "2.5.0",
         "@tinycloud/sdk-services": "2.6.0",
         "ms": "^2.1.3",
