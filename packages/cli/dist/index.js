@@ -31642,8 +31642,19 @@ var CLIError = class extends Error {
   }
 };
 function wrapError(error) {
-  if (error instanceof CLIError) return error;
   const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("Missing private key parameter in JWK")) {
+    const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
+    return new CLIError(
+      "AUTH_REQUIRED",
+      `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+      ExitCode.AUTH_REQUIRED,
+      {
+        hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`
+      }
+    );
+  }
+  if (error instanceof CLIError) return error;
   if (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired")) {
     return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
   }
@@ -43364,6 +43375,20 @@ function selectSignerJwk(sessionJwk, key2) {
   }
   return key2 ?? void 0;
 }
+function signerJwkForProfile(profileName, sessionJwk, key2) {
+  const jwk = selectSignerJwk(sessionJwk, key2);
+  if (jwkHasPrivateParameter(jwk)) {
+    return jwk;
+  }
+  throw new CLIError(
+    "AUTH_REQUIRED",
+    `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+    ExitCode.AUTH_REQUIRED,
+    {
+      hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`
+    }
+  );
+}
 async function createSDKInstance(ctx, options) {
   const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile);
@@ -43386,7 +43411,7 @@ async function createSDKInstance(ctx, options) {
         delegationHeader: session.delegationHeader,
         delegationCid: session.delegationCid,
         spaceId: session.spaceId,
-        jwk: selectSignerJwk(session.jwk, key2),
+        jwk: signerJwkForProfile(ctx.profile, session.jwk, key2),
         verificationMethod: session.verificationMethod ?? profile?.sessionDid ?? profile?.did,
         address: session.address,
         chainId: session.chainId,
@@ -43410,7 +43435,7 @@ async function createSDKInstance(ctx, options) {
       delegationHeader: session.delegationHeader,
       delegationCid: session.delegationCid,
       spaceId: session.spaceId,
-      jwk: selectSignerJwk(session.jwk, key2),
+      jwk: signerJwkForProfile(ctx.profile, session.jwk, key2),
       verificationMethod: session.verificationMethod ?? profile?.did,
       address: session.address,
       chainId: session.chainId,
