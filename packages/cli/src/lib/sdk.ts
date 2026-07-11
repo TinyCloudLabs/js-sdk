@@ -35,6 +35,26 @@ export function selectSignerJwk(
   return key ?? undefined;
 }
 
+function signerJwkForProfile(
+  profileName: string,
+  sessionJwk: unknown,
+  key: object | null,
+): object {
+  const jwk = selectSignerJwk(sessionJwk, key);
+  if (jwkHasPrivateParameter(jwk)) {
+    return jwk;
+  }
+
+  throw new CLIError(
+    "AUTH_REQUIRED",
+    `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+    ExitCode.AUTH_REQUIRED,
+    {
+      hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`,
+    },
+  );
+}
+
 /**
  * Create a TinyCloudNode instance from the current CLI context.
  * Uses the profile's persisted session and key.
@@ -79,7 +99,7 @@ export async function createSDKInstance(
         delegationHeader: session.delegationHeader as { Authorization: string },
         delegationCid: session.delegationCid as string,
         spaceId: session.spaceId as string,
-        jwk: selectSignerJwk(session.jwk, key),
+        jwk: signerJwkForProfile(ctx.profile, session.jwk, key),
         verificationMethod: (session.verificationMethod as string) ?? profile?.sessionDid ?? profile?.did,
         address: session.address as string | undefined,
         chainId: session.chainId as number | undefined,
@@ -108,7 +128,7 @@ export async function createSDKInstance(
       delegationHeader: session.delegationHeader as { Authorization: string },
       delegationCid: session.delegationCid as string,
       spaceId: session.spaceId as string,
-      jwk: selectSignerJwk(session.jwk, key),
+      jwk: signerJwkForProfile(ctx.profile, session.jwk, key),
       verificationMethod: (session.verificationMethod as string) ?? profile?.did,
       address: session.address as string | undefined,
       chainId: session.chainId as number | undefined,
