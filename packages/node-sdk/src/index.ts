@@ -139,6 +139,8 @@ export {
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
+  type CreateOwnerDelegationParams,
+  type OwnerDelegationReceipt,
 } from "./TinyCloudNode";
 
 export { AccountService } from "./account/AccountService";
