@@ -56,6 +56,7 @@ import {
   parseCapSpec,
   permissionsFromDelegation,
   readGrantHistory,
+  resolvePermissionSpaces,
   storedAdditionalDelegation,
   type PermissionRequestArtifact,
 } from "../lib/permissions.js";
@@ -476,12 +477,14 @@ export function registerAuthCommand(program: Command): void {
           );
         }
 
+        const requested = await resolvePermissionSpaces(parsed.requested, ctx.profile);
+        const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
         await ensureDelegationAuthority({
           ctx,
           profile,
           node,
-          requested: parsed.requested,
+          requested,
           expiryOption: parsed.requestedExpiry,
           reason: "Grant permissions requested by a TinyCloud auth request artifact.",
           yes: options.yes === true,
@@ -490,7 +493,7 @@ export function registerAuthCommand(program: Command): void {
         // The grant logic lives in the SDK (grantAuthRequest) so it is callable
         // programmatically; this command is a thin wrapper. The CLI request
         // artifact is a structural superset of AuthRequestArtifact.
-        const grant = await grantAuthRequest(node, parsed);
+        const grant = await grantAuthRequest(node, resolvedRequest);
         outputJson(grant);
       } catch (error) {
         handleError(error);

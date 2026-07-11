@@ -298,7 +298,6 @@ export async function parseCapSpec(
   const actionsCsv = spec.slice(lastColon + 1);
   const spaceAndPath = spec.slice(firstColon + 1, lastColon);
   const { space, path } = splitSpaceAndPath(spaceAndPath);
-  const resolvedSpace = await resolveSpaceUri(space, profile) ?? space;
   const actions = expandActionShortNames(
     service,
     actionsCsv.split(",").map((action) => action.trim()).filter(Boolean),
@@ -308,7 +307,9 @@ export async function parseCapSpec(
     throw new CLIError("INVALID_CAP", `Capability "${spec}" has no actions.`, ExitCode.USAGE_ERROR);
   }
 
-  return { service, space: resolvedSpace, path, actions };
+  return (await resolvePermissionSpaces([
+    { service, space, path, actions },
+  ], profile))[0]!;
 }
 
 export async function loadPermissionRequest(
@@ -460,17 +461,35 @@ export function compactPermission(permission: PermissionEntry): string {
   return `${service}:${space}:${permission.path}:${actions}`;
 }
 
-async function resolvePermissionSpaces(
+export async function resolvePermissionSpaces(
   entries: PermissionEntry[],
   profile: string,
 ): Promise<PermissionEntry[]> {
+  const profileConfig = await ProfileManager.getProfile(profile);
+  const allowLogicalSpaces = resolveProfilePosture(profileConfig) === "delegate-session";
   const resolved: PermissionEntry[] = [];
   for (const entry of entries) {
     const service = normalizeService(entry.service);
+    let space: string;
+    try {
+      space = await resolveSpaceUri(entry.space, profile) ?? entry.space;
+    } catch (error) {
+      if (
+        !allowLogicalSpaces ||
+        entry.space.startsWith("tinycloud:") ||
+        !(error instanceof CLIError) ||
+        error.code !== "ADDRESS_UNKNOWN"
+      ) {
+        throw error;
+      }
+      // A new delegate does not know the owner's address yet. Keep the logical
+      // space name in the request; the granting owner resolves it below.
+      space = entry.space;
+    }
     resolved.push({
       ...entry,
       service,
-      space: await resolveSpaceUri(entry.space, profile) ?? entry.space,
+      space,
       actions: expandActionShortNames(service, entry.actions),
     });
   }

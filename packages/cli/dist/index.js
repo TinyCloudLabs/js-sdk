@@ -43176,7 +43176,6 @@ async function parseCapSpec(spec, profile) {
   const actionsCsv = spec.slice(lastColon + 1);
   const spaceAndPath = spec.slice(firstColon + 1, lastColon);
   const { space, path } = splitSpaceAndPath(spaceAndPath);
-  const resolvedSpace = await resolveSpaceUri(space, profile) ?? space;
   const actions = expandActionShortNames(
     service,
     actionsCsv.split(",").map((action) => action.trim()).filter(Boolean)
@@ -43184,7 +43183,9 @@ async function parseCapSpec(spec, profile) {
   if (actions.length === 0) {
     throw new CLIError("INVALID_CAP", `Capability "${spec}" has no actions.`, ExitCode.USAGE_ERROR);
   }
-  return { service, space: resolvedSpace, path, actions };
+  return (await resolvePermissionSpaces([
+    { service, space, path, actions }
+  ], profile))[0];
 }
 async function loadPermissionRequest(source, profile) {
   const raw = JSON.parse(await readFile2(source, "utf8"));
@@ -43292,13 +43293,24 @@ function compactPermission(permission) {
   return `${service}:${space}:${permission.path}:${actions}`;
 }
 async function resolvePermissionSpaces(entries, profile) {
+  const profileConfig = await ProfileManager.getProfile(profile);
+  const allowLogicalSpaces = resolveProfilePosture(profileConfig) === "delegate-session";
   const resolved = [];
   for (const entry of entries) {
     const service = normalizeService(entry.service);
+    let space;
+    try {
+      space = await resolveSpaceUri(entry.space, profile) ?? entry.space;
+    } catch (error) {
+      if (!allowLogicalSpaces || entry.space.startsWith("tinycloud:") || !(error instanceof CLIError) || error.code !== "ADDRESS_UNKNOWN") {
+        throw error;
+      }
+      space = entry.space;
+    }
     resolved.push({
       ...entry,
       service,
-      space: await resolveSpaceUri(entry.space, profile) ?? entry.space,
+      space,
       actions: expandActionShortNames(service, entry.actions)
     });
   }
@@ -43836,17 +43848,19 @@ function registerAuthCommand(program2) {
           ExitCode.USAGE_ERROR
         );
       }
+      const requested = await resolvePermissionSpaces(parsed.requested, ctx.profile);
+      const resolvedRequest = { ...parsed, requested };
       const node = await ensureAuthenticated(ctx);
       await ensureDelegationAuthority({
         ctx,
         profile,
         node,
-        requested: parsed.requested,
+        requested,
         expiryOption: parsed.requestedExpiry,
         reason: "Grant permissions requested by a TinyCloud auth request artifact.",
         yes: options.yes === true
       });
-      const grant = await grantAuthRequest(node, parsed);
+      const grant = await grantAuthRequest(node, resolvedRequest);
       outputJson(grant);
     } catch (error) {
       handleError(error);

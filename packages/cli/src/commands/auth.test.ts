@@ -270,6 +270,7 @@ mock.module("../lib/permissions.js", () => ({
   }),
   permissionsFromDelegation: () => [],
   readGrantHistory: async () => [],
+  resolvePermissionSpaces: async (permissions: unknown[]) => permissions,
   storedAdditionalDelegation: (delegation: object, permissions: object[]) => ({
     delegation,
     permissions,
