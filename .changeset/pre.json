@@ -22,6 +22,7 @@
   "changesets": [
     "calm-keys-delegate",
     "cli-private-jwk-auth-error",
-    "fuzzy-feeds-share-session-key"
+    "fuzzy-feeds-share-session-key",
+    "warm-delegates-import"
   ]
 }

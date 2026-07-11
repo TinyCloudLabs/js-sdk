@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 0.7.7-beta.3
+
+### Patch Changes
+
+- decbb25: Allow a fresh `delegate-session` profile to establish its first authenticated session by importing a delegation targeted at its generated session key.
+
 ## 0.7.7-beta.2
 
 ### Patch Changes
