@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk
 
+## 2.6.4-beta.0
+
+### Patch Changes
+
+- f6048b7: Keep TinyCloudNode session-key accessors synchronized with the active key and make repeated sign-in rotate that key safely, so delegation flows do not reference the removed default key.
+
 ## 2.6.3
 
 ### Patch Changes

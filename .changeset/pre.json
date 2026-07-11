@@ -19,5 +19,7 @@
     "@tinycloud/web-sdk": "2.6.3",
     "@tinycloud/sdk-services-test": "11.0.3"
   },
-  "changesets": []
+  "changesets": [
+    "fuzzy-feeds-share-session-key"
+  ]
 }
