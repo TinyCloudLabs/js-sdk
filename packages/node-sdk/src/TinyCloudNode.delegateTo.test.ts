@@ -146,6 +146,7 @@ function installFakeSession(
     spaceId?: string;
     address?: string;
     chainId?: number;
+    verificationMethod?: string;
   },
 ): void {
   const fakeSession = {
@@ -155,7 +156,7 @@ function installFakeSession(
     spaceId: opts.spaceId ?? "space://test",
     delegationCid: "bafyparent",
     delegationHeader: { Authorization: "Bearer parent" },
-    verificationMethod: "did:key:z6MkTestSession",
+    verificationMethod: opts.verificationMethod ?? "did:key:z6MkTestSession",
     jwk: { kty: "OKP", crv: "Ed25519", x: "test" },
     siwe: opts.siwe,
     signature: "0xfake",
@@ -263,7 +264,10 @@ describe("TinyCloudNode.delegateTo", () => {
     });
 
     const node = new TinyCloudNode({ wasmBindings: wasm });
-    installFakeSession(node, { siwe: buildSiwe(futureExpiry) });
+    installFakeSession(node, {
+      siwe: buildSiwe(futureExpiry),
+      verificationMethod: "did:key:z6MkTestSession#z6MkTestSession",
+    });
 
     const result = await node.delegateTo(BOB_DID, [
       {
@@ -278,6 +282,9 @@ describe("TinyCloudNode.delegateTo", () => {
     expect(result.delegation.delegateDID).toBe(BOB_DID);
     // WASM path was used.
     expect(createDelegationSpy).toHaveBeenCalledTimes(1);
+    expect((createDelegationSpy as any).mock.calls[0][0].verificationMethod).toBe(
+      "did:key:z6MkTestSession",
+    );
     // Wallet path was NOT used.
     expect(prepareSessionSpy).not.toHaveBeenCalled();
   });

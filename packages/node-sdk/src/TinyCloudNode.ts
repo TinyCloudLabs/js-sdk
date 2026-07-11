@@ -2661,7 +2661,10 @@ export class TinyCloudNode {
       delegationCid: params.session.delegationCid,
       jwk: params.session.jwk,
       spaceId: params.session.spaceId,
-      verificationMethod: params.session.verificationMethod,
+      // Session storage carries the verification method as a DID URL
+      // (`did:key:...#key-id`). The Rust UCAN builder expects the principal
+      // DID here and rejects the fragment as an invalid audience DID.
+      verificationMethod: params.session.verificationMethod.split("#", 1)[0],
     };
 
     const result = this.wasmBindings.createDelegation(
