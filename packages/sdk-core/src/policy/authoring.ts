@@ -21,6 +21,8 @@ import { SignedObjectProfileError, SignedObjectSchemaError } from "./errors";
 
 export const TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA =
   "xyz.tinycloud.exchange/transcript-bootstrap/v0" as const;
+export const OWNER_NODE_ENDPOINT_SCHEMA =
+  "xyz.tinycloud.exchange/owner-node-endpoint/v1" as const;
 export const POLICY_VERSION_V0 = "v0" as const;
 export const W3C_VC_CREDENTIAL_VERIFIER = "w3c.vc/credential/v1" as const;
 
@@ -72,12 +74,20 @@ export interface TranscriptShareBootstrap {
     readonly supportedEvidenceVerifiers: readonly [typeof W3C_VC_CREDENTIAL_VERIFIER];
     readonly signedRecord: PolicyEngineRecord;
   };
+  /** Untrusted routing hint. Authority comes only from delegation/invocation validation. */
+  readonly ownerNode: {
+    readonly schema: typeof OWNER_NODE_ENDPOINT_SCHEMA;
+    readonly endpoint: string;
+    readonly spaceId: string;
+  };
   readonly resourceHint: JsonObject;
 }
 
 export interface ComposeTranscriptShareBootstrapInput {
   readonly policyId: string;
   readonly policyEngineRecord: PolicyEngineRecord;
+  readonly ownerNodeEndpoint: string;
+  readonly ownerSpaceId: string;
   readonly resourceHint: JsonObject;
 }
 
@@ -235,7 +245,7 @@ export function composeTranscriptShareBootstrap(
   input: ComposeTranscriptShareBootstrapInput,
 ): TranscriptShareBootstrap {
   const normalized = expectObject(input, "$", "transcript-share-bootstrap-malformed");
-  assertExactKeys(normalized, ["policyId", "policyEngineRecord", "resourceHint"], "$");
+  assertExactKeys(normalized, ["policyId", "policyEngineRecord", "ownerNodeEndpoint", "ownerSpaceId", "resourceHint"], "$");
   const signedRecord = expectPolicyEngineRecord(
     requiredValue(normalized, "policyEngineRecord", "$"),
   );
@@ -254,8 +264,29 @@ export function composeTranscriptShareBootstrap(
       supportedEvidenceVerifiers: [W3C_VC_CREDENTIAL_VERIFIER],
       signedRecord,
     },
+    ownerNode: {
+      schema: OWNER_NODE_ENDPOINT_SCHEMA,
+      endpoint: validateOwnerNodeEndpoint(requiredString(normalized, "ownerNodeEndpoint", "$")),
+      spaceId: requiredString(normalized, "ownerSpaceId", "$"),
+    },
     resourceHint: requiredObject(normalized, "resourceHint", "$"),
   };
+}
+
+function validateOwnerNodeEndpoint(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new PolicyAuthoringError("transcript-share-bootstrap-malformed", "$.ownerNodeEndpoint must be a URL");
+  }
+  if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.hash !== "") {
+    throw new PolicyAuthoringError(
+      "transcript-share-bootstrap-malformed",
+      "$.ownerNodeEndpoint must be an HTTPS URL without credentials or a fragment",
+    );
+  }
+  return url.toString().replace(/\/$/, "");
 }
 
 /**

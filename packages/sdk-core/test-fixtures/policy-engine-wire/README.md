@@ -25,8 +25,8 @@ manifest-completeness test.**
 
 Cases: challenge happy (signed GrantChallenge envelope); challenge unknown
 field → 422 `schema-invalid`; challenge unknown policy → 404
-`policy-not-found`; resolve happy → 200 `{delegation}` (signed
-PortableDelegation, `refresh` semantics read from THIS shape); replay of an
+`policy-not-found`; resolve happy native → 200 `{delegation}` carrying the
+prepared node-native compact-JWS UCAN; replay of an
 evaluated presentation → 409 `challenge-nonce-consumed` (burned-nonce rule:
 restart at /challenge); resolve unknown field → 422 `schema-invalid`; nonce
 substituted without re-signing → 422 `holder-signature-invalid` (DQ-18);
