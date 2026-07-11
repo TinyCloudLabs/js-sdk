@@ -39,7 +39,7 @@ import {
   keyToDID,
 } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
-import { ensureAuthenticated } from "../lib/sdk.js";
+import { bootstrapDelegatedSession, ensureAuthenticated } from "../lib/sdk.js";
 import {
   appendAdditionalDelegation,
   appendPermissionRequestArtifact,
@@ -403,7 +403,15 @@ export function registerAuthCommand(program: Command): void {
         }
 
         const imported = normalizeDelegationImport(parsed);
-        const node = await ensureAuthenticated(ctx);
+        let node;
+        try {
+          node = await ensureAuthenticated(ctx);
+        } catch (error) {
+          const profile = await ProfileManager.getProfile(ctx.profile);
+          const session = await ProfileManager.getSession(ctx.profile);
+          if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
+          node = await bootstrapDelegatedSession(ctx, imported.delegation);
+        }
         await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
           imported.delegation,
           imported.permissions,
