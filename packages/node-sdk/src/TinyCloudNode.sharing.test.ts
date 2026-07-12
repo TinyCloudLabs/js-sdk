@@ -156,4 +156,46 @@ describe("TinyCloudNode sharing", () => {
     expect(access.path).toBe(path);
     expect(access.restorable.verificationMethod.split("#")[0]).toBe(receiver.did.split("#")[0]);
   });
+
+  test("real WASM signs the requested revocation CID rather than the session parent CID", async () => {
+    const wasmBindings = new NodeWasmBindings();
+    const owner = new Wallet("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
+    const manager = wasmBindings.createSessionManager();
+    const sessionKeyId = manager.createSessionKey("revocation-session");
+    const sessionKeyDid = manager.getDID(sessionKeyId).split("#")[0];
+    const spaceId = `tinycloud:pkh:eip155:1:${owner.address}:applications`;
+    const prepared = wasmBindings.prepareSession({
+      abilities: { delegation: { "": ["tinycloud.delegation/revoke"] } },
+      address: wasmBindings.ensureEip55(owner.address),
+      chainId: 1,
+      domain: "feed.localhost",
+      issuedAt: new Date().toISOString(),
+      expirationTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      spaceId,
+      delegateUri: sessionKeyDid,
+    });
+    const session = wasmBindings.completeSessionSetup({
+      ...prepared,
+      signature: await owner.signMessage(prepared.siwe),
+    });
+    const childCid = "bafy-child-distinct-from-parent";
+
+    const headers = wasmBindings.invokeAny!(session, [{
+      resource: `urn:cid:${childCid}`,
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/revoke",
+    }]);
+    const token = headers.Authorization;
+    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")) as {
+      att: Record<string, Record<string, unknown>>;
+      prf: string[];
+    };
+
+    expect(session.delegationCid).not.toBe(childCid);
+    expect(payload.att[`urn:cid:${childCid}`]).toEqual({
+      "tinycloud.delegation/revoke": [{}],
+    });
+    expect(payload.prf).toEqual([session.delegationCid]);
+  });
 });

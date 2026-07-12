@@ -2540,6 +2540,7 @@ export class TinyCloudNode {
       hosts: [this.config.host!],
       session: serviceSession,
       invoke: this.invokeWithRuntimePermissions,
+      invokeAny: this.invokeAnyWithRuntimePermissions,
       fetch: globalThis.fetch.bind(globalThis),
     });
 

@@ -11,6 +11,7 @@
 import type {
   FetchFunction,
   FetchResponse,
+  InvokeAnyFunction,
   InvokeFunction,
   ServiceSession,
 } from "@tinycloud/sdk-services";
@@ -85,6 +86,7 @@ export class DelegationManager {
   private hosts: string[];
   private session: ServiceSession;
   private invoke: InvokeFunction;
+  private invokeAny?: InvokeAnyFunction;
   private fetchFn: FetchFunction;
 
   /**
@@ -96,6 +98,7 @@ export class DelegationManager {
     this.hosts = config.hosts;
     this.session = config.session;
     this.invoke = config.invoke;
+    this.invokeAny = config.invokeAny;
     this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
@@ -279,13 +282,29 @@ export class DelegationManager {
     }
 
     try {
-      const body = JSON.stringify({ cid });
+      if (!this.invokeAny) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.NOT_INITIALIZED,
+            "Revocation requires an invokeAny function that can sign the target CID"
+          ),
+        };
+      }
 
-      const response = await this.invokeOperation(
-        cid,
-        DelegationAction.REVOKE,
-        body
+      const headers = this.invokeAny(
+        this.session,
+        [{
+          resource: `urn:cid:${cid}`,
+          service: "delegation",
+          path: "",
+          action: DelegationAction.REVOKE,
+        }],
       );
+      const response = await this.fetchFn(`${this.host}/revoke`, {
+        method: "POST",
+        headers,
+      });
 
       if (!response.ok) {
         const errorText = await response.text();

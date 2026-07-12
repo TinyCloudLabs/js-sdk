@@ -10,6 +10,7 @@
 import { z } from "zod";
 import type {
   FetchFunction,
+  InvokeAnyFunction,
   InvokeFunction,
   ServiceSession,
 } from "@tinycloud/sdk-services";
@@ -465,6 +466,11 @@ export const DelegationManagerConfigSchema = z.object({
     (val): val is InvokeFunction => typeof val === "function",
     { message: "Expected an invoke function" }
   ),
+  /** Platform-specific invoke function for raw resource URIs */
+  invokeAny: z.unknown().refine(
+    (val): val is InvokeAnyFunction => val === undefined || typeof val === "function",
+    { message: "Expected an invokeAny function or undefined" }
+  ).optional(),
   /** Optional custom fetch implementation */
   fetch: z.unknown().refine(
     (val): val is FetchFunction => val === undefined || typeof val === "function",
