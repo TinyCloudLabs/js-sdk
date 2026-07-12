@@ -335,6 +335,7 @@ export {
   DelegationErrorCode,
   // Delegation types
   Delegation,
+  DelegationStatus,
   CreateDelegationParams,
   CreateDelegationWasmParams,
   CreateDelegationWasmResult,

@@ -42,6 +42,7 @@ export {
 
   // Delegation types
   Delegation,
+  DelegationStatus,
   CreateDelegationParams,
   DelegationChain,
   DelegationApiResponse,

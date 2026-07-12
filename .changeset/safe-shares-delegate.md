@@ -10,3 +10,5 @@ link or its embedded private key. Node `receive` now uses the same primitive
 when auto-subdelegating to its current session key. Delegation revocation can
 now be included in a consolidated manifest and uses the node's revocation
 endpoint so descendants are invalidated rather than recording a no-op invoke.
+The SDK also exposes node-confirmed delegation lifecycle status without
+returning delegation metadata.

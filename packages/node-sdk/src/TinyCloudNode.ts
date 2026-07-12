@@ -76,6 +76,7 @@ import {
   // v2 types
   SiweConfig,
   Delegation,
+  DelegationStatus,
   CreateDelegationParams,
   KeyInfo,
   JWK,
@@ -3648,6 +3649,22 @@ export class TinyCloudNode {
    */
   async revokeDelegation(cid: string): Promise<DelegationResult<void>> {
     return this.delegationManager.revoke(cid);
+  }
+
+  /** Read node-confirmed lifecycle state for one delegation. */
+  async getDelegationStatus(cid: string): Promise<DelegationResult<DelegationStatus>> {
+    return this.delegationManager.status(cid);
+  }
+
+  /** Compute the canonical CID of a compact delegation authorization. */
+  computeDelegationCid(authorization: string): string {
+    if (!authorization || !this.wasmBindings.computeCid) {
+      throw new Error("Delegation CID computation is unavailable");
+    }
+    return this.wasmBindings.computeCid(
+      new TextEncoder().encode(authorization),
+      0x55n,
+    );
   }
 
   /**

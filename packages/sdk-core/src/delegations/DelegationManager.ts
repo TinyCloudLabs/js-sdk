@@ -20,6 +20,8 @@ import {
   DelegationError,
   DelegationErrorCodes,
   Delegation,
+  DelegationStatus,
+  DelegationStatusSchema,
   CreateDelegationParams,
   DelegationChain,
   DelegationManagerConfig,
@@ -33,6 +35,7 @@ import { EXPIRY } from "../expiry";
 const DelegationAction = {
   CREATE: "tinycloud.delegation/create",
   REVOKE: "tinycloud.delegation/revoke",
+  STATUS: "tinycloud.delegation/status",
   LIST: "tinycloud.delegation/list",
   GET: "tinycloud.delegation/get",
   CHECK: "tinycloud.delegation/check",
@@ -347,6 +350,87 @@ export class DelegationManager {
         error: createError(
           DelegationErrorCodes.NETWORK_ERROR,
           `Network error during delegation revocation: ${String(error)}`,
+          error instanceof Error ? error : undefined
+        ),
+      };
+    }
+  }
+
+  /**
+   * Reads the node-confirmed lifecycle state of one delegation without
+   * exposing delegation metadata.
+   */
+  async status(cid: string): Promise<Result<DelegationStatus>> {
+    if (!cid) {
+      return {
+        ok: false,
+        error: createError(DelegationErrorCodes.INVALID_INPUT, "cid is required"),
+      };
+    }
+    if (!this.invokeAny) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.NOT_INITIALIZED,
+          "Delegation status requires an invokeAny function that can sign the target CID"
+        ),
+      };
+    }
+
+    try {
+      const headers = this.invokeAny(this.session, [{
+        resource: `urn:cid:${cid}`,
+        service: "delegation",
+        path: "",
+        action: DelegationAction.STATUS,
+      }]);
+      const response = await this.fetchFn(`${this.host}/delegation/status`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ cid }),
+      });
+      if (!response.ok && response.status !== 404) {
+        const errorText = await response.text();
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.NETWORK_ERROR,
+            `Failed to get delegation status: ${response.status} - ${errorText}`,
+            undefined,
+            { status: response.status, cid }
+          ),
+        };
+      }
+      const parsed = DelegationStatusSchema.safeParse(await response.json());
+      const responseStatusMatches = parsed.success && (
+        response.status === 404
+          ? parsed.data.status === "not_found" && !parsed.data.exists
+          : parsed.data.status !== "not_found"
+      );
+      if (!parsed.success || parsed.data.cid !== cid || !responseStatusMatches) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.INVALID_TOKEN,
+            "Node returned an invalid delegation status response",
+            undefined,
+            { cid }
+          ),
+        };
+      }
+      return { ok: true, data: parsed.data };
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return {
+          ok: false,
+          error: createError(DelegationErrorCodes.ABORTED, "Request aborted", error),
+        };
+      }
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.NETWORK_ERROR,
+          `Network error during delegation status: ${String(error)}`,
           error instanceof Error ? error : undefined
         ),
       };

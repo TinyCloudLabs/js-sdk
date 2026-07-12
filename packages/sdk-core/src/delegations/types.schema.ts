@@ -186,6 +186,34 @@ export const DelegationSchema = z.object({
 
 export type Delegation = z.infer<typeof DelegationSchema>;
 
+/** Node-confirmed lifecycle state for one delegation. */
+export const DelegationStatusSchema = z.object({
+  cid: z.string().min(1),
+  status: z.enum(["active", "revoked", "expired", "unavailable", "not_found"]),
+  exists: z.boolean(),
+  active: z.boolean(),
+  revoked: z.boolean(),
+  expired: z.boolean(),
+}).strict().superRefine((value, context) => {
+  const valid = value.status === "active"
+    ? value.exists && value.active && !value.revoked && !value.expired
+    : value.status === "revoked"
+      ? value.exists && !value.active && value.revoked && !value.expired
+      : value.status === "expired"
+        ? value.exists && !value.active && !value.revoked && value.expired
+        : value.status === "unavailable"
+          ? value.exists && !value.active && !value.revoked && !value.expired
+          : !value.exists && !value.active && !value.revoked && !value.expired;
+  if (!valid) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "delegation status flags do not match status",
+    });
+  }
+});
+
+export type DelegationStatus = z.infer<typeof DelegationStatusSchema>;
+
 /**
  * Entry in the capability registry mapping a capability to available keys.
  */

@@ -140,6 +140,7 @@ describe("TinyCloudNode sharing", () => {
     if (!delegated.ok) return;
 
     const token = delegated.data.delegation.delegationHeader.Authorization;
+    expect(receiver.computeDelegationCid(token)).toBe(delegated.data.delegation.cid);
     const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")) as {
       aud: string;
       prf: string[];
