@@ -85,6 +85,8 @@ export {
   EncodedShareData,
   ReceiveOptions,
   ShareAccess,
+  DelegateReceivedShareParams,
+  DelegatedShareAccess,
 } from "./SharingService";
 
 // SharingService Schemas and Validation

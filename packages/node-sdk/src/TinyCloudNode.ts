@@ -706,6 +706,11 @@ export class TinyCloudNode {
       fetch: globalThis.fetch.bind(globalThis),
       keyProvider: this._keyProvider,
       registry: this._capabilityRegistry,
+      createDelegationWasm: (params) => this.createDelegationWrapper(params),
+      computeCid: (data, codec) => {
+        if (!this.wasmBindings.computeCid) throw new Error("computeCid is unavailable");
+        return this.wasmBindings.computeCid(data, codec);
+      },
       // delegationManager: undefined - not needed for receive()
       createKVService: (config) => {
         // Use pathPrefix as the KV service prefix for sharing links

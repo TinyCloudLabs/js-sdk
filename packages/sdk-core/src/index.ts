@@ -354,6 +354,8 @@ export {
   EncodedShareData,
   ReceiveOptions,
   ShareAccess,
+  DelegateReceivedShareParams,
+  DelegatedShareAccess,
   // v2 types
   JWK,
   KeyType,
@@ -576,6 +578,7 @@ export {
   SessionExpiredError,
   // Functions
   isCapabilitySubset,
+  actionContains,
   parseRecapCapabilities,
   // Types
   type ParseRecapFromSiwe,

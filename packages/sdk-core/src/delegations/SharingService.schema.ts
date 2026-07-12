@@ -178,6 +178,13 @@ export const SharingServiceConfigSchema = z.object({
       message: "Expected a createDelegationWasm function or undefined",
     })
     .optional(),
+  /** CID computation used to verify transportable child delegations. */
+  computeCid: z
+    .unknown()
+    .refine((val): val is (data: Uint8Array, codec: bigint) => string => val === undefined || typeof val === "function", {
+      message: "Expected a computeCid function or undefined",
+    })
+    .optional(),
   /**
    * Path prefix for KV operations.
    */

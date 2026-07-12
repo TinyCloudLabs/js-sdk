@@ -145,6 +145,8 @@ export {
   EncodedShareData,
   ReceiveOptions,
   ShareAccess,
+  DelegateReceivedShareParams,
+  DelegatedShareAccess,
   // Key and delegation record types
   JWK,
   KeyType,

@@ -19,6 +19,7 @@ import type {
   Delegation,
   IngestOptions,
 } from "../delegations/types";
+import { actionContains } from "../capabilities";
 
 // =============================================================================
 // Service Name
@@ -675,18 +676,7 @@ export class CapabilityKeyRegistry implements ICapabilityKeyRegistry {
    * @returns true if pattern matches action
    */
   private actionMatches(pattern: string, action: string): boolean {
-    // Exact match
-    if (pattern === action) {
-      return true;
-    }
-
-    // Wildcard match (e.g., "tinycloud.kv/*" matches "tinycloud.kv/get")
-    if (pattern.endsWith("/*")) {
-      const prefix = pattern.slice(0, -2);
-      return action.startsWith(prefix + "/") || action === prefix;
-    }
-
-    return false;
+    return actionContains(pattern, action);
   }
 
   /**

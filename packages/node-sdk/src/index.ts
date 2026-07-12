@@ -416,6 +416,8 @@ export type {
   EncodedShareData,
   ReceiveOptions,
   ShareAccess,
+  DelegateReceivedShareParams,
+  DelegatedShareAccess,
   Delegation,
   CreateDelegationParams,
   DelegationResult,
