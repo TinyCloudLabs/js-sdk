@@ -584,7 +584,24 @@ describe("TranscriptRequester native bridge conformance", () => {
     const missingResolver: RequesterTransport = { request: async () => ({ status: 500, body: {} }) };
     await expectRequesterFailure(() => requester(missingResolver), "requester-owner-node-endpoint-invalid");
 
-    for (const address of ["127.0.0.1", "10.0.0.1", "169.254.1.1", "::1", "fe80::1", "fd00::1"]) {
+    for (const address of [
+      "127.0.0.1",
+      "10.0.0.1",
+      "100.64.0.1",
+      "169.254.1.1",
+      "172.16.0.1",
+      "192.0.0.1",
+      "192.168.1.1",
+      "198.18.0.1",
+      "198.51.100.1",
+      "203.0.113.1",
+      "224.0.0.1",
+      "::1",
+      "fe80::1",
+      "fd00::1",
+      "::ffff:127.0.0.1",
+      "::ffff:7f00:1",
+    ]) {
       const unsafe: RequesterTransport = {
         request: async () => ({ status: 500, body: {} }),
         resolveEndpoint: async () => ({ addresses: [address] }),
@@ -1042,7 +1059,7 @@ describe("TranscriptRequester challenge, resolve, and renewal", () => {
 });
 
 describe("TranscriptRequester delegation import and containment", () => {
-  it("rejects wider capability, wrong holder, and excessive TTL", async () => {
+  it("rejects wider capability, wrong delegation identity, malformed wire bytes, and excessive TTL", async () => {
     await expectRequesterFailure(async () => {
       const client = await requester(new FixtureTransport([challenge(), resolve([
         { ...kvCapability, path: "notebooks/nb_project_notes/docs/bob-note.md" },
@@ -1053,6 +1070,8 @@ describe("TranscriptRequester delegation import and containment", () => {
     for (const [overrides, code] of [
       [{ holderDid: OWNER_DID }, "requester-delegation-wrong-holder"],
       [{ issuerDid: OWNER_DID }, "requester-delegation-invalid"],
+      [{ policyId: "pol_different" }, "requester-delegation-invalid"],
+      [{ encoded: "not-a-compact-jws" }, "requester-delegation-invalid"],
       [{ expiresAt: "2026-07-09T12:05:01Z" }, "requester-delegation-ttl-excessive"],
     ] as const) {
       await expectRequesterFailure(async () => {
@@ -1591,5 +1610,38 @@ describe("TranscriptRequester external input hardening", () => {
       name: "listen.getConversation",
       params: [],
     });
+  });
+
+  it("rejects a caveated native read before /invoke when the holder signer lacks invokeAny", async () => {
+    const { invokeAny: _invokeAny, ...singularOnlyCapability } = invocationCapability();
+    const transport = new FixtureTransport([
+      challenge(),
+      resolve([sqlCapability]),
+    ]);
+    const client = await createTranscriptRequester({
+      bootstrap: await bootstrap({
+        bootstrap: {
+          resourceHint: {
+            resourceType: "listen.conversation",
+            resourceId: "conv_456",
+            requestedCapabilities: [sqlCapability],
+          },
+        },
+      }),
+      requesterDid: REQUESTER_DID,
+      ownerDid: OWNER_DID,
+      audience: AUDIENCE,
+      grantIssuerDid: GRANT_ISSUER_DID,
+      transport,
+      signingCapability: signingCapability(),
+      invocationCapability: singularOnlyCapability,
+      now: () => NOW,
+    });
+
+    await expectRequesterFailure(
+      () => client.readSql("listen.getConversation"),
+      "requester-invocation-signer-required",
+    );
+    expect(transport.calls.some((call) => call.url.endsWith("/invoke"))).toBe(false);
   });
 });
