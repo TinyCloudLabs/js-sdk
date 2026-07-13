@@ -1,0 +1,33 @@
+{
+  "description": "Canonical signers for v0 vectors. NOT FOR PRODUCTION USE.",
+  "ed25519": {
+    "policy_signer": {
+      "seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "public_key_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "did": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S"
+    },
+    "grant_issuer": {
+      "seed_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "public_key_hex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+      "did": "did:key:z6MkqGC3nWZhYieEVTVDKW5v588CiGfsDSmRVG9ZwwWTvLSK"
+    },
+    "holder": {
+      "seed_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "public_key_hex": "17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce",
+      "did": "did:key:z6Mkg49NtQR2LyYRDCQFK4w1VVHqhypZSSRo7HsyuN7SV7v5"
+    }
+  },
+  "secp256k1": {
+    "owner_root": {
+      "private_key_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "eoa_address": "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+      "did": "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+    },
+    "eligible_subject": {
+      "private_key_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "eoa_address": "0x7564105E977516C53bE337314c7E53838967bDaC",
+      "did": "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac"
+    }
+  },
+  "engine_audience": "https://policy-engine.example/v0"
+}

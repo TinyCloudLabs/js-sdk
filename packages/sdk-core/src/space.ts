@@ -19,6 +19,8 @@ export interface SpaceHostResult {
   activated?: string[];
   /** Space IDs that were skipped (e.g., space doesn't exist yet) */
   skipped?: string[];
+  /** Raw node receipt CID. This identifies the commit event, not the delegation. */
+  commitEventCid?: string;
 }
 
 /**
@@ -66,11 +68,25 @@ export async function submitHostDelegation(
     headers,
   });
 
-  return {
-    success: res.ok,
-    status: res.status,
-    error: res.ok ? undefined : await res.text().catch(() => res.statusText),
-  };
+  if (!res.ok) {
+    return {
+      success: false,
+      status: res.status,
+      error: await res.text().catch(() => res.statusText),
+    };
+  }
+  try {
+    const body = await res.json() as { cid?: string; activated?: string[]; skipped?: string[] };
+    return {
+      success: true,
+      status: res.status,
+      commitEventCid: body.cid,
+      activated: body.activated ?? [],
+      skipped: body.skipped ?? [],
+    };
+  } catch {
+    return { success: true, status: res.status, activated: [], skipped: [] };
+  }
 }
 
 /**
@@ -94,12 +110,13 @@ export async function activateSessionWithHost(
 
   if (res.ok) {
     try {
-      const body = await res.json() as { activated?: string[]; skipped?: string[] };
+      const body = await res.json() as { cid?: string; activated?: string[]; skipped?: string[] };
       return {
         success: true,
         status: res.status,
         activated: body.activated ?? [],
         skipped: body.skipped ?? [],
+        commitEventCid: body.cid,
       };
     } catch {
       // Fallback for older servers that return plain text CID

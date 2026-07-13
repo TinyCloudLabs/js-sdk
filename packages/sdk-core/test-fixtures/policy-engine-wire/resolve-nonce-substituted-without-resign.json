@@ -1,0 +1,61 @@
+{
+  "name": "resolve-nonce-substituted-without-resign",
+  "note": "DQ-18: swapping in another challenge nonce without re-signing invalidates the holder signature.",
+  "request": {
+    "body": {
+      "presentation": {
+        "audience": "https://policy-engine.example/v0",
+        "eligibleSubjectDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+        "expiresAt": "2026-06-12T00:04:30Z",
+        "holderBinding": {
+          "enrollment": {
+            "eligibleSubjectDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+            "enrollmentId": "henr_bipz3aq7khvb3enatc2qvnjxwdzgg5d4dedmmgb7nmpimtfakmfa",
+            "expiresAt": "2026-07-01T00:00:00Z",
+            "holderDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+            "notBefore": "2026-06-01T00:00:00Z",
+            "schema": "xyz.tinycloud.policy/holder-enrollment/v0",
+            "signature": {
+              "signerDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+              "suite": "eddsa-ed25519-sha256-jcs-v1",
+              "value": "D_Ry4f9NKy01XEpx8ojjvBqPcom_2h-5NxBh9fbRMb113EOhSANzWmr8a8a5bhMXEODjLdvtSHXkHRst37mNDw"
+            },
+            "signingKeyDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z"
+          },
+          "type": "enrolled-agent"
+        },
+        "holderDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+        "holderSignature": {
+          "signerDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+          "suite": "eddsa-ed25519-sha256-jcs-v1",
+          "value": "pY8bDWA4el5Xr0iDsNZ-yrcP-H4bgtZazpx-wqrASsNyZsmANTslWyqIC7YLGGUzRPrm7f9BblcgNvI1zB8UCw"
+        },
+        "nonce": "qw_x_-6SWPj5WAEj1ujCZLVFD_zPYEwgUipIJHLHACI",
+        "policyId": "pol_wire_fixture",
+        "requestedCapabilities": [
+          {
+            "actions": [
+              "tinycloud.sql/read"
+            ],
+            "path": "xyz.tinycloud.listen/conversations",
+            "service": "tinycloud.sql",
+            "space": "applications"
+          }
+        ],
+        "requestedCapabilitiesHash": "9d3adc26984df12a53573df824e8045f991d4c4500f625bf391ef1c4f9765304",
+        "schema": "xyz.tinycloud.policy/presentation/v0"
+      }
+    },
+    "method": "POST",
+    "path": "/policy/v0/resolve"
+  },
+  "response": {
+    "body": {
+      "error": {
+        "code": "holder-signature-invalid",
+        "message": "holder-signature-invalid"
+      }
+    },
+    "status": 422
+  }
+}

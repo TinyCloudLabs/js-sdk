@@ -1,0 +1,70 @@
+{
+ "name": "resolve-happy-native",
+ "note": "ResolveResponse envelope: delegation carries policyId, delegationId, encoded (signed PortableDelegation), and refresh/expiry fields exactly as serialized here. | NATIVE VARIANT (amendment 37 base-prep, 2026-07-11): delegation payload replaced by the m1-g-06 frozen accept vector's portableDelegation (node-native compact-JWS UCAN, delegationId = native CID; source: grant-output-vendored/accept.json case valid-bounded-node-native-ucan). The tc-pdel-v0 sibling fixture is DEPRECATED and is deleted by m1-e-02's read-path code swap.",
+ "request": {
+  "body": {
+   "presentation": {
+    "audience": "https://policy-engine.example/v0",
+    "eligibleSubjectDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+    "expiresAt": "2026-06-12T00:04:30Z",
+    "holderBinding": {
+     "enrollment": {
+      "eligibleSubjectDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+      "enrollmentId": "henr_bipz3aq7khvb3enatc2qvnjxwdzgg5d4dedmmgb7nmpimtfakmfa",
+      "expiresAt": "2026-07-01T00:00:00Z",
+      "holderDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+      "notBefore": "2026-06-01T00:00:00Z",
+      "schema": "xyz.tinycloud.policy/holder-enrollment/v0",
+      "signature": {
+       "signerDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+       "suite": "eddsa-ed25519-sha256-jcs-v1",
+       "value": "D_Ry4f9NKy01XEpx8ojjvBqPcom_2h-5NxBh9fbRMb113EOhSANzWmr8a8a5bhMXEODjLdvtSHXkHRst37mNDw"
+      },
+      "signingKeyDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z"
+     },
+     "type": "enrolled-agent"
+    },
+    "holderDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+    "holderSignature": {
+     "signerDid": "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z",
+     "suite": "eddsa-ed25519-sha256-jcs-v1",
+     "value": "JbJ-KDL5WrSjZRP1dOZFjamf0N-E61Ybz7DwK9IfGJWjL7E3M3b4HjZC0W9-XC-IOQJdgNr2gxNKnkXYA-MhCQ"
+    },
+    "nonce": "WDBpGzTohCT84vVP4TowW5fbVW0iXdJOwT-CcJ-kANs",
+    "policyId": "pol_wire_fixture",
+    "requestedCapabilities": [
+     {
+      "actions": [
+       "tinycloud.sql/read"
+      ],
+      "path": "xyz.tinycloud.listen/conversations",
+      "service": "tinycloud.sql",
+      "space": "applications"
+     }
+    ],
+    "requestedCapabilitiesHash": "9d3adc26984df12a53573df824e8045f991d4c4500f625bf391ef1c4f9765304",
+    "schema": "xyz.tinycloud.policy/presentation/v0"
+   }
+  },
+  "method": "POST",
+  "path": "/policy/v0/resolve"
+ },
+ "response": {
+  "body": {
+   "delegation": {
+    "delegationId": "bafkr4ie36bbhsrjielzqztlixjqtkyxld2ltfcp6no2pwuepqlmk3aq6wa",
+    "issuanceId": "iss_m1g06_00000001",
+    "issuerDid": "did:key:z6MkqGC3nWZhYieEVTVDKW5v588CiGfsDSmRVG9ZwwWTvLSK",
+    "holderDid": "did:key:z6Mkg49NtQR2LyYRDCQFK4w1VVHqhypZSSRo7HsyuN7SV7v5",
+    "policyId": "pol_m1g06_transcript",
+    "capabilityHashHex": "04bd54ea7c59efdd21351c975d12dea757840a723cf5417709c7cb4c0ab1b0ee",
+    "revocationMode": "refresh_only",
+    "issuedAt": "2026-07-10T12:00:00Z",
+    "expiresAt": "2026-07-10T12:05:00Z",
+    "terminal": true,
+    "encoded": "eyJhbGciOiJFZERTQSIsImp3ayI6eyJhbGciOiJFZERTQSIsImNydiI6IkVkMjU1MTkiLCJrdHkiOiJPS1AiLCJ4Ijoib0pxbDlIcG5XWUF2LVZYNDNDMHFGS1hKblNPLWxfaGtFbl81T0RSVnBQQSJ9LCJ0eXAiOiJKV1QiLCJ1Y3YiOiIwLjEwLjAifQ.eyJhdHQiOnsidGlueWNsb3VkOnBraDplaXAxNTU6MToweDdFNUY0NTUyMDkxQTY5MTI1ZDVEZkNiN2I4QzI2NTkwMjkzOTVCZGY6ZGVmYXVsdC9zcWwveHl6LnRpbnljbG91ZC5saXN0ZW4vY29udmVyc2F0aW9ucyI6eyJ0aW55Y2xvdWQua3YvZ2V0Ijpbe31dLCJ0aW55Y2xvdWQuc3FsL3JlYWQiOlt7Im1vZGUiOiJjb25zdHJhaW5lZC1zdGF0ZW1lbnRzIiwicmVhZE9ubHkiOnRydWUsInN0YXRlbWVudHMiOlt7ImZpeGVkUGFyYW1zIjpbeyJpbmRleCI6MCwidmFsdWUiOiJjb252XzQ1NiJ9XSwibmFtZSI6Imxpc3Rlbi5nZXRDb252ZXJzYXRpb24iLCJzcWwiOiJTRUxFQ1QgaWQsIHRpdGxlLCBzb3VyY2UsIHNvdXJjZV9pZCwgc291cmNlX3VybCwgc3RhcnRlZF9hdCwgZW5kZWRfYXQsIGR1cmF0aW9uX3NlY3MsIHN1bW1hcnksIG1ldGFkYXRhLCB0cmFuc2NyaXB0X2pzb24sIHRyYW5zY3JpcHRfdGV4dCwgY3JlYXRlZF9hdCwgdXBkYXRlZF9hdCBGUk9NIGNvbnZlcnNhdGlvbiBXSEVSRSBpZCA9ID8ifSx7ImZpeGVkUGFyYW1zIjpbeyJpbmRleCI6MCwidmFsdWUiOiJjb252XzQ1NiJ9XSwibmFtZSI6Imxpc3Rlbi5saXN0UGFydGljaXBhbnRzIiwic3FsIjoiU0VMRUNUIGlkLCBuYW1lLCBlbWFpbCwgc3BlYWtlcl9sYWJlbCBGUk9NIHBhcnRpY2lwYW50IFdIRVJFIGNvbnZlcnNhdGlvbl9pZCA9ID8gT1JERVIgQlkgQ09BTEVTQ0Uoc3BlYWtlcl9sYWJlbCwgbmFtZSksIGlkIn1dfV19fSwiYXVkIjoiZGlkOmtleTp6Nk1rZzQ5TnRRUjJMeVlSRENRRks0dzFWVkhxaHlwWlNTUm83SHN5dU43U1Y3djUiLCJleHAiOjE3ODM2ODUxMDAsImZjdCI6W3sieHl6LnRpbnljbG91ZC5wb2xpY3kvY2FwYWJpbGl0eUhhc2hIZXgiOiIwNGJkNTRlYTdjNTllZmRkMjEzNTFjOTc1ZDEyZGVhNzU3ODQwYTcyM2NmNTQxNzcwOWM3Y2I0YzBhYjFiMGVlIiwieHl6LnRpbnljbG91ZC5wb2xpY3kvZGVsZWdhdGlvbk1vZGUiOiJ0ZXJtaW5hbCIsInh5ei50aW55Y2xvdWQucG9saWN5L2lzc3VhbmNlSWQiOiJpc3NfbTFnMDZfMDAwMDAwMDEiLCJ4eXoudGlueWNsb3VkLnBvbGljeS9wb2xpY3lJZCI6InBvbF9tMWcwNl90cmFuc2NyaXB0IiwieHl6LnRpbnljbG91ZC5wb2xpY3kvcmV2b2NhdGlvbk1vZGUiOiJyZWZyZXNoX29ubHkifV0sImlzcyI6ImRpZDprZXk6ejZNa3FHQzNuV1poWWllRVZUVkRLVzV2NTg4Q2lHZnNEU21SVkc5Wnd3V1R2TFNLI3o2TWtxR0MzbldaaFlpZUVWVFZES1c1djU4OENpR2ZzRFNtUlZHOVp3d1dUdkxTSyIsIm5iZiI6MTc4MzY4NDgwMCwibm5jIjoibTEtZy0wNi1maXhlZC1ub25jZSIsInByZiI6WyJiYWZrcjRpZ2xpZmp0YTRmYWU1ZWN4NWpybWdyeHJ4aG96NWx1eXUzbzR2NWI3YW9mcW1mbXpnZm1heSJdfQ.nuFCoCUdZ3CIhrhYABmu5iaaPEJfGKkhsxv-j-x0q3vONMPidQZSRErvkTZxPHc5Vr9tzLZSqjarqUljBqpxDA"
+   }
+  },
+  "status": 200
+ }
+}

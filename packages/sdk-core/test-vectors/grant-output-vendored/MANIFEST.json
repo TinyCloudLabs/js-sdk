@@ -1,0 +1,27 @@
+{
+ "consumerSurface": "9043d82fe4bdbde50e796d2ba2cc5358c6b2a817",
+ "vectorOrigin": "d476a42f58125c0cff358746316dd7aeef804dbf",
+ "provenance": "byte-exact copies of test-vectors/grant-output/* from policy-engine smithers/data-exchange/m1-wave-12c/m1-integration (9043d82fe4bdbde50e796d2ba2cc5358c6b2a817); vector origin commit d476a42f58125c0cff358746316dd7aeef804dbf (g-06 merge; files byte-identical between the two); prepared by the session-17 PM base-preparation step per amendment 37 (Sol #10/#12) on 2026-07-11; FROZEN for m1-e-02 \u2014 no in-ticket modification/regeneration/supplementation.",
+ "files": [
+  {
+   "path": "accept.json",
+   "sha256": "7ba6a5e19ee72ab8546ef06febebf3a3f612102407dc2be777e17a278419d5b3"
+  },
+  {
+   "path": "producer-reject.json",
+   "sha256": "278b36e137312abff395c98afcb0b938f18490e2b9c327463c603c6a3396ab33"
+  },
+  {
+   "path": "node-import-reject.json",
+   "sha256": "54a6721bf76b3d2be5d209c49e34aaf074767c262a096226dd44e14750bc6f66"
+  },
+  {
+   "path": "node-invocation-reject.json",
+   "sha256": "a6d0f0829c2784155bf52ad41fe1d36f11421e1d6350893ce45d3d5a06f52c1d"
+  },
+  {
+   "path": "audit-reject.json",
+   "sha256": "6cb2471082fabdc97d5401422deb278d0a9dabb23c1d4b8696a6272f8e60a1cf"
+  }
+ ]
+}

@@ -1,0 +1,49 @@
+{
+ "cases": [
+  {
+   "file": "challenge-happy.json",
+   "name": "challenge-happy",
+   "sha256": "eae46e3272cf1e1c212b048e7bf0dbaab308b98a0e7a5b3c65eb98b28df814ae"
+  },
+  {
+   "file": "challenge-unknown-field.json",
+   "name": "challenge-unknown-field",
+   "sha256": "39608d33125ce0b57448c41a70c6d1523e30be42408abd69e60dc7e03715fa9f"
+  },
+  {
+   "file": "challenge-unknown-policy.json",
+   "name": "challenge-unknown-policy",
+   "sha256": "ccfbf6d706f8e7819d7d89f78e7b3d59fc52adadac7c3da41541afe5013d8d4b"
+  },
+  {
+   "file": "resolve-happy-native.json",
+   "name": "resolve-happy-native",
+   "sha256": "0033ecf7d2883ac1fe337926f08eb81de3b34c2b2503a303634a9f0f29114a76"
+  },
+  {
+   "file": "resolve-replay-consumed-nonce.json",
+   "name": "resolve-replay-consumed-nonce",
+   "sha256": "fa3ce44606fa3c7ec94894aac54749786552a41d12a5bc11e88a58b3d67f5470"
+  },
+  {
+   "file": "resolve-unknown-field.json",
+   "name": "resolve-unknown-field",
+   "sha256": "e3cba34e1bf9b4aa0345ada5085e216dc4da3ba5ff39773be68410c69105df55"
+  },
+  {
+   "file": "resolve-nonce-substituted-without-resign.json",
+   "name": "resolve-nonce-substituted-without-resign",
+   "sha256": "80125477583be8fc8991a12f33ed8b162883b2d54c0a39210448004dec1d96c4"
+  },
+  {
+   "file": "resolve-requested-capabilities-hash-mismatch.json",
+   "name": "resolve-requested-capabilities-hash-mismatch",
+   "sha256": "6055ede9f604b44ef6801cf468e76bb7a2fba569cf91c4af989d3345bec4d6c1"
+  }
+ ],
+ "generator": "emit_wire_fixtures_for_sdk (PM session-14 scratch worktree; emitter not committed to policy-engine)",
+ "label": "confirmed from code: policy-engine service implementation @ 8c4cabbf5",
+ "producer": "TinyCloudLabs/policy-engine crates/policy-engine-http/src/lib.rs (test harness handlers via Router)",
+ "producerCommit": "8c4cabbf5",
+ "consumptionRule": "Every case in this manifest MUST be consumed by at least one deterministic sdk-core test; a manifest-completeness test enumerates cases and asserts consumption."
+}

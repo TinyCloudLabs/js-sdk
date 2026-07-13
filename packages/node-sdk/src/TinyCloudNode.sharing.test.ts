@@ -28,7 +28,7 @@ function makeWasmBindings(): IWasmBindings {
     completeSessionSetup: mock((config: unknown) => ({
       ...(config as object),
       delegationCid: "share-delegation-cid",
-      delegationHeader: { Authorization: "share-auth-header" },
+      delegationHeader: { Authorization: "c2hhcmUtYXV0aC1oZWFkZXI" },
     })),
     ensureEip55: (address: string) => address,
   } as unknown as IWasmBindings;
@@ -44,7 +44,7 @@ describe("TinyCloudNode sharing", () => {
     globalThis.fetch = mock(async () => ({
       ok: true,
       status: 200,
-      json: async () => ({ activated: ["share-delegation-cid"] }),
+      json: async () => ({ cid: "commit-event-cid", activated: ["share-delegation-cid"], skipped: [] }),
       text: async () => "",
     })) as unknown as typeof fetch;
 
@@ -66,10 +66,10 @@ describe("TinyCloudNode sharing", () => {
       spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications",
       path: "xyz.tinycloud.tinychat/threads",
       actions: ["tinycloud.sql/read"],
-      requestedExpiry: new Date("2026-07-09T15:17:04.758Z"),
+      requestedExpiry: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     });
 
-    expect(delegation?.authHeader).toBe("share-auth-header");
+    expect(delegation?.authHeader).toBe("c2hhcmUtYXV0aC1oZWFkZXI");
     expect((wasmBindings.prepareSession as any).mock.calls[0][0].abilities).toEqual({
       sql: {
         "xyz.tinycloud.tinychat/threads": ["tinycloud.sql/read"],
@@ -198,5 +198,138 @@ describe("TinyCloudNode sharing", () => {
       "tinycloud.delegation/revoke": [{}],
     });
     expect(payload.prf).toEqual([session.delegationCid]);
+  });
+
+  test("public owner delegation is wallet-rooted, caller-targeted, expiring, and returns raw receipt identities", async () => {
+    const wasmBindings = makeWasmBindings();
+    globalThis.fetch = mock(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        cid: "commit-event-cid",
+        activated: ["tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications"],
+        skipped: [],
+      }),
+      text: async () => "",
+    })) as unknown as typeof fetch;
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer: { signMessage: mock(async () => "signature") } as any,
+      wasmBindings,
+    });
+    (node as any)._restoredTcSession = {
+      address: "0xD559CCd9EB87c530A9a349262669386dE93cf412",
+      chainId: 1,
+      spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications",
+    };
+    const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+    const receipt = await node.createOwnerDelegation({
+      delegateDid: "did:key:z6MkExternalCaller",
+      spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications",
+      path: "xyz.tinycloud.listen/conversations",
+      actions: ["tinycloud.sql/read"],
+      expiresAt,
+    });
+
+    const prepared = (wasmBindings.prepareSession as any).mock.calls[0][0];
+    expect(prepared.delegateUri).toBe("did:key:z6MkExternalCaller");
+    expect(prepared.expirationTime).toBe(expiresAt.toISOString());
+    expect(prepared.parents).toBeUndefined();
+    expect(receipt.delegation.allowSubDelegation).toBe(true);
+    expect(receipt.delegationCid).toBe("share-delegation-cid");
+    expect(receipt.nodeReceipt.commitEventCid).toBe("commit-event-cid");
+    expect(new TextDecoder().decode(receipt.signedDagCbor)).toBe("share-auth-header");
+  });
+
+  test.each([
+    [403, "activation denied"],
+    [503, "activation unavailable"],
+  ])("public owner delegation fails closed when /delegate returns %i", async (status, error) => {
+    const wasmBindings = makeWasmBindings();
+    globalThis.fetch = mock(async () => ({
+      ok: false,
+      status,
+      statusText: error,
+      json: async () => ({}),
+      text: async () => error,
+    })) as unknown as typeof fetch;
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer: { signMessage: mock(async () => "signature") } as any,
+      wasmBindings,
+    });
+    (node as any)._restoredTcSession = {
+      address: "0xD559CCd9EB87c530A9a349262669386dE93cf412",
+      chainId: 1,
+      spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications",
+    };
+
+    await expect(node.createOwnerDelegation({
+      delegateDid: "did:key:z6MkExternalCaller",
+      spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications",
+      path: "xyz.tinycloud.listen/conversations",
+      actions: ["tinycloud.sql/read"],
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+    })).rejects.toThrow(`Owner delegation import failed: ${status} ${error}`);
+  });
+
+  test("public owner delegation rejects invalid authority inputs before signing or network access", async () => {
+    const signMessage = mock(async () => "signature");
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer: { signMessage } as any,
+      wasmBindings: makeWasmBindings(),
+    });
+    (node as any)._restoredTcSession = {
+      address: "0xD559CCd9EB87c530A9a349262669386dE93cf412",
+      chainId: 1,
+      spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications",
+    };
+    const valid = {
+      delegateDid: "did:key:z6MkExternalCaller",
+      spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications",
+      path: "xyz.tinycloud.listen/conversations",
+      actions: ["tinycloud.sql/read"],
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+    };
+
+    for (const [overrides, message] of [
+      [{ delegateDid: "did:pkh:eip155:1:0x1234" }, "external did:key audience"],
+      [{ path: "" }, "bounded capabilities"],
+      [{ actions: [] }, "bounded capabilities"],
+      [{ actions: ["tinycloud.unknown/read"] }, "capabilities are unsupported"],
+      [{ expiresAt: new Date(Date.now() - 1_000) }, "expiry must be explicit"],
+      [{ expiresAt: new Date(Date.now() + 11 * 365 * 24 * 60 * 60 * 1000) }, "within EXPIRY.MAX_MS"],
+    ] as const) {
+      await expect(node.createOwnerDelegation({ ...valid, ...overrides })).rejects.toThrow(message);
+    }
+    expect(signMessage).not.toHaveBeenCalled();
+  });
+
+  test("public owner delegation requires both wallet signer and owner session", async () => {
+    const params = {
+      delegateDid: "did:key:z6MkExternalCaller",
+      spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications",
+      path: "xyz.tinycloud.listen/conversations",
+      actions: ["tinycloud.sql/read"],
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+    };
+    const withoutSigner = new TinyCloudNode({
+      host: "https://node.example",
+      wasmBindings: makeWasmBindings(),
+    });
+    (withoutSigner as any)._restoredTcSession = {
+      address: "0xD559CCd9EB87c530A9a349262669386dE93cf412",
+      chainId: 1,
+      spaceId: params.spaceId,
+    };
+    await expect(withoutSigner.createOwnerDelegation(params)).rejects.toThrow("Owner wallet signer is required");
+
+    const withoutSession = new TinyCloudNode({
+      host: "https://node.example",
+      signer: { signMessage: mock(async () => "signature") } as any,
+      wasmBindings: makeWasmBindings(),
+    });
+    await expect(withoutSession.createOwnerDelegation(params)).rejects.toThrow("Owner session is required");
   });
 });
