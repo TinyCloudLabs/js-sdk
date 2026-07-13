@@ -1,0 +1,59 @@
+name: Authority tests
+
+on:
+  pull_request:
+    paths:
+      - "packages/sdk-core/**"
+      - "packages/node-sdk/**"
+      - "packages/sdk-services/**"
+      - "bun.lock"
+      - "package.json"
+      - ".github/workflows/authority-tests.yml"
+  push:
+    branches: [master]
+    paths:
+      - "packages/sdk-core/**"
+      - "packages/node-sdk/**"
+      - "packages/sdk-services/**"
+      - "bun.lock"
+      - "package.json"
+      - ".github/workflows/authority-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authority:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build SDK authority packages
+        run: |
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/sdk-core build
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/node-sdk build
+
+      - name: Test SDK authority surfaces
+        run: |
+          bun run --cwd packages/sdk-core test
+          bun run --cwd packages/sdk-services test
+          bun run --cwd packages/node-sdk test

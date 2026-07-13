@@ -1,0 +1,32 @@
+{
+  "name": "challenge-happy",
+  "note": "Signed GrantChallenge envelope; challenge object verifies under the signed-object profile.",
+  "request": {
+    "body": {
+      "policyId": "pol_wire_fixture"
+    },
+    "method": "POST",
+    "path": "/policy/v0/challenge"
+  },
+  "response": {
+    "body": {
+      "challenge": {
+        "acceptedSuites": [
+          "eddsa-ed25519-sha256-jcs-v1"
+        ],
+        "audience": "https://policy-engine.example/v0",
+        "challengeExpiresAt": "2026-06-12T00:08:00+00:00",
+        "challengeId": "gchal_tqbb3lskmgkt6lb2qza744qiprhbl2adudc64nipd37xthgwd7cq",
+        "nonce": "ZRRmmD_phRDa_aWQT_CcMpJfS3v39bCsl4apO8X7FQs",
+        "policyId": "pol_wire_fixture",
+        "schema": "xyz.tinycloud.policy/challenge/v0",
+        "signature": {
+          "signerDid": "did:key:z6Mkt6316e2PN3mZdB6N9CrzomJYUd1s5yBZi1XYHmwT9TUP",
+          "suite": "eddsa-ed25519-sha256-jcs-v1",
+          "value": "HyB3owBgVaC0riWT4yKje-A1SadFyHG_XIlkq9QK_DuPkhhQ7TSHVUrLyZbJWzkfPVn-yy79mARmAa8ln8nAAg"
+        }
+      }
+    },
+    "status": 200
+  }
+}

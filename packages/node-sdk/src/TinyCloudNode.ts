@@ -184,6 +184,49 @@ const ROOT_DELEGATION_ACTIONS: string[] = [
  */
 const DEFAULT_SESSION_EXPIRATION_MS = EXPIRY.SESSION_MS;
 
+export interface CreateOwnerDelegationParams {
+  readonly delegateDid: string;
+  readonly spaceId: string;
+  readonly path: string;
+  readonly actions: readonly string[];
+  readonly expiresAt: Date;
+}
+
+export function decodeAuthorizationBytes(authorization: string): Uint8Array {
+  const encoded = authorization.replace(/^Bearer /i, "");
+  const match = /^([A-Za-z0-9_-]+)(={1,2})?$/.exec(encoded);
+  const unpadded = match?.[1];
+  const paddingLength = match?.[2]?.length ?? 0;
+  const remainder = unpadded === undefined ? 1 : unpadded.length % 4;
+  const expectedPaddingLength = remainder === 2 ? 2 : remainder === 3 ? 1 : 0;
+  if (
+    unpadded === undefined ||
+    remainder === 1 ||
+    (paddingLength !== 0 && paddingLength !== expectedPaddingLength)
+  ) {
+    throw new Error("Delegation Authorization is not canonical base64url DAG-CBOR");
+  }
+  const decoded = Uint8Array.from(Buffer.from(unpadded, "base64url"));
+  if (Buffer.from(decoded).toString("base64url") !== unpadded) {
+    throw new Error("Delegation Authorization is not canonical base64url DAG-CBOR");
+  }
+  return decoded;
+}
+
+export interface OwnerDelegationReceipt {
+  readonly delegation: Delegation;
+  /** Exact signed DAG-CBOR bytes submitted in the Authorization header. */
+  readonly signedDagCbor: Uint8Array;
+  /** Locally derived by the node WASM implementation; this is delegation identity. */
+  readonly delegationCid: string;
+  readonly nodeReceipt: {
+    /** Raw /delegate response CID: a commit-event id, not delegation identity. */
+    readonly commitEventCid?: string;
+    readonly activated: readonly string[];
+    readonly skipped: readonly string[];
+  };
+}
+
 function isOpenKeyAutoSignStrategy(strategy: SignStrategy | undefined): boolean {
   return (strategy as { openKeyAutoSign?: unknown } | undefined)?.openKeyAutoSign === true;
 }
@@ -2694,6 +2737,62 @@ export class TinyCloudNode {
    * with expiry longer than the current session.
    * @internal
    */
+  async createOwnerDelegation(params: CreateOwnerDelegationParams): Promise<OwnerDelegationReceipt> {
+    if (!params.delegateDid.startsWith("did:key:") || params.actions.length === 0 || params.path.length === 0) {
+      throw new Error("Owner delegation requires an external did:key audience and bounded capabilities");
+    }
+    const now = new Date();
+    if (params.expiresAt.getTime() <= now.getTime() || params.expiresAt.getTime() - now.getTime() > EXPIRY.MAX_MS) {
+      throw new Error("Owner delegation expiry must be explicit, future, and within EXPIRY.MAX_MS");
+    }
+    if (!this.signer) throw new Error("Owner wallet signer is required");
+    const session = this.currentTinyCloudSession();
+    if (!session) throw new Error("Owner session is required");
+    const abilities = sharingActionsToAbilities(params.path, [...params.actions]);
+    if (!abilities) throw new Error("Owner delegation capabilities are unsupported");
+
+    const host = this.config.host!;
+    const prepared = this.wasmBindings.prepareSession({
+      abilities,
+      address: this.wasmBindings.ensureEip55(session.address),
+      chainId: session.chainId,
+      domain: this.siweDomain,
+      issuedAt: now.toISOString(),
+      expirationTime: params.expiresAt.toISOString(),
+      spaceId: params.spaceId,
+      delegateUri: params.delegateDid,
+    });
+    const signature = await this.signer.signMessage(prepared.siwe);
+    const delegationSession = this.wasmBindings.completeSessionSetup({ ...prepared, signature });
+    const activation = await activateSessionWithHost(host, delegationSession.delegationHeader);
+    if (!activation.success) {
+      throw new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim());
+    }
+    const delegation: Delegation = {
+      cid: delegationSession.delegationCid,
+      delegateDID: params.delegateDid,
+      delegatorDID: pkhDid(session.address, session.chainId),
+      spaceId: params.spaceId,
+      path: params.path,
+      actions: [...params.actions],
+      expiry: params.expiresAt,
+      isRevoked: false,
+      allowSubDelegation: true,
+      createdAt: now,
+      authHeader: delegationSession.delegationHeader.Authorization,
+    };
+    return {
+      delegation,
+      signedDagCbor: decodeAuthorizationBytes(delegationSession.delegationHeader.Authorization),
+      delegationCid: delegationSession.delegationCid,
+      nodeReceipt: {
+        commitEventCid: (activation as typeof activation & { commitEventCid?: string }).commitEventCid,
+        activated: activation.activated ?? [],
+        skipped: activation.skipped ?? [],
+      },
+    };
+  }
+
   private async createRootDelegationForSharing(params: {
     shareKeyDID: string;
     spaceId: string;
@@ -2701,67 +2800,14 @@ export class TinyCloudNode {
     actions: string[];
     requestedExpiry: Date;
   }): Promise<Delegation | undefined> {
-    if (!this.signer) {
-      return undefined;
-    }
-
-    const session = this.currentTinyCloudSession();
-    if (!session) {
-      return undefined;
-    }
-
     try {
-      const host = this.config.host!;
-      const now = new Date();
-
-      const abilities = sharingActionsToAbilities(params.path, params.actions);
-      if (!abilities) {
-        return undefined;
-      }
-
-      // Prepare a direct delegation to the share key (no parents = root delegation)
-      const prepared = this.wasmBindings.prepareSession({
-        abilities,
-        address: this.wasmBindings.ensureEip55(session.address),
-        chainId: session.chainId,
-        domain: this.siweDomain,
-        issuedAt: now.toISOString(),
-        expirationTime: params.requestedExpiry.toISOString(),
-        spaceId: params.spaceId,
-        delegateUri: params.shareKeyDID,
-      });
-
-      // Sign with the signer (no popup in node-sdk)
-      const signature = await this.signer.signMessage(prepared.siwe);
-
-      const delegationSession = this.wasmBindings.completeSessionSetup({
-        ...prepared,
-        signature,
-      });
-
-      // Activate the delegation with the server
-      const activateResult = await activateSessionWithHost(
-        host,
-        delegationSession.delegationHeader
-      );
-
-      if (!activateResult.success) {
-        return undefined;
-      }
-
-      return {
-        cid: delegationSession.delegationCid,
-        delegateDID: params.shareKeyDID,
-        delegatorDID: pkhDid(session.address, session.chainId),
+      return (await this.createOwnerDelegation({
+        delegateDid: params.shareKeyDID,
         spaceId: params.spaceId,
         path: params.path,
         actions: params.actions,
-        expiry: params.requestedExpiry,
-        isRevoked: false,
-        allowSubDelegation: true,
-        createdAt: now,
-        authHeader: delegationSession.delegationHeader.Authorization,
-      };
+        expiresAt: params.requestedExpiry,
+      })).delegation;
     } catch {
       return undefined;
     }

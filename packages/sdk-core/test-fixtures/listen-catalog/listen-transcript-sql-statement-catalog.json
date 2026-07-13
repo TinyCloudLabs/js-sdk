@@ -1,0 +1,25 @@
+{
+ "label": "confirmed from code: listen packages/server/src/transcript-resource-adapter.ts @ 73c934bb07a939cad17df8d083b96892226f07c6 (LISTEN_TRANSCRIPT_SQL_STATEMENT_CATALOG, mechanically extracted via module import)",
+ "catalog": [
+  {
+   "name": "listen.getConversation",
+   "sql": "SELECT id, title, source, source_id, source_url, started_at, ended_at, duration_secs, summary, metadata, transcript_json, transcript_text, created_at, updated_at FROM conversation WHERE id = ?",
+   "fixedParams": [
+    {
+     "index": 0,
+     "value": "{conversationId}"
+    }
+   ]
+  },
+  {
+   "name": "listen.listParticipants",
+   "sql": "SELECT id, name, email, speaker_label FROM participant WHERE conversation_id = ? ORDER BY COALESCE(speaker_label, name), id",
+   "fixedParams": [
+    {
+     "index": 0,
+     "value": "{conversationId}"
+    }
+   ]
+  }
+ ]
+}

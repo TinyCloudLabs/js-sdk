@@ -18,6 +18,16 @@
       "types": "./dist/bootstrap/index.d.ts",
       "import": "./dist/bootstrap/index.js",
       "require": "./dist/bootstrap/index.cjs"
+    },
+    "./policy": {
+      "types": "./dist/policy/index.d.ts",
+      "import": "./dist/policy/index.js",
+      "require": "./dist/policy/index.cjs"
+    },
+    "./requester": {
+      "types": "./dist/requester/index.d.ts",
+      "import": "./dist/requester/index.js",
+      "require": "./dist/requester/index.cjs"
     }
   },
   "files": [
@@ -29,6 +39,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@noble/hashes": "1.8.0",
     "@multiformats/multiaddr": "^13.0.1",
     "@multiformats/multiaddr-to-uri": "^12.0.0",
     "@multiformats/uri-to-multiaddr": "^10.0.0",
