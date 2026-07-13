@@ -36,14 +36,15 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
+      - name: Build SDK authority packages
+        run: |
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/sdk-core build
+          bun run --cwd packages/node-sdk build
+
       - name: Test SDK authority surfaces
         run: |
           bun run --cwd packages/sdk-core test
           bun run --cwd packages/sdk-services test
           bun run --cwd packages/node-sdk test
-
-      - name: Build SDK authority packages
-        run: |
-          bun run --cwd packages/sdk-core build
-          bun run --cwd packages/sdk-services build
-          bun run --cwd packages/node-sdk build
