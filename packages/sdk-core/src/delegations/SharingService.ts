@@ -40,6 +40,10 @@ import type { DelegationManager } from "./DelegationManager";
 import type { ICapabilityKeyRegistry } from "../authorization/CapabilityKeyRegistry";
 import { validateEncodedShareData } from "./SharingService.schema.js";
 import { SERVICE_LONG_TO_SHORT } from "../manifest";
+import { principalDid } from "../identity";
+import { actionContains } from "../capabilities";
+import { bases } from "multiformats/basics";
+import { ed25519 } from "@noble/curves/ed25519";
 
 // ---------------------------------------------------------------------------
 // Local helpers
@@ -218,6 +222,50 @@ export interface ShareAccess {
 }
 
 /**
+ * Parameters for attenuating a received share to another principal.
+ *
+ * Omitted path/actions/expiry inherit the received share's exact values. Any
+ * supplied value must be equal to or an attenuated subset of the parent.
+ */
+export interface DelegateReceivedShareParams {
+  /** DID that may exercise the child delegation. */
+  delegateDID: string;
+  /** Equal to or below the shared path. Defaults to the shared path. */
+  path?: string;
+  /** Subset of the shared actions. Defaults to all shared actions. */
+  actions?: string[];
+  /** No later than the sharing-link expiry. Defaults to the parent expiry. */
+  expiry?: Date;
+  /** Optional node origin that further narrows the configured-host allowlist. */
+  expectedHost?: string;
+}
+
+/**
+ * A transport-ready child delegation with non-secret source lineage.
+ *
+ * `delegation.delegationHeader` is a live bearer credential. Treat it like a
+ * secret: do not log it or persist it outside secure credential storage.
+ * Only `source` is safe to retain as non-secret lineage metadata.
+ */
+export interface DelegatedShareAccess {
+  delegation: Delegation & {
+    delegationHeader: { Authorization: string };
+    ownerAddress: string;
+    chainId: number;
+    host: string;
+    resources: Array<{ service: string; space: string; path: string; actions: string[] }>;
+    disableSubDelegation: boolean;
+  };
+  source: {
+    parentCid: string;
+    spaceId: string;
+    path: string;
+    host: string;
+    expiresAt: Date;
+  };
+}
+
+/**
  * Configuration for SharingService.
  */
 export interface SharingServiceConfig {
@@ -263,6 +311,8 @@ export interface SharingServiceConfig {
    * Creates UCAN delegations directly without requiring server roundtrip.
    */
   createDelegationWasm?: (params: CreateDelegationWasmParams) => CreateDelegationWasmResult;
+  /** Compute a CID for serialized delegation bytes. Required for share attenuation. */
+  computeCid?: (data: Uint8Array, codec: bigint) => string;
   /**
    * Path prefix for KV operations.
    * When set, paths passed to generate() are prefixed with this value.
@@ -328,6 +378,16 @@ export interface ISharingService {
   receive(link: string, options?: ReceiveOptions): Promise<Result<ShareAccess, DelegationError>>;
 
   /**
+   * Consume a sharing link locally and create an attenuated child delegation.
+   * The raw link and embedded private JWK are never returned. The returned
+   * child delegation is itself a sensitive bearer credential.
+   */
+  delegateReceivedShare(
+    link: string,
+    params: DelegateReceivedShareParams
+  ): Promise<Result<DelegatedShareAccess, DelegationError>>;
+
+  /**
    * Encode sharing data into a link string.
    */
   encodeLink(data: EncodedShareData, schema?: ShareSchema): string;
@@ -391,6 +451,7 @@ export class SharingService implements ISharingService {
   private baseUrl: string;
   private createDelegationFn?: SharingServiceConfig["createDelegation"];
   private createDelegationWasmFn?: SharingServiceConfig["createDelegationWasm"];
+  private computeCidFn?: SharingServiceConfig["computeCid"];
   private pathPrefix: string;
   private sessionExpiry?: Date;
   private onRootDelegationNeeded?: SharingServiceConfig["onRootDelegationNeeded"];
@@ -410,6 +471,7 @@ export class SharingService implements ISharingService {
     this.baseUrl = (config.baseUrl ?? "").replace(/\/$/, ""); // Remove trailing slash
     this.createDelegationFn = config.createDelegation;
     this.createDelegationWasmFn = config.createDelegationWasm;
+    this.computeCidFn = config.computeCid;
     this.pathPrefix = config.pathPrefix ?? "";
     this.sessionExpiry = config.sessionExpiry;
     this.onRootDelegationNeeded = config.onRootDelegationNeeded;
@@ -994,34 +1056,36 @@ export class SharingService implements ISharingService {
 
     // Step 3: Auto-subdelegate if requested
     if (autoSubdelegate && useSessionKey && this.session) {
-      try {
-        // Get current session key DID
-        // Note: We need to create a sub-delegation from the ingested key to the session key
-        // This requires the session key DID, which should be available from the session
-
-        // For now, we'll register the ingested key's capabilities directly
-        // The auto-subdelegation would require additional infrastructure to sign with the ingested key
-        // This is a simplification - full implementation would sign a new delegation with the ingested key
-
-        // TODO: Implement full auto-subdelegation when signing infrastructure is available
-        // For now, the ingested key can be used directly via the registry
-
-      } catch (err) {
-        // Log but don't fail - can still use the ingested key directly
-        console.warn("Auto-subdelegation failed, using ingested key directly:", err);
-      }
+      const child = await this.delegateReceivedShare(link, {
+        delegateDID: this.session.verificationMethod,
+        expectedHost: shareData.host,
+      });
+      if (!child.ok) return child;
+      activeDelegation = child.data.delegation;
+      activeKey = {
+        id: `session:${principalDid(this.session.verificationMethod)}`,
+        did: this.session.verificationMethod,
+        type: "session",
+        priority: 0,
+      };
     }
 
     // Step 4: Create pre-configured KV service for the shared path
     // Construct session from share data - no need for existing session
     // Use the authHeader if available, otherwise fall back to constructing from CID
-    const authHeader = shareData.delegation.authHeader ?? `Bearer ${shareData.delegation.cid}`;
+    const portableAuthorization = (activeDelegation as Delegation & {
+      delegationHeader?: { Authorization?: string };
+    }).delegationHeader?.Authorization;
+    const authHeader = portableAuthorization ?? activeDelegation.authHeader ?? `Bearer ${activeDelegation.cid}`;
+    const activeSession = activeKey.type === "session" && this.session
+      ? this.session
+      : undefined;
     const shareSession: ServiceSession = {
       delegationHeader: { Authorization: authHeader },
-      delegationCid: shareData.delegation.cid,
+      delegationCid: activeDelegation.cid,
       spaceId: shareData.spaceId,
-      verificationMethod: shareData.keyDid,
-      jwk: shareData.key,
+      verificationMethod: activeSession?.verificationMethod ?? shareData.keyDid,
+      jwk: activeSession?.jwk ?? shareData.key,
     };
 
     const kvService = this.createKVService({
@@ -1041,6 +1105,246 @@ export class SharingService implements ISharingService {
     };
 
     return { ok: true, data: shareAccess };
+  }
+
+  /**
+   * Create a constrained child delegation from a received sharing link.
+   *
+   * This is the safe handoff for a browser delegating shared input to an
+   * agent or service: the bearer link is decoded and used only in this SDK
+   * instance, while the recipient receives a child UCAN without the embedded
+   * private key. The child UCAN is a sensitive bearer credential and must not
+   * be logged or stored insecurely.
+   */
+  async delegateReceivedShare(
+    link: string,
+    params: DelegateReceivedShareParams
+  ): Promise<Result<DelegatedShareAccess, DelegationError>> {
+    const decoded = this.decodeLinkWithValidation(link);
+    if (!decoded.ok) return decoded;
+    const shareData = decoded.data;
+
+    const parentExpiry = new Date(shareData.delegation.expiry);
+    const now = new Date();
+    if (parentExpiry <= now) {
+      return {
+        ok: false,
+        error: createError(DelegationErrorCodes.AUTH_EXPIRED, "Sharing link has expired"),
+      };
+    }
+    if (shareData.delegation.isRevoked) {
+      return {
+        ok: false,
+        error: createError(DelegationErrorCodes.REVOKED, "Sharing link has been revoked"),
+      };
+    }
+    if (shareData.delegation.allowSubDelegation === false) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.PERMISSION_DENIED,
+          "Sharing link does not allow delegation"
+        ),
+      };
+    }
+    const delegateDID = principalDid(params.delegateDID?.trim() ?? "");
+    if (!/^did:(?:key|pkh):[^\s]+$/.test(delegateDID)) {
+      return {
+        ok: false,
+        error: createError(DelegationErrorCodes.INVALID_INPUT, "A valid delegateDID is required"),
+      };
+    }
+    const trustedHost = trustedNodeOrigin(shareData.host, this.hosts, params.expectedHost);
+    if (!trustedHost) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.PERMISSION_DENIED,
+          "Sharing-link host is not a configured TinyCloud host"
+        ),
+      };
+    }
+    if (
+      shareData.delegation.spaceId !== shareData.spaceId ||
+      principalDid(shareData.delegation.delegateDID) !== principalDid(shareData.keyDid) ||
+      !shareKeyMatchesDid(shareData.key, shareData.keyDid) ||
+      !capabilityPathContains(shareData.delegation.path, shareData.path)
+    ) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.INVALID_TOKEN,
+          "Sharing-link metadata does not match its parent delegation"
+        ),
+      };
+    }
+    if (!shareData.delegation.authHeader) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.INVALID_TOKEN,
+          "Sharing link is missing its signed parent delegation"
+        ),
+      };
+    }
+    if (!this.createDelegationWasmFn || !this.computeCidFn) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.NOT_INITIALIZED,
+          "Client-side delegation and CID support are required"
+        ),
+      };
+    }
+
+    const path = params.path ?? shareData.path;
+    if (!capabilityPathContains(shareData.path, path)) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.PERMISSION_DENIED,
+          "Requested path exceeds the sharing-link capability"
+        ),
+      };
+    }
+
+    const parentActions = shareData.delegation.actions;
+    const actions = params.actions ?? [...parentActions];
+    if (
+      actions.length === 0 ||
+      new Set(actions).size !== actions.length ||
+      actions.includes("*") ||
+      actions.some((action) => !parentActions.some((parentAction) => actionContains(parentAction, action)))
+    ) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.PERMISSION_DENIED,
+          "Requested actions exceed the sharing-link capability"
+        ),
+      };
+    }
+
+    const expiry = params.expiry ?? parentExpiry;
+    if (expiry <= now || expiry > parentExpiry) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.PERMISSION_DENIED,
+          "Child delegation expiry must be active and no later than the sharing link"
+        ),
+      };
+    }
+
+    const service = inferShortServiceFromActionUrns(actions);
+    if (!service) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.INVALID_INPUT,
+          "Sharing-link actions must belong to one known TinyCloud service"
+        ),
+      };
+    }
+
+    const owner = ownerFromSpaceId(shareData.spaceId);
+    if (!owner) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.INVALID_TOKEN,
+          "Sharing link has an unsupported owner space"
+        ),
+      };
+    }
+
+    try {
+      const parentSession: ServiceSession = {
+        delegationHeader: { Authorization: shareData.delegation.authHeader },
+        delegationCid: shareData.delegation.cid,
+        spaceId: shareData.spaceId,
+        verificationMethod: shareData.keyDid,
+        jwk: shareData.key,
+      };
+      const result = this.createDelegationWasmFn({
+        session: parentSession,
+        delegateDID,
+        spaceId: shareData.spaceId,
+        abilities: { [service]: { [path]: actions } },
+        expirationSecs: Math.floor(expiry.getTime() / 1000),
+      });
+      const verifiedChild = verifySignedChild(result, {
+        delegateDID,
+        issuerDID: principalDid(shareData.keyDid),
+        parentCid: shareData.delegation.cid,
+        service,
+        spaceId: shareData.spaceId,
+        path,
+        actions,
+        expiresAt: expiry,
+        parentExpiresAt: parentExpiry,
+      }, this.computeCidFn);
+      if (!verifiedChild) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.CREATION_FAILED,
+            "Delegation signer returned a child outside the requested capability"
+          ),
+        };
+      }
+
+      const registrationInit = {
+        method: "POST",
+        headers: { Authorization: result.delegation },
+        redirect: "error" as const,
+      };
+      const registration = await this.fetchFn(new URL("/delegate", trustedHost).toString(), registrationInit);
+      if (!registration.ok) {
+        throw new Error(`node rejected child delegation (${registration.status})`);
+      }
+
+      const primary = verifiedChild.resource;
+      return {
+        ok: true,
+        data: {
+          delegation: {
+            cid: result.cid,
+            delegateDID: verifiedChild.delegateDID,
+            delegatorDID: shareData.keyDid.split("#")[0],
+            spaceId: shareData.spaceId,
+            path: primary.path,
+            actions: primary.actions,
+            expiry: verifiedChild.expiresAt,
+            isRevoked: false,
+            allowSubDelegation: false,
+            parentCid: shareData.delegation.cid,
+            createdAt: now,
+            delegationHeader: { Authorization: result.delegation },
+            ownerAddress: owner.address,
+            chainId: owner.chainId,
+            host: trustedHost,
+            resources: result.resources,
+            disableSubDelegation: true,
+          },
+          source: {
+            parentCid: shareData.delegation.cid,
+            spaceId: shareData.spaceId,
+            path: primary.path,
+            host: trustedHost,
+            expiresAt: verifiedChild.expiresAt,
+          },
+        },
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.CREATION_FAILED,
+          "Failed to create or register the child delegation"
+        ),
+      };
+    }
   }
 
   /**
@@ -1188,4 +1492,177 @@ export class SharingService implements ISharingService {
  */
 export function createSharingService(config: SharingServiceConfig): ISharingService {
   return new SharingService(config);
+}
+
+function ownerFromSpaceId(spaceId: string): { chainId: number; address: string } | null {
+  const match = spaceId.match(/^tinycloud:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40}):/);
+  if (!match) return null;
+  const chainId = Number(match[1]);
+  if (!Number.isSafeInteger(chainId)) return null;
+  return { chainId, address: match[2] };
+}
+
+function parseTrustedNodeOrigin(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      (url.pathname !== "" && url.pathname !== "/") ||
+      url.search ||
+      url.hash
+    ) return null;
+    return url.origin.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function trustedNodeOrigin(candidate: string, configured: string[], expected?: string): string | null {
+  const origin = parseTrustedNodeOrigin(candidate);
+  if (!origin) return null;
+  const allowed = new Set(configured.map(parseTrustedNodeOrigin).filter((value): value is string => Boolean(value)));
+  if (!allowed.has(origin)) return null;
+  if (expected && parseTrustedNodeOrigin(expected) !== origin) return null;
+  return origin;
+}
+
+function canonicalCapabilityPath(path: string): string | null {
+  if (
+    /[\u0000-\u001f\\]/.test(path) ||
+    /%(?:2e|2f|5c)/i.test(path) ||
+    path.includes("//")
+  ) return null;
+  const wildcardIndex = path.indexOf("*");
+  if (wildcardIndex !== -1 && !path.endsWith("/*") && !path.endsWith("/**")) return null;
+  if (path.slice(0, -3).includes("*") || (path.endsWith("/*") && path.slice(0, -2).includes("*"))) return null;
+  const segments = path.split("/");
+  if (segments.some((segment) => segment === "." || segment === "..")) return null;
+  return path;
+}
+
+function capabilityPathContains(parent: string, child: string): boolean {
+  const canonicalParent = canonicalCapabilityPath(parent);
+  const canonicalChild = canonicalCapabilityPath(child);
+  if (canonicalParent === null || canonicalChild === null) return false;
+  if (canonicalParent === "" || canonicalParent === "/") return true;
+  if (canonicalParent === canonicalChild) return true;
+  if (canonicalParent.endsWith("/**")) {
+    return canonicalChild.startsWith(canonicalParent.slice(0, -2));
+  }
+  if (canonicalParent.endsWith("/*")) {
+    const prefix = canonicalParent.slice(0, -1);
+    if (!canonicalChild.startsWith(prefix)) return false;
+    const remainder = canonicalChild.slice(prefix.length);
+    return remainder.length > 0 && !remainder.includes("/");
+  }
+  return canonicalParent.endsWith("/") && canonicalChild.startsWith(canonicalParent);
+}
+
+function shareKeyMatchesDid(key: JWK, didUrl: string): boolean {
+  if (
+    key.kty !== "OKP" ||
+    key.crv !== "Ed25519" ||
+    typeof key.x !== "string" ||
+    typeof key.d !== "string"
+  ) return false;
+  try {
+    const didBytes = bases.base58btc.decode(principalDid(didUrl).slice("did:key:".length));
+    const publicKey = didBytes.length === 34 && didBytes[0] === 0xed && didBytes[1] === 0x01
+      ? didBytes.slice(2)
+      : null;
+    if (!publicKey) return false;
+    const jwkBytes = decodeBase64UrlBytes(key.x);
+    const privateKey = decodeBase64UrlBytes(key.d);
+    const derivedPublicKey = ed25519.getPublicKey(privateKey);
+    return (
+      privateKey.length === 32 &&
+      publicKey.length === jwkBytes.length &&
+      publicKey.every((byte, index) => byte === jwkBytes[index]) &&
+      derivedPublicKey.length === jwkBytes.length &&
+      derivedPublicKey.every((byte, index) => byte === jwkBytes[index])
+    );
+  } catch {
+    return false;
+  }
+}
+
+function decodeBase64UrlBytes(value: string): Uint8Array {
+  let encoded = value.replace(/-/g, "+").replace(/_/g, "/");
+  while (encoded.length % 4) encoded += "=";
+  if (typeof atob !== "undefined") {
+    return Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+  }
+  return Uint8Array.from(Buffer.from(encoded, "base64"));
+}
+
+function verifySignedChild(
+  result: CreateDelegationWasmResult,
+  expected: {
+    delegateDID: string;
+    issuerDID: string;
+    parentCid: string;
+    service: string;
+    spaceId: string;
+    path: string;
+    actions: string[];
+    expiresAt: Date;
+    parentExpiresAt: Date;
+  },
+  computeCid: NonNullable<SharingServiceConfig["computeCid"]>,
+): { delegateDID: string; expiresAt: Date; resource: CreateDelegationWasmResult["resources"][number] } | null {
+  const parts = result.delegation.split(".");
+  if (parts.length !== 3) return null;
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(decodeBase64UrlBytes(parts[1]))) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const delegateDID = typeof payload.aud === "string" ? principalDid(payload.aud) : "";
+  const issuerDID = typeof payload.iss === "string" ? principalDid(payload.iss) : "";
+  const proofs = Array.isArray(payload.prf) ? payload.prf : [];
+  const expirationSecs = typeof payload.exp === "number" && Number.isInteger(payload.exp) ? payload.exp : 0;
+  const expiresAt = new Date(expirationSecs * 1000);
+  if (
+    delegateDID !== expected.delegateDID ||
+    issuerDID !== expected.issuerDID ||
+    proofs.length !== 1 ||
+    proofs[0] !== expected.parentCid ||
+    expiresAt <= new Date() ||
+    expiresAt > expected.expiresAt ||
+    expiresAt > expected.parentExpiresAt ||
+    computeCid(new TextEncoder().encode(result.delegation), 0x55n) !== result.cid
+  ) return null;
+
+  const att = payload.att;
+  if (!att || typeof att !== "object" || Array.isArray(att)) return null;
+  const entries = Object.entries(att as Record<string, unknown>);
+  if (entries.length !== 1) return null;
+  const [resourceUri, abilityValue] = entries[0];
+  const prefix = `${expected.spaceId}/${expected.service}/`;
+  if (!resourceUri.startsWith(prefix) || resourceUri.slice(prefix.length) !== expected.path) return null;
+  if (!abilityValue || typeof abilityValue !== "object" || Array.isArray(abilityValue)) return null;
+  const signedActions = Object.keys(abilityValue as Record<string, unknown>).sort();
+  const expectedActions = [...expected.actions].sort();
+  if (
+    signedActions.length !== expectedActions.length ||
+    !signedActions.every((action, index) => action === expectedActions[index])
+  ) return null;
+
+  if (principalDid(result.delegateDID) !== delegateDID || result.resources.length !== 1) return null;
+  if (result.expiry.getTime() !== expiresAt.getTime()) return null;
+  const resource = result.resources[0];
+  if (
+    resource.service !== expected.service ||
+    resource.space !== expected.spaceId ||
+    resource.path !== expected.path
+  ) return null;
+  const actualActions = [...resource.actions].sort();
+  if (
+    actualActions.length !== expectedActions.length ||
+    !actualActions.every((action, index) => action === expectedActions[index])
+  ) return null;
+  return { delegateDID, expiresAt, resource };
 }

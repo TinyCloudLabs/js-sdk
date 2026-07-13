@@ -76,6 +76,7 @@ import {
   // v2 types
   SiweConfig,
   Delegation,
+  DelegationStatus,
   CreateDelegationParams,
   KeyInfo,
   JWK,
@@ -749,6 +750,11 @@ export class TinyCloudNode {
       fetch: globalThis.fetch.bind(globalThis),
       keyProvider: this._keyProvider,
       registry: this._capabilityRegistry,
+      createDelegationWasm: (params) => this.createDelegationWrapper(params),
+      computeCid: (data, codec) => {
+        if (!this.wasmBindings.computeCid) throw new Error("computeCid is unavailable");
+        return this.wasmBindings.computeCid(data, codec);
+      },
       // delegationManager: undefined - not needed for receive()
       createKVService: (config) => {
         // Use pathPrefix as the KV service prefix for sharing links
@@ -2578,6 +2584,7 @@ export class TinyCloudNode {
       hosts: [this.config.host!],
       session: serviceSession,
       invoke: this.invokeWithRuntimePermissions,
+      invokeAny: this.invokeAnyWithRuntimePermissions,
       fetch: globalThis.fetch.bind(globalThis),
     });
 
@@ -3688,6 +3695,22 @@ export class TinyCloudNode {
    */
   async revokeDelegation(cid: string): Promise<DelegationResult<void>> {
     return this.delegationManager.revoke(cid);
+  }
+
+  /** Read node-confirmed lifecycle state for one delegation. */
+  async getDelegationStatus(cid: string): Promise<DelegationResult<DelegationStatus>> {
+    return this.delegationManager.status(cid);
+  }
+
+  /** Compute the canonical CID of a compact delegation authorization. */
+  computeDelegationCid(authorization: string): string {
+    if (!authorization || !this.wasmBindings.computeCid) {
+      throw new Error("Delegation CID computation is unavailable");
+    }
+    return this.wasmBindings.computeCid(
+      new TextEncoder().encode(authorization),
+      0x55n,
+    );
   }
 
   /**

@@ -10,6 +10,7 @@
 import { z } from "zod";
 import type {
   FetchFunction,
+  InvokeAnyFunction,
   InvokeFunction,
   ServiceSession,
 } from "@tinycloud/sdk-services";
@@ -184,6 +185,34 @@ export const DelegationSchema = z.object({
 });
 
 export type Delegation = z.infer<typeof DelegationSchema>;
+
+/** Node-confirmed lifecycle state for one delegation. */
+export const DelegationStatusSchema = z.object({
+  cid: z.string().min(1),
+  status: z.enum(["active", "revoked", "expired", "unavailable", "not_found"]),
+  exists: z.boolean(),
+  active: z.boolean(),
+  revoked: z.boolean(),
+  expired: z.boolean(),
+}).strict().superRefine((value, context) => {
+  const valid = value.status === "active"
+    ? value.exists && value.active && !value.revoked && !value.expired
+    : value.status === "revoked"
+      ? value.exists && !value.active && value.revoked && !value.expired
+      : value.status === "expired"
+        ? value.exists && !value.active && !value.revoked && value.expired
+        : value.status === "unavailable"
+          ? value.exists && !value.active && !value.revoked && !value.expired
+          : !value.exists && !value.active && !value.revoked && !value.expired;
+  if (!valid) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "delegation status flags do not match status",
+    });
+  }
+});
+
+export type DelegationStatus = z.infer<typeof DelegationStatusSchema>;
 
 /**
  * Entry in the capability registry mapping a capability to available keys.
@@ -465,6 +494,11 @@ export const DelegationManagerConfigSchema = z.object({
     (val): val is InvokeFunction => typeof val === "function",
     { message: "Expected an invoke function" }
   ),
+  /** Platform-specific invoke function for raw resource URIs */
+  invokeAny: z.unknown().refine(
+    (val): val is InvokeAnyFunction => val === undefined || typeof val === "function",
+    { message: "Expected an invokeAny function or undefined" }
+  ).optional(),
   /** Optional custom fetch implementation */
   fetch: z.unknown().refine(
     (val): val is FetchFunction => val === undefined || typeof val === "function",

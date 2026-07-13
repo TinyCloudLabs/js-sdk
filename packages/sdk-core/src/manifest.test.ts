@@ -77,6 +77,12 @@ describe("expandActionShortNames", () => {
       "tinycloud.sql/schema",
     ]);
   });
+
+  it("expands delegation revocation for a consolidated sign-in manifest", () => {
+    expect(expandActionShortNames("tinycloud.delegation", ["revoke"])).toEqual([
+      "tinycloud.delegation/revoke",
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -968,5 +974,27 @@ describe("resolveManifest — end-to-end composition", () => {
 
     expect(request.resources.some((r) => r.space === "account")).toBe(false);
     expect(request.registryRecords).toEqual([]);
+  });
+
+  it("includes delegation revocation in the consolidated session request", () => {
+    const resolved = resolveManifest({
+      app_id: "com.feed.app",
+      name: "Feed",
+      defaults: false,
+      space: "feed-space",
+      prefix: "",
+      permissions: [{
+        service: "tinycloud.delegation",
+        path: "",
+        actions: ["revoke", "status"],
+      }],
+    });
+
+    expect(resourceCapabilitiesToSpaceAbilitiesMap(resolved.resources)).toEqual({
+      "feed-space": {
+        capabilities: { "": ["tinycloud.capabilities/read"] },
+        delegation: { "": ["tinycloud.delegation/revoke", "tinycloud.delegation/status"] },
+      },
+    });
   });
 });

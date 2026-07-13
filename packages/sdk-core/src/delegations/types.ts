@@ -37,6 +37,8 @@ export {
   // Core delegation types
   DelegationSchema,
   type Delegation,
+  DelegationStatusSchema,
+  type DelegationStatus,
   DelegationRecordSchema,
   type DelegationRecord,
   CreateDelegationParamsSchema,

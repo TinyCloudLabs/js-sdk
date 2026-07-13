@@ -42,6 +42,7 @@ export {
 
   // Delegation types
   Delegation,
+  DelegationStatus,
   CreateDelegationParams,
   DelegationChain,
   DelegationApiResponse,
@@ -85,6 +86,8 @@ export {
   EncodedShareData,
   ReceiveOptions,
   ShareAccess,
+  DelegateReceivedShareParams,
+  DelegatedShareAccess,
 } from "./SharingService";
 
 // SharingService Schemas and Validation

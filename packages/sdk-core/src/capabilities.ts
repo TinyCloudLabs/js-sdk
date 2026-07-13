@@ -114,8 +114,8 @@ export interface SubsetCheckResult {
  *     - If `granted.path` ends with `/`, it covers any `requested.path` that
  *       starts with `granted.path`.
  *     - Otherwise, the paths must match exactly.
- * - Action containment: every URN in `requested.actions` must appear in
- *   `granted.actions` (set subset).
+ * - Action containment: every requested URN must be matched exactly or by a
+ *   service-scoped wildcard such as `tinycloud.kv/*`.
  *
  * Any `requested` entry that does not find a matching `granted` entry is
  * added to `missing` and the overall result is non-subset.
@@ -171,15 +171,21 @@ function canonicalizeEntryMatches(
   const reqActions = new Set(
     expandActionShortNames(requested.service, requested.actions)
   );
-  const grantedActions = new Set(
-    expandActionShortNames(granted.service, granted.actions)
-  );
+  const grantedActions = expandActionShortNames(granted.service, granted.actions);
   for (const a of reqActions) {
-    if (!grantedActions.has(a)) {
+    if (!grantedActions.some((grantedAction) => actionContains(grantedAction, a))) {
       return false;
     }
   }
   return true;
+}
+
+/** Return whether a granted action pattern covers one requested action. */
+export function actionContains(grantedAction: string, requestedAction: string): boolean {
+  if (grantedAction === "*" || grantedAction === requestedAction) return true;
+  if (!grantedAction.endsWith("/*")) return false;
+  const service = grantedAction.slice(0, -2);
+  return requestedAction === service || requestedAction.startsWith(`${service}/`);
 }
 
 /**

@@ -298,6 +298,7 @@ export const SERVICE_SHORT_TO_LONG: Readonly<Record<string, string>> =
     capabilities: "tinycloud.capabilities",
     hooks: "tinycloud.hooks",
     encryption: "tinycloud.encryption",
+    delegation: "tinycloud.delegation",
   });
 
 /**
