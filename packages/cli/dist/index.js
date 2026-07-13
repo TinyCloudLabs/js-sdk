@@ -42362,7 +42362,8 @@ var SERVICE_SHORT_TO_LONG = Object.freeze({
   duckdb: "tinycloud.duckdb",
   capabilities: "tinycloud.capabilities",
   hooks: "tinycloud.hooks",
-  encryption: "tinycloud.encryption"
+  encryption: "tinycloud.encryption",
+  delegation: "tinycloud.delegation"
 });
 var ENCRYPTION_PERMISSION_SERVICE2 = "tinycloud.encryption";
 var ENCRYPTION_MANIFEST_SPACE2 = "encryption";
@@ -50066,6 +50067,22 @@ var DelegationSchema = external_exports.object({
   /** Authorization header (UCAN bearer token) */
   authHeader: external_exports.string().optional()
 });
+var DelegationStatusSchema = external_exports.object({
+  cid: external_exports.string().min(1),
+  status: external_exports.enum(["active", "revoked", "expired", "unavailable", "not_found"]),
+  exists: external_exports.boolean(),
+  active: external_exports.boolean(),
+  revoked: external_exports.boolean(),
+  expired: external_exports.boolean()
+}).strict().superRefine((value, context) => {
+  const valid = value.status === "active" ? value.exists && value.active && !value.revoked && !value.expired : value.status === "revoked" ? value.exists && !value.active && value.revoked && !value.expired : value.status === "expired" ? value.exists && !value.active && !value.revoked && value.expired : value.status === "unavailable" ? value.exists && !value.active && !value.revoked && !value.expired : !value.exists && !value.active && !value.revoked && !value.expired;
+  if (!valid) {
+    context.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "delegation status flags do not match status"
+    });
+  }
+});
 var CapabilityEntrySchema = external_exports.object({
   /** Resource URI this capability applies to */
   resource: external_exports.string(),
@@ -50230,6 +50247,11 @@ var DelegationManagerConfigSchema = external_exports.object({
     (val) => typeof val === "function",
     { message: "Expected an invoke function" }
   ),
+  /** Platform-specific invoke function for raw resource URIs */
+  invokeAny: external_exports.unknown().refine(
+    (val) => val === void 0 || typeof val === "function",
+    { message: "Expected an invokeAny function or undefined" }
+  ).optional(),
   /** Optional custom fetch implementation */
   fetch: external_exports.unknown().refine(
     (val) => val === void 0 || typeof val === "function",
@@ -50454,7 +50476,8 @@ var SERVICE_SHORT_TO_LONG2 = Object.freeze({
   duckdb: "tinycloud.duckdb",
   capabilities: "tinycloud.capabilities",
   hooks: "tinycloud.hooks",
-  encryption: "tinycloud.encryption"
+  encryption: "tinycloud.encryption",
+  delegation: "tinycloud.delegation"
 });
 var SERVICE_LONG_TO_SHORT2 = Object.freeze(
   Object.fromEntries(
@@ -50568,6 +50591,10 @@ var SharingServiceConfigSchema = external_exports.object({
    */
   createDelegationWasm: external_exports.unknown().refine((val) => val === void 0 || typeof val === "function", {
     message: "Expected a createDelegationWasm function or undefined"
+  }).optional(),
+  /** CID computation used to verify transportable child delegations. */
+  computeCid: external_exports.unknown().refine((val) => val === void 0 || typeof val === "function", {
+    message: "Expected a computeCid function or undefined"
   }).optional(),
   /**
    * Path prefix for KV operations.

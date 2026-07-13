@@ -1,5 +1,12 @@
 # @tinycloud/cli
 
+## 0.7.7-beta.5
+
+### Patch Changes
+
+- Updated dependencies [4dee0a9]
+  - @tinycloud/node-sdk@2.7.0-beta.2
+
 ## 0.7.7-beta.4
 
 ### Patch Changes

@@ -24,6 +24,7 @@
     "cli-private-jwk-auth-error",
     "fresh-delegate-requests",
     "fuzzy-feeds-share-session-key",
+    "safe-shares-delegate",
     "warm-delegates-import"
   ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/server",
-  "version": "2.4.7-beta.1",
+  "version": "2.4.7-beta.2",
   "description": "Reusable TinyCloud server and agent integration helpers",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -28,8 +28,8 @@
     "test": "bun test src/"
   },
   "dependencies": {
-    "@tinycloud/node-sdk": "2.6.4-beta.1",
-    "@tinycloud/sdk-core": "2.6.3",
+    "@tinycloud/node-sdk": "2.7.0-beta.2",
+    "@tinycloud/sdk-core": "2.7.0-beta.2",
     "viem": "^2.21.53"
   },
   "devDependencies": {

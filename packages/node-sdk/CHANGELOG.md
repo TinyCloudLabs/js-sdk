@@ -1,5 +1,23 @@
 # @tinycloudlabs/node-sdk
 
+## 2.7.0-beta.2
+
+### Minor Changes
+
+- 4dee0a9: Add `sharing.delegateReceivedShare`, which exchanges a received `tc1` sharing
+  link for a strictly attenuated child delegation without exposing the parent
+  link or its embedded private key. Node `receive` now uses the same primitive
+  when auto-subdelegating to its current session key. Delegation revocation can
+  now be included in a consolidated manifest and uses the node's revocation
+  endpoint so descendants are invalidated rather than recording a no-op invoke.
+  The SDK also exposes node-confirmed delegation lifecycle status without
+  returning delegation metadata.
+
+### Patch Changes
+
+- Updated dependencies [4dee0a9]
+  - @tinycloud/sdk-core@2.7.0-beta.2
+
 ## 2.6.4-beta.1
 
 ### Patch Changes
