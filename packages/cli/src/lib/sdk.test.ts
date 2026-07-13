@@ -7,6 +7,8 @@ import { CLIError } from "../output/errors.js";
 let profile: Record<string, unknown> | null = null;
 let session: Record<string, unknown> | null = null;
 let key: object | null = null;
+const savedSessions: Record<string, unknown>[] = [];
+const savedProfiles: Record<string, unknown>[] = [];
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
@@ -18,6 +20,14 @@ mock.module("../config/profiles.js", () => ({
     },
     getSession: async () => session,
     getKey: async () => key,
+    setSession: async (_name: string, next: Record<string, unknown>) => {
+      session = next;
+      savedSessions.push(next);
+    },
+    setProfile: async (_name: string, next: Record<string, unknown>) => {
+      profile = next;
+      savedProfiles.push(next);
+    },
   },
 }));
 
@@ -54,7 +64,7 @@ mock.module("./permissions.js", () => ({
   replayAdditionalDelegations: async () => {},
 }));
 
-const { ensureAuthenticated, jwkHasPrivateParameter, selectSignerJwk } = await import("./sdk.js");
+const { bootstrapDelegatedSession, ensureAuthenticated, jwkHasPrivateParameter, selectSignerJwk } = await import("./sdk.js");
 
 const ctx = { profile: "tc-sdk-test-headless", host: "https://node.tinycloud.xyz", verbose: false, noCache: false, quiet: false };
 const HEX_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -65,7 +75,63 @@ beforeEach(() => {
   key = null;
   nodeCalls.length = 0;
   restoreCalls.length = 0;
+  savedSessions.length = 0;
+  savedProfiles.length = 0;
   delete process.env.TC_PRIVATE_KEY;
+});
+
+describe("bootstrapDelegatedSession", () => {
+  const FULL_KEY_JWK = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+  const delegation = {
+    delegationHeader: { Authorization: "Bearer delegated" },
+    cid: "bafy-delegated-session",
+    spaceId: "tinycloud:pkh:eip155:1:0xowner",
+    delegateDID: "did:key:zDelegate#zDelegate",
+    ownerAddress: "0xowner",
+    chainId: 1,
+  };
+
+  test("persists and restores the first session for a delegate profile", async () => {
+    profile = {
+      name: ctx.profile,
+      posture: "delegate-session",
+      did: "did:key:zDelegate",
+      sessionDid: "did:key:zDelegate",
+    };
+    key = FULL_KEY_JWK;
+
+    await bootstrapDelegatedSession(ctx, delegation as never);
+
+    expect(savedSessions).toHaveLength(1);
+    expect(savedSessions[0]).toMatchObject({
+      delegationCid: "bafy-delegated-session",
+      verificationMethod: "did:key:zDelegate",
+      jwk: FULL_KEY_JWK,
+    });
+    expect(savedProfiles[0]).toMatchObject({
+      spaceId: "tinycloud:pkh:eip155:1:0xowner",
+      sessionDid: "did:key:zDelegate",
+    });
+    expect(restoreCalls).toHaveLength(1);
+    expect(restoreCalls[0]!.jwk).toBe(FULL_KEY_JWK);
+  });
+
+  test("rejects a delegation issued to a different session key", async () => {
+    profile = {
+      name: ctx.profile,
+      posture: "delegate-session",
+      did: "did:key:zOther",
+      sessionDid: "did:key:zOther",
+    };
+    key = FULL_KEY_JWK;
+
+    const error = await bootstrapDelegatedSession(ctx, delegation as never)
+      .catch((cause) => cause as CLIError);
+
+    expect(error.code).toBe("DELEGATION_AUDIENCE_MISMATCH");
+    expect(savedSessions).toHaveLength(0);
+    expect(restoreCalls).toHaveLength(0);
+  });
 });
 
 afterEach(() => {
@@ -193,5 +259,19 @@ describe("ensureAuthenticated restoreSession uses full keypair from key.json", (
 
     expect(restoreCalls).toHaveLength(1);
     expect(restoreCalls[0]!.jwk).toBe(FULL_KEY_JWK);
+  });
+
+  test("an unrecoverable public-only session is rejected as auth state before restore", async () => {
+    profile = { authMethod: "openkey", did: "did:key:zSession" };
+    session = { ...sessionShell, jwk: PUBLIC_ONLY_SESSION_JWK };
+    key = { kty: "OKP", crv: "Ed25519", x: "key-public" };
+
+    const error = await ensureAuthenticated(ctx).catch((cause) => cause as CLIError);
+    expect(error.code).toBe("AUTH_REQUIRED");
+    expect(error.exitCode).toBe(3);
+    expect(error.metadata?.hint).toBe(
+      "Sign in again with: tc --profile tc-sdk-test-headless auth login --method openkey",
+    );
+    expect(restoreCalls).toHaveLength(0);
   });
 });

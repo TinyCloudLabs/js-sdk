@@ -1,6 +1,6 @@
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, type PortableDelegation } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
-import type { CLIContext } from "../config/types.js";
+import { resolveProfilePosture, type CLIContext } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
@@ -33,6 +33,26 @@ export function selectSignerJwk(
     return sessionJwk as object;
   }
   return key ?? undefined;
+}
+
+function signerJwkForProfile(
+  profileName: string,
+  sessionJwk: unknown,
+  key: object | null,
+): object {
+  const jwk = selectSignerJwk(sessionJwk, key);
+  if (jwkHasPrivateParameter(jwk)) {
+    return jwk;
+  }
+
+  throw new CLIError(
+    "AUTH_REQUIRED",
+    `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+    ExitCode.AUTH_REQUIRED,
+    {
+      hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`,
+    },
+  );
 }
 
 /**
@@ -79,7 +99,7 @@ export async function createSDKInstance(
         delegationHeader: session.delegationHeader as { Authorization: string },
         delegationCid: session.delegationCid as string,
         spaceId: session.spaceId as string,
-        jwk: selectSignerJwk(session.jwk, key),
+        jwk: signerJwkForProfile(ctx.profile, session.jwk, key),
         verificationMethod: (session.verificationMethod as string) ?? profile?.sessionDid ?? profile?.did,
         address: session.address as string | undefined,
         chainId: session.chainId as number | undefined,
@@ -108,7 +128,7 @@ export async function createSDKInstance(
       delegationHeader: session.delegationHeader as { Authorization: string },
       delegationCid: session.delegationCid as string,
       spaceId: session.spaceId as string,
-      jwk: selectSignerJwk(session.jwk, key),
+      jwk: signerJwkForProfile(ctx.profile, session.jwk, key),
       verificationMethod: (session.verificationMethod as string) ?? profile?.did,
       address: session.address as string | undefined,
       chainId: session.chainId as number | undefined,
@@ -119,6 +139,54 @@ export async function createSDKInstance(
 
   await replayAdditionalDelegations(node, ctx.profile);
   return node;
+}
+
+/**
+ * Establish the first authenticated session for a fresh delegate-session
+ * profile from a delegation targeted at that profile's generated key.
+ */
+export async function bootstrapDelegatedSession(
+  ctx: CLIContext,
+  delegation: PortableDelegation,
+): Promise<TinyCloudNode> {
+  const profile = await ProfileManager.getProfile(ctx.profile);
+  if (resolveProfilePosture(profile) !== "delegate-session") {
+    throw new CLIError(
+      "AUTH_REQUIRED",
+      `Profile "${ctx.profile}" is not a delegate-session profile.`,
+      ExitCode.AUTH_REQUIRED,
+    );
+  }
+
+  const sessionDid = profile.sessionDid ?? profile.did;
+  if (delegation.delegateDID.split("#", 1)[0] !== sessionDid.split("#", 1)[0]) {
+    throw new CLIError(
+      "DELEGATION_AUDIENCE_MISMATCH",
+      `Delegation targets ${delegation.delegateDID}, but profile "${ctx.profile}" uses ${sessionDid}.`,
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+
+  const key = await ProfileManager.getKey(ctx.profile);
+  const jwk = signerJwkForProfile(ctx.profile, undefined, key);
+  await ProfileManager.setSession(ctx.profile, {
+    delegationHeader: delegation.delegationHeader,
+    delegationCid: delegation.cid,
+    spaceId: delegation.spaceId,
+    jwk,
+    verificationMethod: sessionDid,
+    address: delegation.ownerAddress,
+    chainId: delegation.chainId,
+    siwe: "",
+    signature: "",
+  });
+  await ProfileManager.setProfile(ctx.profile, {
+    ...profile,
+    sessionDid,
+    spaceId: delegation.spaceId,
+  });
+
+  return createSDKInstance(ctx);
 }
 
 /**

@@ -58,12 +58,12 @@ function makeFakeSessionManager(): ISessionManager {
       return id;
     },
     renameSessionKeyId(oldId: string, newId: string): void {
-      if (keys.has(oldId)) {
-        keys.delete(oldId);
-        keys.add(newId);
-      }
+      if (!keys.has(oldId)) throw new Error(`Key ${oldId} does not exist.`);
+      keys.delete(oldId);
+      keys.add(newId);
     },
     getDID(keyId: string): string {
+      if (!keys.has(keyId)) throw new Error(`Key ${keyId} does not exist.`);
       return `did:key:z6MkTest-${keyId}`;
     },
     jwk(keyId: string): string | undefined {
@@ -190,6 +190,71 @@ function stubAuthNetworkCalls(node: TinyCloudNode): void {
 // ---------------------------------------------------------------------------
 
 describe("TinyCloudNode.signIn — manifest-driven recap", () => {
+  test("sessionDid follows the active key across repeated signIn calls", async () => {
+    const node = makeNodeWithSigner(makeFakeWasmBindings(), {
+      autoBootstrapAccount: false,
+      includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "xyz.tinycloud.feed.host",
+        name: "Feed Host",
+        defaults: false,
+        permissions: [],
+      },
+    });
+
+    await withFetchResponses(
+      [
+        new Response(
+          JSON.stringify({
+            protocol: 1,
+            version: "test",
+            features: [],
+            nodeId: "did:key:z6MkNode",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await node.signIn();
+      },
+    );
+
+    const firstKeyId = node.session?.sessionKey;
+    expect(firstKeyId).toStartWith("session-");
+    expect(node.sessionDid).toBe(`did:key:z6MkTest-${firstKeyId}`);
+
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await withFetchResponses(
+      [
+        new Response(
+          JSON.stringify({
+            protocol: 1,
+            version: "test",
+            features: [],
+            nodeId: "did:key:z6MkNode",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await node.signIn();
+      },
+    );
+
+    const secondKeyId = node.session?.sessionKey;
+    expect(secondKeyId).toStartWith("session-");
+    expect(secondKeyId).not.toBe(firstKeyId);
+    expect(node.sessionDid).toBe(`did:key:z6MkTest-${secondKeyId}`);
+  });
+
   test("no manifest → uses defaultActions (legacy fallback)", async () => {
     const prepareSessionSpy = mock((cfg: any) => ({
       siwe: "fake-siwe",

@@ -1,5 +1,85 @@
 # @tinycloud/cli
 
+## 0.7.7-beta.4
+
+### Patch Changes
+
+- 28e4ae8: Allow a fresh `delegate-session` profile to request permissions using logical space names before it knows the granting owner's address.
+
+## 0.7.7-beta.3
+
+### Patch Changes
+
+- decbb25: Allow a fresh `delegate-session` profile to establish its first authenticated session by importing a delegation targeted at its generated session key.
+
+## 0.7.7-beta.2
+
+### Patch Changes
+
+- Updated dependencies [367c17c]
+  - @tinycloud/node-sdk@2.6.4-beta.1
+
+## 0.7.7-beta.1
+
+### Patch Changes
+
+- 565b5fd: Reject unrecoverable public-only profile sessions before SDK restore and report missing private JWK material as an authentication problem with a sign-in hint instead of a network failure.
+
+## 0.7.7-beta.0
+
+### Patch Changes
+
+- Updated dependencies [f6048b7]
+  - @tinycloud/node-sdk@2.6.4-beta.0
+
+## 0.7.6
+
+### Patch Changes
+
+- Updated dependencies [3841be4]
+  - @tinycloud/node-sdk@2.6.3
+
+## 0.7.6-beta.0
+
+### Patch Changes
+
+- Updated dependencies [3841be4]
+  - @tinycloud/node-sdk@2.6.3-beta.0
+
+## 0.7.5
+
+### Patch Changes
+
+- Updated dependencies [b4d1e45]
+  - @tinycloud/node-sdk@2.6.2
+
+## 0.7.5-beta.0
+
+### Patch Changes
+
+- Updated dependencies [b4d1e45]
+  - @tinycloud/node-sdk@2.6.2-beta.0
+
+## 0.7.4
+
+### Patch Changes
+
+- Updated dependencies [bf31506]
+  - @tinycloud/node-sdk@2.6.1
+
+## 0.7.4-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@2.6.1-beta.1
+
+## 0.7.4-beta.0
+
+### Patch Changes
+
+- Updated dependencies [bf31506]
+  - @tinycloud/node-sdk@2.6.1-beta.0
+
 ## 0.7.3
 
 ### Patch Changes

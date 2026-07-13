@@ -28,7 +28,7 @@ import {
   CAPABILITIES as GENERATED_CAPABILITIES,
   type CapabilityEntry,
   type CapabilityStatus,
-} from "./generated/capabilities";
+} from "./generated/capabilities.js";
 
 export type { CapabilityStatus };
 

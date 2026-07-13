@@ -1,5 +1,207 @@
 # @tinycloudlabs/node-sdk
 
+## 2.6.4-beta.1
+
+### Patch Changes
+
+- 367c17c: Normalize session verification-method DID URLs to principal DIDs at the WASM delegation boundary so session-key delegations accept persisted `did:key:...#key-id` identities.
+
+## 2.6.4-beta.0
+
+### Patch Changes
+
+- f6048b7: Keep TinyCloudNode session-key accessors synchronized with the active key and make repeated sign-in rotate that key safely, so delegation flows do not reference the removed default key.
+
+## 2.6.3
+
+### Patch Changes
+
+- 3841be4: Fix account bootstrap failing on fresh keys because `sqlForSpace()` dropped `invokeAny` (issue #300).
+
+  `TinyCloudNode.sqlForSpace()` (and its `kvForSpace()` counterpart) cloned the
+  active service context with only `{invoke, fetch, hosts, telemetry}`, silently
+  omitting `invokeAny`. Account bootstrap routes through this path: the
+  `account-index-schema` step calls `account.index.ensure()`, whose migration
+  batch dedupes to multiple SQL actions (`tinycloud.sql/schema` +
+  `tinycloud.sql/write`). A multi-action batch requires `context.invokeAny`, so
+  with it undefined `SQLService.invokeSQLAny` threw
+  "SQL operation requires multiple permissions ... does not support
+  multi-resource invocations", and the first `signIn()` on a fresh key failed to
+  provision the account index (the `secret-records-schema` step would have hit
+  the identical failure). The "recovery" on a second `signIn()` was accidental
+  and incomplete — the existence check could pass and skip the schema step,
+  leaving accounts without the account index.
+
+  Thread `invokeAny` from the primary service context (`this._serviceContext.invokeAny`)
+  into the space-scoped context that `sqlForSpace()` and `kvForSpace()` build, so
+  multi-action bootstrap migrations mint their authorization header correctly.
+
+- Updated dependencies [3841be4]
+  - @tinycloud/sdk-core@2.6.3
+
+## 2.6.3-beta.0
+
+### Patch Changes
+
+- 3841be4: Fix account bootstrap failing on fresh keys because `sqlForSpace()` dropped `invokeAny` (issue #300).
+
+  `TinyCloudNode.sqlForSpace()` (and its `kvForSpace()` counterpart) cloned the
+  active service context with only `{invoke, fetch, hosts, telemetry}`, silently
+  omitting `invokeAny`. Account bootstrap routes through this path: the
+  `account-index-schema` step calls `account.index.ensure()`, whose migration
+  batch dedupes to multiple SQL actions (`tinycloud.sql/schema` +
+  `tinycloud.sql/write`). A multi-action batch requires `context.invokeAny`, so
+  with it undefined `SQLService.invokeSQLAny` threw
+  "SQL operation requires multiple permissions ... does not support
+  multi-resource invocations", and the first `signIn()` on a fresh key failed to
+  provision the account index (the `secret-records-schema` step would have hit
+  the identical failure). The "recovery" on a second `signIn()` was accidental
+  and incomplete — the existence check could pass and skip the schema step,
+  leaving accounts without the account index.
+
+  Thread `invokeAny` from the primary service context (`this._serviceContext.invokeAny`)
+  into the space-scoped context that `sqlForSpace()` and `kvForSpace()` build, so
+  multi-action bootstrap migrations mint their authorization header correctly.
+
+- Updated dependencies [3841be4]
+  - @tinycloud/sdk-core@2.6.3-beta.0
+
+## 2.6.2
+
+### Patch Changes
+
+- b4d1e45: TC-111 follow-up: primary-grant selection now returns the caller's scoped
+  session so multi-space recaps mint resources against the correct target space.
+
+  TC-111 registers the primary session's own recap as a synthetic
+  `provenance: "primary"` runtime grant that wins invocation selection when it
+  covers the requested op. The two invocation call sites then used
+  `grant.session` — the stored primary `ServiceSession`, whose `spaceId` is the
+  PRIMARY space. For scoped ops on OTHER spaces that a multi-space recap also
+  covers (e.g. an account-registry write whose fallback session targets the
+  `account` space), the invocation was minted against the primary space
+  (`applications/kv/...` instead of `account/kv/...`) and the node rejected it
+  (observed as 404/40x in prod).
+
+  `selectInvocationSession` and `invokeAnyWithRuntimePermissions` now invoke with
+  the caller's passed/fallback session — which shares the primary delegation but
+  carries the correct target `spaceId` — whenever the winning grant is the
+  primary one. Non-primary grants keep using `grant.session`. Ranking semantics in
+  `findGrantForOperations` are unchanged. This fixes wrong-space invocations for
+  account/secrets ops that were minted against the primary space.
+
+- Updated dependencies [b4d1e45]
+  - @tinycloud/sdk-core@2.6.2
+
+## 2.6.2-beta.0
+
+### Patch Changes
+
+- b4d1e45: TC-111 follow-up: primary-grant selection now returns the caller's scoped
+  session so multi-space recaps mint resources against the correct target space.
+
+  TC-111 registers the primary session's own recap as a synthetic
+  `provenance: "primary"` runtime grant that wins invocation selection when it
+  covers the requested op. The two invocation call sites then used
+  `grant.session` — the stored primary `ServiceSession`, whose `spaceId` is the
+  PRIMARY space. For scoped ops on OTHER spaces that a multi-space recap also
+  covers (e.g. an account-registry write whose fallback session targets the
+  `account` space), the invocation was minted against the primary space
+  (`applications/kv/...` instead of `account/kv/...`) and the node rejected it
+  (observed as 404/40x in prod).
+
+  `selectInvocationSession` and `invokeAnyWithRuntimePermissions` now invoke with
+  the caller's passed/fallback session — which shares the primary delegation but
+  carries the correct target `spaceId` — whenever the winning grant is the
+  primary one. Non-primary grants keep using `grant.session`. Ranking semantics in
+  `findGrantForOperations` are unchanged. This fixes wrong-space invocations for
+  account/secrets ops that were minted against the primary space.
+
+- Updated dependencies [b4d1e45]
+  - @tinycloud/sdk-core@2.6.2-beta.0
+
+## 2.6.1
+
+### Patch Changes
+
+- bf31506: Stop emitting a doomed `tinycloud.space/list` invocation after manifest/recap
+  sign-in (TC-110).
+
+  `scheduleAccountRegistrySync()` unconditionally called
+  `account.spaces.syncAccessible()`, which invokes `tinycloud.space/list` — a
+  capability a manifest/recap session never holds — producing a benign but noisy
+  `401 Unauthorized Action: …/space/ tinycloud.space/list` on every sign-in
+  (visible in browser consoles).
+
+  The sync now skips `syncAccessible()` when the current session's recap does not
+  grant `tinycloud.space/list`, reusing the TC-111 `recapOperationsFromSession`
+  primitive. Only sessions without a SIWE recap (session-only /
+  restored-without-siwe) keep today's behavior — every wallet SIWE session in
+  this stack carries a recap, and none of them grant `space/list`, so all of
+  them skip.
+
+  Behavior note: `syncAccessible()` on this path could only ever register
+  capability-registry-derived **delegated** spaces (the owned-space listing 401
+  was already swallowed by `SpaceService.list`). That sign-in-time delegated
+  registration no longer happens; owned spaces are unaffected (bootstrap seeding
+  - `spaces.register()`), and `account.spaces.list({ preferIndex: true })`
+    self-heals via its own `syncAccessible()` fallback.
+
+  Additionally, `withAccountRegistryRetry` no longer retries authorization
+  verdicts (`Unauthorized Action` / 401): those are deterministic, not transient,
+  so it warns once and stops instead of re-emitting the doomed request. Generic
+  errors still get the full retry budget.
+
+  Guard only — no registry-convergence writes and no sdk-core changes; the CLI
+  (`tc account spaces sync`) still uses `syncAccessible()` for explicit discovery.
+
+- Updated dependencies [bf31506]
+  - @tinycloud/sdk-core@2.6.1
+
+## 2.6.1-beta.1
+
+### Patch Changes
+
+- @tinycloud/sdk-core@2.6.1-beta.1
+
+## 2.6.1-beta.0
+
+### Patch Changes
+
+- bf31506: Stop emitting a doomed `tinycloud.space/list` invocation after manifest/recap
+  sign-in (TC-110).
+
+  `scheduleAccountRegistrySync()` unconditionally called
+  `account.spaces.syncAccessible()`, which invokes `tinycloud.space/list` — a
+  capability a manifest/recap session never holds — producing a benign but noisy
+  `401 Unauthorized Action: …/space/ tinycloud.space/list` on every sign-in
+  (visible in browser consoles).
+
+  The sync now skips `syncAccessible()` when the current session's recap does not
+  grant `tinycloud.space/list`, reusing the TC-111 `recapOperationsFromSession`
+  primitive. Only sessions without a SIWE recap (session-only /
+  restored-without-siwe) keep today's behavior — every wallet SIWE session in
+  this stack carries a recap, and none of them grant `space/list`, so all of
+  them skip.
+
+  Behavior note: `syncAccessible()` on this path could only ever register
+  capability-registry-derived **delegated** spaces (the owned-space listing 401
+  was already swallowed by `SpaceService.list`). That sign-in-time delegated
+  registration no longer happens; owned spaces are unaffected (bootstrap seeding
+  - `spaces.register()`), and `account.spaces.list({ preferIndex: true })`
+    self-heals via its own `syncAccessible()` fallback.
+
+  Additionally, `withAccountRegistryRetry` no longer retries authorization
+  verdicts (`Unauthorized Action` / 401): those are deterministic, not transient,
+  so it warns once and stops instead of re-emitting the doomed request. Generic
+  errors still get the full retry budget.
+
+  Guard only — no registry-convergence writes and no sdk-core changes; the CLI
+  (`tc account spaces sync`) still uses `syncAccessible()` for explicit discovery.
+
+- Updated dependencies [bf31506]
+  - @tinycloud/sdk-core@2.6.1-beta.0
+
 ## 2.6.0
 
 ### Minor Changes

@@ -31642,8 +31642,19 @@ var CLIError = class extends Error {
   }
 };
 function wrapError(error) {
-  if (error instanceof CLIError) return error;
   const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("Missing private key parameter in JWK")) {
+    const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
+    return new CLIError(
+      "AUTH_REQUIRED",
+      `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+      ExitCode.AUTH_REQUIRED,
+      {
+        hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`
+      }
+    );
+  }
+  if (error instanceof CLIError) return error;
   if (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired")) {
     return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
   }
@@ -43165,7 +43176,6 @@ async function parseCapSpec(spec, profile) {
   const actionsCsv = spec.slice(lastColon + 1);
   const spaceAndPath = spec.slice(firstColon + 1, lastColon);
   const { space, path } = splitSpaceAndPath(spaceAndPath);
-  const resolvedSpace = await resolveSpaceUri(space, profile) ?? space;
   const actions = expandActionShortNames(
     service,
     actionsCsv.split(",").map((action) => action.trim()).filter(Boolean)
@@ -43173,7 +43183,9 @@ async function parseCapSpec(spec, profile) {
   if (actions.length === 0) {
     throw new CLIError("INVALID_CAP", `Capability "${spec}" has no actions.`, ExitCode.USAGE_ERROR);
   }
-  return { service, space: resolvedSpace, path, actions };
+  return (await resolvePermissionSpaces([
+    { service, space, path, actions }
+  ], profile))[0];
 }
 async function loadPermissionRequest(source, profile) {
   const raw = JSON.parse(await readFile2(source, "utf8"));
@@ -43281,13 +43293,24 @@ function compactPermission(permission) {
   return `${service}:${space}:${permission.path}:${actions}`;
 }
 async function resolvePermissionSpaces(entries, profile) {
+  const profileConfig = await ProfileManager.getProfile(profile);
+  const allowLogicalSpaces = resolveProfilePosture(profileConfig) === "delegate-session";
   const resolved = [];
   for (const entry of entries) {
     const service = normalizeService(entry.service);
+    let space;
+    try {
+      space = await resolveSpaceUri(entry.space, profile) ?? entry.space;
+    } catch (error) {
+      if (!allowLogicalSpaces || entry.space.startsWith("tinycloud:") || !(error instanceof CLIError) || error.code !== "ADDRESS_UNKNOWN") {
+        throw error;
+      }
+      space = entry.space;
+    }
     resolved.push({
       ...entry,
       service,
-      space: await resolveSpaceUri(entry.space, profile) ?? entry.space,
+      space,
       actions: expandActionShortNames(service, entry.actions)
     });
   }
@@ -43364,6 +43387,20 @@ function selectSignerJwk(sessionJwk, key2) {
   }
   return key2 ?? void 0;
 }
+function signerJwkForProfile(profileName, sessionJwk, key2) {
+  const jwk = selectSignerJwk(sessionJwk, key2);
+  if (jwkHasPrivateParameter(jwk)) {
+    return jwk;
+  }
+  throw new CLIError(
+    "AUTH_REQUIRED",
+    `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+    ExitCode.AUTH_REQUIRED,
+    {
+      hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`
+    }
+  );
+}
 async function createSDKInstance(ctx, options) {
   const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile);
@@ -43386,7 +43423,7 @@ async function createSDKInstance(ctx, options) {
         delegationHeader: session.delegationHeader,
         delegationCid: session.delegationCid,
         spaceId: session.spaceId,
-        jwk: selectSignerJwk(session.jwk, key2),
+        jwk: signerJwkForProfile(ctx.profile, session.jwk, key2),
         verificationMethod: session.verificationMethod ?? profile?.sessionDid ?? profile?.did,
         address: session.address,
         chainId: session.chainId,
@@ -43410,7 +43447,7 @@ async function createSDKInstance(ctx, options) {
       delegationHeader: session.delegationHeader,
       delegationCid: session.delegationCid,
       spaceId: session.spaceId,
-      jwk: selectSignerJwk(session.jwk, key2),
+      jwk: signerJwkForProfile(ctx.profile, session.jwk, key2),
       verificationMethod: session.verificationMethod ?? profile?.did,
       address: session.address,
       chainId: session.chainId,
@@ -43420,6 +43457,43 @@ async function createSDKInstance(ctx, options) {
   }
   await replayAdditionalDelegations(node, ctx.profile);
   return node;
+}
+async function bootstrapDelegatedSession(ctx, delegation) {
+  const profile = await ProfileManager.getProfile(ctx.profile);
+  if (resolveProfilePosture(profile) !== "delegate-session") {
+    throw new CLIError(
+      "AUTH_REQUIRED",
+      `Profile "${ctx.profile}" is not a delegate-session profile.`,
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  const sessionDid = profile.sessionDid ?? profile.did;
+  if (delegation.delegateDID.split("#", 1)[0] !== sessionDid.split("#", 1)[0]) {
+    throw new CLIError(
+      "DELEGATION_AUDIENCE_MISMATCH",
+      `Delegation targets ${delegation.delegateDID}, but profile "${ctx.profile}" uses ${sessionDid}.`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const key2 = await ProfileManager.getKey(ctx.profile);
+  const jwk = signerJwkForProfile(ctx.profile, void 0, key2);
+  await ProfileManager.setSession(ctx.profile, {
+    delegationHeader: delegation.delegationHeader,
+    delegationCid: delegation.cid,
+    spaceId: delegation.spaceId,
+    jwk,
+    verificationMethod: sessionDid,
+    address: delegation.ownerAddress,
+    chainId: delegation.chainId,
+    siwe: "",
+    signature: ""
+  });
+  await ProfileManager.setProfile(ctx.profile, {
+    ...profile,
+    sessionDid,
+    spaceId: delegation.spaceId
+  });
+  return createSDKInstance(ctx);
 }
 async function ensureAuthenticated(ctx, options) {
   if (options?.privateKey) {
@@ -43720,7 +43794,15 @@ function registerAuthCommand(program2) {
         return;
       }
       const imported = normalizeDelegationImport(parsed);
-      const node = await ensureAuthenticated(ctx);
+      let node;
+      try {
+        node = await ensureAuthenticated(ctx);
+      } catch (error) {
+        const profile = await ProfileManager.getProfile(ctx.profile);
+        const session = await ProfileManager.getSession(ctx.profile);
+        if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
+        node = await bootstrapDelegatedSession(ctx, imported.delegation);
+      }
       await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
         imported.delegation,
         imported.permissions
@@ -43766,17 +43848,19 @@ function registerAuthCommand(program2) {
           ExitCode.USAGE_ERROR
         );
       }
+      const requested = await resolvePermissionSpaces(parsed.requested, ctx.profile);
+      const resolvedRequest = { ...parsed, requested };
       const node = await ensureAuthenticated(ctx);
       await ensureDelegationAuthority({
         ctx,
         profile,
         node,
-        requested: parsed.requested,
+        requested,
         expiryOption: parsed.requestedExpiry,
         reason: "Grant permissions requested by a TinyCloud auth request artifact.",
         yes: options.yes === true
       });
-      const grant = await grantAuthRequest(node, parsed);
+      const grant = await grantAuthRequest(node, resolvedRequest);
       outputJson(grant);
     } catch (error) {
       handleError(error);

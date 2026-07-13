@@ -656,7 +656,12 @@ export class TinyCloudNode {
         return operation ? [operation] : [];
       }),
     );
-    return this.wasmBindings.invokeAny(grant?.session ?? session, entries, facts);
+    // When the primary grant wins, invoke with the PASSED session (its scoped
+    // target `spaceId`), not the stored primary `ServiceSession` — see
+    // `selectInvocationSession` for the wrong-space rationale (TC-111 follow-up).
+    const invocationSession =
+      !grant || grant.provenance === "primary" ? session : grant.session;
+    return this.wasmBindings.invokeAny(invocationSession, entries, facts);
   };
 
   /**
@@ -789,6 +794,7 @@ export class TinyCloudNode {
       signer: this.signer!,
       signStrategy: config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
+      sessionManager: this.sessionManager,
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: config.prefix,
@@ -1019,6 +1025,15 @@ export class TinyCloudNode {
 
     await this.tc.signIn(options);
     this.syncResolvedHostFromAuth();
+
+    // NodeUserAuthorization renames the constructor's "default" key when it
+    // creates the signed-in session. Keep node-level key accessors in sync so
+    // sessionDid and delegation flows use the active key instead of the old ID.
+    const signedInSession = this.currentTinyCloudSession();
+    if (signedInSession) {
+      this.sessionKeyId = signedInSession.sessionKey;
+      this.sessionKeyJwk = signedInSession.jwk;
+    }
 
     // Initialize service context with session
     this.initializeServices();
@@ -1475,11 +1490,52 @@ export class TinyCloudNode {
     void this.withAccountRegistryRetry(async () => {
       void this.account.index.ensure();
       await this.writeManifestRegistryRecords();
-      const spaces = await this.account.spaces.syncAccessible();
-      if (!spaces.ok) {
-        throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+
+      if (this.currentSessionCanListSpaces()) {
+        const spaces = await this.account.spaces.syncAccessible();
+        if (!spaces.ok) {
+          throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+        }
       }
+      // Else: the current session carries a recap that does not grant
+      // `tinycloud.space/list` (every manifest/recap session, and the default
+      // non-manifest recap alike — its abilities table has no `space` service).
+      // `syncAccessible()` depends on `tinycloud.space/list`, which such a
+      // session does not hold — see {@link isOwnedSpaceRegistered} — so the
+      // owned-space listing is a doomed request that 401s on the wire
+      // (`Unauthorized Action: …/space/ tinycloud.space/list`). The account
+      // spaces registry is instead maintained by bootstrap seeding +
+      // `spaces.register()`, so we skip the invoke entirely rather than emit it.
     });
+  }
+
+  /**
+   * Whether the current primary session may invoke `tinycloud.space/list`.
+   *
+   * A session with NO parseable recap (session-only / restored-without-siwe)
+   * yields zero recap operations — we preserve today's behavior and let
+   * `syncAccessible()` run. A session whose parseable recap has entries but
+   * none granting `tinycloud.space/list` cannot list owned spaces; the guard
+   * skips. Every wallet SIWE session in this stack carries a recap (manifest
+   * sessions and the default non-manifest recap alike), and none grant
+   * `space/list`, so all of them skip.
+   *
+   * Reuses the TC-111 {@link recapOperationsFromSession} primitive — no second
+   * recap parser.
+   */
+  private currentSessionCanListSpaces(): boolean {
+    const session = this.currentTinyCloudSession();
+    const operations = session
+      ? this.recapOperationsFromSession(session)
+      : [];
+    if (operations.length === 0) {
+      return true;
+    }
+    return operations.some(
+      (operation) =>
+        operation.service === "space" &&
+        this.actionContains(operation.action, "tinycloud.space/list"),
+    );
   }
 
   private async withAccountRegistryRetry(task: () => Promise<void>): Promise<void> {
@@ -1490,6 +1546,18 @@ export class TinyCloudNode {
         await task();
         return;
       } catch (error) {
+        // Authorization verdicts are deterministic, not transient: retrying an
+        // `Unauthorized Action` / 401 only re-emits the doomed request (the
+        // 2026-07-03 recap-storm incident). Warn once and stop; generic errors
+        // still get the full retry budget below.
+        const message = error instanceof Error ? error.message : String(error);
+        if (/Unauthorized Action|\b401\b/.test(message)) {
+          console.warn(
+            "TinyCloud account registry sync stopped: authorization verdict is not retryable",
+            error,
+          );
+          return;
+        }
         lastError = error;
         if (attempt < delays.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
@@ -2019,6 +2087,7 @@ export class TinyCloudNode {
       signer: this.signer,
       signStrategy: this.config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
+      sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: prefix,
@@ -2080,6 +2149,7 @@ export class TinyCloudNode {
       signer: this.signer,
       signStrategy: this.config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
+      sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
       spacePrefix: prefix,
@@ -2634,7 +2704,10 @@ export class TinyCloudNode {
       delegationCid: params.session.delegationCid,
       jwk: params.session.jwk,
       spaceId: params.session.spaceId,
-      verificationMethod: params.session.verificationMethod,
+      // Session storage carries the verification method as a DID URL
+      // (`did:key:...#key-id`). The Rust UCAN builder expects the principal
+      // DID here and rejects the fragment as an invalid audience DID.
+      verificationMethod: params.session.verificationMethod.split("#", 1)[0],
     };
 
     const result = this.wasmBindings.createDelegation(
@@ -2818,6 +2891,7 @@ export class TinyCloudNode {
     const sql = new SQLService({});
     const spaceScopedContext = new ServiceContext({
       invoke: this._serviceContext.invoke,
+      invokeAny: this._serviceContext.invokeAny,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
       telemetry: this.config.telemetry,
@@ -2849,6 +2923,7 @@ export class TinyCloudNode {
     const kv = new KVService({});
     const spaceScopedContext = new ServiceContext({
       invoke: this._serviceContext.invoke,
+      invokeAny: this._serviceContext.invokeAny,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
     });
@@ -3776,10 +3851,16 @@ export class TinyCloudNode {
     if (!subset) {
       // This branch only runs when the session recap is NOT a superset of the
       // requested entries. The synthetic primary grant is built from that same
-      // recap, so it can never cover an entry the recap itself doesn't — it can
-      // never be selected here. No `excludePrimary` guard is needed.
+      // recap, so it should never cover an entry the recap itself doesn't —
+      // but `operationCovers` is strictly more permissive than
+      // `isCapabilitySubset` (action `/*` and path `/*`/`/**` wildcards), so a
+      // wildcard-bearing recap could slip through and mint a delegation with
+      // the primary session's spaceId (the wrong-space class). Exclude the
+      // primary explicitly; failure then degrades to
+      // PermissionNotInManifestError instead of a wrong-space delegation.
       const runtimeGrant = this.findGrantForOperations(
         this.permissionEntriesToOperations(expandedEntries, session),
+        { excludePrimary: true },
       );
       if (runtimeGrant) {
         const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;
@@ -4406,7 +4487,17 @@ export class TinyCloudNode {
       path,
       action,
     });
-    return grant?.session ?? fallback;
+    if (!grant) {
+      return fallback;
+    }
+    // "Primary wins" means the caller's own session already authorizes the op:
+    // use the PASSED session, not the stored primary `ServiceSession`. The stored
+    // primary carries the primary space's `spaceId`, but a multi-space recap can
+    // cover scoped ops on OTHER spaces whose fallback session carries the correct
+    // target `spaceId`. Returning `grant.session` there would mint the invocation
+    // against the wrong space (TC-111 follow-up). Non-primary grants keep their
+    // own session.
+    return grant.provenance === "primary" ? fallback : grant.session;
   }
 
   private findGrantForOperations(

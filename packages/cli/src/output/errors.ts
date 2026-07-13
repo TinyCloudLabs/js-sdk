@@ -23,9 +23,25 @@ export class CLIError extends Error {
 }
 
 export function wrapError(error: unknown): CLIError {
-  if (error instanceof CLIError) return error;
-
   const message = error instanceof Error ? error.message : String(error);
+
+  // A signer cannot make a request without private key material. Some SDK
+  // service paths historically wrapped that local restore/signing failure as
+  // NETWORK_ERROR, which led the CLI to suggest switching hosts. Classify the
+  // underlying auth-state problem before preserving an existing CLIError.
+  if (message.includes("Missing private key parameter in JWK")) {
+    const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
+    return new CLIError(
+      "AUTH_REQUIRED",
+      `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+      ExitCode.AUTH_REQUIRED,
+      {
+        hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`,
+      },
+    );
+  }
+
+  if (error instanceof CLIError) return error;
 
   // Map known error patterns to exit codes
   if (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired")) {

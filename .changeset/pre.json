@@ -2,22 +2,28 @@
   "mode": "pre",
   "tag": "beta",
   "initialVersions": {
-    "@tinycloud/node-demo": "0.0.22",
-    "tinycloud-openkey-example-app": "0.0.20",
-    "openkey-vite": "0.0.18",
+    "@tinycloud/node-demo": "0.0.25",
+    "tinycloud-openkey-example-app": "0.0.23",
+    "openkey-vite": "0.0.21",
     "tinycloud-web-sdk-example-app": "0.0.2",
-    "@tinycloud/bootstrap": "2.5.0",
-    "@tinycloud/cli": "0.7.3",
-    "@tinycloud/node-sdk": "2.6.0",
-    "@tinycloud/sdk-core": "2.6.0",
+    "@tinycloud/bootstrap": "2.5.1",
+    "@tinycloud/cli": "0.7.6",
+    "@tinycloud/node-sdk": "2.6.3",
+    "@tinycloud/sdk-core": "2.6.3",
     "@tinycloud/sdk-rs": "1.0.0",
     "@tinycloud/node-sdk-wasm": "1.7.4",
     "@tinycloud/web-sdk-wasm": "1.7.4",
-    "@tinycloud/sdk-services": "2.6.0",
-    "@tinycloud/server": "2.4.3",
-    "@tinycloud/vfs": "0.1.5",
-    "@tinycloud/web-sdk": "2.6.0",
-    "@tinycloud/sdk-services-test": "11.0.0"
+    "@tinycloud/sdk-services": "2.6.3",
+    "@tinycloud/server": "2.4.6",
+    "@tinycloud/vfs": "0.1.8",
+    "@tinycloud/web-sdk": "2.6.3",
+    "@tinycloud/sdk-services-test": "11.0.3"
   },
-  "changesets": []
+  "changesets": [
+    "calm-keys-delegate",
+    "cli-private-jwk-auth-error",
+    "fresh-delegate-requests",
+    "fuzzy-feeds-share-session-key",
+    "warm-delegates-import"
+  ]
 }

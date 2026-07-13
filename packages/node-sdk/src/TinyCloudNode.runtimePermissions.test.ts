@@ -1642,4 +1642,126 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     ]);
     expect(filtered.every((d) => d.cid !== "base-cid")).toBe(true);
   });
+
+  // TC-111 follow-up (prod regression): a multi-space primary recap covers ops
+  // on OTHER spaces than the primary session's own `spaceId`. When the primary
+  // grant wins for such an op, the invocation must be minted with the caller's
+  // SCOPED fallback session (correct target `spaceId`), NOT the stored primary
+  // `ServiceSession` (whose `spaceId` is the primary space). Before the fix, the
+  // account-registry write for a scoped `account`-space op was minted against
+  // the primary `applications` space and the node rejected it (404/40x).
+  test("primary wins but mints with the scoped fallback session (wrong-space regression)", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    // Space A: the primary session's own space (as installed by the harness).
+    const applicationsSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+    // Space B: a DIFFERENT space the multi-space recap also covers.
+    const accountSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
+
+    // Primary recap covers BOTH the primary space AND the account space.
+    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+      {
+        service: "kv",
+        space: applicationsSpaceId,
+        path: "",
+        actions: ["tinycloud.kv/put"],
+      },
+      {
+        service: "kv",
+        space: accountSpaceId,
+        path: "applications/",
+        actions: ["tinycloud.kv/put"],
+      },
+    ]);
+    (node as any).registerPrimarySessionGrant(primarySession(node));
+    // A broad non-primary grant also covers the op. This makes the three
+    // outcomes distinguishable: "scoped-token" = correct (primary won, caller
+    // session used), "base-token" = call-site regression (primary session
+    // returned), "hijack-token" = ranking regression (primary registration or
+    // coverage silently broken, grant won). Without it, a primary-registration
+    // failure would fall through to the fallback and pass vacuously.
+    installBroadGrant(node, accountSpaceId, "kv", "tinycloud.kv/put", "delegated");
+
+    // The caller passes a SCOPED fallback session for the account space: same
+    // primary delegation, but the correct target `spaceId` and a distinct token.
+    const scopedFallback = {
+      delegationHeader: { Authorization: "scoped-token" },
+      delegationCid: "scoped-cid",
+      spaceId: accountSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeWithRuntimePermissions(
+      scopedFallback,
+      "kv",
+      "applications/xyz.tinycloud.listen",
+      "tinycloud.kv/put",
+    );
+
+    // Must mint with the SCOPED fallback (account space), not the primary
+    // session whose spaceId is the applications space.
+    expect(invoke.mock.calls[0][0].spaceId).toBe(accountSpaceId);
+    expect(invoke.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "scoped-token",
+    );
+  });
+
+  // invokeAny analog of the wrong-space regression above.
+  test("invokeAny: primary wins but mints with the scoped fallback session", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const applicationsSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+    const accountSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
+
+    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+      {
+        service: "kv",
+        space: applicationsSpaceId,
+        path: "",
+        actions: ["tinycloud.kv/put"],
+      },
+      {
+        service: "kv",
+        space: accountSpaceId,
+        path: "applications/",
+        actions: ["tinycloud.kv/put"],
+      },
+    ]);
+    (node as any).registerPrimarySessionGrant(primarySession(node));
+    // Broad non-primary grant covering the op — see the single-invoke test
+    // above for why this keeps the test non-vacuous.
+    installBroadGrant(node, accountSpaceId, "kv", "tinycloud.kv/put", "delegated");
+
+    const scopedFallback = {
+      delegationHeader: { Authorization: "scoped-token" },
+      delegationCid: "scoped-cid",
+      spaceId: accountSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeAnyWithRuntimePermissions(
+      scopedFallback,
+      [
+        {
+          spaceId: accountSpaceId,
+          service: "kv",
+          path: "applications/xyz.tinycloud.listen",
+          action: "tinycloud.kv/put",
+        },
+      ],
+      [{}],
+    );
+
+    const invokeAny = (node as any).wasmBindings.invokeAny;
+    expect(invokeAny.mock.calls[0][0].spaceId).toBe(accountSpaceId);
+    expect(invokeAny.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "scoped-token",
+    );
+  });
 });
