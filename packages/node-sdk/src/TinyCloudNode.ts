@@ -192,12 +192,25 @@ export interface CreateOwnerDelegationParams {
   readonly expiresAt: Date;
 }
 
-function decodeAuthorizationBytes(authorization: string): Uint8Array {
-  const encoded = authorization.replace(/^Bearer\s+/i, "");
-  if (!/^[A-Za-z0-9_-]+$/.test(encoded)) {
+export function decodeAuthorizationBytes(authorization: string): Uint8Array {
+  const encoded = authorization.replace(/^Bearer /i, "");
+  const match = /^([A-Za-z0-9_-]+)(={1,2})?$/.exec(encoded);
+  const unpadded = match?.[1];
+  const paddingLength = match?.[2]?.length ?? 0;
+  const remainder = unpadded === undefined ? 1 : unpadded.length % 4;
+  const expectedPaddingLength = remainder === 2 ? 2 : remainder === 3 ? 1 : 0;
+  if (
+    unpadded === undefined ||
+    remainder === 1 ||
+    (paddingLength !== 0 && paddingLength !== expectedPaddingLength)
+  ) {
     throw new Error("Delegation Authorization is not canonical base64url DAG-CBOR");
   }
-  return Uint8Array.from(Buffer.from(encoded, "base64url"));
+  const decoded = Uint8Array.from(Buffer.from(unpadded, "base64url"));
+  if (Buffer.from(decoded).toString("base64url") !== unpadded) {
+    throw new Error("Delegation Authorization is not canonical base64url DAG-CBOR");
+  }
+  return decoded;
 }
 
 export interface OwnerDelegationReceipt {
