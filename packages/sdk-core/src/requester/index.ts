@@ -577,7 +577,18 @@ export class TranscriptRequester {
         "sql",
         requested.path,
         "tinycloud.sql/read",
-        { action: "execute_statement", name: statement.name, params: statement.fixedParams.map((item) => item.value) },
+        {
+          action: "execute_statement",
+          name: statement.name,
+          // The native constrained-SQL route injects caveat-pinned values and
+          // rejects callers that supply those indices. Uncaveated reads must
+          // resolve the catalog placeholder themselves.
+          params: requested.caveats === undefined
+            ? statement.fixedParams.map((item) =>
+                item.value === "{conversationId}" ? this.bootstrap.resourceHint.resourceId : item.value,
+              )
+            : [],
+        },
         requested.caveats,
       );
       return parseNodeDataResponse(response, SqlReadResponseSchema, "SQL read") as TranscriptRequesterReadSqlResult;

@@ -1526,7 +1526,7 @@ describe("TranscriptRequester external input hardening", () => {
     expect(transport.calls[3]!.body).toEqual({
       action: "execute_statement",
       name: "listen.getConversation",
-      params: sqlStatement.fixedParams.map((item) => item.value),
+      params: ["conv_456"],
     });
   });
 
@@ -1586,5 +1586,10 @@ describe("TranscriptRequester external input hardening", () => {
         caveats: [sqlCapability.caveats],
       },
     ]);
+    expect(transport.calls[3]!.body).toEqual({
+      action: "execute_statement",
+      name: "listen.getConversation",
+      params: [],
+    });
   });
 });
