@@ -70,3 +70,74 @@ test("real WASM Authorization bytes round-trip to the delegation CID", async () 
   );
   expect(independentlyDerivedCid).toBe(delegationSession.delegationCid);
 });
+
+test("real WASM invokeAny preserves constrained-statement caveats", async () => {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner("2".padStart(64, "0"));
+  const address = await signer.getAddress();
+  const chainId = await signer.getChainId();
+  const sessionManager = wasm.createSessionManager();
+  const keyId = "caveated-invocation";
+  sessionManager.renameSessionKeyId("default", keyId);
+  const jwk = JSON.parse(sessionManager.jwk(keyId)!);
+  const issuedAt = new Date();
+  const spaceId = makePkhSpaceId(address, chainId, "caveated-invocation");
+  const prepared = wasm.prepareSession({
+    abilities: {
+      sql: { "xyz.tinycloud.listen/conversations": ["tinycloud.sql/read"] },
+    },
+    address,
+    chainId,
+    domain: "localhost",
+    issuedAt: issuedAt.toISOString(),
+    expirationTime: new Date(issuedAt.getTime() + 60_000).toISOString(),
+    spaceId,
+    jwk,
+  });
+  const session = wasm.completeSessionSetup({
+    ...prepared,
+    signature: await signer.signMessage(prepared.siwe),
+  });
+  const caveat = {
+    mode: "constrained-statements",
+    readOnly: true,
+    statements: [
+      {
+        name: "listen.getConversation",
+        sql: "SELECT id FROM conversation WHERE id = ?",
+        fixedParams: [{ index: 0, value: "conv_456" }],
+      },
+    ],
+  };
+
+  const headers = wasm.invokeAny(session, [
+    {
+      spaceId,
+      service: "sql",
+      path: "xyz.tinycloud.listen/conversations",
+      action: "tinycloud.sql/read",
+      caveats: [caveat],
+    },
+  ]);
+  const authorization = headers.Authorization as string;
+  const payload = JSON.parse(
+    Buffer.from(authorization.split(".")[1]!, "base64url").toString(),
+  );
+  const resource = `${spaceId}/sql/xyz.tinycloud.listen/conversations`;
+
+  expect(payload.att[resource]["tinycloud.sql/read"]).toEqual([caveat]);
+
+  const uncaveatedHeaders = wasm.invokeAny(session, [
+    {
+      spaceId,
+      service: "sql",
+      path: "xyz.tinycloud.listen/conversations",
+      action: "tinycloud.sql/read",
+    },
+  ]);
+  const uncaveatedAuthorization = uncaveatedHeaders.Authorization as string;
+  const uncaveatedPayload = JSON.parse(
+    Buffer.from(uncaveatedAuthorization.split(".")[1]!, "base64url").toString(),
+  );
+  expect(uncaveatedPayload.att[resource]["tinycloud.sql/read"]).toEqual([{}]);
+});

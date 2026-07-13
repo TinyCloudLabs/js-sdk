@@ -2,7 +2,7 @@ import { bytesToHex, sha256 } from "viem";
 import { blake3 } from "@noble/hashes/blake3";
 import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
-import type { InvokeFunction, ServiceHeaders, ServiceSession } from "@tinycloud/sdk-services";
+import type { InvokeAnyFunction, InvokeFunction, ServiceHeaders, ServiceSession } from "@tinycloud/sdk-services";
 import { z } from "zod";
 import {
   POLICY_VERSION_V0,
@@ -188,6 +188,7 @@ export interface RequesterInvocationCapability {
   readonly verificationMethod: string;
   readonly jwk: object;
   readonly invoke: InvokeFunction;
+  readonly invokeAny?: InvokeAnyFunction;
 }
 
 export interface HolderKeyBindingPresentation {
@@ -577,6 +578,7 @@ export class TranscriptRequester {
         requested.path,
         "tinycloud.sql/read",
         { action: "execute_statement", name: statement.name, params: statement.fixedParams.map((item) => item.value) },
+        requested.caveats,
       );
       return parseNodeDataResponse(response, SqlReadResponseSchema, "SQL read") as TranscriptRequesterReadSqlResult;
     } catch (error) {
@@ -614,6 +616,7 @@ export class TranscriptRequester {
     path: string,
     action: "tinycloud.sql/read" | "tinycloud.kv/get",
     body?: unknown,
+    caveats?: Record<string, unknown>,
   ): Promise<RequesterHttpResponse> {
     const capability = this.invocationCapability;
     if (capability === undefined) {
@@ -641,7 +644,27 @@ export class TranscriptRequester {
       verificationMethod: capability.verificationMethod,
       jwk: capability.jwk,
     };
-    const headers = headersRecord(capability.invoke(session, service, path, action));
+    let invocationHeaders: ServiceHeaders;
+    if (caveats === undefined) {
+      invocationHeaders = capability.invoke(session, service, path, action);
+    } else {
+      if (capability.invokeAny === undefined) {
+        throw new TranscriptRequesterError(
+          "requester-invocation-signer-required",
+          "holder invocation capability must support caveated native reads",
+        );
+      }
+      invocationHeaders = capability.invokeAny(session, [
+        {
+          spaceId: this.bootstrap.ownerNode.spaceId,
+          service,
+          path,
+          action,
+          caveats: [caveats],
+        },
+      ]);
+    }
+    const headers = headersRecord(invocationHeaders);
     const response = await this.transport.request({
       method: "POST",
       url: `${trimTrailingSlash(this.bootstrap.ownerNode.endpoint)}/invoke`,

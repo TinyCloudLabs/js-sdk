@@ -178,6 +178,8 @@ export interface InvokeAnyEntry {
   action: string;
   /** Optional raw resource URI. When set, WASM signs this URI directly. */
   resource?: string;
+  /** Capability caveats that must remain on this invocation attenuation. */
+  caveats?: Record<string, unknown>[];
 }
 
 /**

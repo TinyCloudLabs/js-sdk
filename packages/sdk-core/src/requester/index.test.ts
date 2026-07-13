@@ -250,6 +250,9 @@ function invocationCapability(holderDid = REQUESTER_DID): RequesterInvocationCap
     invoke: (session, service, path, action) => ({
       Authorization: `invoke:${session.delegationCid}:${service}:${path}:${action}`,
     }),
+    invokeAny: (session, entries) => ({
+      Authorization: `invoke:${session.delegationCid}:${entries.map((entry) => `${entry.service}:${entry.path}:${entry.action}`).join(",")}`,
+    }),
   };
 }
 
@@ -1525,5 +1528,63 @@ describe("TranscriptRequester external input hardening", () => {
       name: "listen.getConversation",
       params: sqlStatement.fixedParams.map((item) => item.value),
     });
+  });
+
+  it("preserves constrained-statement caveats in the native invocation", async () => {
+    const invokeCalls: unknown[][] = [];
+    const invokeAnyCalls: unknown[][] = [];
+    const capability = {
+      holderDid: REQUESTER_DID,
+      verificationMethod: `${REQUESTER_DID}#device-1`,
+      jwk: { kty: "OKP", crv: "Ed25519", x: "fixture", d: "fixture-private" },
+      invoke: (...args: unknown[]) => {
+        invokeCalls.push(args);
+        return { Authorization: "unexpected-singular-invocation" };
+      },
+      invokeAny: (...args: unknown[]) => {
+        invokeAnyCalls.push(args);
+        return { Authorization: "caveated-invocation" };
+      },
+    } as RequesterInvocationCapability & {
+      invokeAny: (...args: unknown[]) => { Authorization: string };
+    };
+    const transport = new FixtureTransport([
+      challenge(),
+      resolve([sqlCapability]),
+      { status: 200, body: { rows: [{ id: "conv_456" }] } },
+    ]);
+    const client = await createTranscriptRequester({
+      bootstrap: await bootstrap({
+        bootstrap: {
+          resourceHint: {
+            resourceType: "listen.conversation",
+            resourceId: "conv_456",
+            requestedCapabilities: [sqlCapability],
+          },
+        },
+      }),
+      requesterDid: REQUESTER_DID,
+      ownerDid: OWNER_DID,
+      audience: AUDIENCE,
+      grantIssuerDid: GRANT_ISSUER_DID,
+      transport,
+      signingCapability: signingCapability(),
+      invocationCapability: capability,
+      now: () => NOW,
+    });
+
+    await client.readSql("listen.getConversation");
+
+    expect(invokeCalls).toHaveLength(0);
+    expect(invokeAnyCalls).toHaveLength(1);
+    expect(invokeAnyCalls[0]?.[1]).toEqual([
+      {
+        spaceId: OWNER_SPACE_ID,
+        service: "sql",
+        path: sqlCapability.path,
+        action: "tinycloud.sql/read",
+        caveats: [sqlCapability.caveats],
+      },
+    ]);
   });
 });
