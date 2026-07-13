@@ -578,7 +578,7 @@ export class TranscriptRequester {
         requested.path,
         "tinycloud.sql/read",
         {
-          action: "execute_statement",
+          action: "executeStatement",
           name: statement.name,
           // The native constrained-SQL route injects caveat-pinned values and
           // rejects callers that supply those indices. Uncaveated reads must

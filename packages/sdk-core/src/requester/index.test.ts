@@ -1524,7 +1524,7 @@ describe("TranscriptRequester external input hardening", () => {
 
     await client.readSql("listen.getConversation");
     expect(transport.calls[3]!.body).toEqual({
-      action: "execute_statement",
+      action: "executeStatement",
       name: "listen.getConversation",
       params: ["conv_456"],
     });
@@ -1587,7 +1587,7 @@ describe("TranscriptRequester external input hardening", () => {
       },
     ]);
     expect(transport.calls[3]!.body).toEqual({
-      action: "execute_statement",
+      action: "executeStatement",
       name: "listen.getConversation",
       params: [],
     });
