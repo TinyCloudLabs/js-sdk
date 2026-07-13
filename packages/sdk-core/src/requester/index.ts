@@ -993,9 +993,7 @@ export class TranscriptRequester {
   private async importPortableDelegation(
     input: unknown,
   ): Promise<PortableDelegation> {
-    const parsed = normalizeWireDelegation(
-      parseEngineSuccess(input, WireDelegationSchema, "portable delegation"),
-    );
+    const parsed = parseNodeNativePortableDelegation(input);
     if (parsed.policyId !== this.bootstrap.policyId) {
       throw new TranscriptRequesterError(
         "requester-delegation-invalid",
@@ -1475,6 +1473,20 @@ function normalizeWireDelegation(
     capabilities: signed.capabilities,
     encoded: delegation.encoded,
   };
+}
+
+/**
+ * Parse a frozen policy-engine delegation response and derive its authority
+ * exclusively from the signed compact-JWS payload. This performs no egress or
+ * node import and is suitable for constrained runners that cannot honestly
+ * satisfy the public-endpoint transport profile.
+ */
+export function parseNodeNativePortableDelegation(
+  input: unknown,
+): PortableDelegation {
+  return normalizeWireDelegation(
+    parseEngineSuccess(input, WireDelegationSchema, "portable delegation"),
+  );
 }
 
 function delegationAuthorityFromCompactJws(encoded: string): {

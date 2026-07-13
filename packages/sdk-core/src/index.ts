@@ -75,6 +75,7 @@ export {
   TranscriptRequesterError,
   createTranscriptRequester,
   deriveDelegationCid,
+  parseNodeNativePortableDelegation,
   type HolderKeyBindingPresentation,
   type ListenSqlStatementName,
   type PolicyEngineGrantPresentationDenialCode,
