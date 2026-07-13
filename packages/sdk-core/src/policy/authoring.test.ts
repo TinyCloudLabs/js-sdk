@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
+import { privateKeyToAccount } from "viem/accounts";
 import {
   ED25519_JCS_SIGNATURE_SUITE,
+  EIP191_JCS_SIGNATURE_SUITE,
   POLICY_ENGINE_RECORD_SCHEMA,
   POLICY_SCHEMA,
   PolicyAuthoringError,
@@ -47,17 +49,23 @@ const containmentVectors = (await Bun.file(
 ).json()) as { vectors: CapabilityVector[] };
 const suitesFixture = (await Bun.file(
   "test-fixtures/policy-engine-vectors/signed-object-profile/signature-suites.json",
-).json()) as { ed25519: Record<string, { seed_hex: string; did: string }> };
+).json()) as {
+  ed25519: Record<string, { seed_hex: string; did: string }>;
+  secp256k1: Record<string, { private_key_hex: string; did: string }>;
+};
 const objectsFixture = (await Bun.file(
   "test-fixtures/policy-engine-vectors/signed-object-profile/objects.json",
-).json()) as { objects: Array<{ object_type: string; unsigned: Record<string, unknown> }> };
+).json()) as {
+  objects: Array<{ object_type: string; unsigned: Record<string, unknown> }>;
+};
 
 function concretePolicyVector() {
   return objectsFixture.objects.find(
     (entry) =>
       entry.object_type === "Policy" &&
       entry.unsigned.resource !== undefined &&
-      ((entry.unsigned.resource as { resourceId?: unknown }).resourceId === "conv_456"),
+      (entry.unsigned.resource as { resourceId?: unknown }).resourceId ===
+        "conv_456",
   )!;
 }
 
@@ -72,6 +80,16 @@ function edSigner(name: string): SignedObjectSigner {
     suite: ED25519_JCS_SIGNATURE_SUITE,
     signerDid: fixture.did,
     signDigest: (digest) => ed25519.sign(digest, seed),
+  };
+}
+
+function eipSigner(name: string): SignedObjectSigner {
+  const fixture = suitesFixture.secp256k1[name]!;
+  const account = privateKeyToAccount(`0x${fixture.private_key_hex}`);
+  return {
+    suite: EIP191_JCS_SIGNATURE_SUITE,
+    signerDid: fixture.did,
+    signDigest: (digest) => account.signMessage({ message: { raw: digest } }),
   };
 }
 
@@ -140,7 +158,8 @@ const baseGrant = {
   revocation: "active_cutoff",
 };
 const OWNER_DID = "did:pkh:eip155:1:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf";
-const SUBJECT_DID = "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac";
+const SUBJECT_DID =
+  "did:pkh:eip155:1:0x7564105e977516c53be337314c7e53838967bdac";
 
 describe("policy capability frozen vectors", () => {
   it("passes every canonicalization vector as committed", () => {
@@ -177,7 +196,9 @@ describe("policy capability frozen vectors", () => {
     const uncaveatedRequest = { ...sqlCapability };
     delete (uncaveatedRequest as { caveats?: unknown }).caveats;
 
-    expect(policyCapabilityContains(sqlCapability, uncaveatedRequest)).toBe(false);
+    expect(policyCapabilityContains(sqlCapability, uncaveatedRequest)).toBe(
+      false,
+    );
   });
 });
 
@@ -243,8 +264,14 @@ describe("strict authoring capability validation", () => {
 
   it("rejects capability inputs that would require authoring-time canonicalization", () => {
     for (const capability of [
-      { ...exactKvCapability, actions: ["tinycloud.kv/list", "tinycloud.kv/get"] },
-      { ...exactKvCapability, actions: ["tinycloud.kv/get", "tinycloud.kv/get"] },
+      {
+        ...exactKvCapability,
+        actions: ["tinycloud.kv/list", "tinycloud.kv/get"],
+      },
+      {
+        ...exactKvCapability,
+        actions: ["tinycloud.kv/get", "tinycloud.kv/get"],
+      },
       { ...exactKvCapability, path: "notebooks/cafe\u0301/notes" },
       { ...exactKvCapability, path: "notebooks/nb%2Dproject/docs" },
     ]) {
@@ -302,7 +329,11 @@ describe("strict authoring capability validation", () => {
       "policy-capability-malformed-caveats",
     );
     expectCapabilityFailure(
-      () => normalizePolicyCapability({ ...exactKvCapability, caveats: { extra: true } }),
+      () =>
+        normalizePolicyCapability({
+          ...exactKvCapability,
+          caveats: { extra: true },
+        }),
       "policy-capability-malformed-caveats",
     );
     expectCapabilityFailure(
@@ -370,37 +401,49 @@ describe("policy and bootstrap authoring", () => {
       edSigner("policy_signer"),
     );
     expect(signed.schema).toBe(POLICY_SCHEMA);
-    expect(signed.policyId).toBe(deriveSignedObjectMaterial({
-      schema: POLICY_SCHEMA,
-      ownerDid: OWNER_DID,
-      signingKeyDid: suitesFixture.ed25519.policy_signer.did,
-      createdAt: "2026-06-01T00:00:00Z",
-      resource: {
-        resourceType: "conversation",
-        resourceId: "conv_456",
-        permissionsCeiling: [normalizePolicyCapability(sqlCapability)],
-      },
-      when: { subject: { did: SUBJECT_DID } },
-      grant: baseGrant,
-    }).id);
+    expect(signed.policyId).toBe(
+      deriveSignedObjectMaterial({
+        schema: POLICY_SCHEMA,
+        ownerDid: OWNER_DID,
+        signingKeyDid: suitesFixture.ed25519.policy_signer.did,
+        createdAt: "2026-06-01T00:00:00Z",
+        resource: {
+          resourceType: "conversation",
+          resourceId: "conv_456",
+          permissionsCeiling: [normalizePolicyCapability(sqlCapability)],
+        },
+        when: { subject: { did: SUBJECT_DID } },
+        grant: baseGrant,
+      }).id,
+    );
   });
 
   it("refuses invented delegationMode and revocation strings before signing", async () => {
     const policy = concretePolicyVector();
-    await expect(createAndSignPolicy(
-      {
-        ...policy.unsigned,
-        grant: { ...(policy.unsigned.grant as object), delegationMode: "relay" },
-      },
-      edSigner("policy_signer"),
-    )).rejects.toThrow();
-    await expect(createAndSignPolicy(
-      {
-        ...policy.unsigned,
-        grant: { ...(policy.unsigned.grant as object), revocation: "eventual" },
-      },
-      edSigner("policy_signer"),
-    )).rejects.toThrow();
+    await expect(
+      createAndSignPolicy(
+        {
+          ...policy.unsigned,
+          grant: {
+            ...(policy.unsigned.grant as object),
+            delegationMode: "relay",
+          },
+        },
+        edSigner("policy_signer"),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      createAndSignPolicy(
+        {
+          ...policy.unsigned,
+          grant: {
+            ...(policy.unsigned.grant as object),
+            revocation: "eventual",
+          },
+        },
+        edSigner("policy_signer"),
+      ),
+    ).rejects.toThrow();
 
     await expectAuthoringFailure(
       () =>
@@ -441,16 +484,18 @@ describe("policy and bootstrap authoring", () => {
   it("refuses malformed capability paths through exported Policy signing", async () => {
     const policy = concretePolicyVector();
     for (const path of ["items/", "items//child", "items//"]) {
-      await expect(createAndSignPolicy(
-        {
-          ...policy.unsigned,
-          resource: {
-            ...(policy.unsigned.resource as object),
-            permissionsCeiling: [{ ...exactKvCapability, path }],
+      await expect(
+        createAndSignPolicy(
+          {
+            ...policy.unsigned,
+            resource: {
+              ...(policy.unsigned.resource as object),
+              permissionsCeiling: [{ ...exactKvCapability, path }],
+            },
           },
-        },
-        edSigner("policy_signer"),
-      )).rejects.toThrow();
+          edSigner("policy_signer"),
+        ),
+      ).rejects.toThrow();
     }
   });
 
@@ -468,9 +513,24 @@ describe("policy and bootstrap authoring", () => {
       supportedEvidenceVerifiers: [W3C_VC_CREDENTIAL_VERIFIER],
     });
     await expectAuthoringFailure(
-      () => createUnsignedPolicyEngineRecord({ ...baseRecord, expiresAt: "not-a-date" }),
+      () =>
+        createUnsignedPolicyEngineRecord({
+          ...baseRecord,
+          expiresAt: "not-a-date",
+        }),
       "policy-engine-record-date-invalid",
     );
+    for (const endpoint of [
+      "http://policy.example/resolve",
+      "https://user:secret@policy.example/resolve",
+      "https://policy.example/resolve?redirect=internal",
+      "https://policy.example/resolve#fragment",
+    ]) {
+      await expectAuthoringFailure(
+        () => createUnsignedPolicyEngineRecord({ ...baseRecord, endpoint }),
+        "policy-authoring-malformed",
+      );
+    }
     await expectAuthoringFailure(
       () =>
         createUnsignedPolicyEngineRecord({
@@ -498,13 +558,14 @@ describe("policy and bootstrap authoring", () => {
         grantIssuerDid: suitesFixture.ed25519.grant_issuer.did,
         expiresAt: "2026-07-01T00:00:00Z",
       },
-      edSigner("policy_signer"),
+      eipSigner("owner_root"),
     );
     const bootstrap = composeTranscriptShareBootstrap({
       policyId: "pol_example",
       policyEngineRecord: record,
       ownerNodeEndpoint: "https://node.example",
-      ownerSpaceId: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:applications",
+      ownerSpaceId:
+        "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:applications",
       resourceHint: { conversationId: "conv_456" },
     });
     expect(bootstrap.schema).toBe(TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA);
@@ -525,7 +586,7 @@ describe("policy and bootstrap authoring", () => {
         grantIssuerDid: suitesFixture.ed25519.grant_issuer.did,
         expiresAt: "2026-07-01T00:00:00Z",
       },
-      edSigner("policy_signer"),
+      eipSigner("owner_root"),
     );
     await expectAuthoringFailure(
       () =>
@@ -548,7 +609,10 @@ describe("policy and bootstrap authoring", () => {
               ownerNodeEndpoint: "https://node.example",
               ownerSpaceId: "space",
               resourceHint: { conversationId: "conv_456" },
-            }).replace('"policyId"', '"__proto__":{"policyId":"pol_bad"},"policyId"'),
+            }).replace(
+              '"policyId"',
+              '"__proto__":{"policyId":"pol_bad"},"policyId"',
+            ),
           ),
         ),
       "transcript-share-bootstrap-malformed",
@@ -566,7 +630,7 @@ describe("requester-side PolicyEngineRecord verification", () => {
         grantIssuerDid: suitesFixture.ed25519.grant_issuer.did,
         expiresAt: "2026-07-01T00:00:00Z",
       },
-      edSigner("policy_signer"),
+      eipSigner("owner_root"),
     );
   }
 
@@ -581,6 +645,30 @@ describe("requester-side PolicyEngineRecord verification", () => {
         now: "2026-06-01T00:00:00Z",
       }),
     ).resolves.toMatchObject({ schema: POLICY_ENGINE_RECORD_SCHEMA });
+  });
+
+  it("rejects a valid record signature that is not the claimed direct owner", async () => {
+    const record = await createAndSignRequesterPolicyEngineRecord(
+      {
+        ownerDid: OWNER_DID,
+        endpoint: "https://policy.example/resolve",
+        audience: "did:web:requester.example",
+        grantIssuerDid: suitesFixture.ed25519.grant_issuer.did,
+        expiresAt: "2026-07-01T00:00:00Z",
+      },
+      edSigner("policy_signer"),
+    );
+    await expectAuthoringFailure(
+      () =>
+        verifyPolicyEngineRecordForRequester({
+          signedRecord: record,
+          ownerDid: OWNER_DID,
+          audience: "did:web:requester.example",
+          grantIssuerDid: suitesFixture.ed25519.grant_issuer.did,
+          now: "2026-06-01T00:00:00Z",
+        }),
+      "policy-engine-record-signature-invalid",
+    );
   });
 
   it("returns distinct typed failures for absent, tampered, audience, expired, and owner mismatch", async () => {
@@ -600,7 +688,10 @@ describe("requester-side PolicyEngineRecord verification", () => {
         verifyPolicyEngineRecordForRequester({
           signedRecord: {
             ...record,
-            signature: { ...record.signature, value: tamperBase64Url(record.signature.value) },
+            signature: {
+              ...record.signature,
+              value: tamperBase64Url(record.signature.value),
+            },
           },
           ownerDid: OWNER_DID,
           audience: "did:web:requester.example",
@@ -691,7 +782,10 @@ describe("requester-side PolicyEngineRecord verification", () => {
           signedRecord: {
             ...record,
             expiresAt: "not-a-date",
-            signature: { ...record.signature, value: tamperBase64Url(record.signature.value) },
+            signature: {
+              ...record.signature,
+              value: tamperBase64Url(record.signature.value),
+            },
           },
           ownerDid: OWNER_DID,
           audience: "did:web:requester.example",
@@ -721,7 +815,10 @@ describe("requester-side PolicyEngineRecord verification", () => {
               audience: "did:web:requester.example",
               grantIssuerDid: suitesFixture.ed25519.grant_issuer.did,
               now: "2026-06-01T00:00:00Z",
-            }).replace('"signedRecord"', '"__proto__":{"signedRecord":null},"signedRecord"'),
+            }).replace(
+              '"signedRecord"',
+              '"__proto__":{"signedRecord":null},"signedRecord"',
+            ),
           ),
         ),
       "policy-authoring-malformed",

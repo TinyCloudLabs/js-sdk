@@ -71,7 +71,9 @@ export interface TranscriptShareBootstrap {
   readonly policyEngine: {
     readonly endpoint: string;
     readonly audience: string;
-    readonly supportedEvidenceVerifiers: readonly [typeof W3C_VC_CREDENTIAL_VERIFIER];
+    readonly supportedEvidenceVerifiers: readonly [
+      typeof W3C_VC_CREDENTIAL_VERIFIER,
+    ];
     readonly signedRecord: PolicyEngineRecord;
   };
   /** Untrusted routing hint. Authority comes only from delegation/invocation validation. */
@@ -148,7 +150,9 @@ export async function createAndSignTranscriptSharePolicy(
   }
   const ceiling: PolicyCapability[] = [];
   for (let index = 0; index < permissions.length; index++) {
-    ceiling.push(wrapCapabilityError(() => normalizePolicyCapability(permissions[index])));
+    ceiling.push(
+      wrapCapabilityError(() => normalizePolicyCapability(permissions[index])),
+    );
   }
   return createAndSignPolicy(
     {
@@ -169,7 +173,9 @@ export async function createAndSignTranscriptSharePolicy(
       ...(hasOwn(normalized, "disclosure")
         ? { disclosure: requiredObject(normalized, "disclosure", "$") }
         : {}),
-      ...(hasOwn(normalized, "audit") ? { audit: requiredObject(normalized, "audit", "$") } : {}),
+      ...(hasOwn(normalized, "audit")
+        ? { audit: requiredObject(normalized, "audit", "$") }
+        : {}),
     },
     signer,
   ).catch((error) => {
@@ -197,8 +203,14 @@ export function createUnsignedPolicyEngineRecord(
   const supportedPolicyVersions = hasOwn(normalized, "supportedPolicyVersions")
     ? requiredStringArray(normalized, "supportedPolicyVersions", "$")
     : [POLICY_VERSION_V0];
-  validateSupportedPolicyVersions(supportedPolicyVersions, "$.supportedPolicyVersions");
-  const supportedEvidenceVerifiers = hasOwn(normalized, "supportedEvidenceVerifiers")
+  validateSupportedPolicyVersions(
+    supportedPolicyVersions,
+    "$.supportedPolicyVersions",
+  );
+  const supportedEvidenceVerifiers = hasOwn(
+    normalized,
+    "supportedEvidenceVerifiers",
+  )
     ? requiredStringArray(normalized, "supportedEvidenceVerifiers", "$")
     : [W3C_VC_CREDENTIAL_VERIFIER];
   validateSupportedEvidenceVerifiers(
@@ -216,7 +228,9 @@ export function createUnsignedPolicyEngineRecord(
   return {
     schema: POLICY_ENGINE_RECORD_SCHEMA,
     ownerDid: requiredString(normalized, "ownerDid", "$"),
-    endpoint: requiredString(normalized, "endpoint", "$"),
+    endpoint: validatePolicyEngineEndpoint(
+      requiredString(normalized, "endpoint", "$"),
+    ),
     audience: requiredString(normalized, "audience", "$"),
     supportedPolicyVersions,
     supportedEvidenceVerifiers,
@@ -229,11 +243,12 @@ export async function createAndSignRequesterPolicyEngineRecord(
   input: CreatePolicyEngineRecordInput,
   signer: SignedObjectSigner,
 ): Promise<PolicyEngineRecord> {
-  return createAndSignPolicyEngineRecord(createUnsignedPolicyEngineRecord(input), signer).catch(
-    (error) => {
-      throw wrapSignedObjectError(error);
-    },
-  );
+  return createAndSignPolicyEngineRecord(
+    createUnsignedPolicyEngineRecord(input),
+    signer,
+  ).catch((error) => {
+    throw wrapSignedObjectError(error);
+  });
 }
 
 /**
@@ -244,12 +259,30 @@ export async function createAndSignRequesterPolicyEngineRecord(
 export function composeTranscriptShareBootstrap(
   input: ComposeTranscriptShareBootstrapInput,
 ): TranscriptShareBootstrap {
-  const normalized = expectObject(input, "$", "transcript-share-bootstrap-malformed");
-  assertExactKeys(normalized, ["policyId", "policyEngineRecord", "ownerNodeEndpoint", "ownerSpaceId", "resourceHint"], "$");
+  const normalized = expectObject(
+    input,
+    "$",
+    "transcript-share-bootstrap-malformed",
+  );
+  assertExactKeys(
+    normalized,
+    [
+      "policyId",
+      "policyEngineRecord",
+      "ownerNodeEndpoint",
+      "ownerSpaceId",
+      "resourceHint",
+    ],
+    "$",
+  );
   const signedRecord = expectPolicyEngineRecord(
     requiredValue(normalized, "policyEngineRecord", "$"),
   );
-  if (!signedRecord.supportedEvidenceVerifiers.includes(W3C_VC_CREDENTIAL_VERIFIER)) {
+  if (
+    !signedRecord.supportedEvidenceVerifiers.includes(
+      W3C_VC_CREDENTIAL_VERIFIER,
+    )
+  ) {
     throw new PolicyAuthoringError(
       "transcript-share-bootstrap-malformed",
       "policy engine record does not support the bootstrap evidence verifier",
@@ -266,7 +299,9 @@ export function composeTranscriptShareBootstrap(
     },
     ownerNode: {
       schema: OWNER_NODE_ENDPOINT_SCHEMA,
-      endpoint: validateOwnerNodeEndpoint(requiredString(normalized, "ownerNodeEndpoint", "$")),
+      endpoint: validateOwnerNodeEndpoint(
+        requiredString(normalized, "ownerNodeEndpoint", "$"),
+      ),
       spaceId: requiredString(normalized, "ownerSpaceId", "$"),
     },
     resourceHint: requiredObject(normalized, "resourceHint", "$"),
@@ -278,12 +313,46 @@ function validateOwnerNodeEndpoint(value: string): string {
   try {
     url = new URL(value);
   } catch {
-    throw new PolicyAuthoringError("transcript-share-bootstrap-malformed", "$.ownerNodeEndpoint must be a URL");
-  }
-  if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.hash !== "") {
     throw new PolicyAuthoringError(
       "transcript-share-bootstrap-malformed",
-      "$.ownerNodeEndpoint must be an HTTPS URL without credentials or a fragment",
+      "$.ownerNodeEndpoint must be a URL",
+    );
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.hash !== "" ||
+    url.search !== ""
+  ) {
+    throw new PolicyAuthoringError(
+      "transcript-share-bootstrap-malformed",
+      "$.ownerNodeEndpoint must be an HTTPS URL without credentials, query, or fragment",
+    );
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+function validatePolicyEngineEndpoint(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new PolicyAuthoringError(
+      "policy-authoring-malformed",
+      "$.endpoint must be a URL",
+    );
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.hash !== "" ||
+    url.search !== ""
+  ) {
+    throw new PolicyAuthoringError(
+      "policy-authoring-malformed",
+      "$.endpoint must be an HTTPS URL without credentials, query, or fragment",
     );
   }
   return url.toString().replace(/\/$/, "");
@@ -318,15 +387,29 @@ export async function verifyPolicyEngineRecordForRequester(
     );
   }
   const signedRecord = normalized["signedRecord"];
-  if (signedRecord === null || typeof signedRecord !== "object" || Array.isArray(signedRecord)) {
+  if (
+    signedRecord === null ||
+    typeof signedRecord !== "object" ||
+    Array.isArray(signedRecord)
+  ) {
     throw new PolicyAuthoringError(
       "policy-engine-record-absent",
       "$.signedRecord must be present",
     );
   }
   const recordObject = signedRecord as JsonObject;
-  const expiresAt = fieldString(recordObject, "expiresAt", "$.signedRecord", "policy-engine-record-date-invalid");
-  const now = fieldString(normalized, "now", "$", "policy-engine-record-date-invalid");
+  const expiresAt = fieldString(
+    recordObject,
+    "expiresAt",
+    "$.signedRecord",
+    "policy-engine-record-date-invalid",
+  );
+  const now = fieldString(
+    normalized,
+    "now",
+    "$",
+    "policy-engine-record-date-invalid",
+  );
   const expiresMs = parseStrictRfc3339(expiresAt, "$.signedRecord.expiresAt");
   const nowMs = parseStrictRfc3339(now, "$.now");
   if (expiresMs <= nowMs) {
@@ -345,6 +428,12 @@ export async function verifyPolicyEngineRecordForRequester(
       error instanceof Error ? error.message : String(error),
     );
   }
+  if (verified.signature.signerDid !== verified.ownerDid) {
+    throw new PolicyAuthoringError(
+      "policy-engine-record-signature-invalid",
+      "$.signedRecord.signature.signerDid must match ownerDid for the direct-owner requester profile",
+    );
+  }
 
   const expectedOwnerDid = requiredString(normalized, "ownerDid", "$");
   if (verified.ownerDid !== expectedOwnerDid) {
@@ -360,7 +449,11 @@ export async function verifyPolicyEngineRecordForRequester(
       "$.signedRecord.audience does not match",
     );
   }
-  const expectedGrantIssuerDid = requiredString(normalized, "grantIssuerDid", "$");
+  const expectedGrantIssuerDid = requiredString(
+    normalized,
+    "grantIssuerDid",
+    "$",
+  );
   if (verified.grantIssuerDid !== expectedGrantIssuerDid) {
     throw new PolicyAuthoringError(
       "policy-engine-record-grant-issuer-mismatch",
@@ -376,7 +469,10 @@ export async function verifyPolicyEngineRecordForRequester(
       "$.signedRecord.supportedPolicyVersions does not include the required version",
     );
   }
-  const requiredEvidenceVerifier = hasOwn(normalized, "requiredEvidenceVerifier")
+  const requiredEvidenceVerifier = hasOwn(
+    normalized,
+    "requiredEvidenceVerifier",
+  )
     ? requiredString(normalized, "requiredEvidenceVerifier", "$")
     : W3C_VC_CREDENTIAL_VERIFIER;
   if (!verified.supportedEvidenceVerifiers.includes(requiredEvidenceVerifier)) {
@@ -388,10 +484,18 @@ export async function verifyPolicyEngineRecordForRequester(
   return verified;
 }
 
-function expectObject(input: unknown, path: string, code: PolicyAuthoringErrorCode): JsonObject {
+function expectObject(
+  input: unknown,
+  path: string,
+  code: PolicyAuthoringErrorCode,
+): JsonObject {
   try {
     const normalized = normalizeJson(input);
-    if (normalized === null || typeof normalized !== "object" || Array.isArray(normalized)) {
+    if (
+      normalized === null ||
+      typeof normalized !== "object" ||
+      Array.isArray(normalized)
+    ) {
       throw new PolicyAuthoringError(code, `${path} must be an object`);
     }
     return normalized as JsonObject;
@@ -423,18 +527,32 @@ function expectPolicyEngineRecord(input: JsonValue): PolicyEngineRecord {
   }
 }
 
-function assertExactKeys(object: JsonObject, allowed: readonly string[], path: string): void {
+function assertExactKeys(
+  object: JsonObject,
+  allowed: readonly string[],
+  path: string,
+): void {
   const allowedSet = new Set(allowed);
   for (const key of Object.keys(object)) {
     if (!allowedSet.has(key)) {
-      throw new PolicyAuthoringError("policy-authoring-unknown-key", `${path} has unknown field ${key}`);
+      throw new PolicyAuthoringError(
+        "policy-authoring-unknown-key",
+        `${path} has unknown field ${key}`,
+      );
     }
   }
 }
 
-function requiredValue(object: JsonObject, key: string, path: string): JsonValue {
+function requiredValue(
+  object: JsonObject,
+  key: string,
+  path: string,
+): JsonValue {
   if (!hasOwn(object, key)) {
-    throw new PolicyAuthoringError("policy-authoring-malformed", `${path}.${key} is required`);
+    throw new PolicyAuthoringError(
+      "policy-authoring-malformed",
+      `${path}.${key} is required`,
+    );
   }
   return object[key];
 }
@@ -442,7 +560,10 @@ function requiredValue(object: JsonObject, key: string, path: string): JsonValue
 function requiredString(object: JsonObject, key: string, path: string): string {
   const value = requiredValue(object, key, path);
   if (typeof value !== "string" || value.length === 0) {
-    throw new PolicyAuthoringError("policy-authoring-malformed", `${path}.${key} must be a non-empty string`);
+    throw new PolicyAuthoringError(
+      "policy-authoring-malformed",
+      `${path}.${key} must be a non-empty string`,
+    );
   }
   return value;
 }
@@ -458,28 +579,49 @@ function fieldString(
   }
   const value = object[key];
   if (typeof value !== "string" || value.length === 0) {
-    throw new PolicyAuthoringError(code, `${path}.${key} must be a non-empty string`);
+    throw new PolicyAuthoringError(
+      code,
+      `${path}.${key} must be a non-empty string`,
+    );
   }
   return value;
 }
 
-function requiredObject(object: JsonObject, key: string, path: string): JsonObject {
+function requiredObject(
+  object: JsonObject,
+  key: string,
+  path: string,
+): JsonObject {
   const value = requiredValue(object, key, path);
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new PolicyAuthoringError("policy-authoring-malformed", `${path}.${key} must be an object`);
+    throw new PolicyAuthoringError(
+      "policy-authoring-malformed",
+      `${path}.${key} must be an object`,
+    );
   }
   return value as JsonObject;
 }
 
-function requiredArray(object: JsonObject, key: string, path: string): readonly JsonValue[] {
+function requiredArray(
+  object: JsonObject,
+  key: string,
+  path: string,
+): readonly JsonValue[] {
   const value = requiredValue(object, key, path);
   if (!Array.isArray(value)) {
-    throw new PolicyAuthoringError("policy-authoring-malformed", `${path}.${key} must be an array`);
+    throw new PolicyAuthoringError(
+      "policy-authoring-malformed",
+      `${path}.${key} must be an array`,
+    );
   }
   return value;
 }
 
-function requiredStringArray(object: JsonObject, key: string, path: string): string[] {
+function requiredStringArray(
+  object: JsonObject,
+  key: string,
+  path: string,
+): string[] {
   const values = requiredArray(object, key, path);
   return values.map((value, index) => {
     if (typeof value !== "string" || value.length === 0) {
@@ -492,7 +634,10 @@ function requiredStringArray(object: JsonObject, key: string, path: string): str
   });
 }
 
-function validateSupportedPolicyVersions(values: readonly string[], path: string): void {
+function validateSupportedPolicyVersions(
+  values: readonly string[],
+  path: string,
+): void {
   if (values.length === 0) {
     throw new PolicyAuthoringError(
       "policy-authoring-malformed",
@@ -509,7 +654,10 @@ function validateSupportedPolicyVersions(values: readonly string[], path: string
   }
 }
 
-function validateSupportedEvidenceVerifiers(values: readonly string[], path: string): void {
+function validateSupportedEvidenceVerifiers(
+  values: readonly string[],
+  path: string,
+): void {
   if (values.length === 0) {
     throw new PolicyAuthoringError(
       "policy-authoring-malformed",
@@ -541,8 +689,14 @@ function wrapSignedObjectError(error: unknown): Error {
   if (error instanceof PolicyAuthoringError) {
     return error;
   }
-  if (error instanceof SignedObjectSchemaError || error instanceof SignedObjectProfileError) {
-    return new PolicyAuthoringError("policy-authoring-malformed", error.message);
+  if (
+    error instanceof SignedObjectSchemaError ||
+    error instanceof SignedObjectProfileError
+  ) {
+    return new PolicyAuthoringError(
+      "policy-authoring-malformed",
+      error.message,
+    );
   }
   return new PolicyAuthoringError(
     "policy-authoring-malformed",
@@ -555,7 +709,10 @@ function parseStrictRfc3339(value: string, path: string): number {
     /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?Z$/,
   );
   if (!match) {
-    throw new PolicyAuthoringError("policy-engine-record-date-invalid", `${path} must be strict RFC 3339`);
+    throw new PolicyAuthoringError(
+      "policy-engine-record-date-invalid",
+      `${path} must be strict RFC 3339`,
+    );
   }
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) {
@@ -575,9 +732,11 @@ function parseStrictRfc3339(value: string, path: string): number {
 }
 
 const objectHasOwn: (object: object, propertyKey: PropertyKey) => boolean =
-  (Object as ObjectConstructor & {
-    hasOwn?: (object: object, propertyKey: PropertyKey) => boolean;
-  }).hasOwn ??
+  (
+    Object as ObjectConstructor & {
+      hasOwn?: (object: object, propertyKey: PropertyKey) => boolean;
+    }
+  ).hasOwn ??
   (Object.prototype.hasOwnProperty.call.bind(
     Object.prototype.hasOwnProperty,
   ) as (object: object, propertyKey: PropertyKey) => boolean);

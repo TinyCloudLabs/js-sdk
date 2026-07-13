@@ -2,7 +2,12 @@ import { bytesToHex, sha256 } from "viem";
 import { blake3 } from "@noble/hashes/blake3";
 import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
-import type { InvokeAnyFunction, InvokeFunction, ServiceHeaders, ServiceSession } from "@tinycloud/sdk-services";
+import type {
+  InvokeAnyFunction,
+  InvokeFunction,
+  ServiceHeaders,
+  ServiceSession,
+} from "@tinycloud/sdk-services";
 import { z } from "zod";
 import {
   POLICY_VERSION_V0,
@@ -103,6 +108,7 @@ export type TranscriptRequesterErrorCode =
   | "requester-engine-record-audience-mismatch"
   | "requester-engine-record-endpoint-mismatch"
   | "requester-engine-record-invalid"
+  | "requester-policy-engine-endpoint-invalid"
   | "requester-engine-unreachable"
   | "requester-engine-response-invalid"
   | "requester-renewal-required"
@@ -162,14 +168,18 @@ export interface RequesterHttpRequest {
   readonly url: string;
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: unknown;
+  /** Endpoint requests must not follow redirects. */
+  readonly redirect?: "error";
+  /** Transport must connect only to one of these pre-resolved public addresses. */
+  readonly allowedResolvedAddresses?: readonly string[];
 }
 
 export interface RequesterHttpResponse {
   readonly status: number;
   readonly body: unknown;
-  /** Required for owner-node requests; the transport reports the non-redirected final URL. */
+  /** Required for policy-engine and owner-node requests; reports the non-redirected final URL. */
   readonly finalUrl?: string;
-  /** Required for owner-node requests; the transport reports the actual connected IP. */
+  /** Required for policy-engine and owner-node requests; reports the actual connected IP. */
   readonly resolvedAddress?: string;
 }
 
@@ -267,6 +277,11 @@ export interface TranscriptRequesterOptions {
   readonly ownerDid: string;
   readonly audience: string;
   readonly grantIssuerDid: string;
+  /** Owner-node binding from trusted TinyCloud discovery/config, never copied from bootstrap. */
+  readonly trustedOwnerNode: {
+    readonly endpoint: string;
+    readonly spaceId: string;
+  };
   readonly transport: RequesterTransport;
   readonly signingCapability?: RequesterSigningCapability;
   readonly invocationCapability?: RequesterInvocationCapability;
@@ -330,7 +345,9 @@ const PolicyEngineSchema = z
   .object({
     endpoint: z.string().url(),
     audience: z.string(),
-    supportedEvidenceVerifiers: z.tuple([z.literal(W3C_VC_CREDENTIAL_VERIFIER)]),
+    supportedEvidenceVerifiers: z.tuple([
+      z.literal(W3C_VC_CREDENTIAL_VERIFIER),
+    ]),
     signedRecord: SignedRecordSchema,
   })
   .strict();
@@ -383,7 +400,9 @@ const ChallengeSchema = z
   })
   .strict();
 
-const ChallengeResponseSchema = z.object({ challenge: ChallengeSchema }).strict();
+const ChallengeResponseSchema = z
+  .object({ challenge: ChallengeSchema })
+  .strict();
 
 const DenialSchema = z
   .object({
@@ -404,26 +423,15 @@ const ErrorEnvelopeDenialSchema = z
   })
   .strict();
 
-const CapabilitySchema = z
-  .object({
-    service: z.enum(["tinycloud.kv", "tinycloud.sql", "tinycloud.vfs"]),
-    space: z.string(),
-    path: z.string(),
-    actions: z.array(z.string()).min(1),
-    caveats: JsonValueSchema.optional(),
-  })
-  .strict();
-
 const WireDelegationSchema = z
   .object({
     delegationId: z.string(),
+    issuanceId: z.string().min(1),
     issuerDid: z.string(),
     holderDid: z.string(),
     policyId: z.string(),
-    capabilities: z.array(CapabilitySchema).min(1).optional(),
-    issuanceId: z.string().optional(),
-    capabilityHashHex: z.string().optional(),
-    revocationMode: z.literal("refresh_only").optional(),
+    capabilityHashHex: z.string().regex(/^[0-9a-f]{64}$/),
+    revocationMode: z.literal("refresh_only"),
     issuedAt: Rfc3339Schema,
     expiresAt: Rfc3339Schema,
     terminal: z.boolean(),
@@ -431,12 +439,20 @@ const WireDelegationSchema = z
   })
   .strict();
 
-const ResolveResponseSchema = z.object({ delegation: WireDelegationSchema }).strict();
+const ResolveResponseSchema = z
+  .object({ delegation: WireDelegationSchema })
+  .strict();
 const DelegateReceiptSchema = z
-  .object({ cid: z.string().min(1), activated: z.array(z.string()), skipped: z.array(z.string()) })
+  .object({
+    cid: z.string().min(1),
+    activated: z.array(z.string()),
+    skipped: z.array(z.string()),
+  })
   .strict();
 
-const SqlReadResponseSchema = z.object({ rows: z.array(JsonValueSchema) }).strict();
+const SqlReadResponseSchema = z
+  .object({ rows: z.array(JsonValueSchema) })
+  .strict();
 const KvReadResponseSchema = z.object({ value: JsonValueSchema }).strict();
 
 export const LISTEN_SQL_STATEMENT_CATALOG = [
@@ -452,15 +468,42 @@ export const LISTEN_SQL_STATEMENT_CATALOG = [
   },
 ] as const;
 
-export type ListenSqlStatementName = (typeof LISTEN_SQL_STATEMENT_CATALOG)[number]["name"];
+export type ListenSqlStatementName =
+  (typeof LISTEN_SQL_STATEMENT_CATALOG)[number]["name"];
 type ListenSqlStatement = (typeof LISTEN_SQL_STATEMENT_CATALOG)[number];
-type NormalizedWireDelegation = Omit<PortableDelegation, "capabilities"> & {
-  readonly capabilities: readonly z.infer<typeof CapabilitySchema>[];
+type ResolvedListenSqlStatement = {
+  readonly name: string;
+  readonly sql: string;
+  readonly fixedParams: readonly {
+    readonly index: number;
+    readonly value: unknown;
+  }[];
 };
 
-const LISTEN_SQL_STATEMENT_BY_NAME: ReadonlyMap<string, ListenSqlStatement> = new Map(
-  LISTEN_SQL_STATEMENT_CATALOG.map((statement) => [statement.name, statement]),
-);
+export function listenTranscriptScopedStatementName(
+  statementName: ListenSqlStatementName,
+  conversationId: string,
+): string {
+  if (conversationId.length === 0) {
+    throw new TranscriptRequesterError(
+      "requester-access-not-contained",
+      "conversation ID must be non-empty for a scoped Listen SQL read",
+      "not-contained",
+    );
+  }
+  return `${statementName}@${encodeURIComponent(conversationId)}`;
+}
+type NormalizedWireDelegation = PortableDelegation & {
+  readonly encoded: string;
+};
+
+const LISTEN_SQL_STATEMENT_BY_NAME: ReadonlyMap<string, ListenSqlStatement> =
+  new Map(
+    LISTEN_SQL_STATEMENT_CATALOG.map((statement) => [
+      statement.name,
+      statement,
+    ]),
+  );
 
 export class TranscriptRequester {
   private readonly bootstrap: TranscriptShareBootstrap;
@@ -471,12 +514,15 @@ export class TranscriptRequester {
   private readonly transport: RequesterTransport;
   private readonly signingCapability?: RequesterSigningCapability;
   private readonly invocationCapability?: RequesterInvocationCapability;
+  private readonly policyEngineRecordExpiresAtMs: number;
+  private readonly policyEngineAddresses: ReadonlySet<string>;
   private readonly ownerNodeAddresses: ReadonlySet<string>;
   private readonly now: () => Date;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly random: () => number;
   private readonly engineRetryAttempts: number;
   private readonly requestedCapabilities: readonly PolicyCapability[];
+  private readonly nativeAuthorityCeiling: readonly PolicyCapability[];
   private readonly requestedCapabilitiesHash: string;
   private readonly eligibleSubjectDid: string;
   private readonly holderBinding: unknown;
@@ -490,12 +536,16 @@ export class TranscriptRequester {
   private constructor(
     bootstrap: TranscriptShareBootstrap,
     requestedCapabilities: readonly PolicyCapability[],
+    nativeAuthorityCeiling: readonly PolicyCapability[],
     requestedCapabilitiesHash: string,
+    policyEngineRecordExpiresAtMs: number,
+    policyEngineAddresses: ReadonlySet<string>,
     ownerNodeAddresses: ReadonlySet<string>,
     options: TranscriptRequesterOptions,
   ) {
     this.bootstrap = bootstrap;
     this.requestedCapabilities = requestedCapabilities;
+    this.nativeAuthorityCeiling = nativeAuthorityCeiling;
     this.requestedCapabilitiesHash = requestedCapabilitiesHash;
     this.requesterDid = options.requesterDid;
     this.ownerDid = options.ownerDid;
@@ -504,11 +554,14 @@ export class TranscriptRequester {
     this.transport = options.transport;
     this.signingCapability = options.signingCapability;
     this.invocationCapability = options.invocationCapability;
+    this.policyEngineRecordExpiresAtMs = policyEngineRecordExpiresAtMs;
+    this.policyEngineAddresses = policyEngineAddresses;
     this.ownerNodeAddresses = ownerNodeAddresses;
     this.eligibleSubjectDid =
-      options.eligibleSubjectDid ?? options.signingCapability?.eligibleSubjectDid ?? options.requesterDid;
-    this.holderBinding =
-      options.holderBinding ??
+      options.eligibleSubjectDid ??
+      options.signingCapability?.eligibleSubjectDid ??
+      options.requesterDid;
+    this.holderBinding = options.holderBinding ??
       options.signingCapability?.holderBinding ?? {
         type: "enrolled-agent",
         enrollment: {
@@ -517,16 +570,33 @@ export class TranscriptRequester {
         },
       };
     this.evidence = options.evidence ?? options.signingCapability?.evidence;
-    this.presentationTtlSeconds = Math.min(Math.max(options.presentationTtlSeconds ?? 60, 1), 300);
+    this.presentationTtlSeconds = Math.min(
+      Math.max(options.presentationTtlSeconds ?? 60, 1),
+      300,
+    );
     this.now = options.now ?? (() => new Date());
-    this.sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+    this.sleep =
+      options.sleep ??
+      ((milliseconds) =>
+        new Promise((resolve) => setTimeout(resolve, milliseconds)));
     this.random = options.random ?? Math.random;
-    this.engineRetryAttempts = options.engineRetryAttempts ?? REQUESTER_ENGINE_RETRY_ATTEMPTS;
+    this.engineRetryAttempts =
+      options.engineRetryAttempts ?? REQUESTER_ENGINE_RETRY_ATTEMPTS;
   }
 
-  static async create(options: TranscriptRequesterOptions): Promise<TranscriptRequester> {
+  static async create(
+    options: TranscriptRequesterOptions,
+  ): Promise<TranscriptRequester> {
     const bootstrap = parseBootstrap(options.bootstrap);
-    const ownerNodeAddresses = await validateAndResolveOwnerNode(bootstrap.ownerNode.endpoint, options.transport);
+    if (
+      bootstrap.ownerNode.endpoint !== options.trustedOwnerNode.endpoint ||
+      bootstrap.ownerNode.spaceId !== options.trustedOwnerNode.spaceId
+    ) {
+      throw endpointError(
+        "owner-node",
+        "bootstrap owner-node binding does not match trusted discovery/config",
+      );
+    }
     const record = await verifyRecordBeforeEgress(bootstrap, options);
     if (record.endpoint !== bootstrap.policyEngine.endpoint) {
       throw new TranscriptRequesterError(
@@ -542,13 +612,33 @@ export class TranscriptRequester {
         "bootstrap-invalid",
       );
     }
-    const requestedCapabilities = bootstrap.resourceHint.requestedCapabilities.map((capability, index) =>
-      parsePolicyCapability(capability, `$.resourceHint.requestedCapabilities[${index}]`),
+    const policyEngineAddresses = await validateAndResolvePublicEndpoint(
+      bootstrap.policyEngine.endpoint,
+      options.transport,
+      "policy-engine",
     );
+    const ownerNodeAddresses = await validateAndResolveOwnerNode(
+      bootstrap.ownerNode.endpoint,
+      options.transport,
+    );
+    const requestedCapabilities =
+      bootstrap.resourceHint.requestedCapabilities.map((capability, index) =>
+        parsePolicyCapability(
+          capability,
+          `$.resourceHint.requestedCapabilities[${index}]`,
+        ),
+      );
+    const nativeAuthorityCeiling = requestedCapabilities.map((capability) => ({
+      ...capability,
+      space: bootstrap.ownerNode.spaceId,
+    }));
     return new TranscriptRequester(
       bootstrap,
       requestedCapabilities,
+      nativeAuthorityCeiling,
       requestedCapabilitiesHash(requestedCapabilities),
+      parseStrictRfc3339(record.expiresAt)!,
+      policyEngineAddresses,
       ownerNodeAddresses,
       options,
     );
@@ -567,11 +657,36 @@ export class TranscriptRequester {
     return "active";
   }
 
-  async readSql(statementName: ListenSqlStatementName): Promise<TranscriptRequesterReadSqlResult> {
+  async readSql(
+    statementName: ListenSqlStatementName,
+    conversationId?: string,
+  ): Promise<TranscriptRequesterReadSqlResult> {
     try {
-      const statement = listenSqlStatementFromCatalog(statementName);
+      const catalogStatement = listenSqlStatementFromCatalog(statementName);
+      const selectedConversationId =
+        conversationId ?? this.bootstrap.resourceHint.resourceId;
+      const statement: ResolvedListenSqlStatement = {
+        ...catalogStatement,
+        name:
+          conversationId === undefined
+            ? catalogStatement.name
+            : listenTranscriptScopedStatementName(
+                statementName,
+                conversationId,
+              ),
+        fixedParams: catalogStatement.fixedParams.map((item) => ({
+          ...item,
+          value:
+            item.value === "{conversationId}"
+              ? selectedConversationId
+              : item.value,
+        })),
+      };
       const delegation = await this.ensureFreshDelegation();
-      const requested = this.sqlAccessCapabilityForDelegation(delegation, statement);
+      const requested = this.sqlAccessCapabilityForDelegation(
+        delegation,
+        statement,
+      );
       this.assertContainedByDelegation(delegation, requested);
       const response = await this.nativeInvoke(
         "sql",
@@ -583,15 +698,18 @@ export class TranscriptRequester {
           // The native constrained-SQL route injects caveat-pinned values and
           // rejects callers that supply those indices. Uncaveated reads must
           // resolve the catalog placeholder themselves.
-          params: requested.caveats === undefined
-            ? statement.fixedParams.map((item) =>
-                item.value === "{conversationId}" ? this.bootstrap.resourceHint.resourceId : item.value,
-              )
-            : [],
+          params:
+            requested.caveats === undefined
+              ? statement.fixedParams.map((item) => item.value)
+              : [],
         },
         requested.caveats,
       );
-      return parseNodeDataResponse(response, SqlReadResponseSchema, "SQL read") as TranscriptRequesterReadSqlResult;
+      return parseNodeDataResponse(
+        response,
+        SqlReadResponseSchema,
+        "SQL read",
+      ) as TranscriptRequesterReadSqlResult;
     } catch (error) {
       this.recordAccessEnded(error);
       throw error;
@@ -602,7 +720,10 @@ export class TranscriptRequester {
     try {
       const delegation = await this.ensureFreshDelegation();
       const grantedKv = delegation.capabilities.find(
-        (capability) => capability.service === "tinycloud.kv" && capability.path === path && capability.actions.includes("tinycloud.kv/get"),
+        (capability) =>
+          capability.service === "tinycloud.kv" &&
+          capability.path === path &&
+          capability.actions.includes("tinycloud.kv/get"),
       );
       const requested = parsePolicyCapability(
         {
@@ -615,7 +736,11 @@ export class TranscriptRequester {
       );
       this.assertContainedByDelegation(delegation, requested);
       const response = await this.nativeInvoke("kv", path, "tinycloud.kv/get");
-      return parseNodeDataResponse(response, KvReadResponseSchema, "KV read") as TranscriptRequesterReadKvResult;
+      return parseNodeDataResponse(
+        response,
+        KvReadResponseSchema,
+        "KV read",
+      ) as TranscriptRequesterReadKvResult;
     } catch (error) {
       this.recordAccessEnded(error);
       throw error;
@@ -636,13 +761,19 @@ export class TranscriptRequester {
         "holder invocation capability is required for native reads",
       );
     }
-    if (capability.holderDid !== this.requesterDid || capability.holderDid !== this.signingCapability?.holderDid) {
+    if (
+      capability.holderDid !== this.requesterDid ||
+      capability.holderDid !== this.signingCapability?.holderDid
+    ) {
       throw new TranscriptRequesterError(
         "requester-invocation-signer-mismatch",
         "invocation signer must be the presentation key-binding holder",
       );
     }
-    if (this.importedDelegationCid === undefined || this.importedDelegation === undefined) {
+    if (
+      this.importedDelegationCid === undefined ||
+      this.importedDelegation === undefined
+    ) {
       throw new TranscriptRequesterError(
         "requester-delegation-import-failed",
         "native read requires a confirmed delegation import",
@@ -680,6 +811,8 @@ export class TranscriptRequester {
       method: "POST",
       url: `${trimTrailingSlash(this.bootstrap.ownerNode.endpoint)}/invoke`,
       headers,
+      redirect: "error",
+      allowedResolvedAddresses: [...this.ownerNodeAddresses],
       ...(body === undefined ? {} : { body }),
     });
     this.assertOwnerNodeResponse(response, "/invoke");
@@ -694,10 +827,16 @@ export class TranscriptRequester {
         "access-ended",
       );
     }
-    if (this.importedDelegation !== undefined && !this.requiresRenewal(this.importedDelegation)) {
+    if (
+      this.importedDelegation !== undefined &&
+      !this.requiresRenewal(this.importedDelegation)
+    ) {
       return this.importedDelegation;
     }
-    if (this.signingCapability === undefined || this.signingCapability.holderDid !== this.requesterDid) {
+    if (
+      this.signingCapability === undefined ||
+      this.signingCapability.holderDid !== this.requesterDid
+    ) {
       throw new TranscriptRequesterError(
         "requester-renewal-required",
         "a permitted requester signing capability is required for access-triggered renewal",
@@ -715,7 +854,10 @@ export class TranscriptRequester {
           this.importedDelegation = delegation;
           return delegation;
         } catch (error) {
-          if (!(error instanceof TranscriptRequesterError) || error.state !== "unreachable") {
+          if (
+            !(error instanceof TranscriptRequesterError) ||
+            error.state !== "unreachable"
+          ) {
             throw error;
           }
           lastError = error;
@@ -726,7 +868,9 @@ export class TranscriptRequester {
       }
       throw new TranscriptRequesterError(
         "requester-engine-unreachable",
-        lastError instanceof Error ? lastError.message : "policy engine unreachable",
+        lastError instanceof Error
+          ? lastError.message
+          : "policy engine unreachable",
         "unreachable",
       );
     } catch (error) {
@@ -736,20 +880,30 @@ export class TranscriptRequester {
   }
 
   private recordAccessEnded(error: unknown): void {
-    if (error instanceof TranscriptRequesterError && error.state === "access-ended") {
+    if (
+      error instanceof TranscriptRequesterError &&
+      error.state === "access-ended"
+    ) {
       this.accessEnded = true;
     }
   }
 
   private async obtainChallenge(): Promise<z.infer<typeof ChallengeSchema>> {
+    this.assertPolicyEngineRecordCurrent();
     const response = await this.challengeRequestWithRetry({
       method: "POST",
       url: `${trimTrailingSlash(this.bootstrap.policyEngine.endpoint)}/policy/v0/challenge`,
+      redirect: "error",
+      allowedResolvedAddresses: [...this.policyEngineAddresses],
       body: {
         policyId: this.bootstrap.policyId,
       },
     });
-    return parseEngineSuccess(response.body, ChallengeResponseSchema, "challenge response").challenge;
+    return parseEngineSuccess(
+      response.body,
+      ChallengeResponseSchema,
+      "challenge response",
+    ).challenge;
   }
 
   private async mintPresentation(
@@ -772,7 +926,9 @@ export class TranscriptRequester {
       );
     }
     this.usedChallengeNonces.add(challenge.nonce);
-    const expiresAt = new Date(this.now().getTime() + this.presentationTtlSeconds * 1000)
+    const expiresAt = new Date(
+      this.now().getTime() + this.presentationTtlSeconds * 1000,
+    )
       .toISOString()
       .replace(".000Z", "Z");
     const input = {
@@ -818,17 +974,28 @@ export class TranscriptRequester {
     presentation: HolderKeyBindingPresentation,
   ): Promise<PortableDelegation> {
     void challenge;
+    this.assertPolicyEngineRecordCurrent();
     const response = await this.resolveRequestOnce({
       method: "POST",
       url: `${trimTrailingSlash(this.bootstrap.policyEngine.endpoint)}/policy/v0/resolve`,
+      redirect: "error",
+      allowedResolvedAddresses: [...this.policyEngineAddresses],
       body: { presentation },
     });
-    const parsed = parseEngineSuccess(response.body, ResolveResponseSchema, "resolve response");
+    const parsed = parseEngineSuccess(
+      response.body,
+      ResolveResponseSchema,
+      "resolve response",
+    );
     return this.importPortableDelegation(parsed.delegation);
   }
 
-  private async importPortableDelegation(input: unknown): Promise<PortableDelegation> {
-    const parsed = normalizeWireDelegation(parseEngineSuccess(input, WireDelegationSchema, "portable delegation"));
+  private async importPortableDelegation(
+    input: unknown,
+  ): Promise<PortableDelegation> {
+    const parsed = normalizeWireDelegation(
+      parseEngineSuccess(input, WireDelegationSchema, "portable delegation"),
+    );
     if (parsed.policyId !== this.bootstrap.policyId) {
       throw new TranscriptRequesterError(
         "requester-delegation-invalid",
@@ -855,7 +1022,10 @@ export class TranscriptRequester {
     }
     const issuedAt = parseStrictRfc3339(parsed.issuedAt)!;
     const expiresAt = parseStrictRfc3339(parsed.expiresAt)!;
-    if (expiresAt <= issuedAt || expiresAt - issuedAt > parsed.maxTtlSeconds * 1000) {
+    if (
+      expiresAt <= issuedAt ||
+      expiresAt - issuedAt > parsed.maxTtlSeconds * 1000
+    ) {
       throw new TranscriptRequesterError(
         "requester-delegation-ttl-excessive",
         "portable delegation expires outside its maxTtlSeconds bound",
@@ -865,26 +1035,41 @@ export class TranscriptRequester {
       parsePolicyCapability(capability, `$.delegation.capabilities[${index}]`),
     );
     for (const granted of capabilities) {
-      if (!this.requestedCapabilities.some((requested) => policyCapabilityContains(requested, granted))) {
+      if (
+        !this.nativeAuthorityCeiling.some((requested) =>
+          policyCapabilityContains(requested, granted),
+        )
+      ) {
         throw new TranscriptRequesterError(
           "requester-delegation-capability-wider",
           "portable delegation grants a capability outside the bootstrap requested set",
         );
       }
     }
-    if (typeof parsed.encoded !== "string" || parsed.encoded.split(".").length !== 3) {
-      throw new TranscriptRequesterError("requester-delegation-invalid", "portable delegation is not a compact-JWS UCAN");
+    if (
+      typeof parsed.encoded !== "string" ||
+      parsed.encoded.split(".").length !== 3
+    ) {
+      throw new TranscriptRequesterError(
+        "requester-delegation-invalid",
+        "portable delegation is not a compact-JWS UCAN",
+      );
     }
     const delegation = { ...parsed, capabilities } as PortableDelegation;
     const response = await this.transport.request({
       method: "POST",
       url: `${trimTrailingSlash(this.bootstrap.ownerNode.endpoint)}/delegate`,
       headers: { Authorization: parsed.encoded },
+      redirect: "error",
+      allowedResolvedAddresses: [...this.ownerNodeAddresses],
     });
     this.assertOwnerNodeResponse(response, "/delegate");
     const receipt = parseDelegateReceipt(response);
     const target = this.bootstrap.ownerNode.spaceId;
-    if (!receipt.activated.includes(target) || receipt.skipped.includes(target)) {
+    if (
+      !receipt.activated.includes(target) ||
+      receipt.skipped.includes(target)
+    ) {
       throw new TranscriptRequesterError(
         "requester-delegation-import-failed",
         receipt.activated.includes(target) && receipt.skipped.includes(target)
@@ -896,21 +1081,61 @@ export class TranscriptRequester {
     return delegation;
   }
 
-  private assertOwnerNodeResponse(response: RequesterHttpResponse, path: string): void {
-    const expected = `${trimTrailingSlash(this.bootstrap.ownerNode.endpoint)}${path}`;
-    if (response.finalUrl !== expected || response.resolvedAddress === undefined) {
+  private assertOwnerNodeResponse(
+    response: RequesterHttpResponse,
+    path: string,
+  ): void {
+    this.assertEndpointResponse(
+      response,
+      this.bootstrap.ownerNode.endpoint,
+      path,
+      this.ownerNodeAddresses,
+      "owner-node",
+    );
+  }
+
+  private assertPolicyEngineRecordCurrent(): void {
+    if (this.policyEngineRecordExpiresAtMs <= this.now().getTime()) {
       throw new TranscriptRequesterError(
-        "requester-owner-node-endpoint-invalid",
-        "owner-node transport metadata is missing or indicates a redirect",
+        "requester-engine-record-invalid",
+        "verified policy engine record has expired",
         "bootstrap-invalid",
       );
     }
-    if (!this.ownerNodeAddresses.has(normalizeIp(response.resolvedAddress))) {
-      throw new TranscriptRequesterError(
-        "requester-owner-node-endpoint-invalid",
-        "owner-node address changed after endpoint validation",
-        "bootstrap-invalid",
+  }
+
+  private assertPolicyEngineResponse(
+    response: RequesterHttpResponse,
+    path: string,
+  ): void {
+    this.assertEndpointResponse(
+      response,
+      this.bootstrap.policyEngine.endpoint,
+      path,
+      this.policyEngineAddresses,
+      "policy-engine",
+    );
+  }
+
+  private assertEndpointResponse(
+    response: RequesterHttpResponse,
+    endpoint: string,
+    path: string,
+    allowedAddresses: ReadonlySet<string>,
+    kind: "owner-node" | "policy-engine",
+  ): void {
+    const expected = `${trimTrailingSlash(endpoint)}${path}`;
+    const error = (message: string) => endpointError(kind, message);
+    if (
+      response.finalUrl !== expected ||
+      response.resolvedAddress === undefined
+    ) {
+      throw error(
+        `${kind} transport metadata is missing or indicates a redirect`,
       );
+    }
+    if (!allowedAddresses.has(normalizeIp(response.resolvedAddress))) {
+      throw error(`${kind} address changed after endpoint validation`);
     }
   }
 
@@ -925,7 +1150,11 @@ export class TranscriptRequester {
         "renewal-required",
       );
     }
-    if (!delegation.capabilities.some((granted) => policyCapabilityContains(granted, requested))) {
+    if (
+      !delegation.capabilities.some((granted) =>
+        policyCapabilityContains(granted, requested),
+      )
+    ) {
       throw new TranscriptRequesterError(
         "requester-access-not-contained",
         "requested access is outside the imported delegation capabilities",
@@ -936,20 +1165,42 @@ export class TranscriptRequester {
 
   private sqlAccessCapabilityForDelegation(
     delegation: PortableDelegation,
-    statement: ListenSqlStatement,
+    statement: ResolvedListenSqlStatement,
   ): PolicyCapability {
     const grantedSql = delegation.capabilities.find(
-      (capability) => capability.service === "tinycloud.sql" && capability.actions.includes("tinycloud.sql/read"),
+      (capability) =>
+        capability.service === "tinycloud.sql" &&
+        capability.actions.includes("tinycloud.sql/read"),
     );
     if (grantedSql === undefined) {
-      throw new TranscriptRequesterError("requester-access-not-contained", "delegation has no SQL read grant", "not-contained");
+      throw new TranscriptRequesterError(
+        "requester-access-not-contained",
+        "delegation has no SQL read grant",
+        "not-contained",
+      );
     }
     if (grantedSql.caveats !== undefined) {
-      const statements = (grantedSql.caveats as { statements?: readonly { name?: unknown }[] }).statements;
-      if (!statements?.some((candidate) => candidate.name === statement.name)) {
+      const statements = (
+        grantedSql.caveats as {
+          statements?: readonly {
+            name?: unknown;
+            sql?: unknown;
+            fixedParams?: unknown;
+          }[];
+        }
+      ).statements;
+      const matchesCatalogSelection = statements?.some(
+        (candidate) =>
+          candidate.name === statement.name &&
+          candidate.sql === statement.sql &&
+          Array.isArray(candidate.fixedParams) &&
+          jcsCanonicalize(candidate.fixedParams) ===
+            jcsCanonicalize(statement.fixedParams),
+      );
+      if (!matchesCatalogSelection) {
         throw new TranscriptRequesterError(
           "requester-access-not-contained",
-          "SQL statement is outside the delegated named-statement caveat",
+          "SQL statement is outside the delegated catalog-derived statement caveat",
           "not-contained",
         );
       }
@@ -968,15 +1219,20 @@ export class TranscriptRequester {
 
   private requiresRenewal(delegation: PortableDelegation): boolean {
     const expiresAt = parseStrictRfc3339(delegation.expiresAt)!;
-    return expiresAt - this.now().getTime() <= REQUESTER_NEAR_EXPIRY_SECONDS * 1000;
+    return (
+      expiresAt - this.now().getTime() <= REQUESTER_NEAR_EXPIRY_SECONDS * 1000
+    );
   }
 
-  private async challengeRequestWithRetry(request: RequesterHttpRequest): Promise<RequesterHttpResponse> {
+  private async challengeRequestWithRetry(
+    request: RequesterHttpRequest,
+  ): Promise<RequesterHttpResponse> {
     let lastError: unknown;
     const attempts = Math.max(1, this.engineRetryAttempts);
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
         const response = await this.transport.request(request);
+        this.assertPolicyEngineResponse(response, "/policy/v0/challenge");
         if (response.status >= 500) {
           lastError = new Error(`engine returned ${response.status}`);
         } else if (response.status >= 400) {
@@ -992,7 +1248,10 @@ export class TranscriptRequester {
           return response;
         }
       } catch (error) {
-        if (error instanceof TranscriptRequesterError && error.state !== "unreachable") {
+        if (
+          error instanceof TranscriptRequesterError &&
+          error.state !== "unreachable"
+        ) {
           throw error;
         }
         lastError = error;
@@ -1003,14 +1262,19 @@ export class TranscriptRequester {
     }
     throw new TranscriptRequesterError(
       "requester-engine-unreachable",
-      lastError instanceof Error ? lastError.message : "policy engine unreachable",
+      lastError instanceof Error
+        ? lastError.message
+        : "policy engine unreachable",
       "unreachable",
     );
   }
 
-  private async resolveRequestOnce(request: RequesterHttpRequest): Promise<RequesterHttpResponse> {
+  private async resolveRequestOnce(
+    request: RequesterHttpRequest,
+  ): Promise<RequesterHttpResponse> {
     try {
       const response = await this.transport.request(request);
+      this.assertPolicyEngineResponse(response, "/policy/v0/resolve");
       if (response.status >= 500) {
         throw new TranscriptRequesterError(
           "requester-engine-unreachable",
@@ -1063,7 +1327,9 @@ function parseBootstrap(input: unknown): TranscriptShareBootstrap & {
     );
   }
   return parsed.data as TranscriptShareBootstrap & {
-    readonly resourceHint: { readonly requestedCapabilities: readonly unknown[] };
+    readonly resourceHint: {
+      readonly requestedCapabilities: readonly unknown[];
+    };
   };
 }
 
@@ -1077,7 +1343,9 @@ async function verifyRecordBeforeEgress(
       ownerDid: options.ownerDid,
       audience: options.audience,
       grantIssuerDid: options.grantIssuerDid,
-      now: (options.now ?? (() => new Date()))().toISOString().replace(".000Z", "Z"),
+      now: (options.now ?? (() => new Date()))()
+        .toISOString()
+        .replace(".000Z", "Z"),
       requiredPolicyVersion: POLICY_VERSION_V0,
       requiredEvidenceVerifier: W3C_VC_CREDENTIAL_VERIFIER,
     });
@@ -1091,10 +1359,13 @@ async function verifyRecordBeforeEgress(
   }
 }
 
-function errorCodeForRecordFailure(error: unknown): TranscriptRequesterErrorCode {
-  const code = typeof error === "object" && error !== null && "code" in error
-    ? (error as { code?: unknown }).code
-    : undefined;
+function errorCodeForRecordFailure(
+  error: unknown,
+): TranscriptRequesterErrorCode {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
   if (code === "policy-engine-record-signature-invalid") {
     return "requester-engine-record-signature-invalid";
   }
@@ -1109,7 +1380,9 @@ function errorCodeForRecordFailure(error: unknown): TranscriptRequesterErrorCode
 
 function parsePolicyCapability(input: unknown, path: string): PolicyCapability {
   try {
-    return (normalizePolicyCapabilityForRequester(input) as unknown) as PolicyCapability;
+    return normalizePolicyCapabilityForRequester(
+      input,
+    ) as unknown as PolicyCapability;
   } catch (error) {
     throw new TranscriptRequesterError(
       "requester-delegation-invalid",
@@ -1118,7 +1391,9 @@ function parsePolicyCapability(input: unknown, path: string): PolicyCapability {
   }
 }
 
-function listenSqlStatementFromCatalog(statementName: unknown): ListenSqlStatement {
+function listenSqlStatementFromCatalog(
+  statementName: unknown,
+): ListenSqlStatement {
   if (typeof statementName !== "string") {
     throw new TranscriptRequesterError(
       "requester-access-not-contained",
@@ -1137,17 +1412,25 @@ function listenSqlStatementFromCatalog(statementName: unknown): ListenSqlStateme
   return statement;
 }
 
-function normalizePolicyCapabilityForRequester(input: unknown): PolicyCapability {
+function normalizePolicyCapabilityForRequester(
+  input: unknown,
+): PolicyCapability {
   const normalized = normalizeExternal(input, "requester-delegation-invalid");
   return normalizePolicyCapability(normalized);
 }
 
-function requestedCapabilitiesHash(capabilities: readonly PolicyCapability[]): string {
+function requestedCapabilitiesHash(
+  capabilities: readonly PolicyCapability[],
+): string {
   const canonical = [...capabilities].sort((left, right) =>
-    `${left.service}\0${left.space}\0${left.path}`.localeCompare(`${right.service}\0${right.space}\0${right.path}`),
+    `${left.service}\0${left.space}\0${left.path}`.localeCompare(
+      `${right.service}\0${right.space}\0${right.path}`,
+    ),
   );
   const encoder = new TextEncoder();
-  const domain = encoder.encode("xyz.tinycloud.policy/RequestedCapabilities/v0\0");
+  const domain = encoder.encode(
+    "xyz.tinycloud.policy/RequestedCapabilities/v0\0",
+  );
   const body = encoder.encode(jcsCanonicalize(canonical));
   const bytes = new Uint8Array(domain.length + body.length);
   bytes.set(domain, 0);
@@ -1158,63 +1441,198 @@ function requestedCapabilitiesHash(capabilities: readonly PolicyCapability[]): s
 function normalizeWireDelegation(
   delegation: z.infer<typeof WireDelegationSchema>,
 ): NormalizedWireDelegation {
-  const issuedAt = parseStrictRfc3339(delegation.issuedAt)!;
-  const expiresAt = parseStrictRfc3339(delegation.expiresAt)!;
+  const signed = delegationAuthorityFromCompactJws(delegation.encoded);
+  const invalid = (field: string): never => {
+    throw new TranscriptRequesterError(
+      "requester-delegation-invalid",
+      `portable delegation ${field} does not match its signed compact-JWS authority`,
+    );
+  };
+  if (delegation.delegationId !== deriveDelegationCid(delegation.encoded))
+    invalid("delegationId");
+  if (delegation.issuerDid !== signed.issuerDid) invalid("issuerDid");
+  if (delegation.holderDid !== signed.holderDid) invalid("holderDid");
+  if (delegation.policyId !== signed.policyId) invalid("policyId");
+  if (Date.parse(delegation.issuedAt) !== signed.issuedAtMs)
+    invalid("issuedAt");
+  if (Date.parse(delegation.expiresAt) !== signed.expiresAtMs)
+    invalid("expiresAt");
+  if (delegation.terminal !== signed.terminal) invalid("terminal");
+  if (delegation.issuanceId !== signed.issuanceId) invalid("issuanceId");
+  if (delegation.capabilityHashHex !== signed.capabilityHashHex)
+    invalid("capabilityHashHex");
+  if (delegation.revocationMode !== signed.revocationMode)
+    invalid("revocationMode");
   return {
-    delegationId: delegation.delegationId,
-    issuerDid: delegation.issuerDid,
-    holderDid: delegation.holderDid,
-    policyId: delegation.policyId,
-    issuedAt: delegation.issuedAt,
-    expiresAt: delegation.expiresAt,
-    terminal: delegation.terminal,
-    maxTtlSeconds: Math.ceil((expiresAt - issuedAt) / 1000),
-    capabilities: delegation.capabilities ?? capabilitiesFromCompactJws(delegation.encoded),
+    delegationId: deriveDelegationCid(delegation.encoded),
+    issuerDid: signed.issuerDid,
+    holderDid: signed.holderDid,
+    policyId: signed.policyId,
+    issuedAt: new Date(signed.issuedAtMs).toISOString().replace(".000Z", "Z"),
+    expiresAt: new Date(signed.expiresAtMs).toISOString().replace(".000Z", "Z"),
+    terminal: signed.terminal,
+    maxTtlSeconds: Math.ceil((signed.expiresAtMs - signed.issuedAtMs) / 1000),
+    capabilities: signed.capabilities,
     encoded: delegation.encoded,
   };
 }
 
-function capabilitiesFromCompactJws(encoded: string): z.infer<typeof CapabilitySchema>[] {
+function delegationAuthorityFromCompactJws(encoded: string): {
+  issuerDid: string;
+  holderDid: string;
+  policyId: string;
+  issuanceId: string;
+  capabilityHashHex: string;
+  revocationMode: "refresh_only";
+  issuedAtMs: number;
+  expiresAtMs: number;
+  terminal: boolean;
+  capabilities: PolicyCapability[];
+} {
   try {
     const parts = encoded.split(".");
     if (parts.length !== 3) throw new Error("not compact JWS");
-    const payload = JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[1]!))) as {
-      att?: Record<string, Record<string, readonly unknown[]>>;
-    };
-    if (payload.att === undefined) throw new Error("UCAN att is absent");
-    const capabilities: z.infer<typeof CapabilitySchema>[] = [];
-    for (const [resource, abilities] of Object.entries(payload.att)) {
+    const payload = normalizeJson(
+      JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[1]!))),
+    ) as Record<string, unknown>;
+    const issuer = requiredPayloadString(payload, "iss");
+    const holderDid = requiredPayloadString(payload, "aud");
+    const issuedAt = requiredPayloadEpoch(payload, "nbf");
+    const expiresAt = requiredPayloadEpoch(payload, "exp");
+    const facts = payload.fct;
+    if (!Array.isArray(facts)) throw new Error("UCAN fct is absent");
+    const authorityFacts = facts.filter(
+      (fact) =>
+        fact !== null &&
+        typeof fact === "object" &&
+        !Array.isArray(fact) &&
+        "xyz.tinycloud.policy/policyId" in fact,
+    ) as Record<string, unknown>[];
+    if (authorityFacts.length !== 1)
+      throw new Error("UCAN policy authority fact is not unique");
+    const fact = authorityFacts[0]!;
+    const policyId = requiredPayloadString(
+      fact,
+      "xyz.tinycloud.policy/policyId",
+    );
+    const issuanceId = requiredPayloadString(
+      fact,
+      "xyz.tinycloud.policy/issuanceId",
+    );
+    const capabilityHashHex = requiredPayloadString(
+      fact,
+      "xyz.tinycloud.policy/capabilityHashHex",
+    );
+    if (!/^[0-9a-f]{64}$/.test(capabilityHashHex)) {
+      throw new Error(
+        "UCAN capability hash is not 64 lowercase hex characters",
+      );
+    }
+    const revocationMode = requiredPayloadString(
+      fact,
+      "xyz.tinycloud.policy/revocationMode",
+    );
+    const delegationMode = requiredPayloadString(
+      fact,
+      "xyz.tinycloud.policy/delegationMode",
+    );
+    if (revocationMode !== "refresh_only")
+      throw new Error("unsupported UCAN revocation mode");
+    if (delegationMode !== "terminal")
+      throw new Error("UCAN delegation is not terminal");
+    const att = payload.att;
+    if (att === null || typeof att !== "object" || Array.isArray(att)) {
+      throw new Error("UCAN att is absent");
+    }
+    const capabilities: PolicyCapability[] = [];
+    for (const [resource, rawAbilities] of Object.entries(att)) {
+      if (
+        rawAbilities === null ||
+        typeof rawAbilities !== "object" ||
+        Array.isArray(rawAbilities)
+      ) {
+        throw new Error("UCAN att abilities are invalid");
+      }
+      const abilities = rawAbilities as Record<string, unknown>;
       const marker = resource.indexOf("/sql/");
-      if (!resource.startsWith("tinycloud:") || marker < 0) throw new Error("unsupported UCAN resource");
+      if (!resource.startsWith("tinycloud:") || marker < 0)
+        throw new Error("unsupported UCAN resource");
       const space = resource.slice(0, marker);
       const path = resource.slice(marker + "/sql/".length);
-      for (const [action, caveats] of Object.entries(abilities)) {
+      for (const [action, rawCaveats] of Object.entries(abilities)) {
         const service = action.startsWith("tinycloud.sql/")
           ? "tinycloud.sql"
           : action.startsWith("tinycloud.kv/")
             ? "tinycloud.kv"
             : undefined;
-        if (service === undefined || caveats.length === 0) throw new Error("unsupported UCAN ability");
+        if (!Array.isArray(rawCaveats) || rawCaveats.length !== 1) {
+          throw new Error("UCAN ability must have exactly one caveat branch");
+        }
+        const caveats = rawCaveats;
+        if (service === undefined) throw new Error("unsupported UCAN ability");
         const first = caveats[0];
-        capabilities.push({
-          service,
-          space,
-          path,
-          actions: [action],
-          ...(first !== null && typeof first === "object" && !Array.isArray(first) && Object.keys(first).length > 0
-            ? { caveats: first as z.infer<typeof CapabilitySchema>["caveats"] }
-            : {}),
-        });
+        capabilities.push(
+          normalizePolicyCapability({
+            service,
+            space,
+            path,
+            actions: [action],
+            ...(first !== null &&
+            typeof first === "object" &&
+            !Array.isArray(first) &&
+            Object.keys(first).length > 0
+              ? { caveats: first }
+              : {}),
+          }),
+        );
       }
     }
     if (capabilities.length === 0) throw new Error("UCAN att is empty");
-    return capabilities;
+    const fragment = issuer.indexOf("#");
+    const issuerDid = fragment < 0 ? issuer : issuer.slice(0, fragment);
+    if (!issuerDid.startsWith("did:") || !holderDid.startsWith("did:")) {
+      throw new Error("UCAN issuer or audience is not a DID");
+    }
+    return {
+      issuerDid,
+      holderDid,
+      policyId,
+      issuanceId,
+      capabilityHashHex,
+      revocationMode,
+      issuedAtMs: issuedAt * 1000,
+      expiresAtMs: expiresAt * 1000,
+      terminal: true,
+      capabilities,
+    };
   } catch (error) {
     throw new TranscriptRequesterError(
       "requester-delegation-invalid",
       `node-native compact-JWS capabilities are invalid: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+function requiredPayloadString(
+  payload: Record<string, unknown>,
+  key: string,
+): string {
+  const value = payload[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`UCAN ${key} is not a non-empty string`);
+  }
+  return value;
+}
+
+function requiredPayloadEpoch(
+  payload: Record<string, unknown>,
+  key: string,
+): number {
+  const value = payload[key];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`UCAN ${key} is not a non-negative integer epoch`);
+  }
+  return value;
 }
 
 function base64UrlBytes(value: string): Uint8Array {
@@ -1229,7 +1647,10 @@ function parseEngineSuccess<T>(
   schema: z.ZodType<T>,
   label: string,
 ): T {
-  const normalized = normalizeExternal(input, "requester-engine-response-invalid");
+  const normalized = normalizeExternal(
+    input,
+    "requester-engine-response-invalid",
+  );
   const denial = parseDenialBody(normalized);
   if (denial !== undefined) {
     throw errorForDenial(denial);
@@ -1257,7 +1678,10 @@ function parseDataResponse<T>(
     );
   }
   if (response.status >= 400) {
-    const normalized = normalizeExternal(response.body, "requester-access-denied");
+    const normalized = normalizeExternal(
+      response.body,
+      "requester-access-denied",
+    );
     const denial = parseDenialBody(normalized);
     if (denial !== undefined) {
       throw errorForDenial(denial, response.status);
@@ -1268,7 +1692,10 @@ function parseDataResponse<T>(
       "denied",
     );
   }
-  const normalized = normalizeExternal(response.body, "requester-engine-response-invalid");
+  const normalized = normalizeExternal(
+    response.body,
+    "requester-engine-response-invalid",
+  );
   const parsed = schema.safeParse(normalized);
   if (!parsed.success) {
     throw new TranscriptRequesterError(
@@ -1279,7 +1706,9 @@ function parseDataResponse<T>(
   return parsed.data;
 }
 
-function parseDelegateReceipt(response: RequesterHttpResponse): z.infer<typeof DelegateReceiptSchema> {
+function parseDelegateReceipt(
+  response: RequesterHttpResponse,
+): z.infer<typeof DelegateReceiptSchema> {
   if (response.status !== 200) {
     throw new TranscriptRequesterError(
       "requester-delegation-import-failed",
@@ -1289,7 +1718,10 @@ function parseDelegateReceipt(response: RequesterHttpResponse): z.infer<typeof D
       response.status,
     );
   }
-  const normalized = normalizeExternal(response.body, "requester-delegation-import-failed");
+  const normalized = normalizeExternal(
+    response.body,
+    "requester-delegation-import-failed",
+  );
   const parsed = DelegateReceiptSchema.safeParse(normalized);
   if (!parsed.success) {
     throw new TranscriptRequesterError(
@@ -1323,7 +1755,10 @@ function parseNodeDataResponse<T>(
       response.status,
     );
   }
-  const normalized = normalizeExternal(response.body, "requester-node-response-invalid");
+  const normalized = normalizeExternal(
+    response.body,
+    "requester-node-response-invalid",
+  );
   const parsed = schema.safeParse(normalized);
   if (!parsed.success) {
     throw new TranscriptRequesterError(
@@ -1339,8 +1774,10 @@ function nodeErrorMessage(body: unknown): string {
   if (body !== null && typeof body === "object") {
     const record = body as Record<string, unknown>;
     const code = typeof record.code === "string" ? record.code : undefined;
-    const message = typeof record.message === "string" ? record.message : undefined;
-    if (code !== undefined) return message === undefined ? code : `${code}: ${message}`;
+    const message =
+      typeof record.message === "string" ? record.message : undefined;
+    if (code !== undefined)
+      return message === undefined ? code : `${code}: ${message}`;
   }
   return "native node refusal";
 }
@@ -1358,41 +1795,72 @@ async function validateAndResolveOwnerNode(
   endpoint: string,
   transport: RequesterTransport,
 ): Promise<ReadonlySet<string>> {
+  return validateAndResolvePublicEndpoint(endpoint, transport, "owner-node");
+}
+
+async function validateAndResolvePublicEndpoint(
+  endpoint: string,
+  transport: RequesterTransport,
+  kind: "owner-node" | "policy-engine",
+): Promise<ReadonlySet<string>> {
   let url: URL;
   try {
     url = new URL(endpoint);
   } catch {
-    throw ownerEndpointError("owner-node endpoint is not a URL");
+    throw endpointError(kind, `${kind} endpoint is not a URL`);
   }
-  if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.hash !== "") {
-    throw ownerEndpointError("owner-node endpoint must use HTTPS without credentials or fragments");
+  if (
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.hash !== "" ||
+    url.search !== ""
+  ) {
+    throw endpointError(
+      kind,
+      `${kind} endpoint must use HTTPS without credentials, query, or fragment`,
+    );
   }
   if (transport.resolveEndpoint === undefined) {
-    throw ownerEndpointError("owner-node endpoint resolution metadata is required");
+    throw endpointError(
+      kind,
+      `${kind} endpoint resolution metadata is required`,
+    );
   }
   let resolution: RequesterEndpointResolution;
   try {
     resolution = await transport.resolveEndpoint(url.origin);
   } catch (error) {
-    throw ownerEndpointError(`owner-node endpoint resolution failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw endpointError(
+      kind,
+      `${kind} endpoint resolution failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   if (resolution.addresses.length === 0) {
-    throw ownerEndpointError("owner-node endpoint resolved to no addresses");
+    throw endpointError(kind, `${kind} endpoint resolved to no addresses`);
   }
   const addresses = new Set<string>();
   for (const address of resolution.addresses) {
     const normalized = normalizeIp(address);
     if (!isPublicIp(normalized)) {
-      throw ownerEndpointError(`owner-node endpoint resolved to a non-public address: ${address}`);
+      throw endpointError(
+        kind,
+        `${kind} endpoint resolved to a non-public address: ${address}`,
+      );
     }
     addresses.add(normalized);
   }
   return addresses;
 }
 
-function ownerEndpointError(message: string): TranscriptRequesterError {
+function endpointError(
+  kind: "owner-node" | "policy-engine",
+  message: string,
+): TranscriptRequesterError {
   return new TranscriptRequesterError(
-    "requester-owner-node-endpoint-invalid",
+    kind === "owner-node"
+      ? "requester-owner-node-endpoint-invalid"
+      : "requester-policy-engine-endpoint-invalid",
     message,
     "bootstrap-invalid",
   );
@@ -1405,10 +1873,15 @@ function normalizeIp(value: string): string {
 function isPublicIp(value: string): boolean {
   const ip = normalizeIp(value);
   const parts = ip.split(".");
-  if (parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255)) {
+  if (
+    parts.length === 4 &&
+    parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255)
+  ) {
     const [a, b] = parts.map(Number) as [number, number, number, number];
     return !(
-      a === 0 || a === 10 || a === 127 ||
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
       (a === 100 && b >= 64 && b <= 127) ||
       (a === 169 && b === 254) ||
       (a === 172 && b >= 16 && b <= 31) ||
@@ -1421,9 +1894,19 @@ function isPublicIp(value: string): boolean {
     );
   }
   if (!ip.includes(":")) return false;
-  if (ip === "::" || ip === "::1" || ip.startsWith("2001:db8:") || ip.startsWith("fe8") || ip.startsWith("fe9") ||
-      ip.startsWith("fea") || ip.startsWith("feb") || ip.startsWith("fc") || ip.startsWith("fd") ||
-      ip.startsWith("ff")) return false;
+  if (
+    ip === "::" ||
+    ip === "::1" ||
+    ip.startsWith("2001:db8:") ||
+    ip.startsWith("fe8") ||
+    ip.startsWith("fe9") ||
+    ip.startsWith("fea") ||
+    ip.startsWith("feb") ||
+    ip.startsWith("fc") ||
+    ip.startsWith("fd") ||
+    ip.startsWith("ff")
+  )
+    return false;
   const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mapped !== null) return isPublicIp(mapped[1]!);
   const mappedHex = ip.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
@@ -1435,15 +1918,25 @@ function isPublicIp(value: string): boolean {
   return true;
 }
 
-function parseDenialBody(input: unknown): { code: PolicyEngineGrantPresentationDenialCode; message?: string } | undefined {
-  const normalized = normalizeExternal(input, "requester-engine-response-invalid");
+function parseDenialBody(
+  input: unknown,
+):
+  | { code: PolicyEngineGrantPresentationDenialCode; message?: string }
+  | undefined {
+  const normalized = normalizeExternal(
+    input,
+    "requester-engine-response-invalid",
+  );
   const direct = DenialSchema.safeParse(normalized);
   if (direct.success) {
     return { code: direct.data.code, message: direct.data.message };
   }
   const envelope = ErrorEnvelopeDenialSchema.safeParse(normalized);
   if (envelope.success) {
-    return { code: envelope.data.error.code, message: envelope.data.error.message };
+    return {
+      code: envelope.data.error.code,
+      message: envelope.data.error.message,
+    };
   }
   return undefined;
 }
@@ -1467,7 +1960,10 @@ function errorForDenial(
 
 function retryDelay(attempt: number, random: number): number {
   const base = Math.min(REQUESTER_ENGINE_RETRY_MAX_DELAY_MS, 50 * 2 ** attempt);
-  return Math.min(REQUESTER_ENGINE_RETRY_MAX_DELAY_MS, Math.floor(base * (0.5 + random)));
+  return Math.min(
+    REQUESTER_ENGINE_RETRY_MAX_DELAY_MS,
+    Math.floor(base * (0.5 + random)),
+  );
 }
 
 function trimTrailingSlash(value: string): string {
