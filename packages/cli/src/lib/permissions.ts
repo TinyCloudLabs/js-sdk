@@ -2,6 +2,16 @@ import { randomBytes } from "node:crypto";
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  additionalDelegationsPath as sharedAdditionalDelegationsPath,
+  authRequestsPath as sharedAuthRequestsPath,
+  profileStoreMetadataPath,
+  readAdditionalDelegations,
+  readAuthRequests,
+  upsertProfileRecord,
+  withProfileLock,
+  writeJsonAtomic,
+} from "@tinycloud/operations/state";
+import {
   ENCRYPTION_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
   expandActionShortNames,
@@ -14,7 +24,7 @@ import {
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
 import { PROFILES_DIR } from "../config/constants.js";
-import { fileExists, readJson, writeJson, ensureDir } from "../config/storage.js";
+import { ensureDir, fileExists } from "../config/storage.js";
 import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
@@ -77,11 +87,11 @@ export interface DelegationImportArtifact {
 
 export function additionalDelegationsPath(profile: string): string {
   // Sibling file keeps legacy session.json schema unchanged for existing readers.
-  return join(PROFILES_DIR, profile, "additional-delegations.json");
+  return sharedAdditionalDelegationsPath(profile);
 }
 
 export function permissionRequestsPath(profile: string): string {
-  return join(PROFILES_DIR, profile, "auth-requests.json");
+  return sharedAuthRequestsPath(profile);
 }
 
 export function grantHistoryPath(profile: string): string {
@@ -126,57 +136,77 @@ function didWithoutFragment(did: string): string {
 export async function loadAdditionalDelegations(
   profile: string,
 ): Promise<StoredAdditionalDelegation[]> {
-  const raw = await readJson<StoredAdditionalDelegation[]>(
-    additionalDelegationsPath(profile),
-  );
-  return Array.isArray(raw) ? raw : [];
+  return readAdditionalDelegations<StoredAdditionalDelegation>(profile);
 }
 
 export async function saveAdditionalDelegations(
   profile: string,
   entries: StoredAdditionalDelegation[],
 ): Promise<void> {
-  const profileDir = join(PROFILES_DIR, profile);
-  await ensureDir(profileDir);
-  await writeJson(additionalDelegationsPath(profile), entries);
+  await replaceSharedRecords(profile, "additional-delegations", entries);
 }
 
 export async function appendAdditionalDelegation(
   profile: string,
   entry: StoredAdditionalDelegation,
 ): Promise<void> {
-  const existing = await loadAdditionalDelegations(profile);
-  const next = existing.filter((item) => item.delegation.cid !== entry.delegation.cid);
-  next.push(entry);
-  await saveAdditionalDelegations(profile, next);
+  await upsertProfileRecord(
+    profile,
+    "additional-delegations",
+    entry.delegation.cid,
+    entry,
+    (candidate) => candidate.delegation.cid,
+  );
 }
 
 export async function loadPermissionRequestArtifacts(
   profile: string,
 ): Promise<PermissionRequestArtifact[]> {
-  const raw = await readJson<PermissionRequestArtifact[]>(
-    permissionRequestsPath(profile),
-  );
-  return Array.isArray(raw) ? raw.filter(isPermissionRequestArtifact) : [];
+  const raw = await readAuthRequests<PermissionRequestArtifact>(profile);
+  return raw.filter(isPermissionRequestArtifact);
 }
 
 export async function savePermissionRequestArtifacts(
   profile: string,
   entries: PermissionRequestArtifact[],
 ): Promise<void> {
-  const profileDir = join(PROFILES_DIR, profile);
-  await ensureDir(profileDir);
-  await writeJson(permissionRequestsPath(profile), entries);
+  await replaceSharedRecords(profile, "auth-requests", entries);
 }
 
 export async function appendPermissionRequestArtifact(
   profile: string,
   artifact: PermissionRequestArtifact,
 ): Promise<void> {
-  const existing = await loadPermissionRequestArtifacts(profile);
-  const next = existing.filter((item) => item.requestId !== artifact.requestId);
-  next.push(artifact);
-  await savePermissionRequestArtifacts(profile, next);
+  // Retain the legacy parser's behavior of dropping malformed historical
+  // records, while performing that read-modify-write sequence under the
+  // operations-owned profile lock.
+  await withProfileLock(profile, async () => {
+    const existing = (await readAuthRequests<PermissionRequestArtifact>(profile))
+      .filter(isPermissionRequestArtifact);
+    const next = existing.filter((item) => item.requestId !== artifact.requestId);
+    next.push(artifact);
+    await writeSharedRecords(profile, "auth-requests", next);
+  });
+}
+
+async function replaceSharedRecords<T>(
+  profile: string,
+  store: "additional-delegations" | "auth-requests",
+  entries: T[],
+): Promise<void> {
+  await withProfileLock(profile, () => writeSharedRecords(profile, store, entries));
+}
+
+async function writeSharedRecords<T>(
+  profile: string,
+  store: "additional-delegations" | "auth-requests",
+  entries: T[],
+): Promise<void> {
+  const path = store === "additional-delegations"
+    ? additionalDelegationsPath(profile)
+    : permissionRequestsPath(profile);
+  await writeJsonAtomic(path, entries);
+  await writeJsonAtomic(profileStoreMetadataPath(profile, store), { formatVersion: 1 });
 }
 
 export async function getPermissionRequestArtifact(

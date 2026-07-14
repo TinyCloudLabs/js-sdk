@@ -1,12 +1,16 @@
 import { join } from "node:path";
 import {
+  readSession,
+  removeSession,
+  writeSession,
+} from "@tinycloud/operations/state";
+import {
   CONFIG_DIR,
   PROFILES_DIR,
   CONFIG_FILE,
   DEFAULT_PROFILE,
   DEFAULT_HOST,
 } from "./constants.js";
-import { rm } from "node:fs/promises";
 import {
   readJson,
   writeJson,
@@ -131,30 +135,21 @@ export class ProfileManager {
    * Returns the parsed session for a profile, or null if none exists.
    */
   static async getSession(name: string): Promise<object | null> {
-    return readJson<object>(join(PROFILES_DIR, name, "session.json"));
+    return readSession<object>(name);
   }
 
   /**
    * Saves session data for a profile.
    */
   static async setSession(name: string, session: object): Promise<void> {
-    const profileDir = join(PROFILES_DIR, name);
-    await ensureDir(profileDir);
-    await writeJson(join(profileDir, "session.json"), session);
+    await writeSession(name, session);
   }
 
   /**
    * Removes the session file for a profile.
    */
   static async clearSession(name: string): Promise<void> {
-    const sessionPath = join(PROFILES_DIR, name, "session.json");
-    try {
-      await rm(sessionPath);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw err;
-      }
-    }
+    await removeSession(name);
   }
 
   // ── Cache management ────────────────────────────────────────────────
