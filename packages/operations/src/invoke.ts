@@ -1,0 +1,254 @@
+import { createHash } from "node:crypto";
+
+import * as sdkCore from "@tinycloud/sdk-core";
+import type { ZodError } from "zod";
+
+import {
+  type InvocationTarget,
+  type OperationContext,
+  type OperationContextSummary,
+  type OperationDefinition,
+  type OperationRef,
+  type OperationResult,
+  safeOperationContextSummary,
+} from "./contract.js";
+import {
+  internalOperationError,
+  operationError,
+  sanitizeOperationError,
+  sanitizeThrownOperationError,
+} from "./errors.js";
+import { redactOperationError } from "./redaction.js";
+import { lookupOperation } from "./registry.js";
+
+/**
+ * The checked-in sdk-core source exports this from its package root. The
+ * structural expectation keeps declaration generation independent of a stale
+ * shared node_modules link while preserving that package-root runtime import.
+ */
+const jcsCanonicalize = (
+  sdkCore as typeof sdkCore & {
+    jcsCanonicalize(input: unknown): string;
+  }
+).jcsCanonicalize;
+
+type ProfileModuleExpectation = Readonly<{
+  resolveInvocationContext: (
+    target: InvocationTarget,
+  ) => Promise<OperationContext>;
+}>;
+
+const profileModulePath = "./profile.js";
+
+/**
+ * The profile module is owned by ticket S. Keeping its import dynamic and typed
+ * lets this kernel build independently without inventing a production profile
+ * implementation; package tests supply a module mock until S lands.
+ */
+async function resolveInvocationContext(
+  target: InvocationTarget,
+): Promise<OperationContext> {
+  const profileModule = (await import(profileModulePath)) as ProfileModuleExpectation;
+  return profileModule.resolveInvocationContext(target);
+}
+
+/** The sole projection-facing execution API. */
+export async function invokeOperation(
+  operationId: string,
+  operationVersion: number,
+  invocationTarget: InvocationTarget,
+  unknownInput: unknown,
+): Promise<OperationResult<unknown>> {
+  const operation: OperationRef = { operationId, operationVersion };
+  const target = normalizeInvocationTarget(invocationTarget);
+  const lookup = lookupOperation(operationId, operationVersion);
+  const contextResolution = await resolveContext(target);
+
+  // Registry resolution is deliberately complete before any input parsing.
+  if (lookup.status === "operation_not_found") {
+    return errorResult(
+      operation,
+      contextResolution.context,
+      operationError("OPERATION_NOT_FOUND", "The requested operation is not registered."),
+    );
+  }
+  if (lookup.status === "operation_version_unsupported") {
+    return errorResult(
+      operation,
+      contextResolution.context,
+      operationError(
+        "OPERATION_VERSION_UNSUPPORTED",
+        "The requested operation version is not supported.",
+        { details: { supportedVersions: lookup.supportedVersions } },
+      ),
+    );
+  }
+
+  if (contextResolution.error !== undefined) {
+    return errorResult(operation, contextResolution.context, contextResolution.error);
+  }
+
+  const definition = lookup.definition;
+  const parsedInput = definition.input.safeParse(unknownInput);
+  if (!parsedInput.success) {
+    return errorResult(
+      operation,
+      contextResolution.context,
+      operationError("INPUT_INVALID", "The operation input is invalid.", {
+        details: zodIssueDetails(parsedInput.error),
+      }),
+    );
+  }
+
+  if (!definition.postures.includes(contextResolution.context.posture)) {
+    return errorResult(
+      operation,
+      contextResolution.context,
+      operationError(
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "The active profile posture cannot execute this operation.",
+      ),
+    );
+  }
+
+  try {
+    const outcome = await definition.execute(
+      { summary: contextResolution.context },
+      parsedInput.data,
+    );
+
+    switch (outcome.status) {
+      case "ok": {
+        const parsedOutput = definition.output.safeParse(outcome.output);
+        if (!parsedOutput.success) {
+          return errorResult(
+            operation,
+            contextResolution.context,
+            operationError(
+              "OUTPUT_INVALID",
+              "The operation returned an invalid result.",
+            ),
+          );
+        }
+        return {
+          status: "ok",
+          operation,
+          context: contextResolution.context,
+          output: parsedOutput.data,
+        };
+      }
+      case "authority_required":
+        return {
+          status: "authority_required",
+          operation,
+          context: contextResolution.context,
+          missing: outcome.missing,
+          request: outcome.request,
+          approval: outcome.approval,
+          retry: retryDescriptor(
+            operation,
+            parsedInput.data,
+            outcome.requiresCallerInput ?? false,
+          ),
+        };
+      case "setup_required":
+        return {
+          status: "setup_required",
+          operation,
+          context: contextResolution.context,
+          setup: outcome.setup,
+          retry: retryDescriptor(
+            operation,
+            parsedInput.data,
+            outcome.requiresCallerInput ?? false,
+          ),
+        };
+      case "error":
+        return errorResult(
+          operation,
+          contextResolution.context,
+          redactOperationError(definition, sanitizeOperationError(outcome.error)),
+        );
+      default:
+        return errorResult(
+          operation,
+          contextResolution.context,
+          internalOperationError(),
+        );
+    }
+  } catch (error) {
+    return errorResult(
+      operation,
+      contextResolution.context,
+      redactOperationError(definition, sanitizeThrownOperationError(error)),
+    );
+  }
+}
+
+function normalizeInvocationTarget(target: InvocationTarget): InvocationTarget {
+  return {
+    ...(typeof target.profile === "string" ? { profile: target.profile } : {}),
+    ...(typeof target.host === "string" ? { host: target.host } : {}),
+    ...(target.allowOwnerProfile === true ? { allowOwnerProfile: true } : {}),
+    ...(typeof target.privateKey === "string" ? { privateKey: target.privateKey } : {}),
+  };
+}
+
+async function resolveContext(
+  target: InvocationTarget,
+): Promise<Readonly<{ context: OperationContextSummary; error?: ReturnType<typeof sanitizeThrownOperationError> }>> {
+  try {
+    const resolved = await resolveInvocationContext(target);
+    return { context: safeOperationContextSummary(resolved.summary) };
+  } catch (error) {
+    return {
+      context: unresolvedContextSummary(target),
+      error: sanitizeThrownOperationError(error),
+    };
+  }
+}
+
+function unresolvedContextSummary(target: InvocationTarget): OperationContextSummary {
+  return {
+    profile: target.profile ?? "unresolved",
+    host: target.host ?? "unresolved",
+    posture: "unauthenticated",
+    operator: "unauthenticated",
+  };
+}
+
+function errorResult(
+  operation: OperationRef,
+  context: OperationContextSummary,
+  error: ReturnType<typeof sanitizeOperationError>,
+): OperationResult<never> {
+  return { status: "error", operation, context, error };
+}
+
+function retryDescriptor(
+  operation: OperationRef,
+  input: unknown,
+  requiresCallerInput: boolean,
+): Readonly<{
+  operationId: string;
+  operationVersion: number;
+  inputDigest: string;
+  requiresCallerInput: boolean;
+}> {
+  return {
+    operationId: operation.operationId,
+    operationVersion: operation.operationVersion,
+    inputDigest: createHash("sha256").update(jcsCanonicalize(input), "utf8").digest("hex"),
+    requiresCallerInput,
+  };
+}
+
+function zodIssueDetails(error: ZodError): Readonly<Record<string, unknown>> {
+  return {
+    issues: error.issues.map((issue) => ({
+      code: issue.code,
+      message: issue.message,
+      path: issue.path.map(String),
+    })),
+  };
+}
