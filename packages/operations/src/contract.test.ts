@@ -27,7 +27,7 @@ test("safe context summaries retain only identity fields", () => {
     profile: "delegate",
     host: "https://node.example",
     posture: "delegate-session",
-    operator: "delegate",
+    operatorType: "agent",
     principalDid: "did:key:principal",
     sessionDid: "did:key:session",
     ownerDid: "did:key:owner",

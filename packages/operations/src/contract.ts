@@ -21,7 +21,7 @@ export type TinyCloudPosture =
   | "local-owner-key"
   | "unauthenticated";
 
-export type OperationOperator = "owner" | "delegate" | "unauthenticated";
+export type OperationOperatorType = "human" | "agent";
 
 export type SurfaceDisposition =
   | Readonly<{ status: "required" }>
@@ -35,7 +35,7 @@ export interface OperationContextSummary {
   readonly profile: string;
   readonly host: string;
   readonly posture: TinyCloudPosture;
-  readonly operator: OperationOperator;
+  readonly operatorType?: OperationOperatorType;
   readonly principalDid?: string;
   readonly sessionDid?: string;
   readonly ownerDid?: string;
@@ -205,7 +205,9 @@ export function safeOperationContextSummary(
     profile: summary.profile,
     host: summary.host,
     posture: summary.posture,
-    operator: summary.operator,
+    ...(summary.operatorType === undefined
+      ? {}
+      : { operatorType: summary.operatorType }),
     ...(summary.principalDid === undefined
       ? {}
       : { principalDid: summary.principalDid }),

@@ -4,39 +4,18 @@ import {
   readProfile,
   tinycloudConfigPath,
 } from "./state.js";
+import type {
+  InvocationTarget,
+  OperationContextSummary,
+  OperationOperatorType,
+  TinyCloudPosture,
+} from "./contract.js";
 
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
 
-export type TinyCloudPosture =
-  | "owner-openkey"
-  | "delegate-session"
-  | "local-owner-key"
-  | "unauthenticated";
-
-export type TinyCloudOperatorType = "human" | "agent";
-
-/**
- * This intentionally contains only selection inputs. In particular, callers
- * may carry a CLI private-key override elsewhere, but profile resolution never
- * reads or returns it.
- */
-export interface InvocationTarget {
-  profile?: string;
-  host?: string;
-  allowOwnerProfile?: boolean;
-  privateKey?: string;
-}
-
-export interface SafeInvocationContext {
-  profile: string;
-  host: string;
-  posture: TinyCloudPosture;
-  operatorType: TinyCloudOperatorType;
-  principalDid?: string;
-  sessionDid?: string;
-  ownerDid?: string;
-  space?: string;
-}
+export type SafeInvocationContext = OperationContextSummary & {
+  operatorType: OperationOperatorType;
+};
 
 export type InvocationContextResolution =
   | { ok: true; context: SafeInvocationContext }
@@ -153,7 +132,7 @@ function isPosture(value: unknown): value is TinyCloudPosture {
     value === "unauthenticated";
 }
 
-function isOperatorType(value: unknown): value is TinyCloudOperatorType {
+function isOperatorType(value: unknown): value is OperationOperatorType {
   return value === "human" || value === "agent";
 }
 

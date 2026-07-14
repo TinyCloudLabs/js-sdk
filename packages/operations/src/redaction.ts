@@ -59,7 +59,9 @@ export function createSafeOperationDiagnostic(
       profile: diagnostic.context.profile,
       host: diagnostic.context.host,
       posture: diagnostic.context.posture,
-      operator: diagnostic.context.operator,
+      ...(diagnostic.context.operatorType === undefined
+        ? {}
+        : { operatorType: diagnostic.context.operatorType }),
       ...(diagnostic.context.principalDid === undefined
         ? {}
         : { principalDid: diagnostic.context.principalDid }),

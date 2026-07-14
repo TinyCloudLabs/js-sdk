@@ -31489,14 +31489,17 @@ import { Command } from "commander";
 
 // src/output/errors.ts
 import { readFileSync, readdirSync } from "fs";
-import { join as join2 } from "path";
+import { join } from "path";
 
 // src/config/constants.ts
-import { homedir } from "os";
-import { join } from "path";
-var CONFIG_DIR = join(homedir(), ".tinycloud");
-var PROFILES_DIR = join(CONFIG_DIR, "profiles");
-var CONFIG_FILE = join(CONFIG_DIR, "config.json");
+import {
+  profilesPath,
+  tinycloudConfigPath,
+  tinycloudHomePath
+} from "@tinycloud/operations/state";
+var CONFIG_DIR = tinycloudHomePath();
+var PROFILES_DIR = profilesPath();
+var CONFIG_FILE = tinycloudConfigPath();
 var DEFAULT_HOST = "https://node.tinycloud.xyz";
 var DEFAULT_OPENKEY_HOST = "https://openkey.so";
 var DEFAULT_PROFILE = "default";
@@ -31706,7 +31709,7 @@ function capSpecFromAuthMeta(resource, action) {
 function buildNetworkHint() {
   const readHost = (name2) => {
     try {
-      const raw = readFileSync(join2(PROFILES_DIR, name2, "profile.json"), "utf8");
+      const raw = readFileSync(join(PROFILES_DIR, name2, "profile.json"), "utf8");
       return JSON.parse(raw).host;
     } catch {
       return void 0;
@@ -31835,8 +31838,12 @@ function emitBanner(version28) {
 }
 
 // src/config/profiles.ts
-import { join as join3 } from "path";
-import { rm as rm2 } from "fs/promises";
+import { join as join2 } from "path";
+import {
+  readSession,
+  removeSession,
+  writeSession
+} from "@tinycloud/operations/state";
 
 // src/config/storage.ts
 import { readFile, writeFile, stat, mkdir, rm, readdir } from "fs/promises";
@@ -31919,7 +31926,7 @@ var ProfileManager = class _ProfileManager {
    * Throws CLIError if the profile doesn't exist.
    */
   static async getProfile(name2) {
-    const profilePath = join3(PROFILES_DIR, name2, "profile.json");
+    const profilePath = join2(PROFILES_DIR, name2, "profile.json");
     const profile = await readJson(profilePath);
     if (!profile) {
       throw new CLIError(
@@ -31933,15 +31940,15 @@ var ProfileManager = class _ProfileManager {
    * Saves a profile config, creating the profile directory if needed.
    */
   static async setProfile(name2, data) {
-    const profileDir = join3(PROFILES_DIR, name2);
+    const profileDir = join2(PROFILES_DIR, name2);
     await ensureDir(profileDir);
-    await writeJson(join3(profileDir, "profile.json"), data);
+    await writeJson(join2(profileDir, "profile.json"), data);
   }
   /**
    * Returns true if a profile directory exists.
    */
   static async profileExists(name2) {
-    return fileExists(join3(PROFILES_DIR, name2, "profile.json"));
+    return fileExists(join2(PROFILES_DIR, name2, "profile.json"));
   }
   /**
    * Returns an array of profile directory names.
@@ -31961,7 +31968,7 @@ var ProfileManager = class _ProfileManager {
         `Cannot delete the default profile "${name2}". Change the default first with \`tc profile default <other>\`.`
       );
     }
-    const profileDir = join3(PROFILES_DIR, name2);
+    const profileDir = join2(PROFILES_DIR, name2);
     await removeDir(profileDir);
   }
   // ── Key management ──────────────────────────────────────────────────
@@ -31969,50 +31976,41 @@ var ProfileManager = class _ProfileManager {
    * Returns the parsed JWK for a profile, or null if no key exists.
    */
   static async getKey(name2) {
-    return readJson(join3(PROFILES_DIR, name2, "key.json"));
+    return readJson(join2(PROFILES_DIR, name2, "key.json"));
   }
   /**
    * Saves a JWK key for a profile.
    */
   static async setKey(name2, jwk) {
-    const profileDir = join3(PROFILES_DIR, name2);
+    const profileDir = join2(PROFILES_DIR, name2);
     await ensureDir(profileDir);
-    await writeJson(join3(profileDir, "key.json"), jwk);
+    await writeJson(join2(profileDir, "key.json"), jwk);
   }
   // ── Session management ──────────────────────────────────────────────
   /**
    * Returns the parsed session for a profile, or null if none exists.
    */
   static async getSession(name2) {
-    return readJson(join3(PROFILES_DIR, name2, "session.json"));
+    return readSession(name2);
   }
   /**
    * Saves session data for a profile.
    */
   static async setSession(name2, session) {
-    const profileDir = join3(PROFILES_DIR, name2);
-    await ensureDir(profileDir);
-    await writeJson(join3(profileDir, "session.json"), session);
+    await writeSession(name2, session);
   }
   /**
    * Removes the session file for a profile.
    */
   static async clearSession(name2) {
-    const sessionPath = join3(PROFILES_DIR, name2, "session.json");
-    try {
-      await rm2(sessionPath);
-    } catch (err2) {
-      if (err2.code !== "ENOENT") {
-        throw err2;
-      }
-    }
+    await removeSession(name2);
   }
   // ── Cache management ────────────────────────────────────────────────
   /**
    * Returns the path to the profile's cache directory, creating it if needed.
    */
   static async getCacheDir(name2) {
-    const cacheDir = join3(PROFILES_DIR, name2, "cache");
+    const cacheDir = join2(PROFILES_DIR, name2, "cache");
     await ensureDir(cacheDir);
     return cacheDir;
   }
@@ -32366,7 +32364,17 @@ import { TinyCloudNode } from "@tinycloud/node-sdk";
 // src/lib/permissions.ts
 import { randomBytes as randomBytes2 } from "crypto";
 import { appendFile, readFile as readFile2 } from "fs/promises";
-import { join as join4 } from "path";
+import { join as join3 } from "path";
+import {
+  additionalDelegationsPath as sharedAdditionalDelegationsPath,
+  authRequestsPath as sharedAuthRequestsPath,
+  profileStoreMetadataPath,
+  readAdditionalDelegations,
+  readAuthRequests,
+  upsertProfileRecord,
+  withProfileLock,
+  writeJsonAtomic
+} from "@tinycloud/operations/state";
 
 // ../sdk-core/src/manifest.ts
 var import_ms = __toESM(require_ms(), 1);
@@ -43045,13 +43053,13 @@ async function resolveSpaceUri(input, profileName, options = {}) {
 
 // src/lib/permissions.ts
 function additionalDelegationsPath(profile) {
-  return join4(PROFILES_DIR, profile, "additional-delegations.json");
+  return sharedAdditionalDelegationsPath(profile);
 }
 function permissionRequestsPath(profile) {
-  return join4(PROFILES_DIR, profile, "auth-requests.json");
+  return sharedAuthRequestsPath(profile);
 }
 function grantHistoryPath(profile) {
-  return join4(PROFILES_DIR, profile, "auth-grants.jsonl");
+  return join3(PROFILES_DIR, profile, "auth-grants.jsonl");
 }
 function createPermissionRequestArtifact(params) {
   return {
@@ -43079,38 +43087,33 @@ function didWithoutFragment(did) {
   return fragment === -1 ? did : did.slice(0, fragment);
 }
 async function loadAdditionalDelegations(profile) {
-  const raw = await readJson(
-    additionalDelegationsPath(profile)
-  );
-  return Array.isArray(raw) ? raw : [];
-}
-async function saveAdditionalDelegations(profile, entries) {
-  const profileDir = join4(PROFILES_DIR, profile);
-  await ensureDir(profileDir);
-  await writeJson(additionalDelegationsPath(profile), entries);
+  return readAdditionalDelegations(profile);
 }
 async function appendAdditionalDelegation(profile, entry) {
-  const existing = await loadAdditionalDelegations(profile);
-  const next = existing.filter((item) => item.delegation.cid !== entry.delegation.cid);
-  next.push(entry);
-  await saveAdditionalDelegations(profile, next);
+  await upsertProfileRecord(
+    profile,
+    "additional-delegations",
+    entry.delegation.cid,
+    entry,
+    (candidate) => candidate.delegation.cid
+  );
 }
 async function loadPermissionRequestArtifacts(profile) {
-  const raw = await readJson(
-    permissionRequestsPath(profile)
-  );
-  return Array.isArray(raw) ? raw.filter(isPermissionRequestArtifact) : [];
-}
-async function savePermissionRequestArtifacts(profile, entries) {
-  const profileDir = join4(PROFILES_DIR, profile);
-  await ensureDir(profileDir);
-  await writeJson(permissionRequestsPath(profile), entries);
+  const raw = await readAuthRequests(profile);
+  return raw.filter(isPermissionRequestArtifact);
 }
 async function appendPermissionRequestArtifact(profile, artifact) {
-  const existing = await loadPermissionRequestArtifacts(profile);
-  const next = existing.filter((item) => item.requestId !== artifact.requestId);
-  next.push(artifact);
-  await savePermissionRequestArtifacts(profile, next);
+  await withProfileLock(profile, async () => {
+    const existing = (await readAuthRequests(profile)).filter(isPermissionRequestArtifact);
+    const next = existing.filter((item) => item.requestId !== artifact.requestId);
+    next.push(artifact);
+    await writeSharedRecords(profile, "auth-requests", next);
+  });
+}
+async function writeSharedRecords(profile, store, entries) {
+  const path = store === "additional-delegations" ? additionalDelegationsPath(profile) : permissionRequestsPath(profile);
+  await writeJsonAtomic(path, entries);
+  await writeJsonAtomic(profileStoreMetadataPath(profile, store), { formatVersion: 1 });
 }
 async function getPermissionRequestArtifact(profile, requestId) {
   const existing = await loadPermissionRequestArtifacts(profile);
@@ -43149,7 +43152,7 @@ function storedAdditionalDelegation(delegation, permissions) {
   return { delegation, permissions };
 }
 async function appendGrantHistory(profile, entry) {
-  const profileDir = join4(PROFILES_DIR, profile);
+  const profileDir = join3(PROFILES_DIR, profile);
   await ensureDir(profileDir);
   const line = JSON.stringify({
     ts: (/* @__PURE__ */ new Date()).toISOString(),
@@ -45893,8 +45896,8 @@ function registerVaultCommand(program2) {
 // src/commands/secrets.ts
 import { readFile as readFile6 } from "fs/promises";
 import { writeFile as writeFile6 } from "fs/promises";
-import { join as join5 } from "path";
-import { homedir as homedir2 } from "os";
+import { join as join4 } from "path";
+import { homedir } from "os";
 var SECRETS_SPACE3 = "secrets";
 var SECRET_KV_ABILITIES = {
   get: "tinycloud.kv/get",
@@ -45976,8 +45979,8 @@ function resolveSecretListPrefix(options = {}) {
   return scope === void 0 ? "vault/secrets/" : `vault/secrets/scoped/${scope}/`;
 }
 function resolveProfilesDir() {
-  const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir2();
-  return join5(home, ".tinycloud", "profiles");
+  const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+  return join4(home, ".tinycloud", "profiles");
 }
 async function ensureSecretsNode(ctx, options) {
   const auth = authOptions(options);
@@ -46196,7 +46199,7 @@ async function loadDelegationCandidates(source) {
     }
   }
   try {
-    const importedPath = join5(resolveProfilesDir(), source, "additional-delegations.json");
+    const importedPath = join4(resolveProfilesDir(), source, "additional-delegations.json");
     const raw = JSON.parse(await readFile6(importedPath, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
@@ -50879,7 +50882,7 @@ function registerStatusCommand(program2) {
 async function inspectProfile(params) {
   const issues = [];
   const profile = await readProfile(params.name, issues);
-  const session = await readSession(params.name, issues);
+  const session = await readSession2(params.name, issues);
   const hasKey = await readHasKey(params.name, issues);
   const storedDelegations = await readDelegations(params.name, issues);
   const sessionPermissions = session ? sessionPermissionsFromRecap(session) : [];
@@ -50944,7 +50947,7 @@ async function readProfile(name2, issues) {
     return null;
   }
 }
-async function readSession(name2, issues) {
+async function readSession2(name2, issues) {
   try {
     return asRecord(await ProfileManager.getSession(name2));
   } catch (error) {

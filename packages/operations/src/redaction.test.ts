@@ -56,7 +56,7 @@ test("safe diagnostic events redact operation values and accept no target", () =
         profile: "delegate",
         host: "https://node.example",
         posture: "delegate-session",
-        operator: "delegate",
+        operatorType: "agent",
       },
       input: { credentials: { token: "input-canary" } },
       output: { value: "output-canary" },

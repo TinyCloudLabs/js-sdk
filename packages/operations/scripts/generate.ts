@@ -11,7 +11,7 @@ import type {
   TinyCloudPosture,
 } from "../src/contract.ts";
 import { OPERATION_ERROR_CODES, type OperationErrorCode } from "../src/errors.ts";
-import { lookupOperation } from "../src/registry.ts";
+import { operationDefinitionsForCatalog } from "../src/registry.ts";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const catalogPath = resolve(scriptDirectory, "../generated/operations.json");
@@ -45,19 +45,8 @@ interface OperationsCatalog {
   readonly operations: readonly CatalogOperation[];
 }
 
-/**
- * The registry is deliberately closed: projections may look up operations but
- * cannot register or enumerate them. I1 has no registered definitions, so the
- * catalog is intentionally empty. Keeping this probe on the internal registry
- * makes that boundary explicit and avoids deriving metadata from package exports.
- */
 function registeredDefinitions(): readonly OperationDefinition<unknown, unknown>[] {
-  const probe = lookupOperation("tinycloud.catalog.probe", 1);
-  if (probe.status !== "operation_not_found") {
-    throw new Error("The I1 registry must not contain generated catalog operations.");
-  }
-
-  return [];
+  return operationDefinitionsForCatalog();
 }
 
 function toCatalogOperation(

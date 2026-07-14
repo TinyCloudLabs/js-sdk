@@ -7,6 +7,7 @@ import type {
   OperationDefinition,
 } from "./contract.js";
 import { createSafeOperationDiagnostic } from "./redaction.js";
+import type { InvocationContextResolution } from "./profile.js";
 import { jcsCanonicalize } from "../../sdk-core/src/policy/jcs.js";
 
 type TestInput = {
@@ -16,7 +17,7 @@ type TestInput = {
 type TestOutput = { readonly value: string };
 
 let definitions: readonly OperationDefinition<unknown, unknown>[] = [];
-let resolver: (target: InvocationTarget) => Promise<OperationContext>;
+let resolver: (target: InvocationTarget) => Promise<InvocationContextResolution>;
 
 mock.module("@tinycloud/sdk-core", () => ({ jcsCanonicalize }));
 
@@ -49,11 +50,12 @@ const { invokeOperation } = await import("./invoke.js");
 beforeEach(() => {
   definitions = [];
   resolver = async () => ({
-    summary: {
+    ok: true,
+    context: {
       profile: "delegate",
       host: "https://node.example",
       posture: "delegate-session",
-      operator: "delegate",
+      operatorType: "agent",
       principalDid: "did:key:principal",
       sessionDid: "did:key:session",
       ownerDid: "did:key:owner",
@@ -112,6 +114,43 @@ test("validates unknown input before executing a known operation", async () => {
     error: { code: "INPUT_INVALID" },
   });
   expect(executed).toBe(false);
+});
+
+test("returns a safe PROFILE_NOT_FOUND result for a deleted pinned profile", async () => {
+  definitions = [createDefinition()];
+  resolver = async () => ({
+    ok: false,
+    error: {
+      code: "PROFILE_NOT_FOUND",
+      message: 'Profile "deleted" is not available.',
+      retryable: false,
+    },
+  });
+
+  const result = await invokeOperation(
+    "tinycloud.test.get",
+    1,
+    { profile: "deleted" },
+    { name: "valid" },
+  );
+
+  expect(result).toEqual({
+    status: "error",
+    operation: {
+      operationId: "tinycloud.test.get",
+      operationVersion: 1,
+    },
+    context: {
+      profile: "deleted",
+      host: "unresolved",
+      posture: "unauthenticated",
+    },
+    error: {
+      code: "PROFILE_NOT_FOUND",
+      message: 'Profile "deleted" is not available.',
+      retryable: false,
+    },
+  });
 });
 
 test("validates successful handler output", async () => {
@@ -223,17 +262,18 @@ test("keeps the CLI private-key override out of all kernel-safe channels", async
 
   resolver = async (target) => {
     targetSeenByProfile = target;
-    const context: OperationContext = {
-      summary: {
+    const resolution = {
+      ok: true as const,
+      context: {
         profile: "delegate",
         host: "https://node.example",
         posture: "delegate-session",
-        operator: "delegate",
+        operatorType: "agent" as const,
       },
     };
     // The only state-shaped value the kernel can retain is the resolved safe summary.
-    persistedStateProbe.context = context.summary;
-    return context;
+    persistedStateProbe.context = resolution.context;
+    return resolution;
   };
   definitions = [
     createDefinition({
@@ -273,7 +313,7 @@ test("keeps the CLI private-key override out of all kernel-safe channels", async
       profile: "delegate",
       host: "https://node.example",
       posture: "delegate-session",
-      operator: "delegate",
+      operatorType: "agent",
     },
   });
 

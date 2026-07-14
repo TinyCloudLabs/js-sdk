@@ -5,7 +5,6 @@ import type { ZodError } from "zod";
 
 import {
   type InvocationTarget,
-  type OperationContext,
   type OperationContextSummary,
   type OperationDefinition,
   type OperationRef,
@@ -18,6 +17,7 @@ import {
   sanitizeOperationError,
   sanitizeThrownOperationError,
 } from "./errors.js";
+import { resolveInvocationContext } from "./profile.js";
 import { redactOperationError } from "./redaction.js";
 import { lookupOperation } from "./registry.js";
 
@@ -31,26 +31,6 @@ const jcsCanonicalize = (
     jcsCanonicalize(input: unknown): string;
   }
 ).jcsCanonicalize;
-
-type ProfileModuleExpectation = Readonly<{
-  resolveInvocationContext: (
-    target: InvocationTarget,
-  ) => Promise<OperationContext>;
-}>;
-
-const profileModulePath = "./profile.js";
-
-/**
- * The profile module is owned by ticket S. Keeping its import dynamic and typed
- * lets this kernel build independently without inventing a production profile
- * implementation; package tests supply a module mock until S lands.
- */
-async function resolveInvocationContext(
-  target: InvocationTarget,
-): Promise<OperationContext> {
-  const profileModule = (await import(profileModulePath)) as ProfileModuleExpectation;
-  return profileModule.resolveInvocationContext(target);
-}
 
 /** The sole projection-facing execution API. */
 export async function invokeOperation(
@@ -199,7 +179,13 @@ async function resolveContext(
 ): Promise<Readonly<{ context: OperationContextSummary; error?: ReturnType<typeof sanitizeThrownOperationError> }>> {
   try {
     const resolved = await resolveInvocationContext(target);
-    return { context: safeOperationContextSummary(resolved.summary) };
+    if (!resolved.ok) {
+      return {
+        context: unresolvedContextSummary(target),
+        error: sanitizeOperationError(resolved.error),
+      };
+    }
+    return { context: safeOperationContextSummary(resolved.context) };
   } catch (error) {
     return {
       context: unresolvedContextSummary(target),
@@ -213,7 +199,6 @@ function unresolvedContextSummary(target: InvocationTarget): OperationContextSum
     profile: target.profile ?? "unresolved",
     host: target.host ?? "unresolved",
     posture: "unauthenticated",
-    operator: "unauthenticated",
   };
 }
 

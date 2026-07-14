@@ -14,6 +14,11 @@ export type OperationLookup =
  */
 const operationDefinitions: readonly OperationDefinition<unknown, unknown>[] = [];
 
+/** Internal generator input; package exports prevent projection access. */
+export function operationDefinitionsForCatalog(): readonly OperationDefinition<unknown, unknown>[] {
+  return operationDefinitions;
+}
+
 export function lookupOperation(
   operationId: OperationId,
   operationVersion: number,
