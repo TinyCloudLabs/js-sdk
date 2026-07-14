@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { CLIError, setActiveProfileName, wrapError } from "./errors.js";
+import { CLIError, handleError, setActiveProfileName, wrapError } from "./errors.js";
 
 afterEach(() => {
   delete process.env.TC_PROFILE;
@@ -40,10 +40,53 @@ describe("wrapError", () => {
     });
   });
 
-  test("does not replace an existing CLI error or expose a secret in its message", () => {
-    const error = wrapError(new CLIError("NODE_ERROR", "node rejected request", 7));
+  test("preserves an existing CLI error without claiming arbitrary-message redaction", () => {
+    const canary = "tc-191-secret-value-canary";
+    const error = wrapError(new CLIError("NODE_ERROR", `node rejected request: ${canary}`, 7));
     expect(error.code).toBe("NODE_ERROR");
     expect(error.exitCode).toBe(7);
-    expect(error.message).not.toContain("secret-value-canary");
+    expect(error.message).toBe(`node rejected request: ${canary}`);
+  });
+
+  test("emits exact public error output and exit code without private metadata", () => {
+    const canary = "tc-191-secret-value-canary";
+    const stderr = process.stderr as unknown as { write: (chunk: unknown) => boolean };
+    const originalWrite = stderr.write;
+    const originalExit = process.exit;
+    let rendered = "";
+    let exitCode: number | undefined;
+
+    stderr.write = (chunk: unknown) => {
+      rendered += String(chunk);
+      return true;
+    };
+    process.exit = ((code?: number): never => {
+      exitCode = code;
+      throw new Error("expected process exit");
+    }) as typeof process.exit;
+
+    try {
+      expect(() => handleError(new CLIError(
+        "NODE_ERROR",
+        "node rejected request",
+        7,
+        { secretValue: canary },
+      ))).toThrow("expected process exit");
+    } finally {
+      stderr.write = originalWrite;
+      process.exit = originalExit;
+    }
+
+    expect(exitCode).toBe(7);
+    expect(rendered).toBe([
+      "{",
+      '  "error": {',
+      '    "code": "NODE_ERROR",',
+      '    "message": "node rejected request"',
+      "  }",
+      "}",
+      "",
+    ].join("\n"));
+    expect(rendered).not.toContain(canary);
   });
 });

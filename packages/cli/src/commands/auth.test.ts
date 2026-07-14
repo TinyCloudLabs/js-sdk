@@ -4,6 +4,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Keep the import-artifact characterization wired to the shipped validators.
+// The rest of this file mocks persistence to isolate unrelated auth branches.
+const {
+  isDelegationImportArtifact: validateDelegationImportArtifact,
+  isPermissionRequestArtifact: validatePermissionRequestArtifact,
+} = await import("../lib/permissions.js");
+
 type ProfileLike = {
   name: string;
   host: string;
@@ -106,7 +113,7 @@ function resetState(): void {
     spaceId: "space-openkey-new",
     ownerDid: "did:pkh:eip155:1:0xowner",
     verificationMethod: "did:key:new-openkey",
-    expiry: "2026-07-07T00:00:00.000Z",
+    expiry: "2099-01-01T00:00:00.000Z",
   };
   localSignInResult = {
     spaceId: "space-local-new",
@@ -258,15 +265,8 @@ mock.module("../lib/permissions.js", () => ({
   createPermissionRequestArtifact: () => ({}),
   getLastPermissionRequestArtifact: async () => null,
   getPermissionRequestArtifact: async () => null,
-  isDelegationImportArtifact: (value: unknown) => {
-    const candidate = value as { kind?: unknown; version?: unknown; delegation?: unknown } | null;
-    return candidate?.kind === "tinycloud.auth.delegation" && candidate.version === 1 && candidate.delegation !== undefined;
-  },
-  isPermissionRequestArtifact: (value: unknown) => {
-    const candidate = value as { kind?: unknown; version?: unknown; requestId?: unknown; requested?: unknown } | null;
-    return candidate?.kind === "tinycloud.auth.request" && candidate.version === 1 &&
-      typeof candidate.requestId === "string" && Array.isArray(candidate.requested);
-  },
+  isDelegationImportArtifact: validateDelegationImportArtifact,
+  isPermissionRequestArtifact: validatePermissionRequestArtifact,
   appendGrantHistory: async () => {},
   compactPermission: () => "",
   loadAdditionalDelegations: async () => [],
@@ -521,7 +521,7 @@ describe("CLI auth rotate command", () => {
       spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:secrets",
       ownerDid: "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412",
       verificationMethod: "did:key:openkey-session",
-      expiry: "2026-07-07T00:00:00.000Z",
+      expiry: "2099-01-01T00:00:00.000Z",
     };
     const node = {
       hasRuntimePermissions: mock(() => false),
@@ -831,7 +831,7 @@ describe("CLI auth request command", () => {
     });
     authNodeHasRuntimePermissions = false;
     authNodeGrantDelegations = [
-      { cid: "bafy-runtime-grant", expiry: new Date("2026-07-07T00:00:00.000Z") },
+      { cid: "bafy-runtime-grant", expiry: new Date("2099-01-01T00:00:00.000Z") },
     ];
     authNodeRestorableSession = {
       address: "0xLocalOwner",
@@ -877,7 +877,7 @@ describe("CLI auth request command", () => {
         changed: true,
         delegationCid: "bafy-runtime-grant",
         delegationCids: ["bafy-runtime-grant"],
-        expiry: "2026-07-07T00:00:00.000Z",
+        expiry: "2099-01-01T00:00:00.000Z",
       }),
     ]);
   });
@@ -902,7 +902,7 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
       spaceId: "tinycloud:space",
       ownerDid: "did:pkh:eip155:1:0xowner",
       verificationMethod: "did:key:z6MkSession",
-      expiry: "2026-07-07T00:00:00.000Z",
+      expiry: "2099-01-01T00:00:00.000Z",
       // The public-only JWK OpenKey echoes back (public-only because
       // browser-auth.ts strips `d` before sending to OpenKey).
       jwk: { kty: "OKP", crv: "Ed25519", x: "key-public" },
@@ -930,7 +930,7 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
       spaceId: "tinycloud:space",
       ownerDid: "did:pkh:eip155:1:0xowner",
       verificationMethod: "did:key:z6MkSession",
-      expiry: "2026-07-07T00:00:00.000Z",
+      expiry: "2099-01-01T00:00:00.000Z",
       jwk: { kty: "OKP", crv: "Ed25519", x: "key-public", d: "openkey-returned-private" },
     };
 

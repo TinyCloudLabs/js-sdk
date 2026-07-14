@@ -16,7 +16,11 @@ import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
-import { ensureDelegationAuthority, refreshOpenKeySession } from "./auth.js";
+import {
+  ensureDelegationAuthority,
+  refreshOpenKeySession,
+  type OpenKeyAcquisition,
+} from "./auth.js";
 
 // Mirrors `SECRETS_SPACE` in the secret-manager web app's tinycloud-manifest.ts.
 // Secrets always live in the literal "secrets" space regardless of the active
@@ -227,6 +231,8 @@ async function runSecretOperation<T>(params: {
   space?: string;
   label: string;
   operation: () => Promise<SecretResult<T>>;
+  /** Test seam for the owner OpenKey acquisition boundary. */
+  openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<SecretResult<T>> {
   const first = await runSecretOperationAttempt(params.label, params.operation);
   if (first.ok || !shouldRequestSecretPermissions(first.error)) {
@@ -255,6 +261,7 @@ async function runSecretOperation<T>(params: {
       reason: secretPermissionReason(params.action, params.name),
       yes: true,
       force: true,
+      openKeyAcquisition: params.openKeyAcquisition,
     }),
   );
 
@@ -666,11 +673,7 @@ async function readDelegatedSecretValue(params: {
         ExitCode.PERMISSION_DENIED,
       );
     }
-    throw new CLIError(
-      envelopeResult.error.code,
-      envelopeResult.error.message,
-      ExitCode.ERROR,
-    );
+    throw mapEncryptionResultError(envelopeResult.error);
   }
 
   const rawEnvelope = envelopeResult.data.data;
@@ -808,7 +811,10 @@ function outputSecretDoctor(result: SecretDoctorResult): void {
   }
 }
 
-export function registerSecretsCommand(program: Command): void {
+export function registerSecretsCommand(
+  program: Command,
+  openKeyAcquisition?: OpenKeyAcquisition,
+): void {
   const secrets = program.command("secrets").description("Encrypted secrets management");
 
   const network = secrets
@@ -1081,6 +1087,7 @@ export function registerSecretsCommand(program: Command): void {
           space: spaceUri,
           label: `Getting secret ${name}...`,
           operation: () => secrets.get(name, scopeOptions),
+          openKeyAcquisition,
         });
 
         if (!result.ok) {
