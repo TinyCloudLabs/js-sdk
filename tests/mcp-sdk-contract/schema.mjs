@@ -22,7 +22,10 @@ export const inputSchema = z.object({
 export const outputSchema = z.object({
   status: z.literal("ok"),
   selected: z.string(),
-  metadata: z.object({ source: z.string().optional() }).optional(),
+  metadata: z.object({
+    source: z.string().optional(),
+    nodeMajor: z.number().int().optional(),
+  }).optional(),
 });
 
 // This is the exact I0 contract path: Zod 3 -> zod-to-json-schema JSON Schema 7

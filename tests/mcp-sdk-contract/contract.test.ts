@@ -12,6 +12,7 @@ import { inputJsonSchema, outputJsonSchema } from "./schema.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER = join(HERE, "server.mjs");
 const MCP_VERSION = "2.0.0-beta.4";
+const NODE_MAJOR = 20;
 const NODE = process.env.NODE_BINARY ?? "node";
 
 async function findInstalledPackageRoot(packageName: string) {
@@ -75,7 +76,7 @@ test("registers the generated schemas through fromJsonSchema and runs over offic
     expect(result.structuredContent).toEqual({
       status: "ok",
       selected: "ANTHROPIC_API_KEY",
-      metadata: { source: "mcp-sdk-contract" },
+      metadata: { source: "mcp-sdk-contract", nodeMajor: NODE_MAJOR },
     });
     expect(result.content).toEqual([{ type: "text", text: "contract tool completed" }]);
     expect(JSON.stringify(result.content)).not.toContain("ANTHROPIC_API_KEY");
@@ -91,7 +92,8 @@ test("server stdout contains protocol messages only", async () => {
   let stdout = "";
   let stderr = "";
   const toolsListed = new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Timed out waiting for tools/list response")), 5000);
+    // The fixture is entirely local; this only allows for CI process scheduling.
+    const timeout = setTimeout(() => reject(new Error("Timed out waiting for tools/list response")), 10_000);
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
       for (const line of stdout.split("\n").filter(Boolean)) {

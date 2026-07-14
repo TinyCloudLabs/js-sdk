@@ -20,7 +20,13 @@ function createServer() {
       const output = outputSchema.parse({
         status: "ok",
         selected: parsed.target.kind === "secret" ? parsed.target.name : parsed.target.space,
-        ...(parsed.includeMetadata ? { metadata: { source: "mcp-sdk-contract" } } : {}),
+        ...(parsed.includeMetadata ? {
+          metadata: {
+            source: "mcp-sdk-contract",
+            // This response is generated in the stdio child, not by the Bun test runner.
+            nodeMajor: Number(process.versions.node.split(".", 1)[0]),
+          },
+        } : {}),
       });
       return {
         content: [{ type: "text", text: "contract tool completed" }],

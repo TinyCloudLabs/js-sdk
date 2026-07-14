@@ -1,9 +1,8 @@
-import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-type AuditStatus = "pass" | "blocker";
+type AuditStatus = "pass" | "blocker" | "manual-audit-blocker";
 
 export type I0SdkPrerequisiteReport = {
   capabilitySubsetHelper: { status: AuditStatus; evidence: string };
@@ -14,66 +13,77 @@ export type I0SdkPrerequisiteReport = {
 
 const REPOSITORY_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
-function namedExports(source: string, filename: string): Set<string> {
-  const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const exports = new Set<string>();
+function publicImportDiagnostics(root: string): string[] {
+  const contractFilename = join(root, "tests/mcp-sdk-contract/.i0-public-import-contract.ts");
+  const source = `
+    import { isCapabilitySubset as coreCapabilitySubset } from "../../packages/sdk-core/src/index";
+    import { isCapabilitySubset as nodeCapabilitySubset, TinyCloudNode } from "../../packages/node-sdk/src/index";
 
-  for (const statement of sourceFile.statements) {
-    if (!ts.isExportDeclaration(statement) || !statement.exportClause || !ts.isNamedExports(statement.exportClause)) continue;
-    for (const element of statement.exportClause.elements) exports.add(element.name.text);
-  }
+    declare const node: TinyCloudNode;
+    void coreCapabilitySubset;
+    void nodeCapabilitySubset;
+    node.getEncryptionNetworkIdForSpace("tinycloud:did:key:i0-contract:space");
+  `;
+  const options: ts.CompilerOptions = {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    strict: true,
+    skipLibCheck: true,
+    noEmit: true,
+    types: ["node"],
+  };
+  const host = ts.createCompilerHost(options, true);
+  const originalFileExists = host.fileExists.bind(host);
+  const originalReadFile = host.readFile.bind(host);
+  const originalGetSourceFile = host.getSourceFile.bind(host);
 
-  return exports;
+  host.fileExists = (filename) => filename === contractFilename || originalFileExists(filename);
+  host.readFile = (filename) => filename === contractFilename ? source : originalReadFile(filename);
+  host.getSourceFile = (filename, languageVersion, onError, shouldCreateNewSourceFile) =>
+    filename === contractFilename
+      ? ts.createSourceFile(filename, source, languageVersion, true)
+      : originalGetSourceFile(filename, languageVersion, onError, shouldCreateNewSourceFile);
+
+  const program = ts.createProgram([contractFilename], options, host);
+  return ts.getPreEmitDiagnostics(program)
+    .filter((diagnostic) => diagnostic.file?.fileName === contractFilename)
+    .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
 }
 
-export async function collectI0SdkPrerequisiteReport(root = REPOSITORY_ROOT): Promise<I0SdkPrerequisiteReport> {
-  const sdkCoreIndex = await readFile(join(root, "packages/sdk-core/src/index.ts"), "utf8");
-  const nodeIndex = await readFile(join(root, "packages/node-sdk/src/index.ts"), "utf8");
-  const nodeSource = await readFile(join(root, "packages/node-sdk/src/TinyCloudNode.ts"), "utf8");
-  const nodeFixtureSetup = await readFile(join(root, "tests/node-sdk/setup.ts"), "utf8");
-
-  const sdkCoreExports = namedExports(sdkCoreIndex, "packages/sdk-core/src/index.ts");
-  const nodeExports = namedExports(nodeIndex, "packages/node-sdk/src/index.ts");
-  const capabilitySubsetPublic = sdkCoreExports.has("isCapabilitySubset") && nodeExports.has("isCapabilitySubset");
-  const hasValidatedCidBinding = ["bindValidatedDelegation", "bindDelegationCid", "validateDelegationCid"]
-    .some((name) => nodeExports.has(name));
-  const hasLocalEncryptedFixture = /localhost|127\.0\.0\.1/.test(nodeFixtureSetup) &&
-    /encrypted|encryption/i.test(nodeFixtureSetup) &&
-    /useRuntimeDelegation|chain validation|validateDelegation/i.test(nodeFixtureSetup);
+export function collectI0SdkPrerequisiteReport(root = REPOSITORY_ROOT): I0SdkPrerequisiteReport {
+  const importDiagnostics = publicImportDiagnostics(root);
+  const publicImportsCompile = importDiagnostics.length === 0;
 
   return {
     capabilitySubsetHelper: {
-      status: capabilitySubsetPublic ? "pass" : "blocker",
-      evidence: capabilitySubsetPublic
-        ? "sdk-core and node-sdk public indexes export isCapabilitySubset"
-        : "isCapabilitySubset is not present in both public indexes",
+      status: publicImportsCompile ? "pass" : "blocker",
+      evidence: publicImportsCompile
+        ? "TypeScript compiles imports of isCapabilitySubset through both source public indexes"
+        : `public import contract failed to compile: ${importDiagnostics.join("; ")}`,
     },
     cidValidatedDelegationBinding: {
-      status: hasValidatedCidBinding ? "pass" : "blocker",
-      evidence: hasValidatedCidBinding
-        ? "node-sdk public index exposes a validated delegation/CID binding helper"
-        : "no public helper binds a CID to a validated PortableDelegation; computeDelegationCid only hashes authorization bytes",
+      status: "manual-audit-blocker",
+      evidence: "Manual audit blocker: packages/node-sdk/src/index.ts delegation exports and TinyCloudNode.computeDelegationCid(authorization) were inspected; neither inspected surface establishes a validated PortableDelegation-to-CID binding contract.",
     },
     encryptionNetworkIdRuntime: {
-      status: nodeSource.includes("getEncryptionNetworkIdForSpace(") ? "pass" : "blocker",
-      evidence: nodeSource.includes("getEncryptionNetworkIdForSpace(")
-        ? "TinyCloudNode exposes getEncryptionNetworkIdForSpace"
-        : "TinyCloudNode does not expose getEncryptionNetworkIdForSpace",
+      status: publicImportsCompile ? "pass" : "blocker",
+      evidence: publicImportsCompile
+        ? "The public import contract type-checks TinyCloudNode.getEncryptionNetworkIdForSpace through the node-sdk source public index"
+        : "TinyCloudNode.getEncryptionNetworkIdForSpace is unavailable through the checked public import contract",
     },
     hermeticEncryptedNodeActivation: {
-      status: hasLocalEncryptedFixture ? "pass" : "blocker",
-      evidence: hasLocalEncryptedFixture
-        ? "tests/node-sdk/setup.ts contains a local encrypted-node activation and chain-validation fixture"
-        : "existing node-sdk fixture setup is not a hermetic encrypted-node activation/chain-validation proof",
+      status: "manual-audit-blocker",
+      evidence: "Manual audit blocker: tests/node-sdk/setup.ts only configures a TC_TEST_SERVER HTTP endpoint and client; it is not evidence of a hermetic encrypted-node activation or delegation-chain-validation fixture.",
     },
   };
 }
 
-test("reports the SDK prerequisites before I2", async () => {
-  const report = await collectI0SdkPrerequisiteReport();
+test("records executable public SDK evidence and manual I2 blockers", () => {
+  const report = collectI0SdkPrerequisiteReport();
 
   expect(report.capabilitySubsetHelper.status).toBe("pass");
   expect(report.encryptionNetworkIdRuntime.status).toBe("pass");
-  expect(report.cidValidatedDelegationBinding.status).toBe("blocker");
-  expect(report.hermeticEncryptedNodeActivation.status).toBe("blocker");
+  expect(report.cidValidatedDelegationBinding.status).toBe("manual-audit-blocker");
+  expect(report.hermeticEncryptedNodeActivation.status).toBe("manual-audit-blocker");
 });

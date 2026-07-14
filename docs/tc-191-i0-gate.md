@@ -8,23 +8,56 @@ The exact MCP v2 candidate verified by `tests/mcp-sdk-contract` is
 Node `>=20`. The contract passes the Zod 3 -> `zod-to-json-schema@3.25.1`
 (`jsonSchema7`, `$refStrategy: "none"`) -> `fromJsonSchema` path, official
 stdio client, structured output, protocol-only stdout, and packed-engine
-checks. The fixture was executed with Node `20.19.4`, and package metadata is
-packed from the installed candidates without registry access. Because the
-candidate is beta, MCP publication is deferred; no beta package is published
-or approved by this increment.
+checks. The MCP stdio child reports its own runtime major and the contract
+requires it to be Node `20`; `NODE_BINARY` remains an explicit local/CI
+override. Package metadata is packed from the installed candidates without
+registry access. Because the candidate is beta, MCP publication is deferred:
+`unpublishable-defer` prohibits I4 MCP package publication, and no beta
+package is published or approved by this increment.
+
+CI enforcement lives in `.github/workflows/tc-191-i0-gate.yml`. It pins Node
+`20.19.4` and the repository-declared Bun `1.2.0`, installs only with
+`bun install --frozen-lockfile`, emits the local JavaScript workspace entrypoints
+needed by the CLI suites, then runs the six focused suites below. The test step
+sets npm offline and its registry to loopback, so the local `npm pack` engine
+check cannot use the npm registry. The suites use fake/local boundaries; they do
+not call OpenKey or public TinyCloud nodes.
+
+## Canonical MCP import contract
+
+- `PortableDelegation.host` is optional.
+- A canonical MCP import requires `requestId`.
+- `requestId` resolves a stored profile/host-bound request.
+- When the imported delegation has no `host`, SDK activation uses the host from
+  that stored request.
+
+The optional `requestId` in the schema fixture is solely an optional-field
+schema-translation case; it does not relax the canonical MCP import contract.
 
 SDK prerequisite audit:
 
-- Pass: `isCapabilitySubset` is exported from the public `sdk-core` and
-  `node-sdk` indexes.
-- Pass: `TinyCloudNode.getEncryptionNetworkIdForSpace` exists and the CLI
-  hermetic fake-node boundary exercises its space-specific result.
-- Blocker for I2: no public node-sdk helper binds a CID to a validated
-  `PortableDelegation`; `computeDelegationCid` hashes authorization bytes but
-  is not that binding contract.
-- Blocker for I2: the repository has no hermetic local encrypted-node fixture
-  proving runtime delegation activation and delegation-chain validation. The
-  I0 tests do not claim cryptographic acceptance from mocked activation.
+- Executable pass: TypeScript compiles `isCapabilitySubset` imports through
+  `packages/sdk-core/src/index.ts` and `packages/node-sdk/src/index.ts`, the
+  two source public entrypoints. This is a structural public-export contract,
+  not an export-name heuristic.
+- Executable pass: that same type contract calls
+  `TinyCloudNode.getEncryptionNetworkIdForSpace` through the node-sdk source
+  public index. The hermetic CLI fake node exercises its space-specific result
+  in `packages/cli/src/commands/secrets.test.ts`.
+- Manual-audit blocker for I2: the reviewed public delegation surface is
+  `packages/node-sdk/src/index.ts` (the delegation exports) and the reviewed
+  CID implementation is `packages/node-sdk/src/TinyCloudNode.ts` at
+  `computeDelegationCid(authorization)`, which hashes authorization bytes. The
+  reviewed surfaces do not establish a validated `PortableDelegation`-to-CID
+  binding contract. This is not an automated claim that an arbitrarily named
+  helper is absent; a dedicated, security-reviewed public helper is required
+  before I2.
+- Manual-audit blocker for I2: `tests/node-sdk/setup.ts` was inspected. It
+  configures a `TC_TEST_SERVER` HTTP endpoint and client, but does not provide
+  a hermetic local encrypted-node fixture proving runtime delegation activation
+  and chain validation. Mocked activation remains insufficient cryptographic
+  evidence. I2 stays blocked pending that fixture or a reviewed replacement
+  strategy.
 
 Named test boundaries:
 
@@ -49,5 +82,8 @@ bun test packages/cli/src/output/errors.test.ts      # 3 pass
 bun test tests/mcp-sdk-contract/contract.test.ts     # 4 pass
 bun test tests/mcp-sdk-contract/prerequisites.test.ts # 1 pass
 ```
+
+The raw stdio protocol check has a 10-second local-process deadline only to
+allow CI process scheduling; it has no network retry or external dependency.
 
 `packages/operations` and `packages/mcp` are intentionally not created in I0.
