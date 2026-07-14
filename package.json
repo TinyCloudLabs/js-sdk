@@ -15,6 +15,7 @@
     "packages/node-sdk",
     "packages/server",
     "packages/vfs",
+    "packages/operations",
     "packages/cli",
     "apps/*",
     "tests/*"
