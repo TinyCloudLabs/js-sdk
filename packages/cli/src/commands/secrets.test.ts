@@ -572,7 +572,7 @@ describe("CLI secrets commands", () => {
         child.exited,
       ]);
 
-      expect(exitCode).toBe(2);
+      expect(exitCode, stderr).toBe(2);
       expect(stdout).toBe("");
       expect(stderr).toBe([
         "{",

@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "packages/cli/src/**"
+      - "packages/sdk-rs/**"
       - "packages/sdk-core/**"
       - "packages/node-sdk/**"
       - "tests/node-sdk/setup.ts"
@@ -16,6 +17,7 @@ on:
     branches: [master]
     paths:
       - "packages/cli/src/**"
+      - "packages/sdk-rs/**"
       - "packages/sdk-core/**"
       - "packages/node-sdk/**"
       - "tests/node-sdk/setup.ts"
@@ -44,6 +46,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Verify pinned runtimes
         run: |
@@ -80,6 +89,11 @@ jobs:
           --external viem
           --external zod
           --external zod-to-json-schema
+
+      - name: Build node WASM runtime dependency
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
 
       - name: Build node SDK runtime entrypoint
         working-directory: packages/node-sdk
