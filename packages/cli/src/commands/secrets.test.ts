@@ -48,14 +48,14 @@ type FakeNode = {
     decryptEnvelope(
       envelope: unknown,
       options: { proofs: string[] },
-    ): Promise<{ ok: true; data: Uint8Array }>;
+    ): Promise<SecretResult<Uint8Array>>;
   };
   useDelegation(delegation: unknown): Promise<{
     kv: {
       get(
         path: string,
         options: { raw: boolean; prefix: string },
-      ): Promise<{ ok: true; data: { data: string } }>;
+      ): Promise<{ ok: true; data: { data: string } } | { ok: false; error: { code: string; message: string } }>;
     };
   }>;
   getEncryptionNetwork(nameOrNetworkId: string): Promise<NetworkDescriptorLike | null>;
@@ -179,6 +179,8 @@ function makeFakeNode(overrides: {
   networkShowResult?: NetworkDescriptorLike | null;
   networkInitResult?: NetworkDescriptorLike;
   delegateResult?: { delegation: { cid: string; path: string; actions: string[] }; prompted: boolean };
+  delegatedKvResult?: { ok: true; data: { data: string } } | { ok: false; error: { code: string; message: string } };
+  decryptResult?: SecretResult<Uint8Array>;
 } = {}): FakeNode {
   const descriptor = overrides.networkInitResult ?? makeDescriptor();
   return {
@@ -219,7 +221,7 @@ function makeFakeNode(overrides: {
     encryption: {
       async decryptEnvelope(envelope: unknown, options: { proofs: string[] }) {
         recorded.decryptEnvelopeCalls.push({ envelope, options });
-        return {
+        return overrides.decryptResult ?? {
           ok: true as const,
           data: new TextEncoder().encode(JSON.stringify({ value: "delegated-value" })),
         };
@@ -230,7 +232,7 @@ function makeFakeNode(overrides: {
         kv: {
           async get(path: string, options: { raw: boolean; prefix: string }) {
             recorded.delegatedKvGets.push({ path, options });
-            return {
+            return overrides.delegatedKvResult ?? {
               ok: true as const,
               data: {
                 data: JSON.stringify({ networkId: DEFAULT_NETWORK_ID }),
@@ -449,6 +451,20 @@ beforeEach(() => {
 });
 
 describe("CLI secrets commands", () => {
+  test("preserves the get help spelling and output aliases", () => {
+    const program = new Command();
+    registerSecretsCommand(program);
+    const secrets = program.commands.find((command) => command.name() === "secrets");
+    const get = secrets?.commands.find((command) => command.name() === "get");
+    const help = get?.helpInformation() ?? "";
+
+    expect(help).toContain("secrets get [options] <name>");
+    expect(help).toContain("--raw");
+    expect(help).toContain("--value-only");
+    expect(help).toContain("-o, --output <file>");
+    expect(help).toContain("--delegation <source>");
+  });
+
   test("routes put/get/list/delete through node.secrets", async () => {
     await runSecretsCommand(["secrets", "list", "--scope", "Food Tracker"]);
     await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
@@ -481,6 +497,84 @@ describe("CLI secrets commands", () => {
       "Storing secret ANTHROPIC_API_KEY...",
       "Deleting secret ANTHROPIC_API_KEY...",
     ]);
+  });
+
+  test("supports ordinary, raw, value-only, and JSON success output", async () => {
+    await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
+    expect(recorded.outputs).toEqual([{ name: "ANTHROPIC_API_KEY", value: "stored-value" }]);
+
+    const writes: string[] = [];
+    const stdout = process.stdout as unknown as { write: (chunk: unknown) => boolean };
+    const originalWrite = stdout.write;
+    stdout.write = (chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    };
+    try {
+      await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "--raw"]);
+      await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "--value-only"]);
+    } finally {
+      stdout.write = originalWrite;
+    }
+
+    expect(writes).toEqual(["stored-value", "stored-value"]);
+  });
+
+  test("rejects invalid secret names and scopes with usage errors", async () => {
+    await runSecretsCommand(["secrets", "get", "not-a-secret"]);
+    expect(recorded.errors[0]).toMatchObject({ code: "INVALID_SECRET_NAME", exitCode: 2 });
+
+    resetRecorded();
+    await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "--scope", "default"]);
+    expect(recorded.errors[0]).toMatchObject({ code: "INVALID_SECRET_SCOPE", exitCode: 2 });
+  });
+
+  test("maps absent, KV, decrypt, and node failures without treating failures as absence", async () => {
+    currentNode = makeFakeNode({
+      getResult: { ok: false, error: { code: "NOT_FOUND", message: "missing" } },
+    });
+    await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
+    expect(recorded.errors[0]).toMatchObject({ code: "NOT_FOUND", exitCode: 4 });
+
+    resetRecorded();
+    currentNode = makeFakeNode({
+      getResult: { ok: false, error: { code: "PERMISSION_DENIED", message: "permission denied" } },
+    });
+    await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
+    expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 1 });
+    expect(recorded.outputs).toEqual([]);
+
+    resetRecorded();
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-decrypt-"));
+    const source = join(dir, "delegation.json");
+    await writeFile(source, JSON.stringify({
+      delegation: {
+        cid: "bafy-decrypt-failure",
+        spaceId: "secrets",
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["tinycloud.kv/get"],
+        delegateDID: "did:key:z6MkDelegate",
+        ownerAddress: "0xOwner",
+        chainId: 1,
+        expiry: "2099-01-01T00:00:00.000Z",
+        delegationHeader: { Authorization: "Bearer delegated" },
+      },
+      permissions: [
+        { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"] },
+        { service: "tinycloud.encryption", path: DEFAULT_NETWORK_ID, actions: ["tinycloud.encryption/decrypt"] },
+      ],
+    }), "utf8");
+    currentNode = makeFakeNode({
+      delegatedKvResult: { ok: true, data: { data: JSON.stringify({ networkId: DEFAULT_NETWORK_ID }) } },
+      decryptResult: { ok: false, error: { code: "DECRYPTION_FAILED", message: "ciphertext could not be decrypted" } },
+    });
+    try {
+      await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "--delegation", source]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    expect(recorded.errors[0]).toMatchObject({ code: "DECRYPTION_FAILED", exitCode: 1 });
+    expect(recorded.errors[0]).not.toMatchObject({ code: "NOT_FOUND" });
   });
 
   test("routes --space operations and permission requests to the requested TinyCloud space", async () => {

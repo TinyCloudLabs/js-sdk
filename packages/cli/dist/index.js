@@ -44138,8 +44138,9 @@ async function ensureDelegationAuthority(params) {
       );
     }
     const openkeyHost = resolveOpenKeyHost(params.profile);
+    const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
     for (const group of groupPermissionsBySpace(params.requested)) {
-      const delegationData = await startAuthFlow(params.profile.did, {
+      const delegationData = await acquireOpenKey(params.profile.did, {
         jwk: key2,
         host: params.ctx.host,
         permissions: group,

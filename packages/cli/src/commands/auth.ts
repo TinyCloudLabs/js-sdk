@@ -61,6 +61,9 @@ import {
   type PermissionRequestArtifact,
 } from "../lib/permissions.js";
 
+/** The one function dependency used by owner OpenKey permission acquisition. */
+export type OpenKeyAcquisition = typeof startAuthFlow;
+
 /**
  * Prompt user to choose an auth method interactively.
  * Returns "local" for non-interactive (CI/headless) environments.
@@ -841,6 +844,8 @@ export async function ensureDelegationAuthority(params: {
   reason: string;
   yes: boolean;
   force?: boolean;
+  /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
+  openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<void> {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return;
 
@@ -854,8 +859,9 @@ export async function ensureDelegationAuthority(params: {
       );
     }
     const openkeyHost = resolveOpenKeyHost(params.profile);
+    const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
     for (const group of groupPermissionsBySpace(params.requested)) {
-      const delegationData = await startAuthFlow(params.profile.did, {
+      const delegationData = await acquireOpenKey(params.profile.did, {
         jwk: key,
         host: params.ctx.host,
         permissions: group,
