@@ -1,4 +1,367 @@
+import { randomUUID } from "node:crypto";
+import {
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
+
+const DEFAULT_PROFILE = "default";
+const DEFAULT_LOCK_TIMEOUT_MS = 2_000;
+const DEFAULT_LOCK_RETRY_MS = 25;
+const DEFAULT_STALE_LOCK_MS = 30_000;
+
+export type ProfileStoreName =
+  | "session"
+  | "additional-delegations"
+  | "auth-requests";
+
+export interface StoreMetadata {
+  formatVersion: number;
+}
+
+export interface ProfileStoreContents<T> {
+  formatVersion: number;
+  records: T[];
+}
+
+export interface ProfileLockOptions {
+  timeoutMs?: number;
+  retryMs?: number;
+  staleAfterMs?: number;
+}
+
+export class ProfileLockTimeoutError extends Error {
+  readonly code = "PROFILE_LOCK_TIMEOUT";
+
+  constructor(profile: string, timeoutMs: number) {
+    super(`Timed out waiting for the profile lock for "${profile}" after ${timeoutMs}ms.`);
+    this.name = "ProfileLockTimeoutError";
+  }
+}
+
 /**
- * Placeholder for the narrow locked-store API implemented by I1 shared-state work.
+ * The CLI's delegated-secret path treats TC_HOME as a home directory, rather
+ * than a direct TinyCloud directory. Keep the shared store on that convention.
  */
-export type OperationsStateApi = never;
+export function tinycloudHomePath(): string {
+  const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+  return join(home, ".tinycloud");
+}
+
+export function tinycloudConfigPath(): string {
+  return join(tinycloudHomePath(), "config.json");
+}
+
+export function profilesPath(): string {
+  return join(tinycloudHomePath(), "profiles");
+}
+
+export function profilePath(profile: string): string {
+  return join(profilesPath(), validateProfileName(profile));
+}
+
+export function profileConfigPath(profile: string): string {
+  return join(profilePath(profile), "profile.json");
+}
+
+export function sessionPath(profile: string): string {
+  return profileStorePath(profile, "session");
+}
+
+export function additionalDelegationsPath(profile: string): string {
+  return profileStorePath(profile, "additional-delegations");
+}
+
+export function authRequestsPath(profile: string): string {
+  return profileStorePath(profile, "auth-requests");
+}
+
+export function profileStorePath(profile: string, store: ProfileStoreName): string {
+  return join(profilePath(profile), `${store}.json`);
+}
+
+/** The format record is deliberately separate from each legacy JSON payload. */
+export function profileStoreMetadataPath(profile: string, store: ProfileStoreName): string {
+  return `${profileStorePath(profile, store)}.metadata.json`;
+}
+
+export function profileLockPath(profile: string): string {
+  return join(profilePath(profile), ".lock");
+}
+
+export function profileLockMetadataPath(profile: string): string {
+  return join(profileLockPath(profile), "owner.json");
+}
+
+/**
+ * Reads JSON without hiding malformed or inaccessible files. A missing file is
+ * the only condition represented as null.
+ */
+export async function readJson<T>(filePath: string): Promise<T | null> {
+  try {
+    return JSON.parse(await readFile(filePath, "utf8")) as T;
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return null;
+    throw error;
+  }
+}
+
+/**
+ * Writes the same pretty-printed, trailing-newline JSON shape used by the CLI,
+ * but publishes it with an atomic rename from the same directory.
+ */
+export async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
+  const directory = dirname(filePath);
+  const temporaryPath = join(
+    directory,
+    `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  const contents = `${JSON.stringify(value, null, 2)}\n`;
+
+  await mkdir(directory, { recursive: true });
+  try {
+    await writeFile(temporaryPath, contents, "utf8");
+    await rename(temporaryPath, filePath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function readProfile<T extends object = Record<string, unknown>>(
+  profile: string,
+): Promise<T | null> {
+  return readJson<T>(profileConfigPath(profile));
+}
+
+export async function readSession<T extends object = Record<string, unknown>>(
+  profile: string,
+): Promise<T | null> {
+  return readJson<T>(sessionPath(profile));
+}
+
+export async function readAdditionalDelegations<T = Record<string, unknown>>(
+  profile: string,
+): Promise<T[]> {
+  return (await readProfileStore<T>(profile, "additional-delegations")).records;
+}
+
+export async function readAuthRequests<T = Record<string, unknown>>(
+  profile: string,
+): Promise<T[]> {
+  return (await readProfileStore<T>(profile, "auth-requests")).records;
+}
+
+export async function readStoreMetadata(
+  profile: string,
+  store: ProfileStoreName,
+): Promise<StoreMetadata> {
+  const metadata = await readJson<StoreMetadata>(profileStoreMetadataPath(profile, store));
+  if (metadata === null) return { formatVersion: 1 };
+  if (
+    typeof metadata !== "object" ||
+    !Number.isInteger(metadata.formatVersion) ||
+    metadata.formatVersion < 1
+  ) {
+    throw new TypeError(`Invalid store metadata for "${store}".`);
+  }
+  return metadata;
+}
+
+export async function readProfileStore<T>(
+  profile: string,
+  store: Exclude<ProfileStoreName, "session">,
+): Promise<ProfileStoreContents<T>> {
+  const [metadata, raw] = await Promise.all([
+    readStoreMetadata(profile, store),
+    readJson<unknown>(profileStorePath(profile, store)),
+  ]);
+  return {
+    formatVersion: metadata.formatVersion,
+    records: Array.isArray(raw) ? raw as T[] : [],
+  };
+}
+
+/**
+ * Runs a small critical section under the one advisory lock shared by all
+ * profile stores. A stale lock is moved out of the way before deletion so a
+ * concurrently acquired replacement can never be removed accidentally.
+ */
+export async function withProfileLock<T>(
+  profile: string,
+  action: () => Promise<T>,
+  options: ProfileLockOptions = {},
+): Promise<T> {
+  const normalizedProfile = validateProfileName(profile);
+  const release = await acquireProfileLock(normalizedProfile, options);
+  try {
+    return await action();
+  } finally {
+    await release();
+  }
+}
+
+/**
+ * Appends a record or replaces the existing record with the supplied explicit
+ * key. The extractor is supplied by the owning store so state.ts never needs
+ * to know permission-request or delegation record shapes.
+ */
+export async function upsertProfileRecord<T>(
+  profile: string,
+  store: Exclude<ProfileStoreName, "session">,
+  key: string,
+  record: T,
+  getKey: (candidate: T) => string | undefined,
+  options: ProfileLockOptions = {},
+): Promise<T[]> {
+  if (!key) throw new TypeError("A non-empty record key is required.");
+
+  return withProfileLock(profile, async () => {
+    const current = (await readProfileStore<T>(profile, store)).records;
+    const next = current.filter((candidate) => getKey(candidate) !== key);
+    next.push(record);
+    await writeJsonAtomic(profileStorePath(profile, store), next);
+    await writeFormatOneMetadata(profile, store);
+    return next;
+  }, options);
+}
+
+export async function writeSession<T extends object>(
+  profile: string,
+  session: T,
+  options: ProfileLockOptions = {},
+): Promise<void> {
+  await withProfileLock(profile, async () => {
+    await writeJsonAtomic(sessionPath(profile), session);
+    await writeFormatOneMetadata(profile, "session");
+  }, options);
+}
+
+export async function removeSession(
+  profile: string,
+  options: ProfileLockOptions = {},
+): Promise<void> {
+  await withProfileLock(profile, async () => {
+    await rm(sessionPath(profile), { force: true });
+  }, options);
+}
+
+async function writeFormatOneMetadata(profile: string, store: ProfileStoreName): Promise<void> {
+  await writeJsonAtomic(profileStoreMetadataPath(profile, store), { formatVersion: 1 });
+}
+
+async function acquireProfileLock(
+  profile: string,
+  options: ProfileLockOptions,
+): Promise<() => Promise<void>> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+  const retryMs = options.retryMs ?? DEFAULT_LOCK_RETRY_MS;
+  const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_LOCK_MS;
+  const startedAt = Date.now();
+  const lockPath = profileLockPath(profile);
+
+  await mkdir(profilePath(profile), { recursive: true });
+
+  while (true) {
+    try {
+      await mkdir(lockPath);
+      try {
+        await writeJsonAtomic(profileLockMetadataPath(profile), {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      }
+      return async () => {
+        await rm(lockPath, { recursive: true, force: true });
+      };
+    } catch (error) {
+      if (!isErrno(error, "EEXIST")) throw error;
+    }
+
+    if (await recoverStaleLock(lockPath, staleAfterMs)) continue;
+
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= timeoutMs) {
+      throw new ProfileLockTimeoutError(profile, timeoutMs);
+    }
+    await sleep(Math.min(retryMs, timeoutMs - elapsedMs));
+  }
+}
+
+async function recoverStaleLock(lockPath: string, staleAfterMs: number): Promise<boolean> {
+  if (!(await isStaleLock(lockPath, staleAfterMs))) return false;
+
+  const quarantinedPath = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
+  try {
+    await rename(lockPath, quarantinedPath);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return true;
+    return false;
+  }
+  await rm(quarantinedPath, { recursive: true, force: true });
+  return true;
+}
+
+async function isStaleLock(lockPath: string, staleAfterMs: number): Promise<boolean> {
+  const now = Date.now();
+  const owner = await readJson<{ pid?: unknown; createdAt?: unknown }>(join(lockPath, "owner.json"))
+    .catch(() => null);
+  const createdAt = typeof owner?.createdAt === "string"
+    ? Date.parse(owner.createdAt)
+    : Number.NaN;
+
+  if (Number.isFinite(createdAt)) {
+    if (now - createdAt < staleAfterMs) return false;
+    if (typeof owner?.pid === "number" && Number.isInteger(owner.pid) && owner.pid > 0) {
+      return !isProcessAlive(owner.pid);
+    }
+  }
+
+  try {
+    return now - (await stat(lockPath)).mtimeMs >= staleAfterMs;
+  } catch (error) {
+    return isErrno(error, "ENOENT");
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !isErrno(error, "ESRCH");
+  }
+}
+
+function validateProfileName(profile: string): string {
+  if (
+    !profile ||
+    profile === "." ||
+    profile === ".." ||
+    profile.includes("/") ||
+    profile.includes("\\") ||
+    profile.includes("\0")
+  ) {
+    throw new TypeError("Profile names must be non-empty path segments.");
+  }
+  return profile;
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error &&
+    (error as { code?: unknown }).code === code;
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+export { DEFAULT_PROFILE };
