@@ -554,7 +554,7 @@ describe("CLI secrets commands", () => {
 
       const child = Bun.spawn([
         process.execPath,
-        join(process.cwd(), "packages/cli/src/index.ts"),
+        join(process.cwd(), "packages/cli/test-support/secrets-json-error.ts"),
         "--quiet",
         "--json",
         "secrets",
