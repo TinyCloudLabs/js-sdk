@@ -6,6 +6,7 @@ import {
   ProfileLockTimeoutError,
   additionalDelegationsPath,
   authRequestsPath,
+  profileConfigPath,
   profileLockMetadataPath,
   profileLockPath,
   profilePath,
@@ -16,11 +17,13 @@ import {
   readStoreMetadata,
   removeSession,
   sessionPath,
+  tinycloudConfigPath,
   tinycloudHomePath,
   upsertProfileRecord,
   writeJsonAtomic,
   writeSession,
 } from "./state.js";
+import { resolveInvocationContext } from "./profile.js";
 
 const originalTcHome = process.env.TC_HOME;
 const originalHome = process.env.HOME;
@@ -76,6 +79,20 @@ test("reads unversioned format-1 stores and writes format metadata without chang
   expect(await readFile(profileStoreMetadataPath(profile, "auth-requests"), "utf8")).toBe(
     '{\n  "formatVersion": 1\n}\n',
   );
+});
+
+test("rejects an unsupported store format rather than silently downgrading it", async () => {
+  await isolatedHome();
+  const profile = "delegate";
+  await writeJsonAtomic(profileStoreMetadataPath(profile, "session"), { formatVersion: 2 });
+
+  await expect(readStoreMetadata(profile, "session")).rejects.toThrow(
+    'Unsupported store format for "session".',
+  );
+  await expect(writeSession(profile, { verificationMethod: "did:key:session" })).rejects.toThrow(
+    'Unsupported store format for "session".',
+  );
+  await expect(readFile(sessionPath(profile), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test("atomically appends records and replaces duplicate explicit keys", async () => {
@@ -176,6 +193,21 @@ test("times out rather than reclaiming a lock held by a live process", async () 
   )).rejects.toBeInstanceOf(ProfileLockTimeoutError);
 });
 
+test("times out rather than reclaiming an ownerless stale-looking lock", async () => {
+  await isolatedHome();
+  const profile = "delegate";
+  await mkdir(profileLockPath(profile), { recursive: true });
+
+  await expect(upsertProfileRecord(
+    profile,
+    "auth-requests",
+    "req-ownerless-timeout",
+    request("req-ownerless-timeout"),
+    (candidate) => candidate.requestId,
+    { timeoutMs: 30, retryMs: 2, staleAfterMs: 1 },
+  )).rejects.toBeInstanceOf(ProfileLockTimeoutError);
+});
+
 test("two child processes append distinct records without losing either update", async () => {
   const home = await isolatedHome();
   const fixture = new URL("../test-support/append-profile-record.ts", import.meta.url).pathname;
@@ -217,4 +249,58 @@ test("uses TC_HOME as a home root and never resolves test state from the develop
   expect(tinycloudHomePath()).toBe(join(home, ".tinycloud"));
   expect(profilePath("isolated").startsWith(join(homedir(), ".tinycloud"))).toBe(false);
   expect(await readFile(sessionPath("isolated"), "utf8")).toContain("only-in-test-home");
+});
+
+test("returns PROFILE_NOT_FOUND for a deleted pinned profile and never falls back", async () => {
+  await isolatedHome();
+  await writeJsonAtomic(tinycloudConfigPath(), { defaultProfile: "fallback", version: 1 });
+  await writeJsonAtomic(profileConfigPath("fallback"), {
+    host: "https://fallback.tinycloud.test",
+    did: "did:key:fallback",
+  });
+
+  const result = await resolveInvocationContext({ profile: "deleted" });
+
+  expect(result).toEqual({
+    ok: false,
+    error: {
+      code: "PROFILE_NOT_FOUND",
+      message: 'Profile "deleted" is not available.',
+      retryable: false,
+    },
+  });
+});
+
+test("returns safe profile identity without profile or invocation private-key material", async () => {
+  await isolatedHome();
+  await writeJsonAtomic(profileConfigPath("delegate"), {
+    host: "https://node.tinycloud.test",
+    did: "did:pkh:eip155:1:0xowner#controller",
+    sessionDid: "did:key:session#key-1",
+    ownerDid: "did:pkh:eip155:1:0xowner#owner",
+    spaceId: "tinycloud:pkh:eip155:1:0xowner:secrets",
+    posture: "delegate-session",
+    operatorType: "agent",
+    privateKey: "profile-private-key-canary",
+  });
+
+  const result = await resolveInvocationContext({
+    profile: "delegate",
+    privateKey: "invocation-private-key-canary",
+  });
+
+  expect(result).toEqual({
+    ok: true,
+    context: {
+      profile: "delegate",
+      host: "https://node.tinycloud.test",
+      posture: "delegate-session",
+      operatorType: "agent",
+      principalDid: "did:pkh:eip155:1:0xowner",
+      sessionDid: "did:key:session",
+      ownerDid: "did:pkh:eip155:1:0xowner",
+      space: "tinycloud:pkh:eip155:1:0xowner:secrets",
+    },
+  });
+  expect(JSON.stringify(result)).not.toContain("private-key-canary");
 });

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,16 +15,19 @@ test("a legacy CLI import and operations writer append distinct requests without
   const profile = "delegate";
   const legacyRequest = request("req-cli");
   const operationsRequest = request("req-operations");
-  const legacyPermissionsUrl = new URL("../../cli/src/lib/permissions.ts", import.meta.url).href;
+  const legacyArtifactPath = join(home, "legacy-request.json");
+  const legacyCliEntry = new URL("../../cli/src/index.ts", import.meta.url).pathname;
   const operationsFixture = new URL("../test-support/append-profile-record.ts", import.meta.url).pathname;
   const env = { ...process.env, TC_HOME: home, HOME: homedir() };
+  await writeFile(legacyArtifactPath, JSON.stringify(legacyRequest), "utf8");
   const legacy = Bun.spawn([
     process.execPath,
-    "-e",
-    `
-      const { appendPermissionRequestArtifact } = await import(${JSON.stringify(legacyPermissionsUrl)});
-      await appendPermissionRequestArtifact(${JSON.stringify(profile)}, ${JSON.stringify(legacyRequest)});
-    `,
+    legacyCliEntry,
+    "--profile",
+    profile,
+    "auth",
+    "import",
+    legacyArtifactPath,
   ], { env, stdout: "pipe", stderr: "pipe" });
   const operations = Bun.spawn([
     process.execPath,

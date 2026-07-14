@@ -4,7 +4,6 @@ import {
   readFile,
   rename,
   rm,
-  stat,
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -142,6 +141,7 @@ export async function readProfile<T extends object = Record<string, unknown>>(
 export async function readSession<T extends object = Record<string, unknown>>(
   profile: string,
 ): Promise<T | null> {
+  await readStoreMetadata(profile, "session");
   return readJson<T>(sessionPath(profile));
 }
 
@@ -165,10 +165,9 @@ export async function readStoreMetadata(
   if (metadata === null) return { formatVersion: 1 };
   if (
     typeof metadata !== "object" ||
-    !Number.isInteger(metadata.formatVersion) ||
-    metadata.formatVersion < 1
+    metadata.formatVersion !== 1
   ) {
-    throw new TypeError(`Invalid store metadata for "${store}".`);
+    throw new TypeError(`Unsupported store format for "${store}".`);
   }
   return metadata;
 }
@@ -237,6 +236,7 @@ export async function writeSession<T extends object>(
   options: ProfileLockOptions = {},
 ): Promise<void> {
   await withProfileLock(profile, async () => {
+    await readStoreMetadata(profile, "session");
     await writeJsonAtomic(sessionPath(profile), session);
     await writeFormatOneMetadata(profile, "session");
   }, options);
@@ -247,6 +247,7 @@ export async function removeSession(
   options: ProfileLockOptions = {},
 ): Promise<void> {
   await withProfileLock(profile, async () => {
+    await readStoreMetadata(profile, "session");
     await rm(sessionPath(profile), { force: true });
   }, options);
 }
@@ -279,11 +280,12 @@ async function acquireProfileLock(
         await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
         throw error;
       }
+
       return async () => {
         await rm(lockPath, { recursive: true, force: true });
       };
     } catch (error) {
-      if (!isErrno(error, "EEXIST")) throw error;
+      if (!isLockAlreadyHeld(error)) throw error;
     }
 
     if (await recoverStaleLock(lockPath, staleAfterMs)) continue;
@@ -318,18 +320,20 @@ async function isStaleLock(lockPath: string, staleAfterMs: number): Promise<bool
     ? Date.parse(owner.createdAt)
     : Number.NaN;
 
-  if (Number.isFinite(createdAt)) {
-    if (now - createdAt < staleAfterMs) return false;
-    if (typeof owner?.pid === "number" && Number.isInteger(owner.pid) && owner.pid > 0) {
-      return !isProcessAlive(owner.pid);
-    }
+  // Reclaim only a fully published lock whose owner PID is confirmed dead.
+  // An ownerless or malformed directory may still be between mkdir and
+  // metadata publication, so reclaiming it could let two writers enter the
+  // critical section. Current writers claim .lock with exclusive mkdir before
+  // publishing owner metadata and therefore take the same conservative path.
+  if (!Number.isFinite(createdAt) || now - createdAt < staleAfterMs) return false;
+  if (typeof owner?.pid !== "number" || !Number.isInteger(owner.pid) || owner.pid <= 0) {
+    return false;
   }
+  return !isProcessAlive(owner.pid);
+}
 
-  try {
-    return now - (await stat(lockPath)).mtimeMs >= staleAfterMs;
-  } catch (error) {
-    return isErrno(error, "ENOENT");
-  }
+function isLockAlreadyHeld(error: unknown): boolean {
+  return isErrno(error, "EEXIST") || isErrno(error, "ENOTEMPTY");
 }
 
 function isProcessAlive(pid: number): boolean {
