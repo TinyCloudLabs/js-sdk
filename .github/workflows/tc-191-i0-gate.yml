@@ -93,13 +93,14 @@ jobs:
           --external fs
           --external path
 
-      - name: Run focused I0 gate suites offline
+      - name: Run seven focused I0 gate suites offline
         env:
           NODE_BINARY: node
           NPM_CONFIG_OFFLINE: "true"
           NPM_CONFIG_REGISTRY: "http://127.0.0.1:9"
         run: |
           bun test packages/cli/src/commands/secrets.test.ts
+          bun test packages/cli/src/commands/secrets-owner-retry.test.ts
           bun test packages/cli/src/commands/auth.test.ts
           bun test packages/cli/src/lib/permissions.test.ts
           bun test packages/cli/src/output/errors.test.ts

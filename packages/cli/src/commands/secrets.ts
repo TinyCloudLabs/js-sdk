@@ -673,7 +673,11 @@ async function readDelegatedSecretValue(params: {
         ExitCode.PERMISSION_DENIED,
       );
     }
-    throw mapEncryptionResultError(envelopeResult.error);
+    throw new CLIError(
+      envelopeResult.error.code,
+      envelopeResult.error.message,
+      ExitCode.ERROR,
+    );
   }
 
   const rawEnvelope = envelopeResult.data.data;

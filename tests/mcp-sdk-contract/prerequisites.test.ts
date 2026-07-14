@@ -87,3 +87,26 @@ test("records executable public SDK evidence and manual I2 blockers", () => {
   expect(report.cidValidatedDelegationBinding.status).toBe("manual-audit-blocker");
   expect(report.hermeticEncryptedNodeActivation.status).toBe("manual-audit-blocker");
 });
+
+test("executes the built public SDK exports used by operations", async () => {
+  const [coreSdk, nodeSdk] = await Promise.all([
+    import("@tinycloud/sdk-core"),
+    import("@tinycloud/node-sdk"),
+  ]);
+
+  expect(coreSdk.isCapabilitySubset([], [])).toEqual({ subset: true, missing: [] });
+  expect(nodeSdk.isCapabilitySubset([], [])).toEqual({ subset: true, missing: [] });
+
+  const prototype = nodeSdk.TinyCloudNode.prototype as unknown as {
+    ownerDidFromSpaceId(spaceId: string): string | undefined;
+    getEncryptionNetworkIdForSpace(spaceId: string, name?: string): string;
+  };
+  const runtime = {
+    did: "did:key:z6MkFallback",
+    ownerDidFromSpaceId: prototype.ownerDidFromSpaceId,
+  };
+  expect(prototype.getEncryptionNetworkIdForSpace.call(
+    runtime,
+    "tinycloud:did:key:z6MkOwner:secrets",
+  )).toBe("urn:tinycloud:encryption:did:key:z6MkOwner:default");
+});

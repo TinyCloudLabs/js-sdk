@@ -681,7 +681,7 @@ describe("CLI secrets commands", () => {
     ].join("\n")).not.toContain(SECRET_VALUE_CANARY);
   });
 
-  test("maps delegated node transport failures to the network exit code without retrying", async () => {
+  test("preserves the shipped generic exit code for delegated transport results without retrying", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tc-secrets-transport-"));
     const source = join(dir, "delegation.json");
     await writeFile(source, JSON.stringify({
@@ -710,7 +710,7 @@ describe("CLI secrets commands", () => {
       await rm(dir, { recursive: true, force: true });
     }
 
-    expect(recorded.errors[0]).toMatchObject({ code: "TRANSPORT_ERROR", exitCode: 6 });
+    expect(recorded.errors[0]).toMatchObject({ code: "TRANSPORT_ERROR", exitCode: 1 });
     expect(recorded.delegatedKvGets).toHaveLength(1);
     expect(recorded.permissionRequests).toEqual([]);
   });

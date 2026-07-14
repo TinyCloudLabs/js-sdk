@@ -18,7 +18,7 @@ package is published or approved by this increment.
 CI enforcement lives in `.github/workflows/tc-191-i0-gate.yml`. It pins Node
 `20.19.4` and the repository-declared Bun `1.2.0`, installs only with
 `bun install --frozen-lockfile`, emits the local JavaScript workspace entrypoints
-needed by the CLI suites, then runs the six focused suites below. The test step
+needed by the CLI suites, then runs the seven focused suites below. The test step
 sets npm offline and its registry to loopback, so the local `npm pack` engine
 check cannot use the npm registry. The suites use fake/local boundaries; they do
 not call OpenKey or public TinyCloud nodes.
@@ -40,6 +40,9 @@ SDK prerequisite audit:
   `packages/sdk-core/src/index.ts` and `packages/node-sdk/src/index.ts`, the
   two source public entrypoints. This is a structural public-export contract,
   not an export-name heuristic.
+- Runtime pass: the built `@tinycloud/sdk-core` and `@tinycloud/node-sdk`
+  package exports execute `isCapabilitySubset`, and the built
+  `TinyCloudNode` prototype derives a space-specific encryption network ID.
 - Executable pass: that same type contract calls
   `TinyCloudNode.getEncryptionNetworkIdForSpace` through the node-sdk source
   public index. The hermetic CLI fake node exercises its space-specific result
@@ -75,12 +78,13 @@ Named test boundaries:
 Focused verification:
 
 ```text
-bun test packages/cli/src/commands/secrets.test.ts   # 22 pass
+bun test packages/cli/src/commands/secrets.test.ts   # 26 pass
+bun test packages/cli/src/commands/secrets-owner-retry.test.ts # 1 pass
 bun test packages/cli/src/commands/auth.test.ts      # 18 pass
 bun test packages/cli/src/lib/permissions.test.ts    # 5 pass
-bun test packages/cli/src/output/errors.test.ts      # 3 pass
+bun test packages/cli/src/output/errors.test.ts      # 4 pass
 bun test tests/mcp-sdk-contract/contract.test.ts     # 4 pass
-bun test tests/mcp-sdk-contract/prerequisites.test.ts # 1 pass
+bun test tests/mcp-sdk-contract/prerequisites.test.ts # 2 pass
 ```
 
 The raw stdio protocol check has a 10-second local-process deadline only to
