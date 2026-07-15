@@ -1,14 +1,24 @@
-import { defineConfig } from 'tsup';
+import { defineConfig } from "tsup";
+
+const canonicalDecryptTransportError =
+  "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/kv/index.ts', 'src/sql/index.ts', 'src/encryption/index.ts'],
-  format: ['esm', 'cjs'],
+  entry: {
+    index: "src/index.ts",
+    "kv/index": "src/kv/index.ts",
+    "sql/index": "src/sql/index.ts",
+    "encryption/index": "src/encryption/index.ts",
+    "internal/decrypt-transport-response-error":
+      "src/encryption/DecryptTransportResponseError.ts",
+  },
+  format: ["esm", "cjs"],
   dts: true,
   clean: true,
   sourcemap: true,
   splitting: false,
-  // Externalize all dependencies — don't bundle them into the output
-  external: [
-    'zod',
-  ],
+  // The public entrypoints share this one CJS module. Node's CJS cache is
+  // common to require() and import(), so the error retains normal identity
+  // across root and `/encryption` in both module systems.
+  external: ["zod", canonicalDecryptTransportError],
 });

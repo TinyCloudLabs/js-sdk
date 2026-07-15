@@ -45,6 +45,7 @@ import {
   DataVaultService,
   IDataVaultService,
   EncryptionService,
+  DecryptTransportResponseError,
   SecretsService,
   ISecretsService,
   IEncryptionService,
@@ -122,6 +123,7 @@ import {
   resolveTinyCloudHosts,
   principalDidEquals,
   parseNetworkId,
+  resolveSecretPath,
   type BuildDecryptInvocationInput,
   type BuiltDecryptInvocation,
   type CanonicalJson,
@@ -151,6 +153,46 @@ const DEFAULT_ENCRYPTION_NETWORK_NAME = "default";
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
 const NETWORK_ADMIN_TYPE = "tinycloud.encryption.network-admin/v1";
+
+/** Input for {@link TinyCloudNode.readSecret}. The target space is required. */
+export interface SecretReadInput {
+  /** Explicit full space URI or an owned-space name. */
+  space: string;
+  /** Env-style secret name. */
+  name: string;
+  /** Optional logical secret scope. */
+  scope?: string;
+}
+
+/**
+ * Safe classified result for an explicit-space secret read.
+ *
+ * Failure variants contain no raw node response, envelope, plaintext, keys,
+ * tokens, or delegation data.
+ */
+export type SecretReadResult =
+  | { status: "ok"; value: string }
+  | { status: "not_found" }
+  | { status: "node_unreachable" }
+  | { status: "read_failed" }
+  | { status: "corrupt_envelope" }
+  | { status: "decrypt_failed" }
+  | { status: "invalid_payload" };
+
+function isSecretPayload(
+  value: unknown,
+): value is { value: string; createdAt: string; updatedAt: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "value" in value &&
+    typeof (value as { value?: unknown }).value === "string" &&
+    "createdAt" in value &&
+    typeof (value as { createdAt?: unknown }).createdAt === "string" &&
+    "updatedAt" in value &&
+    typeof (value as { updatedAt?: unknown }).updatedAt === "string"
+  );
+}
 
 /**
  * Full actions the session key's root delegation grants over a space. Used for
@@ -553,6 +595,7 @@ export class TinyCloudNode {
   private _hooks?: HooksService;
   private _vault?: DataVaultService;
   private _encryption?: EncryptionService;
+  private _baseVaults = new Map<string, DataVaultService>();
   private _baseSecrets = new Map<string, ISecretsService>();
   private _secrets = new Map<string, ISecretsService>();
   private _account?: AccountService;
@@ -1023,6 +1066,7 @@ export class TinyCloudNode {
     this._hooks = undefined;
     this._vault = undefined;
     this._encryption = undefined;
+    this._baseVaults.clear();
     this._baseSecrets.clear();
     this._secrets.clear();
     this._spaceService = undefined;
@@ -1881,6 +1925,7 @@ export class TinyCloudNode {
     this._hooks = undefined;
     this._vault = undefined;
     this._encryption = undefined;
+    this._baseVaults.clear();
     this._baseSecrets.clear();
     this._secrets.clear();
     this._spaceService = undefined;
@@ -2416,9 +2461,7 @@ export class TinyCloudNode {
           },
         );
         if (!response.ok) {
-          throw new Error(
-            `decrypt failed ${response.status}: ${await response.text()}`,
-          );
+          throw new DecryptTransportResponseError(response.status);
         }
         return (await response.json()) as DecryptResponseBody;
       },
@@ -3098,6 +3141,29 @@ export class TinyCloudNode {
     return secrets;
   }
 
+  /**
+   * Read a secret from an explicit target space without requesting or
+   * auto-signing authority. Active runtime delegations are selected by the
+   * normal KV and encryption invocation paths.
+   */
+  async readSecret(input: SecretReadInput): Promise<SecretReadResult> {
+    const resolved = resolveSecretPath(input.name, { scope: input.scope });
+    const targetSpace = input.space.startsWith("tinycloud:")
+      ? input.space
+      : this.ownedSpaceId(input.space);
+    const result = await this.getBaseVault(targetSpace).readNetworkEncrypted<unknown>(
+      resolved.vaultKey,
+    );
+
+    if (result.status !== "ok") {
+      return { status: result.status };
+    }
+    if (!isSecretPayload(result.entry.value)) {
+      return { status: "invalid_payload" };
+    }
+    return { status: "ok", value: result.entry.value.value };
+  }
+
   private getBaseSecrets(spaceId: string): ISecretsService {
     if (!this._spaceService) {
       throw new Error("Not signed in. Call signIn() first.");
@@ -3107,15 +3173,31 @@ export class TinyCloudNode {
       : this.ownedSpaceId(spaceId);
     let secrets = this._baseSecrets.get(resolvedSpace);
     if (!secrets) {
-      const kvService = this.createSpaceScopedKVService(resolvedSpace);
-      const vaultService = this.createVaultService(resolvedSpace, kvService);
-      if (this._serviceContext) {
-        vaultService.initialize(this._serviceContext);
-      }
-      secrets = new SecretsService(() => vaultService);
+      secrets = new SecretsService(() => this.getBaseVault(resolvedSpace));
       this._baseSecrets.set(resolvedSpace, secrets);
     }
     return secrets;
+  }
+
+  private getBaseVault(spaceId: string): DataVaultService {
+    if (!this._spaceService) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+    const resolvedSpace = spaceId.startsWith("tinycloud:")
+      ? spaceId
+      : this.ownedSpaceId(spaceId);
+    let vault = this._baseVaults.get(resolvedSpace);
+    if (!vault) {
+      vault = this.createVaultService(
+        resolvedSpace,
+        this.createSpaceScopedKVService(resolvedSpace),
+      );
+      if (this._serviceContext) {
+        vault.initialize(this._serviceContext);
+      }
+      this._baseVaults.set(resolvedSpace, vault);
+    }
+    return vault;
   }
 
   /**

@@ -17,6 +17,7 @@ import {
   TelemetryConfig,
 } from "./types";
 import { tinyCloudDebugLogger } from "./debug";
+import { projectDiagnosticData } from "./diagnostics";
 
 /**
  * Configuration options for ServiceContext.
@@ -205,7 +206,7 @@ export class ServiceContext implements IServiceContext {
 
     if (this._telemetryEnabled && this._telemetryHandler) {
       try {
-        this._telemetryHandler(event, data);
+        this._telemetryHandler(event, projectDiagnosticData(data));
       } catch (error) {
         // Don't let telemetry handlers break SDK operations.
         console.error(`Error in telemetry handler for "${event}":`, error);

@@ -89,6 +89,22 @@ export interface VaultEntry<T> {
 }
 
 /**
+ * Safe classification for a network-encrypted vault read.
+ *
+ * Failure variants intentionally contain no node response, encrypted envelope,
+ * plaintext, or key material. Consumers that need to distinguish an authorized
+ * absence from a failed read should use this instead of {@link IDataVaultService.get}.
+ */
+export type VaultNetworkReadResult<T> =
+  | { status: "ok"; entry: VaultEntry<T> }
+  | { status: "not_found" }
+  | { status: "node_unreachable" }
+  | { status: "read_failed" }
+  | { status: "corrupt_envelope" }
+  | { status: "decrypt_failed" }
+  | { status: "invalid_payload" };
+
+/**
  * Structured error codes for vault operations.
  */
 /**

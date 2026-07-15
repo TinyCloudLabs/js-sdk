@@ -47,7 +47,7 @@ class MockVault implements IDataVaultService {
         keyId: "key",
       },
     }),
-  );
+  ) as IDataVaultService["get"];
   delete = mock(
     async (_key: string): Promise<Result<void, VaultError>> => ({
       ok: true,
@@ -79,7 +79,24 @@ class MockVault implements IDataVaultService {
     ok: true,
     data: [],
   }));
-  getShared = this.get;
+  getShared = mock(
+    async <T = unknown>(
+      _grantorDID: string,
+      _key: string,
+      _options?: VaultGetOptions<T>,
+    ): Promise<Result<VaultEntry<T>, VaultError>> => ({
+      ok: true,
+      data: {
+        value: {
+          value: "stored-value",
+          createdAt: "2026-05-04T00:00:00.000Z",
+          updatedAt: "2026-05-04T00:00:00.000Z",
+        } as T,
+        metadata: {},
+        keyId: "key",
+      },
+    }),
+  ) as IDataVaultService["getShared"];
   resolvePublicKey = mock(
     async (): Promise<Result<Uint8Array, VaultError>> => ({
       ok: true,

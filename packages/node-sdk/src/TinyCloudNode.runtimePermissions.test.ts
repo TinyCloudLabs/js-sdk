@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { generateKeyPairSync } from "node:crypto";
 
 import {
   canonicalHashHex,
@@ -13,6 +14,7 @@ import {
   type IWasmBindings,
   type NetworkDescriptor,
   type PermissionEntry,
+  ServiceContext,
 } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
@@ -83,6 +85,7 @@ function makeFakeWasmBindings(
     vault_random_bytes: mock(() => new Uint8Array()),
     vault_sha256: mock(() => new Uint8Array()),
     createSessionManager: makeFakeSessionManager,
+    computeCid: () => "bafy-node-secret-read",
   };
 }
 
@@ -216,6 +219,155 @@ async function withActivatedDelegations(fn: () => Promise<void>): Promise<void> 
 }
 
 describe("TinyCloudNode runtime permission delegations", () => {
+  test("routes an explicit secret read through activated KV and decrypt delegations", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const secretsSpaceId = `tinycloud:pkh:eip155:1:${address}:delegated-secrets`;
+    (node as any)._address = address;
+    const networkId = node.getEncryptionNetworkIdForSpace(secretsSpaceId);
+    const descriptor = makeEncryptionDescriptor(networkId, node.did);
+    const crypto = makeEncryptionCrypto();
+    (node as any).createEncryptionCrypto = () => crypto;
+    const { privateKey } = generateKeyPairSync("ed25519");
+    const jwk = privateKey.export({ format: "jwk" });
+    (node as any).auth.tinyCloudSession.jwk = jwk;
+
+    const permissions: PermissionEntry[] = [
+      {
+        service: "tinycloud.kv",
+        space: secretsSpaceId,
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["tinycloud.kv/get"],
+      },
+      {
+        service: "tinycloud.encryption",
+        path: networkId,
+        actions: ["tinycloud.encryption/decrypt"],
+      },
+    ];
+
+    await withActivatedDelegations(async () => {
+      await node.grantRuntimePermissions(permissions);
+    });
+
+    const encryptionInvocations: string[] = [];
+    const unsignedAuthorization = [
+      Buffer.from(JSON.stringify({ alg: "EdDSA" })).toString("base64url"),
+      Buffer.from(JSON.stringify({ aud: "placeholder" })).toString("base64url"),
+      "signature",
+    ].join(".");
+    (node as any).wasmBindings.invokeAny = mock((session: any) => {
+      encryptionInvocations.push(session.delegationHeader.Authorization);
+      return { Authorization: unsignedAuthorization };
+    });
+
+    const originalFetch = globalThis.fetch;
+    const fetchCalls: Array<{ method: string; url: string; body?: string }> = [];
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      const body = typeof init?.body === "string" ? init.body : undefined;
+      fetchCalls.push({ method, url, body });
+      const networkUrl =
+        `https://tinycloud.test/encryption/networks/${encodeURIComponent(networkId)}`;
+      if (method === "GET" && url === networkUrl) {
+        return new Response(JSON.stringify({ descriptor }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (method === "POST" && url === `${networkUrl}/decrypt`) {
+        if (!body) throw new Error("missing decrypt body");
+        const request = JSON.parse(body) as DecryptRequestBody;
+        const symmetricKey = xor(
+          encryptionBase64Decode(descriptor.publicEncryptionKey),
+          encryptionBase64Decode(request.encryptedSymmetricKey),
+        );
+        const wrappedKey = xor(
+          encryptionBase64Decode(request.receiverPublicKey),
+          symmetricKey,
+        );
+        const invocationCid = "bafy-node-secret-read";
+        const requestBodyHash = canonicalHashHex(crypto.sha256, request as any);
+        const response: DecryptResponseBody = {
+          type: "tinycloud.encryption.decrypt-result/v1",
+          targetNode: request.targetNode,
+          networkId: request.networkId,
+          invocationCid,
+          encryptedSymmetricKeyHash: request.encryptedSymmetricKeyHash,
+          receiverPublicKeyHash: request.receiverPublicKeyHash,
+          wrappedKey: encryptionBase64Encode(wrappedKey),
+          alg: request.alg,
+          keyVersion: request.keyVersion,
+          requestHash: hexEncode(
+            crypto.sha256(
+              encryptionUtf8Encode(`${invocationCid}${requestBodyHash}`),
+            ),
+          ),
+          nodeId: node.did,
+          nodeSignature: encryptionBase64Encode(new Uint8Array(64).fill(9)),
+        };
+        return new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    try {
+      const encryption = (node as any).createEncryptionService();
+      const secret = {
+        value: "secret value",
+        createdAt: "2026-07-15T00:00:00.000Z",
+        updatedAt: "2026-07-15T00:00:00.000Z",
+      };
+      const encrypted = await encryption.encryptToNetwork(
+        networkId,
+        encryptionUtf8Encode(JSON.stringify(secret)),
+        { metadata: { "x-vault-content-type": "application/json" } },
+      );
+      expect(encrypted.ok).toBe(true);
+      if (!encrypted.ok) return;
+
+      const fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        expect((init?.headers as Record<string, string>).Authorization).toBe("runtime-token");
+        return new Response(JSON.stringify(encrypted.data), { status: 200 });
+      }) as any;
+    const context = new ServiceContext({
+      invoke: (node as any).invokeWithRuntimePermissions,
+      fetch,
+      hosts: ["https://tinycloud.test"],
+    });
+    context.setSession({
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
+      verificationMethod: "did:key:default",
+      jwk,
+    });
+    (node as any)._serviceContext = context;
+    (node as any)._spaceService = {};
+
+    await expect(node.readSecret({
+      space: secretsSpaceId,
+      name: "ANTHROPIC_API_KEY",
+    })).resolves.toEqual({ status: "ok", value: "secret value" });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(encryptionInvocations).toEqual(["runtime-token"]);
+      expect(invoke.mock.calls[invoke.mock.calls.length - 1][0].delegationHeader.Authorization)
+        .toBe("runtime-token");
+      expect(fetchCalls.some((call) => call.url.endsWith("/decrypt"))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("uses a stored runtime delegation for matching invocations", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,

@@ -10,6 +10,8 @@ on:
       - "packages/sdk-core/**"
       - "packages/sdk-services/**"
       - "packages/node-sdk/**"
+      - "packages/web-sdk/**"
+      - "packages/sdk-rs/packages/web/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/setup.sh"
@@ -29,6 +31,8 @@ on:
       - "packages/sdk-core/**"
       - "packages/sdk-services/**"
       - "packages/node-sdk/**"
+      - "packages/web-sdk/**"
+      - "packages/sdk-rs/packages/web/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/setup.sh"
@@ -74,55 +78,28 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
-      # The CLI suites import these workspace packages. Emit only their JS
-      # entrypoints: declaration generation is not needed to execute this gate.
-      - name: Build bootstrap runtime entrypoint
-        working-directory: packages/bootstrap
-        run: bunx --no-install tsup --no-config src/index.ts --format esm,cjs --target es2020 --sourcemap
+      - name: Build SDK declarations for packed public API checks
+        run: |
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/sdk-core build
 
-      - name: Build SDK services runtime entrypoint
-        working-directory: packages/sdk-services
-        run: bunx --no-install tsup --no-config src/index.ts --format esm,cjs --target es2020 --sourcemap
-
-      - name: Build SDK core runtime entrypoint
-        working-directory: packages/sdk-core
-        run: >-
-          bunx --no-install tsup --no-config src/index.ts --format esm,cjs
-          --target es2020 --sourcemap
-          --external @multiformats/multiaddr
-          --external @multiformats/multiaddr-to-uri
-          --external @multiformats/uri-to-multiaddr
-          --external @noble/curves/ed25519
-          --external @tinycloud/bootstrap
-          --external @tinycloud/sdk-services
-          --external multiformats/basics
-          --external ms
-          --external siwe
-          --external viem
-          --external zod
-          --external zod-to-json-schema
-
-      - name: Build node WASM runtime dependency
+      - name: Build SDK WASM runtime dependencies
         run: |
           bun run --cwd packages/sdk-rs build:wasm:node
           bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/sdk-rs build:wasm:web
+          bun run --cwd packages/sdk-rs/packages/web build
 
-      - name: Build node SDK runtime entrypoint
-        working-directory: packages/node-sdk
-        run: >-
-          bunx --no-install tsup --no-config src/index.ts --format esm,cjs
-          --target es2020 --sourcemap
-          --external @tinycloud/sdk-core
-          --external @tinycloud/node-sdk-wasm
-          --external siwe
-          --external events
-          --external fs
-          --external path
+      - name: Build node and web SDK declarations
+        run: |
+          bun run --cwd packages/node-sdk build
+          bun run --cwd packages/web-sdk build
 
       - name: Build operations package
         run: bun run --cwd packages/operations build
 
-      - name: Run seven focused I0 gate suites offline
+      - name: Run focused I0 gate suites offline
         env:
           NODE_BINARY: node
           NPM_CONFIG_OFFLINE: "true"
@@ -135,3 +112,4 @@ jobs:
           bun test packages/cli/src/output/errors.test.ts
           bun test tests/mcp-sdk-contract/contract.test.ts
           bun test tests/mcp-sdk-contract/prerequisites.test.ts
+          bun run --cwd tests/mcp-sdk-contract test:public-api
