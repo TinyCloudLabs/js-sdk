@@ -577,11 +577,11 @@ export class TinyCloudWeb {
         session: clientSessionFromPersisted(loaded.data),
       };
     } catch (err) {
-      // A pre-TC-193 custom binding cannot replace a signer. That is an
-      // unsupported restore, not corrupt persisted state.
-      if ((err as { code?: unknown } | undefined)?.code !== "RESTORE_SESSION_KEY_REPLACEMENT_UNSUPPORTED") {
-        await this.sessionStorage.clear(restoreAddress);
-      }
+      // Restore rejection is intentionally transactional. Persisted storage
+      // is user state, and attempting best-effort cleanup here can both mask
+      // the authority error and strand this wrapper in "restoring" when a
+      // storage backend itself fails. Callers can explicitly clear a session
+      // after presenting the recoverable restore failure.
       this._sessionRestoreStatus = "restore-failed";
       return {
         status: "restore-failed",

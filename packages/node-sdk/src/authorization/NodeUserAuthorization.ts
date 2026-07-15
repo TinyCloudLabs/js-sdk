@@ -367,20 +367,29 @@ export class NodeUserAuthorization implements IUserAuthorization {
     hosts?: string[],
   ): void {
     this.sessionManager = sessionManager;
+    // Restore is a complete session replacement, not an additive update. In
+    // particular, a second restore may target a different host and must not
+    // retain skip decisions from the previous activation.
+    this.tinycloudHosts = hosts && hosts.length > 0 ? [...hosts] : undefined;
+    this._lastActivationSkippedSpaceIds = [];
     if (!session) {
+      this._session = undefined;
       this._tinyCloudSession = undefined;
+      this._address = undefined;
+      this._chainId = undefined;
       return;
     }
     this._tinyCloudSession = { ...session };
     this._address = session.address;
     this._chainId = session.chainId;
-    if (
-      (!this.tinycloudHosts || this.tinycloudHosts.length === 0) &&
-      hosts &&
-      hosts.length > 0
-    ) {
-      this.tinycloudHosts = [...hosts];
-    }
+    this._session = {
+      address: session.address,
+      walletAddress: session.address,
+      chainId: session.chainId,
+      sessionKey: session.sessionKey,
+      siwe: session.siwe,
+      signature: session.signature,
+    };
   }
 
   /**

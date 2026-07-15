@@ -6,7 +6,7 @@ pub mod session;
 pub mod keys;
 
 use iri_string::types::UriString;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, str::FromStr};
 use tinycloud_sdk_rs::authorization::InvocationHeaders;
 use tinycloud_sdk_rs::tinycloud_auth::{
@@ -19,6 +19,39 @@ use tinycloud_sdk_rs::tinycloud_auth::{
     ucan_capabilities_object::{Ability, Capabilities},
 };
 use wasm_bindgen::prelude::*;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedSessionProof {
+    delegation_header: PersistedDelegationHeader,
+    delegation_cid: String,
+    space_id: String,
+    #[serde(default)]
+    spaces: Option<BTreeMap<String, String>>,
+    jwk: serde_json::Value,
+    verification_method: String,
+    address: String,
+    chain_id: u64,
+    siwe: String,
+    signature: String,
+    /// The binding supplies its current clock value. This is deliberately not
+    /// part of persisted session data: SIWE validity must not be evaluated at
+    /// an attacker-selected time.
+    now: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PersistedDelegationHeader {
+    #[serde(rename = "Authorization")]
+    authorization: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ValidatedPersistedSessionProof {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<String>,
+}
 
 fn map_jserr<E: std::error::Error>(e: E) -> JsValue {
     e.to_string().into()
@@ -45,6 +78,102 @@ struct InvokeAnyEntry {
 /// Run once on initialisation.
 pub fn initPanicHook() {
     console_error_panic_hook::set_once();
+}
+
+/// Verify and reconstruct persisted session authority as a single operation.
+///
+/// This deliberately uses the TinyCloud SDK's SIWE parser, EIP-191 verifier,
+/// ReCap verifier, and Cacao constructor. TypeScript callers never parse a
+/// persisted SIWE to decide whether its permissions or expiry are trustworthy.
+#[wasm_bindgen]
+#[allow(non_snake_case)]
+pub fn validatePersistedSession(proof: JsValue) -> Result<JsValue, JsValue> {
+    let proof: PersistedSessionProof = serde_wasm_bindgen::from_value(proof)?;
+
+    let signed: tinycloud_sdk_wasm::session::SignedSession =
+        serde_json::from_value(serde_json::json!({
+            "siwe": proof.siwe,
+            "signature": proof.signature,
+            "jwk": proof.jwk,
+            "spaceId": proof.space_id,
+            "additionalSpaces": proof.spaces,
+            "verificationMethod": proof.verification_method,
+        }))
+        .map_err(map_jserr)?;
+
+    let expected_address = tinycloud_sdk_rs::util::decode_eip55(
+        proof.address.strip_prefix("0x").unwrap_or(&proof.address),
+    )
+    .map_err(map_jserr)?;
+    if signed.session.siwe.address != expected_address
+        || signed.session.siwe.chain_id != proof.chain_id
+    {
+        return Err(JsValue::from_str(
+            "persisted SIWE address or chain does not match session metadata",
+        ));
+    }
+    if signed.session.siwe.uri.as_str() != signed.session.verification_method {
+        return Err(JsValue::from_str(
+            "persisted SIWE audience does not match the restored session key",
+        ));
+    }
+    let now =
+        time::OffsetDateTime::parse(&proof.now, &time::format_description::well_known::Rfc3339)
+            .map_err(map_jserr)?;
+    if !signed.session.siwe.valid_at(&now) {
+        return Err(JsValue::from_str(
+            "persisted SIWE is expired or not yet valid",
+        ));
+    }
+    signed
+        .session
+        .siwe
+        .verify_eip191(&signed.signature)
+        .map_err(map_jserr)?;
+
+    // ReCap extraction verifies the capability statement/resource binding.
+    // The primary space is authority; additional `spaces` are persisted UI
+    // metadata (for example the lazily hosted public space) and are not
+    // implicitly elevated to signed authority merely by being present here.
+    let recap =
+        tinycloud_sdk_wasm::session::parse_recap_from_siwe(&signed.session.siwe.to_string())
+            .map_err(map_jserr)?;
+    let expected_spaces = [signed.session.space_id.to_string()];
+    if !recap.is_empty()
+        && expected_spaces
+            .iter()
+            .any(|space| !recap.iter().any(|entry| entry.space == *space))
+    {
+        return Err(JsValue::from_str(
+            "persisted SIWE ReCap does not authorize every restored space",
+        ));
+    }
+
+    // Reconstruct the exact Cacao from the verified SIWE/signature and reject
+    // any persisted authorization bytes or CID that do not identify it.
+    let expires_at = signed
+        .session
+        .siwe
+        .expiration_time
+        .as_ref()
+        .map(ToString::to_string);
+    let reconstructed =
+        tinycloud_sdk_wasm::session::complete_session_setup(signed).map_err(map_jserr)?;
+    let reconstructed_header_value =
+        serde_json::to_value(&reconstructed.delegation_header).map_err(map_jserr)?;
+    let reconstructed_header = reconstructed_header_value
+        .get("Authorization")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| JsValue::from_str("failed to reconstruct persisted delegation header"))?;
+    if reconstructed_header != proof.delegation_header.authorization
+        || reconstructed.delegation_cid.to_string() != proof.delegation_cid
+    {
+        return Err(JsValue::from_str(
+            "persisted delegation header or CID does not match verified SIWE authority",
+        ));
+    }
+
+    serde_wasm_bindgen::to_value(&ValidatedPersistedSessionProof { expires_at }).map_err(Into::into)
 }
 
 #[wasm_bindgen]

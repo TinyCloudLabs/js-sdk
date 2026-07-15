@@ -62,6 +62,14 @@ impl TCWSessionManager {
     /// builds so restore flows share one key lifecycle.
     #[allow(non_snake_case)]
     pub fn replaceSessionKey(&mut self, js_jwk: JsValue, key_id: String) -> Result<String, String> {
+        // Serde represents an explicitly supplied JSON `null` as `None` for
+        // optional fields. `alg: null` is therefore observably different from
+        // an omitted `alg` and must not be accepted as the latter.
+        let raw: serde_json::Value =
+            serde_wasm_bindgen::from_value(js_jwk.clone()).map_err(|e| e.to_string())?;
+        if raw.get("alg").is_some_and(serde_json::Value::is_null) {
+            return Err("session key alg must be EdDSA when present".to_string());
+        }
         let key = serde_wasm_bindgen::from_value(js_jwk).map_err(|e| e.to_string())?;
         self.manager.replace_session_key(key, key_id)
     }

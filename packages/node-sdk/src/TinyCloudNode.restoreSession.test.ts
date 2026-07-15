@@ -4,10 +4,67 @@ import { principalDidEquals, type ISessionManager, type IWasmBindings } from "@t
 
 import { activateValidatedRuntimeDelegation } from "./delegation";
 import { NodeWasmBindings } from "./NodeWasmBindings";
+import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { createHermeticEncryptedNode } from "./test-support/hermetic-encrypted-node";
 
 const RESTORE_HOST = "http://127.0.0.1:1";
+const PROOF_PRIVATE_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
+
+async function signedRestorableSession(options?: {
+  expirationless?: boolean;
+  spaces?: Record<string, string>;
+}) {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+  const manager = wasm.createSessionManager();
+  const jwk = JSON.parse(manager.jwk("default")!);
+  const address = await signer.getAddress();
+  const chainId = await signer.getChainId();
+  const spaceId = wasm.makeSpaceId(address, chainId, "default");
+  const now = new Date();
+  const verificationMethod = manager.getDID("default");
+  const prepared = options?.expirationless
+    ? {
+      jwk,
+      spaceId,
+      verificationMethod,
+      siwe: (manager as any).build({
+        address,
+        chainId,
+        domain: "restore.test",
+        issuedAt: now.toISOString(),
+      }, "default"),
+    }
+    : wasm.prepareSession({
+      abilities: { kv: { "": ["tinycloud.kv/get"] } },
+      address,
+      chainId,
+      domain: "restore.test",
+      issuedAt: now.toISOString(),
+      expirationTime: new Date(now.getTime() + 60 * 60_000).toISOString(),
+      spaceId,
+      jwk,
+    });
+  const signature = await signer.signMessage(prepared.siwe);
+  const session = wasm.completeSessionSetup({ ...prepared, signature });
+  const expiresAt = options?.expirationless
+    ? new Date(now.getTime() + 30 * 60_000).toISOString()
+    : new Date(now.getTime() + 60 * 60_000).toISOString();
+  return {
+    delegationHeader: session.delegationHeader,
+    delegationCid: session.delegationCid,
+    spaceId,
+    spaces: options?.spaces,
+    jwk,
+    verificationMethod,
+    address,
+    chainId,
+    siwe: prepared.siwe,
+    signature,
+    expiresAt,
+  };
+}
 
 function restorableData(jwk: object, verificationMethod: string) {
   return {
@@ -17,15 +74,6 @@ function restorableData(jwk: object, verificationMethod: string) {
     jwk,
     verificationMethod,
   };
-}
-
-function withSiweExpiration(siwe: string, expiresAt: Date): string {
-  const updated = siwe.replace(
-    /^Expiration Time: .+$/m,
-    `Expiration Time: ${expiresAt.toISOString()}`,
-  );
-  if (updated === siwe) throw new Error("test SIWE did not contain an expiration time");
-  return updated;
 }
 
 function legacySessionManager(): ISessionManager {
@@ -46,6 +94,135 @@ function legacyBindings(): IWasmBindings {
 }
 
 describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
+  test("cryptographically binds persisted SIWE authority before trusting its recap, expiry, CID, or header", async () => {
+    const proof = await signedRestorableSession();
+    const wasm = new NodeWasmBindings();
+    expect(() => wasm.validatePersistedSession!(proof)).not.toThrow();
+    const node = new TinyCloudNode({
+      host: RESTORE_HOST,
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: wasm,
+    });
+    await node.restoreSession({ ...proof, tinycloudHosts: ["https://valid.example"] });
+    const priorDid = node.sessionDid;
+    const priorHost = node.hosts[0];
+    const priorState = {
+      auth: (node as any).auth,
+      core: (node as any).tc,
+      manager: (node as any).sessionManager,
+      serviceContext: (node as any)._serviceContext,
+    };
+    for (const tampered of [
+      { ...proof, signature: `${proof.signature.slice(0, -1)}0` },
+      { ...proof, siwe: proof.siwe.replace("Chain ID: 1", "Chain ID: 2") },
+      { ...proof, delegationCid: `${proof.delegationCid}x` },
+      { ...proof, delegationHeader: { Authorization: `${proof.delegationHeader.Authorization}x` } },
+      { ...proof, address: "0x0000000000000000000000000000000000000001" },
+      { ...proof, chainId: proof.chainId + 1 },
+    ]) {
+      expect(() => wasm.validatePersistedSession!(tampered)).toThrow();
+      await expect(node.restoreSession({ ...tampered, tinycloudHosts: ["https://tampered.example"] })).rejects.toThrow();
+      expect(node.sessionDid).toBe(priorDid);
+      expect(node.hosts[0]).toBe(priorHost);
+      expect((node as any).auth).toBe(priorState.auth);
+      expect((node as any).tc).toBe(priorState.core);
+      expect((node as any).sessionManager).toBe(priorState.manager);
+      expect((node as any)._serviceContext).toBe(priorState.serviceContext);
+    }
+    await expect(node.restoreSession({
+      ...proof,
+      expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+    })).rejects.toThrow("does not match its signed SIWE authority");
+  });
+
+  test("replaces auth, host, core publicKV, spaces, and all live keys on repeated cross-host restore", async () => {
+    const proof = await signedRestorableSession({
+      spaces: { public: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:public" },
+    });
+    const node = new TinyCloudNode({
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+    });
+    const manager = (node as any).sessionManager as ISessionManager;
+    manager.createSessionKey("secondary");
+
+    await node.restoreSession({ ...proof, tinycloudHosts: ["https://one.example"] });
+    await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
+
+    expect(node.hosts).toEqual(["https://two.example"]);
+    expect((node as any).config.host).toBe("https://two.example");
+    expect((node as any).auth.hosts).toEqual(["https://two.example"]);
+    expect((node as any).tc.isSignedIn).toBe(true);
+    expect(((node as any).tc.serviceContext as { hosts: string[] }).hosts).toEqual(["https://two.example"]);
+    expect(() => node.publicKV).not.toThrow();
+    expect((node.restorableSession?.spaces)).toEqual(proof.spaces);
+    const registry = (node as any)._capabilityRegistry;
+    const sessionKey = registry.getAllKeys()[0];
+    expect(registry.getDelegationsForKey(sessionKey.id).some((delegation: { spaceId: string }) =>
+      delegation.spaceId === proof.spaces!.public
+    )).toBe(false);
+    expect(((node as any).sessionManager as ISessionManager).listSessionKeys!()).toContain("secondary");
+  });
+
+  test("does not inherit wallet metadata or activation skips from a previous live session", async () => {
+    const proof = await signedRestorableSession();
+    const node = new TinyCloudNode({
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+    });
+    await node.restoreSession({ ...proof, tinycloudHosts: ["https://one.example"] });
+    (node as any).auth._lastActivationSkippedSpaceIds = [proof.spaceId];
+    await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
+    expect((node as any).runtimePermissionGrants).toHaveLength(1);
+
+    await node.restoreSession({
+      delegationHeader: proof.delegationHeader,
+      delegationCid: proof.delegationCid,
+      spaceId: proof.spaceId,
+      jwk: proof.jwk,
+      verificationMethod: proof.verificationMethod,
+      tinycloudHosts: ["https://three.example"],
+    });
+    expect(node.address).toBeUndefined();
+    expect((node as any).auth.session).toBeUndefined();
+    expect(node.hosts).toEqual(["https://three.example"]);
+  });
+
+  test("uses the persisted expiry for a valid expiration-less proof and rejects a missing policy expiry", async () => {
+    const proof = await signedRestorableSession({ expirationless: true });
+    const node = new TinyCloudNode({
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+    });
+    await node.restoreSession({ ...proof, tinycloudHosts: ["https://one.example"] });
+    const firstExpiry = (node as any)._sharingService.sessionExpiry;
+    await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
+    expect((node as any)._sharingService.sessionExpiry.getTime()).toBe(firstExpiry.getTime());
+    await expect(node.restoreSession({ ...proof, expiresAt: undefined })).rejects.toThrow(
+      "must include expiresAt",
+    );
+  });
+
+  test("rejects explicit alg:null and partial key managers without replacing live state", async () => {
+    const proof = await signedRestorableSession();
+    const node = new TinyCloudNode({ wasmBindings: new NodeWasmBindings() });
+    const before = node.sessionDid;
+    await expect(node.restoreSession({ ...proof, jwk: { ...proof.jwk, alg: null } })).rejects.toThrow(
+      "invalid private Ed25519",
+    );
+    expect(node.sessionDid).toBe(before);
+
+    const partial = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: {
+      createSessionManager: legacySessionManager,
+    } as IWasmBindings });
+    const partialDid = partial.sessionDid;
+    await expect(partial.restoreSession(restorableData(proof.jwk, proof.verificationMethod))).rejects.toMatchObject({
+      name: "UnsupportedSessionRestoreError",
+      code: "RESTORE_SESSION_KEY_REPLACEMENT_UNSUPPORTED",
+    });
+    expect(partial.sessionDid).toBe(partialDid);
+  });
+
   test("keeps the live key, auth, host, service graph, and grants after every rejected restore", async () => {
     const fixture = await createHermeticEncryptedNode();
     try {
@@ -107,35 +284,25 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     expect(node.sessionDid).toBe(initialDid);
   });
 
-  test("stages the persisted SIWE expiry into capability and sharing services", async () => {
-    const fixture = await createHermeticEncryptedNode();
-    try {
-      const restored = fixture.createRestoredDelegate();
-      const firstExpiry = new Date(Date.now() + 2 * 60 * 60_000);
-      const restoredExpiry = new Date(Date.now() + 3 * 60 * 60_000);
+  test("stages the signed SIWE expiry into capability and sharing services", async () => {
+    const proof = await signedRestorableSession();
+    const restored = new TinyCloudNode({
+      host: RESTORE_HOST,
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+    });
 
-      await restored.restoreSession({
-        ...fixture.restorableSession,
-        siwe: withSiweExpiration(fixture.restorableSession.siwe, firstExpiry),
-      });
-      await restored.restoreSession({
-        ...fixture.restorableSession,
-        siwe: withSiweExpiration(fixture.restorableSession.siwe, restoredExpiry),
-      });
+    await restored.restoreSession(proof);
 
-      const registry = (restored as any)._capabilityRegistry;
-      const sessionKey = registry.getAllKeys()[0];
-      const delegations = registry.getDelegationsForKey(sessionKey.id);
-      expect(delegations).not.toHaveLength(0);
-      expect(delegations.every((delegation: { expiry: Date }) =>
-        delegation.expiry.getTime() === restoredExpiry.getTime()
-      )).toBe(true);
-      expect((restored as any)._sharingService.sessionExpiry.getTime()).toBe(
-        restoredExpiry.getTime(),
-      );
-    } finally {
-      fixture.stop();
-    }
+    const expectedExpiry = new Date(proof.expiresAt).getTime();
+    const registry = (restored as any)._capabilityRegistry;
+    const sessionKey = registry.getAllKeys()[0];
+    const delegations = registry.getDelegationsForKey(sessionKey.id);
+    expect(delegations).not.toHaveLength(0);
+    expect(delegations.every((delegation: { expiry: Date }) =>
+      delegation.expiry.getTime() === expectedExpiry
+    )).toBe(true);
+    expect((restored as any)._sharingService.sessionExpiry.getTime()).toBe(expectedExpiry);
   });
 
   test("round-trips a real WASM session JWK, stores the canonical verification method, and cryptographically validates restored-key signing", async () => {

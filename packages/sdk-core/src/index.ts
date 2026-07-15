@@ -33,7 +33,12 @@ export {
 export { IENSResolver } from "./ens";
 
 // WASM bindings abstraction
-export { IWasmBindings, ISessionManager } from "./wasm";
+export {
+  IWasmBindings,
+  ISessionManager,
+  type PersistedSessionProof,
+  type ValidatedPersistedSessionProof,
+} from "./wasm";
 
 // Signer interface
 export { ISigner, Bytes } from "./signer";

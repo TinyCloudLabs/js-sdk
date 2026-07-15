@@ -13,6 +13,7 @@ import {
   computeCid,
   prepareSession,
   completeSessionSetup,
+  validatePersistedSession,
   ensureEip55,
   makeSpaceId,
   createDelegation,
@@ -30,7 +31,11 @@ import {
   vault_random_bytes,
   vault_sha256,
 } from "@tinycloud/node-sdk-wasm";
-import type { IWasmBindings, ISessionManager } from "@tinycloud/sdk-core";
+import type {
+  IWasmBindings,
+  ISessionManager,
+  PersistedSessionProof,
+} from "@tinycloud/sdk-core";
 
 /**
  * Node.js WASM bindings using @tinycloud/node-sdk-wasm.
@@ -54,6 +59,12 @@ export class NodeWasmBindings implements IWasmBindings {
   computeCid = computeCid;
   prepareSession = prepareSession;
   completeSessionSetup = completeSessionSetup;
+  validatePersistedSession(proof: PersistedSessionProof) {
+    return validatePersistedSession({
+      ...proof,
+      now: new Date().toISOString(),
+    });
+  }
   ensureEip55 = ensureEip55;
   makeSpaceId = makeSpaceId;
   createDelegation = createDelegation;

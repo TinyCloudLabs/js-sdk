@@ -58,6 +58,7 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
     TCWSessionManager: class {
       createSessionKey(id: string) { return id; }
       replaceSessionKey(_jwk: object, keyId: string) { return keyId; }
+      listSessionKeys() { return ["default", "share-recipient"]; }
       renameSessionKeyId() {}
       getDID(keyId: string) { return `did:key:${keyId}`; }
       jwk() {
@@ -72,6 +73,41 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
 }));
 
 const { TinyCloudWeb } = require("../src/modules/tcw");
+const { BrowserWasmBindings } = require("../src/adapters/BrowserWasmBindings");
+const { restoreDataFromPersisted } = require("../src/modules/browserSessionPersistence");
+
+test("passes persisted additional spaces and expiry through browser restore data", () => {
+  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const expiresAt = "2099-01-01T00:00:00.000Z";
+  const spaces = { public: `tinycloud:pkh:eip155:1:${address}:public` };
+
+  const restored = restoreDataFromPersisted({
+    address,
+    chainId: 1,
+    sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
+    siwe: "siwe",
+    signature: "signature",
+    tinycloudSession: {
+      delegationHeader: { Authorization: "Bearer persisted" },
+      delegationCid: "bafy-persisted",
+      spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
+      spaces,
+      verificationMethod: "did:key:zPersisted#zPersisted",
+    },
+    expiresAt,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    version: "1.0",
+  });
+
+  expect(restored.spaces).toEqual(spaces);
+  expect(restored.expiresAt).toBe(expiresAt);
+});
+
+test("browser session managers expose every live key before restore can replace one", () => {
+  const manager = new BrowserWasmBindings().createSessionManager();
+
+  expect(manager.listSessionKeys?.()).toEqual(["default", "share-recipient"]);
+});
 
 test("forwards signStrategy to the underlying TinyCloudNode", async () => {
   const signStrategy = {
@@ -123,6 +159,44 @@ test("keeps a valid persisted session when the loaded binding cannot restore its
 
   expect(result.status).toBe("restore-failed");
   expect(result.error?.message).not.toContain("private");
+  expect(storage.clear).not.toHaveBeenCalled();
+  expect(tcw.sessionRestoreStatus).toBe("restore-failed");
+});
+
+test("keeps persisted storage and reports the original rejection when cleanup would fail", async () => {
+  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const storage = {
+    save: mock(async () => undefined),
+    load: mock(async () => ({
+      address,
+      chainId: 1,
+      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
+      siwe: "siwe",
+      signature: "signature",
+      tinycloudSession: {
+        delegationHeader: { Authorization: "Bearer persisted" },
+        delegationCid: "bafy-persisted",
+        spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
+        spaces: { public: `tinycloud:pkh:eip155:1:${address}:public` },
+        verificationMethod: "did:key:zPersisted#zPersisted",
+      },
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      version: "1.0",
+    })),
+    clear: mock(async () => { throw new Error("storage clear failed"); }),
+  };
+  const tcw = new TinyCloudWeb({ sessionStorage: storage as any });
+  await (tcw as any)._initPromise;
+  (tcw as any)._node = {
+    restoreSession: mock(async () => { throw new Error("persisted authority rejected"); }),
+  };
+  (tcw as any)._initPromise = Promise.resolve();
+
+  const result = await tcw.restoreSession(address);
+
+  expect(result.status).toBe("restore-failed");
+  expect(result.error?.message).toBe("persisted authority rejected");
   expect(storage.clear).not.toHaveBeenCalled();
   expect(tcw.sessionRestoreStatus).toBe("restore-failed");
 });

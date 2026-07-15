@@ -285,8 +285,8 @@ function clonePersistedSessionJwk(jwk: unknown): object {
 export class UnsupportedSessionRestoreError extends Error {
   readonly code = "RESTORE_SESSION_KEY_REPLACEMENT_UNSUPPORTED" as const;
 
-  constructor() {
-    super("Persisted session restore is unsupported by this WASM binding because it cannot replace the session signer.");
+  constructor(reason = "it cannot replace and enumerate every live session signer") {
+    super(`Persisted session restore is unsupported by this WASM binding because ${reason}.`);
     this.name = "UnsupportedSessionRestoreError";
   }
 }
@@ -301,6 +301,21 @@ function canonicalRestoredVerificationMethod(
     persistedVerificationMethod === canonicalVerificationMethod
     ? canonicalVerificationMethod
     : undefined;
+}
+
+function persistedExpiry(value: unknown): Date {
+  if (typeof value !== "string") {
+    throw new Error("Persisted session without a SIWE expiration must include expiresAt.");
+  }
+  const expiry = new Date(value);
+  if (!Number.isFinite(expiry.getTime()) || expiry.getTime() <= Date.now()) {
+    throw new Error("Persisted session expiry is invalid or expired.");
+  }
+  return expiry;
+}
+
+function sameInstant(left: Date, right: Date): boolean {
+  return left.getTime() === right.getTime();
 }
 
 function sharingActionsToAbilities(path: string, actions: string[]): AbilitiesMap | undefined {
@@ -1879,6 +1894,8 @@ export class TinyCloudNode {
     delegationHeader: { Authorization: string };
     delegationCid: string;
     spaceId: string;
+    /** Additional capability spaces persisted with the primary session. */
+    spaces?: Record<string, string>;
     jwk: object;
     verificationMethod: string;
     address?: string;
@@ -1893,11 +1910,16 @@ export class TinyCloudNode {
      */
     siwe?: string;
     /**
-     * The wallet/OpenKey signature over `siwe`. Optional because the
-     * runtime doesn't re-verify it — it's persisted alongside the SIWE
-     * for callers that need to round-trip the full session shape.
+     * The wallet/OpenKey signature over `siwe`. When any signed-session
+     * metadata is restored, this is required and verified in WASM before
+     * local ReCap or expiry authority is installed.
      */
     signature?: string;
+    /**
+     * Persisted policy expiry. Required when an otherwise valid SIWE omits
+     * `Expiration Time`; restore never invents a new renewable lifetime.
+     */
+    expiresAt?: string;
     /**
      * The TinyCloud hosts this session was created against (from
      * {@link PersistedSessionData.tinycloudHosts}). When present they are
@@ -1923,22 +1945,28 @@ export class TinyCloudNode {
     }
     const stagedManager = this.wasmBindings.createSessionManager();
     const stagedReplace = stagedManager.replaceSessionKey;
-    if (typeof stagedReplace !== "function" || typeof this.sessionManager.replaceSessionKey !== "function") {
+    const liveKeys = this.sessionManager.listSessionKeys;
+    const stagedKeys = stagedManager.listSessionKeys;
+    if (
+      typeof stagedReplace !== "function" ||
+      typeof liveKeys !== "function" ||
+      typeof stagedKeys !== "function"
+    ) {
       throw new UnsupportedSessionRestoreError();
     }
     let stagedKeyId: string;
     let stagedJwk: object;
     let canonicalVerificationMethod: string;
     try {
-      const liveManager = this.sessionManager as ISessionManager & {
-        listSessionKeys?(): string[];
-      };
-      // A successful restore replaces only the primary signer; preserve any
-      // share keys that the concrete WASM manager exposes. Older custom
-      // managers need not implement listing and remain supported.
-      for (const keyId of liveManager.listSessionKeys?.() ?? []) {
+      // Replacing a primary signer without a complete key inventory silently
+      // loses receive/share keys. Require the capability rather than guessing.
+      const keyIds = liveKeys.call(this.sessionManager);
+      if (!Array.isArray(keyIds) || !keyIds.every((keyId) => typeof keyId === "string")) {
+        throw new UnsupportedSessionRestoreError("it cannot reliably enumerate every live session signer");
+      }
+      for (const keyId of keyIds) {
         if (keyId === this.sessionKeyId) continue;
-        const jwk = liveManager.jwk(keyId);
+        const jwk = this.sessionManager.jwk(keyId);
         if (!jwk) throw new Error("missing live session key");
         stagedReplace.call(stagedManager, clonePersistedSessionJwk(JSON.parse(jwk)), keyId);
       }
@@ -1947,7 +1975,8 @@ export class TinyCloudNode {
       if (!stagedJwkJson) throw new Error("missing restored session key");
       stagedJwk = clonePersistedSessionJwk(JSON.parse(stagedJwkJson));
       canonicalVerificationMethod = stagedManager.getDID(stagedKeyId);
-    } catch {
+    } catch (error) {
+      if (error instanceof UnsupportedSessionRestoreError) throw error;
       throw new Error("Persisted session has an invalid private Ed25519 session key.");
     }
     const restoredVerificationMethod = canonicalRestoredVerificationMethod(
@@ -1960,17 +1989,57 @@ export class TinyCloudNode {
       );
     }
 
-    const restoredAddress = sessionData.address
-      ? canonicalizeAddress(sessionData.address)
+    const proofValues = [
+      sessionData.siwe,
+      sessionData.signature,
+      sessionData.address,
+      sessionData.chainId,
+    ];
+    const hasPersistedProof = proofValues.every((value) => value !== undefined);
+    if (!hasPersistedProof && (proofValues.some((value) => value !== undefined) || sessionData.expiresAt !== undefined)) {
+      throw new Error("Persisted session authority metadata is incomplete.");
+    }
+
+    const restoredAddress = hasPersistedProof
+      ? canonicalizeAddress(sessionData.address!)
       : undefined;
+    let stagedSessionExpiry = new Date(0);
+    if (hasPersistedProof) {
+      if (typeof this.wasmBindings.validatePersistedSession !== "function") {
+        throw new UnsupportedSessionRestoreError("it cannot verify persisted SIWE authority");
+      }
+      const verified = this.wasmBindings.validatePersistedSession({
+        delegationHeader: sessionData.delegationHeader,
+        delegationCid: sessionData.delegationCid,
+        spaceId: sessionData.spaceId,
+        spaces: sessionData.spaces,
+        jwk: stagedJwk,
+        verificationMethod: canonicalVerificationMethod,
+        address: restoredAddress!,
+        chainId: sessionData.chainId!,
+        siwe: sessionData.siwe!,
+        signature: sessionData.signature!,
+      });
+      const signedExpiry = verified.expiresAt === undefined
+        ? undefined
+        : persistedExpiry(verified.expiresAt);
+      const persistedPolicyExpiry = sessionData.expiresAt === undefined
+        ? undefined
+        : persistedExpiry(sessionData.expiresAt);
+      if (signedExpiry && persistedPolicyExpiry && !sameInstant(signedExpiry, persistedPolicyExpiry)) {
+        throw new Error("Persisted session expiry does not match its signed SIWE authority.");
+      }
+      stagedSessionExpiry = signedExpiry ?? persistedPolicyExpiry ?? persistedExpiry(undefined);
+    }
     const resolvedHost = await this.resolveRestoredHost(
       sessionData.tinycloudHosts,
       restoredAddress,
       sessionData.chainId,
     );
     const stagedHost = resolvedHost ?? this.config.host!;
-    const stagedAddress = restoredAddress ?? this._address;
-    const stagedChainId = sessionData.chainId ?? this._chainId;
+    // Never blend a metadata-light restore with the prior wallet identity.
+    const stagedAddress = restoredAddress;
+    const stagedChainId = sessionData.chainId ?? 1;
     const stagedNodeDid = stagedAddress
       ? pkhDid(stagedAddress, stagedChainId)
       : canonicalVerificationMethod;
@@ -1982,24 +2051,19 @@ export class TinyCloudNode {
       jwk: stagedJwk,
     };
     const stagedTcSession: TinyCloudSession | undefined =
-      sessionData.siwe && restoredAddress && sessionData.chainId ? {
-        address: restoredAddress,
-        chainId: sessionData.chainId,
+      hasPersistedProof ? {
+        address: restoredAddress!,
+        chainId: sessionData.chainId!,
         sessionKey: JSON.stringify(stagedJwk),
         spaceId: sessionData.spaceId,
+        spaces: sessionData.spaces,
         delegationCid: sessionData.delegationCid,
         delegationHeader: sessionData.delegationHeader,
         verificationMethod: restoredVerificationMethod,
         jwk: stagedJwk as { [k: string]: unknown },
-        siwe: sessionData.siwe,
-        signature: sessionData.signature ?? "",
+        siwe: sessionData.siwe!,
+        signature: sessionData.signature!,
       } : undefined;
-    // The service graph is staged before the session is committed. Derive its
-    // expiry from that staged session once, so capability and sharing state
-    // cannot accidentally inherit a prior session's lifetime.
-    const stagedSessionExpiry = stagedTcSession
-      ? extractSiweExpiration(stagedTcSession.siwe) ?? this.getSessionExpiry()
-      : this.getSessionExpiry();
     const stagedPrimary = this.stagePrimarySessionState(
       stagedTcSession,
       stagedNodeDid,
@@ -2023,8 +2087,8 @@ export class TinyCloudNode {
     this.sessionKeyId = stagedKeyId;
     this.sessionKeyJwk = stagedJwk;
     if (resolvedHost) this.config.host = resolvedHost;
-    if (restoredAddress) this._address = restoredAddress;
-    if (sessionData.chainId !== undefined) this._chainId = sessionData.chainId;
+    this._address = stagedAddress;
+    this._chainId = stagedChainId;
     this._serviceContext = stagedGraph.serviceContext;
     this._kv = stagedGraph.kv;
     this._sql = stagedGraph.sql;
@@ -2041,10 +2105,11 @@ export class TinyCloudNode {
     this._secrets = new Map();
     this._publicKV = undefined;
     this._account = undefined;
+    this.tc = stagedGraph.core;
     this._recapOperationsCache = stagedPrimary.cache;
     this.runtimePermissionGrants = stagedPrimary.grants;
     if (this.auth) {
-      this.auth.installRestoredSession(stagedManager, stagedTcSession, this.config.host ? [this.config.host] : undefined);
+      this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost]);
       this._restoredTcSession = undefined;
     } else {
       this._restoredTcSession = stagedTcSession;
@@ -2076,12 +2141,10 @@ export class TinyCloudNode {
       operations = [];
     }
     const cache = { siwe: session.siwe, operations };
-    const skipped = this.auth?.lastActivationSkippedSpaceIds ?? [];
-    const acceptedOperations = operations.filter((operation) =>
-      operation.spaceId === undefined || !skipped.some((spaceId) => this.spaceIdsEqual(spaceId, operation.spaceId!)),
-    );
-    if (acceptedOperations.length === 0) return { cache, grants: [] };
-    const expiresAt = extractSiweExpiration(session.siwe) ?? sessionExpiry;
+    // Restored authority has no host-activation result yet. Importing a skip
+    // list from an unrelated prior session would erase valid restored grants.
+    if (operations.length === 0) return { cache, grants: [] };
+    const expiresAt = sessionExpiry;
     return {
       cache,
       grants: [{
@@ -2099,14 +2162,14 @@ export class TinyCloudNode {
           delegatorDID: verificationMethod,
           spaceId: session.spaceId,
           path: "",
-          actions: [...new Set(acceptedOperations.map((operation) => operation.action))],
+          actions: [...new Set(operations.map((operation) => operation.action))],
           expiry: expiresAt,
           allowSubDelegation: true,
           ownerAddress: session.address,
           chainId: session.chainId,
           host,
         },
-        operations: acceptedOperations,
+        operations,
         expiresAt,
         provenance: "primary",
       }],
@@ -2124,6 +2187,7 @@ export class TinyCloudNode {
     tinyCloudSession: TinyCloudSession | undefined;
     sessionExpiry: Date;
   }): {
+    core: TinyCloud | null;
     serviceContext: ServiceContext;
     kv: KVService;
     sql: SQLService;
@@ -2137,6 +2201,19 @@ export class TinyCloudNode {
     delegationManager: DelegationManager;
     spaceService: SpaceService;
   } {
+    // TinyCloud owns the public-KV service graph. Stage a replacement core
+    // context alongside the node graph so repeated cross-host restores cannot
+    // leave publicKV pointed at a stale or uninitialized context.
+    const core = this.auth
+      ? new TinyCloud(this.auth, {
+        invokeAny: this.invokeAnyWithRuntimePermissions,
+        telemetry: this.config.telemetry,
+      })
+      : null;
+    if (core) {
+      core.initializeServices(this.invokeWithRuntimePermissions, [input.host]);
+      (core.serviceContext as ServiceContext).setSession(input.serviceSession);
+    }
     const serviceContext = new ServiceContext({
       invoke: this.invokeWithRuntimePermissions,
       invokeAny: this.invokeAnyWithRuntimePermissions,
@@ -2172,7 +2249,19 @@ export class TinyCloudNode {
     const capabilityRegistry = new CapabilityKeyRegistry();
     if (input.tinyCloudSession) {
       const session = input.tinyCloudSession;
-      const delegations: Delegation[] = [{
+      // Extra space names are persisted session metadata. Only space IDs that
+      // occur in the now-verified ReCap may participate in the capability
+      // registry; e.g. a lazily-created public-space label cannot mint a
+      // primary-session grant by itself.
+      const recapSpaces = new Set<string>();
+      try {
+        for (const entry of this.wasmBindings.parseRecapFromSiwe(session.siwe)) {
+          recapSpaces.add(entry.space);
+        }
+      } catch {
+        throw new Error("Verified persisted session ReCap could not be reconstructed.");
+      }
+      const delegations: Delegation[] = recapSpaces.has(session.spaceId) ? [{
         cid: session.delegationCid,
         delegateDID: session.verificationMethod,
         spaceId: session.spaceId,
@@ -2181,8 +2270,9 @@ export class TinyCloudNode {
         expiry: input.sessionExpiry,
         isRevoked: false,
         allowSubDelegation: true,
-      }];
+      }] : [];
       for (const spaceId of Object.values(session.spaces ?? {})) {
+        if (!recapSpaces.has(spaceId)) continue;
         delegations.push({
           cid: session.delegationCid,
           delegateDID: session.verificationMethod,
@@ -2194,13 +2284,15 @@ export class TinyCloudNode {
           allowSubDelegation: true,
         });
       }
-      capabilityRegistry.registerKey({
-        id: session.sessionKey,
-        did: session.verificationMethod,
-        type: "session",
-        jwk: session.jwk as JWK,
-        priority: 0,
-      }, delegations);
+      if (delegations.length > 0) {
+        capabilityRegistry.registerKey({
+          id: session.sessionKey,
+          did: session.verificationMethod,
+          type: "session",
+          jwk: session.jwk as JWK,
+          priority: 0,
+        }, delegations);
+      }
     }
     const delegationManager = new DelegationManager({
       hosts: [input.host],
@@ -2289,7 +2381,7 @@ export class TinyCloudNode {
       onSpaceRegistered: async (space) => { await this.account.spaces.register(space); },
     });
     spaceService.updateConfig({ sharingService });
-    return { serviceContext, kv, sql, duckdb, hooks, vault, encryption, capabilityRegistry, keyProvider, sharingService, delegationManager, spaceService };
+    return { core, serviceContext, kv, sql, duckdb, hooks, vault, encryption, capabilityRegistry, keyProvider, sharingService, delegationManager, spaceService };
   }
 
   /**

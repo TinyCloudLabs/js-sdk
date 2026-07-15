@@ -15,6 +15,7 @@ export {
   TCWSessionManager,
   prepareSession,
   completeSessionSetup,
+  validatePersistedSession,
   invoke,
   invokeAny,
   computeCid,

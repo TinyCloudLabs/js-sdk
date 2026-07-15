@@ -16,6 +16,7 @@ export namespace tcwSession {
 
 export namespace tinycloud {
   export import completeSessionSetup = lib.completeSessionSetup;
+  export import validatePersistedSession = lib.validatePersistedSession;
   export import generateHostSIWEMessage = lib.generateHostSIWEMessage;
   export import siweToDelegationHeaders = lib.siweToDelegationHeaders;
   export import invoke = lib.invoke;

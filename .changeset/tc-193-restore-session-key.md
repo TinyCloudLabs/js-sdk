@@ -6,4 +6,4 @@
 "@tinycloud/web-sdk-wasm": patch
 ---
 
-Restore persisted sessions with their original private Ed25519 signer, validating that the JWK and verification method identify the same principal before runtime delegation activation.
+Restore persisted sessions with their original private Ed25519 signer. Verify the signed SIWE, ReCap, Cacao header/CID, address, chain, session DID, and expiry before installing authority; atomically replace the auth/core/service host context while retaining every live secondary signer. Browser restore now preserves spaces and policy expiry, and rejected restores leave persisted storage untouched.

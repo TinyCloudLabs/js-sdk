@@ -11,6 +11,29 @@ import type { InvokeAnyFunction, InvokeFunction } from "@tinycloud/sdk-services"
 import type { WasmRecapEntry } from "./capabilities";
 
 /**
+ * The persisted authority material that must be verified as one unit before a
+ * restored session can use its ReCap or lifetime locally.
+ */
+export interface PersistedSessionProof {
+  delegationHeader: { Authorization: string };
+  delegationCid: string;
+  spaceId: string;
+  spaces?: Record<string, string>;
+  jwk: object;
+  verificationMethod: string;
+  address: string;
+  chainId: number;
+  siwe: string;
+  signature: string;
+}
+
+/** Canonical facts produced by the WASM-side persisted-session verifier. */
+export interface ValidatedPersistedSessionProof {
+  /** The SIWE expiration exactly as signed, when the SIWE contains one. */
+  expiresAt?: string;
+}
+
+/**
  * Platform-agnostic WASM bindings interface.
  *
  * Each platform provides its own implementation:
@@ -69,6 +92,16 @@ export interface IWasmBindings {
   /** Factory for session managers */
   createSessionManager: () => ISessionManager;
 
+  /**
+   * Verify a persisted EIP-191 SIWE proof and bind it to its reconstructed
+   * Cacao header/CID, session DID, address, chain and ReCap spaces. Optional
+   * so pre-existing custom bindings remain type-compatible; restore rejects
+   * authenticated persisted data when the primitive is unavailable.
+   */
+  validatePersistedSession?: (
+    proof: PersistedSessionProof,
+  ) => ValidatedPersistedSessionProof;
+
   /** Ensure WASM module is initialized (optional — some bindings auto-init) */
   ensureInitialized?: () => Promise<void>;
 }
@@ -86,6 +119,8 @@ export interface ISessionManager {
    * `restoreSession` detects support at runtime.
    */
   replaceSessionKey?(jwk: object, keyId: string): string;
+  /** List every live key so a primary-key replacement cannot discard shares. */
+  listSessionKeys?(): string[];
   /** Rename a session key ID */
   renameSessionKeyId(oldId: string, newId: string): void;
   /** Get the DID for a session key */
