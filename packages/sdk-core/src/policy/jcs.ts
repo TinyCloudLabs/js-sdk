@@ -23,7 +23,8 @@ const objectHasOwn: (object: object, propertyKey: PropertyKey) => boolean =
  * This local encoder is intentionally stricter than JSON.stringify:
  * it rejects non-plain JSON inputs, sparse arrays, undefined/functions/symbols,
  * non-finite numbers, BigInt, dangerous prototype keys, and lone surrogates.
- * Object keys are sorted by Unicode code point before serialization.
+ * Object keys are sorted lexicographically by their raw UTF-16 code units,
+ * as required by RFC 8785 section 3.2.3, before serialization.
  */
 export function jcsCanonicalize(input: unknown): string {
   return serialize(normalizeJson(input, "$"));
@@ -177,23 +178,21 @@ function isArrayIndexKey(key: string, length: number): boolean {
 }
 
 function serializeObject(value: { readonly [key: string]: JsonValue }): string {
-  const keys = Object.keys(value).sort(compareCodePoints);
+  const keys = Object.keys(value).sort(compareUtf16CodeUnits);
   const parts = keys.map((key) => `${JSON.stringify(key)}:${serialize(value[key])}`);
   return `{${parts.join(",")}}`;
 }
 
-function compareCodePoints(a: string, b: string): number {
-  const left = Array.from(a);
-  const right = Array.from(b);
-  const max = Math.min(left.length, right.length);
+function compareUtf16CodeUnits(a: string, b: string): number {
+  const max = Math.min(a.length, b.length);
   for (let index = 0; index < max; index++) {
-    const leftPoint = left[index].codePointAt(0) ?? 0;
-    const rightPoint = right[index].codePointAt(0) ?? 0;
-    if (leftPoint !== rightPoint) {
-      return leftPoint - rightPoint;
+    const leftCodeUnit = a.charCodeAt(index);
+    const rightCodeUnit = b.charCodeAt(index);
+    if (leftCodeUnit !== rightCodeUnit) {
+      return leftCodeUnit - rightCodeUnit;
     }
   }
-  return left.length - right.length;
+  return a.length - b.length;
 }
 
 function assertUnicodeScalarString(value: string, path: string): void {

@@ -1,0 +1,55 @@
+{
+  "name": "@tinycloud/operations",
+  "version": "0.1.0-beta.0",
+  "description": "TinyCloud shared operations contracts and runtime",
+  "author": "TinyCloud, Inc.",
+  "license": "EGPL",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./state": {
+      "types": "./dist/state.d.ts",
+      "import": "./dist/state.js",
+      "require": "./dist/state.cjs"
+    },
+    "./operations.json": "./generated/operations.json"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "generated/operations.json"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "test": "bun test",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "check:typecheck-inputs": "tsc --listFilesOnly -p tsconfig.typecheck.json | grep -F 'packages/operations/src/contract.test.ts' && tsc --listFilesOnly -p tsconfig.typecheck.json | grep -F 'packages/operations/test-support/append-profile-record.ts' && tsc --listFilesOnly -p tsconfig.typecheck.json | grep -F 'packages/operations/test-support/hold-profile-store-writer.ts' && tsc --listFilesOnly -p tsconfig.typecheck.json | grep -F 'packages/operations/scripts/generate.ts' && tsc --listFilesOnly -p tsconfig.typecheck.json | grep -F 'packages/operations/tsup.config.ts'",
+    "generate": "bun scripts/generate.ts",
+    "check:generated": "bun scripts/generate.ts --check"
+  },
+  "dependencies": {
+    "@tinycloud/node-sdk": "2.7.0-beta.2",
+    "@tinycloud/sdk-core": "2.7.0-beta.2",
+    "zod": "^3.22.0",
+    "zod-to-json-schema": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tinycloudlabs/web-sdk"
+  }
+}

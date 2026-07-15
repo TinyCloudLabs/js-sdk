@@ -1,9 +1,14 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
+import {
+  profilesPath,
+  tinycloudConfigPath,
+  tinycloudHomePath,
+} from "@tinycloud/operations/state";
 
-export const CONFIG_DIR = join(homedir(), ".tinycloud");
-export const PROFILES_DIR = join(CONFIG_DIR, "profiles");
-export const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+// Keep the legacy constants API, but resolve the same TC_HOME-aware store as
+// operations so CLI and MCP processes address one shared profile directory.
+export const CONFIG_DIR = tinycloudHomePath();
+export const PROFILES_DIR = profilesPath();
+export const CONFIG_FILE = tinycloudConfigPath();
 
 export const DEFAULT_HOST = "https://node.tinycloud.xyz";
 export const DEFAULT_OPENKEY_HOST = "https://openkey.so";
