@@ -58,6 +58,25 @@ export class SessionExpiredError extends Error {
   }
 }
 
+/**
+ * Thrown when the installed WASM delegation boundary cannot encode every
+ * constrained ReCap branch in a requested child delegation.
+ */
+export class CaveatedDelegationUnsupportedError extends Error {
+  /** Stable machine-readable error code for fail-closed caveated delegation. */
+  code = "CAVEATED_DELEGATION_UNSUPPORTED" as const;
+  /** Requested entries whose constrained ReCap branches cannot be preserved. */
+  entries: PermissionEntry[];
+
+  constructor(entries: PermissionEntry[]) {
+    super(
+      "Cannot create a caveated delegation because this WASM delegation boundary cannot preserve every ReCap caveat branch exactly."
+    );
+    this.name = "CaveatedDelegationUnsupportedError";
+    this.entries = entries.map(cloneEntry);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Space normalization
 // ---------------------------------------------------------------------------
@@ -180,35 +199,63 @@ function canonicalizeEntryMatches(
   // There is no safe general partial ordering for arbitrary ReCap caveat
   // objects. A caveated authority therefore only covers the same caveat set;
   // treating it as uncaveated would authorize a broader child delegation.
-  if (!sameCaveats(requested.caveats, granted.caveats)) {
+  if (!recapCaveatsEqual(requested.caveats, granted.caveats)) {
     return false;
   }
   return true;
 }
 
-function sameCaveats(
+/**
+ * Compare ReCap caveat branch sets without losing signed branch structure.
+ *
+ * ReCap represents an unconstrained ability as `[{}]`, while SDK callers can
+ * represent that same authority as `undefined` or `[]`. Those three forms are
+ * equivalent. Every other branch, including an unconstrained branch mixed
+ * with a constrained one, remains part of the canonical comparison.
+ */
+export function recapCaveatsEqual(
   left: readonly Record<string, unknown>[] | undefined,
   right: readonly Record<string, unknown>[] | undefined,
 ): boolean {
+  return canonicalizeRecapCaveats(left) === canonicalizeRecapCaveats(right);
+}
+
+/**
+ * Canonicalize a ReCap caveat branch set for exact equality checks.
+ *
+ * Object keys and branch order do not affect equality. A lone unconstrained
+ * branch is normalized to the SDK's empty-caveat representation, but an
+ * unconstrained branch in a mixed set is deliberately retained.
+ */
+export function canonicalizeRecapCaveats(
+  caveats: readonly Record<string, unknown>[] | undefined,
+): string {
   const canonicalize = (value: unknown): string => {
-    if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    if (value === null || typeof value === "boolean" || typeof value === "string") {
       return JSON.stringify(value);
+    }
+    if (typeof value === "number") {
+      if (Number.isFinite(value)) return JSON.stringify(value);
+      throw new Error("ReCap caveats must contain only JSON values.");
     }
     if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
     if (typeof value === "object") {
       const object = value as Record<string, unknown>;
+      const prototype = Object.getPrototypeOf(object);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new Error("ReCap caveats must contain only JSON values.");
+      }
       return `{${Object.keys(object).sort().map((key) =>
         `${JSON.stringify(key)}:${canonicalize(object[key])}`,
       ).join(",")}}`;
     }
-    return JSON.stringify(value);
+    throw new Error("ReCap caveats must contain only JSON values.");
   };
-  // ReCap represents an unconstrained ability as `[{}]`; callers that do not
-  // mention caveats represent the same authority as `[]`. Preserve the raw
-  // value everywhere else, but compare those two semantic no-op forms alike.
-  const meaningful = (caveats: readonly Record<string, unknown>[] | undefined) =>
-    (caveats ?? []).filter((caveat) => Object.keys(caveat).length > 0);
-  return canonicalize(meaningful(left)) === canonicalize(meaningful(right));
+  const branches = (caveats ?? []).map(canonicalize).sort();
+  if (branches.length === 0 || (branches.length === 1 && branches[0] === "{}")) {
+    return "[]";
+  }
+  return `[${branches.join(",")}]`;
 }
 
 /** Return whether a granted action pattern covers one requested action. */

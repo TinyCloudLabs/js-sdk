@@ -19,7 +19,7 @@ import type {
   Delegation,
   IngestOptions,
 } from "../delegations/types";
-import { actionContains } from "../capabilities";
+import { actionContains, recapCaveatsEqual } from "../capabilities";
 
 // =============================================================================
 // Service Name
@@ -643,28 +643,7 @@ export class CapabilityKeyRegistry implements ICapabilityKeyRegistry {
       left.path === right.path &&
       left.actions.length === right.actions.length &&
       left.actions.every((action) => right.actions.includes(action)) &&
-      this.sameCaveats(left.caveats, right.caveats);
-  }
-
-  /** Caveats are part of the signed delegation scope, not registry metadata. */
-  private sameCaveats(
-    left: readonly Record<string, unknown>[] | undefined,
-    right: readonly Record<string, unknown>[] | undefined,
-  ): boolean {
-    const canonicalize = (value: unknown): string => {
-      if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
-        return JSON.stringify(value);
-      }
-      if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
-      if (typeof value === "object") {
-        const object = value as Record<string, unknown>;
-        return `{${Object.keys(object).sort().map((key) =>
-          `${JSON.stringify(key)}:${canonicalize(object[key])}`,
-        ).join(",")}}`;
-      }
-      return JSON.stringify(value);
-    };
-    return canonicalize(left ?? []) === canonicalize(right ?? []);
+      recapCaveatsEqual(left.caveats, right.caveats);
   }
 
   /**

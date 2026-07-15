@@ -101,8 +101,10 @@ import {
   // Capability-chain delegation
   type PermissionEntry,
   ENCRYPTION_PERMISSION_SERVICE,
+  CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
+  recapCaveatsEqual,
   expandPermissionEntries as expandPermissionEntriesCore,
   isCapabilitySubset,
   parseRecapCapabilities,
@@ -315,25 +317,6 @@ function cloneRecapCaveats(
   } catch {
     throw new Error("Verified persisted session ReCap contains invalid caveats.");
   }
-}
-
-function canonicalRecapCaveats(
-  caveats: readonly Record<string, unknown>[] | undefined,
-): string {
-  const canonicalize = (value: unknown): string => {
-    if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
-      return JSON.stringify(value);
-    }
-    if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
-    if (typeof value === "object") {
-      const object = value as Record<string, unknown>;
-      return `{${Object.keys(object).sort().map((key) =>
-        `${JSON.stringify(key)}:${canonicalize(object[key])}`
-      ).join(",")}}`;
-    }
-    throw new Error("ReCap caveats must be JSON values.");
-  };
-  return canonicalize(cloneRecapCaveats(caveats));
 }
 
 /** One replaceable set of services bound to a single host/session authority. */
@@ -883,7 +866,7 @@ export class TinyCloudNode {
           return entry;
         }
         if (entry.caveats !== undefined &&
-          canonicalRecapCaveats(entry.caveats) !== canonicalRecapCaveats(granted.caveats)) {
+          !recapCaveatsEqual(entry.caveats, granted.caveats)) {
           throw new Error("Invocation caveats do not match signed ReCap authority.");
         }
         return { ...entry, caveats: cloneRecapCaveats(granted.caveats) };
@@ -972,12 +955,13 @@ export class TinyCloudNode {
     // Initialize SharingService for receive-only access (no session required)
     // This allows session-only users to receive sharing links without signIn()
     // Full capabilities (generate) are added after signIn()
+    const receiveOnlyGraph = this._serviceGraph;
     this._sharingService = new SharingService({
       hosts: [this.config.host!],
       // session: undefined - not needed for receive()
-      invoke: this._serviceGraph.invoke,
-      fetch: this._serviceGraph.fetch,
-      assertActive: this._serviceGraph.assertActive,
+      invoke: receiveOnlyGraph.invoke,
+      fetch: receiveOnlyGraph.fetch,
+      assertActive: () => receiveOnlyGraph.assertActive(),
       keyProvider: this._keyProvider,
       registry: this._capabilityRegistry,
       createDelegationWasm: (params) => this.createDelegationWrapper(params),
@@ -992,7 +976,7 @@ export class TinyCloudNode {
         const prefix = config.pathPrefix?.replace(/\/$/, '');
         const kvService = new KVService({ prefix });
         // Create a new service context for the KV service
-        const kvContext = this._serviceGraph.track(new ServiceContext({
+        const kvContext = receiveOnlyGraph.track(new ServiceContext({
           invoke: config.invoke,
           fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
           hosts: config.hosts,
@@ -2518,7 +2502,7 @@ export class TinyCloudNode {
       hosts: [input.host],
       invoke: graph.invoke,
       fetch: graph.fetch,
-      assertActive: graph.assertActive,
+      assertActive: () => graph.assertActive(),
       keyProvider,
       registry: capabilityRegistry,
       createDelegationWasm: (params) => this.createDelegationWrapper(params),
@@ -3181,7 +3165,7 @@ export class TinyCloudNode {
             : (body as NetworkDescriptor);
         },
       },
-      assertActive: graph.assertActive,
+      assertActive: () => graph.assertActive(),
     });
   }
 
@@ -3396,19 +3380,40 @@ export class TinyCloudNode {
       },
     });
 
-    // Update SharingService with full capabilities (session + createDelegation)
-    // SharingService was initialized in constructor for receive-only access
-    this._sharingService.updateConfig({
+    // A SharingService retains its invoke/fetch functions and lifetime guard.
+    // Recreate it for this graph instead of updating the receive-only instance
+    // from the graph that was just retired during a subsequent sign-in.
+    this._sharingService = new SharingService({
+      hosts: [this.config.host!],
       session: serviceSession,
+      invoke: graph.invoke,
+      fetch: graph.fetch,
+      assertActive: () => graph.assertActive(),
+      keyProvider: this._keyProvider,
+      registry: this._capabilityRegistry,
       delegationManager: this._delegationManager,
       sessionExpiry: this.getSessionExpiry(),
-      // WASM-based delegation creation (preferred - no server roundtrip)
       createDelegationWasm: (params) => {
         graph.assertActive();
         return this.createDelegationWrapper(params);
       },
-      // Root delegation for long-lived share links (bypasses session expiry)
-      // In node-sdk we have direct signer access, so no popup needed
+      computeCid: (data, codec) => {
+        if (!this.wasmBindings.computeCid) throw new Error("computeCid is unavailable");
+        return this.wasmBindings.computeCid(data, codec);
+      },
+      createKVService: (config) => {
+        graph.assertActive();
+        const service = new KVService({ prefix: config.pathPrefix?.replace(/\/$/, "") });
+        const context = graph.track(new ServiceContext({
+          invoke: config.invoke,
+          fetch: config.fetch ?? graph.fetch,
+          hosts: config.hosts,
+          telemetry: this.config.telemetry,
+        }));
+        context.setSession(config.session);
+        service.initialize(context);
+        return service;
+      },
       onRootDelegationNeeded: this.signer
         ? async (params) => {
           graph.assertActive();
@@ -4058,6 +4063,7 @@ export class TinyCloudNode {
         "grantRuntimePermissions requires wallet mode with a signer or privateKey.",
       );
     }
+    this.assertDelegationCaveatsPreservable(expanded);
 
     const rawEntries = expanded.filter((entry) =>
       this.isEncryptionPermissionEntry(entry)
@@ -4584,6 +4590,7 @@ export class TinyCloudNode {
             "createDelegation method.",
         );
       }
+      this.assertDelegationCaveatsPreservable(expandedEntries);
       const delegation = await this.createDelegationLegacyWalletPath(
         did,
         expandedEntries[0],
@@ -4727,6 +4734,7 @@ export class TinyCloudNode {
         "createDelegationViaWasmPath requires a non-empty entries array",
       );
     }
+    this.assertDelegationCaveatsPreservable(entries);
 
     // Translate non-raw manifest `space` fields into the server-side
     // spaceId. Encryption entries target raw network URNs, not spaces.
@@ -4854,6 +4862,7 @@ export class TinyCloudNode {
     expirationTime: Date,
     grant: RuntimePermissionGrant,
   ): Promise<PortableDelegation> {
+    this.assertDelegationCaveatsPreservable(entries);
     const result = this.createDelegationWrapper({
       session: grant.session,
       delegateDID: did,
@@ -4915,6 +4924,19 @@ export class TinyCloudNode {
     permissions: PermissionEntry[],
   ): PermissionEntry[] {
     return expandPermissionEntriesCore(permissions);
+  }
+
+  /**
+   * The current WASM child-delegation APIs accept action-only maps. Refuse any
+   * constrained branch rather than signing a broader action-only child UCAN.
+   */
+  private assertDelegationCaveatsPreservable(entries: PermissionEntry[]): void {
+    const caveated = entries.filter((entry) =>
+      !recapCaveatsEqual(entry.caveats, undefined)
+    );
+    if (caveated.length > 0) {
+      throw new CaveatedDelegationUnsupportedError(caveated);
+    }
   }
 
   private shortServiceName(service: string): string {
@@ -5324,7 +5346,7 @@ export class TinyCloudNode {
     // same signed attenuation.  An uncaveated request is decorated with the
     // grant's caveat immediately before WASM signs it.
     if (requested.caveats !== undefined &&
-      canonicalRecapCaveats(granted.caveats) !== canonicalRecapCaveats(requested.caveats)
+      !recapCaveatsEqual(granted.caveats, requested.caveats)
     ) {
       return false;
     }

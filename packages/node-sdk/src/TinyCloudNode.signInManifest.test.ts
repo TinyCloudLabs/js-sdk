@@ -269,6 +269,67 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     })).rejects.toThrow("Service graph has been retired");
   });
 
+  test("rejects captured encryption discovery after a later wallet sign-in retires its graph", async () => {
+    const originalFetch = globalThis.fetch;
+    let discoveryRequested = false;
+    let requestSignal: AbortSignal | undefined;
+    let releaseDiscovery!: (response: Response) => void;
+    let markDiscoveryStarted!: () => void;
+    const discoveryStarted = new Promise<void>((resolve) => { markDiscoveryStarted = resolve; });
+    const info = () => new Response(JSON.stringify({
+      protocol: 1,
+      version: "test",
+      features: [],
+      nodeId: "did:key:z6MkNode",
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    const activation = () => new Response(JSON.stringify({
+      activated: ["space://test"],
+      skipped: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    globalThis.fetch = mock((url: string, init?: RequestInit) => {
+      if (url.includes("/encryption/networks/")) {
+        if (discoveryRequested) return Promise.resolve(new Response(null, { status: 404 }));
+        discoveryRequested = true;
+        requestSignal = init?.signal;
+        markDiscoveryStarted();
+        return new Promise<Response>((resolve) => { releaseDiscovery = resolve; });
+      }
+      if (url.includes("/info")) return Promise.resolve(info());
+      return Promise.resolve(activation());
+    }) as typeof fetch;
+
+    try {
+      const node = makeNodeWithSigner(makeFakeWasmBindings(), {
+        autoBootstrapAccount: false,
+        includeAccountRegistryPermissions: false,
+        manifest: {
+          app_id: "xyz.tinycloud.feed.host",
+          name: "Feed Host",
+          defaults: false,
+          permissions: [],
+        },
+      });
+      await node.signIn();
+
+      const captured = node.encryption;
+      const inFlight = captured.discoverNetwork(
+        "urn:tinycloud:encryption:did:key:zTest:network",
+      );
+      await discoveryStarted;
+
+      await node.signIn();
+      expect(requestSignal?.aborted).toBe(true);
+      releaseDiscovery(new Response(null, { status: 404 }));
+
+      await expect(inFlight).rejects.toThrow("Service graph has been retired");
+      await expect(captured.discoverNetwork(
+        "urn:tinycloud:encryption:did:key:zTest:network",
+      )).rejects.toThrow("Service graph has been retired");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("no manifest → uses defaultActions (legacy fallback)", async () => {
     const prepareSessionSpy = mock((cfg: any) => ({
       siwe: "fake-siwe",

@@ -589,4 +589,44 @@ describe("ReCap caveats", () => {
     }], "fake-siwe");
     expect(output[0]?.caveats).toEqual([caveat]);
   });
+
+  it("equates only the empty and purely unconstrained caveat forms", () => {
+    const requested = {
+      service: "tinycloud.kv",
+      space: "default",
+      path: "narrow",
+      actions: ["tinycloud.kv/get"],
+    } satisfies PermissionEntry;
+
+    for (const caveats of [undefined, [], [{}]] as const) {
+      expect(isCapabilitySubset([
+        { ...requested, ...(caveats === undefined ? {} : { caveats }) },
+      ], [{ ...requested, caveats: [{}] }]).subset).toBe(true);
+    }
+  });
+
+  it("canonicalizes object keys and branch order without dropping mixed unconstrained branches", () => {
+    const requested = {
+      service: "tinycloud.kv",
+      space: "default",
+      path: "narrow",
+      actions: ["tinycloud.kv/get"],
+    } satisfies PermissionEntry;
+    const constrained = { tenant: "alpha", nested: { region: "us-east-1" } };
+
+    expect(isCapabilitySubset([{
+      ...requested,
+      caveats: [{ nested: { region: "us-east-1" }, tenant: "alpha" }, {}],
+    }], [{
+      ...requested,
+      caveats: [{}, constrained],
+    }]).subset).toBe(true);
+    expect(isCapabilitySubset([{
+      ...requested,
+      caveats: [{}, constrained],
+    }], [{
+      ...requested,
+      caveats: [constrained],
+    }]).subset).toBe(false);
+  });
 });

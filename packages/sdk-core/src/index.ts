@@ -614,12 +614,15 @@ export {
 // Capability subset checking and recap parsing
 export {
   // Errors
+  CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
   // Functions
   isCapabilitySubset,
   actionContains,
+  canonicalizeRecapCaveats,
   parseRecapCapabilities,
+  recapCaveatsEqual,
   // Types
   type ParseRecapFromSiwe,
   type SubsetCheckResult,

@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 
 import {
+  CaveatedDelegationUnsupportedError,
   canonicalHashHex,
   hexEncode,
   encryptionBase64Decode,
@@ -523,6 +524,75 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect(createDelegation.mock.calls[0][0].delegationHeader.Authorization).toBe(
       "runtime-token",
     );
+  });
+
+  test("fails closed when a caveated runtime grant would cross the action-only WASM boundary", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const spaceId = `tinycloud:pkh:eip155:1:${address}:secrets`;
+    const caveats = [{ tenant: "alpha", nested: { region: "us-east-1" } }];
+    const permission: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: "secrets",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      actions: ["tinycloud.kv/put"],
+      caveats,
+    };
+    (node as any).runtimePermissionGrants = [{
+      session: {
+        delegationHeader: { Authorization: "runtime-token" },
+        delegationCid: "runtime-cid",
+        spaceId,
+        verificationMethod: "did:key:default",
+        jwk: { kty: "OKP" },
+      },
+      delegation: {
+        cid: "runtime-cid",
+        delegationHeader: { Authorization: "runtime-token" },
+        spaceId,
+        path: permission.path,
+        actions: permission.actions,
+        caveats,
+        expiry: new Date(Date.now() + 3_600_000),
+        delegateDID: "did:key:default",
+        ownerAddress: address,
+        chainId: 1,
+      },
+      operations: [{
+        spaceId,
+        service: "kv",
+        path: permission.path,
+        action: "tinycloud.kv/put",
+        caveats,
+      }],
+      expiresAt: new Date(Date.now() + 3_600_000),
+      provenance: "delegated",
+    }];
+
+    await expect(node.delegateTo("did:key:backend", [permission]))
+      .rejects.toBeInstanceOf(CaveatedDelegationUnsupportedError);
+    expect((node as any).wasmBindings.createDelegation).not.toHaveBeenCalled();
+  });
+
+  test("rejects caveated runtime grants before preparing an action-only session", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const permission: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: "secrets",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      actions: ["tinycloud.kv/put"],
+      caveats: [{ tenant: "alpha" }],
+    };
+
+    await expect(node.grantRuntimePermissions([permission]))
+      .rejects.toBeInstanceOf(CaveatedDelegationUnsupportedError);
+    expect((node as any).wasmBindings.prepareSession).not.toHaveBeenCalled();
   });
 
   test("can reinstall a portable runtime delegation", async () => {

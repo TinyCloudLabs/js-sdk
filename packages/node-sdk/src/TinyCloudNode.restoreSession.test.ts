@@ -374,6 +374,45 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     }
   });
 
+  test("rejects a captured encryption discovery that resolves after restore retires its graph", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestSignal: AbortSignal | undefined;
+    let releaseResponse!: (response: Response) => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    globalThis.fetch = mock((_url: string, init?: RequestInit) => new Promise<Response>((resolve) => {
+      requestSignal = init?.signal;
+      releaseResponse = resolve;
+      markStarted();
+    })) as typeof fetch;
+
+    try {
+      const proof = await signedRestorableSession();
+      const node = new TinyCloudNode({
+        signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+        wasmBindings: new NodeWasmBindings(),
+      });
+      await node.restoreSession({ ...proof, tinycloudHosts: ["https://one.example"] });
+
+      const captured = node.encryption;
+      const inFlight = captured.discoverNetwork(
+        "urn:tinycloud:encryption:did:key:zTest:network",
+      );
+      await started;
+
+      await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
+      expect(requestSignal?.aborted).toBe(true);
+      releaseResponse(new Response(null, { status: 404 }));
+
+      await expect(inFlight).rejects.toThrow("Service graph has been retired");
+      await expect(captured.discoverNetwork(
+        "urn:tinycloud:encryption:did:key:zTest:network",
+      )).rejects.toThrow("Service graph has been retired");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("does not turn an empty ReCap into delegation or sharing authority", async () => {
     const proof = await signedRestorableSession({ expirationless: true });
     const node = new TinyCloudNode({ wasmBindings: new NodeWasmBindings() });
