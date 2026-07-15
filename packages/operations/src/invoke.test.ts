@@ -63,7 +63,13 @@ beforeEach(() => {
   });
 });
 
-test("rejects an unknown operation before it attempts input parsing", async () => {
+test("rejects an unknown operation before it attempts input parsing or context resolution", async () => {
+  let resolvedContext = false;
+  resolver = async () => {
+    resolvedContext = true;
+    throw new Error("unknown operations must not resolve context");
+  };
+
   const result = await invokeOperation(
     "tinycloud.unknown.get",
     1,
@@ -75,10 +81,16 @@ test("rejects an unknown operation before it attempts input parsing", async () =
     status: "error",
     error: { code: "OPERATION_NOT_FOUND" },
   });
+  expect(resolvedContext).toBe(false);
 });
 
-test("rejects an unsupported operation version before it attempts input parsing", async () => {
+test("rejects an unsupported operation version before it attempts input parsing or context resolution", async () => {
   definitions = [createDefinition()];
+  let resolvedContext = false;
+  resolver = async () => {
+    resolvedContext = true;
+    throw new Error("unsupported versions must not resolve context");
+  };
 
   const result = await invokeOperation(
     "tinycloud.test.get",
@@ -94,10 +106,16 @@ test("rejects an unsupported operation version before it attempts input parsing"
       details: { supportedVersions: [1] },
     },
   });
+  expect(resolvedContext).toBe(false);
 });
 
-test("validates unknown input before executing a known operation", async () => {
+test("validates unknown input before context resolution or executing a known operation", async () => {
   let executed = false;
+  let resolvedContext = false;
+  resolver = async () => {
+    resolvedContext = true;
+    throw new Error("invalid input must not resolve context");
+  };
   definitions = [
     createDefinition({
       execute: async () => {
@@ -113,6 +131,7 @@ test("validates unknown input before executing a known operation", async () => {
     status: "error",
     error: { code: "INPUT_INVALID" },
   });
+  expect(resolvedContext).toBe(false);
   expect(executed).toBe(false);
 });
 

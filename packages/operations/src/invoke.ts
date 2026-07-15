@@ -38,20 +38,21 @@ export async function invokeOperation(
     );
   }
   const lookup = lookupOperation(operationId, operationVersion);
-  const contextResolution = await resolveContext(target);
 
-  // Registry resolution is deliberately complete before any input parsing.
+  // Registry resolution is deliberately complete before any input parsing or
+  // profile access. An unrecognized operation must not cause an invocation to
+  // consult profile state.
   if (lookup.status === "operation_not_found") {
     return errorResult(
       operation,
-      contextResolution.context,
+      unresolvedContextSummary(target),
       operationError("OPERATION_NOT_FOUND", "The requested operation is not registered."),
     );
   }
   if (lookup.status === "operation_version_unsupported") {
     return errorResult(
       operation,
-      contextResolution.context,
+      unresolvedContextSummary(target),
       operationError(
         "OPERATION_VERSION_UNSUPPORTED",
         "The requested operation version is not supported.",
@@ -60,20 +61,24 @@ export async function invokeOperation(
     );
   }
 
-  if (contextResolution.error !== undefined) {
-    return errorResult(operation, contextResolution.context, contextResolution.error);
-  }
-
   const definition = lookup.definition;
   const parsedInput = definition.input.safeParse(unknownInput);
   if (!parsedInput.success) {
     return errorResult(
       operation,
-      contextResolution.context,
+      unresolvedContextSummary(target),
       operationError("INPUT_INVALID", "The operation input is invalid.", {
         details: zodIssueDetails(parsedInput.error),
       }),
     );
+  }
+
+  // Only a registered operation with valid input may inspect the pinned
+  // profile. This keeps validation deterministic and avoids profile I/O for
+  // malformed invocations.
+  const contextResolution = await resolveContext(target);
+  if (contextResolution.error !== undefined) {
+    return errorResult(operation, contextResolution.context, contextResolution.error);
   }
 
   if (!definition.postures.includes(contextResolution.context.posture)) {
