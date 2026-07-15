@@ -49,6 +49,15 @@ function request(requestId: string, revision = 1): { requestId: string; revision
   return { requestId, revision };
 }
 
+const legacyProfile = {
+  name: "legacy",
+  host: "https://node.tinycloud.test",
+  chainId: 1,
+  spaceName: "default",
+  did: "did:key:legacy#controller",
+  createdAt: "2026-01-01T00:00:00.000Z",
+};
+
 test("reads unversioned format-1 stores and writes format metadata without changing JSON layout", async () => {
   await isolatedHome();
   const profile = "delegate";
@@ -271,9 +280,89 @@ test("returns PROFILE_NOT_FOUND for a deleted pinned profile and never falls bac
   });
 });
 
+for (const [name, contents] of [
+  ["an array", []],
+  ["an empty object", {}],
+  ["a profile without a name", (() => {
+    const { name: _name, ...profile } = legacyProfile;
+    return profile;
+  })()],
+  ["a profile without a DID", (() => {
+    const { did: _did, ...profile } = legacyProfile;
+    return profile;
+  })()],
+  ["a profile with a non-string host", { ...legacyProfile, host: 42 }],
+  ["a profile with a non-numeric chain ID", { ...legacyProfile, chainId: "1" }],
+  ["a profile with a non-string space name", { ...legacyProfile, spaceName: {} }],
+  ["a profile without its creation time", (() => {
+    const { createdAt: _createdAt, ...profile } = legacyProfile;
+    return profile;
+  })()],
+  ["a profile with an invalid session DID", { ...legacyProfile, sessionDid: [] }],
+  ["a profile with an invalid posture", { ...legacyProfile, posture: "not-a-posture" }],
+  ["a profile with an invalid operator type", { ...legacyProfile, operatorType: "robot" }],
+  ["a profile with an invalid auth method", { ...legacyProfile, authMethod: "password" }],
+] as const) {
+  test(`returns PROFILE_NOT_FOUND instead of an owner context for ${name}`, async () => {
+    await isolatedHome();
+    const profile = "malformed";
+    await writeJsonAtomic(profileConfigPath(profile), contents);
+
+    expect(await resolveInvocationContext({ profile })).toEqual({
+      ok: false,
+      error: {
+        code: "PROFILE_NOT_FOUND",
+        message: `Profile "${profile}" is not available.`,
+        retryable: false,
+      },
+    });
+  });
+}
+
+test("accepts the legacy required profile shape without newer posture fields", async () => {
+  await isolatedHome();
+  await writeJsonAtomic(profileConfigPath("legacy"), legacyProfile);
+
+  expect(await resolveInvocationContext({
+    profile: "legacy",
+    host: "https://override.tinycloud.test",
+  })).toEqual({
+    ok: true,
+    context: {
+      profile: "legacy",
+      host: "https://override.tinycloud.test",
+      posture: "owner-openkey",
+      operatorType: "human",
+      principalDid: "did:key:legacy",
+      sessionDid: undefined,
+      ownerDid: undefined,
+      space: undefined,
+    },
+  });
+});
+
+test("preserves the local-owner posture for a valid profile", async () => {
+  await isolatedHome();
+  await writeJsonAtomic(profileConfigPath("local"), {
+    ...legacyProfile,
+    name: "local",
+    authMethod: "local",
+  });
+
+  expect(await resolveInvocationContext({ profile: "local" })).toMatchObject({
+    ok: true,
+    context: {
+      profile: "local",
+      posture: "local-owner-key",
+    },
+  });
+});
+
 test("returns safe profile identity without profile or invocation private-key material", async () => {
   await isolatedHome();
   await writeJsonAtomic(profileConfigPath("delegate"), {
+    ...legacyProfile,
+    name: "delegate",
     host: "https://node.tinycloud.test",
     did: "did:pkh:eip155:1:0xowner#controller",
     sessionDid: "did:key:session#key-1",

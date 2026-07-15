@@ -33,14 +33,22 @@ interface GlobalConfig {
 }
 
 interface StoredProfile {
-  host?: unknown;
-  did?: unknown;
+  name: string;
+  host: string;
+  chainId: number;
+  spaceName: string;
+  did: string;
+  createdAt: string;
   sessionDid?: unknown;
   ownerDid?: unknown;
   spaceId?: unknown;
   posture?: unknown;
   operatorType?: unknown;
   authMethod?: unknown;
+  defaultSpace?: unknown;
+  privateKey?: unknown;
+  address?: unknown;
+  openkeyHost?: unknown;
 }
 
 /**
@@ -59,7 +67,7 @@ export async function resolveInvocationContext(
     return profileNotFound(profile);
   }
 
-  if (storedProfile === null || !isRecord(storedProfile)) {
+  if (!isStoredProfile(storedProfile)) {
     return profileNotFound(profile);
   }
 
@@ -136,6 +144,52 @@ function isOperatorType(value: unknown): value is OperationOperatorType {
   return value === "human" || value === "agent";
 }
 
+/**
+ * The CLI's original persisted profile format required these six fields.
+ * Posture and operator fields arrived later, so they remain optional while
+ * any present typed field must still have its documented shape.
+ */
+function isStoredProfile(value: unknown): value is StoredProfile {
+  return isRecord(value) &&
+    isNonEmptyString(value.name) &&
+    isNonEmptyString(value.host) &&
+    typeof value.chainId === "number" &&
+    Number.isFinite(value.chainId) &&
+    isNonEmptyString(value.spaceName) &&
+    isNonEmptyString(value.did) &&
+    isNonEmptyString(value.createdAt) &&
+    isOptionalNonEmptyString(value.sessionDid) &&
+    isOptionalNonEmptyString(value.ownerDid) &&
+    isOptionalNonEmptyString(value.spaceId) &&
+    isOptionalPosture(value.posture) &&
+    isOptionalOperatorType(value.operatorType) &&
+    isOptionalAuthMethod(value.authMethod) &&
+    isOptionalNonEmptyString(value.defaultSpace) &&
+    isOptionalNonEmptyString(value.privateKey) &&
+    isOptionalNonEmptyString(value.address) &&
+    isOptionalNonEmptyString(value.openkeyHost);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isOptionalNonEmptyString(value: unknown): boolean {
+  return value === undefined || isNonEmptyString(value);
+}
+
+function isOptionalPosture(value: unknown): boolean {
+  return value === undefined || isPosture(value);
+}
+
+function isOptionalOperatorType(value: unknown): boolean {
+  return value === undefined || isOperatorType(value);
+}
+
+function isOptionalAuthMethod(value: unknown): boolean {
+  return value === undefined || value === "openkey" || value === "local";
 }
