@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
+import { createServer } from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 
 // Keep the import-artifact characterization wired to the shipped validators.
 // The rest of this file mocks persistence to isolate unrelated auth branches.
 const {
   isDelegationImportArtifact: validateDelegationImportArtifact,
   isPermissionRequestArtifact: validatePermissionRequestArtifact,
-} = await import("../lib/permissions.js");
+} = await import("@tinycloud/operations/artifacts");
 
 type ProfileLike = {
   name: string;
@@ -75,6 +77,7 @@ const recorded = {
   localSignIns: [] as Array<{ privateKey: string; host: string }>,
   spinners: [] as string[],
   generateKeyCalls: 0,
+  grantedRequests: [] as Array<Record<string, unknown>>,
 };
 
 let activeProfile = "default";
@@ -100,6 +103,7 @@ function resetState(): void {
   recorded.localSignIns.length = 0;
   recorded.spinners.length = 0;
   recorded.generateKeyCalls = 0;
+  recorded.grantedRequests.length = 0;
 
   activeProfile = "default";
   activeHost = "https://node.tinycloud.test";
@@ -130,6 +134,9 @@ function resetState(): void {
   authNodeRestorableSession = undefined;
   authNodeGrantDelegations = [];
   ensureAuthenticatedError = null;
+  storedImportRequest = null;
+  operationRecorded.calls.length = 0;
+  operationRecorded.results.length = 0;
 }
 
 function makeProfile(overrides: Partial<ProfileLike> = {}): ProfileLike {
@@ -216,6 +223,39 @@ mock.module("../auth/local-key.js", () => ({
   keyToDID: (jwk: { did?: string }) => jwk.did ?? "did:key:from-key",
 }));
 
+mock.module("@tinycloud/node-sdk", () => ({
+  grantAuthRequest: async (_node: unknown, request: Record<string, unknown>) => {
+    recorded.grantedRequests.push(request);
+    return { delegationCid: "bafy-granted-request" };
+  },
+  principalDidEquals: (left: string, right: string) =>
+    left.split("#", 1)[0] === right.split("#", 1)[0],
+}));
+
+const operationRecorded = {
+  calls: [] as Array<{
+    operationId: string;
+    operationVersion: number;
+    target: Record<string, unknown>;
+    input: unknown;
+  }>,
+  results: [] as unknown[],
+};
+
+mock.module("@tinycloud/operations", () => ({
+  invokeOperation: async (
+    operationId: string,
+    operationVersion: number,
+    target: Record<string, unknown>,
+    input: unknown,
+  ) => {
+    operationRecorded.calls.push({ operationId, operationVersion, target, input });
+    const result = operationRecorded.results.shift();
+    if (result === undefined) throw new Error("No operation result queued");
+    return result;
+  },
+}));
+
 let importSessionDid = "did:key:z6MkSession#z6MkSession";
 const importRecorded = {
   useRuntimeDelegation: [] as Array<{ cid: string }>,
@@ -225,6 +265,7 @@ const importRecorded = {
 };
 
 let ensureAuthenticatedError: Error | null = null;
+let storedImportRequest: Record<string, unknown> | null = null;
 
 const importedNode = {
   hasRuntimePermissions: () => authNodeHasRuntimePermissions,
@@ -264,7 +305,7 @@ mock.module("../lib/permissions.js", () => ({
   },
   createPermissionRequestArtifact: () => ({}),
   getLastPermissionRequestArtifact: async () => null,
-  getPermissionRequestArtifact: async () => null,
+  getPermissionRequestArtifact: async () => storedImportRequest,
   isDelegationImportArtifact: validateDelegationImportArtifact,
   isPermissionRequestArtifact: validatePermissionRequestArtifact,
   appendGrantHistory: async () => {},
@@ -335,7 +376,13 @@ mock.module("../output/errors.js", () => ({
   setActiveProfileName: () => {},
 }));
 
-const { ensureDelegationAuthority, mergePrivateJwkIntoSession, refreshOpenKeySession, registerAuthCommand } = await import("./auth.js");
+const {
+  ensureDelegationAuthority,
+  mergePrivateJwkIntoSession,
+  readAuthArtifactSource,
+  refreshOpenKeySession,
+  registerAuthCommand,
+} = await import("./auth.js");
 
 async function runAuthCommand(args: string[]): Promise<void> {
   const program = new Command();
@@ -597,6 +644,27 @@ function makePortableDelegation(overrides: { delegateDID: string; cid?: string }
   };
 }
 
+function makeStoredImportRequest(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    kind: "tinycloud.auth.request",
+    version: 1,
+    requestId: "req_v1",
+    createdAt: "2026-07-14T12:00:00.000Z",
+    profile: "default",
+    posture: "delegate-session",
+    operatorType: "agent",
+    host: activeHost,
+    sessionDid: "did:key:z6MkSession",
+    requested: [{
+      service: "tinycloud.kv",
+      space: "tinycloud:pkh:eip155:1:0xOwner:secrets",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      actions: ["tinycloud.kv/get"],
+    }],
+    ...overrides,
+  };
+}
+
 describe("CLI auth import command", () => {
   let tempDir: string;
 
@@ -692,6 +760,95 @@ describe("CLI auth import command", () => {
     expect(recorded.errors).toEqual([]);
     expect(importRecorded.useRuntimeDelegation).toEqual([{ cid: "bafy-v1-artifact" }]);
     expect(recorded.outputs[0]).toMatchObject({ requestId: "req_v1", delegationCid: "bafy-v1-artifact", activated: true });
+    expect(operationRecorded.calls).toEqual([]);
+  });
+
+  test("routes only a request-bound active-session v1 delegation through invokeOperation", async () => {
+    const artifact = {
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "req_v1",
+      delegation: makePortableDelegation({
+        delegateDID: "did:key:z6MkSession",
+        cid: "bafy-operation-import",
+      }),
+    };
+    storedImportRequest = makeStoredImportRequest();
+    operationRecorded.results.push({
+      status: "ok",
+      operation: { operationId: "tinycloud.auth.import", operationVersion: 1 },
+      context: { profile: "default", host: activeHost, posture: "delegate-session" },
+      output: {
+        cid: "bafy-operation-import",
+        effectivePermissions: storedImportRequest.requested,
+        expiry: "2099-01-01T00:00:00.000Z",
+        audience: "did:key:z6MkSession",
+        activated: true,
+        alreadyPresent: false,
+      },
+    });
+    const source = join(tempDir, "bound-v1-artifact.json");
+    await writeFile(source, JSON.stringify(artifact), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(operationRecorded.calls).toEqual([{
+      operationId: "tinycloud.auth.import",
+      operationVersion: 1,
+      target: { profile: "default", host: activeHost },
+      input: artifact,
+    }]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(recorded.outputs).toEqual([{
+      imported: true,
+      activated: true,
+      kind: "tinycloud.auth.delegation",
+      requestId: "req_v1",
+      delegationCid: "bafy-operation-import",
+      permissions: storedImportRequest.requested,
+      expiry: "2099-01-01T00:00:00.000Z",
+    }]);
+  });
+
+  test("maps every non-success operation outcome without escalating a delegate session", async () => {
+    const artifact = {
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "req_v1",
+      delegation: makePortableDelegation({ delegateDID: "did:key:z6MkSession" }),
+    };
+    storedImportRequest = makeStoredImportRequest();
+    const source = join(tempDir, "operation-outcome.json");
+    await writeFile(source, JSON.stringify(artifact), "utf8");
+
+    operationRecorded.results.push({
+      status: "authority_required",
+      request: makeStoredImportRequest(),
+      missing: [],
+    });
+    await runAuthCommand(["auth", "import", source]);
+    expect(recorded.errors.pop()).toMatchObject({ code: "AUTHORITY_REQUIRED", exitCode: 5 });
+
+    operationRecorded.results.push({
+      status: "setup_required",
+      setup: { kind: "test" },
+    });
+    await runAuthCommand(["auth", "import", source]);
+    expect(recorded.errors.pop()).toMatchObject({ code: "SETUP_REQUIRED", exitCode: 1 });
+
+    operationRecorded.results.push({
+      status: "error",
+      error: { code: "DELEGATION_REJECTED", message: "The delegation was rejected.", retryable: false },
+    });
+    await runAuthCommand(["auth", "import", source]);
+    expect(recorded.errors.pop()).toMatchObject({ code: "DELEGATION_REJECTED", exitCode: 1 });
+
+    expect(operationRecorded.calls).toHaveLength(3);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(authNodeGrantDelegations).toEqual([]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
   });
 
   test("accepts a stored delegation wrapper from the legacy on-disk shape", async () => {
@@ -742,6 +899,62 @@ describe("CLI auth import command", () => {
       requested: [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"] }],
       next: "tc auth retry req_without_command",
     });
+  });
+
+  test("grants a canonical v1 request that omits command", async () => {
+    profiles.set("default", makeProfile({
+      authMethod: "local",
+      posture: "local-owner-key",
+      privateKey: "0xowner",
+    }));
+    const request = makeStoredImportRequest({
+      posture: "delegate-session",
+      operatorType: "agent",
+    });
+    const source = join(tempDir, "request-without-command.json");
+    await writeFile(source, JSON.stringify(request), "utf8");
+
+    await runAuthCommand(["auth", "grant", source, "--yes"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.grantedRequests).toHaveLength(1);
+    expect(recorded.grantedRequests[0]).not.toHaveProperty("command");
+  });
+});
+
+describe("CLI auth artifact sources", () => {
+  test("retains file, stdin, and URL source parsing", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-auth-source-"));
+    const artifact = '{"kind":"tinycloud.auth.delegation"}';
+    const path = join(directory, "artifact.json");
+    await writeFile(path, artifact, "utf8");
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(artifact);
+    });
+    let listening = false;
+    try {
+      expect(await readAuthArtifactSource(path, { stdin: false })).toBe(artifact);
+
+      Object.defineProperty(process, "stdin", {
+        configurable: true,
+        value: Readable.from([artifact]),
+      });
+      expect(await readAuthArtifactSource(undefined, { stdin: true })).toBe(artifact);
+
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      listening = true;
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("expected a TCP listener");
+      expect(await readAuthArtifactSource(`http://127.0.0.1:${address.port}/artifact.json`, { stdin: false })).toBe(artifact);
+    } finally {
+      if (stdinDescriptor) Object.defineProperty(process, "stdin", stdinDescriptor);
+      if (listening) {
+        await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      }
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

@@ -1,6 +1,10 @@
-import { randomBytes } from "node:crypto";
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  buildPermissionRequestArtifact,
+  isPermissionRequestArtifact,
+  type PermissionRequestArtifact,
+} from "@tinycloud/operations/artifacts";
 import {
   additionalDelegationsPath as sharedAdditionalDelegationsPath,
   authRequestsPath as sharedAuthRequestsPath,
@@ -32,10 +36,11 @@ import { resolveSpaceUri } from "./space.js";
 import {
   resolveProfileOperatorType,
   resolveProfilePosture,
-  type CLIOperatorType,
-  type CLIProfilePosture,
   type ProfileConfig,
 } from "../config/types.js";
+
+export { isPermissionRequestArtifact };
+export type { PermissionRequestArtifact };
 
 /**
  * Stored shape for a runtime delegation appended to a profile.
@@ -55,34 +60,6 @@ export interface GrantHistoryEntry {
   source: "cli" | "401-hint" | "manifest";
   delegationCid?: string;
   expiry?: string;
-}
-
-export interface PermissionRequestArtifact {
-  kind: "tinycloud.auth.request";
-  version: 1;
-  requestId: string;
-  createdAt: string;
-  profile: string;
-  posture: CLIProfilePosture;
-  operatorType: CLIOperatorType;
-  host: string;
-  sessionDid: string;
-  ownerDid?: string;
-  spaceId?: string;
-  requestedExpiry?: string | number;
-  requested: PermissionEntry[];
-  command?: {
-    argv: string[];
-    cwd: string;
-  };
-}
-
-export interface DelegationImportArtifact {
-  kind: "tinycloud.auth.delegation";
-  version: 1;
-  requestId?: string;
-  delegation: PortableDelegation;
-  permissions?: PermissionEntry[];
 }
 
 export function additionalDelegationsPath(profile: string): string {
@@ -107,11 +84,7 @@ export function createPermissionRequestArtifact(params: {
   argv?: string[];
   cwd?: string;
 }): PermissionRequestArtifact {
-  return {
-    kind: "tinycloud.auth.request",
-    version: 1,
-    requestId: `req_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`,
-    createdAt: new Date().toISOString(),
+  return buildPermissionRequestArtifact({
     profile: params.profileName,
     posture: resolveProfilePosture(params.profile),
     operatorType: resolveProfileOperatorType(params.profile),
@@ -120,12 +93,12 @@ export function createPermissionRequestArtifact(params: {
     ownerDid: params.profile.ownerDid,
     spaceId: params.profile.spaceId,
     requestedExpiry: params.requestedExpiry,
-    requested: params.requested,
+    missing: params.requested,
     command: {
       argv: params.argv ?? process.argv.slice(2),
       cwd: params.cwd ?? process.cwd(),
     },
-  };
+  });
 }
 
 function didWithoutFragment(did: string): string {
@@ -222,28 +195,6 @@ export async function getLastPermissionRequestArtifact(
 ): Promise<PermissionRequestArtifact | null> {
   const existing = await loadPermissionRequestArtifacts(profile);
   return existing.at(-1) ?? null;
-}
-
-export function isPermissionRequestArtifact(value: unknown): value is PermissionRequestArtifact {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value as Partial<PermissionRequestArtifact>;
-  return (
-    candidate.kind === "tinycloud.auth.request" &&
-    candidate.version === 1 &&
-    typeof candidate.requestId === "string" &&
-    Array.isArray(candidate.requested)
-  );
-}
-
-export function isDelegationImportArtifact(value: unknown): value is DelegationImportArtifact {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value as Partial<DelegationImportArtifact>;
-  return (
-    candidate.kind === "tinycloud.auth.delegation" &&
-    candidate.version === 1 &&
-    candidate.delegation !== undefined &&
-    typeof candidate.delegation === "object"
-  );
 }
 
 export async function replayAdditionalDelegations(
