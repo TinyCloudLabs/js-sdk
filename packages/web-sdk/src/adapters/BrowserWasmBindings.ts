@@ -1,4 +1,9 @@
-import { IWasmBindings, ISessionManager } from "@tinycloud/sdk-core";
+import {
+  IWasmBindings,
+  ISessionManager,
+  type NativeVerifiedRecipientDidDelegationBundleV2,
+  type RecipientDidDelegationBundleV2,
+} from "@tinycloud/sdk-core";
 import { tinycloud, tcwSession, initialized } from "@tinycloud/web-sdk-wasm";
 import { invoke, invokeAny, prepareSession, completeSessionSetup } from "../modules/Storage/tinycloud/module";
 
@@ -60,6 +65,18 @@ export class BrowserWasmBindings implements IWasmBindings {
       path: string;
       actions: string[];
     }[];
+  }
+  verifyRecipientDidDelegationBundleV2(
+    bundle: RecipientDidDelegationBundleV2,
+    nowUnixSeconds: bigint,
+  ): NativeVerifiedRecipientDidDelegationBundleV2 {
+    return tinycloud.verifyRecipientDidDelegationBundleV2(
+      {
+        ...bundle,
+        issuerProofs: bundle.issuerProofs.map((proof) => ({ ...proof })),
+      },
+      nowUnixSeconds,
+    );
   }
   generateHostSIWEMessage(params: any): string { return tinycloud.generateHostSIWEMessage(params); }
   siweToDelegationHeaders(params: any) { return tinycloud.siweToDelegationHeaders(params); }

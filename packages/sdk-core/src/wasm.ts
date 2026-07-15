@@ -7,8 +7,15 @@
  * @packageDocumentation
  */
 
-import type { InvokeAnyFunction, InvokeFunction } from "@tinycloud/sdk-services";
+import type {
+  InvokeAnyFunction,
+  InvokeFunction,
+} from "@tinycloud/sdk-services";
 import type { WasmRecapEntry } from "./capabilities";
+import type {
+  NativeVerifiedRecipientDidDelegationBundleV2,
+  RecipientDidDelegationBundleV2,
+} from "./recipientDidSharing";
 
 /**
  * Platform-agnostic WASM bindings interface.
@@ -43,6 +50,29 @@ export interface IWasmBindings {
    * Returns an empty array when the SIWE has no recap resource.
    */
   parseRecapFromSiwe: (siweString: string) => WasmRecapEntry[];
+  /**
+   * Atomically verify a recipient-DID delegation bundle without network I/O.
+   *
+   * Optional so custom and older runtimes remain source compatible. Consumers
+   * must fail closed when this is absent; parsing individual artifacts is not
+   * an authority proof. One successful call MUST jointly verify genuine
+   * Cacao/UCAN signatures and recomputed CIDs; SIWE ReCap root authority;
+   * issuer-to-audience and cited-parent continuity; resource/action/caveat and
+   * delegation-mode attenuation at every edge; not-before/expiry bounds; and
+   * exact, complete, authority-contributing proof membership in the supplied
+   * root-to-leaf order. The returned owner, session principal + DID URL,
+   * recipient, proof/grant CIDs, scope, and effective times MUST all come from
+   * that same verified graph. No node fetch, registry lookup, status request,
+   * or unsigned discovery is permitted inside this operation.
+   *
+   * `nowUnixSeconds` is an integer UTC epoch supplied by the caller so
+   * verification is deterministic and testable. Native errors cross the WASM
+   * boundary as rejection; they MUST NOT be converted into partial output.
+   */
+  verifyRecipientDidDelegationBundleV2?: (
+    bundle: RecipientDidDelegationBundleV2,
+    nowUnixSeconds: bigint,
+  ) => NativeVerifiedRecipientDidDelegationBundleV2;
   /** Generate a host SIWE message for space activation */
   generateHostSIWEMessage: (params: any) => string;
   /** Convert a signed SIWE message to delegation headers */
@@ -58,7 +88,10 @@ export interface IWasmBindings {
     signature: Uint8Array,
     info: Uint8Array,
   ) => Uint8Array;
-  vault_x25519_from_seed: (seed: Uint8Array) => { publicKey: Uint8Array; privateKey: Uint8Array };
+  vault_x25519_from_seed: (seed: Uint8Array) => {
+    publicKey: Uint8Array;
+    privateKey: Uint8Array;
+  };
   vault_x25519_dh: (
     privateKey: Uint8Array,
     publicKey: Uint8Array,

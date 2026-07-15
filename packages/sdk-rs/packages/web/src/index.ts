@@ -34,6 +34,7 @@ export namespace tinycloud {
   // whether a requested delegation is derivable from the current session
   // without a fresh wallet prompt.
   export import parseRecapFromSiwe = lib.parseRecapFromSiwe;
+  export import verifyRecipientDidDelegationBundleV2 = lib.verifyRecipientDidDelegationBundleV2;
   // Protocol version
   export import protocolVersion = lib.protocolVersion;
   // Vault crypto

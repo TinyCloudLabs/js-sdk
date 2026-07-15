@@ -283,8 +283,9 @@ describe("TinyCloudNode.delegateTo", () => {
     // WASM path was used.
     expect(createDelegationSpy).toHaveBeenCalledTimes(1);
     expect((createDelegationSpy as any).mock.calls[0][0].verificationMethod).toBe(
-      "did:key:z6MkTestSession",
+      "did:key:z6MkTestSession#z6MkTestSession",
     );
+    expect((createDelegationSpy as any).mock.calls[0][0].jwk.alg).toBe("EdDSA");
     // Wallet path was NOT used.
     expect(prepareSessionSpy).not.toHaveBeenCalled();
   });

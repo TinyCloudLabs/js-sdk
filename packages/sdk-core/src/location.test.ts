@@ -13,6 +13,7 @@ import {
   resolveTinyCloudHosts,
   signLocationRecord,
   validateLocationRecord,
+  verifyDidKeyEd25519Signature,
   verifyLocationRecord,
   type LocationRecordPayload,
 } from "./location";
@@ -62,6 +63,47 @@ describe("location records", () => {
     });
 
     expect(await verifyLocationRecord(record)).toBe(true);
+  });
+
+  it("rejects the legacy one-byte Ed25519 did:key multicodec", () => {
+    const privateKey = new Uint8Array(32).fill(9);
+    const publicKey = ed25519.getPublicKey(privateKey);
+    const legacyDid = `did:key:${bases.base58btc.encode(
+      Uint8Array.of(0xed, ...publicKey),
+    )}`;
+
+    expect(() =>
+      verifyDidKeyEd25519Signature(
+        legacyDid,
+        new Uint8Array([1]),
+        ed25519.sign(new Uint8Array([1]), privateKey),
+      ),
+    ).toThrow("did:key must be an Ed25519 public key");
+  });
+
+  it("rejects a ZIP-215 small-order identity before signature use", () => {
+    const weakPublicKey = Uint8Array.of(1, ...new Uint8Array(31));
+    const weakSignature = Uint8Array.of(1, ...new Uint8Array(63));
+    const did = `did:key:${bases.base58btc.encode(
+      Uint8Array.of(0xed, 0x01, ...weakPublicKey),
+    )}`;
+
+    expect(() =>
+      verifyDidKeyEd25519Signature(did, new Uint8Array(), weakSignature),
+    ).toThrow("canonical torsion-free point");
+  });
+
+  it("rejects a mixed-torsion Ed25519 did:key before signature use", () => {
+    const mixedTorsionDid =
+      "did:key:z6MkpXEduLbfEpxGpadTPFodnKeo8qCZdotBqyemjeahLyVA";
+
+    expect(() =>
+      verifyDidKeyEd25519Signature(
+        mixedTorsionDid,
+        new Uint8Array(),
+        new Uint8Array(64),
+      ),
+    ).toThrow("canonical torsion-free point");
   });
 
   it("converts http URLs and multiaddrs", () => {

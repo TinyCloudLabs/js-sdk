@@ -629,6 +629,21 @@ export {
   type ExpiryTier,
 } from "./expiry";
 
+// Recipient-DID sharing v2 transport and native authority boundary.
+export {
+  RECIPIENT_DID_SHARE_ENVELOPE_V2_DOMAIN,
+  type NativeVerifiedRecipientDidDelegationBundleV2,
+  type RecipientDidCacaoArtifactV2,
+  type RecipientDidDelegationArtifactV2,
+  type RecipientDidDelegationBundleV2,
+  type RecipientDidDelegationRoutingV2,
+  type RecipientDidShareDisplayV2,
+  type RecipientDidShareEnvelopeV2,
+  type RecipientDidShareEnvelopeV2SigningPayload,
+  type RecipientDidShareTargetV2,
+  type RecipientDidUcanArtifactV2,
+} from "./recipientDidSharing";
+
 // Policy signed-object profile core
 export {
   ED25519_JCS_SIGNATURE_SUITE,
