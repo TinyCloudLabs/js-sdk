@@ -23,6 +23,7 @@ import {
 } from "../../../sdk-core/src/manifest.js";
 import { isCapabilitySubset } from "../../../sdk-core/src/capabilities.js";
 import {
+  type AuthRequestArtifact,
   type PermissionEntry,
   type PortableDelegation,
   type TinyCloudNode,
@@ -41,6 +42,29 @@ import {
 
 export { isPermissionRequestArtifact };
 export type { PermissionRequestArtifact };
+
+/**
+ * The public node-sdk request transport deliberately has fewer fields than
+ * the canonical operations artifact. Keep accepting it in the CLI's legacy
+ * request store without changing the canonical operations validator.
+ */
+type StoredPermissionRequestArtifact = PermissionRequestArtifact | AuthRequestArtifact;
+
+export function isCompatiblePermissionRequestArtifact(
+  value: unknown,
+): value is StoredPermissionRequestArtifact {
+  return isPermissionRequestArtifact(value) || isNodeSdkAuthRequestArtifact(value);
+}
+
+function isNodeSdkAuthRequestArtifact(value: unknown): value is AuthRequestArtifact {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Partial<AuthRequestArtifact>;
+  return candidate.kind === "tinycloud.auth.request" &&
+    candidate.version === 1 &&
+    typeof candidate.requestId === "string" && candidate.requestId.length > 0 &&
+    typeof candidate.sessionDid === "string" && candidate.sessionDid.length > 0 &&
+    Array.isArray(candidate.requested) && candidate.requested.length > 0;
+}
 
 /**
  * Stored shape for a runtime delegation appended to a profile.
@@ -134,28 +158,28 @@ export async function appendAdditionalDelegation(
 
 export async function loadPermissionRequestArtifacts(
   profile: string,
-): Promise<PermissionRequestArtifact[]> {
-  const raw = await readAuthRequests<PermissionRequestArtifact>(profile);
-  return raw.filter(isPermissionRequestArtifact);
+): Promise<StoredPermissionRequestArtifact[]> {
+  const raw = await readAuthRequests<unknown>(profile);
+  return raw.filter(isCompatiblePermissionRequestArtifact);
 }
 
 export async function savePermissionRequestArtifacts(
   profile: string,
-  entries: PermissionRequestArtifact[],
+  entries: StoredPermissionRequestArtifact[],
 ): Promise<void> {
   await replaceSharedRecords(profile, "auth-requests", entries);
 }
 
 export async function appendPermissionRequestArtifact(
   profile: string,
-  artifact: PermissionRequestArtifact,
+  artifact: StoredPermissionRequestArtifact,
 ): Promise<void> {
   // Retain the legacy parser's behavior of dropping malformed historical
   // records, while performing that read-modify-write sequence under the
   // operations-owned profile lock.
   await withProfileLock(profile, async () => {
-    const existing = (await readAuthRequests<PermissionRequestArtifact>(profile))
-      .filter(isPermissionRequestArtifact);
+    const existing = (await readAuthRequests<unknown>(profile))
+      .filter(isCompatiblePermissionRequestArtifact);
     const next = existing.filter((item) => item.requestId !== artifact.requestId);
     next.push(artifact);
     await writeSharedRecords(profile, "auth-requests", next);
@@ -185,14 +209,14 @@ async function writeSharedRecords<T>(
 export async function getPermissionRequestArtifact(
   profile: string,
   requestId: string,
-): Promise<PermissionRequestArtifact | null> {
+): Promise<StoredPermissionRequestArtifact | null> {
   const existing = await loadPermissionRequestArtifacts(profile);
   return existing.find((item) => item.requestId === requestId) ?? null;
 }
 
 export async function getLastPermissionRequestArtifact(
   profile: string,
-): Promise<PermissionRequestArtifact | null> {
+): Promise<StoredPermissionRequestArtifact | null> {
   const existing = await loadPermissionRequestArtifacts(profile);
   return existing.at(-1) ?? null;
 }

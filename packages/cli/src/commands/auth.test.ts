@@ -13,6 +13,23 @@ const {
   isPermissionRequestArtifact: validatePermissionRequestArtifact,
 } = await import("@tinycloud/operations/artifacts");
 
+function validateCompatiblePermissionRequestArtifact(value: unknown): boolean {
+  if (validatePermissionRequestArtifact(value)) return true;
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as {
+    kind?: unknown;
+    version?: unknown;
+    requestId?: unknown;
+    sessionDid?: unknown;
+    requested?: unknown;
+  };
+  return candidate.kind === "tinycloud.auth.request" &&
+    candidate.version === 1 &&
+    typeof candidate.requestId === "string" && candidate.requestId.length > 0 &&
+    typeof candidate.sessionDid === "string" && candidate.sessionDid.length > 0 &&
+    Array.isArray(candidate.requested) && candidate.requested.length > 0;
+}
+
 type ProfileLike = {
   name: string;
   host: string;
@@ -91,6 +108,7 @@ let localSignInResult: LocalSignInResult;
 let authNodeHasRuntimePermissions: boolean;
 let authNodeRestorableSession: Record<string, unknown> | undefined;
 let authNodeGrantDelegations: Array<{ cid: string; expiry: Date }>;
+let operationInvokeHook: (() => void) | null = null;
 
 function resetState(): void {
   recorded.outputs.length = 0;
@@ -137,6 +155,7 @@ function resetState(): void {
   storedImportRequest = null;
   operationRecorded.calls.length = 0;
   operationRecorded.results.length = 0;
+  operationInvokeHook = null;
 }
 
 function makeProfile(overrides: Partial<ProfileLike> = {}): ProfileLike {
@@ -250,6 +269,7 @@ mock.module("@tinycloud/operations", () => ({
     input: unknown,
   ) => {
     operationRecorded.calls.push({ operationId, operationVersion, target, input });
+    operationInvokeHook?.();
     const result = operationRecorded.results.shift();
     if (result === undefined) throw new Error("No operation result queued");
     return result;
@@ -307,6 +327,7 @@ mock.module("../lib/permissions.js", () => ({
   getLastPermissionRequestArtifact: async () => null,
   getPermissionRequestArtifact: async () => storedImportRequest,
   isDelegationImportArtifact: validateDelegationImportArtifact,
+  isCompatiblePermissionRequestArtifact: validateCompatiblePermissionRequestArtifact,
   isPermissionRequestArtifact: validatePermissionRequestArtifact,
   appendGrantHistory: async () => {},
   compactPermission: () => "",
@@ -683,6 +704,35 @@ describe("CLI auth import command", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  async function expectCanonicalOperationRejection(
+    artifact: Record<string, unknown>,
+    code: string,
+  ): Promise<void> {
+    storedImportRequest = makeStoredImportRequest();
+    operationRecorded.results.push({
+      status: "error",
+      error: { code, message: "Canonical operation rejection.", retryable: false },
+    });
+    const source = join(tempDir, `${code}.json`);
+    await writeFile(source, JSON.stringify(artifact), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors.pop()).toMatchObject({ code, exitCode: 1 });
+    expect(operationRecorded.calls).toEqual([{
+      operationId: "tinycloud.auth.import",
+      operationVersion: 1,
+      target: { profile: "default", host: activeHost, allowOwnerProfile: true },
+      input: artifact,
+    }]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(importRecorded.bootstrappedDelegations).toEqual([]);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(recorded.localSignIns).toEqual([]);
+    expect(authNodeGrantDelegations).toEqual([]);
+  }
+
   test("persists a cross-user delegation without installing it as a runtime grant", async () => {
     // Audience is the importer's stable identity DID (did:pkh), not the session
     // key. The node would reject this via useRuntimeDelegation, so import must
@@ -763,7 +813,32 @@ describe("CLI auth import command", () => {
     expect(operationRecorded.calls).toEqual([]);
   });
 
-  test("routes only a request-bound active-session v1 delegation through invokeOperation", async () => {
+  test("keeps an unmatched cross-user v1 delegation envelope on the legacy path", async () => {
+    const source = join(tempDir, "unmatched-cross-user-v1.json");
+    await writeFile(source, JSON.stringify({
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "req_for_another_profile",
+      delegation: makePortableDelegation({
+        delegateDID: "did:pkh:eip155:1:0xOtherUser",
+        cid: "bafy-unmatched-cross-user",
+      }),
+    }), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(operationRecorded.calls).toEqual([]);
+    expect(importRecorded.appendedDelegations).toHaveLength(1);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(recorded.outputs[0]).toMatchObject({
+      requestId: "req_for_another_profile",
+      delegationCid: "bafy-unmatched-cross-user",
+      activated: false,
+    });
+  });
+
+  test("routes a request-bound v1 delegation through invokeOperation", async () => {
     const artifact = {
       kind: "tinycloud.auth.delegation",
       version: 1,
@@ -796,7 +871,7 @@ describe("CLI auth import command", () => {
     expect(operationRecorded.calls).toEqual([{
       operationId: "tinycloud.auth.import",
       operationVersion: 1,
-      target: { profile: "default", host: activeHost },
+      target: { profile: "default", host: activeHost, allowOwnerProfile: true },
       input: artifact,
     }]);
     expect(importRecorded.appendedDelegations).toEqual([]);
@@ -810,6 +885,101 @@ describe("CLI auth import command", () => {
       permissions: storedImportRequest.requested,
       expiry: "2099-01-01T00:00:00.000Z",
     }]);
+  });
+
+  test("routes a wrong-host request-bound envelope through the canonical operation", async () => {
+    await expectCanonicalOperationRejection({
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "req_v1",
+      permissions: [{ service: "tinycloud.kv", space: "forged", path: "forged", actions: ["tinycloud.kv/*"] }],
+      delegation: {
+        ...makePortableDelegation({ delegateDID: "did:key:z6MkSession" }),
+        host: "https://wrong-host.tinycloud.test",
+      },
+    }, "DELEGATION_HOST_MISMATCH");
+  });
+
+  test("routes a stale-session request-bound envelope through the canonical operation", async () => {
+    importSessionDid = "did:key:z6MkRotatedSession";
+    storedImportRequest = makeStoredImportRequest({ sessionDid: "did:key:z6MkSession" });
+    const artifact = {
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "req_v1",
+      delegation: makePortableDelegation({ delegateDID: "did:key:z6MkSession" }),
+    };
+    operationRecorded.results.push({
+      status: "error",
+      error: { code: "STALE_SESSION", message: "Canonical operation rejection.", retryable: false },
+    });
+    const source = join(tempDir, "stale-session.json");
+    await writeFile(source, JSON.stringify(artifact), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors.pop()).toMatchObject({ code: "STALE_SESSION", exitCode: 1 });
+    expect(operationRecorded.calls).toHaveLength(1);
+    expect(operationRecorded.calls[0]?.input).toEqual(artifact);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(importRecorded.bootstrappedDelegations).toEqual([]);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(recorded.localSignIns).toEqual([]);
+    expect(authNodeGrantDelegations).toEqual([]);
+  });
+
+  test("routes a wrong-audience request-bound envelope through the canonical operation", async () => {
+    await expectCanonicalOperationRejection({
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "req_v1",
+      delegation: makePortableDelegation({ delegateDID: "did:key:z6MkOtherSession" }),
+    }, "DELEGATION_AUDIENCE_MISMATCH");
+  });
+
+  test("routes a malformed request-bound envelope unchanged through the canonical operation", async () => {
+    const artifact = {
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "req_v1",
+      delegation: null,
+      permissions: [{ service: "tinycloud.kv", space: "forged", path: "forged", actions: ["tinycloud.kv/*"] }],
+    };
+
+    await expectCanonicalOperationRejection(artifact, "INVALID_AUTH_IMPORT");
+  });
+
+  test("keeps a request-bound envelope on the canonical operation path after request deletion", async () => {
+    storedImportRequest = makeStoredImportRequest();
+    const artifact = {
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "req_v1",
+      delegation: makePortableDelegation({ delegateDID: "did:key:z6MkSession" }),
+    };
+    operationInvokeHook = () => {
+      storedImportRequest = null;
+    };
+    operationRecorded.results.push({
+      status: "error",
+      error: { code: "REQUEST_NOT_FOUND", message: "Request was deleted.", retryable: false },
+    });
+    const source = join(tempDir, "request-deleted.json");
+    await writeFile(source, JSON.stringify(artifact), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(storedImportRequest).toBeNull();
+    expect(recorded.errors.pop()).toMatchObject({ code: "REQUEST_NOT_FOUND", exitCode: 1 });
+    expect(operationRecorded.calls).toHaveLength(1);
+    expect(operationRecorded.calls[0]?.input).toEqual(artifact);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(importRecorded.bootstrappedDelegations).toEqual([]);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(recorded.localSignIns).toEqual([]);
+    expect(authNodeGrantDelegations).toEqual([]);
   });
 
   test("maps every non-success operation outcome without escalating a delegate session", async () => {
@@ -919,6 +1089,48 @@ describe("CLI auth import command", () => {
     expect(recorded.errors).toEqual([]);
     expect(recorded.grantedRequests).toHaveLength(1);
     expect(recorded.grantedRequests[0]).not.toHaveProperty("command");
+  });
+
+  test("imports the minimal public node-sdk auth request artifact", async () => {
+    const request = {
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_minimal_import",
+      sessionDid: "did:key:z6MkSession",
+      requested: [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"] }],
+    };
+    const source = join(tempDir, "minimal-request.json");
+    await writeFile(source, JSON.stringify(request), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(importRecorded.appendedRequests).toEqual([request]);
+    expect(recorded.outputs[0]).toEqual({
+      imported: true,
+      kind: "tinycloud.auth.request",
+      requestId: "req_minimal_import",
+      requested: request.requested,
+      next: "tc auth retry req_minimal_import",
+    });
+  });
+
+  test("grants the minimal public node-sdk auth request artifact", async () => {
+    profiles.set("default", makeProfile());
+    const request = {
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_minimal_grant",
+      sessionDid: "did:key:z6MkSession",
+      requested: [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"] }],
+    };
+    const source = join(tempDir, "minimal-grant.json");
+    await writeFile(source, JSON.stringify(request), "utf8");
+
+    await runAuthCommand(["auth", "grant", source, "--yes"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.grantedRequests).toEqual([request]);
   });
 });
 

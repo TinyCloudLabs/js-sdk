@@ -201,6 +201,59 @@ test("snapshots the shipped session, delegation, and request writer layouts", as
   }
 });
 
+test("reads the minimal public node-sdk auth request artifact from the request store", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc-minimal-request-store-"));
+  const permissionsUrl = new URL("./permissions.ts", import.meta.url).href;
+  const script = `
+    const {
+      appendPermissionRequestArtifact,
+      loadPermissionRequestArtifacts,
+    } = await import(${JSON.stringify(permissionsUrl)});
+    const request = {
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_minimal_store",
+      sessionDid: "did:key:z6MkSession",
+      requested: [{
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/KEY",
+        actions: ["tinycloud.kv/get"],
+      }],
+    };
+    await appendPermissionRequestArtifact("snapshot", request);
+    process.stdout.write(JSON.stringify(await loadPermissionRequestArtifacts("snapshot")));
+  `;
+
+  try {
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      env: { ...process.env, HOME: home },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual([{
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_minimal_store",
+      sessionDid: "did:key:z6MkSession",
+      requested: [{
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/KEY",
+        actions: ["tinycloud.kv/get"],
+      }],
+    }]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 function manifestSource(manifest: Record<string, unknown>): string {
   return `base64:${Buffer.from(JSON.stringify(manifest)).toString("base64")}`;
 }
