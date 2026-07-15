@@ -81,8 +81,11 @@ export interface IWasmBindings {
 export interface ISessionManager {
   /** Create a new session key with the given ID, returns the DID */
   createSessionKey(id: string): string;
-  /** Replace an existing key with a validated private Ed25519 JWK. */
-  replaceSessionKey(jwk: object, keyId: string): string;
+  /**
+   * Optional for custom bindings built before persisted-key restore.
+   * `restoreSession` detects support at runtime.
+   */
+  replaceSessionKey?(jwk: object, keyId: string): string;
   /** Rename a session key ID */
   renameSessionKeyId(oldId: string, newId: string): void;
   /** Get the DID for a session key */

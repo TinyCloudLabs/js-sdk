@@ -108,6 +108,7 @@ export type {
 // High-level API
 export {
   TinyCloudNode,
+  UnsupportedSessionRestoreError,
   type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,

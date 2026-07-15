@@ -56,7 +56,7 @@ describe("activateValidatedRuntimeDelegation", () => {
       expect(activated.expiry.getTime()).toBe(delegation.expiry.getTime());
       expect(activated.delegation).not.toHaveProperty("permissions");
 
-      await fixture.readAndDecrypt(activated);
+      await fixture.readAndDecrypt(fixture.delegate, activated);
       fixture.assertNarrowDelegatedReadAndDecrypt(activated);
     } finally {
       fixture.stop();

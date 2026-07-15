@@ -577,7 +577,11 @@ export class TinyCloudWeb {
         session: clientSessionFromPersisted(loaded.data),
       };
     } catch (err) {
-      await this.sessionStorage.clear(restoreAddress);
+      // A pre-TC-193 custom binding cannot replace a signer. That is an
+      // unsupported restore, not corrupt persisted state.
+      if ((err as { code?: unknown } | undefined)?.code !== "RESTORE_SESSION_KEY_REPLACEMENT_UNSUPPORTED") {
+        await this.sessionStorage.clear(restoreAddress);
+      }
       this._sessionRestoreStatus = "restore-failed";
       return {
         status: "restore-failed",

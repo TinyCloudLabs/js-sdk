@@ -9,7 +9,7 @@ use tinycloud_sdk_rs::tinycloud_auth::{
     siwe_recap::{Ability, Capability},
     ssi::{
         dids::DIDKey,
-        jwk::{Params, JWK},
+        jwk::{Algorithm, Params, JWK},
     },
 };
 use wasm_bindgen::prelude::*;
@@ -61,6 +61,14 @@ fn validate_private_ed25519_jwk(key: &JWK) -> Result<(), String> {
     let derived_public_key = SigningKey::from_bytes(&private_key).verifying_key();
     if derived_public_key.as_bytes() != params.public_key.0.as_slice() {
         return Err("session key Ed25519 public and private components do not match".to_string());
+    }
+
+    // `alg` is optional metadata, but when present it must agree with the only
+    // signing suite supported by an Ed25519 session key.
+    if let Some(algorithm) = key.algorithm {
+        if algorithm != Algorithm::EdDSA {
+            return Err("session key alg must be EdDSA when present".to_string());
+        }
     }
 
     Ok(())
@@ -428,6 +436,32 @@ pub mod test {
             manager.jwk(Some("default".to_string())).unwrap(),
             original_default
         );
+    }
+
+    #[tokio::test]
+    async fn test_import_session_key_rejects_contradictory_alg_and_accepts_missing_or_eddsa() {
+        let mut manager = SessionManager::new().unwrap();
+        let original_default = manager.jwk(Some("default".to_string())).unwrap();
+
+        let mut contradictory = JWK::generate_ed25519().unwrap();
+        contradictory.algorithm = Some(Algorithm::ES256);
+        assert!(manager
+            .replace_session_key(contradictory, "default".to_string())
+            .is_err());
+        assert_eq!(
+            manager.jwk(Some("default".to_string())).unwrap(),
+            original_default
+        );
+
+        assert!(manager
+            .replace_session_key(JWK::generate_ed25519().unwrap(), "default".to_string())
+            .is_ok());
+
+        let mut eddsa = JWK::generate_ed25519().unwrap();
+        eddsa.algorithm = Some(Algorithm::EdDSA);
+        assert!(manager
+            .replace_session_key(eddsa, "default".to_string())
+            .is_ok());
     }
 
     #[tokio::test]

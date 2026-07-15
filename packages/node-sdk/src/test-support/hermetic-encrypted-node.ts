@@ -4,6 +4,8 @@ import {
   canonicalHashHex,
   canonicalizeEncryptionJson,
   canonicalSignedResponse,
+  principalDidEquals,
+  verifyDidKeyEd25519Signature,
   type DecryptRequestBody,
   type DecryptResponseBody,
   type InlineEncryptedEnvelope,
@@ -24,17 +26,28 @@ const SECRET_PATH = "vault/secrets/HERMETIC_DELEGATION_CANARY";
 const PLAINTEXT = "hermetic encrypted delegation proof";
 
 type CompactPayload = {
+  iss?: string;
   att?: Record<string, Record<string, unknown>>;
   prf?: string[];
 };
 
-function compactPayload(authorization: string): CompactPayload {
+function verifiedCompactPayload(authorization: string): CompactPayload {
   const compact = authorization.replace(/^Bearer /i, "");
   const parts = compact.split(".");
   if (parts.length !== 3) {
     throw new Error("loopback expected a compact UCAN authorization");
   }
-  return JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as CompactPayload;
+  const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as CompactPayload;
+  const issuer = payload.iss?.split("#", 1)[0];
+  if (!issuer?.startsWith("did:key:")) throw new Error("loopback expected a did:key invocation issuer");
+  if (!verifyDidKeyEd25519Signature(
+    issuer,
+    new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
+    Uint8Array.from(Buffer.from(parts[2]!, "base64url")),
+  )) {
+    throw new Error("loopback rejected an invalid UCAN signature");
+  }
+  return payload;
 }
 
 function base64(bytes: Uint8Array): string {
@@ -63,12 +76,11 @@ function didKeyFromPublicKey(publicKey: Uint8Array): string {
 }
 
 function hasExactCapability(
-  authorization: string,
+  payload: CompactPayload,
   resource: string,
   action: string,
   delegationCid: string,
 ): boolean {
-  const payload = compactPayload(authorization);
   return (
     payload.att?.[resource]?.[action] !== undefined &&
     payload.prf?.includes(delegationCid) === true
@@ -85,6 +97,9 @@ class LoopbackEncryptedNode {
   readonly activations = new Set<string>();
   readonly rejectedActivationCids = new Set<string>();
   readonly observed = {
+    signingIssuers: [] as string[],
+    signedDelegation: false,
+    signedInvocation: false,
     delegatedKvRead: false,
     delegatedDecrypt: false,
   };
@@ -205,10 +220,13 @@ class LoopbackEncryptedNode {
     if (url.pathname === "/delegate" && request.method === "POST") {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
+      const payload = verifiedCompactPayload(authorization);
+      if (payload.iss) this.observed.signingIssuers.push(payload.iss);
       const cid = this.cidForAuthorization(authorization);
       if (this.rejectedActivationCids.has(cid)) {
         return new Response("delegation chain rejected by loopback transport", { status: 403 });
       }
+      this.observed.signedDelegation = true;
       this.activations.add(cid);
       return this.json({ activated: [cid], skipped: [] });
     }
@@ -226,11 +244,13 @@ class LoopbackEncryptedNode {
     this.assertConfigured();
     if (url.pathname === "/invoke" && request.method === "POST") {
       const authorization = request.headers.get("authorization");
+      if (!authorization) return new Response("missing authorization", { status: 401 });
+      const payload = verifiedCompactPayload(authorization);
+      if (payload.iss) this.observed.signingIssuers.push(payload.iss);
       const resource = `${this.spaceId}/kv/${SECRET_PATH}`;
       if (
-        !authorization ||
         !hasExactCapability(
-          authorization,
+          payload,
           resource,
           "tinycloud.kv/get",
           this.delegationCid,
@@ -238,6 +258,7 @@ class LoopbackEncryptedNode {
       ) {
         return new Response("delegated kv/get proof required", { status: 403 });
       }
+      this.observed.signedInvocation = true;
       this.observed.delegatedKvRead = true;
       return this.json(this.envelope);
     }
@@ -245,6 +266,8 @@ class LoopbackEncryptedNode {
     if (url.pathname.endsWith("/decrypt") && request.method === "POST") {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
+      const payload = verifiedCompactPayload(authorization);
+      if (payload.iss) this.observed.signingIssuers.push(payload.iss);
       const bodyText = await request.text();
       const body = JSON.parse(bodyText) as DecryptRequestBody;
       if (canonicalizeEncryptionJson(body) !== bodyText) {
@@ -253,7 +276,7 @@ class LoopbackEncryptedNode {
       if (
         body.networkId !== this.networkId ||
         !hasExactCapability(
-          authorization,
+          payload,
           this.networkId,
           "tinycloud.encryption/decrypt",
           this.delegationCid,
@@ -398,8 +421,11 @@ export interface HermeticEncryptedNode {
     audience: string,
   ): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
   mintUntrustedDelegation(): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
-  readAndDecrypt(delegation: ValidatedRuntimeDelegation): Promise<void>;
-  assertNarrowDelegatedReadAndDecrypt(delegation: ValidatedRuntimeDelegation): void;
+  readAndDecrypt(node: TinyCloudNode, delegation: ValidatedRuntimeDelegation): Promise<void>;
+  assertNarrowDelegatedReadAndDecrypt(
+    delegation: ValidatedRuntimeDelegation,
+    expectedSigningIssuer?: string,
+  ): void;
   stop(): void;
 }
 
@@ -519,12 +545,12 @@ export async function createHermeticEncryptedNode(): Promise<HermeticEncryptedNo
       transport.rejectActivation(delegation.cid);
       return delegation;
     },
-    async readAndDecrypt(delegation) {
-      const read = await delegateRuntime.node.kv.get<InlineEncryptedEnvelope>(SECRET_PATH);
+    async readAndDecrypt(node, delegation) {
+      const read = await node.kv.get<InlineEncryptedEnvelope>(SECRET_PATH);
       if (!read.ok || !read.data.data) {
         throw new Error("loopback delegated KV read failed");
       }
-      const decrypted = await delegateRuntime.node.encryption.decryptEnvelope(
+      const decrypted = await node.encryption.decryptEnvelope(
         read.data.data,
         { proofs: [delegation.cid] },
       );
@@ -532,12 +558,18 @@ export async function createHermeticEncryptedNode(): Promise<HermeticEncryptedNo
         throw new Error("loopback delegated decrypt failed");
       }
     },
-    assertNarrowDelegatedReadAndDecrypt(delegation) {
-      if (!transport.observed.delegatedKvRead || !transport.observed.delegatedDecrypt) {
-        throw new Error("loopback did not observe both delegated KV read and decrypt");
+    assertNarrowDelegatedReadAndDecrypt(delegation, expectedSigningIssuer) {
+      if (!transport.observed.signedDelegation || !transport.observed.signedInvocation ||
+        !transport.observed.delegatedKvRead || !transport.observed.delegatedDecrypt) {
+        throw new Error("loopback did not validate signed delegation and invocation traffic");
       }
       if (!transport.activations.has(delegation.cid)) {
         throw new Error("loopback did not observe the validated delegation activation");
+      }
+      if (expectedSigningIssuer && !transport.observed.signingIssuers.some((issuer) =>
+        principalDidEquals(issuer, expectedSigningIssuer)
+      )) {
+        throw new Error("loopback did not observe a signature from the expected restored session key");
       }
     },
     stop: () => transport.stop(),

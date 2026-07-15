@@ -86,6 +86,47 @@ test("forwards signStrategy to the underlying TinyCloudNode", async () => {
   expect((tcw as any)._node.config.signStrategy).toBe(signStrategy);
 });
 
+test("keeps a valid persisted session when the loaded binding cannot restore its signer", async () => {
+  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const storage = {
+    save: mock(async () => undefined),
+    load: mock(async () => ({
+      address,
+      chainId: 1,
+      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
+      siwe: "siwe",
+      signature: "signature",
+      tinycloudSession: {
+        delegationHeader: { Authorization: "Bearer persisted" },
+        delegationCid: "bafy-persisted",
+        spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
+        verificationMethod: "did:key:zPersisted#zPersisted",
+      },
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      version: "1.0",
+    })),
+    clear: mock(async () => undefined),
+  };
+  const tcw = new TinyCloudWeb({ sessionStorage: storage as any });
+  await (tcw as any)._initPromise;
+  (tcw as any)._node = {
+    restoreSession: mock(async () => {
+      const error = new Error("binding does not support signer replacement") as Error & { code: string };
+      error.code = "RESTORE_SESSION_KEY_REPLACEMENT_UNSUPPORTED";
+      throw error;
+    }),
+  };
+  (tcw as any)._initPromise = Promise.resolve();
+
+  const result = await tcw.restoreSession(address);
+
+  expect(result.status).toBe("restore-failed");
+  expect(result.error?.message).not.toContain("private");
+  expect(storage.clear).not.toHaveBeenCalled();
+  expect(tcw.sessionRestoreStatus).toBe("restore-failed");
+});
+
 test("signIn refreshes a restored session that does not cover the configured manifest", async () => {
   const tcw = new TinyCloudWeb({
     manifest: {

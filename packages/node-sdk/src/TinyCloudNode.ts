@@ -282,13 +282,25 @@ function clonePersistedSessionJwk(jwk: unknown): object {
   }
 }
 
-function restoredSessionDidMatches(actual: string, expected: unknown): boolean {
-  if (typeof expected !== "string") return false;
-  try {
-    return principalDidEquals(actual, expected);
-  } catch {
-    return false;
+export class UnsupportedSessionRestoreError extends Error {
+  readonly code = "RESTORE_SESSION_KEY_REPLACEMENT_UNSUPPORTED" as const;
+
+  constructor() {
+    super("Persisted session restore is unsupported by this WASM binding because it cannot replace the session signer.");
+    this.name = "UnsupportedSessionRestoreError";
   }
+}
+
+function canonicalRestoredVerificationMethod(
+  canonicalVerificationMethod: string,
+  persistedVerificationMethod: unknown,
+): string | undefined {
+  if (typeof persistedVerificationMethod !== "string") return undefined;
+  const principal = canonicalVerificationMethod.split("#", 1)[0];
+  return persistedVerificationMethod === principal ||
+    persistedVerificationMethod === canonicalVerificationMethod
+    ? canonicalVerificationMethod
+    : undefined;
 }
 
 function sharingActionsToAbilities(path: string, actions: string[]): AbilitiesMap | undefined {
@@ -1900,24 +1912,49 @@ export class TinyCloudNode {
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
 
-    // Preflight the persisted signer before resetting any service state. A
-    // fresh TinyCloudNode always starts with a generated default key, so merely
-    // restoring delegation metadata would leave `sessionDid` pointed at the
-    // wrong principal. A disposable manager validates the private Ed25519 JWK
-    // without changing this node; the verification method is then checked
-    // against the DID derived by that exact key (fragments are intentionally
-    // ignored because either DID or DID URL is valid persisted input).
+    // Build every part of the restored state against a disposable manager.
+    // Nothing live is touched until the commit below.
     const restoredJwk = clonePersistedSessionJwk(sessionData.jwk);
+    if (
+      sessionData.chainId !== undefined &&
+      (!Number.isSafeInteger(sessionData.chainId) || sessionData.chainId <= 0)
+    ) {
+      throw new Error("Persisted session chain ID must be a positive safe integer.");
+    }
     const stagedManager = this.wasmBindings.createSessionManager();
+    const stagedReplace = stagedManager.replaceSessionKey;
+    if (typeof stagedReplace !== "function" || typeof this.sessionManager.replaceSessionKey !== "function") {
+      throw new UnsupportedSessionRestoreError();
+    }
     let stagedKeyId: string;
-    let stagedDid: string;
+    let stagedJwk: object;
+    let canonicalVerificationMethod: string;
     try {
-      stagedKeyId = stagedManager.replaceSessionKey(restoredJwk, "restore-validation");
-      stagedDid = stagedManager.getDID(stagedKeyId);
+      const liveManager = this.sessionManager as ISessionManager & {
+        listSessionKeys?(): string[];
+      };
+      // A successful restore replaces only the primary signer; preserve any
+      // share keys that the concrete WASM manager exposes. Older custom
+      // managers need not implement listing and remain supported.
+      for (const keyId of liveManager.listSessionKeys?.() ?? []) {
+        if (keyId === this.sessionKeyId) continue;
+        const jwk = liveManager.jwk(keyId);
+        if (!jwk) throw new Error("missing live session key");
+        stagedReplace.call(stagedManager, clonePersistedSessionJwk(JSON.parse(jwk)), keyId);
+      }
+      stagedKeyId = stagedReplace.call(stagedManager, restoredJwk, this.sessionKeyId);
+      const stagedJwkJson = stagedManager.jwk(stagedKeyId);
+      if (!stagedJwkJson) throw new Error("missing restored session key");
+      stagedJwk = clonePersistedSessionJwk(JSON.parse(stagedJwkJson));
+      canonicalVerificationMethod = stagedManager.getDID(stagedKeyId);
     } catch {
       throw new Error("Persisted session has an invalid private Ed25519 session key.");
     }
-    if (!restoredSessionDidMatches(stagedDid, sessionData.verificationMethod)) {
+    const restoredVerificationMethod = canonicalRestoredVerificationMethod(
+      canonicalVerificationMethod,
+      sessionData.verificationMethod,
+    );
+    if (!restoredVerificationMethod) {
       throw new Error(
         "Persisted session verification method does not match its private Ed25519 session key.",
       );
@@ -1931,150 +1968,328 @@ export class TinyCloudNode {
       restoredAddress,
       sessionData.chainId,
     );
-
-    // The actual replacement is also validated by the shared WASM manager and
-    // happens only after all persisted-key and host preflight above succeeds.
-    // Read back the imported key rather than retaining raw input so the
-    // node-level signer state exactly mirrors the manager used by all SDK
-    // services and delegation flows.
-    let installedKeyId: string;
-    let installedJwk: object;
-    try {
-      installedKeyId = this.sessionManager.replaceSessionKey(restoredJwk, this.sessionKeyId);
-      const installedJwkJson = this.sessionManager.jwk(installedKeyId);
-      if (!installedJwkJson) {
-        throw new Error("missing restored session key");
-      }
-      installedJwk = clonePersistedSessionJwk(JSON.parse(installedJwkJson));
-      if (!restoredSessionDidMatches(
-        this.sessionManager.getDID(installedKeyId),
-        sessionData.verificationMethod,
-      )) {
-        throw new Error("restored session key DID mismatch");
-      }
-    } catch {
-      throw new Error("Persisted session could not install its private Ed25519 session key.");
-    }
-    this.sessionKeyId = installedKeyId;
-    this.sessionKeyJwk = installedJwk;
-
-    // Reset services so they get recreated with new session
-    this._kv = undefined;
-    this._sql = undefined;
-    this._duckdb = undefined;
-    this._hooks = undefined;
-    this._vault = undefined;
-    this._encryption = undefined;
-    this._baseSecrets.clear();
-    this._secrets.clear();
-    this._spaceService = undefined;
-    this._serviceContext = undefined;
-    this.runtimePermissionGrants = [];
-
-    if (restoredAddress) {
-      this._address = restoredAddress;
-    }
-    if (sessionData.chainId) {
-      this._chainId = sessionData.chainId;
-    }
-
-    // Resolve the host the restored session should target, mirroring what a
-    // fresh signIn() would have done. Priority:
-    //   1. explicitHost   — local dev / pinned node, never override
-    //   2. persisted hosts — the node this session was created against
-    //   3. registry/fallback resolution — old sessions that predate the
-    //      persisted tinycloudHosts field
-    // Without this, the ServiceContext below (and every service call) would
-    // silently target the default host instead of the user's actual node.
-    if (resolvedHost) {
-      this.config.host = resolvedHost;
-    }
-
-    // Create service context
-    this._serviceContext = new ServiceContext({
-      invoke: this.invokeWithRuntimePermissions,
-      invokeAny: this.invokeAnyWithRuntimePermissions,
-      fetch: globalThis.fetch.bind(globalThis),
-      hosts: [this.config.host!],
-      telemetry: this.config.telemetry,
-    });
-
-    // Create and register KV service
-    this._kv = new KVService({});
-    this._kv.initialize(this._serviceContext);
-    this._serviceContext.registerService('kv', this._kv);
-
-    // Create and register SQL service
-    this._sql = new SQLService({});
-    this._sql.initialize(this._serviceContext);
-    this._serviceContext.registerService('sql', this._sql);
-
-    // Create and register DuckDB service
-    this._duckdb = new DuckDbService({});
-    this._duckdb.initialize(this._serviceContext);
-    this._serviceContext.registerService('duckdb', this._duckdb);
-
-    this._hooks = new HooksService({});
-    this._hooks.initialize(this._serviceContext);
-    this._serviceContext.registerService('hooks', this._hooks);
-
-    // Set session on context
+    const stagedHost = resolvedHost ?? this.config.host!;
+    const stagedAddress = restoredAddress ?? this._address;
+    const stagedChainId = sessionData.chainId ?? this._chainId;
+    const stagedNodeDid = stagedAddress
+      ? pkhDid(stagedAddress, stagedChainId)
+      : canonicalVerificationMethod;
     const serviceSession: ServiceSession = {
       delegationHeader: sessionData.delegationHeader,
       delegationCid: sessionData.delegationCid,
       spaceId: sessionData.spaceId,
-      verificationMethod: sessionData.verificationMethod,
-      jwk: installedJwk,
+      verificationMethod: restoredVerificationMethod,
+      jwk: stagedJwk,
     };
-    this._serviceContext.setSession(serviceSession);
-
-    // Create and register Vault service (matches initializeServices behavior)
-    this._vault = this.createVaultService(sessionData.spaceId, this._kv!);
-    this._vault.initialize(this._serviceContext);
-    this._serviceContext.registerService('vault', this._vault);
-
-    // Initialize v2 services
-    this.initializeV2Services(serviceSession);
-
-    // Rehydrate a TinyCloudSession on whatever surface is available. In
-    // wallet mode the auth layer holds it; in session-only mode (OpenKey,
-    // public-space restore, …) `this.auth` is null and we fall back to
-    // `_restoredTcSession` on the node itself. Both surfaces are read by
-    // {@link currentTinyCloudSession} so callers don't have to care.
-    //
-    // Required for `useRuntimeDelegation` / `hasRuntimePermissions` /
-    // `getRuntimePermissionDelegations` to work after a session restore —
-    // without this they bail with `SessionExpiredError(new Date(0))`.
-    if (sessionData.siwe && restoredAddress && sessionData.chainId) {
-      const tcSession: TinyCloudSession = {
+    const stagedTcSession: TinyCloudSession | undefined =
+      sessionData.siwe && restoredAddress && sessionData.chainId ? {
         address: restoredAddress,
         chainId: sessionData.chainId,
-        sessionKey: JSON.stringify(installedJwk),
+        sessionKey: JSON.stringify(stagedJwk),
         spaceId: sessionData.spaceId,
         delegationCid: sessionData.delegationCid,
         delegationHeader: sessionData.delegationHeader,
-        verificationMethod: sessionData.verificationMethod,
-        jwk: installedJwk as { [k: string]: unknown },
+        verificationMethod: restoredVerificationMethod,
+        jwk: stagedJwk as { [k: string]: unknown },
         siwe: sessionData.siwe,
         signature: sessionData.signature ?? "",
-      };
-      if (this.auth) {
-        // Pass the now-resolved host so the auth layer's host-needing
-        // methods (ensureSpaceExists/hostSpace) don't throw "hosts have
-        // not been resolved" on a restored session.
-        this.auth.setRestoredTinyCloudSession(
-          tcSession,
-          this.config.host ? [this.config.host] : undefined,
-        );
-      } else {
-        this._restoredTcSession = tcSession;
-      }
+      } : undefined;
+    // The service graph is staged before the session is committed. Derive its
+    // expiry from that staged session once, so capability and sharing state
+    // cannot accidentally inherit a prior session's lifetime.
+    const stagedSessionExpiry = stagedTcSession
+      ? extractSiweExpiration(stagedTcSession.siwe) ?? this.getSessionExpiry()
+      : this.getSessionExpiry();
+    const stagedPrimary = this.stagePrimarySessionState(
+      stagedTcSession,
+      stagedNodeDid,
+      stagedHost,
+      stagedSessionExpiry,
+    );
+    const stagedGraph = this.stageRestoredServiceGraph({
+      host: stagedHost,
+      manager: stagedManager,
+      serviceSession,
+      verificationMethod: canonicalVerificationMethod,
+      nodeDid: stagedNodeDid,
+      address: stagedAddress,
+      chainId: stagedChainId,
+      tinyCloudSession: stagedTcSession,
+      sessionExpiry: stagedSessionExpiry,
+    });
 
-      // Register the restored primary session's own recap as the highest-trust
-      // runtime grant, mirroring signIn() (TC-111). Grants were cleared above,
-      // so no dupes. Only runs when the restored session carries a `siwe`.
-      this.registerPrimarySessionGrant(tcSession);
+    // Every operation below is a non-throwing pointer/value swap.
+    this.sessionManager = stagedManager;
+    this.sessionKeyId = stagedKeyId;
+    this.sessionKeyJwk = stagedJwk;
+    if (resolvedHost) this.config.host = resolvedHost;
+    if (restoredAddress) this._address = restoredAddress;
+    if (sessionData.chainId !== undefined) this._chainId = sessionData.chainId;
+    this._serviceContext = stagedGraph.serviceContext;
+    this._kv = stagedGraph.kv;
+    this._sql = stagedGraph.sql;
+    this._duckdb = stagedGraph.duckdb;
+    this._hooks = stagedGraph.hooks;
+    this._vault = stagedGraph.vault;
+    this._encryption = stagedGraph.encryption;
+    this._capabilityRegistry = stagedGraph.capabilityRegistry;
+    this._keyProvider = stagedGraph.keyProvider;
+    this._sharingService = stagedGraph.sharingService;
+    this._delegationManager = stagedGraph.delegationManager;
+    this._spaceService = stagedGraph.spaceService;
+    this._baseSecrets = new Map();
+    this._secrets = new Map();
+    this._publicKV = undefined;
+    this._account = undefined;
+    this._recapOperationsCache = stagedPrimary.cache;
+    this.runtimePermissionGrants = stagedPrimary.grants;
+    if (this.auth) {
+      this.auth.installRestoredSession(stagedManager, stagedTcSession, this.config.host ? [this.config.host] : undefined);
+      this._restoredTcSession = undefined;
+    } else {
+      this._restoredTcSession = stagedTcSession;
     }
+  }
+
+  private stagePrimarySessionState(
+    session: TinyCloudSession | undefined,
+    verificationMethod: string,
+    host: string,
+    sessionExpiry: Date,
+  ): { cache: { siwe: string; operations: RuntimePermissionOperation[] } | undefined; grants: RuntimePermissionGrant[] } {
+    if (!session?.siwe) return { cache: undefined, grants: [] };
+    let operations: RuntimePermissionOperation[] = [];
+    try {
+      const entries = this.wasmBindings.parseRecapFromSiwe(session.siwe);
+      if (Array.isArray(entries)) {
+        operations = entries.flatMap((entry) => {
+          const service = this.invocationServiceName(entry.service);
+          return entry.actions.map((action) => ({
+            ...(this.isEncryptionNetworkOperation(service, entry.path) ? { resource: entry.path } : { spaceId: entry.space }),
+            service,
+            path: entry.path,
+            action,
+          }));
+        });
+      }
+    } catch {
+      operations = [];
+    }
+    const cache = { siwe: session.siwe, operations };
+    const skipped = this.auth?.lastActivationSkippedSpaceIds ?? [];
+    const acceptedOperations = operations.filter((operation) =>
+      operation.spaceId === undefined || !skipped.some((spaceId) => this.spaceIdsEqual(spaceId, operation.spaceId!)),
+    );
+    if (acceptedOperations.length === 0) return { cache, grants: [] };
+    const expiresAt = extractSiweExpiration(session.siwe) ?? sessionExpiry;
+    return {
+      cache,
+      grants: [{
+        session: {
+          delegationHeader: session.delegationHeader,
+          delegationCid: session.delegationCid,
+          spaceId: session.spaceId,
+          verificationMethod: session.verificationMethod,
+          jwk: session.jwk,
+        },
+        delegation: {
+          cid: session.delegationCid,
+          delegationHeader: session.delegationHeader,
+          delegateDID: session.verificationMethod,
+          delegatorDID: verificationMethod,
+          spaceId: session.spaceId,
+          path: "",
+          actions: [...new Set(acceptedOperations.map((operation) => operation.action))],
+          expiry: expiresAt,
+          allowSubDelegation: true,
+          ownerAddress: session.address,
+          chainId: session.chainId,
+          host,
+        },
+        operations: acceptedOperations,
+        expiresAt,
+        provenance: "primary",
+      }],
+    };
+  }
+
+  private stageRestoredServiceGraph(input: {
+    host: string;
+    manager: ISessionManager;
+    serviceSession: ServiceSession;
+    verificationMethod: string;
+    nodeDid: string;
+    address: string | undefined;
+    chainId: number;
+    tinyCloudSession: TinyCloudSession | undefined;
+    sessionExpiry: Date;
+  }): {
+    serviceContext: ServiceContext;
+    kv: KVService;
+    sql: SQLService;
+    duckdb: DuckDbService;
+    hooks: HooksService;
+    vault: DataVaultService;
+    encryption: EncryptionService;
+    capabilityRegistry: CapabilityKeyRegistry;
+    keyProvider: WasmKeyProvider;
+    sharingService: SharingService;
+    delegationManager: DelegationManager;
+    spaceService: SpaceService;
+  } {
+    const serviceContext = new ServiceContext({
+      invoke: this.invokeWithRuntimePermissions,
+      invokeAny: this.invokeAnyWithRuntimePermissions,
+      fetch: globalThis.fetch.bind(globalThis),
+      hosts: [input.host],
+      telemetry: this.config.telemetry,
+    });
+    const kv = new KVService({});
+    kv.initialize(serviceContext);
+    serviceContext.registerService('kv', kv);
+    const sql = new SQLService({});
+    sql.initialize(serviceContext);
+    serviceContext.registerService('sql', sql);
+    const duckdb = new DuckDbService({});
+    duckdb.initialize(serviceContext);
+    serviceContext.registerService('duckdb', duckdb);
+    const hooks = new HooksService({});
+    hooks.initialize(serviceContext);
+    serviceContext.registerService('hooks', hooks);
+    serviceContext.setSession(input.serviceSession);
+    const encryption = this.createEncryptionService();
+    encryption.initialize(serviceContext);
+    serviceContext.registerService('encryption', encryption);
+    const vault = this.createVaultService(input.serviceSession.spaceId, kv, encryption, {
+      host: input.host,
+      did: input.nodeDid,
+      address: input.address,
+      chainId: input.chainId,
+    });
+    vault.initialize(serviceContext);
+    serviceContext.registerService('vault', vault);
+
+    const capabilityRegistry = new CapabilityKeyRegistry();
+    if (input.tinyCloudSession) {
+      const session = input.tinyCloudSession;
+      const delegations: Delegation[] = [{
+        cid: session.delegationCid,
+        delegateDID: session.verificationMethod,
+        spaceId: session.spaceId,
+        path: "",
+        actions: [...ROOT_DELEGATION_ACTIONS],
+        expiry: input.sessionExpiry,
+        isRevoked: false,
+        allowSubDelegation: true,
+      }];
+      for (const spaceId of Object.values(session.spaces ?? {})) {
+        delegations.push({
+          cid: session.delegationCid,
+          delegateDID: session.verificationMethod,
+          spaceId,
+          path: "",
+          actions: [...ROOT_DELEGATION_ACTIONS],
+          expiry: input.sessionExpiry,
+          isRevoked: false,
+          allowSubDelegation: true,
+        });
+      }
+      capabilityRegistry.registerKey({
+        id: session.sessionKey,
+        did: session.verificationMethod,
+        type: "session",
+        jwk: session.jwk as JWK,
+        priority: 0,
+      }, delegations);
+    }
+    const delegationManager = new DelegationManager({
+      hosts: [input.host],
+      session: input.serviceSession,
+      invoke: this.invokeWithRuntimePermissions,
+      invokeAny: this.invokeAnyWithRuntimePermissions,
+      fetch: globalThis.fetch.bind(globalThis),
+    });
+    const keyProvider = new WasmKeyProvider({ sessionManager: input.manager });
+    const sharingService = new SharingService({
+      hosts: [input.host],
+      invoke: this.invokeWithRuntimePermissions,
+      fetch: globalThis.fetch.bind(globalThis),
+      keyProvider,
+      registry: capabilityRegistry,
+      createDelegationWasm: (params) => this.createDelegationWrapper(params),
+      computeCid: (data, codec) => {
+        if (!this.wasmBindings.computeCid) throw new Error("computeCid is unavailable");
+        return this.wasmBindings.computeCid(data, codec);
+      },
+      createKVService: (config) => {
+        const service = new KVService({ prefix: config.pathPrefix?.replace(/\/$/, '') });
+        const context = new ServiceContext({
+          invoke: config.invoke,
+          fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
+          hosts: config.hosts,
+          telemetry: this.config.telemetry,
+        });
+        context.setSession(config.session);
+        service.initialize(context);
+        return service;
+      },
+    });
+    sharingService.updateConfig({
+      session: input.serviceSession,
+      delegationManager,
+      sessionExpiry: input.sessionExpiry,
+      createDelegationWasm: (params) => this.createDelegationWrapper(params),
+      onRootDelegationNeeded: this.signer ? async (params) => this.createRootDelegationForSharing(params) : undefined,
+    });
+    const spaceService = new SpaceService({
+      hosts: [input.host],
+      session: input.serviceSession,
+      invoke: this.wasmBindings.invoke,
+      fetch: globalThis.fetch.bind(globalThis),
+      capabilityRegistry,
+      userDid: input.nodeDid,
+      createKVService: (spaceId) => this.createSpaceScopedKVService(spaceId),
+      createVaultService: (spaceId) => {
+        const scopedKv = this.createSpaceScopedKVService(spaceId);
+        const scopedVault = this.createVaultService(spaceId, scopedKv);
+        if (this._serviceContext) scopedVault.initialize(this._serviceContext);
+        return scopedVault;
+      },
+      createSecretsService: (spaceId) => this.secretsForSpace(spaceId),
+      createDelegation: async (params) => {
+        try {
+          const portableDelegation = await this.createDelegation({
+            delegateDID: params.delegateDID,
+            path: params.path,
+            actions: params.actions,
+            disableSubDelegation: params.disableSubDelegation,
+            expiryMs: params.expiry ? params.expiry.getTime() - Date.now() : undefined,
+          });
+          return { ok: true as const, data: {
+            cid: portableDelegation.cid,
+            delegateDID: portableDelegation.delegateDID,
+            delegatorDID: this.did,
+            spaceId: portableDelegation.spaceId,
+            path: portableDelegation.path,
+            actions: portableDelegation.actions,
+            expiry: portableDelegation.expiry,
+            isRevoked: false,
+            allowSubDelegation: !portableDelegation.disableSubDelegation,
+            createdAt: new Date(),
+            authHeader: portableDelegation.delegationHeader.Authorization,
+          }};
+        } catch (error) {
+          return { ok: false as const, error: {
+            code: "CREATION_FAILED",
+            message: error instanceof Error ? error.message : String(error),
+            service: "delegation",
+          }};
+        }
+      },
+      onSpaceRegistered: async (space) => { await this.account.spaces.register(space); },
+    });
+    spaceService.updateConfig({ sharingService });
+    return { serviceContext, kv, sql, duckdb, hooks, vault, encryption, capabilityRegistry, keyProvider, sharingService, delegationManager, spaceService };
   }
 
   /**
@@ -2561,7 +2776,17 @@ export class TinyCloudNode {
     return this._encryption;
   }
 
-  private createVaultService(spaceId: string, kv: IKVService): DataVaultService {
+  private createVaultService(
+    spaceId: string,
+    kv: IKVService,
+    encryptionService = this.getEncryptionService(),
+    nodeContext?: {
+      host: string;
+      did: string;
+      address: string | undefined;
+      chainId: number;
+    },
+  ): DataVaultService {
     const wasm = this.wasmBindings;
     const vaultCrypto = createVaultCrypto({
       vault_encrypt: wasm.vault_encrypt, vault_decrypt: wasm.vault_decrypt, vault_derive_key: wasm.vault_derive_key,
@@ -2569,12 +2794,17 @@ export class TinyCloudNode {
       vault_random_bytes: wasm.vault_random_bytes, vault_sha256: wasm.vault_sha256,
     });
     const self = this;
+    const did = nodeContext?.did ?? this.did;
+    const address = nodeContext?.address ?? this._address;
+    const chainId = nodeContext?.chainId ?? this._chainId;
+    const host = nodeContext?.host ?? this.config.host!;
+    const ownerDid = this.ownerDidFromSpaceId(spaceId) ?? did;
     return new DataVaultService({
       spaceId,
       crypto: vaultCrypto,
       encryption: {
-        networkId: this.getEncryptionNetworkIdForSpace(spaceId),
-        service: this.getEncryptionService(),
+        networkId: `urn:tinycloud:encryption:${ownerDid}:${DEFAULT_ENCRYPTION_NETWORK_NAME}`,
+        service: encryptionService,
         decryptCapabilityProof: () => ({
           proofs: [this.requireServiceSession().delegationCid],
         }),
@@ -2593,10 +2823,10 @@ export class TinyCloudNode {
         readPublicSpace: <T>(host: string, targetSpaceId: string, key: string) =>
           TinyCloud.readPublicSpace<T>(host, targetSpaceId, key),
         makePublicSpaceId: TinyCloud.makePublicSpaceId,
-        did: this.did,
-        address: this._address ?? "",
-        chainId: this._chainId,
-        hosts: [this.config.host!],
+        did,
+        address: address ?? "",
+        chainId,
+        hosts: [host],
       },
     });
   }
