@@ -949,6 +949,39 @@ describe("CLI auth import command", () => {
     await expectCanonicalOperationRejection(artifact, "INVALID_AUTH_IMPORT");
   });
 
+  test("routes a malformed empty-ID request-bound envelope through the canonical operation", async () => {
+    const artifact = {
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "",
+      delegation: null,
+      permissions: [{ service: "tinycloud.kv", space: "forged", path: "forged", actions: ["tinycloud.kv/*"] }],
+    };
+    storedImportRequest = makeStoredImportRequest({ requestId: "" });
+    operationRecorded.results.push({
+      status: "error",
+      error: { code: "INVALID_AUTH_IMPORT", message: "Canonical operation rejection.", retryable: false },
+    });
+    const source = join(tempDir, "empty-id-malformed-v1-artifact.json");
+    await writeFile(source, JSON.stringify(artifact), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors.pop()).toMatchObject({ code: "INVALID_AUTH_IMPORT", exitCode: 1 });
+    expect(operationRecorded.calls).toEqual([{
+      operationId: "tinycloud.auth.import",
+      operationVersion: 1,
+      target: { profile: "default", host: activeHost, allowOwnerProfile: true },
+      input: artifact,
+    }]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(importRecorded.bootstrappedDelegations).toEqual([]);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(recorded.localSignIns).toEqual([]);
+    expect(authNodeGrantDelegations).toEqual([]);
+  });
+
   test("keeps a request-bound envelope on the canonical operation path after request deletion", async () => {
     storedImportRequest = makeStoredImportRequest();
     const artifact = {

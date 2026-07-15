@@ -845,7 +845,7 @@ function delegationEnvelopeRequestId(value: unknown): string | undefined {
   const candidate = value as { kind?: unknown; version?: unknown; requestId?: unknown };
   return candidate.kind === "tinycloud.auth.delegation" &&
     candidate.version === 1 &&
-    typeof candidate.requestId === "string" && candidate.requestId.length > 0
+    typeof candidate.requestId === "string"
     ? candidate.requestId
     : undefined;
 }
