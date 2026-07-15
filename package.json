@@ -25,6 +25,7 @@
     "build:release": "turbo build",
     "dev": "turbo dev",
     "test": "turbo test",
+    "typecheck:operations": "bun run --cwd packages/operations typecheck",
     "lint": "turbo lint",
     "clean": "./scripts/clean.sh",
     "doc": "turbo doc",

@@ -1,4 +1,5 @@
 import { beforeEach, expect, mock, test } from "bun:test";
+import { jcsCanonicalize } from "@tinycloud/sdk-core";
 import { z } from "zod";
 
 import type {
@@ -8,7 +9,6 @@ import type {
 } from "./contract.js";
 import { createSafeOperationDiagnostic } from "./redaction.js";
 import type { InvocationContextResolution } from "./profile.js";
-import { jcsCanonicalize } from "../../sdk-core/src/policy/jcs.js";
 
 type TestInput = {
   readonly name: string;
@@ -16,7 +16,7 @@ type TestInput = {
 };
 type TestOutput = { readonly value: string };
 
-let definitions: readonly OperationDefinition<unknown, unknown>[] = [];
+let definitions: readonly OperationDefinition<TestInput, TestOutput>[] = [];
 let resolver: (target: InvocationTarget) => Promise<InvocationContextResolution>;
 
 mock.module("@tinycloud/sdk-core/policy", () => ({ jcsCanonicalize }));
@@ -267,7 +267,7 @@ test("keeps the CLI private-key override out of all kernel-safe channels", async
 
   resolver = async (target) => {
     targetSeenByProfile = target;
-    const resolution = {
+    const resolution: InvocationContextResolution = {
       ok: true as const,
       context: {
         profile: "delegate",

@@ -1,0 +1,81 @@
+name: TC-192 I1 TypeScript gate
+
+on:
+  pull_request:
+    paths:
+      - "packages/operations/**"
+      - "packages/bootstrap/**"
+      - "packages/sdk-services/**"
+      - "packages/sdk-core/**"
+      - "packages/node-sdk/**"
+      - "packages/cli/**"
+      - "docs/tc-192-i1-types-gate.md"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/tc-192-i1-types-gate.yml"
+  push:
+    branches: [master]
+    paths:
+      - "packages/operations/**"
+      - "packages/bootstrap/**"
+      - "packages/sdk-services/**"
+      - "packages/sdk-core/**"
+      - "packages/node-sdk/**"
+      - "packages/cli/**"
+      - "docs/tc-192-i1-types-gate.md"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/tc-192-i1-types-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  i1-types:
+    name: I1 operations strict TypeScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.0
+
+      - name: Verify pinned Bun runtime
+        run: test "$(bun --version)" = "1.2.0"
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      # The invocation test imports the sdk-core public package export, so
+      # emit its current runtime and declaration artifacts before testing it.
+      - name: Build SDK package exports
+        run: |
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/sdk-core build
+
+      # The legacy CLI concurrency test imports the node SDK package while
+      # exercising an operations state writer.
+      - name: Build Node SDK runtime entrypoint
+        working-directory: packages/node-sdk
+        run: >-
+          bunx --no-install tsup --no-config src/index.ts --format esm,cjs
+          --target es2020 --sourcemap
+          --external @tinycloud/sdk-core
+          --external @tinycloud/node-sdk-wasm
+          --external siwe
+          --external events
+          --external fs
+          --external path
+
+      - name: Typecheck the complete operations program
+        run: bun run typecheck:operations
+
+      - name: Build, test, and verify the operations catalog
+        run: |
+          bun run --cwd packages/operations build
+          bun run --cwd packages/operations test
+          bun run --cwd packages/operations check:generated

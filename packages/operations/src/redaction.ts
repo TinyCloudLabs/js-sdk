@@ -129,7 +129,7 @@ function redactPointer(value: unknown, pointer: string): unknown {
     return value;
   }
 
-  parent[key] = REDACTED_VALUE;
+  Reflect.set(parent, key, REDACTED_VALUE);
   return value;
 }
 
@@ -146,7 +146,7 @@ function getPointerParent(
     if (!isRecordOrArray(cursor) || !hasOwn(cursor, token)) {
       return undefined;
     }
-    cursor = cursor[token];
+    cursor = Reflect.get(cursor, token);
   }
   return isRecordOrArray(cursor) ? cursor : undefined;
 }
