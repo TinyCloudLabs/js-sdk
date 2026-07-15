@@ -49,7 +49,7 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
-      # The invocation test imports the sdk-core public package export, so
+      # The invocation test imports the sdk-core public policy export, so
       # emit its current runtime and declaration artifacts before testing it.
       - name: Build SDK package exports
         run: |

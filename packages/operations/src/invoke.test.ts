@@ -1,5 +1,5 @@
 import { beforeEach, expect, mock, test } from "bun:test";
-import { jcsCanonicalize } from "@tinycloud/sdk-core";
+import { jcsCanonicalize } from "@tinycloud/sdk-core/policy";
 import { z } from "zod";
 
 import type {
