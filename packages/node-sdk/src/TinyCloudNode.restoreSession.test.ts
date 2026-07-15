@@ -6,6 +6,7 @@ import {
   type ISessionManager,
   type IWasmBindings,
   type ServiceContext,
+  type ValidatedPersistedSessionProof,
 } from "@tinycloud/sdk-core";
 
 import { activateValidatedRuntimeDelegation } from "./delegation";
@@ -232,13 +233,71 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     expect(actual.flatMap((entry: { actions: string[] }) => entry.actions)).not.toContain("tinycloud.kv/put");
   });
 
+  test("keeps caveated same-CID scopes distinct through restore, invocation, and revocation", async () => {
+    const proof = await signedRestorableSession();
+    const caveats = [
+      { tenant: "alpha", nested: { region: "us-east-1" } },
+      { tenant: "bravo", nested: { region: "eu-west-1" } },
+    ];
+    const wasm = new NodeWasmBindings();
+    const validate = wasm.validatePersistedSession.bind(wasm);
+    (wasm as any).validatePersistedSession = (input: Parameters<typeof validate>[0]) => {
+      const verified = validate(input);
+      const scope = verified.verifiedRecap![0]!;
+      return {
+        ...verified,
+        verifiedRecap: caveats.map((caveat) => ({
+          ...scope,
+          actions: ["tinycloud.kv/get"],
+          caveats: [caveat],
+        })),
+      };
+    };
+    const invokeAny = wasm.invokeAny;
+    const invocations: unknown[][] = [];
+    (wasm as any).invokeAny = (session: unknown, entries: unknown[], facts?: unknown) => {
+      invocations.push(entries);
+      return invokeAny(session as any, entries as any, facts as any);
+    };
+    const node = new TinyCloudNode({ wasmBindings: wasm });
+
+    await node.restoreSession(proof);
+
+    const registry = node.capabilityRegistry;
+    const key = registry.getAllKeys()[0]!;
+    const restored = registry.getDelegationsForKey(key.id);
+    expect(restored).toHaveLength(2);
+    expect(restored.map((delegation) => delegation.caveats)).toEqual(
+      caveats.map((caveat) => [caveat]),
+    );
+
+    const session = (node as any)._serviceContext.session;
+    (node as any).invokeAnyWithRuntimePermissions(session, [{
+      spaceId: proof.spaceId,
+      service: "kv",
+      path: "narrow",
+      action: "tinycloud.kv/get",
+    }]);
+    expect(invocations.at(-1)).toEqual([{
+      spaceId: proof.spaceId,
+      service: "kv",
+      path: "narrow",
+      action: "tinycloud.kv/get",
+      caveats: [caveats[0]],
+    }]);
+
+    expect(registry.revokeDelegation(proof.delegationCid).ok).toBe(true);
+    expect(registry.getDelegationsForKey(key.id).every((delegation) => delegation.isRevoked)).toBe(true);
+  });
+
   test("retires captured services and aborts in-flight requests after each successful restore", async () => {
     const originalFetch = globalThis.fetch;
-    let requestSignal: AbortSignal | undefined;
+    const requestSignals: AbortSignal[] = [];
     let requestStarted!: () => void;
     const started = new Promise<void>((resolve) => { requestStarted = resolve; });
     globalThis.fetch = mock((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
-      requestSignal = init?.signal ?? undefined;
+      const requestSignal = init?.signal;
+      if (requestSignal) requestSignals.push(requestSignal);
       requestStarted();
       requestSignal?.addEventListener("abort", () => {
         reject(new DOMException("retired", "AbortError"));
@@ -270,12 +329,26 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
         spaces: node.spaces,
       };
       const inFlight = captured.kv.get("in-flight");
+      const encryptionInFlight = (captured.encryption as any).config.node.fetchByNetworkId(
+        "urn:tinycloud:encryption:did:key:zTest:network",
+      );
+      const encryptionFailure = encryptionInFlight.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       await started;
+      // `postDecrypt` is async; let it reach the graph-bound fetch before
+      // replacing the graph so this exercises its in-flight cancellation.
+      await Promise.resolve();
 
       await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
 
-      expect(requestSignal?.aborted).toBe(true);
+      // Both the ordinary service call and captured encryption discovery are
+      // in flight on the retired graph, and both receive its abort signal.
+      expect(requestSignals).toHaveLength(2);
+      expect(requestSignals.every((signal) => signal.aborted)).toBe(true);
       await expect(inFlight).resolves.toMatchObject({ ok: false });
+      expect(await encryptionFailure).toBeInstanceOf(DOMException);
       expect(captured.context.session).toBeNull();
       expect(captured.context.abortSignal.aborted).toBe(true);
       expect(() => captured.core.kv).toThrow("Services not initialized");
@@ -283,6 +356,15 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       await expect(captured.delegations.list()).resolves.toMatchObject({ ok: false });
       await expect(captured.sharing.generate({ path: "after", actions: ["tinycloud.kv/get"] }))
         .resolves.toMatchObject({ ok: false });
+      await expect((captured.encryption as any).config.node.fetchByNetworkId(
+        "urn:tinycloud:encryption:did:key:zTest:network",
+      )).rejects.toThrow("Service graph has been retired");
+      await expect((captured.encryption as any).config.signer.signDecryptInvocation({
+        targetNode: "https://one.example",
+        networkId: "urn:tinycloud:encryption:test",
+        body: {},
+        facts: [],
+      })).rejects.toThrow("Service graph has been retired");
       expect(node.hosts).toEqual(["https://two.example"]);
 
       await node.restoreSession({ ...proof, tinycloudHosts: ["https://three.example"] });
@@ -368,6 +450,51 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       code: "RESTORE_SESSION_KEY_REPLACEMENT_UNSUPPORTED",
     });
     expect(partial.sessionDid).toBe(partialDid);
+  });
+
+  test("rejects authenticated legacy verifier output without breaking its TypeScript contract", async () => {
+    const proof = await signedRestorableSession();
+    const legacyOutput: ValidatedPersistedSessionProof = {
+      expiresAt: proof.expiresAt,
+    };
+    expect(legacyOutput.verifiedRecap).toBeUndefined();
+    const wasm = new NodeWasmBindings();
+    const validate = wasm.validatePersistedSession.bind(wasm);
+    (wasm as any).validatePersistedSession = (input: Parameters<typeof validate>[0]) => {
+      const { verifiedRecap: _ignored, ...legacy } = validate(input);
+      return legacy;
+    };
+    const node = new TinyCloudNode({ wasmBindings: wasm });
+    const before = node.sessionDid;
+
+    await expect(node.restoreSession(proof)).rejects.toMatchObject({
+      name: "UnsupportedSessionRestoreError",
+      code: "RESTORE_SESSION_KEY_REPLACEMENT_UNSUPPORTED",
+    });
+    expect(node.sessionDid).toBe(before);
+  });
+
+  test("commits a restore even when a custom retired service throws during sign-out", async () => {
+    const proof = await signedRestorableSession();
+    const node = new TinyCloudNode({ wasmBindings: new NodeWasmBindings() });
+    await node.restoreSession({ ...proof, tinycloudHosts: ["https://one.example"] });
+    const oldContext = (node as any)._serviceContext as ServiceContext;
+    oldContext.registerService("throws-on-sign-out", {
+      config: {},
+      initialize: () => undefined,
+      onSessionChange: () => undefined,
+      onSignOut: () => { throw new Error("custom cleanup failed"); },
+    });
+    const originalError = console.error;
+    console.error = mock(() => undefined);
+    try {
+      await expect(node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] })).resolves.toBeUndefined();
+    } finally {
+      console.error = originalError;
+    }
+    expect(node.hosts).toEqual(["https://two.example"]);
+    expect((node as any)._serviceContext).not.toBe(oldContext);
+    expect(oldContext.abortSignal.aborted).toBe(true);
   });
 
   test("keeps the live key, auth, host, service graph, and grants after every rejected restore", async () => {

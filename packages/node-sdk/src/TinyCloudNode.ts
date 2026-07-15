@@ -284,6 +284,58 @@ function clonePersistedSessionJwk(jwk: unknown): object {
   }
 }
 
+function cloneRecapCaveats(
+  caveats: readonly Record<string, unknown>[] | undefined,
+): Record<string, unknown>[] {
+  if (!caveats) return [];
+  const cloneJson = (value: unknown): unknown => {
+    if (value === null || typeof value === "boolean" || typeof value === "string") {
+      return value;
+    }
+    if (typeof value === "number") {
+      if (Number.isFinite(value)) return value;
+      throw new Error("ReCap caveats must contain only JSON values.");
+    }
+    if (Array.isArray(value)) return value.map(cloneJson);
+    if (typeof value === "object") {
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new Error("ReCap caveats must contain only JSON values.");
+      }
+      const copy: Record<string, unknown> = Object.create(null);
+      for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+        copy[key] = cloneJson(nested);
+      }
+      return copy;
+    }
+    throw new Error("ReCap caveats must contain only JSON values.");
+  };
+  try {
+    return JSON.parse(JSON.stringify(caveats.map(cloneJson))) as Record<string, unknown>[];
+  } catch {
+    throw new Error("Verified persisted session ReCap contains invalid caveats.");
+  }
+}
+
+function canonicalRecapCaveats(
+  caveats: readonly Record<string, unknown>[] | undefined,
+): string {
+  const canonicalize = (value: unknown): string => {
+    if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+      return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
+    if (typeof value === "object") {
+      const object = value as Record<string, unknown>;
+      return `{${Object.keys(object).sort().map((key) =>
+        `${JSON.stringify(key)}:${canonicalize(object[key])}`
+      ).join(",")}}`;
+    }
+    throw new Error("ReCap caveats must be JSON values.");
+  };
+  return canonicalize(cloneRecapCaveats(caveats));
+}
+
 /** One replaceable set of services bound to a single host/session authority. */
 class ServiceGraphLifetime {
   private readonly abortController = new AbortController();
@@ -324,12 +376,22 @@ class ServiceGraphLifetime {
     if (this.retired) return;
     this.retired = true;
     this.abortController.abort();
-    for (const context of this.contexts) {
-      const retire = (context as ServiceContext & { retire?: () => void }).retire;
-      if (retire) retire.call(context);
-      else context.abort();
+    try {
+      for (const context of this.contexts) {
+        try {
+          const retire = (context as ServiceContext & { retire?: () => void }).retire;
+          if (retire) retire.call(context);
+          else context.abort();
+        } catch (error) {
+          // Graph replacement is committed before retirement. A custom
+          // service's best-effort cleanup must not roll that replacement back
+          // or leave later contexts active.
+          console.error("Error retiring service graph context:", error);
+        }
+      }
+    } finally {
+      this.contexts.clear();
     }
-    this.contexts.clear();
   }
 
   assertActive(): void {
@@ -523,6 +585,8 @@ interface RuntimePermissionOperation {
   service: string;
   path: string;
   action: string;
+  /** Exact signed ReCap attenuation for this action, if any. */
+  caveats?: Record<string, unknown>[];
 }
 
 interface RuntimePermissionGrant {
@@ -758,13 +822,37 @@ export class TinyCloudNode {
     action,
     facts,
   ) => {
-    return this.wasmBindings.invoke(
-      this.selectInvocationSession(session, service, path, action),
-      service,
+    const operation: RuntimePermissionOperation = {
+      spaceId: session.spaceId,
+      service: this.invocationServiceName(service),
       path,
       action,
-      facts,
+    };
+    const grant = this.findGrantForOperation(operation);
+    const grantedOperation = grant?.operations.find((candidate) =>
+      this.operationCovers(candidate, operation),
     );
+    const invocationSession = !grant || grant.provenance === "primary"
+      ? session
+      : grant.session;
+
+    // The legacy single-capability binding has no caveat parameter.  Calling
+    // it for a restored caveated grant would silently broaden the authority,
+    // so mint the equivalent one-entry aggregate invocation instead.
+    if ((grantedOperation?.caveats?.length ?? 0) > 0) {
+      if (!this.wasmBindings.invokeAny) {
+        throw new Error("WASM binding does not support caveat-preserving invocation");
+      }
+      return this.wasmBindings.invokeAny(invocationSession, [{
+        spaceId: invocationSession.spaceId,
+        service,
+        path,
+        action,
+        caveats: cloneRecapCaveats(grantedOperation!.caveats),
+      }], facts);
+    }
+
+    return this.wasmBindings.invoke(invocationSession, service, path, action, facts);
   };
 
   private readonly invokeAnyWithRuntimePermissions: InvokeAnyFunction = (
@@ -775,18 +863,33 @@ export class TinyCloudNode {
     if (!this.wasmBindings.invokeAny) {
       throw new Error("WASM binding does not support invokeAny");
     }
-    const grant = this.findGrantForOperations(
-      entries.flatMap((entry) => {
-        const operation = this.operationFromInvokeAnyEntry(entry);
-        return operation ? [operation] : [];
-      }),
-    );
+    const operations = entries.flatMap((entry) => {
+      const operation = this.operationFromInvokeAnyEntry(entry);
+      return operation ? [operation] : [];
+    });
+    const grant = this.findGrantForOperations(operations);
     // When the primary grant wins, invoke with the PASSED session (its scoped
     // target `spaceId`), not the stored primary `ServiceSession` — see
     // `selectInvocationSession` for the wrong-space rationale (TC-111 follow-up).
     const invocationSession =
       !grant || grant.provenance === "primary" ? session : grant.session;
-    return this.wasmBindings.invokeAny(invocationSession, entries, facts);
+    const caveatPreservingEntries = grant
+      ? entries.map((entry) => {
+        const requested = this.operationFromInvokeAnyEntry(entry);
+        const granted = requested && grant.operations.find((candidate) =>
+          this.operationCovers(candidate, requested),
+        );
+        if (!granted?.caveats?.length) {
+          return entry;
+        }
+        if (entry.caveats !== undefined &&
+          canonicalRecapCaveats(entry.caveats) !== canonicalRecapCaveats(granted.caveats)) {
+          throw new Error("Invocation caveats do not match signed ReCap authority.");
+        }
+        return { ...entry, caveats: cloneRecapCaveats(granted.caveats) };
+      })
+      : entries;
+    return this.wasmBindings.invokeAny(invocationSession, caveatPreservingEntries, facts);
   };
 
   /**
@@ -969,7 +1072,10 @@ export class TinyCloudNode {
     return new ServiceGraphLifetime(
       this.invokeWithRuntimePermissions,
       this.invokeAnyWithRuntimePermissions,
-      globalThis.fetch.bind(globalThis),
+      // Resolve fetch at request time. This keeps the graph-owned lifetime
+      // signal while preserving the SDK's existing injectable global fetch
+      // behavior (including adapters that install it after construction).
+      (url, init) => globalThis.fetch(url, init),
     );
   }
 
@@ -1535,7 +1641,7 @@ export class TinyCloudNode {
     }
     let operations: RuntimePermissionOperation[] = [];
     try {
-      const entries = this.wasmBindings.parseRecapFromSiwe(siwe);
+      const entries = this.parseRecapWithCaveats(siwe);
       if (Array.isArray(entries)) {
         operations = entries.flatMap((entry) => {
           const service = this.invocationServiceName(entry.service);
@@ -1546,6 +1652,7 @@ export class TinyCloudNode {
             service,
             path: entry.path,
             action,
+            caveats: cloneRecapCaveats(entry.caveats),
           }));
         });
       }
@@ -2110,20 +2217,27 @@ export class TinyCloudNode {
         siwe: sessionData.siwe!,
         signature: sessionData.signature!,
       });
-      if (!Array.isArray(verified.recap) || !verified.recap.every((entry) =>
+      const exactRecap = verified.verifiedRecap;
+      if (!Array.isArray(exactRecap) || !exactRecap.every((entry) =>
         entry !== null && typeof entry === "object" &&
         typeof entry.service === "string" &&
         typeof entry.space === "string" &&
         typeof entry.path === "string" &&
-        Array.isArray(entry.actions) && entry.actions.every((action) => typeof action === "string")
+        Array.isArray(entry.actions) && entry.actions.every((action) => typeof action === "string") &&
+        Array.isArray(entry.caveats) && entry.caveats.every((caveat) =>
+          caveat !== null && typeof caveat === "object" && !Array.isArray(caveat)
+        )
       )) {
-        throw new Error("Verified persisted session ReCap could not be reconstructed.");
+        throw new UnsupportedSessionRestoreError(
+          "it cannot reconstruct caveat-preserving persisted ReCap authority",
+        );
       }
-      stagedRecap = verified.recap.map((entry) => ({
+      stagedRecap = exactRecap.map((entry) => ({
         service: entry.service,
         space: entry.space,
         path: entry.path,
         actions: [...entry.actions],
+        caveats: cloneRecapCaveats(entry.caveats),
       }));
       const signedExpiry = verified.expiresAt === undefined
         ? undefined
@@ -2244,6 +2358,7 @@ export class TinyCloudNode {
         service,
         path: entry.path,
         action,
+        caveats: cloneRecapCaveats(entry.caveats),
       }));
     });
     const cache = { siwe: session.siwe, operations };
@@ -2344,7 +2459,14 @@ export class TinyCloudNode {
     hooks.initialize(serviceContext);
     serviceContext.registerService('hooks', hooks);
     serviceContext.setSession(input.serviceSession);
-    const encryption = this.createEncryptionService();
+    const encryption = this.createEncryptionService({
+      graph,
+      host: input.host,
+      session: input.serviceSession,
+      did: input.nodeDid,
+      address: input.address,
+      chainId: input.chainId,
+    });
     encryption.initialize(serviceContext);
     serviceContext.registerService('encryption', encryption);
     const vault = this.createVaultService(input.serviceSession.spaceId, kv, encryption, {
@@ -2369,6 +2491,7 @@ export class TinyCloudNode {
           spaceId: entry.space,
           path: entry.path,
           actions: [...entry.actions],
+          caveats: cloneRecapCaveats(entry.caveats),
           expiry: input.sessionExpiry,
           isRevoked: false,
           allowSubDelegation: true,
@@ -2821,6 +2944,19 @@ export class TinyCloudNode {
     return session;
   }
 
+  /**
+   * Runtime-permission helpers can be used from an authenticated Node session
+   * before its public ServiceContext is initialized. They still need the
+   * current signed session, never an optional or stale authority object.
+   */
+  private requireEncryptionSession(): ServiceSession {
+    const session = this._serviceContext?.session ?? this.auth?.tinyCloudSession;
+    if (!session) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+    return session;
+  }
+
   private createEncryptionCrypto(): EncryptionCrypto {
     const wasm = this.wasmBindings;
     const columnEncrypt = (key: Uint8Array, plaintext: Uint8Array): Uint8Array => {
@@ -2885,14 +3021,18 @@ export class TinyCloudNode {
     networkId: string;
     action: string;
     facts: NetworkInvocationFact;
+  }, binding?: {
+    graph: ServiceGraphLifetime;
+    session: ServiceSession;
   }): Promise<{ authorization: string; invocationCid: string }> {
+    binding?.graph.assertActive();
     if (!this.wasmBindings.invokeAny) {
       throw new Error("WASM binding does not support raw-resource invokeAny");
     }
     if (!this.wasmBindings.computeCid) {
       throw new Error("WASM binding does not support invocation CID computation");
     }
-    const session = this.requireServiceSession();
+    const session = binding?.session ?? this.requireEncryptionSession();
     const headers = this.invokeAnyWithRuntimePermissions(
       session,
       [
@@ -2911,6 +3051,7 @@ export class TinyCloudNode {
       input.targetNode,
       session.jwk,
     );
+    binding?.graph.assertActive();
     return {
       authorization: audienceBound,
       invocationCid: this.wasmBindings.computeCid(
@@ -2920,12 +3061,51 @@ export class TinyCloudNode {
     };
   }
 
-  private createEncryptionService(): EncryptionService {
+  private async fetchEncryptionNetworkAt(
+    host: string,
+    networkId: string,
+    fetchFn: FetchFunction,
+  ): Promise<NetworkDescriptor | null> {
+    const response = await fetchFn(
+      `${host}/encryption/networks/${encodeURIComponent(networkId)}`,
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch encryption network ${networkId}: HTTP ${response.status} ${await response.text()}`,
+      );
+    }
+    const body = (await response.json()) as {
+      descriptor?: NetworkDescriptor;
+    } | NetworkDescriptor;
+    return "descriptor" in body && body.descriptor ? body.descriptor : body as NetworkDescriptor;
+  }
+
+  private createEncryptionService(binding?: {
+    graph: ServiceGraphLifetime;
+    host: string;
+    session: ServiceSession;
+    did: string;
+    address: string | undefined;
+    chainId: number;
+  }): EncryptionService {
+    const graph = binding?.graph ?? this._serviceGraph;
+    const host = binding?.host ?? this.config.host!;
+    // The public service path always has a ServiceContext. Keep the auth-session
+    // fallback for the internal runtime-permission helpers, which construct an
+    // encryption service before a ServiceContext is installed. Both paths bind
+    // the resulting service to this graph, so a later graph replacement still
+    // retires the captured service permanently.
+    const session = binding?.session ?? this.requireEncryptionSession();
+    const did = binding?.did ?? this.did;
+    const address = binding?.address ?? this._address;
+    const chainId = binding?.chainId ?? this._chainId;
     const crypto = this.createEncryptionCrypto();
     const transport: DecryptTransport = {
-      postDecrypt: async ({ networkId, authorization, canonicalBody }) => {
-        const response = await fetch(
-          `${this.config.host}/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
+      postDecrypt: async ({ networkId, authorization, canonicalBody, signal }) => {
+        graph.assertActive();
+        const response = await graph.fetch(
+          `${host}/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
           {
             method: "POST",
             headers: {
@@ -2933,8 +3113,10 @@ export class TinyCloudNode {
               "Content-Type": "application/json",
             },
             body: canonicalBody,
+            signal,
           },
         );
+        graph.assertActive();
         if (!response.ok) {
           throw new Error(
             `decrypt failed ${response.status}: ${await response.text()}`,
@@ -2949,12 +3131,14 @@ export class TinyCloudNode {
         signDecryptInvocation: async (
           input: BuildDecryptInvocationInput,
         ): Promise<BuiltDecryptInvocation> => {
+          graph.assertActive();
           const signed = await this.signRawNetworkAuthorization({
             targetNode: input.targetNode,
             networkId: input.networkId,
             action: DECRYPT_ACTION,
             facts: input.facts,
-          });
+          }, { graph, session });
+          graph.assertActive();
           return {
             ...signed,
             canonicalBody: canonicalizeEncryptionJson(
@@ -2965,31 +3149,39 @@ export class TinyCloudNode {
       },
       transport,
       node: {
-        fetchByNetworkId: (networkId) => this.getEncryptionNetwork(networkId),
+        fetchByNetworkId: async (networkId) => {
+          graph.assertActive();
+          const descriptor = await this.fetchEncryptionNetworkAt(host, networkId, graph.fetch);
+          graph.assertActive();
+          return descriptor;
+        },
       },
       wellKnown: {
         fetchWellKnown: async (principal, discoveryKey) => {
-          if (!this._address || !didPrincipalMatches(principal, this.did)) {
+          graph.assertActive();
+          if (!address || !didPrincipalMatches(principal, did)) {
             return null;
           }
-          if (!this.config.host) {
+          const publicSpaceId = makePublicSpaceId(address, chainId);
+          const encodedKey = discoveryKey.split("/").map(encodeURIComponent).join("/");
+          const response = await graph.fetch(
+            `${host}/public/${encodeURIComponent(publicSpaceId)}/kv/${encodedKey}`,
+            { method: "GET" },
+          );
+          graph.assertActive();
+          if (!response.ok) {
             return null;
           }
-          const publicSpaceId = makePublicSpaceId(this._address, this._chainId);
-          const result = await TinyCloud.readPublicSpace<
-            NetworkDescriptor | { descriptor?: NetworkDescriptor }
-          >(this.config.host, publicSpaceId, discoveryKey);
-          if (!result.ok) {
-            return null;
-          }
-          const body = result.data as
+          const body = await response.json() as
             | NetworkDescriptor
             | { descriptor?: NetworkDescriptor };
+          graph.assertActive();
           return "descriptor" in body && body.descriptor
             ? body.descriptor
             : (body as NetworkDescriptor);
         },
       },
+      assertActive: graph.assertActive,
     });
   }
 
@@ -3531,21 +3723,11 @@ export class TinyCloudNode {
     const networkId = nameOrNetworkId.startsWith("urn:tinycloud:encryption:")
       ? nameOrNetworkId
       : this.getDefaultEncryptionNetworkId(nameOrNetworkId);
-    const response = await fetch(
-      `${this.config.host}/encryption/networks/${encodeURIComponent(networkId)}`,
+    return this.fetchEncryptionNetworkAt(
+      this.config.host!,
+      networkId,
+      globalThis.fetch.bind(globalThis),
     );
-    if (response.status === 404) {
-      return null;
-    }
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch encryption network ${networkId}: HTTP ${response.status} ${await response.text()}`,
-      );
-    }
-    const body = (await response.json()) as {
-      descriptor?: NetworkDescriptor;
-    } | NetworkDescriptor;
-    return "descriptor" in body && body.descriptor ? body.descriptor : body as NetworkDescriptor;
   }
 
   async createEncryptionNetwork(
@@ -4423,7 +4605,7 @@ export class TinyCloudNode {
     //    surface a clear TypeError rather than silently falling
     //    through.
     const granted = parseRecapCapabilities(
-      (siwe: string) => this.wasmBindings.parseRecapFromSiwe(siwe),
+      (siwe: string) => this.parseRecapWithCaveats(siwe),
       session.siwe,
     );
     const { subset, missing } = isCapabilitySubset(expandedEntries, granted);
@@ -4802,6 +4984,7 @@ export class TinyCloudNode {
         service,
         path: entry.path,
         action,
+        ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
       }));
     });
   }
@@ -4812,7 +4995,7 @@ export class TinyCloudNode {
   ): boolean {
     try {
       const granted = parseRecapCapabilities(
-        (siwe: string) => this.wasmBindings.parseRecapFromSiwe(siwe),
+        (siwe: string) => this.parseRecapWithCaveats(siwe),
         session.siwe,
       );
       return isCapabilitySubset(entries, granted).subset;
@@ -4835,6 +5018,7 @@ export class TinyCloudNode {
         service,
         path: entry.path,
         action,
+        ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
       }));
     });
   }
@@ -4946,6 +5130,7 @@ export class TinyCloudNode {
       space: this.isEncryptionPermissionEntry(entry) ? "encryption" : spaceId,
       path: entry.path,
       actions: [...entry.actions],
+      ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
     }));
   }
 
@@ -4966,6 +5151,7 @@ export class TinyCloudNode {
         service,
         path: resource.path,
         action,
+        caveats: cloneRecapCaveats(resource.caveats),
       }));
     });
   }
@@ -4985,6 +5171,7 @@ export class TinyCloudNode {
       space: delegation.spaceId,
       path: delegation.path,
       actions,
+      ...(delegation.caveats === undefined ? {} : { caveats: cloneRecapCaveats(delegation.caveats) }),
     }));
   }
 
@@ -5133,6 +5320,15 @@ export class TinyCloudNode {
       return false;
     }
 
+    // A caller that already carries a caveat can only be covered by the exact
+    // same signed attenuation.  An uncaveated request is decorated with the
+    // grant's caveat immediately before WASM signs it.
+    if (requested.caveats !== undefined &&
+      canonicalRecapCaveats(granted.caveats) !== canonicalRecapCaveats(requested.caveats)
+    ) {
+      return false;
+    }
+
     if (granted.resource !== undefined || requested.resource !== undefined) {
       return granted.resource !== undefined &&
         requested.resource !== undefined &&
@@ -5181,6 +5377,12 @@ export class TinyCloudNode {
       : service;
   }
 
+  /** Prefer the v2 caveat-preserving parser while retaining old custom WASM. */
+  private parseRecapWithCaveats(siwe: string): WasmRecapEntry[] {
+    return this.wasmBindings.parseVerifiedRecapFromSiwe?.(siwe)
+      ?? this.wasmBindings.parseRecapFromSiwe(siwe);
+  }
+
   private isEncryptionNetworkOperation(service: string, path: string): boolean {
     return service === "encryption" &&
       path.startsWith("urn:tinycloud:encryption:");
@@ -5192,6 +5394,7 @@ export class TinyCloudNode {
     service: string;
     path: string;
     action: string;
+    caveats?: Record<string, unknown>[];
   }): RuntimePermissionOperation | undefined {
     const service = this.invocationServiceName(entry.service);
     if (typeof entry.resource === "string") {
@@ -5200,6 +5403,7 @@ export class TinyCloudNode {
         service,
         path: entry.path,
         action: entry.action,
+        ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
       };
     }
     if (this.isEncryptionNetworkOperation(service, entry.path)) {
@@ -5208,6 +5412,7 @@ export class TinyCloudNode {
         service,
         path: entry.path,
         action: entry.action,
+        ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
       };
     }
     if (typeof entry.spaceId === "string") {
@@ -5216,6 +5421,7 @@ export class TinyCloudNode {
         service,
         path: entry.path,
         action: entry.action,
+        ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
       };
     }
     return undefined;

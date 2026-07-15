@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, str::FromStr};
 use tinycloud_sdk_rs::authorization::InvocationHeaders;
 use tinycloud_sdk_rs::tinycloud_auth::{
-    resource::{Path, Service, SpaceId},
+    cacaos::siwe::Message,
+    resource::{Path, ResourceId, Service, SpaceId},
+    siwe_recap::Capability,
     ssi::{
         claims::{chrono, chrono::Timelike, jwt::NumericDate},
         dids::{DIDBuf, DIDURLBuf},
@@ -44,11 +46,72 @@ struct PersistedDelegationHeader {
 struct ValidatedPersistedSessionProof {
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<String>,
-    recap: Vec<tinycloud_sdk_wasm::session::ParsedRecapEntry>,
+    recap: Vec<VerifiedRecapEntry>,
+    /// A verifier-versioned witness. Restore requires this rather than the
+    /// legacy `recap` field, which lets existing custom bindings remain source
+    /// compatible without treating their caveat-free output as authority.
+    verified_recap: Vec<VerifiedRecapEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct VerifiedRecapEntry {
+    service: String,
+    space: String,
+    path: String,
+    actions: Vec<String>,
+    caveats: Vec<BTreeMap<String, serde_json::Value>>,
 }
 
 fn map_jserr<E: std::error::Error>(e: E) -> JsValue {
     e.to_string().into()
+}
+
+/// Extract the verified ReCap directly instead of the upstream convenience
+/// projection, which intentionally groups actions but drops their note-bene
+/// caveats. We emit one entry per action so a capability with a different
+/// caveat set can never be merged into a broader sibling scope.
+fn verified_recap_from_siwe(siwe_string: &str) -> Result<Vec<VerifiedRecapEntry>, JsValue> {
+    let message: Message = siwe_string
+        .parse::<Message>()
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let capability = match Capability::<serde_json::Value>::extract_and_verify(&message) {
+        Ok(Some(capability)) => capability,
+        Ok(None) => return Ok(Vec::new()),
+        Err(error) => return Err(JsValue::from_str(&error.to_string())),
+    };
+    let (capabilities, _) = capability.into_inner();
+    let mut entries = Vec::new();
+    for (resource_uri, ability_map) in capabilities.abilities().iter() {
+        let (space, service, path) = match resource_uri.as_str().parse::<ResourceId>() {
+            Ok(resource) => (
+                resource.space().to_string(),
+                resource.service().to_string(),
+                resource.path().map(|path| path.as_str().to_string()).unwrap_or_default(),
+            ),
+            Err(error) if resource_uri.as_str().starts_with("urn:tinycloud:encryption:") => (
+                "encryption".to_string(),
+                "encryption".to_string(),
+                resource_uri.to_string(),
+            ),
+            Err(error) => {
+                return Err(JsValue::from_str(&format!(
+                    "invalid ReCap resource URI {}: {error}",
+                    resource_uri
+                )));
+            }
+        };
+        for (ability, caveats) in ability_map {
+            entries.push(VerifiedRecapEntry {
+                service: service.clone(),
+                space: space.clone(),
+                path: path.clone(),
+                actions: vec![ability.to_string()],
+                caveats: caveats.as_ref().to_vec(),
+            });
+        }
+    }
+    Ok(entries)
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,9 +216,7 @@ pub fn validatePersistedSession(proof: JsValue) -> Result<JsValue, JsValue> {
     // The primary space is authority; additional `spaces` are persisted UI
     // metadata (for example the lazily hosted public space) and are not
     // implicitly elevated to signed authority merely by being present here.
-    let recap =
-        tinycloud_sdk_wasm::session::parse_recap_from_siwe(&signed.session.siwe.to_string())
-            .map_err(map_jserr)?;
+    let recap = verified_recap_from_siwe(&signed.session.siwe.to_string())?;
     let expected_spaces = [signed.session.space_id.to_string()];
     if !recap.is_empty()
         && expected_spaces
@@ -191,8 +252,22 @@ pub fn validatePersistedSession(proof: JsValue) -> Result<JsValue, JsValue> {
         ));
     }
 
-    serde_wasm_bindgen::to_value(&ValidatedPersistedSessionProof { expires_at, recap })
+    serde_wasm_bindgen::to_value(&ValidatedPersistedSessionProof {
+        recap: recap.clone(),
+        verified_recap: recap,
+        expires_at,
+    })
         .map_err(Into::into)
+}
+
+/// Parse a ReCap into exact action/caveat scopes. This is deliberately a new
+/// export: the upstream `parseRecapFromSiwe` remains available for old custom
+/// bindings, while first-party bindings can opt into the verifier v2 witness.
+#[wasm_bindgen]
+#[allow(non_snake_case)]
+pub fn parseVerifiedRecapFromSiwe(siwe_string: &str) -> Result<JsValue, JsValue> {
+    let entries = verified_recap_from_siwe(siwe_string)?;
+    serde_wasm_bindgen::to_value(&entries).map_err(Into::into)
 }
 
 #[wasm_bindgen]
@@ -272,4 +347,46 @@ pub fn invokeAny(session: JsValue, entries: JsValue, facts: JsValue) -> Result<J
     Ok(serde_wasm_bindgen::to_value(&InvocationHeaders::new(
         authz,
     ))?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tinycloud_sdk_rs::tinycloud_auth::cacaos::siwe::Version as SIWEVersion;
+
+    #[test]
+    fn verified_recap_keeps_each_signed_action_caveat() {
+        let mut capability = Capability::<serde_json::Value>::default();
+        let resource: UriString = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default/kv/narrow"
+            .parse()
+            .unwrap();
+        let action: Ability = "tinycloud.kv/get".parse().unwrap();
+        let caveat = BTreeMap::from([(
+            "tenant".to_string(),
+            serde_json::Value::String("alpha".to_string()),
+        )]);
+        capability.with_actions(resource, [(action, vec![caveat.clone()])]);
+        let message = capability
+            .build_message(Message {
+                scheme: None,
+                domain: "restore.test".parse().unwrap(),
+                address: Default::default(),
+                statement: None,
+                uri: "did:key:z6Mkrestore".parse().unwrap(),
+                version: SIWEVersion::V1,
+                chain_id: 1,
+                nonce: "restore-caveat".into(),
+                issued_at: "2026-01-01T00:00:00.000Z".parse().unwrap(),
+                expiration_time: None,
+                not_before: None,
+                request_id: None,
+                resources: vec![],
+            })
+            .unwrap();
+
+        let recap = verified_recap_from_siwe(&message.to_string()).unwrap();
+        assert_eq!(recap.len(), 1);
+        assert_eq!(recap[0].actions, vec!["tinycloud.kv/get"]);
+        assert_eq!(recap[0].caveats, vec![caveat]);
+    }
 }

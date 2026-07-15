@@ -177,7 +177,38 @@ function canonicalizeEntryMatches(
       return false;
     }
   }
+  // There is no safe general partial ordering for arbitrary ReCap caveat
+  // objects. A caveated authority therefore only covers the same caveat set;
+  // treating it as uncaveated would authorize a broader child delegation.
+  if (!sameCaveats(requested.caveats, granted.caveats)) {
+    return false;
+  }
   return true;
+}
+
+function sameCaveats(
+  left: readonly Record<string, unknown>[] | undefined,
+  right: readonly Record<string, unknown>[] | undefined,
+): boolean {
+  const canonicalize = (value: unknown): string => {
+    if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+      return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
+    if (typeof value === "object") {
+      const object = value as Record<string, unknown>;
+      return `{${Object.keys(object).sort().map((key) =>
+        `${JSON.stringify(key)}:${canonicalize(object[key])}`,
+      ).join(",")}}`;
+    }
+    return JSON.stringify(value);
+  };
+  // ReCap represents an unconstrained ability as `[{}]`; callers that do not
+  // mention caveats represent the same authority as `[]`. Preserve the raw
+  // value everywhere else, but compare those two semantic no-op forms alike.
+  const meaningful = (caveats: readonly Record<string, unknown>[] | undefined) =>
+    (caveats ?? []).filter((caveat) => Object.keys(caveat).length > 0);
+  return canonicalize(meaningful(left)) === canonicalize(meaningful(right));
 }
 
 /** Return whether a granted action pattern covers one requested action. */
@@ -213,6 +244,9 @@ function cloneEntry(entry: PermissionEntry): PermissionEntry {
     ...(entry.space !== undefined ? { space: entry.space } : {}),
     path: entry.path,
     actions: [...entry.actions],
+    ...(entry.caveats !== undefined
+      ? { caveats: JSON.parse(JSON.stringify(entry.caveats)) as Record<string, unknown>[] }
+      : {}),
     ...(entry.skipPrefix !== undefined ? { skipPrefix: entry.skipPrefix } : {}),
     ...(entry.expiry !== undefined ? { expiry: entry.expiry } : {}),
   };
@@ -235,6 +269,8 @@ export interface WasmRecapEntry {
   space: string;
   path: string;
   actions: string[];
+  /** Exact ReCap caveats shared by every action in this entry. */
+  caveats?: Record<string, unknown>[];
 }
 
 /**
@@ -289,6 +325,9 @@ export function parseRecapCapabilities(
       space: normalizeSpace(entry.space),
       path: entry.path,
       actions: [...entry.actions],
+      ...(entry.caveats === undefined
+        ? {}
+        : { caveats: JSON.parse(JSON.stringify(entry.caveats)) as Record<string, unknown>[] }),
     };
   });
 

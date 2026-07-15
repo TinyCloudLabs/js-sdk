@@ -117,6 +117,7 @@ export class ServiceContext implements IServiceContext {
    * @param session - New session or null to clear
    */
   setSession(session: ServiceSession | null): void {
+    this.assertActive();
     this._session = session;
     this.emit('session.changed', { authenticated: session !== null });
 
@@ -158,6 +159,7 @@ export class ServiceContext implements IServiceContext {
    * Get the list of TinyCloud host URLs.
    */
   get hosts(): string[] {
+    this.assertActive();
     return this._hosts;
   }
 
@@ -289,7 +291,13 @@ export class ServiceContext implements IServiceContext {
     this._session = null;
     this._abortController.abort();
     for (const service of this._services.values()) {
-      service.onSignOut();
+      // User-provided services are part of the retired graph, but their
+      // cleanup must never make installing the replacement graph fail.
+      try {
+        service.onSignOut();
+      } catch (error) {
+        console.error("Error retiring service:", error);
+      }
     }
   }
 
@@ -298,12 +306,20 @@ export class ServiceContext implements IServiceContext {
    * Creates a new AbortController for future operations.
    */
   abort(): void {
+    // A retired graph must never receive a fresh abort signal. Captured
+    // services retain this context, so recreating its controller would make a
+    // stale graph look live to custom cleanup code.
+    if (this._retired) return;
     this._abortController.abort();
     this._abortController = new AbortController();
 
     // Notify all services
     for (const service of this._services.values()) {
-      service.onSignOut();
+      try {
+        service.onSignOut();
+      } catch (error) {
+        console.error("Error signing out service:", error);
+      }
     }
   }
 
@@ -311,6 +327,7 @@ export class ServiceContext implements IServiceContext {
    * Sign out - abort operations and clear session.
    */
   signOut(): void {
+    if (this._retired) return;
     this.abort();
     this.setSession(null);
     this.emit('session.expired', {});
@@ -329,6 +346,7 @@ export class ServiceContext implements IServiceContext {
 
   private wrapInvoke(invoke: InvokeFunction): InvokeFunction {
     return (session, service, path, action, facts) => {
+      this.assertActive();
       if (!tinyCloudDebugLogger.isEnabled()) {
         return invoke(session, service, path, action, facts);
       }
@@ -359,6 +377,7 @@ export class ServiceContext implements IServiceContext {
 
   private wrapInvokeAny(invokeAny: InvokeAnyFunction): InvokeAnyFunction {
     return (session, entries, facts) => {
+      this.assertActive();
       if (!tinyCloudDebugLogger.isEnabled()) {
         return invokeAny(session, entries, facts);
       }
@@ -381,22 +400,27 @@ export class ServiceContext implements IServiceContext {
 
   private wrapFetch(fetchFn: FetchFunction): FetchFunction {
     return async (url, init) => {
+      this.assertActive();
+      const request = {
+        ...init,
+        signal: this.combineSignals(init?.signal),
+      };
       if (!tinyCloudDebugLogger.isEnabled()) {
-        return fetchFn(url, init);
+        return fetchFn(url, request);
       }
 
       const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", {
         url,
-        method: init?.method ?? "GET",
-        init,
+        method: request.method ?? "GET",
+        init: request,
       });
 
       try {
-        const response = await fetchFn(url, init);
+        const response = await fetchFn(url, request);
         timer.stop({
           ok: response.ok,
           url,
-          method: init?.method ?? "GET",
+          method: request.method ?? "GET",
           status: response.status,
           statusText: response.statusText,
         });
@@ -405,11 +429,30 @@ export class ServiceContext implements IServiceContext {
         timer.stop({
           ok: false,
           url,
-          method: init?.method ?? "GET",
+          method: request.method ?? "GET",
           error,
         });
         throw error;
       }
     };
+  }
+
+  private combineSignals(signal?: AbortSignal): AbortSignal {
+    if (!signal) return this._abortController.signal;
+    const combined = new AbortController();
+    const abort = (source: AbortSignal) => combined.abort(source.reason);
+    if (signal.aborted) {
+      abort(signal);
+    } else if (this._abortController.signal.aborted) {
+      abort(this._abortController.signal);
+    } else {
+      signal.addEventListener("abort", () => abort(signal), { once: true });
+      this._abortController.signal.addEventListener(
+        "abort",
+        () => abort(this._abortController.signal),
+        { once: true },
+      );
+    }
+    return combined.signal;
   }
 }

@@ -230,6 +230,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const firstKeyId = node.session?.sessionKey;
     expect(firstKeyId).toStartWith("session-");
     expect(node.sessionDid).toBe(`did:key:z6MkTest-${firstKeyId}`);
+    const capturedEncryption = node.encryption;
 
     await new Promise((resolve) => setTimeout(resolve, 2));
     await withFetchResponses(
@@ -257,6 +258,15 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     expect(secondKeyId).toStartWith("session-");
     expect(secondKeyId).not.toBe(firstKeyId);
     expect(node.sessionDid).toBe(`did:key:z6MkTest-${secondKeyId}`);
+    await expect((capturedEncryption as any).config.node.fetchByNetworkId(
+      "urn:tinycloud:encryption:did:key:z6MkTest:default",
+    )).rejects.toThrow("Service graph has been retired");
+    await expect((capturedEncryption as any).config.signer.signDecryptInvocation({
+      targetNode: "did:key:z6MkNode",
+      networkId: "urn:tinycloud:encryption:did:key:z6MkTest:default",
+      body: {},
+      facts: [],
+    })).rejects.toThrow("Service graph has been retired");
   });
 
   test("no manifest → uses defaultActions (legacy fallback)", async () => {

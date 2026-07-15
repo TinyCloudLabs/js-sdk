@@ -261,9 +261,12 @@ export class TinyCloud {
 
   /** @internal Retire this service graph after its owner replaces a session. */
   public retireServices(): void {
-    this._serviceContext?.retire();
-    this._services.clear();
-    this._servicesInitialized = false;
+    try {
+      this._serviceContext?.retire();
+    } finally {
+      this._services.clear();
+      this._servicesInitialized = false;
+    }
   }
 
   /**

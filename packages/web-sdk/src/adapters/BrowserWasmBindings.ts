@@ -64,6 +64,15 @@ export class BrowserWasmBindings implements IWasmBindings {
       actions: string[];
     }[];
   }
+  parseVerifiedRecapFromSiwe(siweString: string) {
+    return tinycloud.parseVerifiedRecapFromSiwe(siweString) as {
+      service: string;
+      space: string;
+      path: string;
+      actions: string[];
+      caveats: Record<string, unknown>[];
+    }[];
+  }
   generateHostSIWEMessage(params: any): string { return tinycloud.generateHostSIWEMessage(params); }
   siweToDelegationHeaders(params: any) { return tinycloud.siweToDelegationHeaders(params); }
   protocolVersion(): number { return tinycloud.protocolVersion(); }

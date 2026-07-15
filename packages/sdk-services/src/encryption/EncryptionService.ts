@@ -83,6 +83,7 @@ export interface DecryptTransport {
     networkId: string;
     authorization: string;
     canonicalBody: string;
+    signal?: AbortSignal;
   }): Promise<DecryptResponseBody>;
 }
 
@@ -92,6 +93,8 @@ export interface EncryptionServiceConfig {
   transport: DecryptTransport;
   node?: NodeDescriptorFetcher;
   wellKnown?: WellKnownDescriptorFetcher;
+  /** Bound by an owning service graph to prevent cross-session authority use. */
+  assertActive?: () => void;
   [key: string]: unknown;
 }
 
@@ -120,6 +123,7 @@ export class EncryptionService
     identifier: string,
     ownerDid?: string,
   ): Promise<Result<NetworkDescriptor, EncryptionError>> {
+    this.assertActive();
     const result = await discoverNetworkFn({
       identifier,
       ...(ownerDid !== undefined ? { ownerDid } : {}),
@@ -128,6 +132,7 @@ export class EncryptionService
         ? { wellKnown: this._config.wellKnown }
         : {}),
     });
+    this.assertActive();
     if (!result.ok) return result;
     return encOk(result.data.descriptor);
   }
@@ -138,6 +143,7 @@ export class EncryptionService
     options?: EncryptToNetworkOptions,
   ): Promise<Result<InlineEncryptedEnvelope, EncryptionError>> {
     try {
+      this.assertActive();
       const discovered = await this.discoverNetwork(networkId);
       if (!discovered.ok) return discovered;
       const usable = ensureNetworkUsableForDecrypt(discovered.data);
@@ -173,6 +179,7 @@ export class EncryptionService
     options?: DecryptEnvelopeOptions,
   ): Promise<Result<Uint8Array, EncryptionError>> {
     try {
+      this.assertActive();
       const validated = validateEnvelope(this.crypto, envelope);
       if (!validated.ok) return validated;
       if (
@@ -250,6 +257,7 @@ export class EncryptionService
         facts,
         proof: capabilityProof,
       });
+      this.assertActive();
       if (!built.ok) return built;
 
       let response: DecryptResponseBody;
@@ -259,7 +267,9 @@ export class EncryptionService
           networkId: envelope.networkId,
           authorization: built.data.authorization,
           canonicalBody: built.data.canonicalBody,
+          signal: this.abortSignal,
         });
+        this.assertActive();
       } catch (error) {
         return encErr(
           encryptionError({
@@ -298,5 +308,9 @@ export class EncryptionService
         }),
       );
     }
+  }
+
+  private assertActive(): void {
+    this._config.assertActive?.();
   }
 }

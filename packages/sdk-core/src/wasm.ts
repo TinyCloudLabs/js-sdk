@@ -33,8 +33,15 @@ export interface PersistedSessionProof {
 export interface ValidatedPersistedSessionProof {
   /** The SIWE expiration exactly as signed, when the SIWE contains one. */
   expiresAt?: string;
-  /** Exact capabilities recovered while verifying the signed SIWE ReCap. */
-  recap: WasmRecapEntry[];
+  /** @deprecated Legacy caveat-free witness; restore does not trust it. */
+  recap?: WasmRecapEntry[];
+  /**
+   * Exact, caveat-preserving ReCap reconstruction from a verifier that
+   * implements persisted-session validation v2. This remains optional so a
+   * pre-existing custom binding stays source-compatible, but restore rejects
+   * authenticated authority unless this witness is available.
+   */
+  verifiedRecap?: Array<WasmRecapEntry & { caveats: Record<string, unknown>[] }>;
 }
 
 /**
@@ -70,6 +77,13 @@ export interface IWasmBindings {
    * Returns an empty array when the SIWE has no recap resource.
    */
   parseRecapFromSiwe: (siweString: string) => WasmRecapEntry[];
+  /**
+   * Optional verifier-v2 parser that preserves ReCap caveats. Kept optional
+   * so existing custom bindings remain source-compatible.
+   */
+  parseVerifiedRecapFromSiwe?: (siweString: string) => Array<WasmRecapEntry & {
+    caveats: Record<string, unknown>[];
+  }>;
   /** Generate a host SIWE message for space activation */
   generateHostSIWEMessage: (params: any) => string;
   /** Convert a signed SIWE message to delegation headers */

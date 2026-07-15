@@ -763,6 +763,13 @@ export class SharingService implements ISharingService {
           continue;
         }
 
+        // SharingService cannot reproduce arbitrary signed ReCap caveats when
+        // issuing a child delegation.  Treat caveated authority as unusable
+        // here rather than minting a broader child capability.
+        if ((delegation.caveats?.length ?? 0) > 0) {
+          continue;
+        }
+
         // Check if delegation is valid and not expired
         if (!this.registry.isDelegationValid(delegation)) {
           continue;
