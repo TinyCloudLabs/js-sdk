@@ -3,9 +3,12 @@ name: TC-191 I0 gate
 on:
   pull_request:
     paths:
-      - "packages/cli/src/**"
+      - "packages/bootstrap/**"
+      - "packages/cli/**"
+      - "packages/operations/**"
       - "packages/sdk-rs/**"
       - "packages/sdk-core/**"
+      - "packages/sdk-services/**"
       - "packages/node-sdk/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -19,9 +22,12 @@ on:
   push:
     branches: [master]
     paths:
-      - "packages/cli/src/**"
+      - "packages/bootstrap/**"
+      - "packages/cli/**"
+      - "packages/operations/**"
       - "packages/sdk-rs/**"
       - "packages/sdk-core/**"
+      - "packages/sdk-services/**"
       - "packages/node-sdk/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -112,6 +118,9 @@ jobs:
           --external events
           --external fs
           --external path
+
+      - name: Build operations package
+        run: bun run --cwd packages/operations build
 
       - name: Run seven focused I0 gate suites offline
         env:
