@@ -5,7 +5,10 @@ import {
   withProfileLock,
   writeJsonAtomic,
 } from "../src/state.js";
-import { signalProfileLockProtocol, waitForProfileLockProtocol } from "./profile-lock-protocol.js";
+import {
+  signalProfileLockProtocol,
+  waitForProfileLockProtocol,
+} from "../src/test-support/profile-lock-protocol.js";
 
 const [profile, store, key, encodedRecord, readyPath, releasePath] = process.argv.slice(2);
 if (

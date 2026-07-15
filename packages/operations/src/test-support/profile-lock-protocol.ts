@@ -1,5 +1,5 @@
-import { access, writeFile } from "node:fs/promises";
 import { watch } from "node:fs";
+import { access, writeFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 
 export const PROFILE_LOCK_PROTOCOL_TIMEOUT_MS = 5_000;
@@ -8,10 +8,7 @@ export async function signalProfileLockProtocol(filePath: string): Promise<void>
   await writeFile(filePath, "ready\n", { encoding: "utf8", flag: "wx" });
 }
 
-/**
- * Wait on a filesystem event, with a timeout only to prevent a broken child
- * protocol from hanging the test. It intentionally has no polling or sleeps.
- */
+/** Wait for an event-driven child-process signal, with a bounded test timeout. */
 export async function waitForProfileLockProtocol(
   filePath: string,
   description: string,
@@ -42,8 +39,7 @@ export async function waitForProfileLockProtocol(
       timeoutMs,
     );
 
-    // Cover a signal written after the first existence check but before watch
-    // began observing the directory.
+    // Cover a signal written between the initial existence check and watch.
     check();
   });
 }

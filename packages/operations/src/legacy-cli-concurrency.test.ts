@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   signalProfileLockProtocol,
   waitForProfileLockProtocol,
-} from "../test-support/profile-lock-protocol.js";
+} from "./test-support/profile-lock-protocol.js";
 
 const homes: string[] = [];
 const children: ReturnType<typeof Bun.spawn>[] = [];
@@ -147,7 +147,7 @@ function spawn(command: string[], env: Record<string, string | undefined>) {
 async function expectChildExit(child: ReturnType<typeof Bun.spawn>, name: string): Promise<void> {
   const [exitCode, stderr] = await Promise.all([
     child.exited,
-    new Response(child.stderr).text(),
+    readChildStderr(child),
   ]);
   expect(exitCode, `${name} failed:\n${stderr}`).toBe(0);
 }
@@ -163,8 +163,15 @@ async function waitForContention(
   ]);
   if (outcome === "contended") return;
 
-  const stderr = await new Response(child.stderr).text();
+  const stderr = await readChildStderr(child);
   throw new Error(`${description} exited early (${outcome.exitCode}):\n${stderr}`);
+}
+
+async function readChildStderr(child: ReturnType<typeof Bun.spawn>): Promise<string> {
+  if (!(child.stderr instanceof ReadableStream)) {
+    throw new Error("Expected child stderr to be piped.");
+  }
+  return new Response(child.stderr).text();
 }
 
 async function readStoredRecords<T>(
