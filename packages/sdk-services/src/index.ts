@@ -293,6 +293,7 @@ export type {
 // Encryption service (network-scoped one-of-one decrypt)
 export {
   EncryptionService,
+  DecryptTransportResponseError,
   parseNetworkId,
   buildNetworkId,
   isNetworkId,

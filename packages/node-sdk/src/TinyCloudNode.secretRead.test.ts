@@ -7,21 +7,19 @@ const TARGET_SPACE =
 
 function makeNode(read: unknown) {
   const node = Object.create(TinyCloudNode.prototype) as TinyCloudNode;
-  const getBaseSecrets = mock((_space: string) => ({
-    vault: {
-      readNetworkEncrypted: mock(async () => read),
-    },
+  const getBaseVault = mock((_space: string) => ({
+    readNetworkEncrypted: mock(async () => read),
   }));
   Object.assign(node, {
     _spaceService: {},
-    getBaseSecrets,
+    getBaseVault,
   });
-  return { node, getBaseSecrets };
+  return { node, getBaseVault };
 }
 
 describe("TinyCloudNode.readSecret", () => {
   test("returns value and uses the explicit target space and canonical vault key", async () => {
-    const { node, getBaseSecrets } = makeNode({
+    const { node, getBaseVault } = makeNode({
       status: "ok",
       entry: {
         value: {
@@ -38,8 +36,8 @@ describe("TinyCloudNode.readSecret", () => {
       scope: "Production App",
     })).resolves.toEqual({ status: "ok", value: "secret value" });
 
-    expect(getBaseSecrets).toHaveBeenCalledWith(TARGET_SPACE);
-    expect(getBaseSecrets.mock.results[0]?.value.vault.readNetworkEncrypted)
+    expect(getBaseVault).toHaveBeenCalledWith(TARGET_SPACE);
+    expect(getBaseVault.mock.results[0]?.value.readNetworkEncrypted)
       .toHaveBeenCalledWith("secrets/scoped/production-app/API_KEY");
   });
 

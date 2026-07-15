@@ -297,6 +297,7 @@ export type {
   VaultListOptions,
   VaultGrantOptions,
   VaultEntry,
+  VaultNetworkReadResult,
   VaultError,
   ISecretsService,
   SecretPayload,
@@ -308,6 +309,7 @@ export type {
 // Re-export encryption service values and helpers
 export {
   EncryptionService,
+  DecryptTransportResponseError,
   parseNetworkId,
   buildNetworkId,
   isNetworkId,

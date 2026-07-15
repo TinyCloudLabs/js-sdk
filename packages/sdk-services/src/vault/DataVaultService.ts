@@ -164,6 +164,10 @@ function unwrapKVData<T = unknown>(value: unknown): T {
   return value as T;
 }
 
+function hasHttpResponse(error: { meta?: Record<string, unknown> }): boolean {
+  return typeof error.meta?.status === "number";
+}
+
 function isUnlockSigner(
   signer: unknown
 ): signer is { signMessage(message: string): Promise<string> } {
@@ -690,8 +694,9 @@ export class DataVaultService extends BaseService implements IDataVaultService {
 
     if (!valueResult.ok) {
       if (
-        valueResult.error.code === "NOT_FOUND" ||
-        valueResult.error.code === "KV_NOT_FOUND"
+        (valueResult.error.code === "NOT_FOUND" ||
+          valueResult.error.code === "KV_NOT_FOUND") &&
+        !hasHttpResponse(valueResult.error)
       ) {
         return { status: "not_found" };
       }
@@ -700,7 +705,9 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         valueResult.error.code === "TIMEOUT" ||
         valueResult.error.code === "ABORTED"
       ) {
-        return { status: "node_unreachable" };
+        return hasHttpResponse(valueResult.error)
+          ? { status: "read_failed" }
+          : { status: "node_unreachable" };
       }
       return { status: "read_failed" };
     }
@@ -720,7 +727,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       const proof = await this.decryptCapabilityProof();
       plaintextResult = await config.service.decryptEnvelope(envelope, proof);
     } catch {
-      return { status: "node_unreachable" };
+      return { status: "decrypt_failed" };
     }
 
     if (!plaintextResult.ok) {

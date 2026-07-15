@@ -86,6 +86,13 @@ export interface DecryptTransport {
   }): Promise<DecryptResponseBody>;
 }
 
+/** A reachable node returned an HTTP failure for a decrypt request. */
+export class DecryptTransportResponseError extends Error {
+  constructor(readonly status: number) {
+    super("Node decrypt request failed");
+  }
+}
+
 export interface EncryptionServiceConfig {
   crypto: EncryptionCrypto;
   signer: DecryptInvocationSigner;
@@ -250,7 +257,15 @@ export class EncryptionService
         facts,
         proof: capabilityProof,
       });
-      if (!built.ok) return built;
+      if (!built.ok) {
+        if (built.error.code !== "TRANSPORT_ERROR") return built;
+        return encErr(
+          encryptionError({
+            code: "INVALID_INPUT",
+            message: "Unable to build decrypt request",
+          }),
+        );
+      }
 
       let response: DecryptResponseBody;
       try {
@@ -261,6 +276,15 @@ export class EncryptionService
           canonicalBody: built.data.canonicalBody,
         });
       } catch (error) {
+        if (error instanceof DecryptTransportResponseError) {
+          return encErr(
+            encryptionError(
+              error.status === 401 || error.status === 403
+                ? { code: "DECRYPT_DENIED", message: "Node denied decrypt request" }
+                : { code: "INVALID_RESPONSE", message: "Node decrypt request failed" },
+            ),
+          );
+        }
         return encErr(
           encryptionError({
             code: "TRANSPORT_ERROR",
@@ -293,8 +317,8 @@ export class EncryptionService
     } catch (error) {
       return encErr(
         encryptionError({
-          code: "TRANSPORT_ERROR",
-          cause: toError(error),
+          code: "INVALID_RESPONSE",
+          message: "Local decryption failed",
         }),
       );
     }

@@ -8,7 +8,6 @@ import type {
   VaultGetOptions,
   VaultGrantOptions,
   VaultListOptions,
-  VaultNetworkReadResult,
   VaultPutOptions,
 } from "../vault/types";
 import { SecretsService } from "./index";
@@ -48,12 +47,6 @@ class MockVault implements IDataVaultService {
         keyId: "key",
       },
     }),
-  );
-  readNetworkEncrypted = mock(
-    async <T = unknown>(
-      _key: string,
-      _options?: VaultGetOptions<T>,
-    ): Promise<VaultNetworkReadResult<T>> => ({ status: "not_found" }),
   );
   delete = mock(
     async (_key: string): Promise<Result<void, VaultError>> => ({

@@ -45,6 +45,7 @@ import {
   DataVaultService,
   IDataVaultService,
   EncryptionService,
+  DecryptTransportResponseError,
   SecretsService,
   ISecretsService,
   IEncryptionService,
@@ -594,6 +595,7 @@ export class TinyCloudNode {
   private _hooks?: HooksService;
   private _vault?: DataVaultService;
   private _encryption?: EncryptionService;
+  private _baseVaults = new Map<string, DataVaultService>();
   private _baseSecrets = new Map<string, ISecretsService>();
   private _secrets = new Map<string, ISecretsService>();
   private _account?: AccountService;
@@ -1064,6 +1066,7 @@ export class TinyCloudNode {
     this._hooks = undefined;
     this._vault = undefined;
     this._encryption = undefined;
+    this._baseVaults.clear();
     this._baseSecrets.clear();
     this._secrets.clear();
     this._spaceService = undefined;
@@ -1922,6 +1925,7 @@ export class TinyCloudNode {
     this._hooks = undefined;
     this._vault = undefined;
     this._encryption = undefined;
+    this._baseVaults.clear();
     this._baseSecrets.clear();
     this._secrets.clear();
     this._spaceService = undefined;
@@ -2457,9 +2461,7 @@ export class TinyCloudNode {
           },
         );
         if (!response.ok) {
-          throw new Error(
-            `decrypt failed ${response.status}: ${await response.text()}`,
-          );
+          throw new DecryptTransportResponseError(response.status);
         }
         return (await response.json()) as DecryptResponseBody;
       },
@@ -3149,7 +3151,7 @@ export class TinyCloudNode {
     const targetSpace = input.space.startsWith("tinycloud:")
       ? input.space
       : this.ownedSpaceId(input.space);
-    const result = await this.getBaseSecrets(targetSpace).vault.readNetworkEncrypted<unknown>(
+    const result = await this.getBaseVault(targetSpace).readNetworkEncrypted<unknown>(
       resolved.vaultKey,
     );
 
@@ -3171,15 +3173,31 @@ export class TinyCloudNode {
       : this.ownedSpaceId(spaceId);
     let secrets = this._baseSecrets.get(resolvedSpace);
     if (!secrets) {
-      const kvService = this.createSpaceScopedKVService(resolvedSpace);
-      const vaultService = this.createVaultService(resolvedSpace, kvService);
-      if (this._serviceContext) {
-        vaultService.initialize(this._serviceContext);
-      }
-      secrets = new SecretsService(() => vaultService);
+      secrets = new SecretsService(() => this.getBaseVault(resolvedSpace));
       this._baseSecrets.set(resolvedSpace, secrets);
     }
     return secrets;
+  }
+
+  private getBaseVault(spaceId: string): DataVaultService {
+    if (!this._spaceService) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+    const resolvedSpace = spaceId.startsWith("tinycloud:")
+      ? spaceId
+      : this.ownedSpaceId(spaceId);
+    let vault = this._baseVaults.get(resolvedSpace);
+    if (!vault) {
+      vault = this.createVaultService(
+        resolvedSpace,
+        this.createSpaceScopedKVService(resolvedSpace),
+      );
+      if (this._serviceContext) {
+        vault.initialize(this._serviceContext);
+      }
+      this._baseVaults.set(resolvedSpace, vault);
+    }
+    return vault;
   }
 
   /**

@@ -263,6 +263,7 @@ export {
   type VaultListOptions,
   type VaultGrantOptions,
   type VaultEntry,
+  type VaultNetworkReadResult,
   type VaultError,
   // Secrets Service
   SecretsService,
@@ -277,6 +278,7 @@ export {
   type SecretScopeOptions,
   // Encryption Service (network-scoped)
   EncryptionService,
+  DecryptTransportResponseError,
   parseNetworkId,
   buildNetworkId,
   isNetworkId,

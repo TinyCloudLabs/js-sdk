@@ -112,6 +112,8 @@ export {
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
+  type SecretReadInput,
+  type SecretReadResult,
 } from "./TinyCloudNode";
 
 export { AccountService } from "./account/AccountService";
@@ -260,6 +262,7 @@ export type {
   VaultListOptions,
   VaultGrantOptions,
   VaultEntry,
+  VaultNetworkReadResult,
   VaultError,
   ISecretsService,
   SecretPayload,

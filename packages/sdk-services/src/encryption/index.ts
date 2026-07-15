@@ -9,7 +9,10 @@
  * - Decrypt requests: UCAN-style invocations against a node + networkId.
  */
 
-export { EncryptionService } from "./EncryptionService";
+export {
+  EncryptionService,
+  DecryptTransportResponseError,
+} from "./EncryptionService";
 export type {
   DecryptTransport,
   EncryptionServiceConfig,
