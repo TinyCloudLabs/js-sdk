@@ -378,8 +378,21 @@ function installSession(node: TinyCloudNode, session: TinyCloudSession): void {
 export interface HermeticEncryptedNode {
   readonly host: string;
   readonly delegate: TinyCloudNode;
+  readonly restorableSession: {
+    delegationHeader: { Authorization: string };
+    delegationCid: string;
+    spaceId: string;
+    jwk: object;
+    verificationMethod: string;
+    address: string;
+    chainId: number;
+    siwe: string;
+    signature: string;
+    tinycloudHosts: string[];
+  };
   readonly permissions: readonly PermissionEntry[];
   readonly unrelatedAudience: string;
+  createRestoredDelegate(): TinyCloudNode;
   mintDelegation(): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
   mintDelegationForAudience(
     audience: string,
@@ -483,8 +496,22 @@ export async function createHermeticEncryptedNode(): Promise<HermeticEncryptedNo
   return {
     host: transport.host,
     delegate: delegateRuntime.node,
+    restorableSession: {
+      delegationHeader: delegateSession.delegationHeader,
+      delegationCid: delegateSession.delegationCid,
+      spaceId: delegateSession.spaceId,
+      jwk: delegateSession.jwk,
+      verificationMethod: delegateSession.verificationMethod,
+      address: delegateSession.address,
+      chainId: delegateSession.chainId,
+      siwe: delegateSession.siwe,
+      signature: delegateSession.signature,
+      tinycloudHosts: [transport.host],
+    },
     permissions,
     unrelatedAudience,
+    createRestoredDelegate: () =>
+      new TinyCloudNode({ host: transport.host, wasmBindings: transport.wasm }),
     mintDelegation: () => mint(delegateAudience),
     mintDelegationForAudience: mint,
     async mintUntrustedDelegation() {

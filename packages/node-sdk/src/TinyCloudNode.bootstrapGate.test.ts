@@ -37,6 +37,10 @@ function makeFakeSessionManager(): ISessionManager {
       keys.add(id);
       return id;
     },
+    replaceSessionKey(_jwk: object, keyId: string): string {
+      keys.add(keyId);
+      return keyId;
+    },
     renameSessionKeyId(oldId: string, newId: string): void {
       if (keys.has(oldId)) {
         keys.delete(oldId);

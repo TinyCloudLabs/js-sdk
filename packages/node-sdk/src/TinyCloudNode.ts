@@ -265,6 +265,32 @@ function didPrincipalMatches(actual: string, expected: string): boolean {
   }
 }
 
+function clonePersistedSessionJwk(jwk: unknown): object {
+  if (jwk === null || typeof jwk !== "object" || Array.isArray(jwk)) {
+    throw new Error("Persisted session has an invalid private Ed25519 session key.");
+  }
+
+  try {
+    const serialized = JSON.stringify(jwk);
+    const cloned = serialized === undefined ? undefined : JSON.parse(serialized);
+    if (cloned === null || typeof cloned !== "object" || Array.isArray(cloned)) {
+      throw new Error("invalid JWK object");
+    }
+    return cloned;
+  } catch {
+    throw new Error("Persisted session has an invalid private Ed25519 session key.");
+  }
+}
+
+function restoredSessionDidMatches(actual: string, expected: unknown): boolean {
+  if (typeof expected !== "string") return false;
+  try {
+    return principalDidEquals(actual, expected);
+  } catch {
+    return false;
+  }
+}
+
 function sharingActionsToAbilities(path: string, actions: string[]): AbilitiesMap | undefined {
   const abilities: AbilitiesMap = {};
 
@@ -1874,6 +1900,64 @@ export class TinyCloudNode {
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
 
+    // Preflight the persisted signer before resetting any service state. A
+    // fresh TinyCloudNode always starts with a generated default key, so merely
+    // restoring delegation metadata would leave `sessionDid` pointed at the
+    // wrong principal. A disposable manager validates the private Ed25519 JWK
+    // without changing this node; the verification method is then checked
+    // against the DID derived by that exact key (fragments are intentionally
+    // ignored because either DID or DID URL is valid persisted input).
+    const restoredJwk = clonePersistedSessionJwk(sessionData.jwk);
+    const stagedManager = this.wasmBindings.createSessionManager();
+    let stagedKeyId: string;
+    let stagedDid: string;
+    try {
+      stagedKeyId = stagedManager.replaceSessionKey(restoredJwk, "restore-validation");
+      stagedDid = stagedManager.getDID(stagedKeyId);
+    } catch {
+      throw new Error("Persisted session has an invalid private Ed25519 session key.");
+    }
+    if (!restoredSessionDidMatches(stagedDid, sessionData.verificationMethod)) {
+      throw new Error(
+        "Persisted session verification method does not match its private Ed25519 session key.",
+      );
+    }
+
+    const restoredAddress = sessionData.address
+      ? canonicalizeAddress(sessionData.address)
+      : undefined;
+    const resolvedHost = await this.resolveRestoredHost(
+      sessionData.tinycloudHosts,
+      restoredAddress,
+      sessionData.chainId,
+    );
+
+    // The actual replacement is also validated by the shared WASM manager and
+    // happens only after all persisted-key and host preflight above succeeds.
+    // Read back the imported key rather than retaining raw input so the
+    // node-level signer state exactly mirrors the manager used by all SDK
+    // services and delegation flows.
+    let installedKeyId: string;
+    let installedJwk: object;
+    try {
+      installedKeyId = this.sessionManager.replaceSessionKey(restoredJwk, this.sessionKeyId);
+      const installedJwkJson = this.sessionManager.jwk(installedKeyId);
+      if (!installedJwkJson) {
+        throw new Error("missing restored session key");
+      }
+      installedJwk = clonePersistedSessionJwk(JSON.parse(installedJwkJson));
+      if (!restoredSessionDidMatches(
+        this.sessionManager.getDID(installedKeyId),
+        sessionData.verificationMethod,
+      )) {
+        throw new Error("restored session key DID mismatch");
+      }
+    } catch {
+      throw new Error("Persisted session could not install its private Ed25519 session key.");
+    }
+    this.sessionKeyId = installedKeyId;
+    this.sessionKeyJwk = installedJwk;
+
     // Reset services so they get recreated with new session
     this._kv = undefined;
     this._sql = undefined;
@@ -1887,9 +1971,6 @@ export class TinyCloudNode {
     this._serviceContext = undefined;
     this.runtimePermissionGrants = [];
 
-    const restoredAddress = sessionData.address
-      ? canonicalizeAddress(sessionData.address)
-      : undefined;
     if (restoredAddress) {
       this._address = restoredAddress;
     }
@@ -1905,11 +1986,6 @@ export class TinyCloudNode {
     //      persisted tinycloudHosts field
     // Without this, the ServiceContext below (and every service call) would
     // silently target the default host instead of the user's actual node.
-    const resolvedHost = await this.resolveRestoredHost(
-      sessionData.tinycloudHosts,
-      restoredAddress,
-      sessionData.chainId,
-    );
     if (resolvedHost) {
       this.config.host = resolvedHost;
     }
@@ -1948,7 +2024,7 @@ export class TinyCloudNode {
       delegationCid: sessionData.delegationCid,
       spaceId: sessionData.spaceId,
       verificationMethod: sessionData.verificationMethod,
-      jwk: sessionData.jwk,
+      jwk: installedJwk,
     };
     this._serviceContext.setSession(serviceSession);
 
@@ -1973,12 +2049,12 @@ export class TinyCloudNode {
       const tcSession: TinyCloudSession = {
         address: restoredAddress,
         chainId: sessionData.chainId,
-        sessionKey: JSON.stringify(sessionData.jwk),
+        sessionKey: JSON.stringify(installedJwk),
         spaceId: sessionData.spaceId,
         delegationCid: sessionData.delegationCid,
         delegationHeader: sessionData.delegationHeader,
         verificationMethod: sessionData.verificationMethod,
-        jwk: sessionData.jwk as { [k: string]: unknown },
+        jwk: installedJwk as { [k: string]: unknown },
         siwe: sessionData.siwe,
         signature: sessionData.signature ?? "",
       };

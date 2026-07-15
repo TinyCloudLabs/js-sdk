@@ -12,6 +12,7 @@ const originalFetch = globalThis.fetch;
 function makeFakeSessionManager(): ISessionManager {
   return {
     createSessionKey: (id: string) => id,
+    replaceSessionKey: (_jwk: object, keyId: string) => keyId,
     renameSessionKeyId: () => {},
     getDID: (keyId: string) => `did:key:${keyId}`,
     jwk: () => JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "test" }),

@@ -83,6 +83,9 @@ class BrowserSessionManager implements ISessionManager {
   private inner = new tcwSession.TCWSessionManager();
 
   createSessionKey(id: string): string { return this.inner.createSessionKey(id); }
+  replaceSessionKey(jwk: object, keyId: string): string {
+    return this.inner.replaceSessionKey(jwk, keyId);
+  }
   renameSessionKeyId(oldId: string, newId: string): void { this.inner.renameSessionKeyId(oldId, newId); }
   getDID(keyId: string): string { return this.inner.getDID(keyId); }
   jwk(keyId: string): string | undefined { return this.inner.jwk(keyId); }

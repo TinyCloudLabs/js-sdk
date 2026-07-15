@@ -57,6 +57,7 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
   tcwSession: {
     TCWSessionManager: class {
       createSessionKey(id: string) { return id; }
+      replaceSessionKey(_jwk: object, keyId: string) { return keyId; }
       renameSessionKeyId() {}
       getDID(keyId: string) { return `did:key:${keyId}`; }
       jwk() {

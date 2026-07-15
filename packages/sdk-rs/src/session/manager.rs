@@ -1,12 +1,16 @@
 use std::{collections::HashMap, str::FromStr};
 
+use ed25519_dalek::SigningKey;
 use iri_string::types::UriString;
 use js_sys::JsString;
 use serde_json::Value;
 use tinycloud_sdk_rs::tinycloud_auth::{
     cacaos::siwe::{generate_nonce, Message, Version as SiweVersion},
     siwe_recap::{Ability, Capability},
-    ssi::{dids::DIDKey, jwk::JWK},
+    ssi::{
+        dids::DIDKey,
+        jwk::{Params, JWK},
+    },
 };
 use wasm_bindgen::prelude::*;
 
@@ -28,6 +32,39 @@ pub struct SessionManager {
 }
 
 static DEFAULT_KEY_ID: &str = "default";
+
+/// Session keys are Ed25519 private JWKs. Validate both the JWK shape and
+/// that its public component is actually derived from its private component
+/// before storing it. The DID is derived from `x`, while invocation signing
+/// uses `d`; accepting a mismatched pair would make the restored identity and
+/// signer diverge.
+fn validate_private_ed25519_jwk(key: &JWK) -> Result<(), String> {
+    let params = match &key.params {
+        Params::OKP(params) if params.curve == "Ed25519" => params,
+        Params::OKP(_) => return Err("session key must use the Ed25519 curve".to_string()),
+        _ => return Err("session key must be an Ed25519 OKP JWK".to_string()),
+    };
+
+    let private_key = params
+        .private_key
+        .as_ref()
+        .ok_or_else(|| "session key must include an Ed25519 private component".to_string())?;
+    let private_key: [u8; 32] = private_key
+        .0
+        .as_slice()
+        .try_into()
+        .map_err(|_| "session key has an invalid Ed25519 private component".to_string())?;
+    if params.public_key.0.len() != 32 {
+        return Err("session key has an invalid Ed25519 public component".to_string());
+    }
+
+    let derived_public_key = SigningKey::from_bytes(&private_key).verifying_key();
+    if derived_public_key.as_bytes() != params.public_key.0.as_slice() {
+        return Err("session key Ed25519 public and private components do not match".to_string());
+    }
+
+    Ok(())
+}
 
 /// Builds an TCWSession.
 impl SessionManager {
@@ -183,6 +220,7 @@ impl SessionManager {
         key_id: Option<String>,
         override_key_id: bool,
     ) -> Result<String, String> {
+        validate_private_ed25519_jwk(&key)?;
         let key_id = key_id.unwrap_or(DEFAULT_KEY_ID.to_string());
         if self.sessions.contains_key(&key_id) && !override_key_id {
             return Err(format!("key already exists: {}", key_id));
@@ -199,6 +237,14 @@ impl SessionManager {
             },
         );
         Ok(key_id)
+    }
+
+    /// Replace one active session key after validating the supplied private
+    /// Ed25519 JWK. This is the restore path: validation happens before the
+    /// existing key entry is overwritten, so a malformed persisted key cannot
+    /// leave a manager with a half-installed session key.
+    pub fn replace_session_key(&mut self, key: JWK, key_id: String) -> Result<String, String> {
+        self.import_session_key(key, Some(key_id), true)
     }
 
     pub fn list_session_keys(&self) -> Vec<String> {
@@ -349,6 +395,39 @@ pub mod test {
         let result = manager.import_session_key(key, Some("imported_key".to_string()), false);
         assert!(result.is_ok());
         assert!(manager.sessions.contains_key("imported_key"));
+    }
+
+    #[tokio::test]
+    async fn test_import_session_key_rejects_public_or_mismatched_ed25519_jwk() {
+        let mut manager = SessionManager::new().unwrap();
+        let original_default = manager.jwk(Some("default".to_string())).unwrap();
+
+        let mut public_only = JWK::generate_ed25519().unwrap();
+        if let Params::OKP(params) = &mut public_only.params {
+            params.private_key = None;
+        }
+        assert!(manager
+            .replace_session_key(public_only, "default".to_string())
+            .is_err());
+        assert_eq!(
+            manager.jwk(Some("default".to_string())).unwrap(),
+            original_default
+        );
+
+        let mut mismatched = JWK::generate_ed25519().unwrap();
+        let unrelated = JWK::generate_ed25519().unwrap();
+        if let (Params::OKP(params), Params::OKP(unrelated_params)) =
+            (&mut mismatched.params, unrelated.params)
+        {
+            params.public_key = unrelated_params.public_key.clone();
+        }
+        assert!(manager
+            .replace_session_key(mismatched, "default".to_string())
+            .is_err());
+        assert_eq!(
+            manager.jwk(Some("default".to_string())).unwrap(),
+            original_default
+        );
     }
 
     #[tokio::test]

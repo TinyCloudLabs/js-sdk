@@ -9,6 +9,7 @@ const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
 function makeSessionManager(): ISessionManager {
   return {
     createSessionKey: (id: string) => id,
+    replaceSessionKey: (_jwk: object, keyId: string) => keyId,
     renameSessionKeyId: () => {},
     getDID: (keyId: string) => `did:key:${keyId}`,
     jwk: () => JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "test" }),
