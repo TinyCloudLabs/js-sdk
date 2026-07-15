@@ -225,7 +225,9 @@ test("returns the four canonical operation outcomes", async () => {
   expect(statuses).toEqual(["ok", "authority_required", "setup_required", "error"]);
 });
 
-test("uses RFC 8785 canonical input for key-order-independent retry digests", async () => {
+test("uses RFC 8785 astral/BMP key ordering for retry digests", async () => {
+  const supplementary = "\u{10000}";
+  const privateUse = "\ue000";
   definitions = [
     createDefinition({
       execute: async () => ({
@@ -239,10 +241,10 @@ test("uses RFC 8785 canonical input for key-order-independent retry digests", as
 
   const first = await invokeOperation("tinycloud.test.get", 1, {}, {
     name: "valid",
-    metadata: { b: 2, a: 1 },
+    metadata: { [privateUse]: 2, [supplementary]: 1, b: 2, a: 1 },
   });
   const second = await invokeOperation("tinycloud.test.get", 1, {}, {
-    metadata: { a: 1, b: 2 },
+    metadata: { a: 1, b: 2, [supplementary]: 1, [privateUse]: 2 },
     name: "valid",
   });
 
@@ -252,6 +254,9 @@ test("uses RFC 8785 canonical input for key-order-independent retry digests", as
     throw new Error("expected retry descriptors");
   }
   expect(first.retry.inputDigest).toBe(second.retry.inputDigest);
+  expect(first.retry.inputDigest).toBe(
+    "4f5260790930e280d38949139664cdca06890aae14708530fe412c1effd6d64a",
+  );
 });
 
 test("keeps the CLI private-key override out of all kernel-safe channels", async () => {
