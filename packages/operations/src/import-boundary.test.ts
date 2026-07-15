@@ -82,3 +82,12 @@ test("operations has no projection-framework dependencies or imports", async () 
     }
   }
 });
+
+test("operations uses the SDK policy canonicalizer rather than a local JCS implementation", async () => {
+  const invokeSource = await readFile(resolve(packageDirectory, "src", "invoke.ts"), "utf8");
+
+  expect(invokeSource).toContain(
+    'import { jcsCanonicalize } from "@tinycloud/sdk-core/policy";',
+  );
+  expect(invokeSource).not.toMatch(/function\s+jcsCanonicalize\s*\(/);
+});

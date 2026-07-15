@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import * as sdkCore from "@tinycloud/sdk-core";
+import { jcsCanonicalize } from "@tinycloud/sdk-core/policy";
 import type { ZodError } from "zod";
 
 import {
@@ -20,17 +20,6 @@ import {
 import { resolveInvocationContext } from "./profile.js";
 import { redactOperationError } from "./redaction.js";
 import { lookupOperation } from "./registry.js";
-
-/**
- * The checked-in sdk-core source exports this from its package root. The
- * structural expectation keeps declaration generation independent of a stale
- * shared node_modules link while preserving that package-root runtime import.
- */
-const jcsCanonicalize = (
-  sdkCore as typeof sdkCore & {
-    jcsCanonicalize(input: unknown): string;
-  }
-).jcsCanonicalize;
 
 /** The sole projection-facing execution API. */
 export async function invokeOperation(

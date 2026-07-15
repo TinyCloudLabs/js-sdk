@@ -19,7 +19,7 @@ type TestOutput = { readonly value: string };
 let definitions: readonly OperationDefinition<unknown, unknown>[] = [];
 let resolver: (target: InvocationTarget) => Promise<InvocationContextResolution>;
 
-mock.module("@tinycloud/sdk-core", () => ({ jcsCanonicalize }));
+mock.module("@tinycloud/sdk-core/policy", () => ({ jcsCanonicalize }));
 
 mock.module("./registry.js", () => ({
   lookupOperation(operationId: string, operationVersion: number) {
