@@ -11,8 +11,8 @@
 
 export {
   EncryptionService,
-  DecryptTransportResponseError,
 } from "./EncryptionService";
+export { DecryptTransportResponseError } from "./DecryptTransportResponseError";
 export type {
   DecryptTransport,
   EncryptionServiceConfig,

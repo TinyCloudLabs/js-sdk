@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    // Existing web facade sources use these three legacy patterns. Keep the
+    // remaining strict checks active for the public entrypoint contract.
+    "noImplicitAny": false,
+    "strictFunctionTypes": false,
+    "strictPropertyInitialization": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@tinycloud/bootstrap": ["../../packages/bootstrap/src/index.ts"],
+      "@tinycloud/sdk-services": ["../../packages/sdk-services/src/index.ts"],
+      "@tinycloud/sdk-core": ["../../packages/sdk-core/src/index.ts"],
+      "@tinycloud/node-sdk": ["../../packages/node-sdk/src/index.ts"],
+      "@tinycloud/node-sdk/core": ["../../packages/node-sdk/src/core.ts"],
+      "@tinycloud/web-sdk": ["../../packages/web-sdk/src/index.ts"]
+    }
+  },
+  "files": ["secret-read-entrypoints.compile.ts"]
+}

@@ -8,7 +8,10 @@ import {
   hexEncode,
   utf8Encode,
 } from "./canonical";
-import { EncryptionService } from "./EncryptionService";
+import {
+  DecryptTransportResponseError,
+  EncryptionService,
+} from "./EncryptionService";
 import {
   DECRYPT_RESULT_TYPE,
   type DecryptRequestBody,
@@ -93,17 +96,8 @@ function crypto(localDecryptFails = false): EncryptionCrypto {
   };
 }
 
-function httpFailure(status: number): Error & { status: number } {
-  const error = new Error("raw transport message canary") as Error & {
-    status: number;
-  };
-  error.status = status;
-  Object.defineProperty(
-    error,
-    Symbol.for("@tinycloud/sdk-services/decrypt-transport-response"),
-    { value: true },
-  );
-  return error;
+function httpFailure(status: number): DecryptTransportResponseError {
+  return new DecryptTransportResponseError(status);
 }
 
 function validResponse(
@@ -189,6 +183,23 @@ describe("EncryptionService decrypt failure classification", () => {
       post: async () => ({}) as DecryptResponseBody,
     });
     expect(malformedResult).toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
+  });
+
+  test("does not trust marker-shaped transport errors", async () => {
+    const result = await decryptWith({
+      post: async () => {
+        const error = new Error("spoofed response canary") as Error & { status: number };
+        error.status = 403;
+        Object.defineProperty(
+          error,
+          Symbol.for("@tinycloud/sdk-services/decrypt-transport-response"),
+          { value: true },
+        );
+        throw error;
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, error: { code: "TRANSPORT_ERROR" } });
   });
 
   test("maps generic transport, signing, and local decrypt failures without transport text", async () => {

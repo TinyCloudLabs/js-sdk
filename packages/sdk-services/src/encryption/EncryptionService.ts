@@ -41,6 +41,7 @@ import {
   openWrappedKey,
   verifyDecryptResponse,
 } from "./response";
+import { DecryptTransportResponseError } from "./DecryptTransportResponseError";
 import {
   DECRYPT_FACT_TYPE,
   encryptionError,
@@ -86,31 +87,7 @@ export interface DecryptTransport {
   }): Promise<DecryptResponseBody>;
 }
 
-// Root and `/encryption` entrypoints can be bundled independently, so use a
-// global structural marker instead of constructor identity for HTTP responses.
-const decryptTransportResponseMarker = Symbol.for(
-  "@tinycloud/sdk-services/decrypt-transport-response",
-);
-
-/** A reachable node returned an HTTP failure for a decrypt request. */
-export class DecryptTransportResponseError extends Error {
-  constructor(readonly status: number) {
-    super("Node decrypt request failed");
-    this.name = "DecryptTransportResponseError";
-    Object.defineProperty(this, decryptTransportResponseMarker, { value: true });
-  }
-}
-
-function isDecryptTransportResponseError(
-  error: unknown,
-): error is { status: number } {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as Record<PropertyKey, unknown>)[decryptTransportResponseMarker] === true &&
-    typeof (error as { status?: unknown }).status === "number"
-  );
-}
+export { DecryptTransportResponseError } from "./DecryptTransportResponseError";
 
 export interface EncryptionServiceConfig {
   crypto: EncryptionCrypto;
@@ -295,7 +272,7 @@ export class EncryptionService
           canonicalBody: built.data.canonicalBody,
         });
       } catch (error) {
-        if (isDecryptTransportResponseError(error)) {
+        if (error instanceof DecryptTransportResponseError) {
           return encErr(
             encryptionError(
               error.status === 401 || error.status === 403

@@ -6,6 +6,7 @@ import {
   base64Encode,
   canonicalHashHex,
   canonicalize,
+  DecryptTransportResponseError,
   EncryptionService,
   hexEncode,
   utf8Encode,
@@ -142,17 +143,8 @@ function decryptResponse(
   };
 }
 
-function transportHttpError(status: number): Error & { status: number } {
-  const error = new Error("node transport message canary") as Error & {
-    status: number;
-  };
-  error.status = status;
-  Object.defineProperty(
-    error,
-    Symbol.for("@tinycloud/sdk-services/decrypt-transport-response"),
-    { value: true },
-  );
-  return error;
+function transportHttpError(status: number): DecryptTransportResponseError {
+  return new DecryptTransportResponseError(status);
 }
 
 function createClassifiedVault(options?: {
@@ -347,7 +339,7 @@ describe("DataVaultService.readNetworkEncrypted", () => {
       }
       expect(captured).toContain("sdk.fetch.end");
       expect(captured).toContain('"status":500');
-      expect(captured).toContain("sdk.kv.get");
+      expect(captured).toContain("service.request");
     } finally {
       disableTinyCloudDebug({ persist: false });
     }

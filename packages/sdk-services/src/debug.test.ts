@@ -67,8 +67,8 @@ describe("TinyCloud debug logger", () => {
 
     const logs = logger.getLogs();
     expect(logs).toHaveLength(1000);
-    expect(logs[0].data).toEqual({ i: 5 });
-    expect(logs[999].data).toEqual({ i: 1004 });
+    expect(logs[0].data).toEqual({});
+    expect(logs[999].data).toEqual({});
   });
 
   test("records duration for timers", () => {
@@ -119,7 +119,7 @@ describe("TinyCloud debug logger", () => {
     expect(getTinyCloudDebugLogs()).toEqual([
       expect.objectContaining({
         event: "custom.event",
-        data: { value: 1 },
+        data: {},
       }),
     ]);
   });

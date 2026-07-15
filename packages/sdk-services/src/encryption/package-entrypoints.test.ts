@@ -74,6 +74,22 @@ test("packed root and encryption entrypoints load in CJS and ESM", async () => {
         throw new Error('encryption values missing from packed entrypoint');
       }
     `;
+    const assertSharedConstructor = `
+      const constructors = [
+        rootCjs.DecryptTransportResponseError,
+        encryptionCjs.DecryptTransportResponseError,
+        rootEsm.DecryptTransportResponseError,
+        encryptionEsm.DecryptTransportResponseError,
+      ];
+      if (!constructors.every((constructor) => constructor === constructors[0])) {
+        throw new Error('decrypt transport constructors differ across entrypoints');
+      }
+      for (const constructor of constructors) {
+        if (!(new constructors[0](403) instanceof constructor)) {
+          throw new Error('decrypt transport instanceof differs across entrypoints');
+        }
+      }
+    `;
     const exerciseTaggedHttp = `
       async function exerciseTaggedHttp(EncryptionService, TransportResponseError) {
         const sha256 = (bytes) => {
@@ -135,17 +151,9 @@ test("packed root and encryption entrypoints load in CJS and ESM", async () => {
     await run(
       nodeBinary,
       [
-        "-e",
-        `const root = require('@tinycloud/sdk-services'); const encryption = require('@tinycloud/sdk-services/encryption'); ${assertEntrypoints} ${exerciseTaggedHttp} (async () => { await exerciseTaggedHttp(root.EncryptionService, encryption.DecryptTransportResponseError); await exerciseTaggedHttp(encryption.EncryptionService, root.DecryptTransportResponseError); })().catch((error) => { console.error(error); process.exitCode = 1; });`,
-      ],
-      smokeDirectory,
-    );
-    await run(
-      nodeBinary,
-      [
         "--input-type=module",
         "-e",
-        `const root = await import('@tinycloud/sdk-services'); const encryption = await import('@tinycloud/sdk-services/encryption'); ${assertEntrypoints} ${exerciseTaggedHttp} await exerciseTaggedHttp(root.EncryptionService, encryption.DecryptTransportResponseError); await exerciseTaggedHttp(encryption.EncryptionService, root.DecryptTransportResponseError);`,
+        `import { createRequire } from 'node:module'; const require = createRequire(import.meta.url); const rootCjs = require('@tinycloud/sdk-services'); const encryptionCjs = require('@tinycloud/sdk-services/encryption'); const rootEsm = await import('@tinycloud/sdk-services'); const encryptionEsm = await import('@tinycloud/sdk-services/encryption'); const root = rootEsm; const encryption = encryptionEsm; ${assertEntrypoints} ${assertSharedConstructor} ${exerciseTaggedHttp} await exerciseTaggedHttp(rootCjs.EncryptionService, encryptionEsm.DecryptTransportResponseError); await exerciseTaggedHttp(encryptionCjs.EncryptionService, rootEsm.DecryptTransportResponseError);`,
       ],
       smokeDirectory,
     );
