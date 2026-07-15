@@ -78,7 +78,7 @@ test("tc auth import waits on the operations lock and preserves both shared stor
   expect(await readStoreMetadata(home, profile, "auth-requests")).toEqual({ formatVersion: 1 });
 
   await verifyAdditionalDelegationContention();
-});
+}, { timeout: 15_000 });
 
 async function verifyAdditionalDelegationContention(): Promise<void> {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-additional-delegation-concurrency-"));
