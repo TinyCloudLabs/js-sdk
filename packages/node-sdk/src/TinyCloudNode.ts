@@ -3509,7 +3509,8 @@ export class TinyCloudNode {
     params: CreateOwnerDelegationParams,
     assertActive?: () => void,
   ): Promise<OwnerDelegationReceipt> {
-    assertActive?.();
+    const assertOwnerGraphActive = assertActive ?? this._serviceGraph.assertActive.bind(this._serviceGraph);
+    assertOwnerGraphActive();
     if (!params.delegateDid.startsWith("did:key:") || params.actions.length === 0 || params.path.length === 0) {
       throw new Error("Owner delegation requires an external did:key audience and bounded capabilities");
     }
@@ -3535,10 +3536,10 @@ export class TinyCloudNode {
       delegateUri: params.delegateDid,
     });
     const signature = await this.signer.signMessage(prepared.siwe);
-    assertActive?.();
+    assertOwnerGraphActive();
     const delegationSession = this.wasmBindings.completeSessionSetup({ ...prepared, signature });
     const activation = await activateSessionWithHost(host, delegationSession.delegationHeader);
-    assertActive?.();
+    assertOwnerGraphActive();
     if (!activation.success) {
       throw new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim());
     }

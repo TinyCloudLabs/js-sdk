@@ -198,6 +198,50 @@ describe("TinyCloudNode sharing", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  test("public owner delegation does not activate after its captured graph retires during wallet signing", async () => {
+    const wasmBindings = makeWasmBindings();
+    let releaseSignature!: () => void;
+    let markSigningStarted!: () => void;
+    const signingStarted = new Promise<void>((resolve) => {
+      markSigningStarted = resolve;
+    });
+    const signer = {
+      signMessage: mock(async () => {
+        markSigningStarted();
+        await new Promise<void>((resolve) => {
+          releaseSignature = resolve;
+        });
+        return "signature";
+      }),
+    };
+    globalThis.fetch = mock(async () => new Response(null, { status: 200 })) as typeof fetch;
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer: signer as any,
+      wasmBindings,
+    });
+    (node as any)._restoredTcSession = {
+      address: OWNER,
+      chainId: 1,
+      spaceId: SPACE,
+    };
+
+    const result = node.createOwnerDelegation({
+      delegateDid: "did:key:z6MkExternalCaller",
+      spaceId: SPACE,
+      path: "xyz.tinycloud.listen/conversations",
+      actions: ["tinycloud.sql/read"],
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+    });
+    await signingStarted;
+    (node as any)._serviceGraph.retire();
+    releaseSignature();
+
+    await expect(result).rejects.toThrow("Service graph has been retired");
+    expect(signer.signMessage).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   test("real WASM attenuates a received share and the child survives transport/useDelegation", async () => {
     const wasmBindings = new NodeWasmBindings();
     globalThis.fetch = mock(async () => new Response(
