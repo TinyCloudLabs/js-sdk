@@ -17,6 +17,7 @@ import {
   makeSpaceId,
   createDelegation,
   parseRecapFromSiwe,
+  verifyRecipientDidDelegationBundleV2,
   generateHostSIWEMessage,
   siweToDelegationHeaders,
   protocolVersion,
@@ -30,7 +31,12 @@ import {
   vault_random_bytes,
   vault_sha256,
 } from "@tinycloud/node-sdk-wasm";
-import type { IWasmBindings, ISessionManager } from "@tinycloud/sdk-core";
+import type {
+  IWasmBindings,
+  ISessionManager,
+  NativeVerifiedRecipientDidDelegationBundleV2,
+  RecipientDidDelegationBundleV2,
+} from "@tinycloud/sdk-core";
 
 /**
  * Node.js WASM bindings using @tinycloud/node-sdk-wasm.
@@ -58,6 +64,18 @@ export class NodeWasmBindings implements IWasmBindings {
   makeSpaceId = makeSpaceId;
   createDelegation = createDelegation;
   parseRecapFromSiwe = parseRecapFromSiwe;
+  verifyRecipientDidDelegationBundleV2(
+    bundle: RecipientDidDelegationBundleV2,
+    nowUnixSeconds: bigint,
+  ): NativeVerifiedRecipientDidDelegationBundleV2 {
+    return verifyRecipientDidDelegationBundleV2(
+      {
+        ...bundle,
+        issuerProofs: bundle.issuerProofs.map((proof) => ({ ...proof })),
+      },
+      nowUnixSeconds,
+    );
+  }
   generateHostSIWEMessage = generateHostSIWEMessage;
   siweToDelegationHeaders = siweToDelegationHeaders;
   protocolVersion = protocolVersion;

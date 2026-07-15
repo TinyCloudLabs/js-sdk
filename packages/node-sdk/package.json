@@ -30,6 +30,7 @@
     "build": "tsup",
     "clean": "rm -rf dist",
     "test": "bun test src/",
+    "test:recipient-did-native": "TINYCLOUD_REQUIRE_RECIPIENT_DID_NATIVE_VERIFIER=1 bun test src/recipientDidSharing.test.ts",
     "test:integration": "echo 'Integration tests live in tests/node-sdk workspace'"
   },
   "dependencies": {

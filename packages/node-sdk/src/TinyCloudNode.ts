@@ -129,6 +129,8 @@ import {
   type DecryptTransport,
   type EncryptionCrypto,
   type NetworkDescriptor,
+  type NativeVerifiedRecipientDidDelegationBundleV2,
+  type RecipientDidDelegationBundleV2,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import type { SignStrategy } from "./authorization/strategies";
@@ -144,6 +146,12 @@ import {
   extractSiweExpiration,
 } from "./delegateToHelpers";
 import { NodeSecretsService } from "./NodeSecretsService";
+import {
+  signShareEnvelopeV2WithSession,
+  verifyRecipientDidDelegationBundleV2Native,
+  type SignShareEnvelopeV2Input,
+  type SignShareEnvelopeV2Result,
+} from "./recipientDidSharing";
 
 /** Default TinyCloud host */
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
@@ -457,11 +465,10 @@ function base64UrlDecode(value: string): Uint8Array {
   return new Uint8Array(bytes);
 }
 
-async function signJwtInputWithJwk(
-  signingInput: string,
+async function signBytesWithJwk(
+  bytes: Uint8Array,
   jwk: object,
 ): Promise<Uint8Array> {
-  const bytes = new TextEncoder().encode(signingInput);
   try {
     const subtle = globalThis.crypto?.subtle;
     if (!subtle) {
@@ -480,6 +487,13 @@ async function signJwtInputWithJwk(
     const key = nodeCrypto.createPrivateKey({ key: jwk as any, format: "jwk" });
     return new Uint8Array(nodeCrypto.sign(null, Buffer.from(bytes), key));
   }
+}
+
+async function signJwtInputWithJwk(
+  signingInput: string,
+  jwk: object,
+): Promise<Uint8Array> {
+  return signBytesWithJwk(new TextEncoder().encode(signingInput), jwk);
 }
 
 async function rewriteInvocationAudience(
@@ -2709,12 +2723,11 @@ export class TinyCloudNode {
     const wasmSession = {
       delegationHeader: params.session.delegationHeader,
       delegationCid: params.session.delegationCid,
-      jwk: params.session.jwk,
+      jwk: { ...params.session.jwk, alg: "EdDSA" },
       spaceId: params.session.spaceId,
-      // Session storage carries the verification method as a DID URL
-      // (`did:key:...#key-id`). The Rust UCAN builder expects the principal
-      // DID here and rejects the fragment as an invalid audience DID.
-      verificationMethod: params.session.verificationMethod.split("#", 1)[0],
+      // UCAN issuers are verification-method DID URLs. Preserve the canonical
+      // `did:key:<multibase>#<same multibase>` stored with the session.
+      verificationMethod: params.session.verificationMethod,
     };
 
     const result = this.wasmBindings.createDelegation(
@@ -3710,6 +3723,48 @@ export class TinyCloudNode {
     return this.wasmBindings.computeCid(
       new TextEncoder().encode(authorization),
       0x55n,
+    );
+  }
+
+  /**
+   * Build and sign one recipient-DID share envelope v2 with the active
+   * TinyCloud session key.
+   *
+   * This deliberately accepts structured contract fields and a portable
+   * delegation, never raw bytes, a caller-selected signer, or a private JWK.
+   * It exports only the owner Cacao artifact needed by the recipient's native
+   * authority verifier and rejects grants that are not directly parented by
+   * that active owner session.
+   */
+  async signShareEnvelopeV2(
+    input: SignShareEnvelopeV2Input,
+  ): Promise<SignShareEnvelopeV2Result> {
+    const session = this.currentTinyCloudSession();
+    if (!session) {
+      throw new Error(
+        "signShareEnvelopeV2 requires an active TinyCloud session",
+      );
+    }
+    return signShareEnvelopeV2WithSession(input, {
+      session,
+      wasm: this.wasmBindings,
+      signBytes: (bytes) => signBytesWithJwk(bytes, session.jwk),
+    });
+  }
+
+  /**
+   * Atomically verify a recipient-DID delegation bundle without network I/O.
+   * Fails closed until the configured tinycloud-node/WASM runtime implements
+   * `verifyRecipientDidDelegationBundleV2`.
+   */
+  verifyRecipientDidDelegationBundleV2(
+    bundle: RecipientDidDelegationBundleV2,
+    now = new Date(),
+  ): NativeVerifiedRecipientDidDelegationBundleV2 {
+    return verifyRecipientDidDelegationBundleV2Native(
+      this.wasmBindings,
+      bundle,
+      now,
     );
   }
 

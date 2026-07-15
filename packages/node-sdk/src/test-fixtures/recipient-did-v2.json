@@ -1,0 +1,311 @@
+{
+  "contract": "xyz.tinycloud.share/recipient-did-v2",
+  "currentSdkFixture": {
+    "generator": {
+      "nodeCommit": "390253aca30628f2ac2be28e64d8e3830da07aaa",
+      "sdk": "tinycloud-sdk-wasm",
+      "sdkVersion": "1.3.0",
+      "apis": [
+        "prepare_session",
+        "complete_session_setup",
+        "Session.create_delegation"
+      ]
+    },
+    "sessionJwkD": "WfeGHxh9kdePavqU9KOk2vBhGo8LminMpbvERmrKqTw"
+  },
+  "signingBytesHex": "78797a2e74696e79636c6f75642e73686172652f656e76656c6f70652f7632007b22617574686f72697a6174696f6e546172676574223a7b22646964223a226469643a706b683a6569703135353a313a307864653730396632313032333036323230393231303630333134373135363239303830653266623737222c226b696e64223a22726563697069656e74446964227d2c2264656c65676174696f6e223a7b22666f726d6174223a2274696e79636c6f75642d726563697069656e742d64656c65676174696f6e2d7632222c226772616e74223a7b22636964223a226261666b72346964343534716e68346573726b6d74666e686d3574646f6d78706277716d7236766a37343633356d6c63626b6a786e637236343579222c22656e636f64696e67223a226a7774222c226b696e64223a227563616e222c2276616c7565223a2265794a68624763694f694a465a45525451534973496d70336179493665794a68624763694f694a465a45525451534973496d743065534936496b394c55434973496d4e7964694936496b566b4d6a55314d546b694c434a34496a6f69595664704d574a535457786151307472616b3948623356495a6e6c705a324a7a4e305a524d575a514e6b55745a586c365532684e656b526164794a394c434a30655841694f694a4b563151694c434a31593359694f6949774c6a45774c6a416966512e65794a7063334d694f694a6b61575136613256354f6e6f325457747457577055576a683252304e714d574643596d553064336834627a4e615a3145345533424456466332616e4653537a4e6b626d46305246647154534e364e6b317262566c7156466f34646b6444616a4668516d4a6c4e4864346547387a576d64524f464e77513152584e6d7078556b737a5a47356864455258616b30694c434a68645751694f694a6b615751366347746f4f6d5670634445314e546f784f6a42345a4755334d446c6d4d6a45774d6a4d774e6a49794d446b794d5441324d444d784e4463784e5459794f5441344d4755795a6d49334e794973496d5634634349364e4441774d4441774d4441774d437769626d356a496a6f6964584a754f6e5631615751364e57466b4e7a49794e6a49745954686b4d5330304e4464684c546b304d3249744e44426d4d6a4a6859575a6c4d6a55794969776963484a6d496a7062496d4a685a6d74794e476c6c63576869636e42776332307a4e544d31636d706f636d4632613239754d335a3063444a755a6e4d33636d5272646d4e72645774305a586c73615773325a4842364e585a31496c3073496d46306443493665794a306157353559327876645751366347746f4f6d5670634445314e546f784f6a42344d546c464e30557a4e7a5a464e304d794d544e434e3055335a54646c4e445a6a597a63775154566b524441344e6b52425a6d59795154706b5a575a68645778304c3274324c334268644767694f6e736964476c7565574e736233566b4c6d74324c32646c64434936573374395858313966512e527861562d4a5a716f4f79756d4934774975763836713839367179613973596d697857676a597672676a796433754575616a5146707a57343156306a6f4656636e7a4c776f6a496e634466614f4335575f2d57724351227d2c2269737375657250726f6f6673223a5b7b22636964223a226261666b72346965716862727070736d33353335726a687261766b6f6e33767470326e66733772646b76636b756b7465796c696b3664707a357675222c22656e636f64696e67223a226461672d63626f722d62617365363475726c2d706164222c226b696e64223a22636163616f222c2276616c7565223a226f32466f6f5746305a3256706344517a4e6a4668634b6c6a5958566b65476c6b61575136613256354f6e6f325457747457577055576a683252304e714d574643596d553064336834627a4e615a3145345533424456466332616e4653537a4e6b626d46305246647154534e364e6b317262566c7156466f34646b6444616a4668516d4a6c4e4864346547387a576d64524f464e77513152584e6d7078556b737a5a47356864455258616b316a5a5868776542677a4d4441774c5441784c544178564441774f6a41774f6a41774c6a41774d46706a61574630654267794d4449794c5441784c544178564441774f6a41774f6a41774c6a41774d46706a61584e7a6544746b615751366347746f4f6d5670634445314e546f784f6a42344d546c464e30557a4e7a5a464e304d794d544e434e3055335a54646c4e445a6a597a63775154566b524441344e6b52425a6d5979515756756232356a5a58426d6158683064584a6c546d3975593255784d6a4d305a6d527662574670626d746c654746746347786c4c6d4e76625764325a584a7a6157397541576c795a584e7664584a6a5a584f42654e5631636d3436636d566a595841365a586c4b6147524955576c50626e4e705a45647364575658546e4e694d315a7254323543636d46456347786857454634546c52564e6b31556233646c52455531556c526b526b3136597a4a535647524554577046656c46715a455a4f4d6c557a576c52524d6c6b7954544e4e52555578576b565264303945576b565256317074545774464e6c7048566d315a57465a7a5a454d35636d52704f58645a57464a76535770774e306c75556e4269626d7871596b63354d5670444e584a6b61546c75576c6852615539736444646d566a427a5357355363474a7562477069527a6b78576b4d31636d52704f58646b57464670543278304e325a574d546c6d553364705930684b62556c7163474a595744427063335268644756745a573530654d744a49475a31636e526f5a58496759585630614739796158706c4948526f5a53427a644746305a57516756564a4a494852764948426c636d5a76636d30676447686c49475a766247787664326c755a794268593352706232357a494739754947313549474a6c614746735a6a6f674b444570494364306157353559327876645751756133596e4f69416e5a3256304a7977674a334231644363675a6d3979494364306157353559327876645751366347746f4f6d5670634445314e546f784f6a42344d546c464e30557a4e7a5a464e304d794d544e434e3055335a54646c4e445a6a597a63775154566b524441344e6b52425a6d59795154706b5a575a68645778304c3274324c3342686447676e4c6d467a6f6d467a5745457171316f3653316f664c552d563776797a6d497332474f305a4e556e6876394b774e6d6879675a693972326c47615844517742314f4b6d4e73757a4d734e31704451555646766a425876786652546944396d41384c484746305a6d5670634445354d513d3d227d5d2c22726f7574696e67223a7b226e6f646541756469656e6365223a226469643a7765623a6e6f64652e74696e79636c6f75642e78797a222c226f726967696e223a2268747470733a2f2f6e6f64652e74696e79636c6f75642e78797a227d7d2c22646973706c6179223a7b2266696c656e616d65223a227265706f72742e6d64222c22726563697069656e7448696e74223a22307864653730e280a666623737222c2273656e6465724e616d65223a224164616d227d2c22657870697279223a22323039362d31302d30325430373a30363a34302e3030305a222c2273686172654964223a2273686172652d726563697069656e742d73646b2d66697874757265222c227369676e6174757265223a7b22616c676f726974686d223a2245643235353139222c227369676e6572446964223a226469643a6b65793a7a364d6b6d596a545a387647436a3161426265347778786f335a6751385370435457366a71524b33646e617444576a4d227d2c22746172676574223a7b22616374696f6e73223a5b2274696e79636c6f75642e6b762f676574225d2c226e6f646541756469656e6365223a226469643a7765623a6e6f64652e74696e79636c6f75642e78797a222c226f726967696e223a2268747470733a2f2f6e6f64652e74696e79636c6f75642e78797a222c227265736f75726365223a7b226b696e64223a226578616374222c2270617468223a2270617468227d2c2273706163654964223a2274696e79636c6f75643a706b683a6569703135353a313a3078313945374533373645374332313342374537653765343663633730413564443038364441666632413a64656661756c74227d2c2276657273696f6e223a327d",
+  "signatureHex": "a318140988446fa03b4a6945e18b9af6954e6f5413b423a6be506365cca5b46a67fcadb5da21152c82da0bf79ab7becc8fb35f3ea09ebf800e3bc01b1b721e05",
+  "envelope": {
+    "version": 2,
+    "shareId": "share-recipient-sdk-fixture",
+    "delegation": {
+      "format": "tinycloud-recipient-delegation-v2",
+      "routing": {
+        "origin": "https://node.tinycloud.xyz",
+        "nodeAudience": "did:web:node.tinycloud.xyz"
+      },
+      "grant": {
+        "kind": "ucan",
+        "cid": "bafkr4id454qnh4esrkmtfnhm5tdomxpbwqmr6vj74635mlcbkjxncr645y",
+        "encoding": "jwt",
+        "value": "eyJhbGciOiJFZERTQSIsImp3ayI6eyJhbGciOiJFZERTQSIsImt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiYVdpMWJSTWxaQ0trak9Hb3VIZnlpZ2JzN0ZRMWZQNkUtZXl6U2hNekRadyJ9LCJ0eXAiOiJKV1QiLCJ1Y3YiOiIwLjEwLjAifQ.eyJpc3MiOiJkaWQ6a2V5Ono2TWttWWpUWjh2R0NqMWFCYmU0d3h4bzNaZ1E4U3BDVFc2anFSSzNkbmF0RFdqTSN6Nk1rbVlqVFo4dkdDajFhQmJlNHd4eG8zWmdROFNwQ1RXNmpxUkszZG5hdERXak0iLCJhdWQiOiJkaWQ6cGtoOmVpcDE1NToxOjB4ZGU3MDlmMjEwMjMwNjIyMDkyMTA2MDMxNDcxNTYyOTA4MGUyZmI3NyIsImV4cCI6NDAwMDAwMDAwMCwibm5jIjoidXJuOnV1aWQ6NWFkNzIyNjItYThkMS00NDdhLTk0M2ItNDBmMjJhYWZlMjUyIiwicHJmIjpbImJhZmtyNGllcWhicnBwc20zNTM1cmpocmF2a29uM3Z0cDJuZnM3cmRrdmNrdWt0ZXlsaWs2ZHB6NXZ1Il0sImF0dCI6eyJ0aW55Y2xvdWQ6cGtoOmVpcDE1NToxOjB4MTlFN0UzNzZFN0MyMTNCN0U3ZTdlNDZjYzcwQTVkRDA4NkRBZmYyQTpkZWZhdWx0L2t2L3BhdGgiOnsidGlueWNsb3VkLmt2L2dldCI6W3t9XX19fQ.RxaV-JZqoOyumI4wIuv86q896qya9sYmixWgjYvrgjyd3uEuajQFpzW41V0joFVcnzLwojIncDfaOC5W_-WrCQ"
+      },
+      "issuerProofs": [
+        {
+          "kind": "cacao",
+          "cid": "bafkr4ieqhbrppsm3535rjhravkon3vtp2nfs7rdkvckukteylik6dpz5vu",
+          "encoding": "dag-cbor-base64url-pad",
+          "value": "o2FooWF0Z2VpcDQzNjFhcKljYXVkeGlkaWQ6a2V5Ono2TWttWWpUWjh2R0NqMWFCYmU0d3h4bzNaZ1E4U3BDVFc2anFSSzNkbmF0RFdqTSN6Nk1rbVlqVFo4dkdDajFhQmJlNHd4eG8zWmdROFNwQ1RXNmpxUkszZG5hdERXak1jZXhweBgzMDAwLTAxLTAxVDAwOjAwOjAwLjAwMFpjaWF0eBgyMDIyLTAxLTAxVDAwOjAwOjAwLjAwMFpjaXNzeDtkaWQ6cGtoOmVpcDE1NToxOjB4MTlFN0UzNzZFN0MyMTNCN0U3ZTdlNDZjYzcwQTVkRDA4NkRBZmYyQWVub25jZXBmaXh0dXJlTm9uY2UxMjM0ZmRvbWFpbmtleGFtcGxlLmNvbWd2ZXJzaW9uAWlyZXNvdXJjZXOBeNV1cm46cmVjYXA6ZXlKaGRIUWlPbnNpZEdsdWVXTnNiM1ZrT25CcmFEcGxhWEF4TlRVNk1Ub3dlREU1UlRkRk16YzJSVGRETWpFelFqZEZOMlUzWlRRMlkyTTNNRUUxWkVRd09EWkVRV1ptTWtFNlpHVm1ZWFZzZEM5cmRpOXdZWFJvSWpwN0luUnBibmxqYkc5MVpDNXJkaTluWlhRaU9sdDdmVjBzSW5ScGJubGpiRzkxWkM1cmRpOXdkWFFpT2x0N2ZWMTlmU3dpY0hKbUlqcGJYWDBpc3RhdGVtZW50eMtJIGZ1cnRoZXIgYXV0aG9yaXplIHRoZSBzdGF0ZWQgVVJJIHRvIHBlcmZvcm0gdGhlIGZvbGxvd2luZyBhY3Rpb25zIG9uIG15IGJlaGFsZjogKDEpICd0aW55Y2xvdWQua3YnOiAnZ2V0JywgJ3B1dCcgZm9yICd0aW55Y2xvdWQ6cGtoOmVpcDE1NToxOjB4MTlFN0UzNzZFN0MyMTNCN0U3ZTdlNDZjYzcwQTVkRDA4NkRBZmYyQTpkZWZhdWx0L2t2L3BhdGgnLmFzomFzWEEqq1o6S1ofLU-V7vyzmIs2GO0ZNUnhv9KwNmhygZi9r2lGaXDQwB1OKmNsuzMsN1pDQUVFvjBXvxfRTiD9mA8LHGF0ZmVpcDE5MQ=="
+        }
+      ]
+    },
+    "authorizationTarget": {
+      "kind": "recipientDid",
+      "did": "did:pkh:eip155:1:0xde709f2102306220921060314715629080e2fb77"
+    },
+    "target": {
+      "origin": "https://node.tinycloud.xyz",
+      "nodeAudience": "did:web:node.tinycloud.xyz",
+      "spaceId": "tinycloud:pkh:eip155:1:0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A:default",
+      "resource": {
+        "kind": "exact",
+        "path": "path"
+      },
+      "actions": ["tinycloud.kv/get"]
+    },
+    "display": {
+      "senderName": "Adam",
+      "filename": "report.md",
+      "recipientHint": "0xde70…fb77"
+    },
+    "expiry": "2096-10-02T07:06:40.000Z",
+    "signature": {
+      "signerDid": "did:key:z6MkmYjTZ8vGCj1aBbe4wxxo3ZgQ8SpCTW6jqRK3dnatDWjM",
+      "algorithm": "Ed25519",
+      "value": "oxgUCYhEb6A7SmlF4Yua9pVOb1QTtCOmvlBjZcyltGpn_K212iEVLILaC_eat77Mj7NfPqCev4AOO8AbG3IeBQ"
+    }
+  },
+  "nativeVerified": {
+    "verification": "tinycloud-native-authority-v1",
+    "ownerDid": "did:pkh:eip155:1:0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A",
+    "sessionPrincipalDid": "did:key:z6MkmYjTZ8vGCj1aBbe4wxxo3ZgQ8SpCTW6jqRK3dnatDWjM",
+    "sessionVerificationMethod": "did:key:z6MkmYjTZ8vGCj1aBbe4wxxo3ZgQ8SpCTW6jqRK3dnatDWjM#z6MkmYjTZ8vGCj1aBbe4wxxo3ZgQ8SpCTW6jqRK3dnatDWjM",
+    "recipientDid": "did:pkh:eip155:1:0xde709f2102306220921060314715629080e2fb77",
+    "grantCid": "bafkr4id454qnh4esrkmtfnhm5tdomxpbwqmr6vj74635mlcbkjxncr645y",
+    "proofCids": [
+      "bafkr4ieqhbrppsm3535rjhravkon3vtp2nfs7rdkvckukteylik6dpz5vu"
+    ],
+    "scope": {
+      "spaceId": "tinycloud:pkh:eip155:1:0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A:default",
+      "resource": {
+        "kind": "exact",
+        "path": "path"
+      },
+      "actions": ["tinycloud.kv/get"]
+    },
+    "expiry": "2096-10-02T07:06:40.000Z"
+  },
+  "reject": [
+    {
+      "name": "multi-parent-order",
+      "mutation": {
+        "target": "envelope",
+        "op": "misorder-corrupt-grant-proof"
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "missing-parent",
+      "mutation": {
+        "target": "envelope",
+        "op": "set",
+        "path": "/delegation/issuerProofs",
+        "value": []
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "extra-parent",
+      "mutation": {
+        "target": "envelope",
+        "op": "append-corrupt-grant-proof",
+        "resign": true,
+        "nativeReject": true
+      },
+      "expected": "delegation-invalid"
+    },
+    {
+      "name": "duplicate-parent",
+      "mutation": {
+        "target": "envelope",
+        "op": "duplicate-root"
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "artifact-cid-preimage-mismatch",
+      "mutation": {
+        "target": "envelope",
+        "op": "corrupt-grant-value"
+      },
+      "expected": "artifact-cid-mismatch"
+    },
+    {
+      "name": "invalid-native-signature",
+      "mutation": {
+        "target": "native",
+        "op": "reject"
+      },
+      "expected": "delegation-invalid"
+    },
+    {
+      "name": "invalid-envelope-signature",
+      "mutation": {
+        "target": "envelope",
+        "op": "set",
+        "path": "/display/filename",
+        "value": "tampered.md"
+      },
+      "expected": "signature"
+    },
+    {
+      "name": "owner-space-mismatch",
+      "mutation": {
+        "target": "native",
+        "op": "set",
+        "path": "/ownerDid",
+        "value": "did:pkh:eip155:1:0xde709f2102306220921060314715629080e2fb77"
+      },
+      "expected": "authority-mismatch"
+    },
+    {
+      "name": "route-mismatch",
+      "mutation": {
+        "target": "envelope",
+        "op": "set-route",
+        "origin": "https://other.tinycloud.xyz",
+        "nodeAudience": "did:web:other.tinycloud.xyz",
+        "resign": true
+      },
+      "expected": "target-mismatch"
+    },
+    {
+      "name": "scope-broadening",
+      "mutation": {
+        "target": "native",
+        "op": "set",
+        "path": "/scope/actions",
+        "value": ["tinycloud.kv/get", "tinycloud.kv/put"]
+      },
+      "expected": "target-mismatch"
+    },
+    {
+      "name": "expiry-attenuation",
+      "mutation": {
+        "target": "native",
+        "op": "set",
+        "path": "/expiry",
+        "value": "2096-10-02T07:06:39.000Z"
+      },
+      "expected": "expiry-mismatch"
+    },
+    {
+      "name": "future-not-before",
+      "mutation": {
+        "target": "native",
+        "op": "set",
+        "path": "/notBefore",
+        "value": "2030-01-01T00:00:00.000Z"
+      },
+      "expected": "delegation-invalid"
+    },
+    {
+      "name": "noncanonical-recipient-did",
+      "mutation": {
+        "target": "envelope",
+        "op": "set",
+        "path": "/authorizationTarget/did",
+        "value": "did:pkh:eip155:1:0x7bd63aa37326a64d458559f44432103e3d6eede9"
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "noncanonical-cid",
+      "mutation": {
+        "target": "envelope",
+        "op": "uppercase",
+        "path": "/delegation/grant/cid"
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "wrong-cid-digest-length",
+      "mutation": {
+        "target": "envelope",
+        "op": "set",
+        "path": "/delegation/grant/cid",
+        "value": "bafkr4hyaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "noncanonical-cacao-base64",
+      "mutation": {
+        "target": "envelope",
+        "op": "remove-padding",
+        "path": "/delegation/issuerProofs/0/value"
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "noncanonical-signature-base64",
+      "mutation": {
+        "target": "envelope",
+        "op": "append",
+        "path": "/signature/value",
+        "value": "="
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "node-audience-fragment",
+      "mutation": {
+        "target": "envelope",
+        "op": "set",
+        "path": "/target/nodeAudience",
+        "value": "did:web:node.tinycloud.xyz#key"
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "node-audience-whitespace",
+      "mutation": {
+        "target": "envelope",
+        "op": "set",
+        "path": "/target/nodeAudience",
+        "value": "did:web:node.tinycloud.xyz "
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "node-audience-control",
+      "mutation": {
+        "target": "envelope",
+        "op": "set",
+        "path": "/target/nodeAudience",
+        "value": "did:web:node.tinycloud.xyz\n"
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "node-audience-malformed",
+      "mutation": {
+        "target": "envelope",
+        "op": "set",
+        "path": "/target/nodeAudience",
+        "value": "did:web:Node..tinycloud.xyz"
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "node-audience-ipv4-literal",
+      "mutation": {
+        "target": "envelope",
+        "op": "set-target-route",
+        "origin": "https://127.0.0.1",
+        "nodeAudience": "did:web:127.0.0.1"
+      },
+      "expected": "schema"
+    },
+    {
+      "name": "origin-audience-pairing",
+      "mutation": {
+        "target": "envelope",
+        "op": "set",
+        "path": "/target/nodeAudience",
+        "value": "did:web:other.tinycloud.xyz"
+      },
+      "expected": "schema"
+    }
+  ]
+}

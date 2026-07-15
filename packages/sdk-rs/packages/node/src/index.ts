@@ -36,6 +36,7 @@ export {
   // whether a requested delegation is derivable from the current session
   // without a fresh wallet prompt.
   parseRecapFromSiwe,
+  verifyRecipientDidDelegationBundleV2,
   // Protocol version
   protocolVersion,
   // Vault crypto

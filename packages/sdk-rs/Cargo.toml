@@ -38,6 +38,12 @@ js-sys = "0.3.59"
 # remains the authoritative registry source. Bump this pin only to newer node
 # release tags, in lockstep with the re-vendor + anchor update (TC-121 covers the
 # codegen source-sha headers those steps rely on).
+#
+# TC-224 release blocker: v1.4.5 predates the recipient-DID authority verifier.
+# Keep this production pin on a release tag. Before publishing the TC-224 SDK
+# packages, bump both tinycloud-node dependencies to the first release tag that
+# includes the verifier and its exact typed WASM declaration, then regenerate
+# and publish the Node/browser WASM packages (consumers currently pin 1.7.4).
 tinycloud-sdk-rs = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", tag = "v1.4.5" }
 tinycloud-sdk-wasm = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", tag = "v1.4.5" }
 serde = { version = "1.0", features = ["derive"] }

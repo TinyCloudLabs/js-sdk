@@ -66,6 +66,16 @@ export type {
   TinyCloudDebugLevel,
   TinyCloudDebugEnableOptions,
   TinyCloudDebugTimer,
+  NativeVerifiedRecipientDidDelegationBundleV2,
+  RecipientDidCacaoArtifactV2,
+  RecipientDidDelegationArtifactV2,
+  RecipientDidDelegationBundleV2,
+  RecipientDidDelegationRoutingV2,
+  RecipientDidShareDisplayV2,
+  RecipientDidShareEnvelopeV2,
+  RecipientDidShareEnvelopeV2SigningPayload,
+  RecipientDidShareTargetV2,
+  RecipientDidUcanArtifactV2,
 } from "@tinycloud/sdk-core";
 
 // Re-export core values for extensibility
@@ -206,6 +216,11 @@ export type {
   AuthDelegationArtifact,
   DelegationAuthority,
 } from "./delegation";
+export { RecipientDidSharingError } from "./recipientDidSharing";
+export type {
+  SignShareEnvelopeV2Input,
+  SignShareEnvelopeV2Result,
+} from "./recipientDidSharing";
 
 // Re-export KV service values
 export {

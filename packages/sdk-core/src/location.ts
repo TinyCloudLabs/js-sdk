@@ -532,6 +532,7 @@ function verifyDidKeySignature(
     signatureBytes,
     new TextEncoder().encode(payload),
     publicKey,
+    { zip215: false },
   );
 }
 
@@ -541,10 +542,15 @@ export function verifyDidKeyEd25519Signature(
   signature: Uint8Array,
 ): boolean {
   const publicKey = ed25519PublicKeyFromDidKey(did);
-  return ed25519.verify(signature, payload, publicKey);
+  return ed25519.verify(signature, payload, publicKey, { zip215: false });
 }
 
 function ed25519PublicKeyFromDidKey(did: string): Uint8Array {
+  if (!did.startsWith("did:key:")) {
+    throw new LocationRecordValidationError(
+      "did:key must be an Ed25519 public key",
+    );
+  }
   const identifier = did.slice("did:key:".length);
   if (!identifier.startsWith("z")) {
     throw new LocationRecordValidationError(
@@ -552,15 +558,48 @@ function ed25519PublicKeyFromDidKey(did: string): Uint8Array {
     );
   }
 
-  const bytes = bases.base58btc.decode(identifier);
-  if (bytes.length === 34 && bytes[0] === 0xed && bytes[1] === 0x01) {
-    return bytes.slice(2);
+  let bytes: Uint8Array;
+  try {
+    bytes = bases.base58btc.decode(identifier);
+  } catch {
+    throw new LocationRecordValidationError(
+      "did:key must use canonical base58btc multibase",
+    );
   }
-  if (bytes.length === 33 && bytes[0] === 0xed) {
-    return bytes.slice(1);
+  if (bases.base58btc.encode(bytes) !== identifier) {
+    throw new LocationRecordValidationError(
+      "did:key must use canonical base58btc multibase",
+    );
   }
-  throw new LocationRecordValidationError(
-    "did:key must be an Ed25519 public key",
+  if (bytes.length !== 34 || bytes[0] !== 0xed || bytes[1] !== 0x01) {
+    throw new LocationRecordValidationError(
+      "did:key must be an Ed25519 public key",
+    );
+  }
+
+  const publicKey = bytes.slice(2);
+  try {
+    const point = ed25519.Point.fromBytes(publicKey, false);
+    point.assertValidity();
+    if (
+      point.isSmallOrder() ||
+      !point.isTorsionFree() ||
+      !bytesEqual(point.toBytes(), publicKey)
+    ) {
+      throw new Error("invalid Ed25519 subgroup or encoding");
+    }
+  } catch {
+    throw new LocationRecordValidationError(
+      "did:key Ed25519 key must be a canonical torsion-free point",
+    );
+  }
+  return publicKey;
+}
+
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
   );
 }
 

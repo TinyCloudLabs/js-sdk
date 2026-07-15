@@ -18,6 +18,8 @@ import {
   type ISessionStorage,
   type PersistedSessionData,
   type SignStrategy,
+  type SignShareEnvelopeV2Input,
+  type SignShareEnvelopeV2Result,
 } from "@tinycloud/node-sdk/core";
 import {
   IKVService,
@@ -53,6 +55,8 @@ import {
   type NetworkDescriptor,
   SignInOptions,
   composeManifestRequest,
+  type NativeVerifiedRecipientDidDelegationBundleV2,
+  type RecipientDidDelegationBundleV2,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
 import {
@@ -727,6 +731,23 @@ export class TinyCloudWeb {
   ): Promise<DelegateToResult> => {
     const node = await this.ensureNode();
     return node.delegateTo(did, permissions, options);
+  };
+
+  /** Build and sign the fixed recipient-DID share envelope v2 payload. */
+  signShareEnvelopeV2 = async (
+    input: SignShareEnvelopeV2Input,
+  ): Promise<SignShareEnvelopeV2Result> => {
+    const node = await this.ensureNode();
+    return node.signShareEnvelopeV2(input);
+  };
+
+  /** Invoke the runtime's atomic, network-free recipient authority verifier. */
+  verifyRecipientDidDelegationBundleV2 = async (
+    bundle: RecipientDidDelegationBundleV2,
+    now = new Date(),
+  ): Promise<NativeVerifiedRecipientDidDelegationBundleV2> => {
+    const node = await this.ensureNode();
+    return node.verifyRecipientDidDelegationBundleV2(bundle, now);
   };
 
   materializeDelegation = async (

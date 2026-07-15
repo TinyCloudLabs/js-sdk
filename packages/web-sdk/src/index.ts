@@ -322,6 +322,23 @@ export {
   deserializeDelegation,
 } from "@tinycloud/node-sdk/core";
 export type { PortableDelegation } from "@tinycloud/node-sdk/core";
+export {
+  RecipientDidSharingError,
+  type SignShareEnvelopeV2Input,
+  type SignShareEnvelopeV2Result,
+} from "@tinycloud/node-sdk/core";
+export type {
+  NativeVerifiedRecipientDidDelegationBundleV2,
+  RecipientDidCacaoArtifactV2,
+  RecipientDidDelegationArtifactV2,
+  RecipientDidDelegationBundleV2,
+  RecipientDidDelegationRoutingV2,
+  RecipientDidShareDisplayV2,
+  RecipientDidShareEnvelopeV2,
+  RecipientDidShareEnvelopeV2SigningPayload,
+  RecipientDidShareTargetV2,
+  RecipientDidUcanArtifactV2,
+} from "@tinycloud/sdk-core";
 
 // TinyCloudNode re-export (for advanced usage)
 export {
