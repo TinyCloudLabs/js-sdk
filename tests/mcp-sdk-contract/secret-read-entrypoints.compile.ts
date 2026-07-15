@@ -11,6 +11,7 @@ import type {
   VaultPutOptions,
 } from "@tinycloud/sdk-core";
 import { DecryptTransportResponseError } from "@tinycloud/sdk-services";
+import { DecryptTransportResponseError as EncryptionDecryptTransportResponseError } from "@tinycloud/sdk-services/encryption";
 import type {
   SecretReadInput as NodeSecretReadInput,
   SecretReadResult as NodeSecretReadResult,
@@ -38,6 +39,8 @@ type _ResultExports = [
 const success = <T>(data: T): Result<T, VaultError> => ({ ok: true, data });
 const transportResponseError: DecryptTransportResponseError =
   new DecryptTransportResponseError(403);
+const encryptionTransportResponseError: EncryptionDecryptTransportResponseError =
+  transportResponseError;
 
 /** A pre-I3 external vault implementation: no classified-read method. */
 class LegacyVault implements IDataVaultService {
@@ -122,3 +125,4 @@ void (new LegacyVault());
 void (null as unknown as _InputExports);
 void (null as unknown as _ResultExports);
 void transportResponseError;
+void encryptionTransportResponseError;

@@ -15,10 +15,23 @@ function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function projectUrl(value: unknown): unknown {
+function isBinaryData(value: object): boolean {
   try {
-    const url = value instanceof URL ? value : new URL(String(value));
-    return url.origin;
+    return (
+      Array.isArray(value) ||
+      ArrayBuffer.isView(value) ||
+      value instanceof ArrayBuffer
+    );
+  } catch {
+    // A revoked Proxy can throw while checking its shape. It is not diagnostic
+    // data and must not prevent the SDK operation that emitted it.
+    return true;
+  }
+}
+
+function read(value: object, key: string): unknown {
+  try {
+    return (value as Record<string, unknown>)[key];
   } catch {
     return REDACTED;
   }
@@ -28,12 +41,8 @@ function projectUrl(value: unknown): unknown {
 export function projectDiagnosticError(error: unknown): Record<string, unknown> {
   if (typeof error !== "object" || error === null) return {};
 
-  try {
-    const status = finiteNumber((error as { status?: unknown }).status);
-    return status !== undefined && status >= 100 && status <= 599 ? { status } : {};
-  } catch {
-    return {};
-  }
+  const status = finiteNumber(read(error, "status"));
+  return status !== undefined && status >= 100 && status <= 599 ? { status } : {};
 }
 
 /**
@@ -44,39 +53,32 @@ export function projectDiagnosticError(error: unknown): Record<string, unknown> 
 export function projectDiagnosticData(value: unknown): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value !== "object") return REDACTED;
-  if (value instanceof Error) return projectDiagnosticError(value);
-  if (Array.isArray(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+
+  try {
+    if (isBinaryData(value)) return REDACTED;
+
+    const projected: Record<string, unknown> = {};
+    for (const key of SAFE_NUMBER_FIELDS) {
+      const number = finiteNumber(read(value, key));
+      if (number !== undefined) projected[key] = number;
+    }
+    for (const key of SAFE_BOOLEAN_FIELDS) {
+      const boolean = read(value, key);
+      if (typeof boolean === "boolean") projected[key] = boolean;
+    }
+
+    // URLs, like every other string-bearing value, are never projected. Even
+    // an origin can encode user-controlled data in a hostname.
+    const url = read(value, "url");
+    if (url !== undefined) projected.url = REDACTED;
+
+    const error = read(value, "error");
+    if (error !== undefined) projected.error = projectDiagnosticError(error);
+
+    return projected;
+  } catch {
+    // Projection is best-effort only. Hostile Proxy traps and exotic objects
+    // must never block telemetry, debug logging, or ordinary subscribers.
     return REDACTED;
   }
-
-  const projected: Record<string, unknown> = {};
-  for (const key of SAFE_NUMBER_FIELDS) {
-    try {
-      const number = finiteNumber((value as Record<string, unknown>)[key]);
-      if (number !== undefined) projected[key] = number;
-    } catch {
-      // Diagnostic projection must not let exotic objects break SDK behavior.
-    }
-  }
-  for (const key of SAFE_BOOLEAN_FIELDS) {
-    try {
-      const boolean = (value as Record<string, unknown>)[key];
-      if (typeof boolean === "boolean") projected[key] = boolean;
-    } catch {
-      // Diagnostic projection must not let exotic objects break SDK behavior.
-    }
-  }
-  try {
-    const url = (value as Record<string, unknown>).url;
-    if (url !== undefined) projected.url = projectUrl(url);
-  } catch {
-    projected.url = REDACTED;
-  }
-  try {
-    const error = (value as Record<string, unknown>).error;
-    if (error !== undefined) projected.error = projectDiagnosticError(error);
-  } catch {
-    projected.error = {};
-  }
-  return projected;
 }

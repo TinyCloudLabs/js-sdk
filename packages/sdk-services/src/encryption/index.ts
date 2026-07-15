@@ -12,7 +12,10 @@
 export {
   EncryptionService,
 } from "./EncryptionService";
-export { DecryptTransportResponseError } from "./DecryptTransportResponseError";
+// The root and `/encryption` entrypoints both load this canonical CJS module.
+// That gives this public error normal class identity in CJS and ESM without a
+// mutable global registry or a forgeable structural marker.
+export { DecryptTransportResponseError } from "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 export type {
   DecryptTransport,
   EncryptionServiceConfig,

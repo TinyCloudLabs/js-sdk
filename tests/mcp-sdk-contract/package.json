@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "bun test && bun run test:public-api",
-    "test:public-api": "tsc -p tsconfig.public-api.json"
+    "test:public-api": "bun scripts/verify-packed-public-api.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.0.0-beta.4",

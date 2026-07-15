@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Buffer } from "node:buffer";
 import {
   clearTinyCloudDebugLogs,
   disableTinyCloudDebug,
@@ -100,7 +101,7 @@ describe("ServiceContext telemetry", () => {
       const expected = {
         status: 503,
         ok: false,
-        url: "https://node.tinycloud.test",
+        url: "[REDACTED]",
         error: { status: 503 },
       };
       expect(telemetry).toEqual([["service.response", expected]]);
@@ -119,6 +120,80 @@ describe("ServiceContext telemetry", () => {
       ]) {
         expect(captured).not.toContain(canary);
       }
+    } finally {
+      disableTinyCloudDebug({ persist: false });
+      clearTinyCloudDebugLogs();
+    }
+  });
+
+  test("contains hostile diagnostics without changing subscriber payloads", () => {
+    const telemetry: Array<[string, unknown]> = [];
+    const subscribers: unknown[] = [];
+    const canary = "diagnostic-throw-canary";
+    const throwingGetter = Object.defineProperty({}, "status", {
+      get() {
+        throw new Error(canary);
+      },
+    });
+    const throwingProxy = new Proxy({}, {
+      get() {
+        throw new Error(canary);
+      },
+      getPrototypeOf() {
+        throw new Error(canary);
+      },
+    });
+    const { proxy: revokedProxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    const hostileError = Object.assign(new Error(canary), {
+      code: canary,
+      service: canary,
+      cause: canary,
+      status: 503,
+    });
+    const payloads = [
+      {
+        url: new URL(`https://user:${canary}@${canary}.invalid/${canary}`),
+        error: hostileError,
+        bytes: new Uint8Array([83, 69, 67, 82, 69, 84]),
+        buffer: Buffer.from(canary),
+        nested: [canary, new Uint8Array([1, 2, 3])],
+      },
+      new Uint8Array([83, 69, 67, 82, 69, 84]),
+      Buffer.from(canary),
+      new URL(`https://${canary}.invalid/${canary}`),
+      hostileError,
+      throwingGetter,
+      throwingProxy,
+      revokedProxy,
+    ];
+    const context = createContext({
+      enabled: true,
+      onEvent: (event, data) => telemetry.push([event, data]),
+    });
+    context.on("service.response", (data) => subscribers.push(data));
+
+    enableTinyCloudDebug({ persist: false });
+    clearTinyCloudDebugLogs();
+    try {
+      for (const payload of payloads) context.emit("service.response", payload);
+
+      expect(subscribers).toHaveLength(payloads.length);
+      subscribers.forEach((payload, index) => expect(payload).toBe(payloads[index]));
+      expect(telemetry).toEqual([
+        ["service.response", { url: "[REDACTED]", error: { status: 503 } }],
+        ["service.response", "[REDACTED]"],
+        ["service.response", "[REDACTED]"],
+        ["service.response", {}],
+        ["service.response", { status: 503 }],
+        ["service.response", {}],
+        ["service.response", "[REDACTED]"],
+        ["service.response", "[REDACTED]"],
+      ]);
+
+      const captured = JSON.stringify({ telemetry, debug: getTinyCloudDebugLogs() });
+      expect(captured).not.toContain(canary);
+      expect(captured).not.toContain("83,69,67,82,69,84");
     } finally {
       disableTinyCloudDebug({ persist: false });
       clearTinyCloudDebugLogs();

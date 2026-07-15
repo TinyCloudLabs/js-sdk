@@ -41,7 +41,7 @@ import {
   openWrappedKey,
   verifyDecryptResponse,
 } from "./response";
-import { DecryptTransportResponseError } from "./DecryptTransportResponseError";
+import { DecryptTransportResponseError } from "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 import {
   DECRYPT_FACT_TYPE,
   encryptionError,
@@ -87,7 +87,7 @@ export interface DecryptTransport {
   }): Promise<DecryptResponseBody>;
 }
 
-export { DecryptTransportResponseError } from "./DecryptTransportResponseError";
+export { DecryptTransportResponseError } from "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 
 export interface EncryptionServiceConfig {
   crypto: EncryptionCrypto;

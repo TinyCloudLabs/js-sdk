@@ -26,12 +26,10 @@ async function run(
   return result.stdout;
 }
 
-test("packed root and encryption entrypoints load in CJS and ESM", async () => {
+test("packed root and encryption entrypoints preserve unforgeable CJS and ESM error identity", async () => {
   const smokeDirectory = await mkdtemp(join(packageDirectory, ".entrypoint-smoke-"));
   try {
-    // Runtime entrypoint coverage does not need declaration bundling (which is
-    // validated separately by the public-facade compile fixture).
-    await run(process.execPath, ["x", "tsup", "--no-dts"], packageDirectory);
+    await run(process.execPath, ["run", "build"], packageDirectory);
     const packed = JSON.parse(
       await run(
         "npm",
@@ -90,8 +88,8 @@ test("packed root and encryption entrypoints load in CJS and ESM", async () => {
         }
       }
     `;
-    const exerciseTaggedHttp = `
-      async function exerciseTaggedHttp(EncryptionService, TransportResponseError) {
+    const exerciseTransportFailure = `
+      async function exerciseTransportFailure(EncryptionService, transportError, expectedCode) {
         const sha256 = (bytes) => {
           const output = new Uint8Array(32);
           let sum = 0;
@@ -134,17 +132,15 @@ test("packed root and encryption entrypoints load in CJS and ESM", async () => {
             canonicalBody: JSON.stringify(Object.fromEntries(Object.entries(input.body).sort(([a], [b]) => a.localeCompare(b)))),
           }) },
           transport: { postDecrypt: async () => {
-            const error = new TransportResponseError(403);
-            if (error.name !== 'DecryptTransportResponseError') throw new Error('transport error name is unstable');
-            throw error;
+            throw transportError;
           } },
           node: { fetchByNetworkId: async () => descriptor },
         });
         const encrypted = await service.encryptToNetwork(networkId, new Uint8Array([1]));
         if (!encrypted.ok) throw new Error('could not create envelope');
         const result = await service.decryptEnvelope(encrypted.data, { proofs: [] });
-        if (result.ok || result.error.code !== 'DECRYPT_DENIED') {
-          throw new Error('tagged cross-entrypoint HTTP response was not classified as denied');
+        if (result.ok || result.error.code !== expectedCode) {
+          throw new Error('mixed-entrypoint transport response was not classified correctly');
         }
       }
     `;
@@ -153,7 +149,7 @@ test("packed root and encryption entrypoints load in CJS and ESM", async () => {
       [
         "--input-type=module",
         "-e",
-        `import { createRequire } from 'node:module'; const require = createRequire(import.meta.url); const rootCjs = require('@tinycloud/sdk-services'); const encryptionCjs = require('@tinycloud/sdk-services/encryption'); const rootEsm = await import('@tinycloud/sdk-services'); const encryptionEsm = await import('@tinycloud/sdk-services/encryption'); const root = rootEsm; const encryption = encryptionEsm; ${assertEntrypoints} ${assertSharedConstructor} ${exerciseTaggedHttp} await exerciseTaggedHttp(rootCjs.EncryptionService, encryptionEsm.DecryptTransportResponseError); await exerciseTaggedHttp(encryptionCjs.EncryptionService, rootEsm.DecryptTransportResponseError);`,
+        `const registryKey = Symbol.for('@tinycloud/sdk-services/DecryptTransportResponseError.constructor'); class PreseededError extends Error { constructor(status) { super('preseeded'); this.status = status; } }; Object.defineProperty(globalThis, registryKey, { configurable: false, value: PreseededError }); const { createRequire } = await import('node:module'); const require = createRequire(import.meta.url); const rootCjs = require('@tinycloud/sdk-services'); const encryptionCjs = require('@tinycloud/sdk-services/encryption'); const rootEsm = await import('@tinycloud/sdk-services'); const encryptionEsm = await import('@tinycloud/sdk-services/encryption'); const root = rootEsm; const encryption = encryptionEsm; ${assertEntrypoints} ${assertSharedConstructor} if (rootCjs.DecryptTransportResponseError === PreseededError || !(new rootCjs.DecryptTransportResponseError(403) instanceof Error) || new PreseededError(403) instanceof rootCjs.DecryptTransportResponseError) throw new Error('pre-seeded global constructor affected packed package identity'); ${exerciseTransportFailure} await exerciseTransportFailure(rootCjs.EncryptionService, new encryptionEsm.DecryptTransportResponseError(403), 'DECRYPT_DENIED'); await exerciseTransportFailure(encryptionCjs.EncryptionService, new rootEsm.DecryptTransportResponseError(403), 'DECRYPT_DENIED'); const spoofed = Object.assign(new Error('forged response'), { status: 403 }); Object.defineProperty(spoofed, Symbol.for('@tinycloud/sdk-services/decrypt-transport-response'), { value: true }); await exerciseTransportFailure(rootEsm.EncryptionService, spoofed, 'TRANSPORT_ERROR');`,
       ],
       smokeDirectory,
     );
