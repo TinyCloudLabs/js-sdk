@@ -25,7 +25,7 @@ async function runGenerator(...arguments_: readonly string[]): Promise<number> {
 test("the I1 catalog is generated from internal registry material", async () => {
   const generator = await readFile(generatorPath, "utf8");
 
-  expect(generator).toContain('from "../src/registry.ts"');
+  expect(generator).toContain('from "../src/registry.js"');
   expect(generator).not.toContain('from "../src/index.ts"');
 });
 

@@ -9,9 +9,9 @@ import type {
   OperationEffect,
   OperationExposure,
   TinyCloudPosture,
-} from "../src/contract.ts";
-import { OPERATION_ERROR_CODES, type OperationErrorCode } from "../src/errors.ts";
-import { operationDefinitionsForCatalog } from "../src/registry.ts";
+} from "../src/contract.js";
+import { OPERATION_ERROR_CODES, type OperationErrorCode } from "../src/errors.js";
+import { operationDefinitionsForCatalog } from "../src/registry.js";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const catalogPath = resolve(scriptDirectory, "../generated/operations.json");

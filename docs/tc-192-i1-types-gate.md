@@ -1,10 +1,13 @@
 # TC-192 I1 TypeScript Gate
 
 `.github/workflows/tc-192-i1-types-gate.yml` keeps the complete
-`packages/operations` TypeScript program strict-clean, including its tests.
-It runs the package `typecheck` script through the root
-`typecheck:operations` stage command; no test files are excluded and no
-compiler option is relaxed.
+`packages/operations` TypeScript program strict-clean. The package's no-emit
+typecheck configuration covers `src/**/*` (including tests),
+`test-support/**/*`, `scripts/**/*`, and `tsup.config.ts`; its declaration
+build configuration remains scoped to `src` so its published `dist` layout is
+unchanged. The gate runs the package `typecheck` script through the root
+`typecheck:operations` stage command, then asserts the resolved TypeScript
+file list includes each auxiliary program. No compiler option is relaxed.
 
 The gate pins Bun `1.2.0`, verifies that pin before installing with the locked
 dependency graph, emits the public SDK runtime entrypoints needed by the

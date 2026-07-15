@@ -94,6 +94,9 @@ jobs:
       - name: Typecheck the complete operations program
         run: bun run typecheck:operations
 
+      - name: Assert complete operations typecheck inputs
+        run: bun run --cwd packages/operations check:typecheck-inputs
+
       - name: Build, test, and verify the operations catalog
         run: |
           bun run --cwd packages/operations build
