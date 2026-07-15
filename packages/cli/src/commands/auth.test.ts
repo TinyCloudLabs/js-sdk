@@ -25,9 +25,8 @@ function validateCompatiblePermissionRequestArtifact(value: unknown): boolean {
   };
   return candidate.kind === "tinycloud.auth.request" &&
     candidate.version === 1 &&
-    typeof candidate.requestId === "string" && candidate.requestId.length > 0 &&
-    typeof candidate.sessionDid === "string" && candidate.sessionDid.length > 0 &&
-    Array.isArray(candidate.requested) && candidate.requested.length > 0;
+    typeof candidate.requestId === "string" &&
+    Array.isArray(candidate.requested);
 }
 
 type ProfileLike = {
@@ -1112,6 +1111,30 @@ describe("CLI auth import command", () => {
       requestId: "req_minimal_import",
       requested: request.requested,
       next: "tc auth retry req_minimal_import",
+    });
+  });
+
+  test("imports an empty legacy request with older optional metadata", async () => {
+    const request = {
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_empty_legacy",
+      did: "did:key:z6MkLegacyRequester",
+      requested: [],
+    };
+    const source = join(tempDir, "empty-legacy-request.json");
+    await writeFile(source, JSON.stringify(request), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(importRecorded.appendedRequests).toEqual([request]);
+    expect(recorded.outputs[0]).toEqual({
+      imported: true,
+      kind: "tinycloud.auth.request",
+      requestId: "req_empty_legacy",
+      requested: [],
+      next: "tc auth retry req_empty_legacy",
     });
   });
 

@@ -61,9 +61,8 @@ function isNodeSdkAuthRequestArtifact(value: unknown): value is AuthRequestArtif
   const candidate = value as Partial<AuthRequestArtifact>;
   return candidate.kind === "tinycloud.auth.request" &&
     candidate.version === 1 &&
-    typeof candidate.requestId === "string" && candidate.requestId.length > 0 &&
-    typeof candidate.sessionDid === "string" && candidate.sessionDid.length > 0 &&
-    Array.isArray(candidate.requested) && candidate.requested.length > 0;
+    typeof candidate.requestId === "string" &&
+    Array.isArray(candidate.requested);
 }
 
 /**
