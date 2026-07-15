@@ -271,6 +271,7 @@ export type {
   VaultListOptions,
   VaultGrantOptions,
   VaultEntry,
+  VaultNetworkReadResult,
   VaultError,
 } from "./vault";
 

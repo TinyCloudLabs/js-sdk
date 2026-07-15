@@ -13,6 +13,7 @@ import type {
   VaultGetOptions,
   VaultListOptions,
   VaultGrantOptions,
+  VaultNetworkReadResult,
 } from "./types";
 
 /**
@@ -89,6 +90,18 @@ export interface IDataVaultService extends IService {
     key: string,
     options?: VaultGetOptions<T>
   ): Promise<Result<VaultEntry<T>, VaultError>>;
+
+  /**
+   * Read a network-encrypted entry while preserving safe failure phases.
+   *
+   * This is intended for callers that must distinguish an authorized absence
+   * from KV, envelope, decrypt, and payload failures without surfacing raw
+   * node or cryptographic error data.
+   */
+  readNetworkEncrypted<T = unknown>(
+    key: string,
+    options?: VaultGetOptions<T>
+  ): Promise<VaultNetworkReadResult<T>>;
 
   /**
    * Delete an encrypted key.

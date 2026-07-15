@@ -35,6 +35,7 @@ import {
   VaultListOptions,
   VaultGrantOptions,
   VaultEntry,
+  VaultNetworkReadResult,
   VaultError,
   VaultErrorInput,
   VaultHeaders,
@@ -661,6 +662,92 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         code: "STORAGE_ERROR",
         cause: toError(error),
       });
+    }
+  }
+
+  /**
+   * Read a network-encrypted entry while preserving safe failure phases.
+   *
+   * Unlike {@link getNetworkEncrypted}, this is intentionally message-free so
+   * an operation layer can distinguish an authorized absence from a failed
+   * read without receiving node, envelope, plaintext, or key material.
+   */
+  async readNetworkEncrypted<T = unknown>(
+    key: string,
+    options?: VaultGetOptions<T>,
+  ): Promise<VaultNetworkReadResult<T>> {
+    const config = this.networkEncryption;
+    if (!config || !this.requireAuth()) {
+      return { status: "read_failed" };
+    }
+
+    let valueResult: Awaited<ReturnType<IKVService["get"]>>;
+    try {
+      valueResult = await this.tc.kv.get<string>(`vault/${key}`, { raw: true });
+    } catch {
+      return { status: "node_unreachable" };
+    }
+
+    if (!valueResult.ok) {
+      if (
+        valueResult.error.code === "NOT_FOUND" ||
+        valueResult.error.code === "KV_NOT_FOUND"
+      ) {
+        return { status: "not_found" };
+      }
+      if (
+        valueResult.error.code === "NETWORK_ERROR" ||
+        valueResult.error.code === "TIMEOUT" ||
+        valueResult.error.code === "ABORTED"
+      ) {
+        return { status: "node_unreachable" };
+      }
+      return { status: "read_failed" };
+    }
+
+    let envelope: InlineEncryptedEnvelope;
+    try {
+      const rawEnvelope = unwrapKVData<string>(valueResult.data);
+      envelope = (
+        typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope
+      ) as InlineEncryptedEnvelope;
+    } catch {
+      return { status: "corrupt_envelope" };
+    }
+
+    let plaintextResult: Awaited<ReturnType<typeof config.service.decryptEnvelope>>;
+    try {
+      const proof = await this.decryptCapabilityProof();
+      plaintextResult = await config.service.decryptEnvelope(envelope, proof);
+    } catch {
+      return { status: "node_unreachable" };
+    }
+
+    if (!plaintextResult.ok) {
+      if (plaintextResult.error.code === "INVALID_ENVELOPE") {
+        return { status: "corrupt_envelope" };
+      }
+      if (plaintextResult.error.code === "TRANSPORT_ERROR") {
+        return { status: "node_unreachable" };
+      }
+      return { status: "decrypt_failed" };
+    }
+
+    try {
+      const metadata: Record<string, string> = envelope.metadata ?? {};
+      const contentType =
+        metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
+      const keyId =
+        metadata[VaultHeaders.KEY_ID] ??
+        envelope.encryptedSymmetricKeyHash.slice(0, 16);
+      const value = this.deserializeValue<T>(
+        plaintextResult.data,
+        contentType,
+        options,
+      );
+      return { status: "ok", entry: { value, metadata, keyId } };
+    } catch {
+      return { status: "invalid_payload" };
     }
   }
 

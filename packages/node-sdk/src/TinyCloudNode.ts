@@ -122,6 +122,7 @@ import {
   resolveTinyCloudHosts,
   principalDidEquals,
   parseNetworkId,
+  resolveSecretPath,
   type BuildDecryptInvocationInput,
   type BuiltDecryptInvocation,
   type CanonicalJson,
@@ -151,6 +152,46 @@ const DEFAULT_ENCRYPTION_NETWORK_NAME = "default";
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
 const NETWORK_ADMIN_TYPE = "tinycloud.encryption.network-admin/v1";
+
+/** Input for {@link TinyCloudNode.readSecret}. The target space is required. */
+export interface SecretReadInput {
+  /** Explicit full space URI or an owned-space name. */
+  space: string;
+  /** Env-style secret name. */
+  name: string;
+  /** Optional logical secret scope. */
+  scope?: string;
+}
+
+/**
+ * Safe classified result for an explicit-space secret read.
+ *
+ * Failure variants contain no raw node response, envelope, plaintext, keys,
+ * tokens, or delegation data.
+ */
+export type SecretReadResult =
+  | { status: "ok"; value: string }
+  | { status: "not_found" }
+  | { status: "node_unreachable" }
+  | { status: "read_failed" }
+  | { status: "corrupt_envelope" }
+  | { status: "decrypt_failed" }
+  | { status: "invalid_payload" };
+
+function isSecretPayload(
+  value: unknown,
+): value is { value: string; createdAt: string; updatedAt: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "value" in value &&
+    typeof (value as { value?: unknown }).value === "string" &&
+    "createdAt" in value &&
+    typeof (value as { createdAt?: unknown }).createdAt === "string" &&
+    "updatedAt" in value &&
+    typeof (value as { updatedAt?: unknown }).updatedAt === "string"
+  );
+}
 
 /**
  * Full actions the session key's root delegation grants over a space. Used for
@@ -3096,6 +3137,29 @@ export class TinyCloudNode {
       this._secrets.set(resolvedSpace, secrets);
     }
     return secrets;
+  }
+
+  /**
+   * Read a secret from an explicit target space without requesting or
+   * auto-signing authority. Active runtime delegations are selected by the
+   * normal KV and encryption invocation paths.
+   */
+  async readSecret(input: SecretReadInput): Promise<SecretReadResult> {
+    const resolved = resolveSecretPath(input.name, { scope: input.scope });
+    const targetSpace = input.space.startsWith("tinycloud:")
+      ? input.space
+      : this.ownedSpaceId(input.space);
+    const result = await this.getBaseSecrets(targetSpace).vault.readNetworkEncrypted<unknown>(
+      resolved.vaultKey,
+    );
+
+    if (result.status !== "ok") {
+      return { status: result.status };
+    }
+    if (!isSecretPayload(result.entry.value)) {
+      return { status: "invalid_payload" };
+    }
+    return { status: "ok", value: result.entry.value.value };
   }
 
   private getBaseSecrets(spaceId: string): ISecretsService {

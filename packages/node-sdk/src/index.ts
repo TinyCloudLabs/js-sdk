@@ -141,6 +141,8 @@ export {
   type RuntimePermissionGrantOptions,
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
+  type SecretReadInput,
+  type SecretReadResult,
 } from "./TinyCloudNode";
 
 export { AccountService } from "./account/AccountService";

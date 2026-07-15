@@ -218,7 +218,7 @@ function createNetworkVault() {
       jwk: {},
     },
   } as any);
-  return { vault, store, encryption };
+  return { vault, store, encryption, kv };
 }
 
 describe("DataVaultService.unlock", () => {
@@ -292,5 +292,69 @@ describe("DataVaultService network envelopes", () => {
 
     expect(grant.ok).toBe(false);
     expect([...store.keys()].some((key) => key.startsWith("grants/"))).toBe(false);
+  });
+
+  test("classifies network reads without exposing KV or encryption errors", async () => {
+    const { vault, store, encryption, kv } = createNetworkVault();
+
+    expect(await vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
+      status: "not_found",
+    });
+
+    kv.get.mockImplementationOnce(async () => ({
+      ok: false as const,
+      error: {
+        code: "NETWORK_ERROR",
+        service: "kv",
+        message: "transport canary",
+      },
+    }));
+    expect(await vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
+      status: "node_unreachable",
+    });
+
+    kv.get.mockImplementationOnce(async () => ({
+      ok: false as const,
+      error: {
+        code: "AUTH_UNAUTHORIZED",
+        service: "kv",
+        message: "read canary",
+      },
+    }));
+    expect(await vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
+      status: "read_failed",
+    });
+
+    store.set("vault/secrets/API_KEY", "not an envelope");
+    expect(await vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
+      status: "corrupt_envelope",
+    });
+
+    const put = await vault.put("secrets/API_KEY", { value: "stored" });
+    expect(put.ok).toBe(true);
+
+    const success = await vault.readNetworkEncrypted<{ value: string }>(
+      "secrets/API_KEY",
+    );
+    expect(success).toMatchObject({
+      status: "ok",
+      entry: { value: { value: "stored" } },
+    });
+
+    encryption.decryptEnvelope.mockImplementationOnce(async () => ({
+      ok: false as const,
+      error: { code: "DECRYPT_FAILED", message: "decrypt canary" },
+    }));
+    expect(await vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
+      status: "decrypt_failed",
+    });
+
+    encryption.decryptEnvelope.mockImplementationOnce(async () => ({
+      ok: true as const,
+      data: bytes("not json"),
+    }));
+    expect(await vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
+      status: "invalid_payload",
+    });
   });
 });

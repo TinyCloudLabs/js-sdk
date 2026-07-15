@@ -13,6 +13,7 @@ import {
   type IWasmBindings,
   type NetworkDescriptor,
   type PermissionEntry,
+  ServiceContext,
 } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
@@ -216,6 +217,73 @@ async function withActivatedDelegations(fn: () => Promise<void>): Promise<void> 
 }
 
 describe("TinyCloudNode runtime permission delegations", () => {
+  test("routes an explicit secret read through the activated KV delegation", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const secretsSpaceId = `tinycloud:pkh:eip155:1:${address}:delegated-secrets`;
+    const secretPath = "vault/secrets/ANTHROPIC_API_KEY";
+    const permission: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: secretsSpaceId,
+      path: secretPath,
+      actions: ["tinycloud.kv/get"],
+    };
+
+    await withActivatedDelegations(async () => {
+      await node.grantRuntimePermissions([permission]);
+    });
+
+    const fetch = mock(async () =>
+      new Response("ignored", { status: 200 }),
+    ) as any;
+    const context = new ServiceContext({
+      invoke: (node as any).invokeWithRuntimePermissions,
+      fetch,
+      hosts: ["https://tinycloud.test"],
+    });
+    context.setSession({
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    });
+    (node as any)._serviceContext = context;
+    (node as any)._spaceService = {};
+    const readNetworkEncrypted = mock(async () => {
+      const kv = (node as any).createSpaceScopedKVService(secretsSpaceId);
+      const result = await kv.get(secretPath, { raw: true });
+      expect(result.ok).toBe(true);
+      return {
+        status: "ok" as const,
+        entry: {
+          value: {
+            value: "secret value",
+            createdAt: "2026-07-15T00:00:00.000Z",
+            updatedAt: "2026-07-15T00:00:00.000Z",
+          },
+          metadata: {},
+          keyId: "test-key",
+        },
+      };
+    });
+    (node as any).getBaseSecrets = mock((space: string) => {
+      expect(space).toBe(secretsSpaceId);
+      return { vault: { readNetworkEncrypted } };
+    });
+
+    await expect(node.readSecret({
+      space: secretsSpaceId,
+      name: "ANTHROPIC_API_KEY",
+    })).resolves.toEqual({ status: "ok", value: "secret value" });
+
+    expect(invoke.mock.calls[invoke.mock.calls.length - 1][0].delegationHeader.Authorization)
+      .toBe("runtime-token");
+  });
+
   test("uses a stored runtime delegation for matching invocations", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
