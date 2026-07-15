@@ -48,9 +48,25 @@ export interface OperationContextSummary {
  */
 export interface OperationContext {
   readonly summary: OperationContextSummary;
+  /** Present for every normal invocation; optional for focused definition tests. */
+  readonly runtime?: OperationRuntime;
 }
 
-export type AuthorityPlanningContext = OperationContext;
+/**
+ * Per-invocation authority that is constructed inside operations. It is never
+ * caller supplied and it is deliberately absent from result envelopes.
+ */
+export interface OperationRuntime {
+  readonly node: unknown;
+  readonly granted: readonly CapabilityRequirement[];
+}
+
+/** Context given to planners and handlers after runtime authentication. */
+export interface RuntimeOperationContext extends OperationContext {
+  readonly runtime: OperationRuntime;
+}
+
+export type AuthorityPlanningContext = RuntimeOperationContext;
 
 /**
  * Capability details are finalized by the authority/artifacts increment. The

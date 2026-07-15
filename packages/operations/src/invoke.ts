@@ -1,15 +1,18 @@
 import { createHash } from "node:crypto";
 
+import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { jcsCanonicalize } from "@tinycloud/sdk-core/policy";
 import type { ZodError } from "zod";
 
 import {
+  type ApprovalAction,
+  type CapabilityRequirement,
   type InvocationTarget,
   type OperationContextSummary,
   type OperationDefinition,
   type OperationRef,
   type OperationResult,
-  safeOperationContextSummary,
+  type RuntimeOperationContext,
 } from "./contract.js";
 import {
   internalOperationError,
@@ -17,9 +20,14 @@ import {
   sanitizeOperationError,
   sanitizeThrownOperationError,
 } from "./errors.js";
-import { resolveInvocationContext } from "./profile.js";
+import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
+import {
+  createOrReusePermissionRequest,
+  type PermissionRequestArtifact,
+} from "./artifacts.js";
 import { redactOperationError } from "./redaction.js";
 import { lookupOperation } from "./registry.js";
+import type { createInvocationRuntime } from "./runtime.js";
 
 /** The sole projection-facing execution API. */
 export async function invokeOperation(
@@ -76,15 +84,15 @@ export async function invokeOperation(
   // Only a registered operation with valid input may inspect the pinned
   // profile. This keeps validation deterministic and avoids profile I/O for
   // malformed invocations.
-  const contextResolution = await resolveContext(target);
-  if (contextResolution.error !== undefined) {
-    return errorResult(operation, contextResolution.context, contextResolution.error);
+  const runtimeResolution = await resolveRuntime(target);
+  if (!runtimeResolution.ok) {
+    return errorResult(operation, runtimeResolution.context, runtimeResolution.error);
   }
 
-  if (!definition.postures.includes(contextResolution.context.posture)) {
+  if (!definition.postures.includes(runtimeResolution.context.summary.posture)) {
     return errorResult(
       operation,
-      contextResolution.context,
+      runtimeResolution.context.summary,
       operationError(
         "PROFILE_POSTURE_NOT_ALLOWED",
         "The active profile posture cannot execute this operation.",
@@ -93,8 +101,43 @@ export async function invokeOperation(
   }
 
   try {
+    const planned = await definition.authority(runtimeResolution.context, parsedInput.data);
+    const required = exactCapabilities(planned);
+    if (required === undefined) {
+      return errorResult(
+        operation,
+        runtimeResolution.context.summary,
+        operationError(
+          "PERMISSION_HINT_INVALID",
+          "The operation returned an invalid permission requirement.",
+        ),
+      );
+    }
+
+    const evaluation = evaluateAuthority(
+      runtimeResolution.context.runtime.granted as unknown as PermissionEntry[],
+      required as unknown as PermissionEntry[],
+    );
+    if (!evaluation.satisfied) {
+      const authority = await persistAuthorityRequest(
+        runtimeResolution.context,
+        evaluation.missing,
+      );
+      if (authority.status === "error") {
+        return errorResult(operation, runtimeResolution.context.summary, authority.error);
+      }
+      return authorityRequiredResult(
+        operation,
+        runtimeResolution.context.summary,
+        parsedInput.data,
+        authority.request,
+        authority.missing,
+        runtimeResolution.context.runtime.node,
+      );
+    }
+
     const outcome = await definition.execute(
-      { summary: contextResolution.context },
+      runtimeResolution.context,
       parsedInput.data,
     );
 
@@ -104,7 +147,7 @@ export async function invokeOperation(
         if (!parsedOutput.success) {
           return errorResult(
             operation,
-            contextResolution.context,
+            runtimeResolution.context.summary,
             operationError(
               "OUTPUT_INVALID",
               "The operation returned an invalid result.",
@@ -114,29 +157,47 @@ export async function invokeOperation(
         return {
           status: "ok",
           operation,
-          context: contextResolution.context,
+          context: runtimeResolution.context.summary,
           output: parsedOutput.data,
         };
       }
-      case "authority_required":
-        return {
-          status: "authority_required",
-          operation,
-          context: contextResolution.context,
-          missing: outcome.missing,
-          request: outcome.request,
-          approval: outcome.approval,
-          retry: retryDescriptor(
+      case "authority_required": {
+        const hinted = exactCapabilities(outcome.missing);
+        if (
+          hinted === undefined ||
+          !evaluateAuthority(
+            required as unknown as PermissionEntry[],
+            hinted as unknown as PermissionEntry[],
+          ).satisfied
+        ) {
+          return errorResult(
             operation,
-            parsedInput.data,
-            outcome.requiresCallerInput ?? false,
-          ),
-        };
+            runtimeResolution.context.summary,
+            operationError(
+              "PERMISSION_HINT_INVALID",
+              "The node returned an invalid permission hint.",
+            ),
+          );
+        }
+        const authority = await persistAuthorityRequest(runtimeResolution.context, hinted, true);
+        if (authority.status === "error") {
+          return errorResult(operation, runtimeResolution.context.summary, authority.error);
+        }
+        return authorityRequiredResult(
+          operation,
+          runtimeResolution.context.summary,
+          parsedInput.data,
+          authority.request,
+          authority.missing,
+          runtimeResolution.context.runtime.node,
+          outcome.requiresCallerInput ?? false,
+        );
+      }
       case "setup_required":
         return {
           status: "setup_required",
           operation,
-          context: contextResolution.context,
+          context: runtimeResolution.context.summary,
           setup: outcome.setup,
           retry: retryDescriptor(
             operation,
@@ -147,20 +208,20 @@ export async function invokeOperation(
       case "error":
         return errorResult(
           operation,
-          contextResolution.context,
+          runtimeResolution.context.summary,
           redactOperationError(definition, sanitizeOperationError(outcome.error)),
         );
       default:
         return errorResult(
           operation,
-          contextResolution.context,
+          runtimeResolution.context.summary,
           internalOperationError(),
         );
     }
   } catch (error) {
     return errorResult(
       operation,
-      contextResolution.context,
+      runtimeResolution.context.summary,
       redactOperationError(definition, sanitizeThrownOperationError(error)),
     );
   }
@@ -196,20 +257,18 @@ function normalizeInvocationTarget(target: unknown): InvocationTarget | undefine
   }
 }
 
-async function resolveContext(
+async function resolveRuntime(
   target: InvocationTarget,
-): Promise<Readonly<{ context: OperationContextSummary; error?: ReturnType<typeof sanitizeThrownOperationError> }>> {
+): Promise<Awaited<ReturnType<typeof createInvocationRuntime>>> {
   try {
-    const resolved = await resolveInvocationContext(target);
-    if (!resolved.ok) {
-      return {
-        context: unresolvedContextSummary(target),
-        error: sanitizeOperationError(resolved.error),
-      };
-    }
-    return { context: safeOperationContextSummary(resolved.context) };
+    // Keep the root package loadable for projections that only inspect its
+    // public invocation export. The SDK runtime is needed only once a valid
+    // operation reaches runtime construction.
+    const { createInvocationRuntime } = await import("./runtime.js");
+    return await createInvocationRuntime(target);
   } catch (error) {
     return {
+      ok: false,
       context: unresolvedContextSummary(target),
       error: sanitizeThrownOperationError(error),
     };
@@ -248,6 +307,128 @@ function retryDescriptor(
     inputDigest: createHash("sha256").update(jcsCanonicalize(input), "utf8").digest("hex"),
     requiresCallerInput,
   };
+}
+
+type PersistedAuthority =
+  | Readonly<{
+    status: "ok";
+    request: PermissionRequestArtifact;
+    missing: readonly CapabilityRequirement[];
+  }>
+  | Readonly<{ status: "error"; error: ReturnType<typeof sanitizeOperationError> }>;
+
+async function persistAuthorityRequest(
+  context: RuntimeOperationContext,
+  missing: readonly CapabilityRequirement[],
+  force = false,
+): Promise<PersistedAuthority> {
+  const sessionDid = context.summary.sessionDid;
+  if (sessionDid === undefined) {
+    return {
+      status: "error",
+      error: operationError(
+        "SESSION_NOT_FOUND",
+        "The selected profile does not have an active session.",
+      ),
+    };
+  }
+  try {
+    const resolution = await createOrReusePermissionRequest({
+      profile: context.summary.profile,
+      posture: context.summary.posture,
+      operatorType: context.summary.operatorType ?? "human",
+      host: context.summary.host,
+      sessionDid,
+      ...(context.summary.ownerDid === undefined ? {} : { ownerDid: context.summary.ownerDid }),
+      ...(context.summary.space === undefined ? {} : { spaceId: context.summary.space }),
+      missing: missing as unknown as PermissionEntry[],
+      granted: (force ? [] : context.runtime.granted) as unknown as PermissionEntry[],
+    });
+    if (resolution.status !== "created") {
+      return {
+        status: "error",
+        error: operationError("INTERNAL_ERROR", "The authority request could not be created."),
+      };
+    }
+    return {
+      status: "ok",
+      request: resolution.request,
+      missing: canonicalizeCapabilities(missing as unknown as PermissionEntry[]) as CapabilityRequirement[],
+    };
+  } catch {
+    return {
+      status: "error",
+      error: operationError("INTERNAL_ERROR", "The authority request could not be created."),
+    };
+  }
+}
+
+function authorityRequiredResult(
+  operation: OperationRef,
+  context: OperationContextSummary,
+  input: unknown,
+  request: PermissionRequestArtifact,
+  missing: readonly CapabilityRequirement[],
+  node: unknown,
+  requiresCallerInput = false,
+): OperationResult<never> {
+  return {
+    status: "authority_required",
+    operation,
+    context,
+    missing,
+    request,
+    approval: approvalAction(request, node),
+    retry: retryDescriptor(operation, input, requiresCallerInput),
+  };
+}
+
+function approvalAction(request: PermissionRequestArtifact, node: unknown): ApprovalAction {
+  const maybeNode = node as {
+    getOpenKeyApprovalUrl?: (artifact: PermissionRequestArtifact) => unknown;
+  };
+  let url: string | undefined;
+  try {
+    const candidate = maybeNode.getOpenKeyApprovalUrl?.(request);
+    if (typeof candidate === "string" && candidate.length > 0) url = candidate;
+  } catch {
+    // The stored request remains the source of truth when a runtime does not
+    // expose a canonical OpenKey URL.
+  }
+  return {
+    kind: "openkey",
+    requestId: request.requestId,
+    ...(url === undefined ? {} : { url }),
+    fallback: "tc auth grant <request-artifact>",
+  };
+}
+
+function exactCapabilities(
+  value: readonly CapabilityRequirement[],
+): CapabilityRequirement[] | undefined {
+  const permissions: PermissionEntry[] = [];
+  for (const candidate of value) {
+    if (!isExactPermission(candidate)) return undefined;
+    permissions.push(candidate);
+  }
+  return canonicalizeCapabilities(permissions) as CapabilityRequirement[];
+}
+
+function isExactPermission(value: CapabilityRequirement): value is CapabilityRequirement & PermissionEntry {
+  return typeof value === "object" && value !== null &&
+    isExactText(value.service) &&
+    isExactText(value.path) &&
+    (value.space === undefined || isExactText(value.space)) &&
+    Array.isArray(value.actions) && value.actions.length > 0 &&
+    value.actions.every(isExactText) &&
+    value.skipPrefix !== true &&
+    (value.skipPrefix === undefined || value.skipPrefix === false) &&
+    (value.expiry === undefined || isExactText(value.expiry)) &&
+    (value.description === undefined || isExactText(value.description));
+}
+
+function isExactText(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !value.includes("*");
 }
 
 function zodIssueDetails(error: ZodError): Readonly<Record<string, unknown>> {

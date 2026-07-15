@@ -1,4 +1,4 @@
-import { beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { jcsCanonicalize } from "@tinycloud/sdk-core/policy";
 import { z } from "zod";
 
@@ -6,9 +6,13 @@ import type {
   InvocationTarget,
   OperationContext,
   OperationDefinition,
+  RuntimeOperationContext,
 } from "./contract.js";
 import { createSafeOperationDiagnostic } from "./redaction.js";
-import type { InvocationContextResolution } from "./profile.js";
+import * as artifacts from "./artifacts.js";
+import { invokeOperation } from "./invoke.js";
+import * as registry from "./registry.js";
+import * as runtime from "./runtime.js";
 
 type TestInput = {
   readonly name: string;
@@ -17,50 +21,71 @@ type TestInput = {
 type TestOutput = { readonly value: string };
 
 let definitions: readonly OperationDefinition<TestInput, TestOutput>[] = [];
-let resolver: (target: InvocationTarget) => Promise<InvocationContextResolution>;
+let invocationTrace: string[] = [];
+type RuntimeResolution =
+  | { ok: true; context: RuntimeOperationContext }
+  | { ok: false; context: RuntimeOperationContext["summary"]; error: { code: "PROFILE_NOT_FOUND"; message: string; retryable: false } };
+let resolver: (target: InvocationTarget) => Promise<RuntimeResolution>;
 
-mock.module("@tinycloud/sdk-core/policy", () => ({ jcsCanonicalize }));
+spyOn(registry, "lookupOperation").mockImplementation((operationId, operationVersion) => {
+  const matchingId = definitions.filter((definition) => definition.id === operationId);
+  if (matchingId.length === 0) return { status: "operation_not_found" };
+  const definition = matchingId.find((candidate) => candidate.version === operationVersion);
+  return definition === undefined
+    ? {
+        status: "operation_version_unsupported",
+        supportedVersions: matchingId.map((candidate) => candidate.version),
+      }
+    : { status: "found", definition: definition as unknown as OperationDefinition<unknown, unknown> };
+});
 
-mock.module("./registry.js", () => ({
-  lookupOperation(operationId: string, operationVersion: number) {
-    const matchingId = definitions.filter((definition) => definition.id === operationId);
-    if (matchingId.length === 0) {
-      return { status: "operation_not_found" };
-    }
-    const definition = matchingId.find(
-      (candidate) => candidate.version === operationVersion,
-    );
-    return definition === undefined
-      ? {
-          status: "operation_version_unsupported",
-          supportedVersions: matchingId.map((candidate) => candidate.version),
-        }
-      : { status: "found", definition };
-  },
-}));
+spyOn(runtime, "createInvocationRuntime").mockImplementation((target: InvocationTarget) => resolver(target));
 
-mock.module("./profile.js", () => ({
-  resolveInvocationContext(target: InvocationTarget) {
-    return resolver(target);
-  },
-}));
-
-const { invokeOperation } = await import("./invoke.js");
+spyOn(artifacts, "createOrReusePermissionRequest").mockImplementation(async (input) => {
+  invocationTrace.push("persist");
+  return {
+    status: "created",
+    reused: false,
+    request: {
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "request-1",
+      createdAt: "2026-07-14T12:00:00.000Z",
+      profile: "delegate",
+      posture: "delegate-session",
+      operatorType: "agent",
+      host: "https://node.example",
+      sessionDid: "did:key:session",
+      requested: input.missing.map((permission) => ({
+        ...permission,
+        actions: [...permission.actions],
+      })),
+    },
+  };
+});
 
 beforeEach(() => {
   definitions = [];
+  invocationTrace = [];
   resolver = async () => ({
     ok: true,
     context: {
-      profile: "delegate",
-      host: "https://node.example",
-      posture: "delegate-session",
-      operatorType: "agent",
-      principalDid: "did:key:principal",
-      sessionDid: "did:key:session",
-      ownerDid: "did:key:owner",
+      summary: {
+        profile: "delegate",
+        host: "https://node.example",
+        posture: "delegate-session",
+        operatorType: "agent",
+        principalDid: "did:key:principal",
+        sessionDid: "did:key:session",
+        ownerDid: "did:key:owner",
+      },
+      runtime: { node: {}, granted: [] },
     },
   });
+});
+
+afterAll(() => {
+  mock.restore();
 });
 
 test("rejects an unknown operation before it attempts input parsing or context resolution", async () => {
@@ -135,6 +160,90 @@ test("validates unknown input before context resolution or executing a known ope
   expect(executed).toBe(false);
 });
 
+test("plans and persists exact missing authority before it can execute a handler", async () => {
+  let handlerRan = false;
+  resolver = async () => {
+    invocationTrace.push("runtime");
+    return {
+      ok: true,
+      context: {
+        summary: {
+          profile: "delegate",
+          host: "https://node.example",
+          posture: "delegate-session",
+          operatorType: "agent",
+          sessionDid: "did:key:session",
+        },
+        runtime: { node: {}, granted: [] },
+      },
+    };
+  };
+  definitions = [createDefinition({
+    authority: async () => {
+      invocationTrace.push("plan");
+      return [testCapability];
+    },
+    execute: async () => {
+      handlerRan = true;
+      invocationTrace.push("handler");
+      return { status: "ok", output: { value: "unreachable" } };
+    },
+  })];
+
+  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+
+  expect(result.status).toBe("authority_required");
+  expect(invocationTrace).toEqual(["runtime", "plan", "persist"]);
+  expect(handlerRan).toBe(false);
+});
+
+test("rejects a broad planner capability without persisting a permission request", async () => {
+  let handlerRan = false;
+  definitions = [createDefinition({
+    authority: async () => [{ ...testCapability, path: "vault/secrets/*" }],
+    execute: async () => {
+      handlerRan = true;
+      return { status: "ok", output: { value: "unreachable" } };
+    },
+  })];
+
+  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+
+  expect(result).toMatchObject({ status: "error", error: { code: "PERMISSION_HINT_INVALID" } });
+  expect(invocationTrace).toEqual([]);
+  expect(handlerRan).toBe(false);
+});
+
+test("sanitizes malformed runtime permission hints without creating a broad request", async () => {
+  definitions = [createDefinition({
+    authority: async () => [testCapability],
+    execute: async () => ({
+      status: "authority_required",
+      missing: [{ ...testCapability, path: "vault/secrets/*" }],
+      request: { requestId: "ignored" },
+      approval: { kind: "openkey", requestId: "ignored", fallback: "ignored" },
+    }),
+  })];
+  resolver = async () => ({
+    ok: true,
+    context: {
+      summary: {
+        profile: "delegate",
+        host: "https://node.example",
+        posture: "delegate-session",
+        operatorType: "agent",
+        sessionDid: "did:key:session",
+      },
+      runtime: { node: {}, granted: [testCapability] },
+    },
+  });
+
+  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+
+  expect(result).toMatchObject({ status: "error", error: { code: "PERMISSION_HINT_INVALID" } });
+  expect(invocationTrace).toEqual([]);
+});
+
 test("returns a safe error envelope for invalid invocation targets", async () => {
   const canary = "invocation-target-private-canary";
   const invalidTargets: readonly Readonly<{ name: string; target: unknown }>[] = [
@@ -201,6 +310,11 @@ test("returns a safe PROFILE_NOT_FOUND result for a deleted pinned profile", asy
   definitions = [createDefinition()];
   resolver = async () => ({
     ok: false,
+    context: {
+      profile: "deleted",
+      host: "unresolved",
+      posture: "unauthenticated",
+    },
     error: {
       code: "PROFILE_NOT_FOUND",
       message: 'Profile "deleted" is not available.',
@@ -275,9 +389,10 @@ test("returns the four canonical operation outcomes", async () => {
   const outcomes = [
     createDefinition({ execute: async () => ({ status: "ok", output: { value: "ok" } }) }),
     createDefinition({
+      authority: async () => [testCapability],
       execute: async () => ({
         status: "authority_required",
-        missing: [{ capability: "tinycloud.kv/get" }],
+        missing: [testCapability],
         request: { requestId: "request-1" },
         approval: { kind: "openkey", requestId: "request-1", fallback: "tc auth grant" },
       }),
@@ -299,6 +414,22 @@ test("returns the four canonical operation outcomes", async () => {
   const statuses: string[] = [];
   for (const definition of outcomes) {
     definitions = [definition];
+    resolver = async () => ({
+      ok: true,
+      context: {
+        summary: {
+          profile: "delegate",
+          host: "https://node.example",
+          posture: "delegate-session",
+          operatorType: "agent",
+          sessionDid: "did:key:session",
+        },
+        runtime: {
+          node: {},
+          granted: definition === outcomes[1] ? [testCapability] : [],
+        },
+      },
+    });
     const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
     statuses.push(result.status);
   }
@@ -311,14 +442,28 @@ test("uses RFC 8785 astral/BMP key ordering for retry digests", async () => {
   const privateUse = "\ue000";
   definitions = [
     createDefinition({
+      authority: async () => [testCapability],
       execute: async () => ({
         status: "authority_required",
-        missing: [],
+        missing: [testCapability],
         request: { requestId: "request-1" },
         approval: { kind: "openkey", requestId: "request-1", fallback: "tc auth grant" },
       }),
     }),
   ];
+  resolver = async () => ({
+    ok: true,
+    context: {
+      summary: {
+        profile: "delegate",
+        host: "https://node.example",
+        posture: "delegate-session",
+        operatorType: "agent",
+        sessionDid: "did:key:session",
+      },
+      runtime: { node: {}, granted: [testCapability] },
+    },
+  });
 
   const first = await invokeOperation("tinycloud.test.get", 1, {}, {
     name: "valid",
@@ -348,13 +493,17 @@ test("keeps the CLI private-key override out of all kernel-safe channels", async
 
   resolver = async (target) => {
     targetSeenByProfile = target;
-    const resolution: InvocationContextResolution = {
+    const resolution: RuntimeResolution = {
       ok: true as const,
       context: {
-        profile: "delegate",
-        host: "https://node.example",
-        posture: "delegate-session",
-        operatorType: "agent" as const,
+        summary: {
+          profile: "delegate",
+          host: "https://node.example",
+          posture: "delegate-session",
+          operatorType: "agent" as const,
+          sessionDid: "did:key:session",
+        },
+        runtime: { node: {}, granted: [testCapability] },
       },
     };
     // The only state-shaped value the kernel can retain is the resolved safe summary.
@@ -363,11 +512,12 @@ test("keeps the CLI private-key override out of all kernel-safe channels", async
   };
   definitions = [
     createDefinition({
+      authority: async () => [testCapability],
       execute: async (context) => {
         handlerContext = context;
         return {
           status: "authority_required",
-          missing: [],
+          missing: [testCapability],
           request: { requestId: "request-1" },
           approval: { kind: "openkey", requestId: "request-1", fallback: "tc auth grant" },
         };
@@ -394,7 +544,7 @@ test("keeps the CLI private-key override out of all kernel-safe channels", async
     allowOwnerProfile: true,
     privateKey: privateKeyCanary,
   });
-  expect(handlerContext).toEqual({
+  expect(handlerContext).toMatchObject({
     summary: {
       profile: "delegate",
       host: "https://node.example",
@@ -457,3 +607,10 @@ function createDefinition(
     ...overrides,
   };
 }
+
+const testCapability = {
+  service: "tinycloud.kv",
+  space: "secrets",
+  path: "vault/secrets/API_KEY",
+  actions: ["tinycloud.kv/get"],
+};
