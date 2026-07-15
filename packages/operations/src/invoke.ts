@@ -30,6 +30,13 @@ export async function invokeOperation(
 ): Promise<OperationResult<unknown>> {
   const operation: OperationRef = { operationId, operationVersion };
   const target = normalizeInvocationTarget(invocationTarget);
+  if (target === undefined) {
+    return errorResult(
+      operation,
+      unresolvedContextSummary(),
+      operationError("INPUT_INVALID", "The invocation target is invalid."),
+    );
+  }
   const lookup = lookupOperation(operationId, operationVersion);
   const contextResolution = await resolveContext(target);
 
@@ -154,13 +161,34 @@ export async function invokeOperation(
   }
 }
 
-function normalizeInvocationTarget(target: InvocationTarget): InvocationTarget {
-  return {
-    ...(typeof target.profile === "string" ? { profile: target.profile } : {}),
-    ...(typeof target.host === "string" ? { host: target.host } : {}),
-    ...(target.allowOwnerProfile === true ? { allowOwnerProfile: true } : {}),
-    ...(typeof target.privateKey === "string" ? { privateKey: target.privateKey } : {}),
-  };
+function normalizeInvocationTarget(target: unknown): InvocationTarget | undefined {
+  if (typeof target !== "object" || target === null) return undefined;
+
+  try {
+    const candidate = target as InvocationTarget;
+    const profile = candidate.profile;
+    const host = candidate.host;
+    const allowOwnerProfile = candidate.allowOwnerProfile;
+    const privateKey = candidate.privateKey;
+
+    if (
+      (profile !== undefined && typeof profile !== "string") ||
+      (host !== undefined && typeof host !== "string") ||
+      (allowOwnerProfile !== undefined && typeof allowOwnerProfile !== "boolean") ||
+      (privateKey !== undefined && typeof privateKey !== "string")
+    ) {
+      return undefined;
+    }
+
+    return {
+      ...(profile === undefined ? {} : { profile }),
+      ...(host === undefined ? {} : { host }),
+      ...(allowOwnerProfile === true ? { allowOwnerProfile: true } : {}),
+      ...(privateKey === undefined ? {} : { privateKey }),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 async function resolveContext(
@@ -183,7 +211,7 @@ async function resolveContext(
   }
 }
 
-function unresolvedContextSummary(target: InvocationTarget): OperationContextSummary {
+function unresolvedContextSummary(target: InvocationTarget = {}): OperationContextSummary {
   return {
     profile: target.profile ?? "unresolved",
     host: target.host ?? "unresolved",

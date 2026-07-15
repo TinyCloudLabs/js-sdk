@@ -116,6 +116,68 @@ test("validates unknown input before executing a known operation", async () => {
   expect(executed).toBe(false);
 });
 
+test("returns a safe error envelope for invalid invocation targets", async () => {
+  const canary = "invocation-target-private-canary";
+  const invalidTargets: readonly Readonly<{ name: string; target: unknown }>[] = [
+    { name: "null", target: null },
+    { name: "primitive", target: "not-an-invocation-target" },
+    { name: "invalid field", target: { profile: 1 } },
+    {
+      name: "throwing getter",
+      target: {
+        get profile() {
+          throw new Error(canary);
+        },
+      },
+    },
+    {
+      name: "throwing proxy",
+      target: new Proxy({}, {
+        get() {
+          throw new Error(canary);
+        },
+      }),
+    },
+    {
+      name: "private key getter",
+      target: {
+        profile: "pinned-profile",
+        get privateKey() {
+          throw new Error(canary);
+        },
+      },
+    },
+  ];
+
+  for (const { name, target } of invalidTargets) {
+    const result = await invokeOperation(
+      "tinycloud.test.get",
+      1,
+      target as InvocationTarget,
+      { name: "valid" },
+    );
+
+    expect(result, name).toEqual({
+      status: "error",
+      operation: {
+        operationId: "tinycloud.test.get",
+        operationVersion: 1,
+      },
+      context: {
+        profile: "unresolved",
+        host: "unresolved",
+        posture: "unauthenticated",
+      },
+      error: {
+        code: "INPUT_INVALID",
+        message: "The invocation target is invalid.",
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify(result), name).not.toContain(canary);
+  }
+});
+
 test("returns a safe PROFILE_NOT_FOUND result for a deleted pinned profile", async () => {
   definitions = [createDefinition()];
   resolver = async () => ({
