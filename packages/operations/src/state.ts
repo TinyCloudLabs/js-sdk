@@ -231,6 +231,31 @@ export async function upsertProfileRecord<T>(
   }, options);
 }
 
+/**
+ * Performs a typed read-modify-write of a legacy array store under the one
+ * per-profile lock. The payload stays an array and the sibling metadata stays
+ * format 1, so existing CLI readers keep their byte/layout contract.
+ */
+export async function updateProfileStore<T, Result>(
+  profile: string,
+  store: Exclude<ProfileStoreName, "session">,
+  update: (
+    records: readonly T[],
+  ) => Promise<{ readonly records: readonly T[]; readonly result: Result }> | {
+    readonly records: readonly T[];
+    readonly result: Result;
+  },
+  options: ProfileLockOptions = {},
+): Promise<Result> {
+  return withProfileLock(profile, async () => {
+    const current = await readProfileStore<T>(profile, store);
+    const next = await update(current.records);
+    await writeJsonAtomic(profileStorePath(profile, store), next.records);
+    await writeFormatOneMetadata(profile, store);
+    return next.result;
+  }, options);
+}
+
 export async function writeSession<T extends object>(
   profile: string,
   session: T,

@@ -53,6 +53,21 @@ test("packed operations package loads its real CJS and ESM entrypoints in Node",
       ],
       smokeDirectory,
     );
+    const assertArtifactsExport = "if (typeof artifacts.createOrReusePermissionRequest !== 'function' || typeof artifacts.evaluateAuthority !== 'function') throw new Error('missing artifacts exports');";
+    await run(
+      nodeBinary,
+      ["-e", `const artifacts = require('@tinycloud/operations/artifacts'); ${assertArtifactsExport}`],
+      smokeDirectory,
+    );
+    await run(
+      nodeBinary,
+      [
+        "--input-type=module",
+        "-e",
+        `const artifacts = await import('@tinycloud/operations/artifacts'); ${assertArtifactsExport}`,
+      ],
+      smokeDirectory,
+    );
   } finally {
     await rm(smokeDirectory, { recursive: true, force: true });
   }

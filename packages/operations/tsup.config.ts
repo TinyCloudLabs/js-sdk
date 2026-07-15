@@ -16,16 +16,20 @@ export default defineConfig({
     'zod',
     'zod-to-json-schema',
   ],
-  noExternal: ['@tinycloud/sdk-core/policy'],
-  // Keep the source import on sdk-core's supported policy boundary, but bundle
-  // only its canonicalizer implementation. This avoids loading sdk-core's
-  // broader CJS entrypoint (and its ESM-only multiformats subpaths).
+  noExternal: ['@tinycloud/sdk-core/policy', '@tinycloud/sdk-core'],
+  // Keep source imports on supported sdk-core boundaries while bundling only
+  // the policy canonicalizer and capability-subset implementation. This avoids
+  // loading sdk-core's broader CJS entrypoint (and its ESM-only subpaths).
   esbuildOptions(options) {
     options.alias = {
       ...options.alias,
       '@tinycloud/sdk-core/policy': resolve(
         packageDirectory,
         '../sdk-core/src/policy/jcs.ts',
+      ),
+      '@tinycloud/sdk-core': resolve(
+        packageDirectory,
+        '../sdk-core/src/capabilities.ts',
       ),
     };
   },
