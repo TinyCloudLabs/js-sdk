@@ -1,4 +1,5 @@
 import {
+  canonicalizeRecapCaveats,
   Delegation,
   DelegatedResource,
   PermissionEntry,
@@ -196,8 +197,44 @@ function canonicalPermissionEntries(
       left.service.localeCompare(right.service) ||
       (left.space ?? "").localeCompare(right.space ?? "") ||
       left.path.localeCompare(right.path) ||
-      left.actions.join("\u0000").localeCompare(right.actions.join("\u0000")),
+      left.actions.join("\u0000").localeCompare(right.actions.join("\u0000")) ||
+      canonicalizeRecapCaveats(left.caveats).localeCompare(canonicalizeRecapCaveats(right.caveats)),
     );
+}
+
+function signedCaveats(value: unknown): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value) || value.some((caveat) =>
+    caveat === null || typeof caveat !== "object" || Array.isArray(caveat)
+  )) {
+    throw new Error("Validated runtime delegation has malformed signed ReCap caveats.");
+  }
+  const cloned = JSON.parse(JSON.stringify(value)) as Record<string, unknown>[];
+  return canonicalizeRecapCaveats(cloned) === canonicalizeRecapCaveats(undefined)
+    ? undefined
+    : cloned;
+}
+
+function groupedSignedEntries(
+  service: string,
+  space: string | undefined,
+  path: string,
+  abilities: Record<string, unknown>,
+): PermissionEntry[] {
+  const groups = new Map<string, { actions: string[]; caveats?: Record<string, unknown>[] }>();
+  for (const [action, rawCaveats] of Object.entries(abilities)) {
+    const caveats = signedCaveats(rawCaveats);
+    const identity = canonicalizeRecapCaveats(caveats);
+    const group = groups.get(identity) ?? { actions: [], caveats };
+    group.actions.push(action);
+    groups.set(identity, group);
+  }
+  return [...groups.values()].map((group) => ({
+    service,
+    ...(space === undefined ? {} : { space }),
+    path,
+    actions: group.actions.sort(),
+    ...(group.caveats === undefined ? {} : { caveats: group.caveats }),
+  }));
 }
 
 function signedAuthorityFromCompactUcan(
@@ -223,20 +260,18 @@ function signedAuthorityFromCompactUcan(
     if (abilities === null || typeof abilities !== "object" || Array.isArray(abilities)) {
       throw new Error("Validated runtime delegation has an invalid signed attenuation.");
     }
-    const actions = Object.entries(abilities as Record<string, unknown>)
-      .filter(([, caveats]) => Array.isArray(caveats))
-      .map(([action]) => action)
-      .sort();
-    if (actions.length === 0) {
+    const abilityEntries = Object.entries(abilities as Record<string, unknown>);
+    if (abilityEntries.length === 0) {
       throw new Error("Validated runtime delegation has an empty signed capability.");
     }
 
     if (resource.startsWith("urn:tinycloud:encryption:")) {
-      permissions.push({
-        service: "tinycloud.encryption",
-        path: resource,
-        actions,
-      });
+      permissions.push(...groupedSignedEntries(
+        "tinycloud.encryption",
+        undefined,
+        resource,
+        abilities as Record<string, unknown>,
+      ));
       continue;
     }
 
@@ -253,7 +288,12 @@ function signedAuthorityFromCompactUcan(
         `Validated runtime delegation has an unsupported signed service '${shortService}'.`,
       );
     }
-    permissions.push({ service, space: space!, path: path!, actions });
+    permissions.push(...groupedSignedEntries(
+      service,
+      space!,
+      path!,
+      abilities as Record<string, unknown>,
+    ));
   }
 
   if (permissions.length === 0) {
@@ -271,6 +311,7 @@ function signedAuthorityFromCompactUcan(
         : permission.space!,
     path: permission.path,
     actions: [...permission.actions],
+    ...(permission.caveats === undefined ? {} : { caveats: permission.caveats }),
   }));
   return {
     audience: payload.aud,
@@ -290,7 +331,8 @@ function canonicalResourcesFromPortableDelegation(
         left.service.localeCompare(right.service) ||
         left.space.localeCompare(right.space) ||
         left.path.localeCompare(right.path) ||
-        left.actions.join("\u0000").localeCompare(right.actions.join("\u0000")),
+        left.actions.join("\u0000").localeCompare(right.actions.join("\u0000")) ||
+        canonicalizeRecapCaveats(left.caveats).localeCompare(canonicalizeRecapCaveats(right.caveats)),
       );
   }
   const byService = new Map<string, string[]>();
@@ -307,6 +349,7 @@ function canonicalResourcesFromPortableDelegation(
       space: service === "encryption" ? "encryption" : delegation.spaceId,
       path: delegation.path,
       actions: [...new Set(actions)].sort(),
+      ...(delegation.caveats === undefined ? {} : { caveats: delegation.caveats }),
     }))
     .sort((left, right) =>
       left.service.localeCompare(right.service) ||
@@ -319,7 +362,11 @@ function resourcesMatch(
   actual: readonly DelegatedResource[],
   expected: readonly DelegatedResource[],
 ): boolean {
-  return JSON.stringify(actual) === JSON.stringify(expected);
+  const comparable = (resource: DelegatedResource) => ({
+    ...resource,
+    caveats: canonicalizeRecapCaveats(resource.caveats),
+  });
+  return JSON.stringify(actual.map(comparable)) === JSON.stringify(expected.map(comparable));
 }
 
 /**
@@ -400,6 +447,7 @@ export async function activateValidatedRuntimeDelegation(
     spaceId: signedSpace ?? delegation.spaceId,
     path: primary.path,
     actions: [...primary.actions],
+    ...(primary.caveats === undefined ? {} : { caveats: primary.caveats }),
     resources: signed.resources.map((resource) => ({
       ...resource,
       actions: [...resource.actions],

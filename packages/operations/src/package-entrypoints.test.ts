@@ -72,3 +72,9 @@ test("packed operations package loads its real CJS and ESM entrypoints in Node",
     await rm(smokeDirectory, { recursive: true, force: true });
   }
 }, 20_000);
+
+test("state exposes only lock-owning primitives, never the lock-assuming writer", async () => {
+  const state = await import("./state.js");
+  expect("updateProfileStore" in state).toBe(true);
+  expect("updateProfileStoreWhileLocked" in state).toBe(false);
+});

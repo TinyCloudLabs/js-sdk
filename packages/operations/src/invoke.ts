@@ -125,6 +125,29 @@ export async function invokeOperation(
   if (!runtimeResolution.ok) {
     return errorResult(operation, runtimeResolution.context, runtimeResolution.error);
   }
+  if (definition.runtime === "authenticated") {
+    const actualPosture = runtimeResolution.context.summary.posture;
+    if (!definition.postures.includes(actualPosture)) {
+      return errorResult(
+        operation,
+        runtimeResolution.context.summary,
+        operationError(
+          "PROFILE_POSTURE_NOT_ALLOWED",
+          "The authenticated profile posture cannot execute this operation.",
+        ),
+      );
+    }
+    if (isOwnerPosture(actualPosture) && target.allowOwnerProfile !== true) {
+      return errorResult(
+        operation,
+        runtimeResolution.context.summary,
+        operationError(
+          "PROFILE_OWNER_OPT_IN_REQUIRED",
+          "Owner-profile execution requires explicit opt-in.",
+        ),
+      );
+    }
+  }
   const runtimeContext = runtimeResolution.context.runtime === undefined
     ? undefined
     : runtimeResolution.context as RuntimeOperationContext;

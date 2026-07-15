@@ -15,7 +15,7 @@ import type {
 } from "./contract.js";
 import { canonicalizeCapabilities } from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
-import { resolveInvocationContext } from "./profile.js";
+import { resolveInvocationProfile, resolvePosture } from "./profile.js";
 import {
   profilePath,
   readAdditionalDelegations,
@@ -31,11 +31,6 @@ export type InvocationRuntimeResolution =
     context: RuntimeOperationContext["summary"];
     error: OperationError;
   }>;
-
-interface StoredProfile extends Record<string, unknown> {
-  readonly authMethod?: unknown;
-  readonly privateKey?: unknown;
-}
 
 interface StoredSession extends Record<string, unknown> {
   readonly delegationHeader?: unknown;
@@ -82,7 +77,7 @@ export async function createInvocationRuntime(
   target: InvocationTarget,
   requirement: OperationRuntimeRequirement = "authenticated",
 ): Promise<InvocationRuntimeResolution> {
-  const resolved = await resolveInvocationContext(target);
+  const resolved = await resolveInvocationProfile(target);
   if (!resolved.ok) {
     return {
       ok: false,
@@ -98,13 +93,27 @@ export async function createInvocationRuntime(
 
   const profileName = summary.profile;
   try {
-    const [profile, session, key, additionalDelegations] = await Promise.all([
-      readProfile<StoredProfile>(profileName),
+    const [session, key, additionalDelegations] = await Promise.all([
       readSession<StoredSession>(profileName),
       readJson<Record<string, unknown>>(`${profilePath(profileName)}/key.json`),
       readAdditionalDelegations<StoredAdditionalDelegation>(profileName),
     ]);
-    if (!isRecord(profile)) return failed(summary, profileNotFound(profileName));
+    const profile = resolved.profile;
+
+    // The inspection summary and authenticated material are intentionally
+    // separate reads. Fail closed if the profile changed posture between
+    // them; otherwise local-owner-key could be authenticated under a stale
+    // delegate-session summary and bypass the caller's posture policy.
+    const actualPosture = resolvePosture(profile);
+    if (actualPosture !== summary.posture) {
+      return failed(
+        { ...summary, posture: actualPosture },
+        operationError(
+          "PROFILE_POSTURE_NOT_ALLOWED",
+          "The selected profile changed posture during runtime resolution.",
+        ),
+      );
+    }
 
     const privateKey = typeof target.privateKey === "string"
       ? target.privateKey
@@ -257,10 +266,6 @@ function failed(
   error: OperationError,
 ): InvocationRuntimeResolution {
   return { ok: false, context, error };
-}
-
-function profileNotFound(profile: string): OperationError {
-  return operationError("PROFILE_NOT_FOUND", `Profile "${profile}" is not available.`);
 }
 
 function unresolvedSummary(target: InvocationTarget): RuntimeOperationContext["summary"] {

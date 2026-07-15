@@ -211,6 +211,49 @@ test("preserves the CLI's v1 array layout and refuses an unsupported store forma
     .rejects.toThrow('Unsupported store format for "auth-requests".');
 });
 
+test("dual-reads the public node-sdk request shape using only the selected invocation context", async () => {
+  await isolatedHome();
+  await mkdir(profilePath("delegate"), { recursive: true });
+  await writeFile(authRequestsPath("delegate"), `${JSON.stringify([{
+    kind: "tinycloud.auth.request",
+    version: 1,
+    requestId: "req_public",
+    sessionDid: "did:key:session#controller",
+    requested: [capability("tinycloud.kv/get")],
+  }])}\n`);
+
+  const records = await listPermissionRequests("delegate", {
+    ...context(),
+    sessionDid: "did:key:session",
+    now,
+  });
+  expect(records).toEqual([expect.objectContaining({
+    requestId: "req_public",
+    profile: "delegate",
+    host: "https://node.tinycloud.test",
+    sessionDid: "did:key:session",
+    requested: [capability("tinycloud.kv/get")],
+  })]);
+  expect(await findPermissionRequest("delegate", "req_public", {
+    ...context(),
+    sessionDid: "did:key:session",
+  })).toMatchObject({ requestId: "req_public" });
+});
+
+test("fails closed for malformed legacy request records", async () => {
+  await isolatedHome();
+  await mkdir(profilePath("delegate"), { recursive: true });
+  await writeFile(authRequestsPath("delegate"), JSON.stringify([{
+    kind: "tinycloud.auth.request",
+    version: 1,
+    requestId: "req_malformed",
+    sessionDid: "did:key:session",
+    requested: [{ service: "tinycloud.kv", actions: ["tinycloud.kv/get"] }],
+  }]));
+
+  await expect(listPermissionRequests("delegate", context())).rejects.toThrow();
+});
+
 test("separate artifact writers contend on the existing deterministic lock hook without losing either request", async () => {
   const home = await isolatedHome();
   const profile = "delegate";

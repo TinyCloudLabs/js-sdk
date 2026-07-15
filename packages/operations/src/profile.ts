@@ -32,7 +32,8 @@ interface GlobalConfig {
   defaultProfile?: unknown;
 }
 
-interface StoredProfile {
+/** Validated profile material retained only inside runtime resolution. */
+export type StoredProfile = {
   name: string;
   host: string;
   chainId: number;
@@ -49,7 +50,12 @@ interface StoredProfile {
   privateKey?: unknown;
   address?: unknown;
   openkeyHost?: unknown;
-}
+};
+
+/** Profile snapshot plus its derived safe invocation context. */
+export type InvocationProfileResolution =
+  | { ok: true; profile: StoredProfile; context: SafeInvocationContext }
+  | Extract<InvocationContextResolution, { ok: false }>;
 
 /**
  * Resolves one selected profile to safe identity data. Resolution is deliberately
@@ -59,6 +65,14 @@ interface StoredProfile {
 export async function resolveInvocationContext(
   target: InvocationTarget = {},
 ): Promise<InvocationContextResolution> {
+  const resolved = await resolveInvocationProfile(target);
+  return resolved.ok ? { ok: true, context: resolved.context } : resolved;
+}
+
+/** Resolves the selected profile and its safe context from one profile read. */
+export async function resolveInvocationProfile(
+  target: InvocationTarget = {},
+): Promise<InvocationProfileResolution> {
   const profile = await resolveProfileName(target);
   let storedProfile: StoredProfile | null;
   try {
@@ -76,6 +90,7 @@ export async function resolveInvocationContext(
 
   return {
     ok: true,
+    profile: storedProfile,
     context: {
       profile,
       host,
@@ -103,13 +118,14 @@ async function resolveProfileName(target: InvocationTarget): Promise<string> {
   return DEFAULT_PROFILE;
 }
 
-function resolvePosture(profile: StoredProfile): TinyCloudPosture {
+/** Derives the effective posture without consulting any later profile read. */
+export function resolvePosture(profile: Pick<StoredProfile, "posture" | "authMethod">): TinyCloudPosture {
   if (isPosture(profile.posture)) return profile.posture;
   if (profile.authMethod === "local") return "local-owner-key";
   return "owner-openkey";
 }
 
-function profileNotFound(profile: string): InvocationContextResolution {
+function profileNotFound(profile: string): Extract<InvocationContextResolution, { ok: false }> {
   return {
     ok: false,
     error: {

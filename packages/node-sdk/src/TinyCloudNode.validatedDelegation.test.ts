@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 
 import { activateValidatedRuntimeDelegation } from "./delegation";
+import type { PortableDelegation } from "./delegation";
 import {
   activateValidatedRuntimeDelegation as publicActivateValidatedRuntimeDelegation,
 } from "./index";
@@ -197,6 +198,72 @@ describe("activateValidatedRuntimeDelegation", () => {
           host: fixture.host,
         }),
       ).rejects.toThrow(/do not match signed authority/);
+    } finally {
+      fixture.stop();
+    }
+  });
+
+  test("preserves a signed ReCap caveat through activation and installed resources", async () => {
+    const fixture = await createHermeticEncryptedNode();
+    try {
+      const node = fixture.delegate as unknown as {
+        readonly wasmBindings: {
+          invokeAny(session: unknown, entries: readonly Record<string, unknown>[]): { Authorization: string };
+        };
+        currentTinyCloudSession(): unknown;
+        readonly sessionDid: string;
+        computeDelegationCid(authorization: string): string;
+        useRuntimeDelegation(delegation: PortableDelegation): Promise<void>;
+        getRuntimePermissionDelegations(): PortableDelegation[];
+      };
+      const permission = fixture.permissions.find((entry) => entry.service === "tinycloud.kv");
+      if (permission?.space === undefined) throw new Error("expected a space-scoped permission");
+      const caveat = { tenant: "alpha", nested: { region: "us-east-1" } };
+      const authorization = node.wasmBindings.invokeAny(node.currentTinyCloudSession(), [{
+        spaceId: permission.space,
+        service: "kv",
+        path: permission.path,
+        action: "tinycloud.kv/get",
+        caveats: [caveat],
+      }]).Authorization;
+      const payload = JSON.parse(Buffer.from(authorization.split(".")[1]!, "base64url").toString()) as {
+        exp: number;
+      };
+      const cid = node.computeDelegationCid(authorization);
+      const delegation = {
+        cid,
+        delegationHeader: { Authorization: authorization },
+        ownerAddress: fixture.restorableSession.address,
+        chainId: fixture.restorableSession.chainId,
+        spaceId: permission.space,
+        path: permission.path,
+        actions: ["tinycloud.kv/get"],
+        caveats: [caveat],
+        resources: [{
+          service: "kv",
+          space: permission.space,
+          path: permission.path,
+          actions: ["tinycloud.kv/get"],
+          caveats: [caveat],
+        }],
+        expiry: new Date(payload.exp * 1000),
+        delegateDID: node.sessionDid,
+        host: fixture.host,
+      };
+      const activated = await activateValidatedRuntimeDelegation(
+        node,
+        delegation,
+        { host: fixture.host },
+      );
+
+      expect(activated.effectivePermissions).toEqual([{
+        service: "tinycloud.kv",
+        space: permission.space,
+        path: permission.path,
+        actions: ["tinycloud.kv/get"],
+        caveats: [caveat],
+      }]);
+      expect(activated.delegation.resources?.[0]?.caveats).toEqual([caveat]);
     } finally {
       fixture.stop();
     }

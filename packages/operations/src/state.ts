@@ -254,12 +254,8 @@ export async function updateProfileStore<T, Result>(
   );
 }
 
-/**
- * The caller must already own this profile's lock. It exists for the import
- * transaction, which validates state, activates a signed delegation, rechecks
- * rotation, and persists without releasing the lock between those steps.
- */
-export async function updateProfileStoreWhileLocked<T, Result>(
+/** The caller must already own this profile's lock. */
+async function updateProfileStoreWhileLocked<T, Result>(
   profile: string,
   store: Exclude<ProfileStoreName, "session">,
   update: (

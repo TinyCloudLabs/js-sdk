@@ -20,6 +20,7 @@ import {
   readJson,
   readAdditionalDelegations,
   sessionPath,
+  withProfileLock,
   writeJsonAtomic,
 } from "../state.js";
 import {
@@ -139,6 +140,29 @@ test("a covered stored request is reevaluated and returns no artifact", async ()
   });
 
   expect(covered).toEqual({ status: "ok", output: { missing: [] } });
+});
+
+test("a partially covered stored request returns and persists only its exact missing subset", async () => {
+  const put = { ...capability, actions: ["tinycloud.kv/put"] };
+  definitions = [targetDefinition([capability, put])];
+  const request = requestDefinition();
+  const created = await request.execute(context(), targetInput());
+  if (created.status !== "ok" || created.output.request === undefined) {
+    throw new Error("expected a stored request");
+  }
+
+  const reevaluated = await request.execute(
+    context([capability]),
+    { requestId: created.output.request.requestId },
+  );
+
+  expect(reevaluated).toMatchObject({
+    status: "ok",
+    output: { missing: [put], request: { requested: [put] } },
+  });
+  expect(created.output.request.requested).toEqual([capability, put]);
+  const stored = await readAuthRequestRecords("delegate");
+  expect(stored.map((entry) => entry.requested)).toEqual([[put]]);
 });
 
 test("maps malformed import input through canonical invocation to DELEGATION_ARTIFACT_INVALID", async () => {
@@ -282,6 +306,33 @@ test("imports a real signed delegation idempotently and a fresh runtime replays 
   }
 });
 
+test("imports a real delegation against a minimal public node-sdk request record", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = "req_public_shape";
+    await writeJsonAtomic(authRequestsPath(fixture.profile), [{
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId,
+      sessionDid: fixture.sessionDid,
+      requested: fixture.hermetic.permissions,
+    }]);
+
+    const result = await importDefinition().execute(
+      runtime,
+      importArtifact(requestId, await fixture.hermetic.mintDelegation()),
+    );
+
+    expect(result).toMatchObject({
+      status: "ok",
+      output: { cid: expect.any(String), activated: true },
+    });
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 test("imports only delegation authority contained by the exact stored request, including a valid subset", async () => {
   const fixture = await createAuthRuntimeFixture();
   try {
@@ -360,6 +411,54 @@ test("rechecks real on-disk session rotation before reporting import success", a
       status: "error",
       error: { code: "DELEGATION_AUDIENCE_MISMATCH" },
     });
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("does not hold the production profile lock during delayed activation and rejects rotated state", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const node = runtime.runtime.node as {
+      useRuntimeDelegation(delegation: unknown): Promise<void>;
+    };
+    const activate = node.useRuntimeDelegation.bind(node);
+    let activationStarted!: () => void;
+    let releaseActivation!: () => void;
+    const started = new Promise<void>((resolve) => { activationStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseActivation = resolve; });
+    node.useRuntimeDelegation = async (delegation) => {
+      activationStarted();
+      await gate;
+      await activate(delegation);
+    };
+
+    const importPromise = importDefinition().execute(
+      runtime,
+      importArtifact(requestId, await fixture.hermetic.mintDelegation()),
+    );
+    await started;
+
+    let writerEntered = false;
+    const writer = withProfileLock(fixture.profile, async () => {
+      writerEntered = true;
+      await writeJsonAtomic(sessionPath(fixture.profile), {
+        ...fixture.hermetic.restorableSession,
+        verificationMethod: fixture.hermetic.unrelatedAudience,
+      });
+    });
+    await Promise.race([
+      writer,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("profile writer blocked during activation")), 250)),
+    ]);
+    expect(writerEntered).toBe(true);
+
+    releaseActivation();
+    const result = await importPromise;
+    expect(result).toMatchObject({ status: "error", error: { code: "DELEGATION_AUDIENCE_MISMATCH" } });
     expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
   } finally {
     fixture.hermetic.stop();

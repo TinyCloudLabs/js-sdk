@@ -282,6 +282,39 @@ test("requires explicit opt-in before authenticating either owner posture", asyn
   }
 });
 
+test("fails closed when the authenticated resolution changes from inspection posture", async () => {
+  definitions = [createDefinition({ postures: ["owner-openkey", "delegate-session", "local-owner-key"] })];
+  let calls = 0;
+  resolver = async (_target, requirement) => {
+    calls += 1;
+    const posture = requirement === "inspection" && calls === 1
+      ? "delegate-session"
+      : "local-owner-key";
+    return {
+      ok: true,
+      context: {
+        summary: {
+          profile: "race",
+          host: "https://node.example",
+          posture,
+          operatorType: "human",
+          sessionDid: "did:key:session",
+        },
+        runtime: { node: {}, granted: [] },
+      },
+    };
+  };
+
+  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+
+  expect(result).toMatchObject({
+    status: "error",
+    context: { posture: "local-owner-key" },
+    error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" },
+  });
+  expect(calls).toBe(2);
+});
+
 test("sanitizes malformed runtime permission hints without creating a broad request", async () => {
   definitions = [createDefinition({
     authority: async () => [testCapability],
