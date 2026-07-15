@@ -2,7 +2,9 @@ import { watch } from "node:fs";
 import { access, writeFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 
-export const PROFILE_LOCK_PROTOCOL_TIMEOUT_MS = 5_000;
+// The CLI contention test has a 15-second outer bound. Keep every
+// event-driven protocol wait within it, leaving time for child cleanup.
+export const PROFILE_LOCK_PROTOCOL_TIMEOUT_MS = 12_000;
 
 export async function signalProfileLockProtocol(filePath: string): Promise<void> {
   await writeFile(filePath, "ready\n", { encoding: "utf8", flag: "wx" });
