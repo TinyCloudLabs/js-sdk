@@ -3,7 +3,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  PROFILE_LOCK_CHILD_EXIT_TIMEOUT_MS,
+  PROFILE_LOCK_CHILD_NORMAL_EXIT_TIMEOUT_MS,
+  PROFILE_LOCK_CHILD_SIGKILL_TIMEOUT_MS,
+  PROFILE_LOCK_CHILD_SIGTERM_TIMEOUT_MS,
+  PROFILE_LOCK_CHILD_STDERR_CLOSE_TIMEOUT_MS,
   PROFILE_LOCK_TEST_TIMEOUT_MS,
   signalProfileLockProtocol,
   waitForProfileLockProtocol,
@@ -157,10 +160,12 @@ async function waitForChildSignal(
   signalPath: string,
   description: string,
 ): Promise<void> {
+  const abortController = new AbortController();
   const outcome = await Promise.race([
-    waitForProfileLockProtocol(signalPath, description).then(() => "signaled" as const),
+    waitForProfileLockProtocol(signalPath, description, undefined, abortController.signal)
+      .then(() => "signaled" as const),
     child.exited.then((exitCode) => ({ exitCode })),
-  ]);
+  ]).finally(() => abortController.abort());
   if (outcome === "signaled") return;
 
   const stderr = await readChildStderr(child);
@@ -170,18 +175,19 @@ async function waitForChildSignal(
 async function waitForChildExit(
   child: ReturnType<typeof Bun.spawn>,
   name: string,
-  timeoutMs = PROFILE_LOCK_CHILD_EXIT_TIMEOUT_MS,
+  timeoutMs = PROFILE_LOCK_CHILD_NORMAL_EXIT_TIMEOUT_MS,
 ): Promise<number> {
   return await withTimeout(child.exited, `${name} did not exit`, timeoutMs);
 }
 
 async function terminateChild(child: ReturnType<typeof Bun.spawn>): Promise<void> {
-  if (child.exitCode === null) child.kill("SIGTERM");
+  if (child.exitCode !== null) return;
+  child.kill("SIGTERM");
   try {
-    await waitForChildExit(child, "test child cleanup");
+    await waitForChildExit(child, "test child cleanup after SIGTERM", PROFILE_LOCK_CHILD_SIGTERM_TIMEOUT_MS);
   } catch {
     if (child.exitCode === null) child.kill("SIGKILL");
-    await waitForChildExit(child, "test child cleanup after SIGKILL");
+    await waitForChildExit(child, "test child cleanup after SIGKILL", PROFILE_LOCK_CHILD_SIGKILL_TIMEOUT_MS);
   }
 }
 
@@ -192,7 +198,7 @@ async function readChildStderr(child: ReturnType<typeof Bun.spawn>): Promise<str
   return await withTimeout(
     new Response(child.stderr).text(),
     "Child stderr did not close",
-    PROFILE_LOCK_CHILD_EXIT_TIMEOUT_MS,
+    PROFILE_LOCK_CHILD_STDERR_CLOSE_TIMEOUT_MS,
   );
 }
 
