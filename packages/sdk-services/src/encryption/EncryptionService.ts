@@ -41,6 +41,7 @@ import {
   openWrappedKey,
   verifyDecryptResponse,
 } from "./response";
+import { DecryptTransportResponseError } from "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 import {
   DECRYPT_FACT_TYPE,
   encryptionError,
@@ -86,6 +87,8 @@ export interface DecryptTransport {
     signal?: AbortSignal;
   }): Promise<DecryptResponseBody>;
 }
+
+export { DecryptTransportResponseError } from "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 
 export interface EncryptionServiceConfig {
   crypto: EncryptionCrypto;
@@ -258,7 +261,15 @@ export class EncryptionService
         proof: capabilityProof,
       });
       this.assertActive();
-      if (!built.ok) return built;
+      if (!built.ok) {
+        if (built.error.code !== "TRANSPORT_ERROR") return built;
+        return encErr(
+          encryptionError({
+            code: "INVALID_INPUT",
+            message: "Unable to build decrypt request",
+          }),
+        );
+      }
 
       let response: DecryptResponseBody;
       try {
@@ -271,6 +282,15 @@ export class EncryptionService
         });
         this.assertActive();
       } catch (error) {
+        if (error instanceof DecryptTransportResponseError) {
+          return encErr(
+            encryptionError(
+              error.status === 401 || error.status === 403
+                ? { code: "DECRYPT_DENIED", message: "Node denied decrypt request" }
+                : { code: "INVALID_RESPONSE", message: "Node decrypt request failed" },
+            ),
+          );
+        }
         return encErr(
           encryptionError({
             code: "TRANSPORT_ERROR",
@@ -303,8 +323,8 @@ export class EncryptionService
     } catch (error) {
       return encErr(
         encryptionError({
-          code: "TRANSPORT_ERROR",
-          cause: toError(error),
+          code: "INVALID_RESPONSE",
+          message: "Local decryption failed",
         }),
       );
     }

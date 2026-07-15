@@ -28,6 +28,11 @@
       "types": "./dist/encryption/index.d.ts",
       "import": "./dist/encryption/index.js",
       "require": "./dist/encryption/index.cjs"
+    },
+    "./internal/decrypt-transport-response-error": {
+      "types": "./dist/internal/decrypt-transport-response-error.d.cts",
+      "import": "./dist/internal/decrypt-transport-response-error.cjs",
+      "require": "./dist/internal/decrypt-transport-response-error.cjs"
     }
   },
   "files": [

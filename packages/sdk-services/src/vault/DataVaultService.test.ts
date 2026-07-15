@@ -218,7 +218,7 @@ function createNetworkVault() {
       jwk: {},
     },
   } as any);
-  return { vault, store, encryption };
+  return { vault, store, encryption, kv };
 }
 
 describe("DataVaultService.unlock", () => {
@@ -293,4 +293,5 @@ describe("DataVaultService network envelopes", () => {
     expect(grant.ok).toBe(false);
     expect([...store.keys()].some((key) => key.startsWith("grants/"))).toBe(false);
   });
+
 });

@@ -271,6 +271,7 @@ export type {
   VaultListOptions,
   VaultGrantOptions,
   VaultEntry,
+  VaultNetworkReadResult,
   VaultError,
 } from "./vault";
 
@@ -292,6 +293,7 @@ export type {
 // Encryption service (network-scoped one-of-one decrypt)
 export {
   EncryptionService,
+  DecryptTransportResponseError,
   parseNetworkId,
   buildNetworkId,
   isNetworkId,

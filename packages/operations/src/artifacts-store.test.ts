@@ -16,7 +16,7 @@ import {
 import {
   signalProfileLockProtocol,
   waitForProfileLockProtocol,
-} from "../test-support/profile-lock-protocol.js";
+} from "./test-support/profile-lock-protocol.js";
 
 const homes: string[] = [];
 const children: ReturnType<typeof Bun.spawn>[] = [];

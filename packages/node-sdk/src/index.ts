@@ -142,6 +142,8 @@ export {
   type RuntimePermissionGrantOptions,
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
+  type SecretReadInput,
+  type SecretReadResult,
 } from "./TinyCloudNode";
 
 export { AccountService } from "./account/AccountService";
@@ -304,6 +306,7 @@ export type {
   VaultListOptions,
   VaultGrantOptions,
   VaultEntry,
+  VaultNetworkReadResult,
   VaultError,
   ISecretsService,
   SecretPayload,
@@ -315,6 +318,7 @@ export type {
 // Re-export encryption service values and helpers
 export {
   EncryptionService,
+  DecryptTransportResponseError,
   parseNetworkId,
   buildNetworkId,
   isNetworkId,
