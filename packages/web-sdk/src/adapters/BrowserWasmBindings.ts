@@ -19,10 +19,7 @@ export class BrowserWasmBindings implements IWasmBindings {
   get prepareSession() { return prepareSession; }
   get completeSessionSetup() { return completeSessionSetup; }
   validatePersistedSession(proof: PersistedSessionProof) {
-    return tinycloud.validatePersistedSession({
-      ...proof,
-      now: new Date().toISOString(),
-    });
+    return tinycloud.validatePersistedSession(proof);
   }
   computeCid(data: Uint8Array, codec: bigint): string { return tinycloud.computeCid(data, codec); }
 

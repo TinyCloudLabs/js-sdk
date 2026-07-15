@@ -18,9 +18,11 @@ export interface PersistedSessionProof {
   delegationHeader: { Authorization: string };
   delegationCid: string;
   spaceId: string;
+  /** @deprecated Ignored by validation; capabilities come from the signed ReCap. */
   spaces?: Record<string, string>;
   jwk: object;
-  verificationMethod: string;
+  /** @deprecated Ignored by validation; the verification method is derived from `jwk`. */
+  verificationMethod?: string;
   address: string;
   chainId: number;
   siwe: string;
@@ -31,6 +33,8 @@ export interface PersistedSessionProof {
 export interface ValidatedPersistedSessionProof {
   /** The SIWE expiration exactly as signed, when the SIWE contains one. */
   expiresAt?: string;
+  /** Exact capabilities recovered while verifying the signed SIWE ReCap. */
+  recap: WasmRecapEntry[];
 }
 
 /**

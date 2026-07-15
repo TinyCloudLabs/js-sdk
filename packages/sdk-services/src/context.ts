@@ -64,6 +64,7 @@ export class ServiceContext implements IServiceContext {
   private _services: Map<string, IService> = new Map();
   private _eventHandlers: Map<string, Set<EventHandler>> = new Map();
   private _abortController: AbortController = new AbortController();
+  private _retired = false;
   private readonly _invoke: InvokeFunction;
   private readonly _invokeAny?: InvokeAnyFunction;
   private readonly _fetch: FetchFunction;
@@ -100,14 +101,14 @@ export class ServiceContext implements IServiceContext {
    * Get the current session.
    */
   get session(): ServiceSession | null {
-    return this._session;
+    return this._retired ? null : this._session;
   }
 
   /**
    * Check if the context has an authenticated session.
    */
   get isAuthenticated(): boolean {
-    return this._session !== null;
+    return !this._retired && this._session !== null;
   }
 
   /**
@@ -133,6 +134,7 @@ export class ServiceContext implements IServiceContext {
    * Get the invoke function for WASM operations.
    */
   get invoke(): InvokeFunction {
+    this.assertActive();
     return this._invoke;
   }
 
@@ -140,6 +142,7 @@ export class ServiceContext implements IServiceContext {
    * Get the multi-resource invoke function when available.
    */
   get invokeAny(): InvokeAnyFunction | undefined {
+    this.assertActive();
     return this._invokeAny;
   }
 
@@ -147,6 +150,7 @@ export class ServiceContext implements IServiceContext {
    * Get the fetch function for HTTP requests.
    */
   get fetch(): FetchFunction {
+    this.assertActive();
     return this._fetch;
   }
 
@@ -275,6 +279,21 @@ export class ServiceContext implements IServiceContext {
   }
 
   /**
+   * Permanently retire this graph after its owner installs a replacement.
+   * Unlike `abort()`, retirement never creates a fresh controller, so captured
+   * services cannot resume calls under a superseded session.
+   */
+  retire(): void {
+    if (this._retired) return;
+    this._retired = true;
+    this._session = null;
+    this._abortController.abort();
+    for (const service of this._services.values()) {
+      service.onSignOut();
+    }
+  }
+
+  /**
    * Abort all pending operations and notify services.
    * Creates a new AbortController for future operations.
    */
@@ -330,6 +349,12 @@ export class ServiceContext implements IServiceContext {
         throw error;
       }
     };
+  }
+
+  private assertActive(): void {
+    if (this._retired) {
+      throw new Error("Service graph has been retired by session replacement.");
+    }
   }
 
   private wrapInvokeAny(invokeAny: InvokeAnyFunction): InvokeAnyFunction {

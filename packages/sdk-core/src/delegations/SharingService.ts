@@ -355,6 +355,8 @@ export interface SharingServiceConfig {
     /** Requested expiry time */
     requestedExpiry: Date;
   }) => Promise<Delegation | undefined>;
+  /** Reject operations after the host session/service graph has been retired. */
+  assertActive?: () => void;
 }
 
 /**
@@ -455,6 +457,7 @@ export class SharingService implements ISharingService {
   private pathPrefix: string;
   private sessionExpiry?: Date;
   private onRootDelegationNeeded?: SharingServiceConfig["onRootDelegationNeeded"];
+  private assertActiveFn?: SharingServiceConfig["assertActive"];
 
   /**
    * Creates a new SharingService instance.
@@ -475,6 +478,7 @@ export class SharingService implements ISharingService {
     this.pathPrefix = config.pathPrefix ?? "";
     this.sessionExpiry = config.sessionExpiry;
     this.onRootDelegationNeeded = config.onRootDelegationNeeded;
+    this.assertActiveFn = config.assertActive;
   }
 
   /**
@@ -488,6 +492,7 @@ export class SharingService implements ISharingService {
    * Updates the session (e.g., after re-authentication).
    */
   public updateSession(session: ServiceSession): void {
+    this.assertActiveFn?.();
     this.session = session;
   }
 
@@ -495,7 +500,8 @@ export class SharingService implements ISharingService {
    * Updates the service configuration.
    * Used to add full capabilities (session, delegationManager, createDelegation, createDelegationWasm) after signIn.
    */
-  public updateConfig(config: Partial<Pick<SharingServiceConfig, "session" | "delegationManager" | "createDelegation" | "createDelegationWasm" | "sessionExpiry" | "onRootDelegationNeeded">>): void {
+  public updateConfig(config: Partial<Pick<SharingServiceConfig, "session" | "delegationManager" | "createDelegation" | "createDelegationWasm" | "sessionExpiry" | "onRootDelegationNeeded" | "assertActive">>): void {
+    this.assertActiveFn?.();
     if (config.session !== undefined) {
       this.session = config.session;
     }
@@ -514,6 +520,9 @@ export class SharingService implements ISharingService {
     if (config.onRootDelegationNeeded !== undefined) {
       this.onRootDelegationNeeded = config.onRootDelegationNeeded;
     }
+    if (config.assertActive !== undefined) {
+      this.assertActiveFn = config.assertActive;
+    }
   }
 
   /**
@@ -527,6 +536,9 @@ export class SharingService implements ISharingService {
    * 5. Return link string
    */
   async generate(params: GenerateShareParams): Promise<Result<ShareLink, DelegationError>> {
+    const activeError = this.retiredGraphError();
+    if (activeError) return { ok: false, error: activeError };
+
     // Require session for generating (not for receiving)
     if (!this.session) {
       return {
@@ -667,37 +679,32 @@ export class SharingService implements ISharingService {
           delegation = rootDelegation;
           expiry = requestedExpiry;
         } else {
-          // Root delegation declined, clamp to session expiry
-          const fallbackResult = await this.handleSessionExtensionFallback(requestedExpiry);
-          expiry = fallbackResult.expiry;
-          const delegationResult = await this.createSessionDelegation(plainDID, fullPath, actions, expiry);
-          const parsed = handleDelegationResult(delegationResult);
-          if ('ok' in parsed && parsed.ok === false) {
-            return parsed;
-          }
-          delegation = parsed as Delegation;
+          return {
+            ok: false,
+            error: createError(
+              DelegationErrorCodes.PERMISSION_DENIED,
+              "The active session ReCap does not authorize this sharing delegation.",
+            ),
+          };
         }
       } catch (err) {
-        // Root delegation failed, clamp to session expiry
-        const fallbackResult = await this.handleSessionExtensionFallback(requestedExpiry);
-        expiry = fallbackResult.expiry;
-        const delegationResult = await this.createSessionDelegation(plainDID, fullPath, actions, expiry);
-        const parsed = handleDelegationResult(delegationResult);
-        if ('ok' in parsed && parsed.ok === false) {
-          return parsed;
-        }
-        delegation = parsed as Delegation;
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.PERMISSION_DENIED,
+            "The active session ReCap does not authorize this sharing delegation.",
+            err instanceof Error ? err : undefined,
+          ),
+        };
       }
     } else {
-      // No root delegation callback, clamp to what session can provide
-      const fallbackResult = await this.handleSessionExtensionFallback(requestedExpiry);
-      expiry = fallbackResult.expiry;
-      const delegationResult = await this.createSessionDelegation(plainDID, fullPath, actions, expiry);
-      const parsed = handleDelegationResult(delegationResult);
-      if ('ok' in parsed && parsed.ok === false) {
-        return parsed;
-      }
-      delegation = parsed as Delegation;
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.PERMISSION_DENIED,
+          "The active session ReCap does not authorize this sharing delegation.",
+        ),
+      };
     }
 
     // Step 3: Package the share data
@@ -744,16 +751,18 @@ export class SharingService implements ISharingService {
     actions: string[],
     requestedExpiry: Date
   ): boolean {
-    // Check session expiry first (most common case)
-    if (this.sessionExpiry && requestedExpiry <= this.sessionExpiry) {
-      return true;
-    }
-
     // Check registry for keys with sufficient capabilities
     const allKeys = this.registry.getAllKeys();
     for (const key of allKeys) {
       const delegations = this.registry.getDelegationsForKey(key.id);
       for (const delegation of delegations) {
+        // A registry can contain capabilities for several spaces. A share
+        // created by this service may only spend authority for its own
+        // session space.
+        if (delegation.spaceId !== this.session?.spaceId) {
+          continue;
+        }
+
         // Check if delegation is valid and not expired
         if (!this.registry.isDelegationValid(delegation)) {
           continue;
@@ -792,6 +801,19 @@ export class SharingService implements ISharingService {
     return false;
   }
 
+  private retiredGraphError(): DelegationError | undefined {
+    try {
+      this.assertActiveFn?.();
+      return undefined;
+    } catch (err) {
+      return createError(
+        DelegationErrorCodes.NOT_INITIALIZED,
+        "The session service graph has been retired.",
+        err instanceof Error ? err : undefined,
+      );
+    }
+  }
+
   /**
    * Check if a delegation path matches/covers the requested path.
    * A delegation path covers the request if:
@@ -820,15 +842,6 @@ export class SharingService implements ISharingService {
     }
 
     return false;
-  }
-
-  /**
-   * Handle fallback to session extension when root delegation is not available.
-   * @internal
-   */
-  private async handleSessionExtensionFallback(requestedExpiry: Date): Promise<{ expiry: Date }> {
-    // Clamp to current session expiry
-    return { expiry: this.sessionExpiry ?? requestedExpiry };
   }
 
   /**
@@ -1000,6 +1013,9 @@ export class SharingService implements ISharingService {
     link: string,
     options: ReceiveOptions = {}
   ): Promise<Result<ShareAccess, DelegationError>> {
+    const activeError = this.retiredGraphError();
+    if (activeError) return { ok: false, error: activeError };
+
     const {
       autoSubdelegate = true,
       useSessionKey = true,
@@ -1120,6 +1136,9 @@ export class SharingService implements ISharingService {
     link: string,
     params: DelegateReceivedShareParams
   ): Promise<Result<DelegatedShareAccess, DelegationError>> {
+    const activeError = this.retiredGraphError();
+    if (activeError) return { ok: false, error: activeError };
+
     const decoded = this.decodeLinkWithValidation(link);
     if (!decoded.ok) return decoded;
     const shareData = decoded.data;

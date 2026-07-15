@@ -1,6 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 
-import { principalDidEquals, type ISessionManager, type IWasmBindings } from "@tinycloud/sdk-core";
+import {
+  principalDidEquals,
+  type Delegation,
+  type ISessionManager,
+  type IWasmBindings,
+  type ServiceContext,
+} from "@tinycloud/sdk-core";
 
 import { activateValidatedRuntimeDelegation } from "./delegation";
 import { NodeWasmBindings } from "./NodeWasmBindings";
@@ -13,7 +19,10 @@ const PROOF_PRIVATE_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c
 
 async function signedRestorableSession(options?: {
   expirationless?: boolean;
+  expired?: boolean;
   spaces?: Record<string, string>;
+  signedSpaces?: Record<string, string>;
+  abilities?: Record<string, Record<string, string[]>>;
 }) {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
@@ -23,6 +32,12 @@ async function signedRestorableSession(options?: {
   const chainId = await signer.getChainId();
   const spaceId = wasm.makeSpaceId(address, chainId, "default");
   const now = new Date();
+  const issuedAt = options?.expired
+    ? new Date(now.getTime() - 2 * 60 * 60_000)
+    : now;
+  const expirationTime = options?.expired
+    ? new Date(now.getTime() - 60 * 60_000)
+    : new Date(now.getTime() + 60 * 60_000);
   const verificationMethod = manager.getDID("default");
   const prepared = options?.expirationless
     ? {
@@ -33,24 +48,25 @@ async function signedRestorableSession(options?: {
         address,
         chainId,
         domain: "restore.test",
-        issuedAt: now.toISOString(),
+        issuedAt: issuedAt.toISOString(),
       }, "default"),
     }
     : wasm.prepareSession({
-      abilities: { kv: { "": ["tinycloud.kv/get"] } },
+      abilities: options?.abilities ?? { kv: { "": ["tinycloud.kv/get"] } },
       address,
       chainId,
       domain: "restore.test",
-      issuedAt: now.toISOString(),
-      expirationTime: new Date(now.getTime() + 60 * 60_000).toISOString(),
+      issuedAt: issuedAt.toISOString(),
+      expirationTime: expirationTime.toISOString(),
       spaceId,
+      additionalSpaces: options?.signedSpaces ?? options?.spaces,
       jwk,
     });
   const signature = await signer.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
   const expiresAt = options?.expirationless
     ? new Date(now.getTime() + 30 * 60_000).toISOString()
-    : new Date(now.getTime() + 60 * 60_000).toISOString();
+    : expirationTime.toISOString();
   return {
     delegationHeader: session.delegationHeader,
     delegationCid: session.delegationCid,
@@ -98,6 +114,13 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     const proof = await signedRestorableSession();
     const wasm = new NodeWasmBindings();
     expect(() => wasm.validatePersistedSession!(proof)).not.toThrow();
+    const unrelatedJwk = JSON.parse(wasm.createSessionManager().jwk("default")!);
+    expect(() => wasm.validatePersistedSession!({ ...proof, jwk: unrelatedJwk })).toThrow();
+    const expired = await signedRestorableSession({ expired: true });
+    expect(() => wasm.validatePersistedSession!({
+      ...expired,
+      now: new Date(expired.expiresAt).toISOString(),
+    } as any)).toThrow();
     const node = new TinyCloudNode({
       host: RESTORE_HOST,
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
@@ -160,8 +183,132 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     const sessionKey = registry.getAllKeys()[0];
     expect(registry.getDelegationsForKey(sessionKey.id).some((delegation: { spaceId: string }) =>
       delegation.spaceId === proof.spaces!.public
-    )).toBe(false);
+    )).toBe(true);
     expect(((node as any).sessionManager as ISessionManager).listSessionKeys!()).toContain("secondary");
+  });
+
+  test("reconstructs every verified narrow ReCap entry without unsigned metadata authority", async () => {
+    const proof = await signedRestorableSession({
+      spaces: {
+        public: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:public",
+        unsigned: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:unsigned",
+      },
+      signedSpaces: {
+        public: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:public",
+      },
+      abilities: {
+        kv: { "narrow/": ["tinycloud.kv/get"] },
+        sql: { "records/": ["tinycloud.sql/read"] },
+      },
+    });
+    const wasm = new NodeWasmBindings();
+    const verified = wasm.validatePersistedSession!(proof);
+    const node = new TinyCloudNode({ wasmBindings: wasm });
+
+    await node.restoreSession({ ...proof, tinycloudHosts: ["https://recap.example"] });
+
+    const registry = (node as any)._capabilityRegistry;
+    const key = registry.getAllKeys()[0];
+    const actual = registry.getDelegationsForKey(key.id).map((delegation: Delegation) => ({
+      space: delegation.spaceId,
+      path: delegation.path,
+      actions: delegation.actions,
+    })).sort((left: { space: string; path: string }, right: { space: string; path: string }) =>
+      `${left.space}|${left.path}`.localeCompare(`${right.space}|${right.path}`),
+    );
+    const expected = verified.recap.map((entry) => ({
+      space: entry.space,
+      path: entry.path,
+      actions: entry.actions,
+    })).sort((left, right) =>
+      `${left.space}|${left.path}`.localeCompare(`${right.space}|${right.path}`),
+    );
+
+    expect(actual).toEqual(expected);
+    expect(actual.some((entry: { space: string }) => entry.space === proof.spaces!.unsigned)).toBe(false);
+    expect(actual.flatMap((entry: { actions: string[] }) => entry.actions)).toEqual(
+      expect.arrayContaining(["tinycloud.kv/get", "tinycloud.sql/read"]),
+    );
+    expect(actual.flatMap((entry: { actions: string[] }) => entry.actions)).not.toContain("tinycloud.kv/put");
+  });
+
+  test("retires captured services and aborts in-flight requests after each successful restore", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestSignal: AbortSignal | undefined;
+    let requestStarted!: () => void;
+    const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+    globalThis.fetch = mock((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      requestSignal = init?.signal ?? undefined;
+      requestStarted();
+      requestSignal?.addEventListener("abort", () => {
+        reject(new DOMException("retired", "AbortError"));
+      }, { once: true });
+    })) as typeof fetch;
+
+    try {
+      const proof = await signedRestorableSession({
+        abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/metadata"] } },
+      });
+      const node = new TinyCloudNode({
+        signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+        wasmBindings: new NodeWasmBindings(),
+      });
+      await node.restoreSession({ ...proof, tinycloudHosts: ["https://one.example"] });
+
+      const captured = {
+        context: (node as any)._serviceContext as ServiceContext,
+        core: (node as any).tc,
+        kv: node.kv,
+        publicKV: node.publicKV,
+        sql: node.sql,
+        duckdb: node.duckdb,
+        hooks: node.hooks,
+        vault: node.vault,
+        encryption: node.encryption,
+        sharing: node.sharing,
+        delegations: node.delegationManager,
+        spaces: node.spaces,
+      };
+      const inFlight = captured.kv.get("in-flight");
+      await started;
+
+      await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
+
+      expect(requestSignal?.aborted).toBe(true);
+      await expect(inFlight).resolves.toMatchObject({ ok: false });
+      expect(captured.context.session).toBeNull();
+      expect(captured.context.abortSignal.aborted).toBe(true);
+      expect(() => captured.core.kv).toThrow("Services not initialized");
+      await expect(captured.publicKV.get("after")).resolves.toMatchObject({ ok: false });
+      await expect(captured.delegations.list()).resolves.toMatchObject({ ok: false });
+      await expect(captured.sharing.generate({ path: "after", actions: ["tinycloud.kv/get"] }))
+        .resolves.toMatchObject({ ok: false });
+      expect(node.hosts).toEqual(["https://two.example"]);
+
+      await node.restoreSession({ ...proof, tinycloudHosts: ["https://three.example"] });
+      expect(node.hosts).toEqual(["https://three.example"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("does not turn an empty ReCap into delegation or sharing authority", async () => {
+    const proof = await signedRestorableSession({ expirationless: true });
+    const node = new TinyCloudNode({ wasmBindings: new NodeWasmBindings() });
+
+    await node.restoreSession({ ...proof, tinycloudHosts: ["https://empty-recap.example"] });
+
+    expect(node.capabilityRegistry.getAllKeys()).toEqual([]);
+    await expect(node.delegateTo("did:key:zEmpty", [{
+      service: "tinycloud.kv",
+      space: proof.spaceId,
+      path: "",
+      actions: ["tinycloud.kv/get"],
+    }])).rejects.toThrow();
+    await expect(node.sharing.generate({
+      path: "cannot-share",
+      actions: ["tinycloud.kv/get"],
+    })).resolves.toMatchObject({ ok: false });
   });
 
   test("does not inherit wallet metadata or activation skips from a previous live session", async () => {

@@ -26,18 +26,11 @@ struct PersistedSessionProof {
     delegation_header: PersistedDelegationHeader,
     delegation_cid: String,
     space_id: String,
-    #[serde(default)]
-    spaces: Option<BTreeMap<String, String>>,
     jwk: serde_json::Value,
-    verification_method: String,
     address: String,
     chain_id: u64,
     siwe: String,
     signature: String,
-    /// The binding supplies its current clock value. This is deliberately not
-    /// part of persisted session data: SIWE validity must not be evaluated at
-    /// an attacker-selected time.
-    now: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +44,7 @@ struct PersistedDelegationHeader {
 struct ValidatedPersistedSessionProof {
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<String>,
+    recap: Vec<tinycloud_sdk_wasm::session::ParsedRecapEntry>,
 }
 
 fn map_jserr<E: std::error::Error>(e: E) -> JsValue {
@@ -89,6 +83,26 @@ pub fn initPanicHook() {
 #[allow(non_snake_case)]
 pub fn validatePersistedSession(proof: JsValue) -> Result<JsValue, JsValue> {
     let proof: PersistedSessionProof = serde_wasm_bindgen::from_value(proof)?;
+    if proof.jwk.get("alg").is_some_and(serde_json::Value::is_null) {
+        return Err(JsValue::from_str(
+            "session key alg must be EdDSA when present",
+        ));
+    }
+
+    // The caller may supply persisted key material, but never the identity
+    // that validates it. Importing derives the canonical did:key verification
+    // method from the private Ed25519 JWK and applies the same private-key
+    // validation as the session manager used by restore.
+    let jwk = serde_json::from_value(proof.jwk.clone()).map_err(map_jserr)?;
+    let mut manager =
+        crate::session::SessionManager::new().map_err(|error| JsValue::from_str(&error))?;
+    let key_id = "persisted".to_owned();
+    manager
+        .replace_session_key(jwk, key_id.clone())
+        .map_err(|error| JsValue::from_str(&error))?;
+    let verification_method = manager
+        .get_did(Some(key_id))
+        .map_err(|error| JsValue::from_str(&error))?;
 
     let signed: tinycloud_sdk_wasm::session::SignedSession =
         serde_json::from_value(serde_json::json!({
@@ -96,8 +110,7 @@ pub fn validatePersistedSession(proof: JsValue) -> Result<JsValue, JsValue> {
             "signature": proof.signature,
             "jwk": proof.jwk,
             "spaceId": proof.space_id,
-            "additionalSpaces": proof.spaces,
-            "verificationMethod": proof.verification_method,
+            "verificationMethod": verification_method,
         }))
         .map_err(map_jserr)?;
 
@@ -117,9 +130,14 @@ pub fn validatePersistedSession(proof: JsValue) -> Result<JsValue, JsValue> {
             "persisted SIWE audience does not match the restored session key",
         ));
     }
-    let now =
-        time::OffsetDateTime::parse(&proof.now, &time::format_description::well_known::Rfc3339)
-            .map_err(map_jserr)?;
+    // `Date.now()` is obtained by the WASM module, rather than from caller
+    // input, so an expired proof cannot be revived with a historical clock.
+    let now_millis = js_sys::Date::now();
+    if !now_millis.is_finite() {
+        return Err(JsValue::from_str("current clock is unavailable"));
+    }
+    let now = time::OffsetDateTime::from_unix_timestamp_nanos((now_millis as i128) * 1_000_000)
+        .map_err(map_jserr)?;
     if !signed.session.siwe.valid_at(&now) {
         return Err(JsValue::from_str(
             "persisted SIWE is expired or not yet valid",
@@ -173,7 +191,8 @@ pub fn validatePersistedSession(proof: JsValue) -> Result<JsValue, JsValue> {
         ));
     }
 
-    serde_wasm_bindgen::to_value(&ValidatedPersistedSessionProof { expires_at }).map_err(Into::into)
+    serde_wasm_bindgen::to_value(&ValidatedPersistedSessionProof { expires_at, recap })
+        .map_err(Into::into)
 }
 
 #[wasm_bindgen]

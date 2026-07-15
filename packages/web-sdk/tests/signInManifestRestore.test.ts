@@ -74,6 +74,7 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
 
 const { TinyCloudWeb } = require("../src/modules/tcw");
 const { BrowserWasmBindings } = require("../src/adapters/BrowserWasmBindings");
+const { BrowserSessionStorage } = require("../src/adapters/BrowserSessionStorage");
 const { restoreDataFromPersisted } = require("../src/modules/browserSessionPersistence");
 
 test("passes persisted additional spaces and expiry through browser restore data", () => {
@@ -198,6 +199,50 @@ test("keeps persisted storage and reports the original rejection when cleanup wo
   expect(result.status).toBe("restore-failed");
   expect(result.error?.message).toBe("persisted authority rejected");
   expect(storage.clear).not.toHaveBeenCalled();
+  expect(tcw.sessionRestoreStatus).toBe("restore-failed");
+});
+
+test("reports storage load exceptions as restore failures without clearing persisted state", async () => {
+  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const persisted = { marker: "leave-me-intact" };
+  const storage = {
+    save: mock(async () => undefined),
+    load: mock(async () => { throw new Error("storage read failed"); }),
+    clear: mock(async () => undefined),
+  };
+  const tcw = new TinyCloudWeb({ sessionStorage: storage as any });
+  await (tcw as any)._initPromise;
+
+  const result = await tcw.restoreSession(address);
+
+  expect(result.status).toBe("restore-failed");
+  expect(result.error?.message).toBe("storage read failed");
+  expect(storage.clear).not.toHaveBeenCalled();
+  expect(persisted).toEqual({ marker: "leave-me-intact" });
+  expect(tcw.sessionRestoreStatus).toBe("restore-failed");
+});
+
+test("reports browser getItem exceptions as restore failures without attempting storage cleanup", async () => {
+  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const removeItem = mock(() => undefined);
+  const backend = {
+    get length() { return 1; },
+    clear: () => undefined,
+    getItem: mock(() => { throw new Error("getItem failed"); }),
+    key: () => null,
+    removeItem,
+    setItem: () => undefined,
+  } as Storage;
+  const tcw = new TinyCloudWeb({
+    sessionStorage: new BrowserSessionStorage({ storage: backend }),
+  });
+  await (tcw as any)._initPromise;
+
+  const result = await tcw.restoreSession(address);
+
+  expect(result.status).toBe("restore-failed");
+  expect(result.error?.message).toBe("getItem failed");
+  expect(removeItem).not.toHaveBeenCalled();
   expect(tcw.sessionRestoreStatus).toBe("restore-failed");
 });
 

@@ -60,10 +60,7 @@ export class NodeWasmBindings implements IWasmBindings {
   prepareSession = prepareSession;
   completeSessionSetup = completeSessionSetup;
   validatePersistedSession(proof: PersistedSessionProof) {
-    return validatePersistedSession({
-      ...proof,
-      now: new Date().toISOString(),
-    });
+    return validatePersistedSession(proof);
   }
   ensureEip55 = ensureEip55;
   makeSpaceId = makeSpaceId;

@@ -57,11 +57,13 @@ import {
   ISigner,
   type InvokeAnyFunction,
   type InvokeFunction,
+  type FetchFunction,
   INotificationHandler,
   SilentNotificationHandler,
   IENSResolver,
   IWasmBindings,
   ISessionManager,
+  type WasmRecapEntry,
   ISpaceCreationHandler,
   SignInOptions,
   // v2 services
@@ -279,6 +281,74 @@ function clonePersistedSessionJwk(jwk: unknown): object {
     return cloned;
   } catch {
     throw new Error("Persisted session has an invalid private Ed25519 session key.");
+  }
+}
+
+/** One replaceable set of services bound to a single host/session authority. */
+class ServiceGraphLifetime {
+  private readonly abortController = new AbortController();
+  private readonly contexts = new Set<ServiceContext>();
+  private retired = false;
+
+  constructor(
+    private readonly invokeFn: InvokeFunction,
+    private readonly invokeAnyFn: InvokeAnyFunction,
+    private readonly fetchFn: FetchFunction,
+  ) {}
+
+  readonly invoke: InvokeFunction = (session, service, path, action, facts) => {
+    this.assertActive();
+    return this.invokeFn(session, service, path, action, facts);
+  };
+
+  readonly invokeAny: InvokeAnyFunction = (session, entries, facts) => {
+    this.assertActive();
+    return this.invokeAnyFn(session, entries, facts);
+  };
+
+  readonly fetch: FetchFunction = (url, init) => {
+    this.assertActive();
+    return this.fetchFn(url, {
+      ...init,
+      signal: this.combineSignals(init?.signal),
+    });
+  };
+
+  track(context: ServiceContext): ServiceContext {
+    this.assertActive();
+    this.contexts.add(context);
+    return context;
+  }
+
+  retire(): void {
+    if (this.retired) return;
+    this.retired = true;
+    this.abortController.abort();
+    for (const context of this.contexts) {
+      const retire = (context as ServiceContext & { retire?: () => void }).retire;
+      if (retire) retire.call(context);
+      else context.abort();
+    }
+    this.contexts.clear();
+  }
+
+  assertActive(): void {
+    if (this.retired) {
+      throw new Error("Service graph has been retired by session replacement.");
+    }
+  }
+
+  private combineSignals(signal?: AbortSignal): AbortSignal {
+    if (!signal) return this.abortController.signal;
+    const combined = new AbortController();
+    const abort = () => combined.abort();
+    if (signal.aborted || this.abortController.signal.aborted) {
+      abort();
+    } else {
+      signal.addEventListener("abort", abort, { once: true });
+      this.abortController.signal.addEventListener("abort", abort, { once: true });
+    }
+    return combined.signal;
   }
 }
 
@@ -599,6 +669,7 @@ export class TinyCloudNode {
   private _chainId: number = 1;
   private wasmBindings: IWasmBindings;
   private sessionManager: ISessionManager;
+  private _serviceGraph!: ServiceGraphLifetime;
   private _serviceContext?: ServiceContext;
   private _kv?: KVService;
   private _sql?: SQLService;
@@ -782,6 +853,8 @@ export class TinyCloudNode {
     }
     this.sessionKeyJwk = JSON.parse(jwkStr);
 
+    this._serviceGraph = this.createServiceGraphLifetime();
+
     // Initialize capability registry for all users (needed for tracking received delegations)
     this._capabilityRegistry = new CapabilityKeyRegistry();
 
@@ -799,8 +872,9 @@ export class TinyCloudNode {
     this._sharingService = new SharingService({
       hosts: [this.config.host!],
       // session: undefined - not needed for receive()
-      invoke: this.invokeWithRuntimePermissions,
-      fetch: globalThis.fetch.bind(globalThis),
+      invoke: this._serviceGraph.invoke,
+      fetch: this._serviceGraph.fetch,
+      assertActive: this._serviceGraph.assertActive,
       keyProvider: this._keyProvider,
       registry: this._capabilityRegistry,
       createDelegationWasm: (params) => this.createDelegationWrapper(params),
@@ -815,12 +889,12 @@ export class TinyCloudNode {
         const prefix = config.pathPrefix?.replace(/\/$/, '');
         const kvService = new KVService({ prefix });
         // Create a new service context for the KV service
-        const kvContext = new ServiceContext({
+        const kvContext = this._serviceGraph.track(new ServiceContext({
           invoke: config.invoke,
           fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
           hosts: config.hosts,
           telemetry: this.config.telemetry,
-        });
+        }));
         kvContext.setSession(config.session);
         kvService.initialize(kvContext);
         return kvService;
@@ -889,6 +963,14 @@ export class TinyCloudNode {
       config.capabilityRequest === undefined &&
       (config.prefix ?? "default") === "default" &&
       isOpenKeyAutoSignStrategy(config.signStrategy);
+  }
+
+  private createServiceGraphLifetime(): ServiceGraphLifetime {
+    return new ServiceGraphLifetime(
+      this.invokeWithRuntimePermissions,
+      this.invokeAnyWithRuntimePermissions,
+      globalThis.fetch.bind(globalThis),
+    );
   }
 
   private syncResolvedHostFromAuth(): void {
@@ -1084,6 +1166,15 @@ export class TinyCloudNode {
 
     await this.tc.signIn(options);
     this.syncResolvedHostFromAuth();
+
+    // Bind the replacement services to the runtime dependencies active for
+    // this sign-in and permanently retire anything captured from the previous
+    // session. The authorization flow above remains transactional: a rejected
+    // sign-in leaves the existing graph untouched.
+    const oldGraph = this._serviceGraph;
+    this._serviceGraph = this.createServiceGraphLifetime();
+    oldGraph.retire();
+    this.tc.retireServices();
 
     // NodeUserAuthorization renames the constructor's "default" key when it
     // creates the signed-in session. Keep node-level key accessors in sync so
@@ -2004,6 +2095,7 @@ export class TinyCloudNode {
       ? canonicalizeAddress(sessionData.address!)
       : undefined;
     let stagedSessionExpiry = new Date(0);
+    let stagedRecap: WasmRecapEntry[] = [];
     if (hasPersistedProof) {
       if (typeof this.wasmBindings.validatePersistedSession !== "function") {
         throw new UnsupportedSessionRestoreError("it cannot verify persisted SIWE authority");
@@ -2012,14 +2104,27 @@ export class TinyCloudNode {
         delegationHeader: sessionData.delegationHeader,
         delegationCid: sessionData.delegationCid,
         spaceId: sessionData.spaceId,
-        spaces: sessionData.spaces,
         jwk: stagedJwk,
-        verificationMethod: canonicalVerificationMethod,
         address: restoredAddress!,
         chainId: sessionData.chainId!,
         siwe: sessionData.siwe!,
         signature: sessionData.signature!,
       });
+      if (!Array.isArray(verified.recap) || !verified.recap.every((entry) =>
+        entry !== null && typeof entry === "object" &&
+        typeof entry.service === "string" &&
+        typeof entry.space === "string" &&
+        typeof entry.path === "string" &&
+        Array.isArray(entry.actions) && entry.actions.every((action) => typeof action === "string")
+      )) {
+        throw new Error("Verified persisted session ReCap could not be reconstructed.");
+      }
+      stagedRecap = verified.recap.map((entry) => ({
+        service: entry.service,
+        space: entry.space,
+        path: entry.path,
+        actions: [...entry.actions],
+      }));
       const signedExpiry = verified.expiresAt === undefined
         ? undefined
         : persistedExpiry(verified.expiresAt);
@@ -2069,6 +2174,7 @@ export class TinyCloudNode {
       stagedNodeDid,
       stagedHost,
       stagedSessionExpiry,
+      stagedRecap,
     );
     const stagedGraph = this.stageRestoredServiceGraph({
       host: stagedHost,
@@ -2080,9 +2186,12 @@ export class TinyCloudNode {
       chainId: stagedChainId,
       tinyCloudSession: stagedTcSession,
       sessionExpiry: stagedSessionExpiry,
+      recap: stagedRecap,
     });
 
     // Every operation below is a non-throwing pointer/value swap.
+    const oldGraph = this._serviceGraph;
+    const oldCore = this.tc;
     this.sessionManager = stagedManager;
     this.sessionKeyId = stagedKeyId;
     this.sessionKeyJwk = stagedJwk;
@@ -2101,6 +2210,7 @@ export class TinyCloudNode {
     this._sharingService = stagedGraph.sharingService;
     this._delegationManager = stagedGraph.delegationManager;
     this._spaceService = stagedGraph.spaceService;
+    this._serviceGraph = stagedGraph.graph;
     this._baseSecrets = new Map();
     this._secrets = new Map();
     this._publicKV = undefined;
@@ -2114,6 +2224,8 @@ export class TinyCloudNode {
     } else {
       this._restoredTcSession = stagedTcSession;
     }
+    oldGraph.retire();
+    (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
   }
 
   private stagePrimarySessionState(
@@ -2121,25 +2233,19 @@ export class TinyCloudNode {
     verificationMethod: string,
     host: string,
     sessionExpiry: Date,
+    recap: WasmRecapEntry[],
   ): { cache: { siwe: string; operations: RuntimePermissionOperation[] } | undefined; grants: RuntimePermissionGrant[] } {
     if (!session?.siwe) return { cache: undefined, grants: [] };
     let operations: RuntimePermissionOperation[] = [];
-    try {
-      const entries = this.wasmBindings.parseRecapFromSiwe(session.siwe);
-      if (Array.isArray(entries)) {
-        operations = entries.flatMap((entry) => {
-          const service = this.invocationServiceName(entry.service);
-          return entry.actions.map((action) => ({
-            ...(this.isEncryptionNetworkOperation(service, entry.path) ? { resource: entry.path } : { spaceId: entry.space }),
-            service,
-            path: entry.path,
-            action,
-          }));
-        });
-      }
-    } catch {
-      operations = [];
-    }
+    operations = recap.flatMap((entry) => {
+      const service = this.invocationServiceName(entry.service);
+      return entry.actions.map((action) => ({
+        ...(this.isEncryptionNetworkOperation(service, entry.path) ? { resource: entry.path } : { spaceId: entry.space }),
+        service,
+        path: entry.path,
+        action,
+      }));
+    });
     const cache = { siwe: session.siwe, operations };
     // Restored authority has no host-activation result yet. Importing a skip
     // list from an unrelated prior session would erase valid restored grants.
@@ -2186,8 +2292,10 @@ export class TinyCloudNode {
     chainId: number;
     tinyCloudSession: TinyCloudSession | undefined;
     sessionExpiry: Date;
+    recap: WasmRecapEntry[];
   }): {
     core: TinyCloud | null;
+    graph: ServiceGraphLifetime;
     serviceContext: ServiceContext;
     kv: KVService;
     sql: SQLService;
@@ -2204,23 +2312,25 @@ export class TinyCloudNode {
     // TinyCloud owns the public-KV service graph. Stage a replacement core
     // context alongside the node graph so repeated cross-host restores cannot
     // leave publicKV pointed at a stale or uninitialized context.
+    const graph = this.createServiceGraphLifetime();
     const core = this.auth
       ? new TinyCloud(this.auth, {
-        invokeAny: this.invokeAnyWithRuntimePermissions,
+        invokeAny: graph.invokeAny,
         telemetry: this.config.telemetry,
       })
       : null;
     if (core) {
-      core.initializeServices(this.invokeWithRuntimePermissions, [input.host]);
-      (core.serviceContext as ServiceContext).setSession(input.serviceSession);
+      core.initializeServices(graph.invoke, [input.host], graph.fetch);
+      const coreContext = graph.track(core.serviceContext as ServiceContext);
+      coreContext.setSession(input.serviceSession);
     }
-    const serviceContext = new ServiceContext({
-      invoke: this.invokeWithRuntimePermissions,
-      invokeAny: this.invokeAnyWithRuntimePermissions,
-      fetch: globalThis.fetch.bind(globalThis),
+    const serviceContext = graph.track(new ServiceContext({
+      invoke: graph.invoke,
+      invokeAny: graph.invokeAny,
+      fetch: graph.fetch,
       hosts: [input.host],
       telemetry: this.config.telemetry,
-    });
+    }));
     const kv = new KVService({});
     kv.initialize(serviceContext);
     serviceContext.registerService('kv', kv);
@@ -2242,6 +2352,7 @@ export class TinyCloudNode {
       did: input.nodeDid,
       address: input.address,
       chainId: input.chainId,
+      serviceGraph: graph,
     });
     vault.initialize(serviceContext);
     serviceContext.registerService('vault', vault);
@@ -2249,41 +2360,19 @@ export class TinyCloudNode {
     const capabilityRegistry = new CapabilityKeyRegistry();
     if (input.tinyCloudSession) {
       const session = input.tinyCloudSession;
-      // Extra space names are persisted session metadata. Only space IDs that
-      // occur in the now-verified ReCap may participate in the capability
-      // registry; e.g. a lazily-created public-space label cannot mint a
-      // primary-session grant by itself.
-      const recapSpaces = new Set<string>();
-      try {
-        for (const entry of this.wasmBindings.parseRecapFromSiwe(session.siwe)) {
-          recapSpaces.add(entry.space);
-        }
-      } catch {
-        throw new Error("Verified persisted session ReCap could not be reconstructed.");
-      }
-      const delegations: Delegation[] = recapSpaces.has(session.spaceId) ? [{
-        cid: session.delegationCid,
-        delegateDID: session.verificationMethod,
-        spaceId: session.spaceId,
-        path: "",
-        actions: [...ROOT_DELEGATION_ACTIONS],
-        expiry: input.sessionExpiry,
-        isRevoked: false,
-        allowSubDelegation: true,
-      }] : [];
-      for (const spaceId of Object.values(session.spaces ?? {})) {
-        if (!recapSpaces.has(spaceId)) continue;
-        delegations.push({
+      // ReCap entries are returned by the verifier that authenticated this
+      // SIWE. Persisted space metadata is only a routing hint and cannot add
+      // an unsigned space, path, or action to the registry.
+      const delegations: Delegation[] = input.recap.map((entry) => ({
           cid: session.delegationCid,
           delegateDID: session.verificationMethod,
-          spaceId,
-          path: "",
-          actions: [...ROOT_DELEGATION_ACTIONS],
+          spaceId: entry.space,
+          path: entry.path,
+          actions: [...entry.actions],
           expiry: input.sessionExpiry,
           isRevoked: false,
           allowSubDelegation: true,
-        });
-      }
+        }));
       if (delegations.length > 0) {
         capabilityRegistry.registerKey({
           id: session.sessionKey,
@@ -2297,15 +2386,16 @@ export class TinyCloudNode {
     const delegationManager = new DelegationManager({
       hosts: [input.host],
       session: input.serviceSession,
-      invoke: this.invokeWithRuntimePermissions,
-      invokeAny: this.invokeAnyWithRuntimePermissions,
-      fetch: globalThis.fetch.bind(globalThis),
+      invoke: graph.invoke,
+      invokeAny: graph.invokeAny,
+      fetch: graph.fetch,
     });
     const keyProvider = new WasmKeyProvider({ sessionManager: input.manager });
     const sharingService = new SharingService({
       hosts: [input.host],
-      invoke: this.invokeWithRuntimePermissions,
-      fetch: globalThis.fetch.bind(globalThis),
+      invoke: graph.invoke,
+      fetch: graph.fetch,
+      assertActive: graph.assertActive,
       keyProvider,
       registry: capabilityRegistry,
       createDelegationWasm: (params) => this.createDelegationWrapper(params),
@@ -2315,12 +2405,12 @@ export class TinyCloudNode {
       },
       createKVService: (config) => {
         const service = new KVService({ prefix: config.pathPrefix?.replace(/\/$/, '') });
-        const context = new ServiceContext({
+        const context = graph.track(new ServiceContext({
           invoke: config.invoke,
           fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
           hosts: config.hosts,
           telemetry: this.config.telemetry,
-        });
+        }));
         context.setSession(config.session);
         service.initialize(context);
         return service;
@@ -2330,25 +2420,64 @@ export class TinyCloudNode {
       session: input.serviceSession,
       delegationManager,
       sessionExpiry: input.sessionExpiry,
-      createDelegationWasm: (params) => this.createDelegationWrapper(params),
-      onRootDelegationNeeded: this.signer ? async (params) => this.createRootDelegationForSharing(params) : undefined,
+      createDelegationWasm: (params) => {
+        graph.assertActive();
+        return this.createDelegationWrapper(params);
+      },
+      onRootDelegationNeeded: this.signer ? async (params) => {
+        graph.assertActive();
+        return this.createRootDelegationForSharing(params);
+      } : undefined,
     });
     const spaceService = new SpaceService({
       hosts: [input.host],
       session: input.serviceSession,
-      invoke: this.wasmBindings.invoke,
-      fetch: globalThis.fetch.bind(globalThis),
+      invoke: graph.invoke,
+      fetch: graph.fetch,
       capabilityRegistry,
       userDid: input.nodeDid,
-      createKVService: (spaceId) => this.createSpaceScopedKVService(spaceId),
+      createKVService: (spaceId) => {
+        graph.assertActive();
+        const scopedKv = new KVService({});
+        const context = graph.track(new ServiceContext({
+          invoke: graph.invoke,
+          invokeAny: graph.invokeAny,
+          fetch: graph.fetch,
+          hosts: [input.host],
+          telemetry: this.config.telemetry,
+        }));
+        context.setSession({ ...input.serviceSession, spaceId });
+        scopedKv.initialize(context);
+        return scopedKv;
+      },
       createVaultService: (spaceId) => {
-        const scopedKv = this.createSpaceScopedKVService(spaceId);
-        const scopedVault = this.createVaultService(spaceId, scopedKv);
-        if (this._serviceContext) scopedVault.initialize(this._serviceContext);
+        graph.assertActive();
+        const scopedKv = new KVService({});
+        const context = graph.track(new ServiceContext({
+          invoke: graph.invoke,
+          invokeAny: graph.invokeAny,
+          fetch: graph.fetch,
+          hosts: [input.host],
+          telemetry: this.config.telemetry,
+        }));
+        context.setSession({ ...input.serviceSession, spaceId });
+        scopedKv.initialize(context);
+        const scopedVault = this.createVaultService(spaceId, scopedKv, encryption, {
+          host: input.host,
+          did: input.nodeDid,
+          address: input.address,
+          chainId: input.chainId,
+          serviceGraph: graph,
+        });
+        scopedVault.initialize(context);
         return scopedVault;
       },
-      createSecretsService: (spaceId) => this.secretsForSpace(spaceId),
+      createSecretsService: (spaceId) => {
+        graph.assertActive();
+        return this.secretsForSpace(spaceId);
+      },
       createDelegation: async (params) => {
+        graph.assertActive();
         try {
           const portableDelegation = await this.createDelegation({
             delegateDID: params.delegateDID,
@@ -2378,10 +2507,13 @@ export class TinyCloudNode {
           }};
         }
       },
-      onSpaceRegistered: async (space) => { await this.account.spaces.register(space); },
+      onSpaceRegistered: async (space) => {
+        graph.assertActive();
+        await this.account.spaces.register(space);
+      },
     });
     spaceService.updateConfig({ sharingService });
-    return { core, serviceContext, kv, sql, duckdb, hooks, vault, encryption, capabilityRegistry, keyProvider, sharingService, delegationManager, spaceService };
+    return { core, graph, serviceContext, kv, sql, duckdb, hooks, vault, encryption, capabilityRegistry, keyProvider, sharingService, delegationManager, spaceService };
   }
 
   /**
@@ -2580,16 +2712,21 @@ export class TinyCloudNode {
     }
 
     // Initialize TinyCloud core services (needed for publicKV, ensurePublicSpace)
-    this.tc!.initializeServices(this.invokeWithRuntimePermissions, [this.config.host!]);
+    this.tc!.initializeServices(
+      this._serviceGraph.invoke,
+      [this.config.host!],
+      this._serviceGraph.fetch,
+    );
+    this._serviceGraph.track(this.tc!.serviceContext as ServiceContext);
 
     // Create service context
-    this._serviceContext = new ServiceContext({
-      invoke: this.invokeWithRuntimePermissions,
-      invokeAny: this.invokeAnyWithRuntimePermissions,
-      fetch: globalThis.fetch.bind(globalThis),
+    this._serviceContext = this._serviceGraph.track(new ServiceContext({
+      invoke: this._serviceGraph.invoke,
+      invokeAny: this._serviceGraph.invokeAny,
+      fetch: this._serviceGraph.fetch,
       hosts: [this.config.host!],
       telemetry: this.config.telemetry,
-    });
+    }));
 
     // Create and register KV service
     this._kv = new KVService({});
@@ -2638,12 +2775,12 @@ export class TinyCloudNode {
   private createSpaceScopedKVService(spaceId: string): KVService {
     const kvService = new KVService({});
     if (this._serviceContext) {
-      const spaceScopedContext = new ServiceContext({
+      const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
         invoke: this._serviceContext.invoke,
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
-      });
+      }));
       const session = this._serviceContext.session;
       if (session) {
         spaceScopedContext.setSession({ ...session, spaceId });
@@ -2877,9 +3014,11 @@ export class TinyCloudNode {
       did: string;
       address: string | undefined;
       chainId: number;
+      serviceGraph?: ServiceGraphLifetime;
     },
   ): DataVaultService {
     const wasm = this.wasmBindings;
+    const serviceGraph = nodeContext?.serviceGraph ?? this._serviceGraph;
     const vaultCrypto = createVaultCrypto({
       vault_encrypt: wasm.vault_encrypt, vault_decrypt: wasm.vault_decrypt, vault_derive_key: wasm.vault_derive_key,
       vault_x25519_from_seed: wasm.vault_x25519_from_seed, vault_x25519_dh: wasm.vault_x25519_dh,
@@ -2905,13 +3044,17 @@ export class TinyCloudNode {
         kv,
         ensurePublicSpace: async () => {
           try {
+            serviceGraph.assertActive();
             await self.ensurePublicSpace();
             return { ok: true as const, data: undefined };
           } catch (error) {
             return { ok: false as const, error: { code: "STORAGE_ERROR", message: error instanceof Error ? error.message : String(error), service: "vault" } };
           }
         },
-        get publicKV() { return self._publicKV ?? self.tc!.publicKV; },
+        get publicKV() {
+          serviceGraph.assertActive();
+          return self._publicKV ?? self.tc!.publicKV;
+        },
         readPublicSpace: <T>(host: string, targetSpaceId: string, key: string) =>
           TinyCloud.readPublicSpace<T>(host, targetSpaceId, key),
         makePublicSpaceId: TinyCloud.makePublicSpaceId,
@@ -2928,6 +3071,8 @@ export class TinyCloudNode {
    * @internal
    */
   private initializeV2Services(serviceSession: ServiceSession): void {
+    const graph = this._serviceGraph;
+
     // Initialize CapabilityKeyRegistry
     this._capabilityRegistry = new CapabilityKeyRegistry();
 
@@ -2981,23 +3126,25 @@ export class TinyCloudNode {
     this._delegationManager = new DelegationManager({
       hosts: [this.config.host!],
       session: serviceSession,
-      invoke: this.invokeWithRuntimePermissions,
-      invokeAny: this.invokeAnyWithRuntimePermissions,
-      fetch: globalThis.fetch.bind(globalThis),
+      invoke: graph.invoke,
+      invokeAny: graph.invokeAny,
+      fetch: graph.fetch,
     });
 
     // Initialize SpaceService
     this._spaceService = new SpaceService({
       hosts: [this.config.host!],
       session: serviceSession,
-      invoke: this.wasmBindings.invoke,
-      fetch: globalThis.fetch.bind(globalThis),
+      invoke: graph.invoke,
+      fetch: graph.fetch,
       capabilityRegistry: this._capabilityRegistry,
       userDid: this.did,
       createKVService: (spaceId: string) => {
+        graph.assertActive();
         return this.createSpaceScopedKVService(spaceId);
       },
       createVaultService: (spaceId: string) => {
+        graph.assertActive();
         const kvService = this.createSpaceScopedKVService(spaceId);
         const vaultService = this.createVaultService(spaceId, kvService);
         if (this._serviceContext) {
@@ -3006,11 +3153,13 @@ export class TinyCloudNode {
         return vaultService;
       },
       createSecretsService: (spaceId: string) => {
+        graph.assertActive();
         return this.secretsForSpace(spaceId);
       },
       // Enable space.delegations.create() via SIWE-based delegation
       createDelegation: async (params) => {
         try {
+          graph.assertActive();
           // Use the existing createDelegation method which calls /delegate with SIWE
           const portableDelegation = await this.createDelegation({
             delegateDID: params.delegateDID,
@@ -3050,6 +3199,7 @@ export class TinyCloudNode {
         }
       },
       onSpaceRegistered: async (space) => {
+        graph.assertActive();
         await this.account.spaces.register(space);
       },
     });
@@ -3061,11 +3211,17 @@ export class TinyCloudNode {
       delegationManager: this._delegationManager,
       sessionExpiry: this.getSessionExpiry(),
       // WASM-based delegation creation (preferred - no server roundtrip)
-      createDelegationWasm: (params) => this.createDelegationWrapper(params),
+      createDelegationWasm: (params) => {
+        graph.assertActive();
+        return this.createDelegationWrapper(params);
+      },
       // Root delegation for long-lived share links (bypasses session expiry)
       // In node-sdk we have direct signer access, so no popup needed
       onRootDelegationNeeded: this.signer
-        ? async (params) => this.createRootDelegationForSharing(params)
+        ? async (params) => {
+          graph.assertActive();
+          return this.createRootDelegationForSharing(params);
+        }
         : undefined,
     });
 
@@ -3294,13 +3450,13 @@ export class TinyCloudNode {
     }
 
     const sql = new SQLService({});
-    const spaceScopedContext = new ServiceContext({
+    const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
       invoke: this._serviceContext.invoke,
       invokeAny: this._serviceContext.invokeAny,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
       telemetry: this.config.telemetry,
-    });
+    }));
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     sql.initialize(spaceScopedContext);
     return sql;
@@ -3326,12 +3482,12 @@ export class TinyCloudNode {
     }
 
     const kv = new KVService({});
-    const spaceScopedContext = new ServiceContext({
+    const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
       invoke: this._serviceContext.invoke,
       invokeAny: this._serviceContext.invokeAny,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
-    });
+    }));
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     kv.initialize(spaceScopedContext);
     return kv;
@@ -4022,12 +4178,12 @@ export class TinyCloudNode {
     // Cache a properly authorized public KV service using the new delegation
     if (this._serviceContext) {
       const publicKV = new KVService({ prefix: "" });
-      const publicContext = new ServiceContext({
-        invoke: this.invokeWithRuntimePermissions,
-        fetch: this._serviceContext.fetch,
+      const publicContext = this._serviceGraph.track(new ServiceContext({
+        invoke: this._serviceGraph.invoke,
+        fetch: this._serviceGraph.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
-      });
+      }));
       publicContext.setSession({
         delegationHeader: delegationSession.delegationHeader,
         delegationCid: delegationSession.delegationCid,
