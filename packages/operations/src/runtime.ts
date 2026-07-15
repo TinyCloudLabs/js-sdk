@@ -120,6 +120,18 @@ export async function createInvocationRuntime(
       : typeof profile.privateKey === "string"
       ? profile.privateKey
       : undefined;
+    const selectedPosture = profile.authMethod === "local"
+      ? "local-owner-key"
+      : summary.posture;
+    if (selectedPosture !== summary.posture) {
+      return failed(
+        { ...summary, posture: selectedPosture },
+        operationError(
+          "PROFILE_POSTURE_NOT_ALLOWED",
+          "The selected profile authentication material does not match its posture.",
+        ),
+      );
+    }
     const node = new TinyCloudNode({
       host: summary.host,
       ...(privateKey === undefined ? {} : { privateKey }),

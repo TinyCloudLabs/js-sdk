@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { TinyCloudNode } from "@tinycloud/node-sdk";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
@@ -137,6 +138,45 @@ test("never falls back to a configured profile when the pinned profile disappear
       retryable: false,
     },
   });
+});
+
+test("rejects a delegate profile with local owner material before sign-in or runtime execution", async () => {
+  await writeJsonAtomic(profileConfigPath("incoherent"), {
+    name: "incoherent",
+    host: "https://node.example",
+    chainId: 1,
+    spaceName: "secrets",
+    did: "did:key:delegate",
+    sessionDid: "did:key:delegate",
+    posture: "delegate-session",
+    authMethod: "local",
+    privateKey: "1".padStart(64, "0"),
+    createdAt: "2026-07-14T12:00:00.000Z",
+  });
+  const signIn = spyOn(TinyCloudNode.prototype, "signIn").mockImplementation(async () => {
+    throw new Error("owner sign-in must not be reached");
+  });
+
+  try {
+    const result = await createInvocationRuntime({ profile: "incoherent" });
+
+    expect(result).toEqual({
+      ok: false,
+      context: {
+        profile: "incoherent",
+        host: "unresolved",
+        posture: "unauthenticated",
+      },
+      error: {
+        code: "PROFILE_NOT_FOUND",
+        message: 'Profile "incoherent" is not available.',
+        retryable: false,
+      },
+    });
+    expect(signIn).not.toHaveBeenCalled();
+  } finally {
+    signIn.mockRestore();
+  }
 });
 
 function validatedDelegation(

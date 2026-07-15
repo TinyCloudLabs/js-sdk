@@ -1,4 +1,7 @@
 import { afterAll, beforeEach, expect, mock, spyOn, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { jcsCanonicalize } from "@tinycloud/sdk-core/policy";
 import { z } from "zod";
 
@@ -14,6 +17,7 @@ import * as artifacts from "./artifacts.js";
 import { invokeOperation } from "./invoke.js";
 import * as registry from "./registry.js";
 import * as runtime from "./runtime.js";
+import { profileConfigPath, writeJsonAtomic } from "./state.js";
 
 type TestInput = {
   readonly name: string;
@@ -43,6 +47,7 @@ spyOn(registry, "lookupOperation").mockImplementation((operationId, operationVer
     : { status: "found", definition: definition as unknown as OperationDefinition<unknown, unknown> };
 });
 
+const actualCreateInvocationRuntime = runtime.createInvocationRuntime;
 spyOn(runtime, "createInvocationRuntime").mockImplementation((
   target: InvocationTarget,
   requirement: OperationRuntimeRequirement = "authenticated",
@@ -313,6 +318,60 @@ test("fails closed when the authenticated resolution changes from inspection pos
     error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" },
   });
   expect(calls).toBe(2);
+});
+
+test("rejects incoherent local owner material before invocation can sign in or execute", async () => {
+  const home = await mkdtemp(`${tmpdir()}/tinycloud-operations-invoke-posture-`);
+  const previousHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  let handlerRan = false;
+  const signIn = spyOn(TinyCloudNode.prototype, "signIn").mockImplementation(async () => {
+    throw new Error("owner sign-in must not be reached");
+  });
+  definitions = [createDefinition({
+    authority: async () => [],
+    execute: async () => {
+      handlerRan = true;
+      return { status: "ok", output: { value: "must-not-run" } };
+    },
+  })];
+  resolver = async (target, requirement) =>
+    await actualCreateInvocationRuntime(target, requirement) as RuntimeResolution;
+
+  try {
+    await writeJsonAtomic(profileConfigPath("incoherent"), {
+      name: "incoherent",
+      host: "https://node.example",
+      chainId: 1,
+      spaceName: "secrets",
+      did: "did:key:delegate",
+      sessionDid: "did:key:delegate",
+      posture: "delegate-session",
+      authMethod: "local",
+      privateKey: "1".padStart(64, "0"),
+      createdAt: "2026-07-14T12:00:00.000Z",
+    });
+
+    const result = await invokeOperation(
+      "tinycloud.test.get",
+      1,
+      { profile: "incoherent" },
+      { name: "valid" },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      context: { profile: "incoherent", posture: "unauthenticated" },
+      error: { code: "PROFILE_NOT_FOUND" },
+    });
+    expect(signIn).not.toHaveBeenCalled();
+    expect(handlerRan).toBe(false);
+  } finally {
+    signIn.mockRestore();
+    if (previousHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousHome;
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test("sanitizes malformed runtime permission hints without creating a broad request", async () => {
