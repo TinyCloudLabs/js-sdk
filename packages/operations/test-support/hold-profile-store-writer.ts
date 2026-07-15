@@ -6,6 +6,7 @@ import {
   writeJsonAtomic,
 } from "../src/state.js";
 import {
+  PROFILE_LOCK_HOLDER_RELEASE_TIMEOUT_MS,
   signalProfileLockProtocol,
   waitForProfileLockProtocol,
 } from "../src/test-support/profile-lock-protocol.js";
@@ -27,7 +28,11 @@ const record = JSON.parse(encodedRecord) as Record<string, unknown>;
 await withProfileLock(profile, async () => {
   const current = await readProfileStore<Record<string, unknown>>(profile, store);
   await signalProfileLockProtocol(readyPath);
-  await waitForProfileLockProtocol(releasePath, "the parent to release the profile lock");
+  await waitForProfileLockProtocol(
+    releasePath,
+    "the parent to release the profile lock",
+    PROFILE_LOCK_HOLDER_RELEASE_TIMEOUT_MS,
+  );
 
   const next = current.records.filter((candidate) => recordKey(store, candidate) !== key);
   next.push(record);
