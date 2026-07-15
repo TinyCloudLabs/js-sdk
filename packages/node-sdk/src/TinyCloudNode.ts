@@ -3702,13 +3702,16 @@ export class TinyCloudNode {
     return this.delegationManager.status(cid);
   }
 
-  /** Compute the canonical CID of a compact delegation authorization. */
+  /** Compute the canonical CID of a compact UCAN or DAG-CBOR delegation authorization. */
   computeDelegationCid(authorization: string): string {
     if (!authorization || !this.wasmBindings.computeCid) {
       throw new Error("Delegation CID computation is unavailable");
     }
+    const compact = authorization.replace(/^Bearer /i, "");
     return this.wasmBindings.computeCid(
-      new TextEncoder().encode(authorization),
+      compact.includes(".")
+        ? new TextEncoder().encode(compact)
+        : decodeAuthorizationBytes(authorization),
       0x55n,
     );
   }

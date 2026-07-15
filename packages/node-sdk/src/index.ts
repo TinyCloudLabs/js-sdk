@@ -199,12 +199,19 @@ export { NodeWasmBindings } from "./NodeWasmBindings";
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";
 export type { RestorableSession } from "./DelegatedAccess";
-export { serializeDelegation, deserializeDelegation, grantAuthRequest } from "./delegation";
+export {
+  serializeDelegation,
+  deserializeDelegation,
+  grantAuthRequest,
+  activateValidatedRuntimeDelegation,
+} from "./delegation";
 export type {
   PortableDelegation,
   AuthRequestArtifact,
   AuthDelegationArtifact,
   DelegationAuthority,
+  RuntimeDelegationActivator,
+  ValidatedRuntimeDelegation,
 } from "./delegation";
 
 // Re-export KV service values
