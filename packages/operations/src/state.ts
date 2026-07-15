@@ -7,12 +7,13 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 
 const DEFAULT_PROFILE = "default";
 const DEFAULT_LOCK_TIMEOUT_MS = 2_000;
 const DEFAULT_LOCK_RETRY_MS = 25;
 const DEFAULT_STALE_LOCK_MS = 30_000;
+const TEST_LOCK_CONTENTION_SIGNAL_PATH = "TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH";
 
 export type ProfileStoreName =
   | "session"
@@ -286,6 +287,7 @@ async function acquireProfileLock(
       };
     } catch (error) {
       if (!isLockAlreadyHeld(error)) throw error;
+      await signalTestLockContention(profile);
     }
 
     if (await recoverStaleLock(lockPath, staleAfterMs)) continue;
@@ -296,6 +298,36 @@ async function acquireProfileLock(
     }
     await sleep(Math.min(retryMs, timeoutMs - elapsedMs));
   }
+}
+
+/**
+ * Gives process-level contention tests an event-driven witness that a second
+ * writer has reached an already-held lock. This deliberately has no effect
+ * outside an explicit test environment, and only creates a new signal file
+ * beneath TC_HOME; it never changes lock acquisition or release semantics.
+ */
+async function signalTestLockContention(profile: string): Promise<void> {
+  if (process.env.NODE_ENV !== "test") return;
+
+  const configuredPath = process.env[TEST_LOCK_CONTENTION_SIGNAL_PATH];
+  const configuredHome = process.env.TC_HOME;
+  if (!configuredPath || !configuredHome) return;
+
+  const home = resolve(configuredHome);
+  const signalPath = resolve(configuredPath);
+  const pathFromHome = relative(home, signalPath);
+  if (
+    pathFromHome === "" ||
+    pathFromHome === ".." ||
+    pathFromHome.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
+    pathFromHome.startsWith("../") ||
+    pathFromHome.startsWith("..\\")
+  ) {
+    return;
+  }
+
+  await writeFile(signalPath, `${profile}\n`, { encoding: "utf8", flag: "wx" })
+    .catch(() => undefined);
 }
 
 async function recoverStaleLock(lockPath: string, staleAfterMs: number): Promise<boolean> {
