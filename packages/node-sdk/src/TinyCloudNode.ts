@@ -2533,7 +2533,12 @@ export class TinyCloudNode {
       },
       onRootDelegationNeeded: this.signer ? async (params) => {
         graph.assertActive();
-        return this.createRootDelegationForSharing(params);
+        const delegation = await this.createRootDelegationForSharing(
+          params,
+          () => graph.assertActive(),
+        );
+        graph.assertActive();
+        return delegation;
       } : undefined,
     });
     const spaceService = new SpaceService({
@@ -3417,7 +3422,12 @@ export class TinyCloudNode {
       onRootDelegationNeeded: this.signer
         ? async (params) => {
           graph.assertActive();
-          return this.createRootDelegationForSharing(params);
+          const delegation = await this.createRootDelegationForSharing(
+            params,
+            () => graph.assertActive(),
+          );
+          graph.assertActive();
+          return delegation;
         }
         : undefined,
     });
@@ -3495,7 +3505,11 @@ export class TinyCloudNode {
    * with expiry longer than the current session.
    * @internal
    */
-  async createOwnerDelegation(params: CreateOwnerDelegationParams): Promise<OwnerDelegationReceipt> {
+  async createOwnerDelegation(
+    params: CreateOwnerDelegationParams,
+    assertActive?: () => void,
+  ): Promise<OwnerDelegationReceipt> {
+    assertActive?.();
     if (!params.delegateDid.startsWith("did:key:") || params.actions.length === 0 || params.path.length === 0) {
       throw new Error("Owner delegation requires an external did:key audience and bounded capabilities");
     }
@@ -3521,8 +3535,10 @@ export class TinyCloudNode {
       delegateUri: params.delegateDid,
     });
     const signature = await this.signer.signMessage(prepared.siwe);
+    assertActive?.();
     const delegationSession = this.wasmBindings.completeSessionSetup({ ...prepared, signature });
     const activation = await activateSessionWithHost(host, delegationSession.delegationHeader);
+    assertActive?.();
     if (!activation.success) {
       throw new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim());
     }
@@ -3557,7 +3573,7 @@ export class TinyCloudNode {
     path: string;
     actions: string[];
     requestedExpiry: Date;
-  }): Promise<Delegation | undefined> {
+  }, assertActive?: () => void): Promise<Delegation | undefined> {
     try {
       return (await this.createOwnerDelegation({
         delegateDid: params.shareKeyDID,
@@ -3565,8 +3581,9 @@ export class TinyCloudNode {
         path: params.path,
         actions: params.actions,
         expiresAt: params.requestedExpiry,
-      })).delegation;
+      }, assertActive)).delegation;
     } catch {
+      assertActive?.();
       return undefined;
     }
   }
@@ -4627,8 +4644,9 @@ export class TinyCloudNode {
       // the primary session's spaceId (the wrong-space class). Exclude the
       // primary explicitly; failure then degrades to
       // PermissionNotInManifestError instead of a wrong-space delegation.
+      const runtimeOperations = this.permissionEntriesToOperations(expandedEntries, session);
       const runtimeGrant = this.findGrantForOperations(
-        this.permissionEntriesToOperations(expandedEntries, session),
+        runtimeOperations,
         { excludePrimary: true },
       );
       if (runtimeGrant) {
@@ -4645,6 +4663,7 @@ export class TinyCloudNode {
           expandedEntries,
           runtimeExpiration,
           runtimeGrant,
+          runtimeOperations,
         );
         return { delegation, prompted: false };
       }
@@ -4861,7 +4880,9 @@ export class TinyCloudNode {
     entries: PermissionEntry[],
     expirationTime: Date,
     grant: RuntimePermissionGrant,
+    requestedOperations: RuntimePermissionOperation[],
   ): Promise<PortableDelegation> {
+    this.assertRuntimeGrantCaveatsPreservable(entries, requestedOperations, grant);
     this.assertDelegationCaveatsPreservable(entries);
     const result = this.createDelegationWrapper({
       session: grant.session,
@@ -4936,6 +4957,78 @@ export class TinyCloudNode {
     );
     if (caveated.length > 0) {
       throw new CaveatedDelegationUnsupportedError(caveated);
+    }
+  }
+
+  /**
+   * Runtime grant selection intentionally allows an uncaveated operation to
+   * select a caveated grant so invocation can restore the signed caveat before
+   * crossing the caveat-aware WASM boundary. Child delegation cannot do that:
+   * it only accepts action maps, so reject the selected constrained branch.
+   */
+  private assertRuntimeGrantCaveatsPreservable(
+    entries: PermissionEntry[],
+    requestedOperations: RuntimePermissionOperation[],
+    grant: RuntimePermissionGrant,
+  ): void {
+    let operationIndex = 0;
+    const caveated: PermissionEntry[] = [];
+    for (const entry of entries) {
+      for (const action of entry.actions) {
+        const requested = requestedOperations[operationIndex++];
+        if (!requested) continue;
+        const constrained = grant.operations.find((granted) =>
+          this.operationCovers(granted, requested) &&
+          !recapCaveatsEqual(granted.caveats, undefined),
+        );
+        if (constrained) {
+          caveated.push({
+            ...entry,
+            actions: [action],
+            caveats: cloneRecapCaveats(constrained.caveats),
+          });
+        }
+      }
+    }
+    if (caveated.length > 0) {
+      throw new CaveatedDelegationUnsupportedError(caveated);
+    }
+  }
+
+  /** Reject caveated parent branches before action-only child signing. */
+  private assertPortableDelegationCaveatsPreservable(
+    delegation: PortableDelegation,
+  ): void {
+    const entries: PermissionEntry[] = [];
+    const add = (
+      service: string,
+      space: string,
+      path: string,
+      actions: string[],
+      caveats: readonly Record<string, unknown>[] | undefined,
+    ): void => {
+      if (recapCaveatsEqual(caveats, undefined)) return;
+      entries.push({
+        service: service.startsWith("tinycloud.") ? service : `tinycloud.${service}`,
+        space,
+        path,
+        actions: [...actions],
+        caveats: cloneRecapCaveats(caveats),
+      });
+    };
+
+    add(
+      delegation.actions[0]?.split("/", 1)[0] ?? "tinycloud.unknown",
+      delegation.spaceId,
+      delegation.path,
+      delegation.actions,
+      delegation.caveats,
+    );
+    for (const resource of delegation.resources ?? []) {
+      add(resource.service, resource.space, resource.path, resource.actions, resource.caveats);
+    }
+    if (entries.length > 0) {
+      throw new CaveatedDelegationUnsupportedError(entries);
     }
   }
 
@@ -5930,6 +6023,8 @@ export class TinyCloudNode {
       expiryMs?: number;
     }
   ): Promise<PortableDelegation> {
+    this.assertPortableDelegationCaveatsPreservable(parentDelegation);
+
     if (!this.signer) {
       throw new Error("Cannot createSubDelegation() in session-only mode. Requires wallet mode.");
     }

@@ -352,6 +352,7 @@ export {
   DEFAULT_MANIFEST_VERSION,
   VAULT_PERMISSION_SERVICE,
   // Errors raised by delegateTo / requestPermissions.
+  CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,

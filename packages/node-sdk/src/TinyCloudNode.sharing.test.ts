@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
-import type { EncodedShareData, ISessionManager, IWasmBindings } from "@tinycloud/sdk-core";
+import {
+  CapabilityKeyRegistry,
+  CaveatedDelegationUnsupportedError,
+  type EncodedShareData,
+  type ISessionManager,
+  type IWasmBindings,
+} from "@tinycloud/sdk-core";
 import { Wallet } from "ethers";
 
 import { TinyCloudNode } from "./TinyCloudNode";
@@ -8,6 +14,8 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import { deserializeDelegation, serializeDelegation } from "./delegation";
 
 const originalFetch = globalThis.fetch;
+const OWNER = "0xD559CCd9EB87c530A9a349262669386dE93cf412";
+const SPACE = `tinycloud:pkh:eip155:1:${OWNER}:applications`;
 
 function makeFakeSessionManager(): ISessionManager {
   return {
@@ -15,7 +23,7 @@ function makeFakeSessionManager(): ISessionManager {
     replaceSessionKey: (_jwk: object, keyId: string) => keyId,
     renameSessionKeyId: () => {},
     getDID: (keyId: string) => `did:key:${keyId}`,
-    jwk: () => JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "test" }),
+    jwk: () => JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "test", d: "test" }),
   };
 }
 
@@ -76,6 +84,118 @@ describe("TinyCloudNode sharing", () => {
         "xyz.tinycloud.tinychat/threads": ["tinycloud.sql/read"],
       },
     });
+  });
+
+  test("rejects every meaningful parent caveat branch before sub-delegation signing", async () => {
+    const wasmBindings = makeWasmBindings();
+    const signer = { signMessage: mock(async () => "signature") };
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer: signer as any,
+      wasmBindings,
+    });
+    (node as any)._address = OWNER;
+    (node as any)._chainId = 1;
+    const parent = {
+      cid: "parent-cid",
+      delegationHeader: { Authorization: "parent.header.signature" },
+      spaceId: SPACE,
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+      expiry: new Date(Date.now() + 60 * 60_000),
+      delegateDID: "did:key:z6MkReceiver",
+      ownerAddress: OWNER,
+      chainId: 1,
+    };
+    const cases = [
+      { caveats: [{ tenant: "alpha" }] },
+      { caveats: [{}, { tenant: "alpha" }] },
+      {
+        resources: [{
+          service: "kv",
+          space: SPACE,
+          path: "shared",
+          actions: ["tinycloud.kv/get"],
+          caveats: [{ tenant: "alpha" }],
+        }],
+      },
+    ];
+
+    for (const parentCaveats of cases) {
+      const result = node.createSubDelegation(
+        { ...parent, ...parentCaveats },
+        {
+          path: "shared",
+          actions: ["tinycloud.kv/get"],
+          delegateDID: "did:key:z6MkChild",
+        },
+      );
+      await expect(result).rejects.toBeInstanceOf(CaveatedDelegationUnsupportedError);
+      await expect(result).rejects.toMatchObject({
+        code: "CAVEATED_DELEGATION_UNSUPPORTED",
+      });
+    }
+
+    expect(wasmBindings.prepareSession).not.toHaveBeenCalled();
+    expect(signer.signMessage).not.toHaveBeenCalled();
+  });
+
+  test("does not activate a root share after its owner-signer graph retires", async () => {
+    const wasmBindings = makeWasmBindings();
+    let releaseSignature!: () => void;
+    let markSigningStarted!: () => void;
+    const signingStarted = new Promise<void>((resolve) => {
+      markSigningStarted = resolve;
+    });
+    const signer = {
+      signMessage: mock(async () => {
+        markSigningStarted();
+        await new Promise<void>((resolve) => {
+          releaseSignature = resolve;
+        });
+        return "signature";
+      }),
+    };
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer: signer as any,
+      wasmBindings,
+    });
+    const session = {
+      address: OWNER,
+      chainId: 1,
+      sessionKey: "default",
+      spaceId: SPACE,
+      delegationCid: "parent-cid",
+      delegationHeader: { Authorization: "parent.header.signature" },
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP", crv: "Ed25519", x: "test", d: "test" },
+      siwe: "signed session",
+      signature: "signature",
+    };
+    (node as any).auth = { tinyCloudSession: session };
+    (node as any)._address = OWNER;
+    (node as any)._chainId = 1;
+    (node as any).initializeV2Services({
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      spaceId: session.spaceId,
+      verificationMethod: session.verificationMethod,
+      jwk: session.jwk,
+    });
+    (node.sharing as any).registry = new CapabilityKeyRegistry();
+    globalThis.fetch = mock(async () => new Response(null, { status: 200 })) as typeof fetch;
+
+    const result = node.sharing.generate({
+      path: "outside-the-session-recap",
+      actions: ["tinycloud.kv/get"],
+    });
+    await signingStarted;
+    (node as any)._serviceGraph.retire();
+    releaseSignature();
+
+    await expect(result).resolves.toMatchObject({ ok: false });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   test("real WASM attenuates a received share and the child survives transport/useDelegation", async () => {

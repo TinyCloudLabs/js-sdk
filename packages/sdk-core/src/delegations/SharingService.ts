@@ -39,9 +39,13 @@ import { DelegationErrorCodes } from "./types";
 import type { DelegationManager } from "./DelegationManager";
 import type { ICapabilityKeyRegistry } from "../authorization/CapabilityKeyRegistry";
 import { validateEncodedShareData } from "./SharingService.schema.js";
-import { SERVICE_LONG_TO_SHORT } from "../manifest";
+import { SERVICE_LONG_TO_SHORT, type PermissionEntry } from "../manifest";
 import { principalDid } from "../identity";
-import { actionContains } from "../capabilities";
+import {
+  actionContains,
+  CaveatedDelegationUnsupportedError,
+  recapCaveatsEqual,
+} from "../capabilities";
 import { bases } from "multiformats/basics";
 import { ed25519 } from "@noble/curves/ed25519";
 
@@ -604,7 +608,11 @@ export class SharingService implements ISharingService {
     try {
       const shareKeyName = `share:${Date.now()}:${Math.random().toString(36).substring(2, 10)}`;
       keyId = await this.keyProvider.createSessionKey(shareKeyName);
+      const keyCreationActiveError = this.retiredGraphError();
+      if (keyCreationActiveError) return { ok: false, error: keyCreationActiveError };
       keyDid = await this.keyProvider.getDID(keyId);
+      const keyDidActiveError = this.retiredGraphError();
+      if (keyDidActiveError) return { ok: false, error: keyDidActiveError };
       keyJwk = this.keyProvider.getJWK(keyId) as JWK;
 
       // Ensure the private key is included
@@ -659,6 +667,8 @@ export class SharingService implements ISharingService {
     if (canSatisfyFromRegistry) {
       // An existing key can satisfy this request - use session delegation (no prompt)
       const delegationResult = await this.createSessionDelegation(plainDID, fullPath, actions, expiry);
+      const childDelegationActiveError = this.retiredGraphError();
+      if (childDelegationActiveError) return { ok: false, error: childDelegationActiveError };
       const parsed = handleDelegationResult(delegationResult);
       if ('ok' in parsed && parsed.ok === false) {
         return parsed;
@@ -674,6 +684,8 @@ export class SharingService implements ISharingService {
           actions,
           requestedExpiry,
         });
+        const rootDelegationActiveError = this.retiredGraphError();
+        if (rootDelegationActiveError) return { ok: false, error: rootDelegationActiveError };
 
         if (rootDelegation) {
           delegation = rootDelegation;
@@ -706,6 +718,9 @@ export class SharingService implements ISharingService {
         ),
       };
     }
+
+    const finalActiveError = this.retiredGraphError();
+    if (finalActiveError) return { ok: false, error: finalActiveError };
 
     // Step 3: Package the share data
     const shareData: EncodedShareData = {
@@ -862,6 +877,9 @@ export class SharingService implements ISharingService {
     actions: string[],
     expiry: Date
   ): Promise<Delegation | Result<never, DelegationError>> {
+    const activeError = this.retiredGraphError();
+    if (activeError) return { ok: false, error: activeError };
+
     if (!this.session) {
       return {
         ok: false,
@@ -918,6 +936,8 @@ export class SharingService implements ISharingService {
           },
           expirationSecs: Math.floor(expiry.getTime() / 1000),
         });
+        const childSigningActiveError = this.retiredGraphError();
+        if (childSigningActiveError) return { ok: false, error: childSigningActiveError };
 
         // Register the delegation with the server
         const registerRes = await this.fetchFn(`${this.host}/delegate`, {
@@ -926,9 +946,13 @@ export class SharingService implements ISharingService {
             Authorization: wasmResult.delegation,
           },
         });
+        const registrationActiveError = this.retiredGraphError();
+        if (registrationActiveError) return { ok: false, error: registrationActiveError };
 
         if (!registerRes.ok) {
           const errorText = await registerRes.text();
+          const registrationTextActiveError = this.retiredGraphError();
+          if (registrationTextActiveError) return { ok: false, error: registrationTextActiveError };
           return {
             ok: false,
             error: createError(
@@ -988,6 +1012,8 @@ export class SharingService implements ISharingService {
       const delegationResult = this.createDelegationFn
         ? await this.createDelegationFn(delegationParams)
         : await this.delegationManager!.create(delegationParams);
+      const delegationCreationActiveError = this.retiredGraphError();
+      if (delegationCreationActiveError) return { ok: false, error: delegationCreationActiveError };
 
       if (!delegationResult.ok) {
         return {
@@ -1149,6 +1175,7 @@ export class SharingService implements ISharingService {
     const decoded = this.decodeLinkWithValidation(link);
     if (!decoded.ok) return decoded;
     const shareData = decoded.data;
+    this.assertDelegationCaveatsPreservable(shareData.delegation);
 
     const parentExpiry = new Date(shareData.delegation.expiry);
     const now = new Date();
@@ -1299,6 +1326,8 @@ export class SharingService implements ISharingService {
         abilities: { [service]: { [path]: actions } },
         expirationSecs: Math.floor(expiry.getTime() / 1000),
       });
+      const childSigningActiveError = this.retiredGraphError();
+      if (childSigningActiveError) return { ok: false, error: childSigningActiveError };
       const verifiedChild = verifySignedChild(result, {
         delegateDID,
         issuerDID: principalDid(shareData.keyDid),
@@ -1326,6 +1355,8 @@ export class SharingService implements ISharingService {
         redirect: "error" as const,
       };
       const registration = await this.fetchFn(new URL("/delegate", trustedHost).toString(), registrationInit);
+      const registrationActiveError = this.retiredGraphError();
+      if (registrationActiveError) return { ok: false, error: registrationActiveError };
       if (!registration.ok) {
         throw new Error(`node rejected child delegation (${registration.status})`);
       }
@@ -1371,6 +1402,23 @@ export class SharingService implements ISharingService {
         ),
       };
     }
+  }
+
+  /**
+   * The child-delegation WASM boundary accepts action-only abilities. Reject
+   * every constrained parent branch before that boundary can broaden it.
+   */
+  private assertDelegationCaveatsPreservable(delegation: Delegation): void {
+    if (recapCaveatsEqual(delegation.caveats, undefined)) return;
+    const service = delegation.actions[0]?.split("/", 1)[0] ?? "tinycloud.unknown";
+    const entry: PermissionEntry = {
+      service,
+      space: delegation.spaceId,
+      path: delegation.path,
+      actions: [...delegation.actions],
+      caveats: delegation.caveats ?? [],
+    };
+    throw new CaveatedDelegationUnsupportedError([entry]);
   }
 
   /**

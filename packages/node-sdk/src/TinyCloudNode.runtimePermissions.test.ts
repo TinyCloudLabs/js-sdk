@@ -577,6 +577,79 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect((node as any).wasmBindings.createDelegation).not.toHaveBeenCalled();
   });
 
+  test("rejects an uncaveated public request selected against a caveated runtime grant", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const spaceId = `tinycloud:pkh:eip155:1:${address}:default`;
+    const caveats = [{ tenant: "alpha", nested: { region: "us-east-1" } }];
+    const operation = {
+      spaceId,
+      service: "kv",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      action: "tinycloud.kv/put",
+      caveats,
+    };
+    const grant = {
+      session: {
+        delegationHeader: { Authorization: "runtime-token" },
+        delegationCid: "runtime-cid",
+        spaceId,
+        verificationMethod: "did:key:default",
+        jwk: { kty: "OKP" },
+      },
+      delegation: {
+        cid: "runtime-cid",
+        delegationHeader: { Authorization: "runtime-token" },
+        spaceId,
+        path: operation.path,
+        actions: [operation.action],
+        caveats,
+        expiry: new Date(Date.now() + 3_600_000),
+        delegateDID: "did:key:default",
+        ownerAddress: address,
+        chainId: 1,
+      },
+      operations: [operation],
+      expiresAt: new Date(Date.now() + 3_600_000),
+      provenance: "delegated" as const,
+    };
+    (node as any).runtimePermissionGrants = [grant];
+    const selectGrant = mock((operations: unknown[], options: unknown) =>
+      (node as any).__selectRuntimeGrant(operations, options),
+    );
+    (node as any).__selectRuntimeGrant = (node as any).findGrantForOperations.bind(node);
+    (node as any).findGrantForOperations = selectGrant;
+
+    const result = node.createDelegation({
+      path: operation.path,
+      actions: [operation.action],
+      delegateDID: "did:key:backend",
+    });
+
+    await expect(result).rejects.toMatchObject({
+      name: "CaveatedDelegationUnsupportedError",
+      code: "CAVEATED_DELEGATION_UNSUPPORTED",
+      entries: [{ caveats }],
+    });
+    expect(selectGrant).toHaveBeenCalledTimes(1);
+    const [selectedOperations, selectedOptions] = selectGrant.mock.calls[0] as [
+      Array<Record<string, unknown>>,
+      { excludePrimary: boolean },
+    ];
+    expect(selectedOperations).toEqual([expect.objectContaining({
+      spaceId: operation.spaceId,
+      service: operation.service,
+      path: operation.path,
+      action: operation.action,
+    })]);
+    expect(selectedOperations[0]?.caveats).toBeUndefined();
+    expect(selectedOptions).toEqual({ excludePrimary: true });
+    expect((node as any).wasmBindings.createDelegation).not.toHaveBeenCalled();
+  });
+
   test("rejects caveated runtime grants before preparing an action-only session", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,

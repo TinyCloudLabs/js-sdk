@@ -3,6 +3,7 @@ import type { ServiceSession } from "@tinycloud/sdk-services";
 import { bases } from "multiformats/basics";
 import { ed25519 } from "@noble/curves/ed25519";
 import { CapabilityKeyRegistry } from "../authorization/CapabilityKeyRegistry";
+import { CaveatedDelegationUnsupportedError } from "../capabilities";
 import { SharingService, type EncodedShareData } from "./SharingService";
 import type { CreateDelegationWasmParams, KeyProvider } from "./types";
 
@@ -34,7 +35,10 @@ function childToken(params: CreateDelegationWasmParams, actions = Object.values(
   ].join(".");
 }
 
-function makeService() {
+function makeService(options: {
+  assertActive?: () => void;
+  fetch?: typeof globalThis.fetch;
+} = {}) {
   const createDelegationWasm = mock((params: CreateDelegationWasmParams) => ({
     delegation: childToken(params),
     cid: "bafy-child",
@@ -47,7 +51,7 @@ function makeService() {
       actions: Object.values(params.abilities.kv)[0],
     }],
   }));
-  const fetch = mock(async () => new Response(null, { status: 200 }));
+  const fetch = options.fetch ?? mock(async () => new Response(null, { status: 200 }));
   const service = new SharingService({
     hosts: [HOST],
     invoke: mock(async () => ({ ok: true, data: undefined })) as never,
@@ -57,6 +61,7 @@ function makeService() {
     createKVService: mock(() => ({})) as never,
     createDelegationWasm,
     computeCid: () => "bafy-child",
+    assertActive: options.assertActive,
   });
   return { service, createDelegationWasm, fetch };
 }
@@ -150,6 +155,144 @@ describe("SharingService.delegateReceivedShare", () => {
       expect(createDelegationWasm).not.toHaveBeenCalled();
       expect(fetch).not.toHaveBeenCalled();
     }
+  });
+
+  test("rejects every meaningful parent caveat branch before signing or network access", async () => {
+    const unconstrained: Array<Record<string, unknown>[] | undefined> = [undefined, [], [{}]];
+    for (const caveats of unconstrained) {
+      const { service, createDelegationWasm, fetch } = makeService();
+      const result = await service.delegateReceivedShare(
+        shareLink(service, { caveats }),
+        { delegateDID: "did:key:z6MkFeedHost" },
+      );
+      expect(result.ok).toBe(true);
+      expect(createDelegationWasm).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+
+    const constrained: Record<string, unknown>[][] = [
+      [{ tenant: "alpha" }],
+      [{}, { tenant: "alpha" }],
+    ];
+    for (const caveats of constrained) {
+      const { service, createDelegationWasm, fetch } = makeService();
+      const result = service.delegateReceivedShare(
+        shareLink(service, { caveats }),
+        { delegateDID: "did:key:z6MkFeedHost" },
+      );
+      await expect(result).rejects.toBeInstanceOf(CaveatedDelegationUnsupportedError);
+      await expect(result).rejects.toMatchObject({
+        code: "CAVEATED_DELEGATION_UNSUPPORTED",
+        entries: [{ caveats }],
+      });
+      expect(createDelegationWasm).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  });
+
+  test("does not report a registered child after its service graph retires", async () => {
+    let active = true;
+    let releaseRegistration!: (response: Response) => void;
+    let markRegistrationStarted!: () => void;
+    const registrationStarted = new Promise<void>((resolve) => {
+      markRegistrationStarted = resolve;
+    });
+    const fetch = mock(() => new Promise<Response>((resolve) => {
+      releaseRegistration = resolve;
+      markRegistrationStarted();
+    })) as unknown as typeof globalThis.fetch;
+    const { service } = makeService({
+      fetch,
+      assertActive: () => {
+        if (!active) throw new Error("retired");
+      },
+    });
+
+    const result = service.delegateReceivedShare(shareLink(service), {
+      delegateDID: "did:key:z6MkFeedHost",
+    });
+    await registrationStarted;
+    active = false;
+    releaseRegistration(new Response(null, { status: 200 }));
+
+    await expect(result).resolves.toMatchObject({
+      ok: false,
+      error: { code: "NOT_INITIALIZED" },
+    });
+  });
+
+  test("does not report a generated share after its service graph retires during registration", async () => {
+    let active = true;
+    let releaseRegistration!: (response: Response) => void;
+    let markRegistrationStarted!: () => void;
+    const registrationStarted = new Promise<void>((resolve) => {
+      markRegistrationStarted = resolve;
+    });
+    const fetch = mock(() => new Promise<Response>((resolve) => {
+      releaseRegistration = resolve;
+      markRegistrationStarted();
+    })) as unknown as typeof globalThis.fetch;
+    const registry = new CapabilityKeyRegistry();
+    registry.registerKey({
+      id: "parent-key",
+      did: "did:key:z6MkParent",
+      type: "session",
+      priority: 0,
+    }, [{
+      cid: "bafy-parent",
+      delegateDID: "did:key:z6MkParent",
+      spaceId: SPACE,
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+      expiry: PARENT_EXPIRY,
+      isRevoked: false,
+      allowSubDelegation: true,
+    }]);
+    const session: ServiceSession = {
+      delegationHeader: { Authorization: "parent.header.signature" },
+      delegationCid: "bafy-parent",
+      spaceId: SPACE,
+      verificationMethod: "did:key:z6MkParent#z6MkParent",
+      jwk: { kty: "OKP", crv: "Ed25519", x: "parent-x", d: "parent-d" },
+    };
+    const service = new SharingService({
+      hosts: [HOST],
+      session,
+      invoke: mock(async () => ({ ok: true, data: undefined })) as never,
+      fetch,
+      keyProvider: {
+        createSessionKey: mock(async () => "share-key"),
+        getDID: mock(async () => "did:key:z6MkShare#z6MkShare"),
+        getJWK: mock(() => ({ kty: "OKP", crv: "Ed25519", x: "share-x", d: "share-d" })),
+      },
+      registry,
+      createKVService: mock(() => ({})) as never,
+      createDelegationWasm: mock((params: CreateDelegationWasmParams) => ({
+        delegation: "child.header.signature",
+        cid: "bafy-child",
+        delegateDID: params.delegateDID,
+        expiry: new Date(params.expirationSecs * 1000),
+        resources: [{
+          service: "kv",
+          space: params.spaceId,
+          path: Object.keys(params.abilities.kv)[0]!,
+          actions: Object.values(params.abilities.kv)[0]!,
+        }],
+      })),
+      assertActive: () => {
+        if (!active) throw new Error("retired");
+      },
+    });
+
+    const result = service.generate({ path: "shared", actions: ["tinycloud.kv/get"] });
+    await registrationStarted;
+    active = false;
+    releaseRegistration(new Response(null, { status: 200 }));
+
+    await expect(result).resolves.toMatchObject({
+      ok: false,
+      error: { code: "NOT_INITIALIZED" },
+    });
   });
 
   test("narrows a service wildcard while rejecting cross-service actions", async () => {
