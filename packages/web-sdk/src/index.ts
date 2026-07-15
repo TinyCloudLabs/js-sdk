@@ -6,6 +6,7 @@ export {
   SessionRestoreResult,
   SessionRestoreStatus,
 } from "./modules/tcw";
+export type { SecretReadInput, SecretReadResult } from "@tinycloud/node-sdk";
 
 // Browser Adapters
 export {

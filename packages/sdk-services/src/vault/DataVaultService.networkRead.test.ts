@@ -6,7 +6,6 @@ import {
   base64Encode,
   canonicalHashHex,
   canonicalize,
-  DecryptTransportResponseError,
   EncryptionService,
   hexEncode,
   utf8Encode,
@@ -15,6 +14,12 @@ import {
   type EncryptionCrypto,
   type NetworkDescriptor,
 } from "../encryption";
+import {
+  clearTinyCloudDebugLogs,
+  disableTinyCloudDebug,
+  enableTinyCloudDebug,
+  getTinyCloudDebugLogs,
+} from "../debug";
 import { KVService } from "../kv/KVService";
 import { DataVaultService, type VaultCrypto } from "./DataVaultService";
 
@@ -137,17 +142,34 @@ function decryptResponse(
   };
 }
 
-function createClassifiedVault() {
+function transportHttpError(status: number): Error & { status: number } {
+  const error = new Error("node transport message canary") as Error & {
+    status: number;
+  };
+  error.status = status;
+  Object.defineProperty(
+    error,
+    Symbol.for("@tinycloud/sdk-services/decrypt-transport-response"),
+    { value: true },
+  );
+  return error;
+}
+
+function createClassifiedVault(options?: {
+  telemetry?: (event: string, data: unknown) => void;
+  authorization?: string;
+}) {
   let localDecryptFails = false;
   let kvResponse = async () => new Response("missing", { status: 404 });
   let decrypt = async (input: { canonicalBody: string }) =>
     decryptResponse(crypto, input);
   const crypto = createEncryptionCrypto(() => localDecryptFails);
+  const authorization = options?.authorization ?? "test-authorization";
   const encryption = new EncryptionService({
     crypto,
     signer: {
       signDecryptInvocation: async (input) => ({
-        authorization: "test-authorization",
+        authorization,
         invocationCid: "bafy-classified-read",
         canonicalBody: canonicalize(input.body as any),
       }),
@@ -157,11 +179,14 @@ function createClassifiedVault() {
   });
   const context = new ServiceContext({
     hosts: ["https://tinycloud.test"],
-    invoke: () => ({ Authorization: "test-authorization" }),
+    invoke: () => ({ Authorization: authorization }),
     fetch: async () => kvResponse() as any,
+    ...(options?.telemetry
+      ? { telemetry: { enabled: true, onEvent: options.telemetry } }
+      : {}),
   });
   context.setSession({
-    delegationHeader: { Authorization: "test-authorization" },
+    delegationHeader: { Authorization: authorization },
     delegationCid: "bafy-delegation",
     spaceId: SPACE_ID,
     verificationMethod: "did:key:z6MkSession",
@@ -268,7 +293,7 @@ describe("DataVaultService.readNetworkEncrypted", () => {
     fixture.setLocalDecryptFails(false);
 
     fixture.setDecrypt(async () => {
-      throw new DecryptTransportResponseError(403);
+      throw transportHttpError(403);
     });
     expect(await fixture.vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
       status: "decrypt_failed",
@@ -281,5 +306,50 @@ describe("DataVaultService.readNetworkEncrypted", () => {
     expect(transport).toEqual({ status: "node_unreachable" });
     expect(JSON.stringify(transport)).not.toContain("canary");
     expect(JSON.stringify(transport)).not.toContain("sensitive value");
+  });
+
+  test("redacts classified-read canaries from debug logs and telemetry", async () => {
+    const telemetry: Array<{ event: string; data: unknown }> = [];
+    const delegationCanary = "delegation-token-canary";
+    const nodeBodyCanary = "raw-node-body-canary";
+    const secretCanary = "secret-value-canary";
+    const fixture = createClassifiedVault({
+      authorization: delegationCanary,
+      telemetry: (event, data) => telemetry.push({ event, data }),
+    });
+    const envelope = await fixture.encrypt({
+      value: secretCanary,
+      createdAt: "2026-07-15T00:00:00.000Z",
+      updatedAt: "2026-07-15T00:00:00.000Z",
+    });
+
+    enableTinyCloudDebug({ persist: false });
+    clearTinyCloudDebugLogs();
+    try {
+      fixture.setKvResponse(() => Promise.resolve(new Response(envelope, { status: 200 })));
+      await expect(fixture.vault.readNetworkEncrypted("secrets/API_KEY")).resolves.toMatchObject({
+        status: "ok",
+      });
+
+      fixture.setKvResponse(() =>
+        Promise.resolve(new Response(nodeBodyCanary, { status: 500 })),
+      );
+      await expect(fixture.vault.readNetworkEncrypted("secrets/API_KEY")).resolves.toEqual({
+        status: "read_failed",
+      });
+
+      const captured = JSON.stringify({
+        debug: getTinyCloudDebugLogs(),
+        telemetry,
+      });
+      for (const canary of [delegationCanary, nodeBodyCanary, secretCanary]) {
+        expect(captured).not.toContain(canary);
+      }
+      expect(captured).toContain("sdk.fetch.end");
+      expect(captured).toContain('"status":500');
+      expect(captured).toContain("sdk.kv.get");
+    } finally {
+      disableTinyCloudDebug({ persist: false });
+    }
   });
 });

@@ -30,4 +30,23 @@ describe("ServiceContext telemetry", () => {
 
     expect(events).toEqual([["service.response", { duration: 12 }]]);
   });
+
+  test("projects telemetry without changing subscriber payloads", () => {
+    const telemetry: Array<[string, unknown]> = [];
+    const subscribers: unknown[] = [];
+    const context = createContext({
+      enabled: true,
+      onEvent: (event, data) => telemetry.push([event, data]),
+    });
+    const payload = { action: "read", secret: "subscriber-canary" };
+    context.on("service.response", (data) => subscribers.push(data));
+
+    context.emit("service.response", payload);
+
+    expect(subscribers).toEqual([payload]);
+    expect(subscribers[0]).toBe(payload);
+    expect(telemetry).toEqual([
+      ["service.response", { action: "read", secret: "[REDACTED]" }],
+    ]);
+  });
 });

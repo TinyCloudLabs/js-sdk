@@ -1,3 +1,5 @@
+import { projectDiagnosticData } from "./diagnostics";
+
 export type TinyCloudDebugLevel = "debug";
 
 export interface TinyCloudDebugEvent {
@@ -242,6 +244,10 @@ export class TinyCloudDebugLogger {
   ): TinyCloudDebugEvent {
     const debugEvent: TinyCloudDebugEvent = {
       ...event,
+      ...(event.data === undefined
+        ? {}
+        : { data: projectDiagnosticData(event.data) }),
+      ...(event.message === undefined ? {} : { message: "[REDACTED]" }),
       sequence: ++this.sequence,
     };
 
