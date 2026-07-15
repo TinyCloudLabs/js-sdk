@@ -106,6 +106,7 @@ function createStatusDefinition(params: Readonly<{
     input: StatusInputSchema,
     output: StatusOutputSchema,
     effects: ["read"],
+    runtime: "inspection",
     postures: STATUS_POSTURES,
     exposure: STATUS_EXPOSURE,
     sensitivity: STATUS_SENSITIVITY,

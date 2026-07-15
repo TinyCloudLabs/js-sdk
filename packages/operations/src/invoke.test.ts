@@ -6,6 +6,7 @@ import type {
   InvocationTarget,
   OperationContext,
   OperationDefinition,
+  OperationRuntimeRequirement,
   RuntimeOperationContext,
 } from "./contract.js";
 import { createSafeOperationDiagnostic } from "./redaction.js";
@@ -25,7 +26,10 @@ let invocationTrace: string[] = [];
 type RuntimeResolution =
   | { ok: true; context: RuntimeOperationContext }
   | { ok: false; context: RuntimeOperationContext["summary"]; error: { code: "PROFILE_NOT_FOUND"; message: string; retryable: false } };
-let resolver: (target: InvocationTarget) => Promise<RuntimeResolution>;
+let resolver: (
+  target: InvocationTarget,
+  requirement: OperationRuntimeRequirement,
+) => Promise<RuntimeResolution>;
 
 spyOn(registry, "lookupOperation").mockImplementation((operationId, operationVersion) => {
   const matchingId = definitions.filter((definition) => definition.id === operationId);
@@ -39,7 +43,10 @@ spyOn(registry, "lookupOperation").mockImplementation((operationId, operationVer
     : { status: "found", definition: definition as unknown as OperationDefinition<unknown, unknown> };
 });
 
-spyOn(runtime, "createInvocationRuntime").mockImplementation((target: InvocationTarget) => resolver(target));
+spyOn(runtime, "createInvocationRuntime").mockImplementation((
+  target: InvocationTarget,
+  requirement: OperationRuntimeRequirement = "authenticated",
+) => resolver(target, requirement));
 
 spyOn(artifacts, "createOrReusePermissionRequest").mockImplementation(async (input) => {
   invocationTrace.push("persist");
@@ -193,25 +200,86 @@ test("plans and persists exact missing authority before it can execute a handler
   const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
 
   expect(result.status).toBe("authority_required");
-  expect(invocationTrace).toEqual(["runtime", "plan", "persist"]);
+  expect(invocationTrace).toEqual(["runtime", "runtime", "plan", "persist"]);
   expect(handlerRan).toBe(false);
 });
 
-test("rejects a broad planner capability without persisting a permission request", async () => {
-  let handlerRan = false;
-  definitions = [createDefinition({
-    authority: async () => [{ ...testCapability, path: "vault/secrets/*" }],
-    execute: async () => {
-      handlerRan = true;
-      return { status: "ok", output: { value: "unreachable" } };
-    },
-  })];
+test("rejects broad, caveated, and malformed planner capability hints without persisting", async () => {
+  const invalidRequirements: readonly unknown[] = [
+    [{ ...testCapability, path: "vault/secrets/*" }],
+    [{ ...testCapability, path: "/" }],
+    [{ ...testCapability, path: "vault/secrets/" }],
+    [{ ...testCapability, caveats: [{ tenant: "one" }] }],
+    { not: "an array" },
+  ];
 
-  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+  for (const requirement of invalidRequirements) {
+    let handlerRan = false;
+    definitions = [createDefinition({
+      authority: async () => requirement as never,
+      execute: async () => {
+        handlerRan = true;
+        return { status: "ok", output: { value: "unreachable" } };
+      },
+    })];
 
-  expect(result).toMatchObject({ status: "error", error: { code: "PERMISSION_HINT_INVALID" } });
+    const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+
+    expect(result).toMatchObject({ status: "error", error: { code: "PERMISSION_HINT_INVALID" } });
+    expect(handlerRan).toBe(false);
+  }
   expect(invocationTrace).toEqual([]);
-  expect(handlerRan).toBe(false);
+});
+
+test("requires explicit opt-in before authenticating either owner posture", async () => {
+  for (const posture of ["owner-openkey", "local-owner-key"] as const) {
+    const requirements: OperationRuntimeRequirement[] = [];
+    let planned = false;
+    let executed = false;
+    definitions = [createDefinition({
+      postures: [posture],
+      authority: async () => {
+        planned = true;
+        return [];
+      },
+      execute: async () => {
+        executed = true;
+        return { status: "ok", output: { value: "ok" } };
+      },
+    })];
+    resolver = async (_target, requirement) => {
+      requirements.push(requirement);
+      return {
+        ok: true,
+        context: {
+          summary: {
+            profile: "owner",
+            host: "https://node.example",
+            posture,
+            operatorType: "human",
+          },
+          runtime: { node: {}, granted: [] },
+        },
+      };
+    };
+
+    const blocked = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+    expect(blocked).toMatchObject({ status: "error", error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } });
+    expect(requirements).toEqual(["inspection"]);
+    expect(planned).toBe(false);
+    expect(executed).toBe(false);
+
+    const allowed = await invokeOperation(
+      "tinycloud.test.get",
+      1,
+      { allowOwnerProfile: true },
+      { name: "valid" },
+    );
+    expect(allowed).toMatchObject({ status: "ok", output: { value: "ok" } });
+    expect(requirements).toEqual(["inspection", "inspection", "authenticated"]);
+    expect(planned).toBe(true);
+    expect(executed).toBe(true);
+  }
 });
 
 test("sanitizes malformed runtime permission hints without creating a broad request", async () => {
@@ -605,6 +673,7 @@ function createDefinition(
     authority: async () => [],
     execute: async () => ({ status: "ok", output: { value: "ok" } }),
     ...overrides,
+    runtime: overrides.runtime ?? "authenticated",
   };
 }
 

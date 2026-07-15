@@ -1146,6 +1146,30 @@ export class TinyCloudNode {
   }
 
   /**
+   * Return the current session's signed ReCap capabilities after the session
+   * has been authenticated or restored. This is intentionally distinct from
+   * installed runtime delegations: it reports base-session authority only.
+   *
+   * Invalid or unparseable signed ReCap material throws so callers fail closed
+   * rather than treating a malformed session as unrestricted authority.
+   */
+  getVerifiedSessionCapabilities(): PermissionEntry[] {
+    const session = this.currentTinyCloudSession();
+    if (!session || !session.siwe) return [];
+    return parseRecapCapabilities(
+      (siwe: string) => this.parseRecapWithCaveats(siwe),
+      session.siwe,
+    ).map((entry) => entry.service === "tinycloud.encryption"
+      ? {
+        service: entry.service,
+        path: entry.path,
+        actions: [...entry.actions],
+        ...(entry.caveats === undefined ? {} : { caveats: entry.caveats }),
+      }
+      : entry);
+  }
+
+  /**
    * Get the Ethereum address for this user.
    */
   get address(): string | undefined {

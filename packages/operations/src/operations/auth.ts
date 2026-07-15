@@ -6,7 +6,11 @@ import {
 } from "@tinycloud/node-sdk";
 import { z } from "zod";
 
-import { canonicalizeCapabilities, evaluateAuthority } from "../authority.js";
+import {
+  canonicalizeCapabilities,
+  evaluateAuthority,
+  validateExactCapabilities,
+} from "../authority.js";
 import {
   createOrReusePermissionRequest,
   DelegationImportArtifactSchema,
@@ -16,7 +20,6 @@ import {
   type PermissionRequestArtifact,
 } from "../artifacts.js";
 import type {
-  CapabilityRequirement,
   OperationContext,
   OperationDefinition,
   OperationExecutionOutcome,
@@ -27,7 +30,11 @@ import type {
 } from "../contract.js";
 import { operationError } from "../errors.js";
 import { lookupOperation } from "../registry.js";
-import { readAdditionalDelegations, upsertProfileRecord } from "../state.js";
+import {
+  readSession,
+  updateProfileStoreWhileLocked,
+  withProfileLock,
+} from "../state.js";
 
 const PermissionEntrySchema = z.object({
   service: z.string().min(1),
@@ -37,6 +44,9 @@ const PermissionEntrySchema = z.object({
   skipPrefix: z.boolean().optional(),
   expiry: z.string().min(1).optional(),
   description: z.string().optional(),
+}).strict();
+const GrantedPermissionEntrySchema = PermissionEntrySchema.extend({
+  caveats: z.array(z.record(z.unknown())).optional(),
 }).strict();
 
 type CapabilitiesInput = Record<never, never>;
@@ -57,13 +67,14 @@ type AuthImportOutput = Readonly<{
   effectivePermissions: readonly PermissionEntry[];
   expiry: string;
   audience: string;
+  host: string;
   activated: true;
   alreadyPresent: boolean;
 }>;
 
 const EmptyInputSchema: z.ZodType<CapabilitiesInput> = z.object({}).strict();
 const CapabilitiesOutputSchema: z.ZodType<CapabilitiesOutput> = z.object({
-  capabilities: z.array(PermissionEntrySchema),
+  capabilities: z.array(GrantedPermissionEntrySchema),
 }).strict();
 const AuthRequestInputSchema: z.ZodType<AuthRequestInput> = z.union([
   z.object({ requestId: z.string().min(1) }).strict(),
@@ -102,6 +113,7 @@ const AuthImportOutputSchema: z.ZodType<AuthImportOutput> = z.object({
   effectivePermissions: z.array(PermissionEntrySchema),
   expiry: z.string().datetime({ offset: true }),
   audience: z.string().min(1),
+  host: z.string().min(1),
   activated: z.literal(true),
   alreadyPresent: z.boolean(),
 }).strict();
@@ -117,7 +129,9 @@ const AUTH_EXPOSURE: OperationExposure = {
   skill: { status: "required" },
   docs: { status: "required" },
 };
-const AUTH_SENSITIVITY: OperationSensitivity = { input: [], output: [] };
+const AUTH_CAPABILITIES_SENSITIVITY: OperationSensitivity = { input: [], output: [] };
+const AUTH_REQUEST_SENSITIVITY: OperationSensitivity = { input: ["/input"], output: [] };
+const AUTH_IMPORT_SENSITIVITY: OperationSensitivity = { input: [""], output: [] };
 
 /**
  * Internal I2 auth definitions. Registry integration intentionally owns their
@@ -137,9 +151,10 @@ export const authOperationDefinitions: readonly AuthOperationDefinition[] = [
     input: EmptyInputSchema,
     output: CapabilitiesOutputSchema,
     effects: ["read"],
+    runtime: "authenticated",
     postures: AUTH_POSTURES,
     exposure: AUTH_EXPOSURE,
-    sensitivity: AUTH_SENSITIVITY,
+    sensitivity: AUTH_CAPABILITIES_SENSITIVITY,
     authority: async () => [],
     execute: async (context: OperationContext): Promise<OperationExecutionOutcome<CapabilitiesOutput>> => ({
       status: "ok",
@@ -158,9 +173,10 @@ export const authOperationDefinitions: readonly AuthOperationDefinition[] = [
     input: AuthRequestInputSchema,
     output: AuthRequestOutputSchema,
     effects: ["local_write"],
+    runtime: "authenticated",
     postures: AUTH_POSTURES,
     exposure: AUTH_EXPOSURE,
-    sensitivity: AUTH_SENSITIVITY,
+    sensitivity: AUTH_REQUEST_SENSITIVITY,
     authority: async () => [],
     execute: (context: OperationContext, input: AuthRequestInput) => requestExactAuthority(
       context as RuntimeOperationContext,
@@ -175,9 +191,11 @@ export const authOperationDefinitions: readonly AuthOperationDefinition[] = [
     input: DelegationImportArtifactSchema,
     output: AuthImportOutputSchema,
     effects: ["local_write"],
+    runtime: "authenticated",
     postures: AUTH_POSTURES,
     exposure: AUTH_EXPOSURE,
-    sensitivity: AUTH_SENSITIVITY,
+    sensitivity: AUTH_IMPORT_SENSITIVITY,
+    invalidInputErrorCode: "DELEGATION_ARTIFACT_INVALID",
     authority: async () => [],
     execute: (context: OperationContext, input: DelegationImportArtifact) => importRequestBoundDelegation(
       context as RuntimeOperationContext,
@@ -202,7 +220,23 @@ async function requestExactAuthority(
       if (request === null) {
         return invalidInput("The requested authority request is not available for this session.");
       }
-      return { status: "ok", output: { missing: request.requested, request } };
+      if (request.profile !== context.summary.profile) {
+        return invalidInput("The requested authority request is not available for this profile.");
+      }
+      const required = exactCapabilities(request.requested);
+      if (required === undefined) {
+        return operationFailure(
+          "PERMISSION_HINT_INVALID",
+          "The stored authority request has invalid capabilities.",
+        );
+      }
+      if (evaluateAuthority(
+        context.runtime.granted as unknown as PermissionEntry[],
+        required,
+      ).satisfied) {
+        return { status: "ok", output: { missing: [] } };
+      }
+      return { status: "ok", output: { missing: required, request } };
     } catch {
       return internalFailure();
     }
@@ -274,108 +308,117 @@ async function importRequestBoundDelegation(
   context: RuntimeOperationContext,
   input: DelegationImportArtifact,
 ): Promise<OperationExecutionOutcome<AuthImportOutput>> {
-  const sessionDid = context.summary.sessionDid;
-  if (sessionDid === undefined) return missingSession();
-
   try {
-    const requests = await listPermissionRequests(context.summary.profile);
-    const request = requests.find((candidate) => candidate.requestId === input.requestId);
-    if (request === undefined) {
-      return operationFailure(
-        "DELEGATION_ARTIFACT_INVALID",
-        "The delegation does not reference a stored request for this profile.",
+    return await withProfileLock(context.summary.profile, async () => {
+      const sessionDid = await currentSessionDid(context.summary.profile);
+      if (sessionDid === undefined) return missingSession();
+      if (
+        context.summary.sessionDid === undefined ||
+        !samePrincipal(context.summary.sessionDid, sessionDid)
+      ) {
+        return audienceMismatch(sessionDid, context.summary.sessionDid ?? "unknown");
+      }
+
+      const requests = await listPermissionRequests(context.summary.profile);
+      const request = requests.find((candidate) => candidate.requestId === input.requestId);
+      if (request === undefined || request.profile !== context.summary.profile) {
+        return operationFailure(
+          "DELEGATION_ARTIFACT_INVALID",
+          "The delegation does not reference a stored request for this profile.",
+        );
+      }
+      if (normalizeHost(request.host) !== normalizeHost(context.summary.host)) {
+        return hostMismatch(context.summary.host, request.host);
+      }
+      if (!samePrincipal(request.sessionDid, sessionDid)) {
+        return audienceMismatch(sessionDid, request.sessionDid);
+      }
+
+      const rawDelegation = input.delegation as unknown as Record<string, unknown>;
+      const explicitHost = rawDelegation.host;
+      if (explicitHost !== undefined && typeof explicitHost !== "string") {
+        return invalidDelegation();
+      }
+      if (typeof explicitHost === "string" && normalizeHost(explicitHost) !== normalizeHost(request.host)) {
+        return hostMismatch(request.host, explicitHost);
+      }
+      const expiry = normalizeExpiry(rawDelegation.expiry);
+      if (expiry === undefined) return invalidDelegation();
+      if (expiry.getTime() <= Date.now()) return expiredDelegation();
+      if (input.delegationCid !== undefined && input.delegationCid !== rawDelegation.cid) {
+        return invalidDelegation();
+      }
+      if (typeof rawDelegation.delegateDID !== "string" || !samePrincipal(rawDelegation.delegateDID, sessionDid)) {
+        return audienceMismatch(sessionDid, String(rawDelegation.delegateDID ?? "unknown"));
+      }
+
+      const delegation = {
+        ...rawDelegation,
+        expiry,
+        host: explicitHost ?? request.host,
+      } as PortableDelegation;
+      let activated: Awaited<ReturnType<typeof activateValidatedRuntimeDelegation>>;
+      try {
+        activated = await activateValidatedRuntimeDelegation(
+          context.runtime.node as RuntimeDelegationActivator,
+          delegation,
+          { host: request.host },
+        );
+      } catch {
+        return operationFailure(
+          "DELEGATION_REJECTED",
+          "The delegation was rejected by the TinyCloud runtime.",
+        );
+      }
+
+      const effectivePermissions = canonicalizeCapabilities(activated.effectivePermissions);
+      if (!evaluateAuthority(request.requested, effectivePermissions).satisfied) {
+        return operationFailure(
+          "DELEGATION_REJECTED",
+          "The delegation exceeds the stored authority request.",
+        );
+      }
+
+      const sessionAfterActivation = await currentSessionDid(context.summary.profile);
+      if (sessionAfterActivation === undefined || !samePrincipal(sessionAfterActivation, sessionDid)) {
+        return audienceMismatch(sessionAfterActivation ?? "unknown", sessionDid);
+      }
+      const alreadyPresent = await updateProfileStoreWhileLocked<Record<string, unknown>, boolean>(
+        context.summary.profile,
+        "additional-delegations",
+        (records) => {
+          const exists = records.some((entry) => delegationCid(entry) === activated.cid);
+          return {
+            records: exists
+              ? records
+              : [...records, {
+                delegation: activated.delegation,
+                permissions: activated.effectivePermissions,
+              }],
+            result: exists,
+          };
+        },
       );
-    }
-    if (request.host !== context.summary.host) {
-      return hostMismatch(context.summary.host, request.host);
-    }
-    if (!samePrincipal(request.sessionDid, sessionDid)) {
-      return audienceMismatch(sessionDid, request.sessionDid);
-    }
-
-    const rawDelegation = input.delegation as unknown as Record<string, unknown>;
-    const explicitHost = rawDelegation.host;
-    if (explicitHost !== undefined && typeof explicitHost !== "string") {
-      return invalidDelegation();
-    }
-    if (typeof explicitHost === "string" && normalizeHost(explicitHost) !== normalizeHost(request.host)) {
-      return hostMismatch(request.host, explicitHost);
-    }
-    const expiry = normalizeExpiry(rawDelegation.expiry);
-    if (expiry === undefined) return invalidDelegation();
-    if (expiry.getTime() <= Date.now()) return expiredDelegation();
-    if (input.delegationCid !== undefined && input.delegationCid !== rawDelegation.cid) {
-      return invalidDelegation();
-    }
-    if (typeof rawDelegation.delegateDID !== "string" || !samePrincipal(rawDelegation.delegateDID, sessionDid)) {
-      return audienceMismatch(sessionDid, String(rawDelegation.delegateDID ?? "unknown"));
-    }
-
-    const delegation = {
-      ...rawDelegation,
-      expiry,
-      host: explicitHost ?? request.host,
-    } as PortableDelegation;
-    const activated = await activateValidatedRuntimeDelegation(
-      context.runtime.node as RuntimeDelegationActivator,
-      delegation,
-      { host: request.host },
-    );
-
-    const existing = await readAdditionalDelegations<Record<string, unknown>>(
-      context.summary.profile,
-    );
-    const alreadyPresent = existing.some((entry) => delegationCid(entry) === activated.cid);
-    await upsertProfileRecord(
-      context.summary.profile,
-      "additional-delegations",
-      activated.cid,
-      {
-        delegation: activated.delegation,
-        permissions: activated.effectivePermissions,
-      },
-      (candidate) => delegationCid(candidate as Record<string, unknown>),
-    );
-    return {
-      status: "ok",
-      output: {
-        cid: activated.cid,
-        effectivePermissions: canonicalizeCapabilities(activated.effectivePermissions),
-        expiry: activated.expiry.toISOString(),
-        audience: activated.audience,
-        activated: true,
-        alreadyPresent,
-      },
-    };
-  } catch (error) {
-    return mapImportFailure(error, sessionDid, context.summary.host);
+      return {
+        status: "ok",
+        output: {
+          cid: activated.cid,
+          effectivePermissions,
+          expiry: activated.expiry.toISOString(),
+          audience: activated.audience,
+          host: activated.host,
+          activated: true,
+          alreadyPresent,
+        },
+      };
+    });
+  } catch {
+    return internalImportFailure();
   }
 }
 
-function exactCapabilities(value: readonly CapabilityRequirement[]): PermissionEntry[] | undefined {
-  const permissions: PermissionEntry[] = [];
-  for (const candidate of value) {
-    if (!isExactPermission(candidate)) return undefined;
-    permissions.push(candidate);
-  }
-  return canonicalizeCapabilities(permissions);
-}
-
-function isExactPermission(value: CapabilityRequirement): value is CapabilityRequirement & PermissionEntry {
-  return typeof value === "object" && value !== null &&
-    isExactText(value.service) &&
-    isExactText(value.path) &&
-    (value.space === undefined || isExactText(value.space)) &&
-    Array.isArray(value.actions) && value.actions.length > 0 &&
-    value.actions.every(isExactText) &&
-    value.skipPrefix !== true &&
-    (value.skipPrefix === undefined || value.skipPrefix === false) &&
-    (value.expiry === undefined || isExactText(value.expiry)) &&
-    (value.description === undefined || isExactText(value.description));
-}
-
-function isExactText(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && !value.includes("*");
+function exactCapabilities(value: unknown): PermissionEntry[] | undefined {
+  return validateExactCapabilities(value);
 }
 
 function normalizeExpiry(value: unknown): Date | undefined {
@@ -398,16 +441,10 @@ function delegationCid(value: Record<string, unknown>): string | undefined {
   return typeof cid === "string" ? cid : undefined;
 }
 
-function mapImportFailure(
-  error: unknown,
-  expectedSessionDid: string,
-  expectedHost: string,
-): OperationExecutionOutcome<never> {
-  const message = error instanceof Error ? error.message : "";
-  if (/expired/i.test(message)) return expiredDelegation();
-  if (/host/i.test(message) && /match/i.test(message)) return hostMismatch(expectedHost, "unrecognized");
-  if (/targets|audience/i.test(message)) return audienceMismatch(expectedSessionDid, "unrecognized");
-  return operationFailure("DELEGATION_REJECTED", "The delegation was rejected by the TinyCloud runtime.");
+async function currentSessionDid(profile: string): Promise<string | undefined> {
+  const session = await readSession<Record<string, unknown>>(profile);
+  if (session === null || typeof session.verificationMethod !== "string") return undefined;
+  return session.verificationMethod.split("#", 1)[0] || undefined;
 }
 
 function missingSession(): OperationExecutionOutcome<never> {
@@ -442,6 +479,10 @@ function invalidInput(message: string): OperationExecutionOutcome<never> {
 
 function internalFailure(): OperationExecutionOutcome<never> {
   return operationFailure("INTERNAL_ERROR", "The authority request could not be completed.");
+}
+
+function internalImportFailure(): OperationExecutionOutcome<never> {
+  return operationFailure("INTERNAL_ERROR", "The delegation import could not be completed.");
 }
 
 function operationFailure(

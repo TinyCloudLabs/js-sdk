@@ -29,6 +29,7 @@ interface HermeticEncryptedNode {
   readonly permissions: readonly PermissionEntry[];
   readonly unrelatedAudience: string;
   mintDelegation(): Promise<StoredRuntimeDelegation>;
+  mintDelegationWithPermissions(permissions: PermissionEntry[]): Promise<StoredRuntimeDelegation>;
   readAndDecrypt(node: unknown, delegation: unknown): Promise<void>;
   assertNarrowDelegatedReadAndDecrypt(delegation: unknown, expectedSigningIssuer?: string): void;
   stop(): void;
@@ -44,15 +45,19 @@ export interface AuthRuntimeFixture {
  * Persists a real node-sdk session so operations tests exercise the same
  * fresh-runtime restore path used after a process restart.
  */
-export async function createAuthRuntimeFixture(): Promise<AuthRuntimeFixture> {
+export async function createAuthRuntimeFixture(
+  options: Readonly<{ delegateBasePermissions?: boolean }> = {},
+): Promise<AuthRuntimeFixture> {
   const moduleUrl = new URL(
     "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
     import.meta.url,
   ).href;
   const module = await import(moduleUrl) as {
-    createHermeticEncryptedNode(): Promise<HermeticEncryptedNode>;
+    createHermeticEncryptedNode(
+      options?: Readonly<{ delegateBasePermissions?: boolean }>,
+    ): Promise<HermeticEncryptedNode>;
   };
-  const hermetic = await module.createHermeticEncryptedNode();
+  const hermetic = await module.createHermeticEncryptedNode(options);
   const profile = "delegate";
   const sessionDid = hermetic.restorableSession.verificationMethod.split("#", 1)[0]!;
 

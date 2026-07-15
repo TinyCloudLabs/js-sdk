@@ -111,6 +111,27 @@ function legacyBindings(): IWasmBindings {
 }
 
 describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
+  test("exposes cryptographically restored base-session ReCap authority through the public API", async () => {
+    const proof = await signedRestorableSession({
+      abilities: { kv: { "vault/secrets/API_KEY": ["tinycloud.kv/get"] } },
+    });
+    const node = new TinyCloudNode({
+      host: RESTORE_HOST,
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+    });
+
+    await node.restoreSession(proof);
+
+    expect(node.getVerifiedSessionCapabilities()).toEqual([{
+      service: "tinycloud.kv",
+      space: "default",
+      path: "vault/secrets/API_KEY",
+      actions: ["tinycloud.kv/get"],
+      caveats: [],
+    }]);
+  });
+
   test("cryptographically binds persisted SIWE authority before trusting its recap, expiry, CID, or header", async () => {
     const proof = await signedRestorableSession();
     const wasm = new NodeWasmBindings();

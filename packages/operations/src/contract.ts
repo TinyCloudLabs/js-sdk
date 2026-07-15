@@ -1,6 +1,6 @@
 import type { z } from "zod";
 
-import type { OperationError } from "./errors.js";
+import type { OperationError, OperationErrorCode } from "./errors.js";
 
 /** A stable, cross-surface operation identifier. */
 export type OperationId = string;
@@ -107,6 +107,13 @@ export interface OperationSensitivity {
   readonly output: readonly JsonPointer[];
 }
 
+/**
+ * An inspection operation may read safe local profile state without creating a
+ * node or authenticating. Every other operation requires an authenticated
+ * runtime before planning or execution.
+ */
+export type OperationRuntimeRequirement = "authenticated" | "inspection";
+
 export interface OperationExposure {
   readonly cli: SurfaceDisposition;
   readonly mcp: SurfaceDisposition;
@@ -184,9 +191,12 @@ export interface OperationDefinition<I, O> {
   readonly input: z.ZodType<I>;
   readonly output: z.ZodType<O>;
   readonly effects: readonly OperationEffect[];
+  readonly runtime: OperationRuntimeRequirement;
   readonly postures: readonly TinyCloudPosture[];
   readonly exposure: OperationExposure;
   readonly sensitivity: OperationSensitivity;
+  /** A definition may give malformed transport artifacts a stable error code. */
+  readonly invalidInputErrorCode?: OperationErrorCode;
   readonly authority: (
     context: AuthorityPlanningContext,
     input: I,

@@ -417,6 +417,9 @@ export interface HermeticEncryptedNode {
   readonly unrelatedAudience: string;
   createRestoredDelegate(): TinyCloudNode;
   mintDelegation(): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
+  mintDelegationWithPermissions(
+    permissions: PermissionEntry[],
+  ): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
   mintDelegationForAudience(
     audience: string,
   ): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
@@ -439,7 +442,9 @@ export interface HermeticEncryptedNode {
  * symmetric encryption through the same WASM crypto methods. It emulates only
  * host-side UCAN chain/revocation storage and request authorization.
  */
-export async function createHermeticEncryptedNode(): Promise<HermeticEncryptedNode> {
+export async function createHermeticEncryptedNode(
+  options: Readonly<{ delegateBasePermissions?: boolean }> = {},
+): Promise<HermeticEncryptedNode> {
   const transport = new LoopbackEncryptedNode();
   const ownerRuntime = makeNode(transport.host, OWNER_PRIVATE_KEY, transport.wasm);
   const delegateRuntime = makeNode(transport.host, DELEGATE_PRIVATE_KEY, transport.wasm);
@@ -474,7 +479,12 @@ export async function createHermeticEncryptedNode(): Promise<HermeticEncryptedNo
   const delegateSession = await makeSession(delegateRuntime.node, delegateRuntime.signer, {
     address: delegateAddress,
     spaceId,
-    abilities: {},
+    abilities: options.delegateBasePermissions
+      ? { kv: { [SECRET_PATH]: ["tinycloud.kv/get"] } }
+      : {},
+    ...(options.delegateBasePermissions
+      ? { rawAbilities: { [networkId]: ["tinycloud.encryption/decrypt"] } }
+      : {}),
   });
   installSession(delegateRuntime.node, delegateSession);
 
@@ -539,6 +549,16 @@ export async function createHermeticEncryptedNode(): Promise<HermeticEncryptedNo
     createRestoredDelegate: () =>
       new TinyCloudNode({ host: transport.host, wasmBindings: transport.wasm }),
     mintDelegation: () => mint(delegateAudience),
+    mintDelegationWithPermissions: (requestedPermissions) =>
+      ownerRuntime.node.delegateTo(delegateAudience, requestedPermissions).then(({ delegation }) => {
+        transport.configure({
+          spaceId,
+          networkId,
+          delegationCid: delegation.cid,
+          envelope: encrypted.data,
+        });
+        return delegation;
+      }),
     mintDelegationForAudience: mint,
     async mintUntrustedDelegation() {
       const delegation = await mint(delegateAudience);

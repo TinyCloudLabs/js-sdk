@@ -10,8 +10,18 @@ import type {
   RuntimeOperationContext,
 } from "../contract.js";
 import { createInvocationRuntime } from "../runtime.js";
+import { invokeOperation } from "../invoke.js";
+import { createSafeOperationDiagnostic } from "../redaction.js";
 import * as registry from "../registry.js";
-import { readAdditionalDelegations } from "../state.js";
+import {
+  additionalDelegationsPath,
+  authRequestsPath,
+  profileStoreMetadataPath,
+  readJson,
+  readAdditionalDelegations,
+  sessionPath,
+  writeJsonAtomic,
+} from "../state.js";
 import {
   createAuthRuntimeFixture,
   type StoredRuntimeDelegation,
@@ -70,6 +80,20 @@ test("auth request accepts no free-form capabilities and calls only a registered
   expect(handlerRuns).toBe(0);
 });
 
+test("auth request rejects prefix, caveated, and non-array planner hints", async () => {
+  const request = requestDefinition();
+  for (const planned of [
+    [{ ...capability, path: "/" }],
+    [{ ...capability, path: "vault/secrets/" }],
+    [{ ...capability, caveats: [{ tenant: "one" }] }],
+    { not: "an array" },
+  ]) {
+    definitions = [targetDefinition(planned)];
+    const result = await request.execute(context(), targetInput());
+    expect(result).toMatchObject({ status: "error", error: { code: "PERMISSION_HINT_INVALID" } });
+  }
+});
+
 test("auth request reuses equivalent exact requests and persists nothing when authority is satisfied", async () => {
   definitions = [targetDefinition()];
   const request = requestDefinition();
@@ -100,6 +124,64 @@ test("a stored request is bound to the active profile host and session", async (
     requestId: created.output.request.requestId,
   });
   expect(oldHost).toMatchObject({ status: "error", error: { code: "INPUT_INVALID" } });
+});
+
+test("a covered stored request is reevaluated and returns no artifact", async () => {
+  definitions = [targetDefinition()];
+  const request = requestDefinition();
+  const created = await request.execute(context(), targetInput());
+  if (created.status !== "ok" || created.output.request === undefined) {
+    throw new Error("expected a stored request");
+  }
+
+  const covered = await request.execute(context([capability]), {
+    requestId: created.output.request.requestId,
+  });
+
+  expect(covered).toEqual({ status: "ok", output: { missing: [] } });
+});
+
+test("maps malformed import input through canonical invocation to DELEGATION_ARTIFACT_INVALID", async () => {
+  definitions = [importDefinition()];
+
+  const result = await invokeOperation("tinycloud.auth.import", 1, {}, {
+    kind: "tinycloud.auth.delegation",
+    version: 1,
+    requestId: "request-1",
+    delegation: { cid: "malformed" },
+  });
+
+  expect(result).toMatchObject({
+    status: "error",
+    error: { code: "DELEGATION_ARTIFACT_INVALID" },
+  });
+});
+
+test("auth diagnostic policies redact delegation transport and nested target inputs", () => {
+  const importCanary = "delegation-proof-token-jwk-canary";
+  const requestCanary = "nested-target-input-canary";
+  const importer = importDefinition();
+  const requester = requestDefinition();
+  const importDiagnostic = createSafeOperationDiagnostic(importer, {
+    operation: { operationId: importer.id, operationVersion: importer.version },
+    context: context().summary,
+    input: {
+      kind: "tinycloud.auth.delegation",
+      delegation: { proof: importCanary, token: importCanary, jwk: importCanary },
+    },
+  });
+  const requestDiagnostic = createSafeOperationDiagnostic(requester, {
+    operation: { operationId: requester.id, operationVersion: requester.version },
+    context: context().summary,
+    input: {
+      operationId: "tinycloud.test.get",
+      operationVersion: 1,
+      input: { credentials: { token: requestCanary } },
+    },
+  });
+
+  expect(JSON.stringify({ importDiagnostic, requestDiagnostic })).not.toContain(importCanary);
+  expect(JSON.stringify({ importDiagnostic, requestDiagnostic })).not.toContain(requestCanary);
 });
 
 test("import rejects malformed, host, audience, expiry, session-rotation, and CID-invalid artifacts before persistence", async () => {
@@ -177,6 +259,7 @@ test("imports a real signed delegation idempotently and a fresh runtime replays 
       output: {
         cid: delegation.cid,
         effectivePermissions: canonicalizeCapabilities(fixture.hermetic.permissions),
+        host: fixture.hermetic.host,
         activated: true,
         alreadyPresent: false,
       },
@@ -194,6 +277,133 @@ test("imports a real signed delegation idempotently and a fresh runtime replays 
     expect(fresh.context.runtime.granted).toEqual(
       canonicalizeCapabilities(fixture.hermetic.permissions),
     );
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("imports only delegation authority contained by the exact stored request, including a valid subset", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const importer = importDefinition();
+    const kvOnly = fixture.hermetic.permissions.filter((permission) =>
+      permission.service === "tinycloud.kv",
+    );
+    const narrowRequest = await createBoundRequest(runtime, kvOnly);
+    const broaderDelegation = await fixture.hermetic.mintDelegation();
+
+    const broader = await importer.execute(runtime, importArtifact(narrowRequest, broaderDelegation));
+    expect(broader).toMatchObject({ status: "error", error: { code: "DELEGATION_REJECTED" } });
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
+
+    const fullRequest = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const subsetDelegation = await fixture.hermetic.mintDelegationWithPermissions([...kvOnly]);
+    const subset = await importer.execute(runtime, importArtifact(fullRequest, subsetDelegation));
+    expect(subset).toMatchObject({
+      status: "ok",
+      output: {
+        cid: subsetDelegation.cid,
+        effectivePermissions: canonicalizeCapabilities(kvOnly),
+        host: fixture.hermetic.host,
+      },
+    });
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("rejects a stored request whose profile does not match the selected profile", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const requests = await readAuthRequestRecords(fixture.profile);
+    await writeJsonAtomic(authRequestsPath(fixture.profile), requests.map((request) =>
+      request.requestId === requestId ? { ...request, profile: "other-profile" } : request,
+    ));
+
+    const result = await importDefinition().execute(
+      runtime,
+      importArtifact(requestId, await fixture.hermetic.mintDelegation()),
+    );
+    expect(result).toMatchObject({ status: "error", error: { code: "DELEGATION_ARTIFACT_INVALID" } });
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("rechecks real on-disk session rotation before reporting import success", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const node = runtime.runtime.node as {
+      useRuntimeDelegation(delegation: unknown): Promise<void>;
+    };
+    const activate = node.useRuntimeDelegation.bind(node);
+    node.useRuntimeDelegation = async (delegation) => {
+      await activate(delegation);
+      await writeJsonAtomic(sessionPath(fixture.profile), {
+        ...fixture.hermetic.restorableSession,
+        verificationMethod: fixture.hermetic.unrelatedAudience,
+      });
+    };
+
+    const result = await importDefinition().execute(
+      runtime,
+      importArtifact(requestId, await fixture.hermetic.mintDelegation()),
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: { code: "DELEGATION_AUDIENCE_MISMATCH" },
+    });
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("serializes concurrent same-CID imports and reports accurate idempotency", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const artifact = importArtifact(requestId, await fixture.hermetic.mintDelegation());
+    const [first, second] = await Promise.all([
+      importDefinition().execute(runtime, artifact),
+      importDefinition().execute(runtime, artifact),
+    ]);
+
+    expect([first, second].map((result) => result.status)).toEqual(["ok", "ok"]);
+    const alreadyPresent = [first, second].map((result) =>
+      result.status === "ok" ? result.output.alreadyPresent : undefined,
+    ).sort();
+    expect(alreadyPresent).toEqual([false, true]);
+    expect(await readAdditionalDelegations(fixture.profile)).toHaveLength(1);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("does not report a persistence failure as a delegation rejection", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    await writeJsonAtomic(
+      profileStoreMetadataPath(fixture.profile, "additional-delegations"),
+      { formatVersion: 2 },
+    );
+
+    const result = await importDefinition().execute(
+      runtime,
+      importArtifact(requestId, await fixture.hermetic.mintDelegation()),
+    );
+
+    expect(result).toMatchObject({ status: "error", error: { code: "INTERNAL_ERROR" } });
   } finally {
     fixture.hermetic.stop();
   }
@@ -229,7 +439,7 @@ function targetInput() {
 }
 
 function targetDefinition(
-  planned: readonly PermissionEntry[] = [capability],
+  planned: unknown = [capability],
 ): OperationDefinition<unknown, unknown> {
   return {
     id: "tinycloud.test.get",
@@ -239,6 +449,7 @@ function targetDefinition(
     input: z.object({ name: z.string() }),
     output: z.object({ value: z.string() }),
     effects: ["read"],
+    runtime: "authenticated",
     postures: ["delegate-session"],
     exposure: {
       cli: { status: "required" },
@@ -247,7 +458,7 @@ function targetDefinition(
       docs: { status: "required" },
     },
     sensitivity: { input: [], output: [] },
-    authority: async () => planned as unknown as readonly Readonly<Record<string, unknown>>[],
+    authority: async () => planned as never,
     execute: async () => {
       handlerRuns += 1;
       return { status: "ok", output: { value: "unreachable" } };
@@ -292,4 +503,10 @@ function importArtifact(requestId: string, delegation: StoredRuntimeDelegation) 
     requestId,
     delegation,
   };
+}
+
+async function readAuthRequestRecords(profile: string): Promise<Record<string, unknown>[]> {
+  const records = await readJson<unknown>(authRequestsPath(profile));
+  if (!Array.isArray(records)) throw new Error("expected authority request records");
+  return records as Record<string, unknown>[];
 }

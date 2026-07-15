@@ -12,6 +12,7 @@ import {
   type OperationDefinition,
   type OperationRef,
   type OperationResult,
+  type OperationRuntimeRequirement,
   type RuntimeOperationContext,
 } from "./contract.js";
 import {
@@ -20,14 +21,18 @@ import {
   sanitizeOperationError,
   sanitizeThrownOperationError,
 } from "./errors.js";
-import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
+import {
+  canonicalizeCapabilities,
+  evaluateAuthority,
+  validateExactCapabilities,
+} from "./authority.js";
 import {
   createOrReusePermissionRequest,
   type PermissionRequestArtifact,
 } from "./artifacts.js";
 import { redactOperationError } from "./redaction.js";
 import { lookupOperation } from "./registry.js";
-import type { createInvocationRuntime } from "./runtime.js";
+import type { InvocationRuntimeResolution } from "./runtime.js";
 
 /** The sole projection-facing execution API. */
 export async function invokeOperation(
@@ -75,33 +80,60 @@ export async function invokeOperation(
     return errorResult(
       operation,
       unresolvedContextSummary(target),
-      operationError("INPUT_INVALID", "The operation input is invalid.", {
+      operationError(definition.invalidInputErrorCode ?? "INPUT_INVALID", "The operation input is invalid.", {
         details: zodIssueDetails(parsedInput.error),
       }),
     );
   }
 
   // Only a registered operation with valid input may inspect the pinned
-  // profile. This keeps validation deterministic and avoids profile I/O for
-  // malformed invocations.
-  const runtimeResolution = await resolveRuntime(target);
-  if (!runtimeResolution.ok) {
-    return errorResult(operation, runtimeResolution.context, runtimeResolution.error);
+  // profile. Inspection is deliberately node-free, so owner opt-in and status
+  // availability are decided before any authentication or external effect.
+  const inspectionResolution = await resolveRuntime(target, "inspection");
+  if (!inspectionResolution.ok) {
+    return errorResult(operation, inspectionResolution.context, inspectionResolution.error);
   }
 
-  if (!definition.postures.includes(runtimeResolution.context.summary.posture)) {
+  if (!definition.postures.includes(inspectionResolution.context.summary.posture)) {
     return errorResult(
       operation,
-      runtimeResolution.context.summary,
+      inspectionResolution.context.summary,
       operationError(
         "PROFILE_POSTURE_NOT_ALLOWED",
         "The active profile posture cannot execute this operation.",
       ),
     );
   }
+  if (
+    definition.runtime === "authenticated" &&
+    isOwnerPosture(inspectionResolution.context.summary.posture) &&
+    target.allowOwnerProfile !== true
+  ) {
+    return errorResult(
+      operation,
+      inspectionResolution.context.summary,
+      operationError(
+        "PROFILE_OWNER_OPT_IN_REQUIRED",
+        "Owner-profile execution requires explicit opt-in.",
+      ),
+    );
+  }
+
+  const runtimeResolution = definition.runtime === "inspection"
+    ? inspectionResolution
+    : await resolveRuntime(target, "authenticated");
+  if (!runtimeResolution.ok) {
+    return errorResult(operation, runtimeResolution.context, runtimeResolution.error);
+  }
+  const runtimeContext = runtimeResolution.context.runtime === undefined
+    ? undefined
+    : runtimeResolution.context as RuntimeOperationContext;
 
   try {
-    const planned = await definition.authority(runtimeResolution.context, parsedInput.data);
+    const planned = await definition.authority(
+      (runtimeContext ?? runtimeResolution.context) as RuntimeOperationContext,
+      parsedInput.data,
+    );
     const required = exactCapabilities(planned);
     if (required === undefined) {
       return errorResult(
@@ -115,12 +147,19 @@ export async function invokeOperation(
     }
 
     const evaluation = evaluateAuthority(
-      runtimeResolution.context.runtime.granted as unknown as PermissionEntry[],
+      (runtimeContext?.runtime.granted ?? []) as unknown as PermissionEntry[],
       required as unknown as PermissionEntry[],
     );
     if (!evaluation.satisfied) {
+      if (runtimeContext === undefined) {
+        return errorResult(
+          operation,
+          runtimeResolution.context.summary,
+          internalOperationError(),
+        );
+      }
       const authority = await persistAuthorityRequest(
-        runtimeResolution.context,
+        runtimeContext,
         evaluation.missing,
       );
       if (authority.status === "error") {
@@ -132,7 +171,7 @@ export async function invokeOperation(
         parsedInput.data,
         authority.request,
         authority.missing,
-        runtimeResolution.context.runtime.node,
+        runtimeContext.runtime.node,
       );
     }
 
@@ -179,7 +218,14 @@ export async function invokeOperation(
             ),
           );
         }
-        const authority = await persistAuthorityRequest(runtimeResolution.context, hinted, true);
+        if (runtimeContext === undefined) {
+          return errorResult(
+            operation,
+            runtimeResolution.context.summary,
+            internalOperationError(),
+          );
+        }
+        const authority = await persistAuthorityRequest(runtimeContext, hinted, true);
         if (authority.status === "error") {
           return errorResult(operation, runtimeResolution.context.summary, authority.error);
         }
@@ -189,7 +235,7 @@ export async function invokeOperation(
           parsedInput.data,
           authority.request,
           authority.missing,
-          runtimeResolution.context.runtime.node,
+          runtimeContext.runtime.node,
           outcome.requiresCallerInput ?? false,
         );
       }
@@ -259,13 +305,14 @@ function normalizeInvocationTarget(target: unknown): InvocationTarget | undefine
 
 async function resolveRuntime(
   target: InvocationTarget,
-): Promise<Awaited<ReturnType<typeof createInvocationRuntime>>> {
+  requirement: OperationRuntimeRequirement,
+): Promise<InvocationRuntimeResolution> {
   try {
     // Keep the root package loadable for projections that only inspect its
     // public invocation export. The SDK runtime is needed only once a valid
     // operation reaches runtime construction.
     const { createInvocationRuntime } = await import("./runtime.js");
-    return await createInvocationRuntime(target);
+    return await createInvocationRuntime(target, requirement);
   } catch (error) {
     return {
       ok: false,
@@ -403,32 +450,12 @@ function approvalAction(request: PermissionRequestArtifact, node: unknown): Appr
   };
 }
 
-function exactCapabilities(
-  value: readonly CapabilityRequirement[],
-): CapabilityRequirement[] | undefined {
-  const permissions: PermissionEntry[] = [];
-  for (const candidate of value) {
-    if (!isExactPermission(candidate)) return undefined;
-    permissions.push(candidate);
-  }
-  return canonicalizeCapabilities(permissions) as CapabilityRequirement[];
+function exactCapabilities(value: unknown): CapabilityRequirement[] | undefined {
+  return validateExactCapabilities(value) as CapabilityRequirement[] | undefined;
 }
 
-function isExactPermission(value: CapabilityRequirement): value is CapabilityRequirement & PermissionEntry {
-  return typeof value === "object" && value !== null &&
-    isExactText(value.service) &&
-    isExactText(value.path) &&
-    (value.space === undefined || isExactText(value.space)) &&
-    Array.isArray(value.actions) && value.actions.length > 0 &&
-    value.actions.every(isExactText) &&
-    value.skipPrefix !== true &&
-    (value.skipPrefix === undefined || value.skipPrefix === false) &&
-    (value.expiry === undefined || isExactText(value.expiry)) &&
-    (value.description === undefined || isExactText(value.description));
-}
-
-function isExactText(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && !value.includes("*");
+function isOwnerPosture(posture: OperationContextSummary["posture"]): boolean {
+  return posture === "owner-openkey" || posture === "local-owner-key";
 }
 
 function zodIssueDetails(error: ZodError): Readonly<Record<string, unknown>> {

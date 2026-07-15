@@ -8,7 +8,9 @@ import {
 
 import type {
   InvocationTarget,
+  OperationContext,
   OperationRuntime,
+  OperationRuntimeRequirement,
   RuntimeOperationContext,
 } from "./contract.js";
 import { canonicalizeCapabilities } from "./authority.js";
@@ -22,8 +24,8 @@ import {
   readSession,
 } from "./state.js";
 
-type RuntimeResolution =
-  | Readonly<{ ok: true; context: RuntimeOperationContext }>
+export type InvocationRuntimeResolution =
+  | Readonly<{ ok: true; context: OperationContext }>
   | Readonly<{
     ok: false;
     context: RuntimeOperationContext["summary"];
@@ -57,9 +59,29 @@ interface StoredAdditionalDelegation extends Record<string, unknown> {
  * name is resolved once and every subsequent read is explicitly scoped to that
  * name; no failure path can choose a different profile.
  */
+type AuthenticatedRuntimeResolution =
+  | Readonly<{ ok: true; context: RuntimeOperationContext }>
+  | Exclude<InvocationRuntimeResolution, Readonly<{ ok: true; context: OperationContext }>>;
+
+export function createInvocationRuntime(
+  target: InvocationTarget,
+): Promise<AuthenticatedRuntimeResolution>;
+export function createInvocationRuntime(
+  target: InvocationTarget,
+  requirement: "authenticated",
+): Promise<AuthenticatedRuntimeResolution>;
+export function createInvocationRuntime(
+  target: InvocationTarget,
+  requirement: "inspection",
+): Promise<InvocationRuntimeResolution>;
+export function createInvocationRuntime(
+  target: InvocationTarget,
+  requirement: OperationRuntimeRequirement,
+): Promise<InvocationRuntimeResolution>;
 export async function createInvocationRuntime(
   target: InvocationTarget,
-): Promise<RuntimeResolution> {
+  requirement: OperationRuntimeRequirement = "authenticated",
+): Promise<InvocationRuntimeResolution> {
   const resolved = await resolveInvocationContext(target);
   if (!resolved.ok) {
     return {
@@ -70,6 +92,10 @@ export async function createInvocationRuntime(
   }
 
   const summary = resolved.context;
+  if (requirement === "inspection") {
+    return { ok: true, context: { summary } };
+  }
+
   const profileName = summary.profile;
   try {
     const [profile, session, key, additionalDelegations] = await Promise.all([
@@ -108,7 +134,9 @@ export async function createInvocationRuntime(
     // particular, do not report the persisted verification method if SDK
     // restoration failed to install its key as the live session key.
     const activeSessionDid = normalizeDid(node.sessionDid);
-    const livePermissions: PermissionEntry[] = [];
+    // This API derives from the restored, verified base session rather than
+    // from an SDK private field or a second parse of signed authority here.
+    const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
     const seenCids = new Set<string>();
     for (const entry of additionalDelegations) {
       const delegation = normalizeStoredDelegation(entry);
@@ -227,7 +255,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function failed(
   context: RuntimeOperationContext["summary"],
   error: OperationError,
-): RuntimeResolution {
+): InvocationRuntimeResolution {
   return { ok: false, context, error };
 }
 

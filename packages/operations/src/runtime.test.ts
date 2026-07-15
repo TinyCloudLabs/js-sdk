@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import type { PermissionEntry } from "@tinycloud/sdk-core";
 
-import { canonicalizeCapabilities } from "./authority.js";
+import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
+import type { OperationDefinition } from "./contract.js";
 import { createInvocationRuntime } from "./runtime.js";
 import { profileConfigPath, writeJsonAtomic } from "./state.js";
+import { authOperationDefinitions } from "./operations/auth.js";
 import {
   createAuthRuntimeFixture,
   persistRuntimeDelegations,
@@ -59,6 +62,32 @@ test("restores the persisted session DID and rereads a real live delegation for 
       validatedDelegation(installed[0]!, second.context.runtime.granted),
       node.sessionDid,
     );
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("includes cryptographically restored base-session ReCap authority in runtime grants", async () => {
+  const fixture = await createAuthRuntimeFixture({ delegateBasePermissions: true });
+  try {
+    const runtime = await createInvocationRuntime({ profile: fixture.profile });
+    expect(runtime.ok).toBe(true);
+    if (!runtime.ok) throw new Error("expected a runtime");
+    expect(runtime.context.runtime.granted).not.toEqual([]);
+    expect(evaluateAuthority(
+      runtime.context.runtime.granted as unknown as readonly PermissionEntry[],
+      fixture.hermetic.permissions,
+    )).toEqual({ satisfied: true, missing: [] });
+    const capabilities = authOperationDefinitions.find((definition) =>
+      definition.id === "tinycloud.auth.capabilities",
+    ) as OperationDefinition<{}, { readonly capabilities: readonly PermissionEntry[] }> | undefined;
+    if (capabilities === undefined) throw new Error("missing auth capabilities operation");
+    const result = await capabilities.execute(runtime.context, {});
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(evaluateAuthority(result.output.capabilities, fixture.hermetic.permissions))
+        .toEqual({ satisfied: true, missing: [] });
+    }
   } finally {
     fixture.hermetic.stop();
   }
