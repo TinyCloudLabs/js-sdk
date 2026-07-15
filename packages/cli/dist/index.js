@@ -44138,8 +44138,9 @@ async function ensureDelegationAuthority(params) {
       );
     }
     const openkeyHost = resolveOpenKeyHost(params.profile);
+    const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
     for (const group of groupPermissionsBySpace(params.requested)) {
-      const delegationData = await startAuthFlow(params.profile.did, {
+      const delegationData = await acquireOpenKey(params.profile.did, {
         jwk: key2,
         host: params.ctx.host,
         permissions: group,
@@ -46021,7 +46022,8 @@ async function runSecretOperation(params) {
       expiryOption: void 0,
       reason: secretPermissionReason(params.action, params.name),
       yes: true,
-      force: true
+      force: true,
+      openKeyAcquisition: params.openKeyAcquisition
     })
   );
   return runSecretOperationAttempt(params.label, params.operation);
@@ -46435,7 +46437,7 @@ function outputSecretDoctor(result) {
     process.stdout.write(theme.warn(`${failed} secrets check${failed > 1 ? "s" : ""} need attention.`) + "\n");
   }
 }
-function registerSecretsCommand(program2) {
+function registerSecretsCommand(program2, openKeyAcquisition) {
   const secrets = program2.command("secrets").description("Encrypted secrets management");
   const network = secrets.command("network").description("Manage the default secrets encryption network");
   network.command("show [nameOrNetworkId]").description("Show a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (nameOrNetworkId, options, cmd) => {
@@ -46647,7 +46649,8 @@ function registerSecretsCommand(program2) {
         scopeOptions,
         space: spaceUri,
         label: `Getting secret ${name2}...`,
-        operation: () => secrets2.get(name2, scopeOptions)
+        operation: () => secrets2.get(name2, scopeOptions),
+        openKeyAcquisition
       });
       if (!result.ok) {
         if (result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND") {

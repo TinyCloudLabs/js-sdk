@@ -1,0 +1,128 @@
+name: TC-191 I0 gate
+
+on:
+  pull_request:
+    paths:
+      - "packages/cli/src/**"
+      - "packages/sdk-rs/**"
+      - "packages/sdk-core/**"
+      - "packages/node-sdk/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/setup.sh"
+      - "tests/node-sdk/setup.ts"
+      - "tests/mcp-sdk-contract/**"
+      - "docs/tc-191-i0-gate.md"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/tc-191-i0-gate.yml"
+  push:
+    branches: [master]
+    paths:
+      - "packages/cli/src/**"
+      - "packages/sdk-rs/**"
+      - "packages/sdk-core/**"
+      - "packages/node-sdk/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/setup.sh"
+      - "tests/node-sdk/setup.ts"
+      - "tests/mcp-sdk-contract/**"
+      - "docs/tc-191-i0-gate.md"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/tc-191-i0-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  i0-gate:
+    name: I0 compatibility and MCP contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Verify pinned runtimes
+        run: |
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "20"
+          test "$(bun --version)" = "1.2.0"
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      # The CLI suites import these workspace packages. Emit only their JS
+      # entrypoints: declaration generation is not needed to execute this gate.
+      - name: Build bootstrap runtime entrypoint
+        working-directory: packages/bootstrap
+        run: bunx --no-install tsup --no-config src/index.ts --format esm,cjs --target es2020 --sourcemap
+
+      - name: Build SDK services runtime entrypoint
+        working-directory: packages/sdk-services
+        run: bunx --no-install tsup --no-config src/index.ts --format esm,cjs --target es2020 --sourcemap
+
+      - name: Build SDK core runtime entrypoint
+        working-directory: packages/sdk-core
+        run: >-
+          bunx --no-install tsup --no-config src/index.ts --format esm,cjs
+          --target es2020 --sourcemap
+          --external @multiformats/multiaddr
+          --external @multiformats/multiaddr-to-uri
+          --external @multiformats/uri-to-multiaddr
+          --external @noble/curves/ed25519
+          --external @tinycloud/bootstrap
+          --external @tinycloud/sdk-services
+          --external multiformats/basics
+          --external ms
+          --external siwe
+          --external viem
+          --external zod
+          --external zod-to-json-schema
+
+      - name: Build node WASM runtime dependency
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+
+      - name: Build node SDK runtime entrypoint
+        working-directory: packages/node-sdk
+        run: >-
+          bunx --no-install tsup --no-config src/index.ts --format esm,cjs
+          --target es2020 --sourcemap
+          --external @tinycloud/sdk-core
+          --external @tinycloud/node-sdk-wasm
+          --external siwe
+          --external events
+          --external fs
+          --external path
+
+      - name: Run seven focused I0 gate suites offline
+        env:
+          NODE_BINARY: node
+          NPM_CONFIG_OFFLINE: "true"
+          NPM_CONFIG_REGISTRY: "http://127.0.0.1:9"
+        run: |
+          bun test packages/cli/src/commands/secrets.test.ts
+          bun test packages/cli/src/commands/secrets-owner-retry.test.ts
+          bun test packages/cli/src/commands/auth.test.ts
+          bun test packages/cli/src/lib/permissions.test.ts
+          bun test packages/cli/src/output/errors.test.ts
+          bun test tests/mcp-sdk-contract/contract.test.ts
+          bun test tests/mcp-sdk-contract/prerequisites.test.ts

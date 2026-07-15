@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const OWNER_DID = "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412";
 const OWNER_ADDRESS = "0xd559ccd9eb87c530a9a349262669386de93cf412";
@@ -62,7 +65,11 @@ mock.module("@tinycloud/sdk-services", () => {
   };
 });
 
-const { loadManifestPermissions, resolvePermissionSpaces } = await import("./permissions.js");
+const {
+  diffPermissions,
+  loadManifestPermissions,
+  resolvePermissionSpaces,
+} = await import("./permissions.js");
 
 beforeEach(() => {
   activeProfile = {
@@ -98,6 +105,100 @@ test("a fresh delegate request preserves a logical space until the owner grants 
     space: "applications",
     actions: ["tinycloud.kv/list"],
   });
+});
+
+test("uses the public SDK capability-subset semantics for exact missing permissions", () => {
+  const missing = diffPermissions(
+    [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+    [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["tinycloud.kv/*"] }],
+  );
+
+  expect(missing).toEqual([]);
+});
+
+test("snapshots the shipped session, delegation, and request writer layouts", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc-layout-"));
+  const permissionsUrl = new URL("./permissions.ts", import.meta.url).href;
+  const profilesUrl = new URL("../config/profiles.ts", import.meta.url).href;
+  const script = `
+    const { ProfileManager } = await import(${JSON.stringify(profilesUrl)});
+    const {
+      appendAdditionalDelegation,
+      appendPermissionRequestArtifact,
+    } = await import(${JSON.stringify(permissionsUrl)});
+    await ProfileManager.setSession("snapshot", {
+      authMethod: "openkey",
+      address: "0xOwner",
+      chainId: 1,
+      spaceId: "tinycloud:pkh:eip155:1:0xOwner:secrets",
+      delegationCid: "bafy-session",
+      verificationMethod: "did:key:session",
+    });
+    await appendAdditionalDelegation("snapshot", {
+      delegation: {
+        cid: "bafy-additional",
+        spaceId: "tinycloud:pkh:eip155:1:0xOwner:secrets",
+        path: "vault/secrets/KEY",
+        actions: ["tinycloud.kv/get"],
+        delegateDID: "did:key:session",
+        ownerAddress: "0xOwner",
+        chainId: 1,
+        expiry: new Date("2099-01-01T00:00:00.000Z"),
+        delegationHeader: { Authorization: "encoded" },
+      },
+      permissions: [{
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/KEY",
+        actions: ["tinycloud.kv/get"],
+      }],
+    });
+    await appendPermissionRequestArtifact("snapshot", {
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_snapshot",
+      createdAt: "2026-07-14T12:00:00.000Z",
+      profile: "snapshot",
+      posture: "delegate-session",
+      operatorType: "agent",
+      host: "https://node.tinycloud.test",
+      sessionDid: "did:key:session",
+      requested: [{
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/KEY",
+        actions: ["tinycloud.kv/get"],
+      }],
+    });
+    const fs = await import("node:fs/promises");
+    const result = {};
+    for (const name of ["session.json", "additional-delegations.json", "auth-requests.json"]) {
+      result[name] = await fs.readFile(${JSON.stringify(join(home, ".tinycloud", "profiles", "snapshot"))} + "/" + name, "utf8");
+    }
+    process.stdout.write(JSON.stringify(result));
+  `;
+
+  try {
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      env: { ...process.env, HOME: home },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    const layout = JSON.parse(stdout) as Record<string, string>;
+    expect(layout).toEqual({
+      "session.json": '{\n  "authMethod": "openkey",\n  "address": "0xOwner",\n  "chainId": 1,\n  "spaceId": "tinycloud:pkh:eip155:1:0xOwner:secrets",\n  "delegationCid": "bafy-session",\n  "verificationMethod": "did:key:session"\n}\n',
+      "additional-delegations.json": '[\n  {\n    "delegation": {\n      "cid": "bafy-additional",\n      "spaceId": "tinycloud:pkh:eip155:1:0xOwner:secrets",\n      "path": "vault/secrets/KEY",\n      "actions": [\n        "tinycloud.kv/get"\n      ],\n      "delegateDID": "did:key:session",\n      "ownerAddress": "0xOwner",\n      "chainId": 1,\n      "expiry": "2099-01-01T00:00:00.000Z",\n      "delegationHeader": {\n        "Authorization": "encoded"\n      }\n    },\n    "permissions": [\n      {\n        "service": "tinycloud.kv",\n        "space": "secrets",\n        "path": "vault/secrets/KEY",\n        "actions": [\n          "tinycloud.kv/get"\n        ]\n      }\n    ]\n  }\n]\n',
+      "auth-requests.json": '[\n  {\n    "kind": "tinycloud.auth.request",\n    "version": 1,\n    "requestId": "req_snapshot",\n    "createdAt": "2026-07-14T12:00:00.000Z",\n    "profile": "snapshot",\n    "posture": "delegate-session",\n    "operatorType": "agent",\n    "host": "https://node.tinycloud.test",\n    "sessionDid": "did:key:session",\n    "requested": [\n      {\n        "service": "tinycloud.kv",\n        "space": "secrets",\n        "path": "vault/secrets/KEY",\n        "actions": [\n          "tinycloud.kv/get"\n        ]\n      }\n    ]\n  }\n]\n',
+    });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 function manifestSource(manifest: Record<string, unknown>): string {
