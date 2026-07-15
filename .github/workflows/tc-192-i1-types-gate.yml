@@ -4,11 +4,15 @@ on:
   pull_request:
     paths:
       - "packages/operations/**"
+      - "packages/sdk-rs/**"
       - "packages/bootstrap/**"
       - "packages/sdk-services/**"
       - "packages/sdk-core/**"
       - "packages/node-sdk/**"
       - "packages/cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/setup.sh"
       - "docs/tc-192-i1-types-gate.md"
       - "package.json"
       - "bun.lock"
@@ -17,11 +21,15 @@ on:
     branches: [master]
     paths:
       - "packages/operations/**"
+      - "packages/sdk-rs/**"
       - "packages/bootstrap/**"
       - "packages/sdk-services/**"
       - "packages/sdk-core/**"
       - "packages/node-sdk/**"
       - "packages/cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/setup.sh"
       - "docs/tc-192-i1-types-gate.md"
       - "package.json"
       - "bun.lock"
@@ -43,6 +51,13 @@ jobs:
         with:
           bun-version: 1.2.0
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
       - name: Verify pinned Bun runtime
         run: test "$(bun --version)" = "1.2.0"
 
@@ -56,6 +71,11 @@ jobs:
           bun run --cwd packages/bootstrap build
           bun run --cwd packages/sdk-services build
           bun run --cwd packages/sdk-core build
+
+      - name: Build node WASM runtime dependency
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
 
       # The legacy CLI concurrency test imports the node SDK package while
       # exercising an operations state writer.

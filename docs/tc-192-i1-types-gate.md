@@ -13,3 +13,8 @@ legacy CLI concurrency suite. It then typechecks, builds, tests, and verifies
 the generated operations catalog. The invocation test imports `jcsCanonicalize`
 from the public `@tinycloud/sdk-core/policy` export, so the gate intentionally
 does not reach into SDK source files.
+
+The real CLI contention process imports the workspace node WASM package. The
+gate therefore builds that package with the repository's standard Rust and
+wasm-pack steps before executing the operations suite, and its path filters
+cover the Rust workspace manifests and setup script.
