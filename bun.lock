@@ -198,6 +198,23 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/mcp": {
+      "name": "@tinycloud/mcp",
+      "version": "0.1.0-beta.0",
+      "bin": {
+        "tinycloud-mcp": "./bin/tinycloud-mcp"
+      },
+      "dependencies": {
+        "@modelcontextprotocol/server": "2.0.0-beta.4",
+        "@tinycloud/operations": "0.1.0-beta.0",
+      },
+      "devDependencies": {
+        "@modelcontextprotocol/client": "2.0.0-beta.4",
+        "@types/node": "^20",
+        "tsup": "^8.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/node-sdk": {
       "name": "@tinycloud/node-sdk",
       "version": "2.7.0-beta.2",
@@ -445,7 +462,7 @@
   "overrides": {
     "typescript": "5.7.3",
     "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5"
+    "@types/react-dom": "^18.3.5",
   },
   "packages": {
     "@adobe/css-tools": ["@adobe/css-tools@4.4.4", "", {}, "sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg=="],
@@ -1795,6 +1812,8 @@
     "@tinycloud/cli": ["@tinycloud/cli@workspace:packages/cli"],
 
     "@tinycloud/cli-tests": ["@tinycloud/cli-tests@workspace:tests/cli"],
+
+    "@tinycloud/mcp": ["@tinycloud/mcp@workspace:packages/mcp"],
 
     "@tinycloud/mcp-sdk-contract": ["@tinycloud/mcp-sdk-contract@workspace:tests/mcp-sdk-contract"],
 

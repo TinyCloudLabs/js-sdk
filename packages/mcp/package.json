@@ -1,0 +1,69 @@
+{
+  "name": "@tinycloud/mcp",
+  "version": "0.1.0-beta.0",
+  "private": true,
+  "description": "TinyCloud delegated operations MCP server",
+  "author": "TinyCloud, Inc.",
+  "license": "EGPL",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "tinycloud-mcp": "./bin/tinycloud-mcp"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js",
+      "require": "./dist/server.cjs"
+    },
+    "./tools": {
+      "types": "./dist/tools.d.ts",
+      "import": "./dist/tools.js",
+      "require": "./dist/tools.cjs"
+    },
+    "./results": {
+      "types": "./dist/results.d.ts",
+      "import": "./dist/results.js",
+      "require": "./dist/results.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "bin",
+    "generated",
+    "skills"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "test": "bun run build && bun scripts/test.ts && bun run check:generated",
+    "test:stdio": "bun run build && bun test src/stdio.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "generate": "bun scripts/generate.ts",
+    "check:generated": "bun scripts/generate.ts --check"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0-beta.4",
+    "@tinycloud/operations": "0.1.0-beta.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0-beta.4",
+    "@types/node": "^20",
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tinycloudlabs/web-sdk"
+  }
+}

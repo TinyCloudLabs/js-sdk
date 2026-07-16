@@ -12,6 +12,7 @@ import type {
 } from "../src/contract.js";
 import { OPERATION_ERROR_CODES, type OperationErrorCode } from "../src/errors.js";
 import { operationDefinitionsForCatalog } from "../src/registry.js";
+import { canonicalResultJsonSchema } from "../src/result-schema.js";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const catalogPath = resolve(scriptDirectory, "../generated/operations.json");
@@ -25,6 +26,7 @@ interface CatalogOperation {
   readonly description: string;
   readonly input: JsonSchema;
   readonly output: JsonSchema;
+  readonly result: JsonSchema;
   readonly postures: readonly TinyCloudPosture[];
   readonly effects: readonly OperationEffect[];
   readonly sensitivity: Readonly<{
@@ -52,13 +54,27 @@ function registeredDefinitions(): readonly OperationDefinition<unknown, unknown>
 function toCatalogOperation(
   definition: OperationDefinition<unknown, unknown>,
 ): CatalogOperation {
+  const input = zodToJsonSchema(definition.input, { target: "jsonSchema7" });
   return {
     id: definition.id,
     version: definition.version,
     title: definition.title,
     description: definition.description,
-    input: zodToJsonSchema(definition.input, { target: "jsonSchema7" }),
+    // MCP requires an object root for tool inputs. The union branches are
+    // already strict objects; recording that fact keeps the generated catalog
+    // byte-identical to the schema MCP advertises through fromJsonSchema.
+    input: {
+      ...(input as Record<string, unknown>),
+      ...(typeof (input as Record<string, unknown>).type === "string"
+        ? {}
+        : { type: "object" }),
+    },
     output: zodToJsonSchema(definition.output, { target: "jsonSchema7" }),
+    result: canonicalResultJsonSchema(
+      definition.id,
+      definition.version,
+      zodToJsonSchema(definition.output, { target: "jsonSchema7" }) as JsonSchema,
+    ),
     postures: [...definition.postures],
     effects: [...definition.effects],
     sensitivity: {

@@ -109,6 +109,7 @@ class LoopbackEncryptedNode {
   private spaceId?: string;
   private networkId?: string;
   private delegationCid?: string;
+  private secretPresent = true;
 
   constructor() {
     this.server = Bun.serve({
@@ -137,6 +138,10 @@ class LoopbackEncryptedNode {
   configureNetwork(spaceId: string, networkId: string): void {
     this.spaceId = spaceId;
     this.networkId = networkId;
+  }
+
+  setSecretPresent(value: boolean): void {
+    this.secretPresent = value;
   }
 
   rejectActivation(cid: string): void {
@@ -258,6 +263,7 @@ class LoopbackEncryptedNode {
       ) {
         return new Response("delegated kv/get proof required", { status: 403 });
       }
+      if (!this.secretPresent) return new Response("not found", { status: 404 });
       this.observed.signedInvocation = true;
       this.observed.delegatedKvRead = true;
       return this.json(this.envelope);
@@ -443,7 +449,11 @@ export interface HermeticEncryptedNode {
  * host-side UCAN chain/revocation storage and request authorization.
  */
 export async function createHermeticEncryptedNode(
-  options: Readonly<{ delegateBasePermissions?: boolean }> = {},
+  options: Readonly<{
+    delegateBasePermissions?: boolean;
+    secretPayloadValue?: string;
+    secretPresent?: boolean;
+  }> = {},
 ): Promise<HermeticEncryptedNode> {
   const transport = new LoopbackEncryptedNode();
   const ownerRuntime = makeNode(transport.host, OWNER_PRIVATE_KEY, transport.wasm);
@@ -466,6 +476,7 @@ export async function createHermeticEncryptedNode(
     },
   ];
   transport.configureNetwork(spaceId, networkId);
+  transport.setSecretPresent(options.secretPresent ?? true);
 
   const ownerSession = await makeSession(ownerRuntime.node, ownerRuntime.signer, {
     address: ownerAddress,
@@ -504,7 +515,13 @@ export async function createHermeticEncryptedNode(
   };
   const encrypted = await delegateRuntime.node.encryption.encryptToNetwork(
     networkId,
-    new TextEncoder().encode(PLAINTEXT),
+    new TextEncoder().encode(options.secretPayloadValue === undefined
+      ? PLAINTEXT
+      : JSON.stringify({
+        value: options.secretPayloadValue,
+        createdAt: "2026-07-16T00:00:00.000Z",
+        updatedAt: "2026-07-16T00:00:00.000Z",
+      })),
     { descriptor },
   );
   if (!encrypted.ok) {

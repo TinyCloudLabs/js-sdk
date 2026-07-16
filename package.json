@@ -16,6 +16,7 @@
     "packages/server",
     "packages/vfs",
     "packages/operations",
+    "packages/mcp",
     "packages/cli",
     "apps/*",
     "tests/*"

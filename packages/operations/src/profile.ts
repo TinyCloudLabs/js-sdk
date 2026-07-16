@@ -109,6 +109,19 @@ export async function resolveInvocationProfile(
   };
 }
 
+/**
+ * Selects the profile name once for a long-lived projection process. The
+ * selected name is safe identity data; profile material is read only by the
+ * invocation runtime after the projection pins this value.
+ */
+export async function resolveInvocationProfileName(
+  explicitProfile?: string,
+): Promise<string> {
+  return resolveProfileName(
+    explicitProfile === undefined ? {} : { profile: explicitProfile },
+  );
+}
+
 async function resolveProfileName(target: InvocationTarget): Promise<string> {
   if (typeof target.profile === "string") return target.profile;
   if (typeof process.env.TC_PROFILE === "string") return process.env.TC_PROFILE;

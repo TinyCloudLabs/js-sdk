@@ -16,6 +16,7 @@ type CatalogOperation = {
   version: number;
   input: Record<string, unknown>;
   output: Record<string, unknown>;
+  result: Record<string, unknown>;
   effects: readonly string[];
   postures: readonly string[];
   exposure: Record<string, unknown>;
@@ -66,6 +67,8 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     expect(operation.input).toBeDefined();
     expect(operation.output).toBeDefined();
     expect(operation.output.additionalProperties).toBe(false);
+    expect(operation.result).toBeDefined();
+    expect(operation.result.anyOf).toHaveLength(4);
     expect(operation.effects.length).toBeGreaterThan(0);
     expect(operation.postures.length).toBeGreaterThan(0);
     expect(Object.keys(operation.exposure).sort()).toEqual(["cli", "docs", "mcp", "skill"]);
@@ -86,6 +89,31 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
   const secretGet = byId.get("tinycloud.secrets.get");
   expect(secretGet?.sensitivity).toEqual({ input: false, output: true });
   expect(secretGet?.effects).toEqual(["read", "local_write"]);
+});
+
+test("generated authority results require the complete strict request artifact", async () => {
+  const catalog = JSON.parse(await readFile(catalogPath, "utf8")) as {
+    operations: CatalogOperation[];
+  };
+  const resultSchema = catalog.operations.find((operation) =>
+    operation.id === "tinycloud.secrets.get"
+  )!.result as { $defs: Record<string, Record<string, unknown>> };
+  const requestSchema = resultSchema.$defs.permissionRequest;
+
+  expect(requestSchema).not.toHaveProperty("anyOf");
+  expect(requestSchema.additionalProperties).toBe(false);
+  expect(requestSchema.required).toEqual([
+    "kind",
+    "version",
+    "requestId",
+    "createdAt",
+    "profile",
+    "posture",
+    "operatorType",
+    "host",
+    "sessionDid",
+    "requested",
+  ]);
 });
 
 test("generation is byte-identical and generated checks do not repair drift", async () => {
