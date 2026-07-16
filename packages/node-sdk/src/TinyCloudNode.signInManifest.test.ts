@@ -169,8 +169,13 @@ async function withActivationResponses(
   fn: (fetchMock: any) => Promise<void>,
 ): Promise<void> {
   const originalFetch = globalThis.fetch;
+  const expectedAuthorization = "Bearer manifest-activation-fixture";
   const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    const authorization = new Headers(init?.headers).get("authorization");
+    if (authorization !== expectedAuthorization) {
+      return originalFetch(input, init);
+    }
     if (!url.endsWith("/delegate") || init?.method !== "POST") {
       throw new Error(`unexpected activation fetch: ${url}`);
     }
@@ -725,7 +730,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const node = makeNodeWithSigner(makeFakeWasmBindings());
     const auth = (node as any).auth;
     auth._tinyCloudSession = {
-      delegationHeader: { Authorization: "Bearer fake" },
+      delegationHeader: { Authorization: "Bearer manifest-activation-fixture" },
     };
     auth.hostOwnedSpace = mock(async () => true);
 
