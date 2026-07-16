@@ -1253,12 +1253,20 @@ function withCapabilitiesReadForSpaces(
 }
 
 function accountRegistryPermissions(): ResourceCapability[] {
-  return [ACCOUNT_REGISTRY_PATH, "spaces/"].map((path) => ({
-    service: "tinycloud.kv",
-    space: ACCOUNT_REGISTRY_SPACE,
-    path,
-    actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
-  }));
+  return [
+    ...[ACCOUNT_REGISTRY_PATH, "spaces/"].map((path) => ({
+      service: "tinycloud.kv",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
+    })),
+    {
+      service: "tinycloud.delegation",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path: "",
+      actions: ["tinycloud.delegation/list"],
+    },
+  ];
 }
 
 function accountRegistryIndexPermission(): ResourceCapability {

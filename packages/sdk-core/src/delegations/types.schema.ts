@@ -216,6 +216,60 @@ export const DelegationStatusSchema = z.object({
 
 export type DelegationStatus = z.infer<typeof DelegationStatusSchema>;
 
+export const DelegationRevocationReceiptSchema = z.object({
+  revoked: z.literal(true),
+  cid: z.string().min(1),
+}).strict();
+
+export type DelegationRevocationReceipt = z.infer<typeof DelegationRevocationReceiptSchema>;
+
+export const AccountDelegationResourceSchema = z.object({
+  resource: z.string().min(1),
+  actions: z.array(z.string()),
+  caveats: z.array(z.record(z.string(), z.unknown())),
+}).strict();
+
+const AccountDelegationDateSchema = z
+  .string()
+  .datetime({ offset: true })
+  .transform((value) => new Date(value));
+
+export const AccountDelegationRecordSchema = z.object({
+  cid: z.string().min(1),
+  direction: z.enum(["granted", "received"]),
+  delegatorDid: z.string().min(1),
+  delegateDid: z.string().min(1),
+  resources: z.array(AccountDelegationResourceSchema),
+  parents: z.array(z.string()),
+  issuedAt: AccountDelegationDateSchema.nullable(),
+  notBefore: AccountDelegationDateSchema.nullable(),
+  expiresAt: AccountDelegationDateSchema.nullable(),
+  status: z.enum(["active", "pending", "expired", "revoked", "ancestor_revoked"]),
+  revokedAt: AccountDelegationDateSchema.nullable().optional(),
+  revokedBy: z.string().optional(),
+  revokedAncestorCid: z.string().optional(),
+}).strict();
+
+export const AccountDelegationPageSchema = z.object({
+  schemaVersion: z.literal(2),
+  items: z.array(AccountDelegationRecordSchema),
+  nextCursor: z.string().optional(),
+}).strict();
+
+export type AccountDelegationResource = z.infer<typeof AccountDelegationResourceSchema>;
+export type AccountDelegationRecord = z.infer<typeof AccountDelegationRecordSchema>;
+export type AccountDelegationPage = z.infer<typeof AccountDelegationPageSchema>;
+
+export const AccountDelegationQueryOptionsSchema = z.object({
+  direction: z.enum(["granted", "received", "all"]).optional(),
+  status: z.enum(["active", "pending", "expired", "revoked", "ancestor_revoked"]).optional(),
+  space: z.string().trim().min(1).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  cursor: z.string().min(1).optional(),
+}).strict();
+
+export type AccountDelegationQueryOptions = z.infer<typeof AccountDelegationQueryOptionsSchema>;
+
 /**
  * Entry in the capability registry mapping a capability to available keys.
  */
@@ -486,6 +540,8 @@ export type GenerateShareParams = z.infer<typeof GenerateShareParamsSchema>;
 export const DelegationManagerConfigSchema = z.object({
   /** TinyCloud host URLs */
   hosts: z.array(z.string()),
+  /** Account space used by account-wide delegation history queries */
+  accountSpaceId: z.string().min(1).optional(),
   /** Active session for authentication */
   session: z.unknown().refine(
     (val): val is ServiceSession => val !== null && typeof val === "object",

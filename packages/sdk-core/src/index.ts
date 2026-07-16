@@ -377,6 +377,11 @@ export {
   // Delegation types
   Delegation,
   DelegationStatus,
+  DelegationRevocationReceipt,
+  AccountDelegationResource,
+  AccountDelegationRecord,
+  AccountDelegationPage,
+  AccountDelegationQueryOptions,
   CreateDelegationParams,
   CreateDelegationWasmParams,
   CreateDelegationWasmResult,

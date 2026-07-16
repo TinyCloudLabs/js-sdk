@@ -516,6 +516,9 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
         capabilities: {
           "": ["tinycloud.capabilities/read"],
         },
+        delegation: {
+          "": ["tinycloud.delegation/list"],
+        },
         kv: {
           "applications/": [
             "tinycloud.kv/get",

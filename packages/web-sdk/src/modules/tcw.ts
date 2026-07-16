@@ -33,6 +33,7 @@ import {
   IEncryptionService,
   DelegationManager,
   Delegation,
+  DelegationRevocationReceipt,
   CreateDelegationParams,
   Result,
   DelegationError,
@@ -886,7 +887,7 @@ export class TinyCloudWeb {
     return node.delegate(params);
   }
 
-  async revokeDelegation(cid: string): Promise<Result<void, DelegationError>> {
+  async revokeDelegation(cid: string): Promise<Result<DelegationRevocationReceipt, DelegationError>> {
     const node = await this.ensureNode();
     return node.revokeDelegation(cid);
   }

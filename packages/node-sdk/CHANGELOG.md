@@ -1,5 +1,18 @@
 # @tinycloudlabs/node-sdk
 
+## 2.7.0-beta.3
+
+### Minor Changes
+
+- f7a1d4f: Add signed account-wide delegation history queries with lifecycle and revocation
+  status, plus CID-bound delegation revocation receipts and the account-scoped
+  delegation control capabilities used by SDK sessions.
+
+### Patch Changes
+
+- Updated dependencies [f7a1d4f]
+  - @tinycloud/sdk-core@2.7.0-beta.3
+
 ## 2.7.0-beta.2
 
 ### Minor Changes

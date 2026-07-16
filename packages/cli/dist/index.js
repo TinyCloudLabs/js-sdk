@@ -4855,6 +4855,8 @@ var CAPABILITIES = [
   { urn: "tinycloud.duckdb/select", service: "tinycloud.duckdb", status: "deprecated-alias", aliasOf: "tinycloud.duckdb/read" },
   { urn: "tinycloud.duckdb/*", service: "tinycloud.duckdb", status: "active", implies: ["tinycloud.duckdb/read", "tinycloud.duckdb/write", "tinycloud.duckdb/admin", "tinycloud.duckdb/import", "tinycloud.duckdb/export"] },
   { urn: "tinycloud.capabilities/read", service: "tinycloud.capabilities", status: "active" },
+  { urn: "tinycloud.delegation/status", service: "tinycloud.delegation", status: "active" },
+  { urn: "tinycloud.delegation/list", service: "tinycloud.delegation", status: "active" },
   { urn: "tinycloud.hooks/subscribe", service: "tinycloud.hooks", status: "active" },
   { urn: "tinycloud.hooks/register", service: "tinycloud.hooks", status: "active" },
   { urn: "tinycloud.hooks/list", service: "tinycloud.hooks", status: "active" },
@@ -16273,6 +16275,43 @@ var DelegationStatusSchema = external_exports.object({
     });
   }
 });
+var DelegationRevocationReceiptSchema = external_exports.object({
+  revoked: external_exports.literal(true),
+  cid: external_exports.string().min(1)
+}).strict();
+var AccountDelegationResourceSchema = external_exports.object({
+  resource: external_exports.string().min(1),
+  actions: external_exports.array(external_exports.string()),
+  caveats: external_exports.array(external_exports.record(external_exports.string(), external_exports.unknown()))
+}).strict();
+var AccountDelegationDateSchema = external_exports.string().datetime({ offset: true }).transform((value) => new Date(value));
+var AccountDelegationRecordSchema = external_exports.object({
+  cid: external_exports.string().min(1),
+  direction: external_exports.enum(["granted", "received"]),
+  delegatorDid: external_exports.string().min(1),
+  delegateDid: external_exports.string().min(1),
+  resources: external_exports.array(AccountDelegationResourceSchema),
+  parents: external_exports.array(external_exports.string()),
+  issuedAt: AccountDelegationDateSchema.nullable(),
+  notBefore: AccountDelegationDateSchema.nullable(),
+  expiresAt: AccountDelegationDateSchema.nullable(),
+  status: external_exports.enum(["active", "pending", "expired", "revoked", "ancestor_revoked"]),
+  revokedAt: AccountDelegationDateSchema.nullable().optional(),
+  revokedBy: external_exports.string().optional(),
+  revokedAncestorCid: external_exports.string().optional()
+}).strict();
+var AccountDelegationPageSchema = external_exports.object({
+  schemaVersion: external_exports.literal(2),
+  items: external_exports.array(AccountDelegationRecordSchema),
+  nextCursor: external_exports.string().optional()
+}).strict();
+var AccountDelegationQueryOptionsSchema = external_exports.object({
+  direction: external_exports.enum(["granted", "received", "all"]).optional(),
+  status: external_exports.enum(["active", "pending", "expired", "revoked", "ancestor_revoked"]).optional(),
+  space: external_exports.string().trim().min(1).optional(),
+  limit: external_exports.number().int().min(1).max(100).optional(),
+  cursor: external_exports.string().min(1).optional()
+}).strict();
 var CapabilityEntrySchema = external_exports.object({
   /** Resource URI this capability applies to */
   resource: external_exports.string(),
@@ -16427,6 +16466,8 @@ var GenerateShareParamsSchema = external_exports.object({
 var DelegationManagerConfigSchema = external_exports.object({
   /** TinyCloud host URLs */
   hosts: external_exports.array(external_exports.string()),
+  /** Account space used by account-wide delegation history queries */
+  accountSpaceId: external_exports.string().min(1).optional(),
   /** Active session for authentication */
   session: external_exports.unknown().refine(
     (val) => val !== null && typeof val === "object",

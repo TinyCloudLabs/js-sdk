@@ -131,6 +131,11 @@ export {
   DelegationManagerConfig,
   // Delegation types
   Delegation,
+  DelegationRevocationReceipt,
+  AccountDelegationResource,
+  AccountDelegationRecord,
+  AccountDelegationPage,
+  AccountDelegationQueryOptions,
   CreateDelegationParams,
   DelegationChain,
   DelegationApiResponse,

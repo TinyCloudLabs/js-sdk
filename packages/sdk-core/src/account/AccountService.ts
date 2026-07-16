@@ -15,7 +15,14 @@ import {
   type Manifest,
 } from "../manifest";
 import { ACCOUNT_INDEX_SCHEMA } from "@tinycloud/bootstrap";
-import type { Delegation, SpaceInfo } from "../delegations/types";
+import type {
+  AccountDelegationPage,
+  AccountDelegationQueryOptions,
+  Delegation,
+  DelegationRevocationReceipt,
+  SpaceInfo,
+} from "../delegations/types";
+import type { DelegationManager } from "../delegations/DelegationManager";
 import type { ISpaceService } from "../spaces/SpaceService";
 
 const SERVICE_NAME = "account";
@@ -109,6 +116,7 @@ export interface AccountServiceConfig {
   getPrimarySpaceId: () => string | undefined;
   getAccountSpaceId: () => string | undefined;
   getSpaces: () => ISpaceService;
+  getDelegationManager?: () => Pick<DelegationManager, "query" | "revoke">;
   getAccountDb?: () => IDatabaseHandle | undefined;
   ensureAccountSpaceHosted?: () => Promise<void>;
 }
@@ -317,6 +325,21 @@ export class AccountService {
   };
 
   readonly delegations = {
+    query: async (
+      options: AccountDelegationQueryOptions = {},
+    ): Promise<Result<AccountDelegationPage>> => {
+      const manager = this.config.getDelegationManager?.();
+      if (!manager) {
+        return err(serviceError(
+          "NOT_INITIALIZED",
+          "Delegation history requires an authenticated delegation manager",
+          SERVICE_NAME,
+        ));
+      }
+      const queried = await manager.query(options);
+      return queried.ok ? ok(queried.data) : accountErr(queried.error);
+    },
+
     list: async (
       options: AccountDelegationListOptions = {},
     ): Promise<Result<AccountDelegation[]>> => {
@@ -363,11 +386,27 @@ export class AccountService {
       return ok(delegations);
     },
 
-    revoke: async (options: AccountDelegationRevokeOptions): Promise<Result<void>> => {
-      const space = await this.resolveSpace(options.space);
-      if (!space.ok) return space;
+    revoke: async (
+      input: string | AccountDelegationRevokeOptions,
+    ): Promise<Result<DelegationRevocationReceipt | void>> => {
+      const cid = typeof input === "string" ? input : input.cid;
+      const manager = this.config.getDelegationManager?.();
+      if (manager) {
+        const revoked = await manager.revoke(cid);
+        return revoked.ok ? ok(revoked.data) : accountErr(revoked.error);
+      }
 
-      const revoked = await this.config.getSpaces().get(space.data.id).delegations.revoke(options.cid);
+      // Deprecated compatibility path for callers constructing AccountService directly.
+      if (typeof input === "string") {
+        return err(serviceError(
+          "NOT_INITIALIZED",
+          "CID-only revocation requires an authenticated delegation manager",
+          SERVICE_NAME,
+        ));
+      }
+      const space = await this.resolveSpace(input.space);
+      if (!space.ok) return space;
+      const revoked = await this.config.getSpaces().get(space.data.id).delegations.revoke(cid);
       if (!revoked.ok) return accountErr(revoked.error);
       return ok(undefined);
     },

@@ -80,6 +80,7 @@ import {
   SiweConfig,
   Delegation,
   DelegationStatus,
+  DelegationRevocationReceipt,
   CreateDelegationParams,
   KeyInfo,
   JWK,
@@ -1273,6 +1274,7 @@ export class TinyCloudNode {
         getPrimarySpaceId: () => this.spaceId,
         getAccountSpaceId: () => this.accountSpaceId,
         getSpaces: () => this.spaces,
+        getDelegationManager: () => this.delegationManager,
         getAccountDb: () =>
           this.accountSpaceId
             ? this.sqlForSpace(this.accountSpaceId).db("account")
@@ -3403,6 +3405,7 @@ export class TinyCloudNode {
     // Initialize DelegationManager
     this._delegationManager = new DelegationManager({
       hosts: [this.config.host!],
+      accountSpaceId: this.accountSpaceId,
       session: serviceSession,
       invoke: graph.invoke,
       invokeAny: graph.invokeAny,
@@ -4670,7 +4673,7 @@ export class TinyCloudNode {
    * @param cid - The CID of the delegation to revoke
    * @returns Result indicating success or failure
    */
-  async revokeDelegation(cid: string): Promise<DelegationResult<void>> {
+  async revokeDelegation(cid: string): Promise<DelegationResult<DelegationRevocationReceipt>> {
     return this.delegationManager.revoke(cid);
   }
 
