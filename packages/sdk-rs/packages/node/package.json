@@ -16,7 +16,7 @@
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "prebuild": "mkdir -p src/wasm && cp ../../node-sdk-wasm/tinycloud_web_sdk_rs.js src/wasm/index.cjs && cp ../../node-sdk-wasm/tinycloud_web_sdk_rs.d.ts src/wasm/index.d.cts && cp ../../node-sdk-wasm/tinycloud_web_sdk_rs_bg.wasm src/wasm/",

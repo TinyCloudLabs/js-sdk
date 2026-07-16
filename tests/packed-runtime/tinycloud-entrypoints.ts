@@ -15,7 +15,17 @@ const execFile = promisify(execFileCallback);
 const repositoryDirectory = resolve(import.meta.dir, "../..");
 const workspaceNodeModules = join(repositoryDirectory, "node_modules");
 const nodeBinary = process.env.NODE_BINARY ?? "node";
-const expectedNodeMajor = process.env.EXPECTED_NODE_MAJOR ?? "18";
+const expectedNodeMajor = process.env.EXPECTED_NODE_MAJOR ?? "20";
+
+const publishedPackageNames = {
+  bootstrap: "@tinycloud/bootstrap",
+  "sdk-services": "@tinycloud/sdk-services",
+  "sdk-core": "@tinycloud/sdk-core",
+  "node-sdk-wasm": "@tinycloud/node-sdk-wasm",
+  "node-sdk": "@tinycloud/node-sdk",
+  operations: "@tinycloud/operations",
+  cli: "@tinycloud/cli",
+} as const;
 
 export function tinycloudPackages(root = repositoryDirectory) {
   return [
@@ -25,6 +35,7 @@ export function tinycloudPackages(root = repositoryDirectory) {
     ["node-sdk-wasm", join(root, "packages/sdk-rs/packages/node")],
     ["node-sdk", join(root, "packages/node-sdk")],
     ["operations", join(root, "packages/operations")],
+    ["cli", join(root, "packages/cli")],
   ] as const;
 }
 
@@ -145,6 +156,27 @@ async function hasFiles(
     return true;
   } catch {
     return false;
+  }
+}
+
+async function assertPackedNode20Manifest(
+  name: keyof typeof publishedPackageNames,
+  packageDirectory: string,
+): Promise<void> {
+  const manifest = JSON.parse(
+    await readFile(join(packageDirectory, "package.json"), "utf8"),
+  ) as {
+    name?: unknown;
+    engines?: { node?: unknown };
+  };
+  const expectedName = publishedPackageNames[name];
+  if (manifest.name !== expectedName || manifest.engines?.node !== ">=20") {
+    throw new Error(
+      `Packed ${expectedName} must advertise engines.node >=20; got ${JSON.stringify({
+        name: manifest.name,
+        node: manifest.engines?.node,
+      })}.`,
+    );
   }
 }
 
@@ -269,6 +301,7 @@ export async function withPackedTinyCloudPackages<T>(
       )) {
         const packed = await packPackage(packageDirectory, smokeDirectory);
         packageDirectories.set(name, packed.packageDirectory);
+        await assertPackedNode20Manifest(name, packed.packageDirectory);
         if (name === "node-sdk-wasm") {
           const entries = (
             await run("tar", ["-tzf", packed.archive], repositoryDirectory)

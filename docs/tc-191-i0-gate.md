@@ -15,6 +15,11 @@ registry access. Because the candidate is beta, MCP publication is deferred:
 `unpublishable-defer` prohibits I4 MCP package publication, and no beta
 package is published or approved by this increment.
 
+The current I0/I2 published runtime boundary is the seven-package graph of
+Bootstrap, SDK Services, SDK Core, Node WASM, Node SDK, Operations, and CLI.
+Each packed manifest declares `engines.node: ">=20"`, and the graph is
+exercised under exact Node `20.19.4` for both CommonJS and ESM entrypoints.
+
 CI enforcement lives in `.github/workflows/tc-191-i0-gate.yml`. It pins Node
 `20.19.4` and the repository-declared Bun `1.2.0`, installs only with
 `bun install --frozen-lockfile`, builds the local workspace entrypoints and the

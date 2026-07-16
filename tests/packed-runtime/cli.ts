@@ -44,12 +44,17 @@ async function assertNoDanglingRelativeImports(
 
 export async function verifyPackedCliRuntime(): Promise<void> {
   await withPackedTinyCloudPackages(
-    async (smokeDirectory, _packageDirectories, sourceDirectory) => {
-      const packedCli = await packPackage(
-        join(sourceDirectory, "packages/cli"),
-        smokeDirectory,
-      );
-      const cliDirectory = packedCli.packageDirectory;
+    async (smokeDirectory, packageDirectories) => {
+      const cliDirectory = packageDirectories.get("cli");
+      if (!cliDirectory) throw new Error("Packed CLI package was not produced.");
+      const selectedNodeMajor = (
+        await run(
+          cliNodeBinary,
+          ["-p", "process.versions.node.split('.')[0]"],
+          smokeDirectory,
+        )
+      ).trim();
+      expect(selectedNodeMajor).toBe(process.env.EXPECTED_NODE_MAJOR ?? "20");
       const entrypoint = join(cliDirectory, "dist/index.js");
       const built = await readFile(entrypoint, "utf8");
 

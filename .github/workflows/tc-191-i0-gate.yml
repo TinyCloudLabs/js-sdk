@@ -55,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Node 20 for CLI and contract checks
+      - name: Select Node 20.19.4 for CLI, MCP, and packed graph checks
         uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
@@ -109,6 +109,7 @@ jobs:
         env:
           NODE_BINARY: node
           CLI_NODE_BINARY: node
+          EXPECTED_NODE_MAJOR: "20"
           NPM_CONFIG_OFFLINE: "true"
           NPM_CONFIG_REGISTRY: "http://127.0.0.1:9"
         run: |
@@ -122,18 +123,14 @@ jobs:
           bun test tests/mcp-sdk-contract/prerequisites.test.ts
           bun run --cwd tests/mcp-sdk-contract test:public-api
 
-      - name: Select Node 18 for the SDK and Operations packed graph
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18.16.0
-
-      - name: Verify Node 18 packed-graph boundary
+      - name: Verify Node 20 packed-graph boundary
         env:
           NODE_BINARY: node
-          EXPECTED_NODE_MAJOR: "18"
+          CLI_NODE_BINARY: node
+          EXPECTED_NODE_MAJOR: "20"
           NPM_CONFIG_OFFLINE: "true"
           NPM_CONFIG_REGISTRY: "http://127.0.0.1:9"
         run: |
-          test "$(node --version)" = "v18.16.0"
-          test "$(node -p 'process.versions.node.split(".")[0]')" = "18"
+          test "$(node --version)" = "v20.19.4"
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "20"
           bun test tests/packed-runtime/entrypoints.test.ts
