@@ -168,7 +168,7 @@ test("tc auth import contends for the operations lock and preserves additional d
   } finally {
     fixture.hermetic.stop();
   }
-}
+}, { timeout: PROFILE_LOCK_TEST_TIMEOUT_MS });
 
 async function withTcHome<T>(home: string, action: () => Promise<T>): Promise<T> {
   const previousTcHome = process.env.TC_HOME;
