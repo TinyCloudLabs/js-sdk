@@ -31,6 +31,7 @@ import {
   type PermissionRequestArtifact,
 } from "./artifacts.js";
 import { redactOperationError } from "./redaction.js";
+import { safeOriginHost } from "./safe-values.js";
 import type { InvocationRuntimeResolution } from "./runtime.js";
 
 /** The sole projection-facing execution API. */
@@ -62,7 +63,10 @@ export async function invokeOperation(
     return errorResult(
       operation,
       unresolvedContextSummary(target),
-      operationError("OPERATION_NOT_FOUND", "The requested operation is not registered."),
+      operationError(
+        "OPERATION_NOT_FOUND",
+        "The requested operation is not registered.",
+      ),
     );
   }
   if (lookup.status === "operation_version_unsupported") {
@@ -83,9 +87,13 @@ export async function invokeOperation(
     return errorResult(
       operation,
       unresolvedContextSummary(target),
-      operationError(definition.invalidInputErrorCode ?? "INPUT_INVALID", "The operation input is invalid.", {
-        details: zodIssueDetails(parsedInput.error),
-      }),
+      operationError(
+        definition.invalidInputErrorCode ?? "INPUT_INVALID",
+        "The operation input is invalid.",
+        {
+          details: zodIssueDetails(parsedInput.error),
+        },
+      ),
     );
   }
 
@@ -94,10 +102,16 @@ export async function invokeOperation(
   // availability are decided before any authentication or external effect.
   const inspectionResolution = await resolveRuntime(target, "inspection");
   if (!inspectionResolution.ok) {
-    return errorResult(operation, inspectionResolution.context, inspectionResolution.error);
+    return errorResult(
+      operation,
+      inspectionResolution.context,
+      inspectionResolution.error,
+    );
   }
 
-  if (!definition.postures.includes(inspectionResolution.context.summary.posture)) {
+  if (
+    !definition.postures.includes(inspectionResolution.context.summary.posture)
+  ) {
     return errorResult(
       operation,
       inspectionResolution.context.summary,
@@ -122,11 +136,16 @@ export async function invokeOperation(
     );
   }
 
-  const runtimeResolution = definition.runtime === "inspection"
-    ? inspectionResolution
-    : await resolveRuntime(target, "authenticated");
+  const runtimeResolution =
+    definition.runtime === "inspection"
+      ? inspectionResolution
+      : await resolveRuntime(target, "authenticated");
   if (!runtimeResolution.ok) {
-    return errorResult(operation, runtimeResolution.context, runtimeResolution.error);
+    return errorResult(
+      operation,
+      runtimeResolution.context,
+      runtimeResolution.error,
+    );
   }
   if (definition.runtime === "authenticated") {
     const actualPosture = runtimeResolution.context.summary.posture;
@@ -151,9 +170,10 @@ export async function invokeOperation(
       );
     }
   }
-  const runtimeContext = runtimeResolution.context.runtime === undefined
-    ? undefined
-    : runtimeResolution.context as RuntimeOperationContext;
+  const runtimeContext =
+    runtimeResolution.context.runtime === undefined
+      ? undefined
+      : (runtimeResolution.context as RuntimeOperationContext);
 
   try {
     const planned = await definition.authority(
@@ -189,7 +209,11 @@ export async function invokeOperation(
         evaluation.missing,
       );
       if (authority.status === "error") {
-        return errorResult(operation, runtimeResolution.context.summary, authority.error);
+        return errorResult(
+          operation,
+          runtimeResolution.context.summary,
+          authority.error,
+        );
       }
       return authorityRequiredResult(
         operation,
@@ -251,9 +275,17 @@ export async function invokeOperation(
             internalOperationError(),
           );
         }
-        const authority = await persistAuthorityRequest(runtimeContext, hinted, true);
+        const authority = await persistAuthorityRequest(
+          runtimeContext,
+          hinted,
+          true,
+        );
         if (authority.status === "error") {
-          return errorResult(operation, runtimeResolution.context.summary, authority.error);
+          return errorResult(
+            operation,
+            runtimeResolution.context.summary,
+            authority.error,
+          );
         }
         return authorityRequiredResult(
           operation,
@@ -281,7 +313,10 @@ export async function invokeOperation(
         return errorResult(
           operation,
           runtimeResolution.context.summary,
-          redactOperationError(definition, sanitizeOperationError(outcome.error)),
+          redactOperationError(
+            definition,
+            sanitizeOperationError(outcome.error),
+          ),
         );
       default:
         return errorResult(
@@ -299,7 +334,9 @@ export async function invokeOperation(
   }
 }
 
-function normalizeInvocationTarget(target: unknown): InvocationTarget | undefined {
+function normalizeInvocationTarget(
+  target: unknown,
+): InvocationTarget | undefined {
   if (typeof target !== "object" || target === null) return undefined;
 
   try {
@@ -312,7 +349,8 @@ function normalizeInvocationTarget(target: unknown): InvocationTarget | undefine
     if (
       (profile !== undefined && typeof profile !== "string") ||
       (host !== undefined && typeof host !== "string") ||
-      (allowOwnerProfile !== undefined && typeof allowOwnerProfile !== "boolean") ||
+      (allowOwnerProfile !== undefined &&
+        typeof allowOwnerProfile !== "boolean") ||
       (privateKey !== undefined && typeof privateKey !== "string")
     ) {
       return undefined;
@@ -348,10 +386,12 @@ async function resolveRuntime(
   }
 }
 
-function unresolvedContextSummary(target: InvocationTarget = {}): OperationContextSummary {
+function unresolvedContextSummary(
+  target: InvocationTarget = {},
+): OperationContextSummary {
   return {
-    profile: target.profile ?? "unresolved",
-    host: target.host ?? "unresolved",
+    profile: typeof target.profile === "string" ? target.profile : "unresolved",
+    host: safeOriginHost(target.host) ?? "unresolved",
     posture: "unauthenticated",
   };
 }
@@ -377,18 +417,23 @@ function retryDescriptor(
   return {
     operationId: operation.operationId,
     operationVersion: operation.operationVersion,
-    inputDigest: createHash("sha256").update(jcsCanonicalize(input), "utf8").digest("hex"),
+    inputDigest: createHash("sha256")
+      .update(jcsCanonicalize(input), "utf8")
+      .digest("hex"),
     requiresCallerInput,
   };
 }
 
 type PersistedAuthority =
   | Readonly<{
-    status: "ok";
-    request: PermissionRequestArtifact;
-    missing: readonly CapabilityRequirement[];
-  }>
-  | Readonly<{ status: "error"; error: ReturnType<typeof sanitizeOperationError> }>;
+      status: "ok";
+      request: PermissionRequestArtifact;
+      missing: readonly CapabilityRequirement[];
+    }>
+  | Readonly<{
+      status: "error";
+      error: ReturnType<typeof sanitizeOperationError>;
+    }>;
 
 async function persistAuthorityRequest(
   context: RuntimeOperationContext,
@@ -412,26 +457,40 @@ async function persistAuthorityRequest(
       operatorType: context.summary.operatorType ?? "human",
       host: context.summary.host,
       sessionDid,
-      ...(context.summary.ownerDid === undefined ? {} : { ownerDid: context.summary.ownerDid }),
-      ...(context.summary.space === undefined ? {} : { spaceId: context.summary.space }),
+      ...(context.summary.ownerDid === undefined
+        ? {}
+        : { ownerDid: context.summary.ownerDid }),
+      ...(context.summary.space === undefined
+        ? {}
+        : { spaceId: context.summary.space }),
       missing: missing as unknown as PermissionEntry[],
-      granted: (force ? [] : context.runtime.granted) as unknown as PermissionEntry[],
+      granted: (force
+        ? []
+        : context.runtime.granted) as unknown as PermissionEntry[],
     });
     if (resolution.status !== "created") {
       return {
         status: "error",
-        error: operationError("INTERNAL_ERROR", "The authority request could not be created."),
+        error: operationError(
+          "INTERNAL_ERROR",
+          "The authority request could not be created.",
+        ),
       };
     }
     return {
       status: "ok",
       request: resolution.request,
-      missing: canonicalizeCapabilities(missing as unknown as PermissionEntry[]) as CapabilityRequirement[],
+      missing: canonicalizeCapabilities(
+        missing as unknown as PermissionEntry[],
+      ) as CapabilityRequirement[],
     };
   } catch {
     return {
       status: "error",
-      error: operationError("INTERNAL_ERROR", "The authority request could not be created."),
+      error: operationError(
+        "INTERNAL_ERROR",
+        "The authority request could not be created.",
+      ),
     };
   }
 }
@@ -456,7 +515,10 @@ function authorityRequiredResult(
   };
 }
 
-function approvalAction(request: PermissionRequestArtifact, node: unknown): ApprovalAction {
+function approvalAction(
+  request: PermissionRequestArtifact,
+  node: unknown,
+): ApprovalAction {
   const maybeNode = node as {
     getOpenKeyApprovalUrl?: (artifact: PermissionRequestArtifact) => unknown;
   };
@@ -476,8 +538,12 @@ function approvalAction(request: PermissionRequestArtifact, node: unknown): Appr
   };
 }
 
-function exactCapabilities(value: unknown): CapabilityRequirement[] | undefined {
-  return validateExactCapabilities(value) as CapabilityRequirement[] | undefined;
+function exactCapabilities(
+  value: unknown,
+): CapabilityRequirement[] | undefined {
+  return validateExactCapabilities(value) as
+    | CapabilityRequirement[]
+    | undefined;
 }
 
 function isOwnerPosture(posture: OperationContextSummary["posture"]): boolean {
@@ -486,10 +552,8 @@ function isOwnerPosture(posture: OperationContextSummary["posture"]): boolean {
 
 function zodIssueDetails(error: ZodError): Readonly<Record<string, unknown>> {
   return {
-    issues: error.issues.map((issue) => ({
-      code: issue.code,
-      message: issue.message,
-      path: issue.path.map(String),
-    })),
+    // The canonical error channel carries only schema-owned issue codes.
+    // Messages and paths can contain arbitrary input keys and values.
+    issues: error.issues.map((issue) => ({ code: issue.code })),
   };
 }

@@ -4,6 +4,7 @@ import type {
   OperationRef,
 } from "./contract.js";
 import type { OperationError, OperationErrorCode } from "./errors.js";
+import { safeOriginHost, safeSessionDid } from "./safe-values.js";
 
 export const REDACTED_VALUE = "[REDACTED]";
 
@@ -124,7 +125,7 @@ const SAFE_ERROR_DETAIL_POLICIES: Readonly<
 > = {
   INPUT_INVALID: {
     issues: (value) =>
-      Array.isArray(value) && value.every(isSafeIssue) ? value : undefined,
+      Array.isArray(value) ? safeIssueCodes(value) : undefined,
   },
   OPERATION_VERSION_UNSUPPORTED: {
     supportedVersions: (value) =>
@@ -133,12 +134,12 @@ const SAFE_ERROR_DETAIL_POLICIES: Readonly<
         : undefined,
   },
   DELEGATION_AUDIENCE_MISMATCH: {
-    expectedSessionDid: safeString,
-    artifactAudience: safeString,
+    expectedSessionDid: safeSessionDid,
+    artifactAudience: safeSessionDid,
   },
   DELEGATION_HOST_MISMATCH: {
-    expectedHost: safeString,
-    artifactHost: safeString,
+    expectedHost: safeOriginHost,
+    artifactHost: safeOriginHost,
   },
 };
 
@@ -158,19 +159,38 @@ function redactSafeErrorDetails(
   return Object.keys(safeDetails).length === 0 ? undefined : safeDetails;
 }
 
-function safeString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+function safeIssueCodes(
+  value: readonly unknown[],
+): readonly Readonly<{ code: string }>[] | undefined {
+  const codes = value.map((issue) => {
+    if (!isRecord(issue) || typeof issue.code !== "string") return undefined;
+    return SAFE_ISSUE_CODES.has(issue.code) ? { code: issue.code } : undefined;
+  });
+  return codes.every(
+    (issue): issue is Readonly<{ code: string }> => issue !== undefined,
+  )
+    ? codes
+    : undefined;
 }
 
-function isSafeIssue(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.code === "string" &&
-    typeof value.message === "string" &&
-    Array.isArray(value.path) &&
-    value.path.every((part) => typeof part === "string")
-  );
-}
+const SAFE_ISSUE_CODES = new Set([
+  "invalid_type",
+  "invalid_literal",
+  "custom",
+  "invalid_union",
+  "invalid_union_discriminator",
+  "invalid_enum_value",
+  "unrecognized_keys",
+  "invalid_arguments",
+  "invalid_return_type",
+  "invalid_date",
+  "invalid_string",
+  "too_small",
+  "too_big",
+  "invalid_intersection_types",
+  "not_multiple_of",
+  "not_finite",
+]);
 
 function redactPointer(value: unknown, pointer: string): unknown {
   if (pointer === "") {

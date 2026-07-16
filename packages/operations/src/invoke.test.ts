@@ -197,6 +197,31 @@ test("validates unknown input before context resolution or executing a known ope
   expect(executed).toBe(false);
 });
 
+test("invoke-level invalid input diagnostics omit attacker-controlled issue details", async () => {
+  const canary = "Bearer-private-auth-token-canary";
+  definitions = [
+    createDefinition({
+      input: z.object({ name: z.string() }).strict(),
+    }),
+  ];
+
+  const result = await invokeOperation(
+    "tinycloud.test.get",
+    1,
+    {},
+    { name: "valid", [canary]: canary },
+  );
+
+  expect(result).toMatchObject({
+    status: "error",
+    error: {
+      code: "INPUT_INVALID",
+      details: { issues: [{ code: "unrecognized_keys" }] },
+    },
+  });
+  expect(JSON.stringify(result)).not.toContain(canary);
+});
+
 test("plans and persists exact missing authority before it can execute a handler", async () => {
   let handlerRan = false;
   resolver = async () => {
@@ -648,8 +673,10 @@ test("canonical invocation preserves safe delegation mismatch details in results
   const transportCanary = "raw-delegation-auth-token-jwk-canary";
   const expectedHost = "https://expected.example";
   const artifactHost = "https://artifact.example";
-  const expectedSessionDid = "did:key:expected-session";
-  const artifactAudience = "did:key:artifact-audience";
+  const expectedSessionDid =
+    "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
+  const artifactAudience =
+    "did:pkh:eip155:1:0x2222222222222222222222222222222222222222";
   const definition = createDefinition({
     sensitivity: { input: [""], output: [] },
     execute: async (_context, input) =>
@@ -708,6 +735,39 @@ test("canonical invocation preserves safe delegation mismatch details in results
     expect(JSON.stringify(diagnostic)).not.toContain(transportCanary);
     expect(diagnostic.error).toEqual(result.error);
   }
+
+  const canary = "raw-jwk-private-key-canary";
+  definitions = [
+    createDefinition({
+      execute: async () =>
+        ({
+          status: "error",
+          error: {
+            code: "DELEGATION_HOST_MISMATCH",
+            message: "The delegation does not match the selected runtime.",
+            retryable: false,
+            details: {
+              expectedHost: `https://user:pass@safe.example/path?token=${canary}`,
+              artifactHost: canary,
+            },
+          },
+        }) as never,
+    }),
+  ];
+  const hostile = await invokeOperation(
+    "tinycloud.test.get",
+    1,
+    {},
+    { name: "valid" },
+  );
+  expect(hostile).toMatchObject({
+    status: "error",
+    error: { code: "DELEGATION_HOST_MISMATCH" },
+  });
+  expect(
+    hostile.status === "error" ? hostile.error.details : undefined,
+  ).toBeUndefined();
+  expect(JSON.stringify(hostile)).not.toContain(canary);
 });
 
 test("returns the four canonical operation outcomes", async () => {

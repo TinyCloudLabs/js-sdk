@@ -2,8 +2,16 @@
   "name": "@tinycloud/node-sdk-wasm",
   "version": "1.7.4",
   "description": "TinyCloud WASM bindings for Node.js",
-  "main": "dist/index.js",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
   "type": "module",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -13,7 +21,7 @@
   "scripts": {
     "prebuild": "mkdir -p src/wasm && cp ../../node-sdk-wasm/tinycloud_web_sdk_rs.js src/wasm/index.cjs && cp ../../node-sdk-wasm/tinycloud_web_sdk_rs.d.ts src/wasm/index.d.cts && cp ../../node-sdk-wasm/tinycloud_web_sdk_rs_bg.wasm src/wasm/",
     "build": "tsc",
-    "postbuild": "mkdir -p dist/wasm && cp src/wasm/tinycloud_web_sdk_rs_bg.wasm dist/wasm/ && cp src/wasm/index.cjs dist/wasm/ && cp src/wasm/index.d.cts dist/wasm/",
+    "postbuild": "mkdir -p dist/wasm && cp src/index.cjs dist/index.cjs && cp src/wasm/tinycloud_web_sdk_rs_bg.wasm dist/wasm/ && cp src/wasm/index.cjs dist/wasm/ && cp src/wasm/index.d.cts dist/wasm/",
     "clean": "rm -rf dist src/wasm"
   },
   "devDependencies": {
