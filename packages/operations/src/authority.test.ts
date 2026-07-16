@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   canonicalizeCapabilities,
   evaluateAuthority,
+  evaluateOperationAuthority,
   permissionIdentity,
   validateExactCapabilities,
 } from "./authority.js";
@@ -113,4 +114,24 @@ test("preserves signed caveat branches in granted-authority canonicalization", (
   };
   expect(canonicalizeCapabilities([caveated])).toEqual([caveated]);
   expect(permissionIdentity(caveated)).not.toBe(permissionIdentity(keyGet));
+});
+
+test("operation authority keeps full space owner identity exact while resolving short names", () => {
+  const ownerA = "tinycloud:pkh:eip155:1:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:secrets";
+  const ownerB = "tinycloud:pkh:eip155:1:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:secrets";
+  const resolveOwnerA = (space: string) => space === "secrets" ? ownerA : space;
+
+  expect(evaluateOperationAuthority(
+    [{ ...keyGet, space: ownerA }],
+    [{ ...keyGet, space: ownerB }],
+    resolveOwnerA,
+  )).toEqual({
+    satisfied: false,
+    missing: [{ ...keyGet, space: ownerB }],
+  });
+  expect(evaluateOperationAuthority(
+    [{ ...keyGet, space: ownerA }],
+    [{ ...keyGet, space: "secrets" }],
+    resolveOwnerA,
+  )).toEqual({ satisfied: true, missing: [] });
 });

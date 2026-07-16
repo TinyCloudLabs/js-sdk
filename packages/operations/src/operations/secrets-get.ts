@@ -15,7 +15,9 @@ import { OperationInvocationError, operationError } from "../errors.js";
 import {
   buildSecretSetupUrl,
   normalizeSecretsGetInput,
+  operationSpaceResolver,
   resolveSecretReference,
+  resolveSecretReferenceForOperation,
   type SecretReference,
   type SecretsGetInput,
 } from "../secrets.js";
@@ -82,8 +84,24 @@ async function planSecretGet(
   context: RuntimeOperationContext,
   input: SecretsGetInput,
 ): Promise<readonly CapabilityRequirement[]> {
-  const reference = resolveSecretReference(input);
-  const networkId = resolveEncryptionNetworkId(context.runtime.node, reference.space);
+  const reference = resolveSecretReferenceForOperation(
+    input,
+    context.runtime.node,
+    context.summary.space,
+  );
+  let networkSpace = reference.space;
+  if (input.space === undefined) {
+    try {
+      networkSpace = operationSpaceResolver(
+        context.runtime.node,
+        context.summary.space,
+      )("secrets");
+    } catch {
+      // Definition-focused callers may omit authenticated identity metadata;
+      // the runtime path supplies the owner space before production planning.
+    }
+  }
+  const networkId = resolveEncryptionNetworkId(context.runtime.node, networkSpace);
 
   return [
     {
@@ -104,7 +122,11 @@ async function executeSecretGet(
   context: OperationContext,
   input: SecretsGetInput,
 ): Promise<OperationExecutionOutcome<SecretsGetOutput>> {
-  const reference = resolveSecretReference(input);
+  const reference = resolveSecretReferenceForOperation(
+    input,
+    context.runtime?.node,
+    context.summary.space,
+  );
   const node = context.runtime?.node as SecretReadingNode | undefined;
   if (node === undefined || typeof node.readSecret !== "function") {
     return {
@@ -201,14 +223,21 @@ function resolveEncryptionNetworkId(node: unknown, space: string): string {
     getDefaultEncryptionNetworkId?: () => unknown;
   };
 
+  let scoped: unknown;
   try {
-    const scoped = candidate.getEncryptionNetworkIdForSpace?.(space);
-    if (typeof scoped === "string" && scoped.length > 0) return scoped;
-    const fallback = candidate.getDefaultEncryptionNetworkId?.();
-    if (typeof fallback === "string" && fallback.length > 0) return fallback;
+    scoped = candidate.getEncryptionNetworkIdForSpace?.(space);
   } catch {
-    // The operation returns a stable safe error rather than widening authority.
+    // A scoped resolver is optional and may fail for a non-primary space.
   }
+  if (typeof scoped === "string" && scoped.length > 0) return scoped;
+
+  let fallback: unknown;
+  try {
+    fallback = candidate.getDefaultEncryptionNetworkId?.();
+  } catch {
+    // Both local sources must fail before the operation reports unresolved.
+  }
+  if (typeof fallback === "string" && fallback.length > 0) return fallback;
 
   throw new OperationInvocationError(
     operationError(

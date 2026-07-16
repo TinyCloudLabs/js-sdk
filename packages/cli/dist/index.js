@@ -14812,6 +14812,7 @@ import { readFile as readFile6 } from "fs/promises";
 import { writeFile as writeFile6 } from "fs/promises";
 import { join as join4 } from "path";
 import { homedir } from "os";
+import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
 var SECRETS_SPACE3 = "secrets";
 var SECRET_KV_ABILITIES = {
   get: "tinycloud.kv/get",
@@ -14956,6 +14957,60 @@ async function runSecretOperationAttempt(label, operation) {
     const permissionError = thrownPermissionError(error);
     if (permissionError) return permissionError;
     throw error;
+  }
+}
+async function invokeCanonicalSecretGet(params) {
+  const auth = authOptions(params.options);
+  const target = {
+    profile: params.ctx.profile,
+    host: params.ctx.host,
+    allowOwnerProfile: true,
+    ...auth ?? {}
+  };
+  const input = {
+    name: params.name,
+    ...params.scope === void 0 ? {} : { scope: params.scope },
+    ...params.space === void 0 ? {} : { space: params.space }
+  };
+  const invoke = () => withSpinner(
+    params.label,
+    () => invokeOperation2("tinycloud.secrets.get", 1, target, input)
+  );
+  const first = await invoke();
+  if (first.status !== "authority_required") return first;
+  const profile = await ProfileManager.getProfile(params.ctx.profile);
+  if (!canRequestOwnerPermissions(profile)) return first;
+  const node = params.node ?? await ensureSecretsNode(params.ctx, params.options);
+  await withSpinner(
+    "Requesting secret permissions...",
+    () => ensureDelegationAuthority({
+      ctx: params.ctx,
+      profile,
+      node,
+      requested: first.missing,
+      expiryOption: void 0,
+      reason: secretPermissionReason("get", params.name),
+      yes: true,
+      force: true,
+      openKeyAcquisition: params.openKeyAcquisition
+    })
+  );
+  return invoke();
+}
+function throwCanonicalSecretGetError(result, name2) {
+  switch (result.status) {
+    case "authority_required":
+      throw new CLIError(
+        "PERMISSION_DENIED",
+        "Permission denied while reading secret",
+        ExitCode.ERROR
+      );
+    case "setup_required":
+      throw new CLIError("NOT_FOUND", `Secret "${name2}" not found`, ExitCode.NOT_FOUND);
+    case "error":
+      throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+    case "ok":
+      throw new Error("Expected a failed canonical secret result.");
   }
 }
 function canRequestOwnerPermissions(profile) {
@@ -15531,11 +15586,11 @@ function registerSecretsCommand(program2, openKeyAcquisition) {
         );
         const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
         const delegatedCtx = { ...ctx, host: effectiveHost };
-        const node2 = await ensureSecretsNode(delegatedCtx, options);
+        const node = await ensureSecretsNode(delegatedCtx, options);
         const value2 = await withSpinner(
           `Getting secret ${name2}...`,
           () => readDelegatedSecretValue({
-            node: node2,
+            node,
             delegation: delegated.delegation,
             delegationCid: delegated.delegation.cid,
             permissions: delegated.permissions,
@@ -15556,26 +15611,19 @@ function registerSecretsCommand(program2, openKeyAcquisition) {
         outputJson({ name: name2, value: value2 });
         return;
       }
-      const node = await ensureSecretsNode(ctx, options);
-      const secrets2 = secretsServiceForSpace(node, spaceUri);
-      const result = await runSecretOperation({
+      const result = await invokeCanonicalSecretGet({
         ctx,
-        node,
-        action: "get",
         name: name2,
-        scopeOptions,
-        space: spaceUri,
+        ...scopeOptions?.scope === void 0 ? {} : { scope: scopeOptions.scope },
+        ...spaceUri === void 0 ? {} : { space: spaceUri },
+        options,
         label: `Getting secret ${name2}...`,
-        operation: () => secrets2.get(name2, scopeOptions),
         openKeyAcquisition
       });
-      if (!result.ok) {
-        if (result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND") {
-          throw new CLIError("NOT_FOUND", `Secret "${name2}" not found`, ExitCode.NOT_FOUND);
-        }
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      if (result.status !== "ok") {
+        throwCanonicalSecretGetError(result, name2);
       }
-      const value = String(result.data);
+      const value = result.output.value;
       if (options.output) {
         await writeFile6(options.output, value);
         outputJson({ name: name2, written: options.output });

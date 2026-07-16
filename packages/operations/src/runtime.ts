@@ -120,10 +120,11 @@ export async function createInvocationRuntime(
       : typeof profile.privateKey === "string"
       ? profile.privateKey
       : undefined;
-    const selectedPosture = profile.authMethod === "local"
+    const explicitPrivateKeyOverride = typeof target.privateKey === "string";
+    const selectedPosture = explicitPrivateKeyOverride || profile.authMethod === "local"
       ? "local-owner-key"
       : summary.posture;
-    if (selectedPosture !== summary.posture) {
+    if (selectedPosture !== summary.posture && !explicitPrivateKeyOverride) {
       return failed(
         { ...summary, posture: selectedPosture },
         operationError(
@@ -138,7 +139,11 @@ export async function createInvocationRuntime(
     });
 
     const activeSession = session === null ? undefined : normalizeSession(session, key);
-    if (activeSession === undefined) {
+    if (explicitPrivateKeyOverride) {
+      // An explicit key is a complete, non-persisted identity. Do not inherit
+      // an OpenKey session (or require one) from the selected profile.
+      await node.signIn();
+    } else if (activeSession === undefined) {
       if (profile.authMethod === "local" && privateKey !== undefined) {
         await node.signIn();
       } else {
@@ -155,6 +160,7 @@ export async function createInvocationRuntime(
     // particular, do not report the persisted verification method if SDK
     // restoration failed to install its key as the live session key.
     const activeSessionDid = normalizeDid(node.sessionDid);
+    const livePrincipalDid = normalizeDid(node.did);
     // This API derives from the restored, verified base session rather than
     // from an SDK private field or a second parse of signed authority here.
     const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
@@ -186,6 +192,11 @@ export async function createInvocationRuntime(
       context: {
         summary: {
           ...summary,
+          posture: selectedPosture,
+          ...(livePrincipalDid === undefined ? {} : { principalDid: livePrincipalDid }),
+          ...(explicitPrivateKeyOverride && livePrincipalDid !== undefined
+            ? { ownerDid: livePrincipalDid }
+            : {}),
           ...(activeSessionDid === undefined ? {} : { sessionDid: activeSessionDid }),
         },
         runtime,

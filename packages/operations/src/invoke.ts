@@ -22,8 +22,8 @@ import {
   sanitizeThrownOperationError,
 } from "./errors.js";
 import {
-  canonicalizeCapabilities,
-  evaluateAuthority,
+  canonicalizeOperationCapabilities,
+  evaluateOperationAuthority,
   validateExactCapabilities,
 } from "./authority.js";
 import {
@@ -33,6 +33,7 @@ import {
 import { redactOperationError } from "./redaction.js";
 import { safeOriginHost } from "./safe-values.js";
 import type { InvocationRuntimeResolution } from "./runtime.js";
+import { operationSpaceResolver } from "./secrets.js";
 
 /** The sole projection-facing execution API. */
 export async function invokeOperation(
@@ -174,6 +175,12 @@ export async function invokeOperation(
     runtimeResolution.context.runtime === undefined
       ? undefined
       : (runtimeResolution.context as RuntimeOperationContext);
+  const resolveSpace = runtimeContext === undefined
+    ? undefined
+    : operationSpaceResolver(
+      runtimeContext.runtime.node,
+      runtimeContext.summary.space,
+    );
 
   try {
     const planned = await definition.authority(
@@ -192,9 +199,10 @@ export async function invokeOperation(
       );
     }
 
-    const evaluation = evaluateAuthority(
+    const evaluation = evaluateOperationAuthority(
       (runtimeContext?.runtime.granted ?? []) as unknown as PermissionEntry[],
       required as unknown as PermissionEntry[],
+      resolveSpace,
     );
     if (!evaluation.satisfied) {
       if (runtimeContext === undefined) {
@@ -254,9 +262,10 @@ export async function invokeOperation(
         const hinted = exactCapabilities(outcome.missing);
         if (
           hinted === undefined ||
-          !evaluateAuthority(
-            required as unknown as PermissionEntry[],
+          !evaluateOperationAuthority(
             hinted as unknown as PermissionEntry[],
+            required as unknown as PermissionEntry[],
+            resolveSpace,
           ).satisfied
         ) {
           return errorResult(
@@ -451,6 +460,12 @@ async function persistAuthorityRequest(
     };
   }
   try {
+    const resolveSpace = operationSpaceResolver(
+      context.runtime.node,
+      context.summary.space,
+    );
+    const canonicalMissing = canonicalizeOperationCapabilities(missing as unknown as PermissionEntry[], resolveSpace);
+    const canonicalGranted = canonicalizeOperationCapabilities(context.runtime.granted as unknown as PermissionEntry[], resolveSpace);
     const resolution = await createOrReusePermissionRequest({
       profile: context.summary.profile,
       posture: context.summary.posture,
@@ -463,10 +478,10 @@ async function persistAuthorityRequest(
       ...(context.summary.space === undefined
         ? {}
         : { spaceId: context.summary.space }),
-      missing: missing as unknown as PermissionEntry[],
+      missing: canonicalMissing as unknown as PermissionEntry[],
       granted: (force
         ? []
-        : context.runtime.granted) as unknown as PermissionEntry[],
+        : canonicalGranted) as unknown as PermissionEntry[],
     });
     if (resolution.status !== "created") {
       return {
@@ -480,9 +495,7 @@ async function persistAuthorityRequest(
     return {
       status: "ok",
       request: resolution.request,
-      missing: canonicalizeCapabilities(
-        missing as unknown as PermissionEntry[],
-      ) as CapabilityRequirement[],
+      missing: canonicalMissing as CapabilityRequirement[],
     };
   } catch {
     return {

@@ -61,6 +61,7 @@ export async function verifyPackedCliRuntime(): Promise<void> {
       await assertNoDanglingRelativeImports(cliDirectory, built);
       expect(built).not.toContain("Dynamic require");
       expect(built).not.toContain("__require2");
+      expect(built).toContain("tinycloud.secrets.get");
 
       const home = join(smokeDirectory, "home");
       const profileDirectory = join(home, ".tinycloud/profiles/default");
@@ -82,6 +83,36 @@ export async function verifyPackedCliRuntime(): Promise<void> {
           authMethod: "openkey",
         }) + "\n",
       );
+
+      const operationProfileDirectory = join(home, ".tinycloud/profiles/operation");
+      await mkdir(operationProfileDirectory, { recursive: true });
+      await writeFile(
+        join(operationProfileDirectory, "profile.json"),
+        JSON.stringify({
+          name: "operation",
+          host: "https://node.example",
+          chainId: 1,
+          spaceName: "secrets",
+          did: "did:key:operation",
+          createdAt: "2026-07-15T00:00:00.000Z",
+          posture: "delegate-session",
+          authMethod: "openkey",
+        }) + "\n",
+      );
+      try {
+        await run(
+          cliNodeBinary,
+          [entrypoint, "--quiet", "--profile", "operation", "secrets", "get", "API_KEY", "--json"],
+          smokeDirectory,
+          { env: { ...process.env, TC_HOME: home, TC_PROFILE: "operation" } },
+        );
+        throw new Error("Packed canonical secrets get unexpectedly succeeded.");
+      } catch (error) {
+        const failure = error as { stderr?: string; code?: number };
+        expect(failure.code).toBe(1);
+        const payload = JSON.parse(failure.stderr ?? "{}") as { error?: { code?: unknown } };
+        expect(payload.error?.code).toBe("SESSION_NOT_FOUND");
+      }
 
       const runImport = async (requestId: string, associated: boolean) => {
         await writeFile(
@@ -176,6 +207,8 @@ export async function verifyMissingTrackedCliArtifactCannotBeMasked(): Promise<v
       ["run", "build"],
       join(import.meta.dir, "../../packages/cli"),
     );
+    const trackedBuild = await readFile(entrypoint, "utf8");
+    expect(trackedBuild).toContain("tinycloud.secrets.get");
     await rm(entrypoint);
 
     const smokeDirectory = await mkdtemp(

@@ -291,7 +291,7 @@ async function runSecretOperationAttempt<T>(
 
 async function invokeCanonicalSecretGet(params: {
   ctx: CLIContext;
-  node: TinyCloudNode;
+  node?: TinyCloudNode;
   name: string;
   scope?: string;
   space?: string;
@@ -321,12 +321,13 @@ async function invokeCanonicalSecretGet(params: {
 
   const profile = await ProfileManager.getProfile(params.ctx.profile);
   if (!canRequestOwnerPermissions(profile)) return first;
+  const node = params.node ?? await ensureSecretsNode(params.ctx, params.options);
 
   await withSpinner("Requesting secret permissions...", () =>
     ensureDelegationAuthority({
       ctx: params.ctx,
       profile,
-      node: params.node,
+      node,
       requested: first.missing as PermissionEntry[],
       expiryOption: undefined,
       reason: secretPermissionReason("get", params.name),
@@ -1153,10 +1154,8 @@ export function registerSecretsCommand(
           return;
         }
 
-        const node = await ensureSecretsNode(ctx, options);
         const result = await invokeCanonicalSecretGet({
           ctx,
-          node,
           name,
           ...(scopeOptions?.scope === undefined ? {} : { scope: scopeOptions.scope }),
           ...(spaceUri === undefined ? {} : { space: spaceUri }),

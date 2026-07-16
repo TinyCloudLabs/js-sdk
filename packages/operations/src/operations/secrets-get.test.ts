@@ -86,6 +86,21 @@ describe("tinycloud.secrets.get", () => {
     ]);
   });
 
+  test("isolates a throwing scoped network resolver before using a valid local default", async () => {
+    const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
+    const planned = await secretsGetOperationDefinition.authority(
+      context(async () => ({ status: "not_found" }), {
+        getEncryptionNetworkIdForSpace: () => {
+          throw new Error("scoped lookup unavailable");
+        },
+        getDefaultEncryptionNetworkId: () => NETWORK_ID,
+      }) as RuntimeOperationContext,
+      input,
+    );
+
+    expect(planned[1]).toMatchObject({ path: NETWORK_ID });
+  });
+
   test("fails closed when the encryption network cannot be resolved", async () => {
     const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
 

@@ -17,6 +17,14 @@ export interface AuthorityEvaluation {
   readonly missing: readonly CanonicalPermissionEntry[];
 }
 
+/**
+ * Operation-owned space resolution. The SDK's general capability evaluator
+ * intentionally preserves its historical short/full-space compatibility; the
+ * operation kernel supplies this narrower resolver when a space identifies a
+ * remote owner's resource.
+ */
+export type OperationSpaceResolver = (space: string) => string;
+
 const EXACT_PERMISSION_KEYS = new Set([
   "service",
   "space",
@@ -62,6 +70,71 @@ export function evaluateAuthority(
     satisfied: result.subset,
     missing: canonicalizeCapabilities(result.missing),
   };
+}
+
+/**
+ * Evaluate operation capabilities without allowing two owners' same-named
+ * spaces to compare equal. Path and action containment still come from the
+ * SDK primitive; only the operation space identity is made owner-exact.
+ */
+export function evaluateOperationAuthority(
+  granted: readonly PermissionEntry[],
+  required: readonly PermissionEntry[],
+  resolveSpace?: OperationSpaceResolver,
+): AuthorityEvaluation {
+  const canonicalGranted = canonicalizeOperationCapabilities(granted, resolveSpace);
+  const canonicalRequired = canonicalizeOperationCapabilities(required, resolveSpace);
+  const missing: CanonicalPermissionEntry[] = [];
+
+  for (const requested of canonicalRequired) {
+    const covered = canonicalGranted.some((candidate) =>
+      candidate.service === requested.service &&
+      operationSpacesEqual(candidate.space, requested.space) &&
+      isCapabilitySubset([requested], [candidate]).subset,
+    );
+    if (!covered) missing.push(requested);
+  }
+
+  return {
+    satisfied: missing.length === 0,
+    missing: canonicalizeCapabilities(missing),
+  };
+}
+
+/** Canonical identity used by operation preflight, hints, and artifacts. */
+export function canonicalizeOperationCapabilities(
+  permissions: readonly PermissionEntry[],
+  resolveSpace?: OperationSpaceResolver,
+): CanonicalPermissionEntry[] {
+  return canonicalizeCapabilities(permissions.map((permission) => {
+    const canonicalPath = canonicalizeOperationPath(permission);
+    if (permission.space === undefined || resolveSpace === undefined) {
+      return canonicalPath;
+    }
+    try {
+      return { ...canonicalPath, space: resolveSpace(permission.space) };
+    } catch {
+      // An unresolvable identity remains a non-matching literal. It must never
+      // be widened to a wildcard or to another authenticated owner.
+      return canonicalPath;
+    }
+  }));
+}
+
+function canonicalizeOperationPath(permission: PermissionEntry): PermissionEntry {
+  if (permission.service !== "tinycloud.encryption") return permission;
+  const match = permission.path.match(
+    /^(urn:tinycloud:encryption:did:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.*)$/,
+  );
+  if (!match) return permission;
+  return { ...permission, path: `${match[1]}${match[2]!.toLowerCase()}${match[3]}` };
+}
+
+function operationSpacesEqual(
+  granted: string | undefined,
+  requested: string | undefined,
+): boolean {
+  return granted === requested;
 }
 
 /** Returns a stable exact identity for one capability without containment. */
