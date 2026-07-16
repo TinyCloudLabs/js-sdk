@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,7 @@ import {
   profilePath,
   profileStoreMetadataPath,
   readAdditionalDelegations,
+  readJson,
   readProfileStore,
   readSession,
   readStoreMetadata,
@@ -21,13 +22,17 @@ import {
   tinycloudHomePath,
   updateProfileStore,
   upsertProfileRecord,
+  withProfileLock,
   writeJsonAtomic,
   writeSession,
 } from "./state.js";
+import { waitForProfileLockProtocol } from "./test-support/profile-lock-protocol.js";
 import { resolveInvocationContext } from "./profile.js";
 
 const originalTcHome = process.env.TC_HOME;
 const originalHome = process.env.HOME;
+const originalNodeEnv = process.env.NODE_ENV;
+const originalRecoveryBarrier = process.env.TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR;
 const homes: string[] = [];
 
 afterEach(async () => {
@@ -35,6 +40,10 @@ afterEach(async () => {
   else process.env.TC_HOME = originalTcHome;
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = originalNodeEnv;
+  if (originalRecoveryBarrier === undefined) delete process.env.TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR;
+  else process.env.TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR = originalRecoveryBarrier;
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
 
@@ -208,6 +217,80 @@ test("recovers a stale profile lock only after its owner is gone", async () => {
   expect((await readProfileStore<{ requestId: string; revision: number }>(profile, "auth-requests")).records)
     .toEqual([request("req-stale")]);
   await expect(readFile(profileLockMetadataPath(profile), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("two contenders recover one crashed stale lock without deleting the live replacement", async () => {
+  const home = await isolatedHome();
+  const profile = "delegate";
+  const barrier = join(home, "recovery-barrier");
+  await mkdir(barrier, { recursive: true });
+  await mkdir(profileLockPath(profile), { recursive: true });
+  await writeJsonAtomic(profileLockMetadataPath(profile), {
+    pid: 999_999_999,
+    createdAt: new Date(Date.now() - 60_000).toISOString(),
+    token: "crashed-holder",
+  });
+  process.env.NODE_ENV = "test";
+  process.env.TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR = barrier;
+
+  const fixture = new URL("../test-support/append-profile-record.ts", import.meta.url).pathname;
+  const env = { ...process.env, TC_HOME: home, HOME: homedir(), NODE_ENV: "test" };
+  const first = Bun.spawn([
+    process.execPath,
+    fixture,
+    profile,
+    "req-first-recovery",
+    JSON.stringify(request("req-first-recovery")),
+  ], { env, stdout: "pipe", stderr: "pipe" });
+  const second = Bun.spawn([
+    process.execPath,
+    fixture,
+    profile,
+    "req-second-recovery",
+    JSON.stringify(request("req-second-recovery")),
+  ], { env, stdout: "pipe", stderr: "pipe" });
+
+  await waitForProfileLockProtocol(
+    join(barrier, `ready-${first.pid}-${profile}`),
+    "first stale-lock contender",
+  );
+  await waitForProfileLockProtocol(
+    join(barrier, `ready-${second.pid}-${profile}`),
+    "second stale-lock contender",
+  );
+  await writeFile(join(barrier, "release"), "release\n", "utf8");
+
+  const [firstExit, secondExit, firstError, secondError] = await Promise.all([
+    first.exited,
+    second.exited,
+    new Response(first.stderr).text(),
+    new Response(second.stderr).text(),
+  ]);
+  expect(firstExit, firstError).toBe(0);
+  expect(secondExit, secondError).toBe(0);
+  expect((await readdir(profileLockPath(profile)).catch(() => [])).filter((name) => name.startsWith(".stale-"))).toEqual([]);
+  expect((await readProfileStore<{ requestId: string; revision: number }>(profile, "auth-requests")).records
+    .map((record) => record.requestId).sort()).toEqual(["req-first-recovery", "req-second-recovery"]);
+});
+
+test("a completed holder cannot release a replacement lock instance", async () => {
+  await isolatedHome();
+  const profile = "delegate";
+  await withProfileLock(profile, async () => {
+    await rm(profileLockPath(profile), { recursive: true, force: true });
+    await mkdir(profileLockPath(profile), { recursive: true });
+    await writeJsonAtomic(profileLockMetadataPath(profile), {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      token: "replacement-instance",
+    });
+  });
+
+  expect(await readJson<{ pid?: number; createdAt?: string; token?: string }>(profileLockMetadataPath(profile))).toEqual({
+    pid: process.pid,
+    createdAt: expect.any(String),
+    token: "replacement-instance",
+  });
 });
 
 test("times out rather than reclaiming a lock held by a live process", async () => {

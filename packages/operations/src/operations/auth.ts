@@ -317,10 +317,17 @@ async function importRequestBoundDelegation(
   input: DelegationImportArtifact,
 ): Promise<OperationExecutionOutcome<AuthImportOutput>> {
   try {
+    const rawDelegation = input.delegation as unknown as Record<string, unknown>;
+    if (typeof rawDelegation.delegateDID !== "string") return invalidDelegation();
+    if (context.summary.sessionDid !== undefined && !samePrincipal(
+      rawDelegation.delegateDID,
+      context.summary.sessionDid,
+    )) {
+      return audienceMismatch(context.summary.sessionDid, rawDelegation.delegateDID);
+    }
     const initial = await importState(context, input.requestId);
     if (!initial.ok) return initial.result;
     const { request, sessionDid, host } = initial;
-    const rawDelegation = input.delegation as unknown as Record<string, unknown>;
     const explicitHost = rawDelegation.host;
     if (explicitHost !== undefined && typeof explicitHost !== "string") {
       return invalidDelegation();

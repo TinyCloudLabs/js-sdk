@@ -112,6 +112,33 @@ test("does not reuse a stale-session request and prunes it while holding the for
   expect((await listPermissionRequests("delegate")).map((item) => item.requestId)).toEqual(["req_rotated"]);
 });
 
+test("excludes and prunes a pre-rotation legacy request while retaining the current session request", async () => {
+  await isolatedHome();
+  await mkdir(profilePath("delegate"), { recursive: true });
+  await writeFile(authRequestsPath("delegate"), JSON.stringify([
+    {
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_pre_rotation",
+      sessionDid: "did:key:old-session#old-key",
+      requested: [capability()],
+    },
+  ]), "utf8");
+
+  const current = await findPermissionRequest("delegate", "req_pre_rotation", {
+    sessionDid: "did:key:rotated",
+    host: "https://node.tinycloud.test",
+  });
+  expect(current).toBeNull();
+
+  const rotated = await createOrReusePermissionRequest(requestInput({
+    ...context({ sessionDid: "did:key:rotated" }),
+    createRequestId: () => "req_current",
+  }));
+  expect(rotated).toMatchObject({ status: "created", request: { requestId: "req_current" } });
+  expect((await listPermissionRequests("delegate")).map((item) => item.requestId)).toEqual(["req_current"]);
+});
+
 test("supersedes a partially granted request with its exact remaining subset", async () => {
   await isolatedHome();
   await createOrReusePermissionRequest(requestInput({

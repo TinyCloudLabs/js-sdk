@@ -26,6 +26,7 @@ const profile = {
 const secretAttempts: string[] = [];
 let operationAttempts = 0;
 const installedDelegations: string[] = [];
+let currentSession: Record<string, unknown> | null = { expiresAt: "2099-01-01T00:00:00.000Z" };
 
 const node = {
   did: "did:key:z6MkOwner",
@@ -83,7 +84,11 @@ mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     resolveContext: async () => ({ profile: "default", host: profile.host }),
     getProfile: async () => profile,
-    getSession: async () => ({ expiresAt: "2099-01-01T00:00:00.000Z" }),
+    getSession: async () => currentSession,
+    setSession: async (_profile: string, session: Record<string, unknown>) => {
+      currentSession = session;
+    },
+    setProfile: async () => undefined,
     getKey: async () => ({
       kty: "OKP",
       crv: "Ed25519",
@@ -210,5 +215,34 @@ describe("owner secrets get OpenKey retry", () => {
         "",
       ].join("\n"),
     );
+  });
+
+  test("creates a fresh owner session before the canonical authority request", async () => {
+    secretAttempts.length = 0;
+    operationAttempts = 0;
+    installedDelegations.length = 0;
+    currentSession = null;
+    let acquisitions = 0;
+    const program = new Command();
+    registerSecretsCommand(program, async () => {
+      acquisitions += 1;
+      return {
+        delegationHeader: { Authorization: "Bearer openkey-owner" },
+        delegationCid: `bafy-owner-openkey-${acquisitions}`,
+        spaceId: "secrets",
+        verificationMethod: "did:key:z6MkOwner",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        expiry: "2099-01-01T00:00:00.000Z",
+      };
+    });
+
+    await program.parseAsync(
+      ["node", "tc", "secrets", "get", "ANTHROPIC_API_KEY"],
+      { from: "node" },
+    );
+
+    expect(currentSession).not.toBeNull();
+    expect(acquisitions).toBe(2);
+    expect(operationAttempts).toBe(2);
   });
 });

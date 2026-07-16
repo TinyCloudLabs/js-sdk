@@ -408,9 +408,8 @@ export function registerAuthCommand(program: Command): void {
           return;
         }
 
-        const requestId = await requestBoundDelegationRequestId(ctx, parsed);
-        if (requestId !== undefined) {
-          await importRequestBoundDelegation(ctx, parsed, requestId);
+        if (isRequestBoundDelegationEnvelope(parsed)) {
+          await importRequestBoundDelegation(ctx, parsed);
           return;
         }
 
@@ -814,40 +813,24 @@ function isLegacyDelegationImportArtifact(value: unknown): value is {
   delegation: PortableDelegation;
   permissions?: PermissionEntry[];
 } {
-  // This is deliberately only an envelope discriminator. Full v1 validation
-  // belongs to the canonical operation route; historical unbound envelopes
-  // must retain the existing portable-delegation compatibility path.
+  // A legacy envelope is genuinely unbound only when it has no requestId
+  // member. Request-bound v1 shape always belongs to the canonical route,
+  // even when its request is stale or unknown locally.
   if (value === null || typeof value !== "object") return false;
-  const candidate = value as { kind?: unknown; version?: unknown; delegation?: unknown };
+  const candidate = value as { kind?: unknown; version?: unknown; requestId?: unknown; delegation?: unknown };
   return candidate.kind === "tinycloud.auth.delegation" &&
     candidate.version === 1 &&
+    !Object.hasOwn(candidate, "requestId") &&
     candidate.delegation !== null &&
     typeof candidate.delegation === "object";
 }
 
-async function requestBoundDelegationRequestId(
-  ctx: CLIContext,
-  value: unknown,
-): Promise<string | undefined> {
-  const requestId = delegationEnvelopeRequestId(value);
-  if (requestId === undefined) return undefined;
-
-  // Deliberately classify only by the persisted request in the selected
-  // profile. The canonical operation validates host, session, audience,
-  // expiry, and every other delegation property against current state.
-  return await getPermissionRequestArtifact(ctx.profile, requestId) === null
-    ? undefined
-    : requestId;
-}
-
-function delegationEnvelopeRequestId(value: unknown): string | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  const candidate = value as { kind?: unknown; version?: unknown; requestId?: unknown };
+function isRequestBoundDelegationEnvelope(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as { kind?: unknown; version?: unknown; requestId?: unknown; delegation?: unknown };
   return candidate.kind === "tinycloud.auth.delegation" &&
     candidate.version === 1 &&
-    typeof candidate.requestId === "string"
-    ? candidate.requestId
-    : undefined;
+    Object.hasOwn(candidate, "requestId");
 }
 
 type AuthImportOutput = {
@@ -860,7 +843,6 @@ type AuthImportOutput = {
 async function importRequestBoundDelegation(
   ctx: { profile: string; host: string },
   artifact: unknown,
-  requestId: string,
 ): Promise<void> {
   const result = await invokeOperation(
     "tinycloud.auth.import",
@@ -879,7 +861,10 @@ async function importRequestBoundDelegation(
         imported: true,
         activated: output.activated,
         kind: "tinycloud.auth.delegation",
-        requestId,
+        requestId: typeof artifact === "object" && artifact !== null &&
+          typeof (artifact as { requestId?: unknown }).requestId === "string"
+          ? (artifact as { requestId: string }).requestId
+          : null,
         delegationCid: output.cid,
         permissions: output.effectivePermissions,
         expiry: output.expiry,
@@ -1564,7 +1549,7 @@ export function mergePrivateJwkIntoSession(
 export async function refreshOpenKeySession(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean } = {},
+  options: { paste?: boolean; noPopup?: boolean; openKeyAcquisition?: OpenKeyAcquisition } = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown> }> {
   const key = await ProfileManager.getKey(profileName);
   if (!key) {
@@ -1579,7 +1564,8 @@ export async function refreshOpenKeySession(
   const profile = await ProfileManager.getProfile(profileName);
 
   // Start browser auth flow
-  const delegationData = await startAuthFlow(profile.did, {
+  const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
+  const delegationData = await acquireOpenKey(profile.did, {
     paste: options.paste,
     noPopup: options.noPopup,
     jwk: key,

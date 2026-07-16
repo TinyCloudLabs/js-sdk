@@ -3,6 +3,7 @@ import {
   mkdir,
   readFile,
   rename,
+  rmdir,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -14,6 +15,7 @@ const DEFAULT_LOCK_TIMEOUT_MS = 2_000;
 const DEFAULT_LOCK_RETRY_MS = 25;
 const DEFAULT_STALE_LOCK_MS = 30_000;
 const TEST_LOCK_CONTENTION_SIGNAL_PATH = "TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH";
+const TEST_LOCK_RECOVERY_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR";
 
 export type ProfileStoreName =
   | "session"
@@ -189,8 +191,8 @@ export async function readProfileStore<T>(
 
 /**
  * Runs a small critical section under the one advisory lock shared by all
- * profile stores. A stale lock is moved out of the way before deletion so a
- * concurrently acquired replacement can never be removed accidentally.
+ * profile stores. Lock release verifies its ownership token before removing
+ * the exact metadata instance it acquired.
  */
 export async function withProfileLock<T>(
   profile: string,
@@ -313,25 +315,27 @@ async function acquireProfileLock(
   while (true) {
     try {
       await mkdir(lockPath);
+      const token = randomUUID();
       try {
         await writeJsonAtomic(profileLockMetadataPath(profile), {
           pid: process.pid,
           createdAt: new Date().toISOString(),
+          token,
         });
       } catch (error) {
-        await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+        await rmdir(lockPath).catch(() => undefined);
         throw error;
       }
 
       return async () => {
-        await rm(lockPath, { recursive: true, force: true });
+        await releaseProfileLock(lockPath, token);
       };
     } catch (error) {
       if (!isLockAlreadyHeld(error)) throw error;
       await signalTestLockContention(profile);
     }
 
-    if (await recoverStaleLock(lockPath, staleAfterMs)) continue;
+    if (await recoverStaleLock(profile, lockPath, staleAfterMs)) continue;
 
     const elapsedMs = Date.now() - startedAt;
     if (elapsedMs >= timeoutMs) {
@@ -339,6 +343,26 @@ async function acquireProfileLock(
     }
     await sleep(Math.min(retryMs, timeoutMs - elapsedMs));
   }
+}
+
+async function releaseProfileLock(lockPath: string, token: string): Promise<void> {
+  const ownerPath = join(lockPath, "owner.json");
+  const claimPath = join(lockPath, `.release-${token}.json`);
+  try {
+    await rename(ownerPath, claimPath);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return;
+    throw error;
+  }
+
+  const claimed = await readJson<{ token?: unknown }>(claimPath).catch(() => null);
+  if (claimed?.token !== token) {
+    await rename(claimPath, ownerPath).catch(() => undefined);
+    return;
+  }
+
+  await rm(claimPath, { force: true });
+  await rmdir(lockPath).catch(() => undefined);
 }
 
 /**
@@ -371,24 +395,67 @@ async function signalTestLockContention(profile: string): Promise<void> {
     .catch(() => undefined);
 }
 
-async function recoverStaleLock(lockPath: string, staleAfterMs: number): Promise<boolean> {
-  if (!(await isStaleLock(lockPath, staleAfterMs))) return false;
+async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs: number): Promise<boolean> {
+  const ownerPath = join(lockPath, "owner.json");
+  const owner = await readJson<{ pid?: unknown; createdAt?: unknown; token?: unknown }>(ownerPath)
+    .catch(() => null);
+  if (!isStaleOwner(owner, staleAfterMs)) return false;
 
-  const quarantinedPath = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
+  // Claim the observed metadata file, rather than renaming/removing the lock
+  // directory. A contender can only acquire the directory after it is empty;
+  // rmdir below therefore cannot remove a replacement lock instance.
+  const observedToken = typeof owner?.token === "string" && owner.token.length > 0
+    ? owner.token
+    : "legacy";
+  await waitForTestStaleRecoveryBarrier(profile);
+  const claimPath = join(lockPath, `.stale-${randomUUID()}.json`);
   try {
-    await rename(lockPath, quarantinedPath);
+    await rename(ownerPath, claimPath);
   } catch (error) {
-    if (isErrno(error, "ENOENT")) return true;
+    if (isErrno(error, "ENOENT")) return false;
     return false;
   }
-  await rm(quarantinedPath, { recursive: true, force: true });
+
+  const claimed = await readJson<{ pid?: unknown; createdAt?: unknown; token?: unknown }>(claimPath)
+    .catch(() => null);
+  const sameInstance = claimed !== null && (
+    observedToken === "legacy"
+      ? claimed.token === undefined
+      : claimed.token === observedToken
+  );
+  if (!sameInstance) {
+    await rename(claimPath, ownerPath).catch(() => undefined);
+    return false;
+  }
+
+  await rm(claimPath, { force: true });
+  await rmdir(lockPath).catch(() => undefined);
   return true;
 }
 
-async function isStaleLock(lockPath: string, staleAfterMs: number): Promise<boolean> {
+async function waitForTestStaleRecoveryBarrier(profile: string): Promise<void> {
+  if (process.env.NODE_ENV !== "test") return;
+  const barrierDirectory = process.env[TEST_LOCK_RECOVERY_BARRIER_DIR];
+  if (!barrierDirectory) return;
+  await mkdir(barrierDirectory, { recursive: true });
+  const readyPath = join(barrierDirectory, `ready-${process.pid}-${profile}`);
+  await writeFile(readyPath, "ready\n", { encoding: "utf8", flag: "wx" }).catch(() => undefined);
+  const releasePath = join(barrierDirectory, "release");
+  while (true) {
+    try {
+      await readFile(releasePath, "utf8");
+      return;
+    } catch {
+      await sleep(1);
+    }
+  }
+}
+
+function isStaleOwner(
+  owner: { pid?: unknown; createdAt?: unknown } | null,
+  staleAfterMs: number,
+): boolean {
   const now = Date.now();
-  const owner = await readJson<{ pid?: unknown; createdAt?: unknown }>(join(lockPath, "owner.json"))
-    .catch(() => null);
   const createdAt = typeof owner?.createdAt === "string"
     ? Date.parse(owner.createdAt)
     : Number.NaN;

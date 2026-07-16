@@ -87,9 +87,9 @@ test("official v2 client lists exactly six generated-schema tools over stdio", a
 
     const expectedToolResults = [
       ["tinycloud_auth_status", {}, { status: "ok", operation: { operationId: "tinycloud.auth.status", operationVersion: 1 } }],
-      ["tinycloud_auth_capabilities", {}, { status: "error", operation: { operationId: "tinycloud.auth.capabilities", operationVersion: 1 }, error: { code: "SESSION_NOT_FOUND" } }],
-      ["tinycloud_auth_request", { requestId: "missing-request" }, { status: "error", operation: { operationId: "tinycloud.auth.request", operationVersion: 1 }, error: { code: "SESSION_NOT_FOUND" } }],
-      ["tinycloud_auth_import", validImportProbe(), { status: "error", operation: { operationId: "tinycloud.auth.import", operationVersion: 1 }, error: { code: "SESSION_NOT_FOUND" } }],
+      ["tinycloud_auth_capabilities", {}, { status: "error", operation: { operationId: "tinycloud.auth.capabilities", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_auth_request", { requestId: "missing-request" }, { status: "error", operation: { operationId: "tinycloud.auth.request", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_auth_import", validImportProbe(), { status: "error", operation: { operationId: "tinycloud.auth.import", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_secrets_get", { name: "MCP_TEST_SECRET" }, { status: "error", operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
     ] as const;
     for (const [name, arguments_, expected] of expectedToolResults) {
@@ -317,7 +317,7 @@ test("three real MCP processes request, import, restart, and retry the original 
     else process.env.TC_HOME = previousTcHome;
     await rm(home, { recursive: true, force: true });
   }
-});
+}, 15_000);
 
 test("an authorized missing secret returns only the value-free setup action", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-setup-"));

@@ -109,9 +109,9 @@ export async function verifyPackedCliRuntime(): Promise<void> {
         throw new Error("Packed canonical secrets get unexpectedly succeeded.");
       } catch (error) {
         const failure = error as { stderr?: string; code?: number };
-        expect(failure.code).toBe(1);
+        expect(failure.code).toBe(3);
         const payload = JSON.parse(failure.stderr ?? "{}") as { error?: { code?: unknown } };
-        expect(payload.error?.code).toBe("SESSION_NOT_FOUND");
+        expect(payload.error?.code).toBe("AUTH_REQUIRED");
       }
 
       const runImport = async (requestId: string, associated: boolean) => {
@@ -169,12 +169,10 @@ export async function verifyPackedCliRuntime(): Promise<void> {
             code?: number;
           };
           const stderr = failure.stderr ?? "";
-          expect(failure.code).toBe(associated ? 1 : 2);
+          expect(failure.code).toBe(1);
           if (!stderr.trimStart().startsWith("{")) throw new Error(stderr);
           const payload = JSON.parse(stderr) as { error?: { code?: unknown } };
-          expect(payload.error?.code).toBe(
-            associated ? "DELEGATION_ARTIFACT_INVALID" : "INVALID_AUTH_IMPORT",
-          );
+          expect(payload.error?.code).toBe("DELEGATION_ARTIFACT_INVALID");
           expect(failure.stdout ?? "").toBe("");
         }
       };
