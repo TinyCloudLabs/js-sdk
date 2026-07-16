@@ -434,6 +434,14 @@
         "@types/bun": "latest",
       },
     },
+    "tests/operations-mcp-conformance": {
+      "name": "@tinycloud/operations-mcp-conformance",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@types/bun": "latest",
+        "@types/node": "^20",
+      },
+    },
     "tests/sdk-services": {
       "name": "@tinycloud/sdk-services-test",
       "version": "11.0.3",
@@ -1826,6 +1834,8 @@
     "@tinycloud/node-sdk-wasm": ["@tinycloud/node-sdk-wasm@workspace:packages/sdk-rs/packages/node"],
 
     "@tinycloud/operations": ["@tinycloud/operations@workspace:packages/operations"],
+
+    "@tinycloud/operations-mcp-conformance": ["@tinycloud/operations-mcp-conformance@workspace:tests/operations-mcp-conformance"],
 
     "@tinycloud/sdk-core": ["@tinycloud/sdk-core@workspace:packages/sdk-core"],
 

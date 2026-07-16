@@ -28,6 +28,11 @@ export function toMcpToolResult(result: unknown): McpToolResult {
   };
 }
 
+/** The canonical envelope immediately before MCP protocol serialization. */
+export function canonicalMcpAdapterResult(result: unknown): CanonicalOperationResult {
+  return toMcpToolResult(result).structuredContent;
+}
+
 function isCanonicalOperationResult(value: unknown): value is CanonicalOperationResult {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const status = (value as { status?: unknown }).status;

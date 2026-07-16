@@ -28,6 +28,7 @@ interface HermeticEncryptedNode {
   } & Record<string, unknown>;
   readonly permissions: readonly PermissionEntry[];
   readonly unrelatedAudience: string;
+  createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
   mintDelegation(): Promise<StoredRuntimeDelegation>;
   mintDelegationWithPermissions(permissions: PermissionEntry[]): Promise<StoredRuntimeDelegation>;
   readAndDecrypt(node: unknown, delegation: unknown): Promise<void>;
