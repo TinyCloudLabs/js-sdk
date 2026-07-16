@@ -24,6 +24,1868 @@
   ],
   "operations": [
     {
+      "id": "tinycloud.account.applications.list",
+      "version": 1,
+      "title": "List TinyCloud account applications",
+      "description": "List the application manifests registered in the selected owner's TinyCloud account.",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "applications": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "appId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "manifests": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  }
+                },
+                "updatedAt": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "manifestHash": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "appId",
+                "manifests"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "applications",
+          "count"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "ok"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.account.applications.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "$ref": "#/$defs/output"
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "output"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "authority_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.account.applications.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "missing": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/permissionEntry"
+                }
+              },
+              "request": {
+                "$ref": "#/$defs/permissionRequest"
+              },
+              "approval": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "openkey"
+                  },
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "fallback": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "requestId",
+                  "fallback"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "missing",
+              "request",
+              "approval",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "setup_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.account.applications.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "setup": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "secret_manager"
+                  },
+                  "secret": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "scope": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "space": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "space"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "secret",
+                  "url",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "setup",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "error"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.account.applications.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "error": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "enum": [
+                      "INPUT_INVALID",
+                      "OPERATION_NOT_FOUND",
+                      "OPERATION_VERSION_UNSUPPORTED",
+                      "PROFILE_NOT_FOUND",
+                      "PROFILE_POSTURE_NOT_ALLOWED",
+                      "PROFILE_OWNER_OPT_IN_REQUIRED",
+                      "SESSION_NOT_FOUND",
+                      "PERMISSION_HINT_INVALID",
+                      "DELEGATION_ARTIFACT_INVALID",
+                      "DELEGATION_EXPIRED",
+                      "DELEGATION_AUDIENCE_MISMATCH",
+                      "DELEGATION_HOST_MISMATCH",
+                      "DELEGATION_REJECTED",
+                      "ENCRYPTION_NETWORK_UNRESOLVED",
+                      "NODE_UNREACHABLE",
+                      "NODE_ERROR",
+                      "SECRET_READ_FAILED",
+                      "SECRET_DECRYPT_FAILED",
+                      "OUTPUT_INVALID",
+                      "INTERNAL_ERROR"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "$defs": {
+          "permissionEntry": {
+            "type": "object",
+            "properties": {
+              "service": {
+                "type": "string",
+                "minLength": 1
+              },
+              "space": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              },
+              "skipPrefix": {
+                "type": "boolean"
+              },
+              "expiry": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "path",
+              "actions"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "permissionRequest": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "tinycloud.auth.request"
+              },
+              "version": {
+                "type": "number",
+                "const": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "profile": {
+                "type": "string",
+                "minLength": 1
+              },
+              "posture": {
+                "type": "string",
+                "enum": [
+                  "owner-openkey",
+                  "delegate-session",
+                  "local-owner-key",
+                  "unauthenticated"
+                ]
+              },
+              "operatorType": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent"
+                ]
+              },
+              "host": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sessionDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ownerDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "spaceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestedExpiry": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "requested": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "space": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    },
+                    "caveats": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      }
+                    },
+                    "skipPrefix": {
+                      "type": "boolean"
+                    },
+                    "expiry": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "service",
+                    "path",
+                    "actions"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "command": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "argv",
+                  "cwd"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "version",
+              "requestId",
+              "createdAt",
+              "profile",
+              "posture",
+              "operatorType",
+              "host",
+              "sessionDid",
+              "requested"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "applications": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "appId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "manifests": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      }
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "manifestHash": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "appId",
+                    "manifests"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "applications",
+              "count"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          }
+        }
+      },
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "effects": [
+        "read"
+      ],
+      "sensitivity": {
+        "input": false,
+        "output": true
+      },
+      "exposure": {
+        "cli": {
+          "status": "excluded",
+          "reason": "Existing account and KV Commander commands remain the CLI surface."
+        },
+        "mcp": {
+          "status": "required"
+        },
+        "skill": {
+          "status": "required"
+        },
+        "docs": {
+          "status": "required"
+        }
+      },
+      "stableErrors": [
+        "INPUT_INVALID",
+        "OPERATION_NOT_FOUND",
+        "OPERATION_VERSION_UNSUPPORTED",
+        "PROFILE_NOT_FOUND",
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "PROFILE_OWNER_OPT_IN_REQUIRED",
+        "SESSION_NOT_FOUND",
+        "PERMISSION_HINT_INVALID",
+        "DELEGATION_ARTIFACT_INVALID",
+        "DELEGATION_EXPIRED",
+        "DELEGATION_AUDIENCE_MISMATCH",
+        "DELEGATION_HOST_MISMATCH",
+        "DELEGATION_REJECTED",
+        "ENCRYPTION_NETWORK_UNRESOLVED",
+        "NODE_UNREACHABLE",
+        "NODE_ERROR",
+        "SECRET_READ_FAILED",
+        "SECRET_DECRYPT_FAILED",
+        "OUTPUT_INVALID",
+        "INTERNAL_ERROR"
+      ],
+      "authority": {
+        "dynamic": true
+      }
+    },
+    {
+      "id": "tinycloud.account.spaces.list",
+      "version": 1,
+      "title": "List TinyCloud account spaces",
+      "description": "List the spaces registered in the selected owner's TinyCloud account.",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "spaces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "spaceId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "ownerDid": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "owned",
+                    "delegated",
+                    "discovered"
+                  ]
+                },
+                "permissions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "archived"
+                  ]
+                },
+                "registeredAt": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "type": "string"
+                },
+                "expiresAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "spaceId",
+                "name",
+                "ownerDid",
+                "type",
+                "permissions",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "spaces",
+          "count"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "ok"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.account.spaces.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "$ref": "#/$defs/output"
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "output"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "authority_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.account.spaces.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "missing": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/permissionEntry"
+                }
+              },
+              "request": {
+                "$ref": "#/$defs/permissionRequest"
+              },
+              "approval": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "openkey"
+                  },
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "fallback": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "requestId",
+                  "fallback"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "missing",
+              "request",
+              "approval",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "setup_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.account.spaces.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "setup": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "secret_manager"
+                  },
+                  "secret": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "scope": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "space": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "space"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "secret",
+                  "url",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "setup",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "error"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.account.spaces.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "error": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "enum": [
+                      "INPUT_INVALID",
+                      "OPERATION_NOT_FOUND",
+                      "OPERATION_VERSION_UNSUPPORTED",
+                      "PROFILE_NOT_FOUND",
+                      "PROFILE_POSTURE_NOT_ALLOWED",
+                      "PROFILE_OWNER_OPT_IN_REQUIRED",
+                      "SESSION_NOT_FOUND",
+                      "PERMISSION_HINT_INVALID",
+                      "DELEGATION_ARTIFACT_INVALID",
+                      "DELEGATION_EXPIRED",
+                      "DELEGATION_AUDIENCE_MISMATCH",
+                      "DELEGATION_HOST_MISMATCH",
+                      "DELEGATION_REJECTED",
+                      "ENCRYPTION_NETWORK_UNRESOLVED",
+                      "NODE_UNREACHABLE",
+                      "NODE_ERROR",
+                      "SECRET_READ_FAILED",
+                      "SECRET_DECRYPT_FAILED",
+                      "OUTPUT_INVALID",
+                      "INTERNAL_ERROR"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "$defs": {
+          "permissionEntry": {
+            "type": "object",
+            "properties": {
+              "service": {
+                "type": "string",
+                "minLength": 1
+              },
+              "space": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              },
+              "skipPrefix": {
+                "type": "boolean"
+              },
+              "expiry": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "path",
+              "actions"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "permissionRequest": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "tinycloud.auth.request"
+              },
+              "version": {
+                "type": "number",
+                "const": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "profile": {
+                "type": "string",
+                "minLength": 1
+              },
+              "posture": {
+                "type": "string",
+                "enum": [
+                  "owner-openkey",
+                  "delegate-session",
+                  "local-owner-key",
+                  "unauthenticated"
+                ]
+              },
+              "operatorType": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent"
+                ]
+              },
+              "host": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sessionDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ownerDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "spaceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestedExpiry": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "requested": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "space": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    },
+                    "caveats": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      }
+                    },
+                    "skipPrefix": {
+                      "type": "boolean"
+                    },
+                    "expiry": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "service",
+                    "path",
+                    "actions"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "command": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "argv",
+                  "cwd"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "version",
+              "requestId",
+              "createdAt",
+              "profile",
+              "posture",
+              "operatorType",
+              "host",
+              "sessionDid",
+              "requested"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "spaces": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "spaceId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "ownerDid": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "owned",
+                        "delegated",
+                        "discovered"
+                      ]
+                    },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "archived"
+                      ]
+                    },
+                    "registeredAt": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "spaceId",
+                    "name",
+                    "ownerDid",
+                    "type",
+                    "permissions",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "spaces",
+              "count"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          }
+        }
+      },
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "effects": [
+        "read"
+      ],
+      "sensitivity": {
+        "input": false,
+        "output": true
+      },
+      "exposure": {
+        "cli": {
+          "status": "excluded",
+          "reason": "Existing account and KV Commander commands remain the CLI surface."
+        },
+        "mcp": {
+          "status": "required"
+        },
+        "skill": {
+          "status": "required"
+        },
+        "docs": {
+          "status": "required"
+        }
+      },
+      "stableErrors": [
+        "INPUT_INVALID",
+        "OPERATION_NOT_FOUND",
+        "OPERATION_VERSION_UNSUPPORTED",
+        "PROFILE_NOT_FOUND",
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "PROFILE_OWNER_OPT_IN_REQUIRED",
+        "SESSION_NOT_FOUND",
+        "PERMISSION_HINT_INVALID",
+        "DELEGATION_ARTIFACT_INVALID",
+        "DELEGATION_EXPIRED",
+        "DELEGATION_AUDIENCE_MISMATCH",
+        "DELEGATION_HOST_MISMATCH",
+        "DELEGATION_REJECTED",
+        "ENCRYPTION_NETWORK_UNRESOLVED",
+        "NODE_UNREACHABLE",
+        "NODE_ERROR",
+        "SECRET_READ_FAILED",
+        "SECRET_DECRYPT_FAILED",
+        "OUTPUT_INVALID",
+        "INTERNAL_ERROR"
+      ],
+      "authority": {
+        "dynamic": true
+      }
+    },
+    {
       "id": "tinycloud.auth.capabilities",
       "version": 1,
       "title": "TinyCloud active capabilities",
@@ -4212,6 +6074,1848 @@
       "exposure": {
         "cli": {
           "status": "required"
+        },
+        "mcp": {
+          "status": "required"
+        },
+        "skill": {
+          "status": "required"
+        },
+        "docs": {
+          "status": "required"
+        }
+      },
+      "stableErrors": [
+        "INPUT_INVALID",
+        "OPERATION_NOT_FOUND",
+        "OPERATION_VERSION_UNSUPPORTED",
+        "PROFILE_NOT_FOUND",
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "PROFILE_OWNER_OPT_IN_REQUIRED",
+        "SESSION_NOT_FOUND",
+        "PERMISSION_HINT_INVALID",
+        "DELEGATION_ARTIFACT_INVALID",
+        "DELEGATION_EXPIRED",
+        "DELEGATION_AUDIENCE_MISMATCH",
+        "DELEGATION_HOST_MISMATCH",
+        "DELEGATION_REJECTED",
+        "ENCRYPTION_NETWORK_UNRESOLVED",
+        "NODE_UNREACHABLE",
+        "NODE_ERROR",
+        "SECRET_READ_FAILED",
+        "SECRET_DECRYPT_FAILED",
+        "OUTPUT_INVALID",
+        "INTERNAL_ERROR"
+      ],
+      "authority": {
+        "dynamic": true
+      }
+    },
+    {
+      "id": "tinycloud.kv.get",
+      "version": 1,
+      "title": "Get a TinyCloud KV value",
+      "description": "Read one exact key from a delegated non-secrets TinyCloud space.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "space": {
+            "type": "string",
+            "minLength": 1
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "space",
+          "key"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "space": {
+            "type": "string",
+            "minLength": 1
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "array",
+                "items": {}
+              },
+              {
+                "type": "object",
+                "additionalProperties": {}
+              }
+            ]
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "json",
+              "text",
+              "base64"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "etag": {
+                "type": "string"
+              },
+              "contentType": {
+                "type": "string"
+              },
+              "lastModified": {
+                "type": "string"
+              },
+              "contentLength": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "space",
+          "key",
+          "value",
+          "encoding",
+          "metadata"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "ok"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.kv.get"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "$ref": "#/$defs/output"
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "output"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "authority_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.kv.get"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "missing": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/permissionEntry"
+                }
+              },
+              "request": {
+                "$ref": "#/$defs/permissionRequest"
+              },
+              "approval": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "openkey"
+                  },
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "fallback": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "requestId",
+                  "fallback"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "missing",
+              "request",
+              "approval",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "setup_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.kv.get"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "setup": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "secret_manager"
+                  },
+                  "secret": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "scope": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "space": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "space"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "secret",
+                  "url",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "setup",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "error"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.kv.get"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "error": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "enum": [
+                      "INPUT_INVALID",
+                      "OPERATION_NOT_FOUND",
+                      "OPERATION_VERSION_UNSUPPORTED",
+                      "PROFILE_NOT_FOUND",
+                      "PROFILE_POSTURE_NOT_ALLOWED",
+                      "PROFILE_OWNER_OPT_IN_REQUIRED",
+                      "SESSION_NOT_FOUND",
+                      "PERMISSION_HINT_INVALID",
+                      "DELEGATION_ARTIFACT_INVALID",
+                      "DELEGATION_EXPIRED",
+                      "DELEGATION_AUDIENCE_MISMATCH",
+                      "DELEGATION_HOST_MISMATCH",
+                      "DELEGATION_REJECTED",
+                      "ENCRYPTION_NETWORK_UNRESOLVED",
+                      "NODE_UNREACHABLE",
+                      "NODE_ERROR",
+                      "SECRET_READ_FAILED",
+                      "SECRET_DECRYPT_FAILED",
+                      "OUTPUT_INVALID",
+                      "INTERNAL_ERROR"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "$defs": {
+          "permissionEntry": {
+            "type": "object",
+            "properties": {
+              "service": {
+                "type": "string",
+                "minLength": 1
+              },
+              "space": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              },
+              "skipPrefix": {
+                "type": "boolean"
+              },
+              "expiry": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "path",
+              "actions"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "permissionRequest": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "tinycloud.auth.request"
+              },
+              "version": {
+                "type": "number",
+                "const": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "profile": {
+                "type": "string",
+                "minLength": 1
+              },
+              "posture": {
+                "type": "string",
+                "enum": [
+                  "owner-openkey",
+                  "delegate-session",
+                  "local-owner-key",
+                  "unauthenticated"
+                ]
+              },
+              "operatorType": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent"
+                ]
+              },
+              "host": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sessionDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ownerDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "spaceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestedExpiry": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "requested": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "space": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    },
+                    "caveats": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      }
+                    },
+                    "skipPrefix": {
+                      "type": "boolean"
+                    },
+                    "expiry": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "service",
+                    "path",
+                    "actions"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "command": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "argv",
+                  "cwd"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "version",
+              "requestId",
+              "createdAt",
+              "profile",
+              "posture",
+              "operatorType",
+              "host",
+              "sessionDid",
+              "requested"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "space": {
+                "type": "string",
+                "minLength": 1
+              },
+              "key": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "array",
+                    "items": {}
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {}
+                  }
+                ]
+              },
+              "encoding": {
+                "type": "string",
+                "enum": [
+                  "json",
+                  "text",
+                  "base64"
+                ]
+              },
+              "metadata": {
+                "type": "object",
+                "properties": {
+                  "etag": {
+                    "type": "string"
+                  },
+                  "contentType": {
+                    "type": "string"
+                  },
+                  "lastModified": {
+                    "type": "string"
+                  },
+                  "contentLength": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "space",
+              "key",
+              "value",
+              "encoding",
+              "metadata"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          }
+        }
+      },
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "effects": [
+        "read"
+      ],
+      "sensitivity": {
+        "input": true,
+        "output": true
+      },
+      "exposure": {
+        "cli": {
+          "status": "excluded",
+          "reason": "Existing account and KV Commander commands remain the CLI surface."
+        },
+        "mcp": {
+          "status": "required"
+        },
+        "skill": {
+          "status": "required"
+        },
+        "docs": {
+          "status": "required"
+        }
+      },
+      "stableErrors": [
+        "INPUT_INVALID",
+        "OPERATION_NOT_FOUND",
+        "OPERATION_VERSION_UNSUPPORTED",
+        "PROFILE_NOT_FOUND",
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "PROFILE_OWNER_OPT_IN_REQUIRED",
+        "SESSION_NOT_FOUND",
+        "PERMISSION_HINT_INVALID",
+        "DELEGATION_ARTIFACT_INVALID",
+        "DELEGATION_EXPIRED",
+        "DELEGATION_AUDIENCE_MISMATCH",
+        "DELEGATION_HOST_MISMATCH",
+        "DELEGATION_REJECTED",
+        "ENCRYPTION_NETWORK_UNRESOLVED",
+        "NODE_UNREACHABLE",
+        "NODE_ERROR",
+        "SECRET_READ_FAILED",
+        "SECRET_DECRYPT_FAILED",
+        "OUTPUT_INVALID",
+        "INTERNAL_ERROR"
+      ],
+      "authority": {
+        "dynamic": true
+      }
+    },
+    {
+      "id": "tinycloud.kv.list",
+      "version": 1,
+      "title": "List TinyCloud KV keys",
+      "description": "List keys at one exact prefix in a delegated TinyCloud space.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "space": {
+            "type": "string",
+            "minLength": 1
+          },
+          "prefix": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "space"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "space": {
+            "type": "string",
+            "minLength": 1
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "space",
+          "prefix",
+          "keys",
+          "count"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "ok"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.kv.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "$ref": "#/$defs/output"
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "output"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "authority_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.kv.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "missing": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/permissionEntry"
+                }
+              },
+              "request": {
+                "$ref": "#/$defs/permissionRequest"
+              },
+              "approval": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "openkey"
+                  },
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "fallback": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "requestId",
+                  "fallback"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "missing",
+              "request",
+              "approval",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "setup_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.kv.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "setup": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "secret_manager"
+                  },
+                  "secret": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "scope": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "space": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "space"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "secret",
+                  "url",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "setup",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "error"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.kv.list"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "error": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "enum": [
+                      "INPUT_INVALID",
+                      "OPERATION_NOT_FOUND",
+                      "OPERATION_VERSION_UNSUPPORTED",
+                      "PROFILE_NOT_FOUND",
+                      "PROFILE_POSTURE_NOT_ALLOWED",
+                      "PROFILE_OWNER_OPT_IN_REQUIRED",
+                      "SESSION_NOT_FOUND",
+                      "PERMISSION_HINT_INVALID",
+                      "DELEGATION_ARTIFACT_INVALID",
+                      "DELEGATION_EXPIRED",
+                      "DELEGATION_AUDIENCE_MISMATCH",
+                      "DELEGATION_HOST_MISMATCH",
+                      "DELEGATION_REJECTED",
+                      "ENCRYPTION_NETWORK_UNRESOLVED",
+                      "NODE_UNREACHABLE",
+                      "NODE_ERROR",
+                      "SECRET_READ_FAILED",
+                      "SECRET_DECRYPT_FAILED",
+                      "OUTPUT_INVALID",
+                      "INTERNAL_ERROR"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "$defs": {
+          "permissionEntry": {
+            "type": "object",
+            "properties": {
+              "service": {
+                "type": "string",
+                "minLength": 1
+              },
+              "space": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              },
+              "skipPrefix": {
+                "type": "boolean"
+              },
+              "expiry": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "path",
+              "actions"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "permissionRequest": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "tinycloud.auth.request"
+              },
+              "version": {
+                "type": "number",
+                "const": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "profile": {
+                "type": "string",
+                "minLength": 1
+              },
+              "posture": {
+                "type": "string",
+                "enum": [
+                  "owner-openkey",
+                  "delegate-session",
+                  "local-owner-key",
+                  "unauthenticated"
+                ]
+              },
+              "operatorType": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent"
+                ]
+              },
+              "host": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sessionDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ownerDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "spaceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestedExpiry": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "requested": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "space": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    },
+                    "caveats": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      }
+                    },
+                    "skipPrefix": {
+                      "type": "boolean"
+                    },
+                    "expiry": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "service",
+                    "path",
+                    "actions"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "command": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "argv",
+                  "cwd"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "version",
+              "requestId",
+              "createdAt",
+              "profile",
+              "posture",
+              "operatorType",
+              "host",
+              "sessionDid",
+              "requested"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "space": {
+                "type": "string",
+                "minLength": 1
+              },
+              "prefix": {
+                "type": "string"
+              },
+              "keys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "space",
+              "prefix",
+              "keys",
+              "count"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          }
+        }
+      },
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "effects": [
+        "read"
+      ],
+      "sensitivity": {
+        "input": true,
+        "output": true
+      },
+      "exposure": {
+        "cli": {
+          "status": "excluded",
+          "reason": "Existing account and KV Commander commands remain the CLI surface."
         },
         "mcp": {
           "status": "required"

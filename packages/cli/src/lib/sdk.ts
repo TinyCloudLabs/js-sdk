@@ -175,10 +175,6 @@ export async function bootstrapDelegatedSession(
     spaceId: delegation.spaceId,
     jwk,
     verificationMethod: sessionDid,
-    address: delegation.ownerAddress,
-    chainId: delegation.chainId,
-    siwe: "",
-    signature: "",
   });
   await ProfileManager.setProfile(ctx.profile, {
     ...profile,

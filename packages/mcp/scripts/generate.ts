@@ -37,6 +37,10 @@ const TOOL_NAMES: Record<string, string> = {
   "tinycloud.auth.capabilities": "tinycloud_auth_capabilities",
   "tinycloud.auth.request": "tinycloud_auth_request",
   "tinycloud.auth.import": "tinycloud_auth_import",
+  "tinycloud.account.spaces.list": "tinycloud_account_spaces_list",
+  "tinycloud.account.applications.list": "tinycloud_account_applications_list",
+  "tinycloud.kv.list": "tinycloud_kv_list",
+  "tinycloud.kv.get": "tinycloud_kv_get",
   "tinycloud.secrets.get": "tinycloud_secrets_get",
 };
 

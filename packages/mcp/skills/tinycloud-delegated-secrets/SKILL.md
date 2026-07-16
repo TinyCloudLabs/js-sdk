@@ -1,4 +1,4 @@
-# TinyCloud delegated secrets
+# TinyCloud delegated exploration and secrets
 
 Use the TinyCloud MCP tools as a resumable authority workflow. Never ask the
 user to paste a secret value, private key, token, or delegation credential into
@@ -7,10 +7,14 @@ chat.
 <!-- BEGIN GENERATED TINYCloud operation facts -->
 The following facts are generated from `@tinycloud/operations/operations.json`:
 
+- `tinycloud_account_applications_list` -> `tinycloud.account.applications.list@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_account_spaces_list` -> `tinycloud.account.spaces.list@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_auth_capabilities` -> `tinycloud.auth.capabilities@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_auth_import` -> `tinycloud.auth.import@1`; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_auth_request` -> `tinycloud.auth.request@1`; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_auth_status` -> `tinycloud.auth.status@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
+- `tinycloud_kv_get` -> `tinycloud.kv.get@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_kv_list` -> `tinycloud.kv.list@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_secrets_get` -> `tinycloud.secrets.get@1`; effects: read, local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_status` -> `tinycloud.status.get@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
 <!-- END GENERATED TINYCloud operation facts -->
@@ -25,7 +29,28 @@ Coverage is generated from the Commander registration ledger; legacy commands ar
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
 <!-- END GENERATED TINYCloud operations coverage -->
 
-## Workflow
+## Account and KV exploration
+
+1. A fresh `delegate-session` profile must first bootstrap its session through
+   the CLI: emit one exact `tc auth request --cap ...` artifact, have the owner
+   grant that artifact, and import the result with `tc auth import`. Start MCP
+   only after the import succeeds.
+2. Inspect posture with `tinycloud_status` or `tinycloud_auth_status`.
+3. Call `tinycloud_account_spaces_list` and
+   `tinycloud_account_applications_list`. If either returns
+   `authority_required`, give the exact structured request to the account
+   owner for `tc auth grant --stdin --yes`, then import the returned artifact
+   with `tinycloud_auth_import`.
+4. Choose a non-secrets space from those results. Use `tinycloud_kv_list` with
+   an exact space and prefix. Follow the same request, owner grant, import,
+   restart, and retry sequence when authority is required.
+5. Use `tinycloud_kv_get` for one exact returned key. A list grant does not
+   imply get authority; request and import the exact get grant when required.
+6. Do not broaden a path, substitute a sibling key, change the audience, or
+   use generic KV tools against a secrets space. Use `tinycloud_secrets_get`
+   for secrets.
+
+## Secret workflow
 
 1. Inspect posture first with `tinycloud_status` or `tinycloud_auth_status`.
    Treat `delegate-session` as delegated authority even when its owner DID is
@@ -56,7 +81,6 @@ This proving surface uses local stdio only. It has no continuation tool,
 resources, prompts, elicitation, remote transport, generic permission grant,
 or secret mutation tool.
 
-This is an experimental, publication-deferred surface while the MCP SDK v2
-gate is `unpublishable-defer`. Delegated posture is the default; owner-profile
-data access requires explicit opt-in. The user must enter secrets only in
-Secret Manager, never in chat.
+This is a beta surface. Delegated posture is the default; owner-profile data
+access requires explicit opt-in. The user must enter secrets only in Secret
+Manager, never in chat.

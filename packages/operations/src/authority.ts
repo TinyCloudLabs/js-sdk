@@ -217,7 +217,7 @@ function isExactPermission(value: unknown): value is PermissionEntry {
   }
   if (
     !isExactText(value.service) ||
-    !isExactPath(value.path) ||
+    !isExactPath(value.path, value.actions) ||
     (value.space !== undefined && !isExactText(value.space)) ||
     !Array.isArray(value.actions) ||
     value.actions.length === 0 ||
@@ -243,8 +243,12 @@ function isExactText(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && !value.includes("*");
 }
 
-function isExactPath(value: unknown): value is string {
-  return isExactText(value) && value !== "/" && !value.endsWith("/");
+function isExactPath(value: unknown, actions: unknown): value is string {
+  if (typeof value !== "string" || value === "/" || value.includes("*")) return false;
+  if (value === "" || value.endsWith("/")) {
+    return Array.isArray(actions) && actions.includes("tinycloud.kv/list");
+  }
+  return true;
 }
 
 function canonicalizeCaveats(

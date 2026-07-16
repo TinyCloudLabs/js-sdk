@@ -11,6 +11,7 @@ import catalog from "@tinycloud/operations/operations.json";
 
 const packageDirectory = new URL("..", import.meta.url).pathname;
 const cliPath = join(packageDirectory, "dist/cli.js");
+const tinycloudCliPath = join(packageDirectory, "../cli/dist/index.js");
 const nodeBinary = process.env.NODE_BINARY ?? "node";
 const homes: string[] = [];
 
@@ -18,7 +19,7 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
 
-test("official v2 client lists exactly six generated-schema tools over stdio", async () => {
+test("official v2 client lists exactly ten generated-schema tools over stdio", async () => {
   const home = await fixtureHome();
   const transport = new StdioClientTransport({
     command: nodeBinary,
@@ -43,9 +44,13 @@ test("official v2 client lists exactly six generated-schema tools over stdio", a
       "tinycloud_auth_capabilities",
       "tinycloud_auth_request",
       "tinycloud_auth_import",
+      "tinycloud_account_spaces_list",
+      "tinycloud_account_applications_list",
+      "tinycloud_kv_list",
+      "tinycloud_kv_get",
       "tinycloud_secrets_get",
     ]);
-    expect(listed.tools).toHaveLength(6);
+    expect(listed.tools).toHaveLength(10);
 
     const byId = new Map((catalog as { operations: Array<{ id: string; version: number; input: unknown; result: unknown }> }).operations
       .map((operation) => [`${operation.id}@${operation.version}`, operation]));
@@ -55,6 +60,10 @@ test("official v2 client lists exactly six generated-schema tools over stdio", a
       tinycloud_auth_capabilities: "tinycloud.auth.capabilities@1",
       tinycloud_auth_request: "tinycloud.auth.request@1",
       tinycloud_auth_import: "tinycloud.auth.import@1",
+      tinycloud_account_spaces_list: "tinycloud.account.spaces.list@1",
+      tinycloud_account_applications_list: "tinycloud.account.applications.list@1",
+      tinycloud_kv_list: "tinycloud.kv.list@1",
+      tinycloud_kv_get: "tinycloud.kv.get@1",
       tinycloud_secrets_get: "tinycloud.secrets.get@1",
     };
     for (const tool of listed.tools) {
@@ -65,12 +74,16 @@ test("official v2 client lists exactly six generated-schema tools over stdio", a
         byId.get(mapping[tool.name]!)!.result as typeof tool.outputSchema,
       );
       expect(tool.annotations).toMatchObject({
-        readOnlyHint: tool.name === "tinycloud_status" ||
-          tool.name === "tinycloud_auth_status" ||
-          tool.name === "tinycloud_auth_capabilities",
+        readOnlyHint: !["tinycloud_auth_request", "tinycloud_auth_import", "tinycloud_secrets_get"].includes(tool.name),
         idempotentHint: true,
         destructiveHint: false,
-        openWorldHint: tool.name === "tinycloud_secrets_get",
+        openWorldHint: [
+          "tinycloud_account_spaces_list",
+          "tinycloud_account_applications_list",
+          "tinycloud_kv_list",
+          "tinycloud_kv_get",
+          "tinycloud_secrets_get",
+        ].includes(tool.name),
       });
     }
 
@@ -90,6 +103,10 @@ test("official v2 client lists exactly six generated-schema tools over stdio", a
       ["tinycloud_auth_capabilities", {}, { status: "error", operation: { operationId: "tinycloud.auth.capabilities", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_auth_request", { requestId: "missing-request" }, { status: "error", operation: { operationId: "tinycloud.auth.request", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_auth_import", validImportProbe(), { status: "error", operation: { operationId: "tinycloud.auth.import", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_account_spaces_list", {}, { status: "error", operation: { operationId: "tinycloud.account.spaces.list", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_account_applications_list", {}, { status: "error", operation: { operationId: "tinycloud.account.applications.list", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_kv_list", { space: "applications" }, { status: "error", operation: { operationId: "tinycloud.kv.list", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_kv_get", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.get", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_secrets_get", { name: "MCP_TEST_SECRET" }, { status: "error", operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
     ] as const;
     for (const [name, arguments_, expected] of expectedToolResults) {
@@ -319,6 +336,144 @@ test("three real MCP processes request, import, restart, and retry the original 
   }
 }, 15_000);
 
+test("a fresh delegate bootstraps through the real CLI, then explores through MCP", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-owner-grant-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const authSupport = await import(new URL(
+    "../../operations/test-support/auth-runtime.ts",
+    import.meta.url,
+  ).href) as {
+    createAuthRuntimeFixture: () => Promise<any>;
+  };
+  const fixture = await authSupport.createAuthRuntimeFixture();
+  const freshProfile = "fresh-delegate";
+  let importer: ConnectedClient | undefined;
+  let retry: ConnectedClient | undefined;
+  let stage = "create fresh delegate profile";
+  try {
+    await runTinyCloudCli(home, [
+      "profile", "create", freshProfile,
+      "--host", fixture.hermetic.host,
+      "--posture", "delegate-session",
+      "--operator", "agent",
+    ]);
+    stage = "create bootstrap account request";
+    const accountRequest = await runTinyCloudCli(home, [
+      "--profile", freshProfile,
+      "auth", "request",
+      "--cap", "tinycloud.kv:account:spaces/:get,list",
+      "--emit",
+    ]);
+    expect(accountRequest).toMatchObject({
+      kind: "tinycloud.auth.request",
+      profile: freshProfile,
+      posture: "delegate-session",
+      requested: [{
+        service: "tinycloud.kv",
+        space: "account",
+        path: "spaces/",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/list"],
+      }],
+    });
+    const accountPermissions = [{
+      service: "tinycloud.kv",
+      space: fixture.hermetic.accountSpaceId,
+      path: "spaces/",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/list"],
+    }];
+
+    stage = "owner grants account spaces";
+    const accountGrant = await runOwnerGrant(home, fixture.ownerProfile, accountRequest);
+    expect(accountGrant).toMatchObject({
+      kind: "tinycloud.auth.delegation",
+      requestId: accountRequest.requestId,
+      permissions: accountPermissions,
+      delegation: { delegateDID: accountRequest.sessionDid },
+    });
+    stage = "bootstrap delegate through CLI import";
+    expect(await runTinyCloudCli(home, [
+      "--profile", freshProfile,
+      "auth", "import", "--stdin",
+    ], accountGrant)).toMatchObject({ imported: true, activated: true });
+
+    stage = "retry account spaces";
+    retry = await connectClient(home, ["--profile", freshProfile]);
+    expect(contentOf(await timedTool(retry.client, {
+      name: "tinycloud_account_spaces_list",
+      arguments: {},
+    }))).toMatchObject({
+      status: "ok",
+      output: { spaces: [{ spaceId: fixture.hermetic.applicationsSpaceId, name: "applications" }] },
+    });
+    stage = "request KV get";
+    const kvFirst = contentOf(await timedTool(retry.client, {
+      name: "tinycloud_kv_get",
+      arguments: { space: "applications", key: "agents/demo/profile" },
+    }));
+    expect(kvFirst).toMatchObject({ status: "authority_required" });
+    if (kvFirst?.status !== "authority_required") throw new Error("expected exact KV authority request");
+    const kvRequest = kvFirst.request as Record<string, any>;
+    const kvPermissions = [{
+      service: "tinycloud.kv",
+      space: fixture.hermetic.applicationsSpaceId,
+      path: "agents/demo/profile",
+      actions: ["tinycloud.kv/get"],
+    }];
+    expect(kvRequest.requested).toEqual(kvPermissions);
+    await retry.client.close();
+    retry = undefined;
+
+    stage = "owner grants KV get";
+    const kvGrant = await runOwnerGrant(home, fixture.ownerProfile, kvRequest);
+    expect(kvGrant).toMatchObject({
+      kind: "tinycloud.auth.delegation",
+      requestId: kvRequest.requestId,
+      permissions: kvPermissions,
+      delegation: { delegateDID: accountRequest.sessionDid },
+    });
+
+    stage = "import KV get grant";
+    importer = await connectClient(home, ["--profile", freshProfile]);
+    expect(contentOf(await timedTool(importer.client, {
+      name: "tinycloud_auth_import",
+      arguments: kvGrant,
+    }))).toMatchObject({ status: "ok", output: { activated: true } });
+    await importer.client.close();
+    importer = undefined;
+
+    stage = "retry KV get";
+    retry = await connectClient(home, ["--profile", freshProfile]);
+    expect(contentOf(await timedTool(retry.client, {
+      name: "tinycloud_kv_get",
+      arguments: { space: "applications", key: "agents/demo/profile" },
+    }))).toMatchObject({
+      status: "ok",
+      output: { value: { name: "Ada", role: "operator" }, encoding: "json" },
+    });
+    stage = "deny sibling KV get";
+    expect(contentOf(await timedTool(retry.client, {
+      name: "tinycloud_kv_get",
+      arguments: { space: "applications", key: "agents/demo/settings" },
+    }))).toMatchObject({ status: "authority_required" });
+    stage = "assert loopback resources";
+    fixture.hermetic.assertDelegatedKvResources([
+      `tinycloud.kv/list:${fixture.hermetic.accountSpaceId}/kv/spaces/`,
+      `tinycloud.kv/get:${fixture.hermetic.accountSpaceId}/kv/spaces/applications`,
+      `tinycloud.kv/get:${fixture.hermetic.applicationsSpaceId}/kv/agents/demo/profile`,
+    ]);
+  } catch (error) {
+    throw new Error(`${stage}: ${error instanceof Error ? error.message : String(error)}; MCP stderr: ${[importer?.stderr(), retry?.stderr()].filter(Boolean).join(" | ")}`);
+  } finally {
+    await closeWithinDeadline(importer?.client);
+    await closeWithinDeadline(retry?.client);
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
 test("an authorized missing secret returns only the value-free setup action", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-setup-"));
   const previousTcHome = process.env.TC_HOME;
@@ -406,8 +561,78 @@ async function connectClient(home: string, args: readonly string[]): Promise<Con
   });
   let stderr = "";
   transport.stderr?.on("data", (chunk) => { stderr += String(chunk); });
-  await client.connect(transport);
+  await withDeadline(client.connect(transport), 60_000, "MCP connection");
   return { client, stderr: () => stderr };
+}
+
+async function runOwnerGrant(
+  home: string,
+  profile: string,
+  request: Record<string, unknown>,
+): Promise<Record<string, any>> {
+  const process = Bun.spawn({
+    cmd: [nodeBinary, tinycloudCliPath, "--profile", profile, "--json", "--quiet", "auth", "grant", "--stdin", "--yes"],
+    env: { ...globalThis.process.env, TC_HOME: home },
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  process.stdin.write(JSON.stringify(request));
+  process.stdin.end();
+  const [exitCode, stdout, stderr] = await Promise.all([
+    process.exited,
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+  ]);
+  if (exitCode !== 0) throw new Error(`tc auth grant failed: ${stderr}`);
+  return JSON.parse(stdout) as Record<string, any>;
+}
+
+async function runTinyCloudCli(
+  home: string,
+  args: readonly string[],
+  input?: Record<string, unknown>,
+): Promise<Record<string, any>> {
+  const process = Bun.spawn({
+    cmd: [nodeBinary, tinycloudCliPath, "--json", "--quiet", ...args],
+    env: { ...globalThis.process.env, TC_HOME: home },
+    stdin: input === undefined ? "ignore" : "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (input !== undefined && process.stdin) {
+    process.stdin.write(JSON.stringify(input));
+    process.stdin.end();
+  }
+  const [exitCode, stdout, stderr] = await Promise.all([
+    process.exited,
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+  ]);
+  if (exitCode !== 0) throw new Error(`tc ${args.join(" ")} failed: ${stderr}`);
+  return JSON.parse(stdout) as Record<string, any>;
+}
+
+async function timedTool(
+  client: Client,
+  request: Parameters<Client["callTool"]>[0],
+): ReturnType<Client["callTool"]> {
+  return withDeadline(client.callTool(request), 30_000, "MCP tool call") as ReturnType<Client["callTool"]>;
+}
+
+async function closeWithinDeadline(client: Client | undefined): Promise<void> {
+  if (!client) return;
+  await withDeadline(client.close(), 5_000, "MCP close").catch(() => undefined);
+}
+
+function withDeadline<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }
 
 function validImportProbe(): Record<string, unknown> {

@@ -90,12 +90,12 @@ test("rejects every planner requirement that v1 exact artifacts cannot preserve"
   const hiddenField = { ...keyGet } as Record<string, unknown>;
   Object.defineProperty(hiddenField, "hidden", { value: "dropped-by-json", enumerable: false });
   const invalid = [
-    [{ ...keyGet, path: "" }],
     [{ ...keyGet, path: "/" }],
-    [{ ...keyGet, path: "vault/secrets/" }],
     [{ ...keyGet, service: "tinycloud.*" }],
     [{ ...keyGet, actions: ["tinycloud.kv/*"] }],
     [{ ...keyGet, actions: ["tinycloud.kv/get", "tinycloud.kv/get"] }],
+    [{ ...keyGet, path: "" }],
+    [{ ...keyGet, path: "documents/" }],
     [{ ...keyGet, caveats: [{ tenant: "one" }] }],
     [{ ...keyGet, unexpected: "open-world" }],
     [hiddenField],
@@ -106,6 +106,18 @@ test("rejects every planner requirement that v1 exact artifacts cannot preserve"
     expect(validateExactCapabilities(requirement)).toBeUndefined();
   }
   expect(validateExactCapabilities([keyGet])).toEqual([keyGet]);
+  expect(validateExactCapabilities([{ ...keyGet, path: "", actions: ["tinycloud.kv/list"] }])).toEqual([
+    { ...keyGet, path: "", actions: ["tinycloud.kv/list"] },
+  ]);
+  expect(validateExactCapabilities([{
+    ...keyGet,
+    path: "documents/",
+    actions: ["tinycloud.kv/get", "tinycloud.kv/list"],
+  }])).toEqual([{
+    ...keyGet,
+    path: "documents/",
+    actions: ["tinycloud.kv/get", "tinycloud.kv/list"],
+  }]);
 });
 
 test("preserves signed caveat branches in granted-authority canonicalization", () => {

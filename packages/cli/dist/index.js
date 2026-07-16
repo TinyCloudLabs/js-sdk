@@ -28,9 +28,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../node_modules/ms/index.js
+// ../../../js-sdk-integration/node_modules/ms/index.js
 var require_ms = __commonJS({
-  "../../node_modules/ms/index.js"(exports, module) {
+  "../../../js-sdk-integration/node_modules/ms/index.js"(exports, module) {
     "use strict";
     var s = 1e3;
     var m = s * 60;
@@ -145,9 +145,9 @@ var require_ms = __commonJS({
   }
 });
 
-// ../sdk-services/dist/internal/decrypt-transport-response-error.cjs
+// ../../../js-sdk-integration/packages/sdk-services/dist/internal/decrypt-transport-response-error.cjs
 var require_decrypt_transport_response_error = __commonJS({
-  "../sdk-services/dist/internal/decrypt-transport-response-error.cjs"(exports, module) {
+  "../../../js-sdk-integration/packages/sdk-services/dist/internal/decrypt-transport-response-error.cjs"(exports, module) {
     "use strict";
     var __defProp3 = Object.defineProperty;
     var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
@@ -792,7 +792,7 @@ import {
 // ../sdk-core/src/manifest.ts
 var import_ms = __toESM(require_ms(), 1);
 
-// ../../node_modules/zod/v3/external.js
+// ../../../js-sdk-integration/node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
   BRAND: () => BRAND,
@@ -904,7 +904,7 @@ __export(external_exports, {
   void: () => voidType
 });
 
-// ../../node_modules/zod/v3/helpers/util.js
+// ../../../js-sdk-integration/node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
   util2.assertEqual = (_) => {
@@ -1038,7 +1038,7 @@ var getParsedType = (data) => {
   }
 };
 
-// ../../node_modules/zod/v3/ZodError.js
+// ../../../js-sdk-integration/node_modules/zod/v3/ZodError.js
 var ZodIssueCode = util.arrayToEnum([
   "invalid_type",
   "invalid_literal",
@@ -1156,7 +1156,7 @@ ZodError.create = (issues) => {
   return error;
 };
 
-// ../../node_modules/zod/v3/locales/en.js
+// ../../../js-sdk-integration/node_modules/zod/v3/locales/en.js
 var errorMap = (issue, _ctx) => {
   let message;
   switch (issue.code) {
@@ -1259,7 +1259,7 @@ var errorMap = (issue, _ctx) => {
 };
 var en_default = errorMap;
 
-// ../../node_modules/zod/v3/errors.js
+// ../../../js-sdk-integration/node_modules/zod/v3/errors.js
 var overrideErrorMap = en_default;
 function setErrorMap(map) {
   overrideErrorMap = map;
@@ -1268,7 +1268,7 @@ function getErrorMap() {
   return overrideErrorMap;
 }
 
-// ../../node_modules/zod/v3/helpers/parseUtil.js
+// ../../../js-sdk-integration/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
   const { data, path, errorMaps, issueData } = params;
   const fullPath = [...path, ...issueData.path || []];
@@ -1378,14 +1378,14 @@ var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
 
-// ../../node_modules/zod/v3/helpers/errorUtil.js
+// ../../../js-sdk-integration/node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 (function(errorUtil2) {
   errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
   errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
 
-// ../../node_modules/zod/v3/types.js
+// ../../../js-sdk-integration/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
   constructor(parent, value, path, key) {
     this._cachedPath = [];
@@ -4833,7 +4833,7 @@ var coerce = {
 };
 var NEVER = INVALID;
 
-// ../bootstrap/dist/index.js
+// ../../../js-sdk-integration/packages/bootstrap/dist/index.js
 var CAPABILITIES = [
   { urn: "tinycloud.kv/get", service: "tinycloud.kv", status: "active" },
   { urn: "tinycloud.kv/list", service: "tinycloud.kv", status: "active" },
@@ -5339,7 +5339,7 @@ var BOOTSTRAP_ALLOWLIST = Object.freeze(
   ])
 );
 
-// ../sdk-services/dist/index.js
+// ../../../js-sdk-integration/packages/sdk-services/dist/index.js
 var import_decrypt_transport_response_error = __toESM(require_decrypt_transport_response_error(), 1);
 var import_decrypt_transport_response_error2 = __toESM(require_decrypt_transport_response_error(), 1);
 var import_decrypt_transport_response_error3 = __toESM(require_decrypt_transport_response_error(), 1);
@@ -12105,11 +12105,7 @@ async function bootstrapDelegatedSession(ctx, delegation) {
     delegationCid: delegation.cid,
     spaceId: delegation.spaceId,
     jwk,
-    verificationMethod: sessionDid,
-    address: delegation.ownerAddress,
-    chainId: delegation.chainId,
-    siwe: "",
-    signature: ""
+    verificationMethod: sessionDid
   });
   await ProfileManager.setProfile(ctx.profile, {
     ...profile,
@@ -13023,7 +13019,7 @@ function registerAuthCommand(program2) {
         return;
       }
       if (isRequestBoundDelegationEnvelope(parsed)) {
-        await importRequestBoundDelegation(ctx, parsed);
+        await importRequestBoundDelegationWithBootstrap(ctx, parsed);
         return;
       }
       const imported = normalizeDelegationImport(parsed);
@@ -13345,6 +13341,28 @@ function isRequestBoundDelegationEnvelope(value) {
   if (value === null || typeof value !== "object") return false;
   const candidate = value;
   return candidate.kind === "tinycloud.auth.delegation" && candidate.version === 1 && Object.hasOwn(candidate, "requestId");
+}
+async function importRequestBoundDelegationWithBootstrap(ctx, artifact) {
+  const session = await ProfileManager.getSession(ctx.profile);
+  if (session !== null) {
+    await importRequestBoundDelegation(ctx, artifact);
+    return;
+  }
+  const profile = await ProfileManager.getProfile(ctx.profile);
+  if (resolveProfilePosture(profile) !== "delegate-session") {
+    await importRequestBoundDelegation(ctx, artifact);
+    return;
+  }
+  const candidate = artifact;
+  const delegation = normalizePortableDelegation(candidate.delegation);
+  try {
+    await bootstrapDelegatedSession(ctx, delegation);
+    await importRequestBoundDelegation(ctx, artifact);
+  } catch (error) {
+    await ProfileManager.clearSession(ctx.profile);
+    await ProfileManager.setProfile(ctx.profile, profile);
+    throw error;
+  }
 }
 async function importRequestBoundDelegation(ctx, artifact) {
   const result = await invokeOperation(
@@ -14736,7 +14754,7 @@ function registerKvCommand(program2) {
   });
 }
 
-// ../sdk-core/dist/index.js
+// ../../../js-sdk-integration/packages/sdk-core/dist/index.js
 import { SiweMessage } from "siwe";
 import crypto2 from "crypto";
 var import_ms2 = __toESM(require_ms(), 1);

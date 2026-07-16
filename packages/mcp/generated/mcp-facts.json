@@ -2,6 +2,34 @@
   "schemaVersion": 1,
   "tools": [
     {
+      "name": "tinycloud_account_applications_list",
+      "operationId": "tinycloud.account.applications.list",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud_account_spaces_list",
+      "operationId": "tinycloud.account.spaces.list",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
       "name": "tinycloud_auth_capabilities",
       "operationId": "tinycloud.auth.capabilities",
       "operationVersion": 1,
@@ -57,6 +85,34 @@
         "unauthenticated"
       ],
       "sensitiveOutput": false
+    },
+    {
+      "name": "tinycloud_kv_get",
+      "operationId": "tinycloud.kv.get",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud_kv_list",
+      "operationId": "tinycloud.kv.list",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
     },
     {
       "name": "tinycloud_secrets_get",

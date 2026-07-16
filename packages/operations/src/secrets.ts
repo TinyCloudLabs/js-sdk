@@ -94,7 +94,7 @@ function resolveOperationSpace(space: string, node: unknown, ownerSpace?: string
   if (space.startsWith("tinycloud:")) return canonicalizeSpaceUri(space);
 
   const ownerSpaceId = ownerSpace === undefined ? undefined : ownedSpaceForName(ownerSpace, space);
-  if (ownerSpaceId !== undefined) return ownerSpaceId;
+  if (ownerSpaceId !== undefined) return canonicalizeSpaceUri(ownerSpaceId);
 
   const candidate = node as {
     resolveOwnedSpace?: (spaceName: string) => unknown;
@@ -116,7 +116,7 @@ function resolveOperationSpace(space: string, node: unknown, ownerSpace?: string
   // identity used by the CLI space resolver.
   if (typeof candidate.spaceId === "string") {
     const resolved = ownedSpaceForName(candidate.spaceId, space);
-    if (resolved !== undefined) return resolved;
+    if (resolved !== undefined) return canonicalizeSpaceUri(resolved);
   }
 
   const did = typeof candidate.did === "string" ? candidate.did : undefined;
