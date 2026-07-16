@@ -29,52 +29,72 @@ let definitions: readonly OperationDefinition<TestInput, TestOutput>[] = [];
 let invocationTrace: string[] = [];
 type RuntimeResolution =
   | { ok: true; context: RuntimeOperationContext }
-  | { ok: false; context: RuntimeOperationContext["summary"]; error: { code: "PROFILE_NOT_FOUND"; message: string; retryable: false } };
+  | {
+      ok: false;
+      context: RuntimeOperationContext["summary"];
+      error: { code: "PROFILE_NOT_FOUND"; message: string; retryable: false };
+    };
 let resolver: (
   target: InvocationTarget,
   requirement: OperationRuntimeRequirement,
 ) => Promise<RuntimeResolution>;
 
-spyOn(registry, "lookupOperation").mockImplementation((operationId, operationVersion) => {
-  const matchingId = definitions.filter((definition) => definition.id === operationId);
-  if (matchingId.length === 0) return { status: "operation_not_found" };
-  const definition = matchingId.find((candidate) => candidate.version === operationVersion);
-  return definition === undefined
-    ? {
-        status: "operation_version_unsupported",
-        supportedVersions: matchingId.map((candidate) => candidate.version),
-      }
-    : { status: "found", definition: definition as unknown as OperationDefinition<unknown, unknown> };
-});
+spyOn(registry, "lookupOperation").mockImplementation(
+  (operationId, operationVersion) => {
+    const matchingId = definitions.filter(
+      (definition) => definition.id === operationId,
+    );
+    if (matchingId.length === 0) return { status: "operation_not_found" };
+    const definition = matchingId.find(
+      (candidate) => candidate.version === operationVersion,
+    );
+    return definition === undefined
+      ? {
+          status: "operation_version_unsupported",
+          supportedVersions: matchingId.map((candidate) => candidate.version),
+        }
+      : {
+          status: "found",
+          definition: definition as unknown as OperationDefinition<
+            unknown,
+            unknown
+          >,
+        };
+  },
+);
 
 const actualCreateInvocationRuntime = runtime.createInvocationRuntime;
-spyOn(runtime, "createInvocationRuntime").mockImplementation((
-  target: InvocationTarget,
-  requirement: OperationRuntimeRequirement = "authenticated",
-) => resolver(target, requirement));
+spyOn(runtime, "createInvocationRuntime").mockImplementation(
+  (
+    target: InvocationTarget,
+    requirement: OperationRuntimeRequirement = "authenticated",
+  ) => resolver(target, requirement),
+);
 
-spyOn(artifacts, "createOrReusePermissionRequest").mockImplementation(async (input) => {
-  invocationTrace.push("persist");
-  return {
-    status: "created",
-    reused: false,
-    request: {
-      kind: "tinycloud.auth.request",
-      version: 1,
-      requestId: "request-1",
-      createdAt: "2026-07-14T12:00:00.000Z",
-      profile: "delegate",
-      posture: "delegate-session",
-      operatorType: "agent",
-      host: "https://node.example",
-      sessionDid: "did:key:session",
-      requested: input.missing.map((permission) => ({
-        ...permission,
-        actions: [...permission.actions],
-      })),
-    },
-  };
-});
+spyOn(artifacts, "createOrReusePermissionRequest").mockImplementation(
+  async (input) => {
+    invocationTrace.push("persist");
+    return {
+      status: "created",
+      reused: false,
+      request: {
+        kind: "tinycloud.auth.request",
+        version: 1,
+        requestId: "request-1",
+        createdAt: "2026-07-14T12:00:00.000Z",
+        profile: "delegate",
+        posture: "delegate-session",
+        operatorType: "agent",
+        host: "https://node.example",
+        sessionDid: "did:key:session",
+        requested: input.missing.map((permission) => ({
+          ...permission,
+          actions: [...permission.actions],
+        })),
+      },
+    };
+  },
+);
 
 beforeEach(() => {
   definitions = [];
@@ -162,7 +182,12 @@ test("validates unknown input before context resolution or executing a known ope
     }),
   ];
 
-  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: 42 });
+  const result = await invokeOperation(
+    "tinycloud.test.get",
+    1,
+    {},
+    { name: 42 },
+  );
 
   expect(result).toMatchObject({
     status: "error",
@@ -190,19 +215,26 @@ test("plans and persists exact missing authority before it can execute a handler
       },
     };
   };
-  definitions = [createDefinition({
-    authority: async () => {
-      invocationTrace.push("plan");
-      return [testCapability];
-    },
-    execute: async () => {
-      handlerRan = true;
-      invocationTrace.push("handler");
-      return { status: "ok", output: { value: "unreachable" } };
-    },
-  })];
+  definitions = [
+    createDefinition({
+      authority: async () => {
+        invocationTrace.push("plan");
+        return [testCapability];
+      },
+      execute: async () => {
+        handlerRan = true;
+        invocationTrace.push("handler");
+        return { status: "ok", output: { value: "unreachable" } };
+      },
+    }),
+  ];
 
-  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+  const result = await invokeOperation(
+    "tinycloud.test.get",
+    1,
+    {},
+    { name: "valid" },
+  );
 
   expect(result.status).toBe("authority_required");
   expect(invocationTrace).toEqual(["runtime", "runtime", "plan", "persist"]);
@@ -220,17 +252,27 @@ test("rejects broad, caveated, and malformed planner capability hints without pe
 
   for (const requirement of invalidRequirements) {
     let handlerRan = false;
-    definitions = [createDefinition({
-      authority: async () => requirement as never,
-      execute: async () => {
-        handlerRan = true;
-        return { status: "ok", output: { value: "unreachable" } };
-      },
-    })];
+    definitions = [
+      createDefinition({
+        authority: async () => requirement as never,
+        execute: async () => {
+          handlerRan = true;
+          return { status: "ok", output: { value: "unreachable" } };
+        },
+      }),
+    ];
 
-    const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+    const result = await invokeOperation(
+      "tinycloud.test.get",
+      1,
+      {},
+      { name: "valid" },
+    );
 
-    expect(result).toMatchObject({ status: "error", error: { code: "PERMISSION_HINT_INVALID" } });
+    expect(result).toMatchObject({
+      status: "error",
+      error: { code: "PERMISSION_HINT_INVALID" },
+    });
     expect(handlerRan).toBe(false);
   }
   expect(invocationTrace).toEqual([]);
@@ -241,17 +283,19 @@ test("requires explicit opt-in before authenticating either owner posture", asyn
     const requirements: OperationRuntimeRequirement[] = [];
     let planned = false;
     let executed = false;
-    definitions = [createDefinition({
-      postures: [posture],
-      authority: async () => {
-        planned = true;
-        return [];
-      },
-      execute: async () => {
-        executed = true;
-        return { status: "ok", output: { value: "ok" } };
-      },
-    })];
+    definitions = [
+      createDefinition({
+        postures: [posture],
+        authority: async () => {
+          planned = true;
+          return [];
+        },
+        execute: async () => {
+          executed = true;
+          return { status: "ok", output: { value: "ok" } };
+        },
+      }),
+    ];
     resolver = async (_target, requirement) => {
       requirements.push(requirement);
       return {
@@ -268,8 +312,16 @@ test("requires explicit opt-in before authenticating either owner posture", asyn
       };
     };
 
-    const blocked = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
-    expect(blocked).toMatchObject({ status: "error", error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } });
+    const blocked = await invokeOperation(
+      "tinycloud.test.get",
+      1,
+      {},
+      { name: "valid" },
+    );
+    expect(blocked).toMatchObject({
+      status: "error",
+      error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" },
+    });
     expect(requirements).toEqual(["inspection"]);
     expect(planned).toBe(false);
     expect(executed).toBe(false);
@@ -288,13 +340,18 @@ test("requires explicit opt-in before authenticating either owner posture", asyn
 });
 
 test("fails closed when the authenticated resolution changes from inspection posture", async () => {
-  definitions = [createDefinition({ postures: ["owner-openkey", "delegate-session", "local-owner-key"] })];
+  definitions = [
+    createDefinition({
+      postures: ["owner-openkey", "delegate-session", "local-owner-key"],
+    }),
+  ];
   let calls = 0;
   resolver = async (_target, requirement) => {
     calls += 1;
-    const posture = requirement === "inspection" && calls === 1
-      ? "delegate-session"
-      : "local-owner-key";
+    const posture =
+      requirement === "inspection" && calls === 1
+        ? "delegate-session"
+        : "local-owner-key";
     return {
       ok: true,
       context: {
@@ -310,7 +367,12 @@ test("fails closed when the authenticated resolution changes from inspection pos
     };
   };
 
-  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+  const result = await invokeOperation(
+    "tinycloud.test.get",
+    1,
+    {},
+    { name: "valid" },
+  );
 
   expect(result).toMatchObject({
     status: "error",
@@ -321,22 +383,31 @@ test("fails closed when the authenticated resolution changes from inspection pos
 });
 
 test("rejects incoherent local owner material before invocation can sign in or execute", async () => {
-  const home = await mkdtemp(`${tmpdir()}/tinycloud-operations-invoke-posture-`);
+  const home = await mkdtemp(
+    `${tmpdir()}/tinycloud-operations-invoke-posture-`,
+  );
   const previousHome = process.env.TC_HOME;
   process.env.TC_HOME = home;
   let handlerRan = false;
-  const signIn = spyOn(TinyCloudNode.prototype, "signIn").mockImplementation(async () => {
-    throw new Error("owner sign-in must not be reached");
-  });
-  definitions = [createDefinition({
-    authority: async () => [],
-    execute: async () => {
-      handlerRan = true;
-      return { status: "ok", output: { value: "must-not-run" } };
+  const signIn = spyOn(TinyCloudNode.prototype, "signIn").mockImplementation(
+    async () => {
+      throw new Error("owner sign-in must not be reached");
     },
-  })];
+  );
+  definitions = [
+    createDefinition({
+      authority: async () => [],
+      execute: async () => {
+        handlerRan = true;
+        return { status: "ok", output: { value: "must-not-run" } };
+      },
+    }),
+  ];
   resolver = async (target, requirement) =>
-    await actualCreateInvocationRuntime(target, requirement) as RuntimeResolution;
+    (await actualCreateInvocationRuntime(
+      target,
+      requirement,
+    )) as RuntimeResolution;
 
   try {
     await writeJsonAtomic(profileConfigPath("incoherent"), {
@@ -375,15 +446,21 @@ test("rejects incoherent local owner material before invocation can sign in or e
 });
 
 test("sanitizes malformed runtime permission hints without creating a broad request", async () => {
-  definitions = [createDefinition({
-    authority: async () => [testCapability],
-    execute: async () => ({
-      status: "authority_required",
-      missing: [{ ...testCapability, path: "vault/secrets/*" }],
-      request: { requestId: "ignored" },
-      approval: { kind: "openkey", requestId: "ignored", fallback: "ignored" },
+  definitions = [
+    createDefinition({
+      authority: async () => [testCapability],
+      execute: async () => ({
+        status: "authority_required",
+        missing: [{ ...testCapability, path: "vault/secrets/*" }],
+        request: { requestId: "ignored" },
+        approval: {
+          kind: "openkey",
+          requestId: "ignored",
+          fallback: "ignored",
+        },
+      }),
     }),
-  })];
+  ];
   resolver = async () => ({
     ok: true,
     context: {
@@ -398,44 +475,56 @@ test("sanitizes malformed runtime permission hints without creating a broad requ
     },
   });
 
-  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+  const result = await invokeOperation(
+    "tinycloud.test.get",
+    1,
+    {},
+    { name: "valid" },
+  );
 
-  expect(result).toMatchObject({ status: "error", error: { code: "PERMISSION_HINT_INVALID" } });
+  expect(result).toMatchObject({
+    status: "error",
+    error: { code: "PERMISSION_HINT_INVALID" },
+  });
   expect(invocationTrace).toEqual([]);
 });
 
 test("returns a safe error envelope for invalid invocation targets", async () => {
   const canary = "invocation-target-private-canary";
-  const invalidTargets: readonly Readonly<{ name: string; target: unknown }>[] = [
-    { name: "null", target: null },
-    { name: "primitive", target: "not-an-invocation-target" },
-    { name: "invalid field", target: { profile: 1 } },
-    {
-      name: "throwing getter",
-      target: {
-        get profile() {
-          throw new Error(canary);
+  const invalidTargets: readonly Readonly<{ name: string; target: unknown }>[] =
+    [
+      { name: "null", target: null },
+      { name: "primitive", target: "not-an-invocation-target" },
+      { name: "invalid field", target: { profile: 1 } },
+      {
+        name: "throwing getter",
+        target: {
+          get profile() {
+            throw new Error(canary);
+          },
         },
       },
-    },
-    {
-      name: "throwing proxy",
-      target: new Proxy({}, {
-        get() {
-          throw new Error(canary);
-        },
-      }),
-    },
-    {
-      name: "private key getter",
-      target: {
-        profile: "pinned-profile",
-        get privateKey() {
-          throw new Error(canary);
+      {
+        name: "throwing proxy",
+        target: new Proxy(
+          {},
+          {
+            get() {
+              throw new Error(canary);
+            },
+          },
+        ),
+      },
+      {
+        name: "private key getter",
+        target: {
+          profile: "pinned-profile",
+          get privateKey() {
+            throw new Error(canary);
+          },
         },
       },
-    },
-  ];
+    ];
 
   for (const { name, target } of invalidTargets) {
     const result = await invokeOperation(
@@ -511,11 +600,16 @@ test("returns a safe PROFILE_NOT_FOUND result for a deleted pinned profile", asy
 test("validates successful handler output", async () => {
   definitions = [
     createDefinition({
-      execute: async () => ({ status: "ok", output: { value: 42 } } as never),
+      execute: async () => ({ status: "ok", output: { value: 42 } }) as never,
     }),
   ];
 
-  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+  const result = await invokeOperation(
+    "tinycloud.test.get",
+    1,
+    {},
+    { name: "valid" },
+  );
 
   expect(result).toMatchObject({
     status: "error",
@@ -533,7 +627,12 @@ test("sanitizes unexpected handler exceptions", async () => {
     }),
   ];
 
-  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+  const result = await invokeOperation(
+    "tinycloud.test.get",
+    1,
+    {},
+    { name: "valid" },
+  );
 
   expect(result).toMatchObject({
     status: "error",
@@ -545,16 +644,88 @@ test("sanitizes unexpected handler exceptions", async () => {
   expect(JSON.stringify(result)).not.toContain(canary);
 });
 
+test("canonical invocation preserves safe delegation mismatch details in results and diagnostics", async () => {
+  const transportCanary = "raw-delegation-auth-token-jwk-canary";
+  const expectedHost = "https://expected.example";
+  const artifactHost = "https://artifact.example";
+  const expectedSessionDid = "did:key:expected-session";
+  const artifactAudience = "did:key:artifact-audience";
+  const definition = createDefinition({
+    sensitivity: { input: [""], output: [] },
+    execute: async (_context, input) =>
+      ({
+        status: "error",
+        error: {
+          code:
+            input.name === "host"
+              ? "DELEGATION_HOST_MISMATCH"
+              : "DELEGATION_AUDIENCE_MISMATCH",
+          message: "The delegation does not match the selected runtime.",
+          retryable: false,
+          details:
+            input.name === "host"
+              ? {
+                  expectedHost,
+                  artifactHost,
+                  delegationHeader: transportCanary,
+                  target: { token: transportCanary },
+                }
+              : {
+                  expectedSessionDid,
+                  artifactAudience,
+                  jwk: transportCanary,
+                  target: { input: transportCanary },
+                },
+        },
+      }) as never,
+  });
+  definitions = [definition];
+
+  for (const input of [{ name: "host" }, { name: "audience" }]) {
+    const result = await invokeOperation("tinycloud.test.get", 1, {}, input);
+    expect(result.status).toBe("error");
+    if (result.status !== "error") throw new Error("expected an error result");
+
+    if (input.name === "host") {
+      expect(result.error).toMatchObject({
+        details: { expectedHost, artifactHost },
+      });
+    } else {
+      expect(result.error).toMatchObject({
+        details: { expectedSessionDid, artifactAudience },
+      });
+    }
+    expect(JSON.stringify(result)).not.toContain(transportCanary);
+
+    const diagnostic = createSafeOperationDiagnostic(definition, {
+      operation: result.operation,
+      context: result.context,
+      input: {
+        delegation: { authorization: transportCanary, jwk: transportCanary },
+      },
+      error: result.error,
+    });
+    expect(JSON.stringify(diagnostic)).not.toContain(transportCanary);
+    expect(diagnostic.error).toEqual(result.error);
+  }
+});
+
 test("returns the four canonical operation outcomes", async () => {
   const outcomes = [
-    createDefinition({ execute: async () => ({ status: "ok", output: { value: "ok" } }) }),
+    createDefinition({
+      execute: async () => ({ status: "ok", output: { value: "ok" } }),
+    }),
     createDefinition({
       authority: async () => [testCapability],
       execute: async () => ({
         status: "authority_required",
         missing: [testCapability],
         request: { requestId: "request-1" },
-        approval: { kind: "openkey", requestId: "request-1", fallback: "tc auth grant" },
+        approval: {
+          kind: "openkey",
+          requestId: "request-1",
+          fallback: "tc auth grant",
+        },
       }),
     }),
     createDefinition({
@@ -566,7 +737,11 @@ test("returns the four canonical operation outcomes", async () => {
     createDefinition({
       execute: async () => ({
         status: "error",
-        error: { code: "SESSION_NOT_FOUND", message: "No session.", retryable: true },
+        error: {
+          code: "SESSION_NOT_FOUND",
+          message: "No session.",
+          retryable: true,
+        },
       }),
     }),
   ];
@@ -590,11 +765,21 @@ test("returns the four canonical operation outcomes", async () => {
         },
       },
     });
-    const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+    const result = await invokeOperation(
+      "tinycloud.test.get",
+      1,
+      {},
+      { name: "valid" },
+    );
     statuses.push(result.status);
   }
 
-  expect(statuses).toEqual(["ok", "authority_required", "setup_required", "error"]);
+  expect(statuses).toEqual([
+    "ok",
+    "authority_required",
+    "setup_required",
+    "error",
+  ]);
 });
 
 test("uses RFC 8785 astral/BMP key ordering for retry digests", async () => {
@@ -607,7 +792,11 @@ test("uses RFC 8785 astral/BMP key ordering for retry digests", async () => {
         status: "authority_required",
         missing: [testCapability],
         request: { requestId: "request-1" },
-        approval: { kind: "openkey", requestId: "request-1", fallback: "tc auth grant" },
+        approval: {
+          kind: "openkey",
+          requestId: "request-1",
+          fallback: "tc auth grant",
+        },
       }),
     }),
   ];
@@ -625,18 +814,31 @@ test("uses RFC 8785 astral/BMP key ordering for retry digests", async () => {
     },
   });
 
-  const first = await invokeOperation("tinycloud.test.get", 1, {}, {
-    name: "valid",
-    metadata: { [privateUse]: 2, [supplementary]: 1, b: 2, a: 1 },
-  });
-  const second = await invokeOperation("tinycloud.test.get", 1, {}, {
-    metadata: { a: 1, b: 2, [supplementary]: 1, [privateUse]: 2 },
-    name: "valid",
-  });
+  const first = await invokeOperation(
+    "tinycloud.test.get",
+    1,
+    {},
+    {
+      name: "valid",
+      metadata: { [privateUse]: 2, [supplementary]: 1, b: 2, a: 1 },
+    },
+  );
+  const second = await invokeOperation(
+    "tinycloud.test.get",
+    1,
+    {},
+    {
+      metadata: { a: 1, b: 2, [supplementary]: 1, [privateUse]: 2 },
+      name: "valid",
+    },
+  );
 
   expect(first.status).toBe("authority_required");
   expect(second.status).toBe("authority_required");
-  if (first.status !== "authority_required" || second.status !== "authority_required") {
+  if (
+    first.status !== "authority_required" ||
+    second.status !== "authority_required"
+  ) {
     throw new Error("expected retry descriptors");
   }
   expect(first.retry.inputDigest).toBe(second.retry.inputDigest);
@@ -679,7 +881,11 @@ test("keeps the CLI private-key override out of all kernel-safe channels", async
           status: "authority_required",
           missing: [testCapability],
           request: { requestId: "request-1" },
-          approval: { kind: "openkey", requestId: "request-1", fallback: "tc auth grant" },
+          approval: {
+            kind: "openkey",
+            requestId: "request-1",
+            fallback: "tc auth grant",
+          },
         };
       },
     }),
@@ -693,7 +899,10 @@ test("keeps the CLI private-key override out of all kernel-safe channels", async
       host: "https://node.example",
       allowOwnerProfile: true,
       privateKey: privateKeyCanary,
-      ...({ node: "forbidden", grants: ["forbidden"] } as Record<string, unknown>),
+      ...({ node: "forbidden", grants: ["forbidden"] } as Record<
+        string,
+        unknown
+      >),
     } as InvocationTarget,
     { name: "valid" },
   );

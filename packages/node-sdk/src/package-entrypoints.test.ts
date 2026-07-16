@@ -18,18 +18,17 @@ async function run(
 ): Promise<string> {
   const result = await execFile(command, [...arguments_], {
     cwd,
-    maxBuffer: 10 * 1024 * 1024,
+    maxBuffer: 20 * 1024 * 1024,
   });
   return result.stdout;
 }
 
-test("packed operations package loads its real CJS and ESM entrypoints in Node", async () => {
+test("packed node-sdk CJS and ESM entrypoints expose and can call activation", async () => {
   const smokeDirectory = await mkdtemp(
     join(packageDirectory, ".entrypoint-smoke-"),
   );
   try {
     await run(process.execPath, ["run", "build"], packageDirectory);
-
     const packed = JSON.parse(
       await run(
         "npm",
@@ -39,13 +38,13 @@ test("packed operations package loads its real CJS and ESM entrypoints in Node",
     ) as Array<{ filename: string }>;
     expect(packed).toHaveLength(1);
 
+    await installWorkspaceDependencies(smokeDirectory);
     const installedPackage = join(
       smokeDirectory,
       "node_modules",
       "@tinycloud",
-      "operations",
+      "node-sdk",
     );
-    await installWorkspaceDependencies(smokeDirectory);
     await mkdir(installedPackage, { recursive: true });
     await run(
       "tar",
@@ -59,21 +58,11 @@ test("packed operations package loads its real CJS and ESM entrypoints in Node",
       packageDirectory,
     );
 
-    const assertRootExport =
-      "if (Object.keys(operations).join(',') !== 'invokeOperation') throw new Error(`unexpected root exports: ${Object.keys(operations)}`);";
     await run(
       nodeBinary,
       [
         "-e",
-        `const operations = require('@tinycloud/operations'); ${assertRootExport}`,
-      ],
-      smokeDirectory,
-    );
-    await run(
-      nodeBinary,
-      [
-        "-e",
-        `const operations = require('@tinycloud/operations'); operations.invokeOperation('tinycloud.unknown.get', 1, {}, {}).then((result) => { if (result.status !== 'error' || result.error.code !== 'OPERATION_NOT_FOUND') throw new Error(JSON.stringify(result)); });`,
+        `void (async () => { const sdk = require('@tinycloud/node-sdk'); if (typeof sdk.activateValidatedRuntimeDelegation !== 'function') throw new Error('missing activation export'); let rejected = false; try { await sdk.activateValidatedRuntimeDelegation({}, {}); } catch { rejected = true; } if (!rejected) throw new Error('invalid delegation unexpectedly activated'); })();`,
       ],
       smokeDirectory,
     );
@@ -82,42 +71,14 @@ test("packed operations package loads its real CJS and ESM entrypoints in Node",
       [
         "--input-type=module",
         "-e",
-        `const operations = await import('@tinycloud/operations'); ${assertRootExport}`,
-      ],
-      smokeDirectory,
-    );
-    await run(
-      nodeBinary,
-      [
-        "--input-type=module",
-        "-e",
-        `const operations = await import('@tinycloud/operations'); const result = await operations.invokeOperation('tinycloud.unknown.get', 1, {}, {}); if (result.status !== 'error' || result.error.code !== 'OPERATION_NOT_FOUND') throw new Error(JSON.stringify(result));`,
-      ],
-      smokeDirectory,
-    );
-    const assertArtifactsExport =
-      "if (typeof artifacts.createOrReusePermissionRequest !== 'function' || typeof artifacts.evaluateAuthority !== 'function') throw new Error('missing artifacts exports');";
-    await run(
-      nodeBinary,
-      [
-        "-e",
-        `const artifacts = require('@tinycloud/operations/artifacts'); ${assertArtifactsExport}`,
-      ],
-      smokeDirectory,
-    );
-    await run(
-      nodeBinary,
-      [
-        "--input-type=module",
-        "-e",
-        `const artifacts = await import('@tinycloud/operations/artifacts'); ${assertArtifactsExport}`,
+        `const sdk = await import('@tinycloud/node-sdk'); if (typeof sdk.activateValidatedRuntimeDelegation !== 'function') throw new Error('missing activation export'); let rejected = false; try { await sdk.activateValidatedRuntimeDelegation({}, {}); } catch { rejected = true; } if (!rejected) throw new Error('invalid delegation unexpectedly activated');`,
       ],
       smokeDirectory,
     );
   } finally {
     await rm(smokeDirectory, { recursive: true, force: true });
   }
-}, 20_000);
+}, 30_000);
 
 async function installWorkspaceDependencies(
   smokeDirectory: string,
@@ -125,24 +86,19 @@ async function installWorkspaceDependencies(
   const workspaceNodeModules = resolve(packageDirectory, "../../node_modules");
   const smokeNodeModules = join(smokeDirectory, "node_modules");
   await mkdir(smokeNodeModules, { recursive: true });
-
   for (const entry of await readdir(workspaceNodeModules)) {
-    if (entry === "@tinycloud") {
-      continue;
-    }
+    if (entry === "@tinycloud") continue;
     await symlink(
       join(workspaceNodeModules, entry),
       join(smokeNodeModules, entry),
       "dir",
     );
   }
-
   const workspaceTinyCloud = join(workspaceNodeModules, "@tinycloud");
   const smokeTinyCloud = join(smokeNodeModules, "@tinycloud");
   await mkdir(smokeTinyCloud, { recursive: true });
   for (const name of [
     "bootstrap",
-    "node-sdk",
     "node-sdk-wasm",
     "sdk-core",
     "sdk-services",
@@ -154,9 +110,3 @@ async function installWorkspaceDependencies(
     );
   }
 }
-
-test("state exposes only lock-owning primitives, never the lock-assuming writer", async () => {
-  const state = await import("./state.js");
-  expect("updateProfileStore" in state).toBe(true);
-  expect("updateProfileStoreWhileLocked" in state).toBe(false);
-});

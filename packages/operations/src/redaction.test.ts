@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   REDACTED_VALUE,
   createSafeOperationDiagnostic,
+  redactOperationError,
   redactOperationValue,
 } from "./redaction.js";
 
@@ -65,4 +66,27 @@ test("safe diagnostic events redact operation values and accept no target", () =
 
   expect(JSON.stringify(diagnostic)).not.toContain("input-canary");
   expect(JSON.stringify(diagnostic)).not.toContain("output-canary");
+});
+
+test("error details use an explicit safe-field policy", () => {
+  const error = redactOperationError(
+    { sensitivity },
+    {
+      code: "DELEGATION_HOST_MISMATCH",
+      message: "The delegation is for a different host.",
+      retryable: false,
+      details: {
+        expectedHost: "https://expected.example",
+        artifactHost: "https://artifact.example",
+        authorization: "raw-delegation-canary",
+        nested: { token: "nested-token-canary" },
+      },
+    },
+  );
+
+  expect(error.details).toEqual({
+    expectedHost: "https://expected.example",
+    artifactHost: "https://artifact.example",
+  });
+  expect(JSON.stringify(error)).not.toContain("canary");
 });

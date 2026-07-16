@@ -55,12 +55,21 @@ const node = {
 };
 
 mock.module("@tinycloud/node-sdk", () => ({
+  TinyCloudNode: class TinyCloudNode {},
   NodeWasmBindings: class NodeWasmBindings {
     parseRecapFromSiwe(): unknown[] {
       return [];
     }
   },
   grantAuthRequest: async () => ({}),
+  activateValidatedRuntimeDelegation: async () => ({
+    cid: "bafy-owner-openkey",
+    effectivePermissions: [],
+    delegation: {},
+    expiry: new Date("2099-01-01T00:00:00.000Z"),
+    audience: "did:key:z6MkOwner",
+    host: profile.host,
+  }),
   principalDidEquals: (a: string, b: string) => a === b,
 }));
 
@@ -69,7 +78,12 @@ mock.module("../config/profiles.js", () => ({
     resolveContext: async () => ({ profile: "default", host: profile.host }),
     getProfile: async () => profile,
     getSession: async () => ({ expiresAt: "2099-01-01T00:00:00.000Z" }),
-    getKey: async () => ({ kty: "OKP", crv: "Ed25519", x: "owner", d: "private" }),
+    getKey: async () => ({
+      kty: "OKP",
+      crv: "Ed25519",
+      x: "owner",
+      d: "private",
+    }),
   },
 }));
 
@@ -104,7 +118,9 @@ describe("owner secrets get OpenKey retry", () => {
     installedDelegations.length = 0;
     let acquisitions = 0;
     let stdout = "";
-    const output = process.stdout as unknown as { write: (chunk: unknown) => boolean };
+    const output = process.stdout as unknown as {
+      write: (chunk: unknown) => boolean;
+    };
     const originalWrite = output.write;
     output.write = (chunk: unknown) => {
       stdout += String(chunk);
@@ -123,7 +139,10 @@ describe("owner secrets get OpenKey retry", () => {
           expiry: "2099-01-01T00:00:00.000Z",
         };
       });
-      await program.parseAsync(["node", "tc", "secrets", "get", "ANTHROPIC_API_KEY"], { from: "node" });
+      await program.parseAsync(
+        ["node", "tc", "secrets", "get", "ANTHROPIC_API_KEY"],
+        { from: "node" },
+      );
     } finally {
       output.write = originalWrite;
     }
@@ -131,12 +150,14 @@ describe("owner secrets get OpenKey retry", () => {
     expect(acquisitions).toBe(1);
     expect(secretAttempts).toEqual(["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"]);
     expect(installedDelegations).toEqual(["bafy-owner-openkey"]);
-    expect(stdout).toBe([
-      "{",
-      '  "name": "ANTHROPIC_API_KEY",',
-      `  "value": "${SECRET_VALUE_CANARY}"`,
-      "}",
-      "",
-    ].join("\n"));
+    expect(stdout).toBe(
+      [
+        "{",
+        '  "name": "ANTHROPIC_API_KEY",',
+        `  "value": "${SECRET_VALUE_CANARY}"`,
+        "}",
+        "",
+      ].join("\n"),
+    );
   });
 });

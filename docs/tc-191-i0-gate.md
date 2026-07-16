@@ -48,26 +48,27 @@ SDK prerequisite audit:
   `TinyCloudNode.getEncryptionNetworkIdForSpace` through the node-sdk source
   public index. The hermetic CLI fake node exercises its space-specific result
   in `packages/cli/src/commands/secrets.test.ts`.
-- Manual-audit blocker for I2: the reviewed public delegation surface is
-  `packages/node-sdk/src/index.ts` (the delegation exports) and the reviewed
-  CID implementation is `packages/node-sdk/src/TinyCloudNode.ts` at
-  `computeDelegationCid(authorization)`, which hashes authorization bytes. The
-  reviewed surfaces do not establish a validated `PortableDelegation`-to-CID
-  binding contract. This is not an automated claim that an arbitrarily named
-  helper is absent; a dedicated, security-reviewed public helper is required
-  before I2.
-- Manual-audit blocker for I2: `tests/node-sdk/setup.ts` was inspected. It
-  configures a `TC_TEST_SERVER` HTTP endpoint and client, but does not provide
-  a hermetic local encrypted-node fixture proving runtime delegation activation
-  and chain validation. Mocked activation remains insufficient cryptographic
-  evidence. I2 stays blocked pending that fixture or a reviewed replacement
-  strategy.
+- Executable pass: `activateValidatedRuntimeDelegation` is exported from
+  `packages/node-sdk/src/index.ts`. The helper validates the delegation,
+  recomputes its CID from the authorization bytes, and installs only the
+  validated runtime authority. `packages/node-sdk/src/TinyCloudNode.validatedDelegation.test.ts`
+  covers the public export, real WASM CID binding, altered audience/CID/
+  authorization rejection, and idempotent activation.
+- Executable pass: the hermetic encrypted-node fixture in
+  `packages/node-sdk/src/test-support/hermetic-encrypted-node.ts` exercises
+  restored-session signing, validated activation, and a narrow encrypted KV
+  read/decrypt path without OpenKey, a public TinyCloud node, or a
+  `TC_TEST_SERVER` dependency. The restore and validated-delegation security
+  suites pass with 25 tests. These I2 prerequisites are closed; the remaining
+  `unpublishable-defer` result is solely the separately documented MCP beta
+  publication decision.
 
 Named test boundaries:
 
 - Node: `packages/cli/src/commands/secrets.test.ts` uses a narrow fake node for
   KV, encryption, permission, absence, and transport outcomes. Real SDK
-  cryptographic import/activation remains outside this I0 fake boundary.
+  cryptographic import/activation remains outside this I0 fake boundary and is
+  covered by the 25-test node-sdk restore/validated-delegation suites above.
 - Storage: `packages/cli/src/lib/permissions.test.ts` runs shipped writers in
   a child Bun process with an isolated `HOME` and snapshots exact
   `session.json`, `additional-delegations.json`, and `auth-requests.json`
@@ -81,12 +82,15 @@ Focused verification:
 ```text
 bun test packages/cli/src/commands/secrets.test.ts   # 26 pass
 bun test packages/cli/src/commands/secrets-owner-retry.test.ts # 1 pass
-bun test packages/cli/src/commands/auth.test.ts      # 18 pass
-bun test packages/cli/src/lib/permissions.test.ts    # 5 pass
+bun test packages/cli/src/commands/auth.test.ts      # 32 pass
+bun test packages/cli/src/lib/permissions.test.ts    # 8 pass
 bun test packages/cli/src/output/errors.test.ts      # 4 pass
 bun test tests/mcp-sdk-contract/contract.test.ts     # 4 pass
 bun test tests/mcp-sdk-contract/prerequisites.test.ts # 2 pass
 ```
+
+The packed public API check and the packed CJS/ESM SDK probes also pass under
+the pinned Node `20.19.4` and Bun `1.2.0` gate runtimes.
 
 The raw stdio protocol check has a 10-second local-process deadline only to
 allow CI process scheduling; it has no network retry or external dependency.
