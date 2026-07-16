@@ -1,5 +1,52 @@
 # @tinycloud/cli
 
+## 0.7.7
+
+### Patch Changes
+
+- 1269a58: Add canonical delegated account-space, application, and generic non-secrets KV exploration operations. Publish the beta MCP package with four corresponding read-only tools and a documented exact request, owner grant, import, restart, and retry workflow. Allow a fresh delegate profile to bootstrap from its first request-bound delegation while preserving canonical import validation.
+- 565b5fd: Reject unrecoverable public-only profile sessions before SDK restore and report missing private JWK material as an authentication problem with a sign-in hint instead of a network failure.
+- 28e4ae8: Allow a fresh `delegate-session` profile to request permissions using logical space names before it knows the granting owner's address.
+- 5c32147: Add the I5 Commander coverage ledger and deterministic registration check,
+  cross-surface canonical-envelope fixtures, generated coverage references,
+  source-boundary checks, and Node 20 packed-artifact conformance gates. MCP
+  publication remains deferred while the SDK v2 beta gate is `unpublishable-defer`.
+- a5b557a: Resolve explicit-key secret spaces against the authenticated owner and keep
+  local-owner acquisition and its single retry on one live runtime session.
+- 2721f9d: Add the experimental operations package foundation and depend on its exact prerelease from the CLI.
+- f5b1c75: Repair I2 release artifacts: bundle ESM-only multiformats dependencies for Node CommonJS consumers, preserve safe delegation mismatch details, and publish the canonical CLI auth import route.
+- b982b90: Declare Node 20 or newer as the supported runtime floor for the complete published SDK and Operations graph, including the CLI and Node WASM bindings.
+- 206533a: Route request-bound v1 delegation imports through TinyCloud operations while retaining legacy auth-import compatibility paths.
+- abe8083: Implement the canonical `tinycloud.secrets.get` operation and route `tc secrets get` through it while preserving Commander rendering and owner authorization behavior.
+- decbb25: Allow a fresh `delegate-session` profile to establish its first authenticated session by importing a delegation targeted at its generated session key.
+- Updated dependencies [492a656]
+- Updated dependencies [940ff1d]
+- Updated dependencies [367c17c]
+- Updated dependencies [1269a58]
+- Updated dependencies [5172cf9]
+- Updated dependencies [f6048b7]
+- Updated dependencies [5c32147]
+- Updated dependencies [a5b557a]
+- Updated dependencies [2721f9d]
+- Updated dependencies [f7a1d4f]
+- Updated dependencies [f5b1c75]
+- Updated dependencies [39cc055]
+- Updated dependencies [4dee0a9]
+- Updated dependencies [b982b90]
+- Updated dependencies [96b9e21]
+- Updated dependencies [160c16e]
+- Updated dependencies [d6d5ef1]
+- Updated dependencies [8777823]
+- Updated dependencies [abe8083]
+- Updated dependencies [cd8c11f]
+- Updated dependencies [1606a6f]
+- Updated dependencies [c62f72a]
+- Updated dependencies [1c73181]
+- Updated dependencies [96b9e21]
+  - @tinycloud/operations@0.1.0
+  - @tinycloud/node-sdk-wasm@1.7.5
+  - @tinycloud/node-sdk@2.7.0
+
 ## 0.7.7-beta.8
 
 ### Patch Changes

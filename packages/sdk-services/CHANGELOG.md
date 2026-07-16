@@ -1,5 +1,22 @@
 # @tinycloudlabs/sdk-services
 
+## 2.7.0
+
+### Minor Changes
+
+- d6d5ef1: Restore persisted sessions with their original private Ed25519 signer. Verify the signed SIWE, ReCap, Cacao header/CID, address, chain, session DID, and expiry before installing authority; atomically replace the auth/core/service host context while retaining every live secondary signer. Retired service graphs abort outstanding work and cannot reuse old encryption authority. Browser restore now preserves spaces and policy expiry, and rejected restores leave persisted storage untouched.
+- cd8c11f: Add an explicit-space classified secret-read API that preserves safe KV,
+  envelope, decrypt, and payload failure phases without changing legacy secret
+  reads.
+
+### Patch Changes
+
+- b982b90: Declare Node 20 or newer as the supported runtime floor for the complete published SDK and Operations graph, including the CLI and Node WASM bindings.
+- Updated dependencies [940ff1d]
+- Updated dependencies [f7a1d4f]
+- Updated dependencies [b982b90]
+  - @tinycloud/bootstrap@2.6.0
+
 ## 2.7.0-beta.4
 
 ### Minor Changes

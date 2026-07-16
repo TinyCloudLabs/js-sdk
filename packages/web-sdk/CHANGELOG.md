@@ -1,5 +1,44 @@
 # @tinycloudlabs/web-sdk
 
+## 2.7.0
+
+### Minor Changes
+
+- f7a1d4f: Add signed account-wide delegation history queries with lifecycle and revocation
+  status, plus CID-bound delegation revocation receipts and the account-scoped
+  delegation control capabilities used by SDK sessions.
+- 4dee0a9: Add `sharing.delegateReceivedShare`, which exchanges a received `tc1` sharing
+  link for a strictly attenuated child delegation without exposing the parent
+  link or its embedded private key. Node `receive` now uses the same primitive
+  when auto-subdelegating to its current session key. Delegation revocation can
+  now be included in a consolidated manifest and uses the node's revocation
+  endpoint so descendants are invalidated rather than recording a no-op invoke.
+  The SDK also exposes node-confirmed delegation lifecycle status without
+  returning delegation metadata.
+
+### Patch Changes
+
+- d6d5ef1: Restore persisted sessions with their original private Ed25519 signer. Verify the signed SIWE, ReCap, Cacao header/CID, address, chain, session DID, and expiry before installing authority; atomically replace the auth/core/service host context while retaining every live secondary signer. Retired service graphs abort outstanding work and cannot reuse old encryption authority. Browser restore now preserves spaces and policy expiry, and rejected restores leave persisted storage untouched.
+- cd8c11f: Add an explicit-space classified secret-read API that preserves safe KV,
+  envelope, decrypt, and payload failure phases without changing legacy secret
+  reads.
+- Updated dependencies [367c17c]
+- Updated dependencies [1269a58]
+- Updated dependencies [f6048b7]
+- Updated dependencies [f7a1d4f]
+- Updated dependencies [f5b1c75]
+- Updated dependencies [4dee0a9]
+- Updated dependencies [b982b90]
+- Updated dependencies [160c16e]
+- Updated dependencies [d6d5ef1]
+- Updated dependencies [8777823]
+- Updated dependencies [cd8c11f]
+- Updated dependencies [1606a6f]
+- Updated dependencies [96b9e21]
+  - @tinycloud/node-sdk@2.7.0
+  - @tinycloud/sdk-core@2.7.0
+  - @tinycloud/web-sdk-wasm@1.7.5
+
 ## 2.7.0-beta.5
 
 ### Patch Changes

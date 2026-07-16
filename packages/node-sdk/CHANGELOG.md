@@ -1,5 +1,47 @@
 # @tinycloudlabs/node-sdk
 
+## 2.7.0
+
+### Minor Changes
+
+- f7a1d4f: Add signed account-wide delegation history queries with lifecycle and revocation
+  status, plus CID-bound delegation revocation receipts and the account-scoped
+  delegation control capabilities used by SDK sessions.
+- 4dee0a9: Add `sharing.delegateReceivedShare`, which exchanges a received `tc1` sharing
+  link for a strictly attenuated child delegation without exposing the parent
+  link or its embedded private key. Node `receive` now uses the same primitive
+  when auto-subdelegating to its current session key. Delegation revocation can
+  now be included in a consolidated manifest and uses the node's revocation
+  endpoint so descendants are invalidated rather than recording a no-op invoke.
+  The SDK also exposes node-confirmed delegation lifecycle status without
+  returning delegation metadata.
+- cd8c11f: Add an explicit-space classified secret-read API that preserves safe KV,
+  envelope, decrypt, and payload failure phases without changing legacy secret
+  reads.
+- 1606a6f: Expose exact, expiry-pruned effective capabilities from activated runtime grants.
+
+### Patch Changes
+
+- 367c17c: Normalize session verification-method DID URLs to principal DIDs at the WASM delegation boundary so session-key delegations accept persisted `did:key:...#key-id` identities.
+- 1269a58: Add canonical delegated account-space, application, and generic non-secrets KV exploration operations. Publish the beta MCP package with four corresponding read-only tools and a documented exact request, owner grant, import, restart, and retry workflow. Allow a fresh delegate profile to bootstrap from its first request-bound delegation while preserving canonical import validation.
+- f6048b7: Keep TinyCloudNode session-key accessors synchronized with the active key and make repeated sign-in rotate that key safely, so delegation flows do not reference the removed default key.
+- f5b1c75: Repair I2 release artifacts: bundle ESM-only multiformats dependencies for Node CommonJS consumers, preserve safe delegation mismatch details, and publish the canonical CLI auth import route.
+- b982b90: Declare Node 20 or newer as the supported runtime floor for the complete published SDK and Operations graph, including the CLI and Node WASM bindings.
+- d6d5ef1: Restore persisted sessions with their original private Ed25519 signer. Verify the signed SIWE, ReCap, Cacao header/CID, address, chain, session DID, and expiry before installing authority; atomically replace the auth/core/service host context while retaining every live secondary signer. Retired service graphs abort outstanding work and cannot reuse old encryption authority. Browser restore now preserves spaces and policy expiry, and rejected restores leave persisted storage untouched.
+- 8777823: Add a CID-bound `activateValidatedRuntimeDelegation` helper that validates and installs compact UCAN runtime delegations.
+- 96b9e21: Add `TinyCloudNode#getVerifiedSessionCapabilities` for the authenticated session's signed ReCap authority.
+- Updated dependencies [940ff1d]
+- Updated dependencies [f7a1d4f]
+- Updated dependencies [f5b1c75]
+- Updated dependencies [4dee0a9]
+- Updated dependencies [b982b90]
+- Updated dependencies [160c16e]
+- Updated dependencies [d6d5ef1]
+- Updated dependencies [cd8c11f]
+  - @tinycloud/node-sdk-wasm@1.7.5
+  - @tinycloud/sdk-core@2.7.0
+  - @tinycloud/sdk-services@2.7.0
+
 ## 2.7.0-beta.5
 
 ### Patch Changes

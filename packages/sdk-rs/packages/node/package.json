@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/node-sdk-wasm",
-  "version": "1.7.5-beta.0",
+  "version": "1.7.5",
   "description": "TinyCloud WASM bindings for Node.js",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
