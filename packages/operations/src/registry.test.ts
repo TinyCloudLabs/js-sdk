@@ -2,6 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 
 import { invokeOperation } from "./invoke.js";
 import { authOperationDefinitions } from "./operations/auth.js";
+import { secretsGetOperationDefinitions } from "./operations/secrets-get.js";
 import { statusOperationDefinitions } from "./operations/status.js";
 import { lookupOperation, operationDefinitionsForCatalog } from "./registry.js";
 import { createAuthRuntimeFixture } from "../test-support/auth-runtime.js";
@@ -11,19 +12,24 @@ const expectedOperationIds = [
   "tinycloud.auth.import",
   "tinycloud.auth.request",
   "tinycloud.auth.status",
+  "tinycloud.secrets.get",
   "tinycloud.status.get",
 ] as const;
 
-test("I2 registry contains exactly the reviewed v1 operations", () => {
+test("registry contains exactly the reviewed v1 operations", () => {
   const definitions = operationDefinitionsForCatalog();
 
   expect(definitions.map((definition) => definition.id).sort()).toEqual([...expectedOperationIds]);
   expect(definitions.every((definition) => definition.version === 1)).toBe(true);
   expect(new Set(definitions.map((definition) => definition.id)).size).toBe(definitions.length);
-  expect([...statusOperationDefinitions, ...authOperationDefinitions]).toHaveLength(5);
+  expect([
+    ...statusOperationDefinitions,
+    ...authOperationDefinitions,
+    ...secretsGetOperationDefinitions,
+  ]).toHaveLength(6);
 });
 
-test("I2 registry resolves each v1 operation and rejects unknown versions", () => {
+test("registry resolves each v1 operation and rejects unknown versions", () => {
   for (const operationId of expectedOperationIds) {
     expect(lookupOperation(operationId, 1)).toMatchObject({
       status: "found",

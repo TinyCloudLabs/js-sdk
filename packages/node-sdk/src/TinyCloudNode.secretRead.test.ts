@@ -67,4 +67,38 @@ describe("TinyCloudNode.readSecret", () => {
     expect(result).toEqual({ status: "invalid_payload" });
     expect(JSON.stringify(result)).not.toContain("plaintext canary");
   });
+
+  test("preserves only a validated structured permission hint", async () => {
+    const hint = {
+      service: "tinycloud.kv" as const,
+      space: TARGET_SPACE,
+      path: "vault/secrets/API_KEY",
+      actions: ["tinycloud.kv/get"],
+    };
+    const { node } = makeNode({ status: "permission_required", hint });
+
+    await expect(node.readSecret({ space: TARGET_SPACE, name: "API_KEY" })).resolves.toEqual({
+      status: "permission_required",
+      hint,
+    });
+    expect(JSON.stringify(await node.readSecret({ space: TARGET_SPACE, name: "API_KEY" })))
+      .not.toContain("node error");
+  });
+
+  test("does not expose malformed permission hints as authority", async () => {
+    const { node } = makeNode({
+      status: "permission_required",
+      hint: {
+        service: "tinycloud.kv",
+        space: TARGET_SPACE,
+        path: "vault/secrets/*",
+        actions: ["tinycloud.kv/*"],
+        caveats: [{ tenant: "raw-node-error" }],
+      },
+    });
+
+    await expect(node.readSecret({ space: TARGET_SPACE, name: "API_KEY" })).resolves.toEqual({
+      status: "read_failed",
+    });
+  });
 });

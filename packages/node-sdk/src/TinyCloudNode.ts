@@ -105,6 +105,7 @@ import {
   CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
+  canonicalizeRecapCaveats,
   recapCaveatsEqual,
   expandPermissionEntries as expandPermissionEntriesCore,
   isCapabilitySubset,
@@ -114,6 +115,7 @@ import {
   type AbilitiesMap,
   resourceCapabilitiesToAbilitiesMap,
   SERVICE_LONG_TO_SHORT,
+  SERVICE_SHORT_TO_LONG,
   KV,
   SQL,
   DUCKDB,
@@ -136,6 +138,10 @@ import {
   type EncryptionCrypto,
   type NetworkDescriptor,
 } from "@tinycloud/sdk-core";
+import {
+  parsePermissionHint,
+  type PermissionHint,
+} from "@tinycloud/sdk-services";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
@@ -168,6 +174,14 @@ export interface SecretReadInput {
   scope?: string;
 }
 
+/** Safe, validated capability hint returned when the node denies one read phase. */
+export interface SecretPermissionHint {
+  readonly service: "tinycloud.kv" | "tinycloud.encryption";
+  readonly space?: string;
+  readonly path: string;
+  readonly actions: readonly string[];
+}
+
 /**
  * Safe classified result for an explicit-space secret read.
  *
@@ -177,6 +191,7 @@ export interface SecretReadInput {
 export type SecretReadResult =
   | { status: "ok"; value: string }
   | { status: "not_found" }
+  | { status: "permission_required"; hint: SecretPermissionHint }
   | { status: "node_unreachable" }
   | { status: "read_failed" }
   | { status: "corrupt_envelope" }
@@ -3174,7 +3189,24 @@ export class TinyCloudNode {
         );
         graph.assertActive();
         if (!response.ok) {
-          throw new DecryptTransportResponseError(response.status);
+          let permissionHint: PermissionHint | undefined;
+          if (response.status === 401 || response.status === 403) {
+            try {
+              const body: unknown = await response.json();
+              const record = typeof body === "object" && body !== null
+                ? body as Record<string, unknown>
+                : undefined;
+              const nested = typeof record?.error === "object" && record.error !== null
+                ? record.error as Record<string, unknown>
+                : undefined;
+              permissionHint = parsePermissionHint(record?.permissionHint) ??
+                parsePermissionHint(nested?.permissionHint);
+            } catch {
+              // A denied response without the SDK-owned structured field is
+              // classified safely below and cannot become a grant hint.
+            }
+          }
+          throw new DecryptTransportResponseError(response.status, permissionHint);
         }
         return (await response.json()) as DecryptResponseBody;
       },
@@ -3937,6 +3969,19 @@ export class TinyCloudNode {
     );
 
     if (result.status !== "ok") {
+      if (result.status === "permission_required") {
+        const hint = parsePermissionHint(result.hint);
+        if (hint === undefined) return { status: "read_failed" };
+        return {
+          status: "permission_required",
+          hint: {
+            service: hint.service,
+            ...(hint.space === undefined ? {} : { space: hint.space }),
+            path: hint.path,
+            actions: [...hint.actions],
+          },
+        };
+      }
       return { status: result.status };
     }
     if (!isSecretPayload(result.entry.value)) {
@@ -4104,6 +4149,74 @@ export class TinyCloudNode {
     const expanded = this.expandPermissionEntries(permissions);
     return this.findRuntimeGrantsForPermissionEntries(expanded, session).map(
       (grant) => grant.delegation,
+    );
+  }
+
+  /**
+   * Return the effective capabilities of installed runtime grants.
+   *
+   * The result is projected from the SDK's activated, expiry-pruned grant
+   * operations rather than from PortableDelegation transport metadata. Base
+   * session authority is intentionally omitted; callers that need the full
+   * live authority must combine this with {@link getVerifiedSessionCapabilities}.
+   */
+  getEffectiveRuntimePermissionEntries(): PermissionEntry[] {
+    const session = this.currentTinyCloudSession();
+    if (!session) return [];
+
+    this.pruneExpiredRuntimePermissionGrants();
+    const grouped = new Map<string, PermissionEntry>();
+    for (const grant of this.runtimePermissionGrants) {
+      if (grant.provenance === "primary") continue;
+      for (const operation of grant.operations) {
+        const service = SERVICE_SHORT_TO_LONG[operation.service];
+        if (service === undefined || typeof operation.path !== "string" ||
+          typeof operation.action !== "string") {
+          continue;
+        }
+
+        let space: string | undefined;
+        if (service !== "tinycloud.encryption") {
+          if (typeof operation.spaceId !== "string") continue;
+          try {
+            space = this.resolvePermissionSpace(operation.spaceId, session);
+          } catch {
+            continue;
+          }
+        }
+
+        const caveats = operation.caveats === undefined || operation.caveats.length === 0
+          ? undefined
+          : cloneRecapCaveats(operation.caveats);
+        const identity = JSON.stringify({
+          service,
+          ...(space === undefined ? {} : { space }),
+          path: operation.path,
+          caveats: canonicalizeRecapCaveats(caveats),
+        });
+        const existing = grouped.get(identity);
+        if (existing === undefined) {
+          grouped.set(identity, {
+            service,
+            ...(space === undefined ? {} : { space }),
+            path: operation.path,
+            actions: [operation.action],
+            ...(caveats === undefined ? {} : { caveats }),
+          });
+          continue;
+        }
+        if (!existing.actions.includes(operation.action)) {
+          existing.actions.push(operation.action);
+          existing.actions.sort();
+        }
+      }
+    }
+
+    return [...grouped.values()].sort((left, right) =>
+      left.service.localeCompare(right.service) ||
+      (left.space ?? "").localeCompare(right.space ?? "") ||
+      left.path.localeCompare(right.path) ||
+      left.actions.join("\u0000").localeCompare(right.actions.join("\u0000")),
     );
   }
 

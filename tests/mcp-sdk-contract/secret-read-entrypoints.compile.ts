@@ -10,14 +10,20 @@ import type {
   VaultListOptions,
   VaultPutOptions,
 } from "@tinycloud/sdk-core";
-import { DecryptTransportResponseError } from "@tinycloud/sdk-services";
+import {
+  DecryptTransportResponseError,
+  parsePermissionHint,
+  type PermissionHint as ServicePermissionHint,
+} from "@tinycloud/sdk-services";
 import { DecryptTransportResponseError as EncryptionDecryptTransportResponseError } from "@tinycloud/sdk-services/encryption";
 import type {
   SecretReadInput as NodeSecretReadInput,
+  SecretPermissionHint as NodeSecretPermissionHint,
   SecretReadResult as NodeSecretReadResult,
 } from "@tinycloud/node-sdk";
 import type {
   SecretReadInput as NodeCoreSecretReadInput,
+  SecretPermissionHint as NodeCoreSecretPermissionHint,
   SecretReadResult as NodeCoreSecretReadResult,
 } from "@tinycloud/node-sdk/core";
 import type {
@@ -35,6 +41,13 @@ type _ResultExports = [
   NodeCoreSecretReadResult,
   WebSecretReadResult,
 ];
+type _HintExports = [
+  NodeSecretPermissionHint,
+  NodeCoreSecretPermissionHint,
+  ServicePermissionHint,
+];
+
+void parsePermissionHint;
 
 const success = <T>(data: T): Result<T, VaultError> => ({ ok: true, data });
 const transportResponseError: DecryptTransportResponseError =

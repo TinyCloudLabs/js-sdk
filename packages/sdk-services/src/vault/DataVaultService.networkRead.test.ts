@@ -143,8 +143,11 @@ function decryptResponse(
   };
 }
 
-function transportHttpError(status: number): DecryptTransportResponseError {
-  return new DecryptTransportResponseError(status);
+function transportHttpError(
+  status: number,
+  permissionHint?: { service: "tinycloud.encryption"; path: string; actions: readonly string[] },
+): DecryptTransportResponseError {
+  return new DecryptTransportResponseError(status, permissionHint);
 }
 
 function createClassifiedVault(options?: {
@@ -255,6 +258,21 @@ describe("DataVaultService.readNetworkEncrypted", () => {
       status: "read_failed",
     });
 
+    const kvHint = {
+      service: "tinycloud.kv" as const,
+      space: SPACE_ID,
+      path: "vault/secrets/API_KEY",
+      actions: ["tinycloud.kv/get"],
+    };
+    fixture.setKvResponse(() => Promise.resolve(new Response(JSON.stringify({ permissionHint: kvHint }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    })));
+    expect(await fixture.vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
+      status: "permission_required",
+      hint: kvHint,
+    });
+
     fixture.setKvResponse(() => Promise.resolve(new Response("node failure", { status: 500 })));
     expect(await fixture.vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
       status: "read_failed",
@@ -285,10 +303,19 @@ describe("DataVaultService.readNetworkEncrypted", () => {
     fixture.setLocalDecryptFails(false);
 
     fixture.setDecrypt(async () => {
-      throw transportHttpError(403);
+      throw transportHttpError(403, {
+        service: "tinycloud.encryption",
+        path: NETWORK_ID,
+        actions: ["tinycloud.encryption/decrypt"],
+      });
     });
     expect(await fixture.vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
-      status: "decrypt_failed",
+      status: "permission_required",
+      hint: {
+        service: "tinycloud.encryption",
+        path: NETWORK_ID,
+        actions: ["tinycloud.encryption/decrypt"],
+      },
     });
 
     fixture.setDecrypt(async () => {

@@ -21,6 +21,7 @@ import {
   storageQuotaExceededError,
   storageLimitReachedError,
   parseAuthError,
+  parsePermissionHintFromErrorText,
   authUnauthorizedError,
 } from "../errors";
 import { IKVService } from "./IKVService";
@@ -500,13 +501,15 @@ export class KVService extends BaseService implements IKVService {
         );
 
         if (!response.ok) {
-          if (response.status === 401) {
+          if (response.status === 401 || response.status === 403) {
             const errorText = await response.text();
             const { resource, action } = parseAuthError(errorText);
+            const permissionHint = parsePermissionHintFromErrorText(errorText);
             return err(authUnauthorizedError("kv", errorText, {
               status: response.status,
               ...(action && { requiredAction: action }),
               ...(resource && { resource }),
+              ...(permissionHint === undefined ? {} : { permissionHint }),
             }));
           }
 

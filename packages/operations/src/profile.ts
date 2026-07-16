@@ -84,7 +84,9 @@ export async function resolveInvocationProfile(
   if (!isStoredProfile(storedProfile)) {
     return profileNotFound(profile);
   }
-  if (!isCoherentProfile(storedProfile)) {
+  // An explicit CLI key is a complete identity override. Do not let stale
+  // persisted auth posture reject that live local-owner authentication path.
+  if (target.privateKey === undefined && !isCoherentProfile(storedProfile)) {
     return profileNotFound(profile);
   }
 

@@ -114,6 +114,7 @@ export {
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
   type SecretReadInput,
+  type SecretPermissionHint,
   type SecretReadResult,
 } from "./TinyCloudNode";
 

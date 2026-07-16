@@ -54,6 +54,9 @@ describe("activateValidatedRuntimeDelegation", () => {
       expect(activated.audience).toBe(fixture.delegate.sessionDid.split("#", 1)[0]);
       expect(activated.host).toBe(fixture.host);
       expect(activated.effectivePermissions).toEqual(fixture.permissions);
+      expect(fixture.delegate.getEffectiveRuntimePermissionEntries()).toEqual(
+        fixture.permissions,
+      );
       expect(activated.expiry.getTime()).toBe(delegation.expiry.getTime());
       expect(activated.delegation).not.toHaveProperty("permissions");
 
@@ -264,6 +267,13 @@ describe("activateValidatedRuntimeDelegation", () => {
         caveats: [caveat],
       }]);
       expect(activated.delegation.resources?.[0]?.caveats).toEqual([caveat]);
+      expect(fixture.delegate.getEffectiveRuntimePermissionEntries()).toEqual([{
+        service: "tinycloud.kv",
+        space: permission.space,
+        path: permission.path,
+        actions: ["tinycloud.kv/get"],
+        caveats: [caveat],
+      }]);
     } finally {
       fixture.stop();
     }

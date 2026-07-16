@@ -172,9 +172,10 @@ var require_decrypt_transport_response_error = __commonJS({
     });
     module.exports = __toCommonJS(DecryptTransportResponseError_exports);
     var DecryptTransportResponseError4 = class extends Error {
-      constructor(status) {
+      constructor(status, permissionHint) {
         super("Node decrypt request failed");
         this.status = status;
+        this.permissionHint = permissionHint;
         this.name = "DecryptTransportResponseError";
       }
     };
@@ -6059,6 +6060,42 @@ var ServiceSessionSchema = external_exports.object({
   /** The session key JWK (required for invoke) */
   jwk: external_exports.object({}).passthrough()
 });
+function parsePermissionHint(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const candidate = value;
+  const keys = Object.keys(candidate).sort();
+  if (keys.some((key) => !["actions", "path", "service", "space"].includes(key))) return void 0;
+  if (candidate.service !== "tinycloud.kv" && candidate.service !== "tinycloud.encryption") return void 0;
+  if (typeof candidate.path !== "string" || candidate.path.length === 0 || candidate.path.includes("*")) return void 0;
+  if (candidate.service === "tinycloud.kv" && (typeof candidate.space !== "string" || candidate.space.length === 0 || !candidate.path.startsWith("vault/") || candidate.path.endsWith("/"))) {
+    return void 0;
+  }
+  if (candidate.service === "tinycloud.encryption" && (candidate.space !== void 0 || !candidate.path.startsWith("urn:tinycloud:encryption:") || candidate.path.endsWith(":"))) {
+    return void 0;
+  }
+  if (!Array.isArray(candidate.actions) || candidate.actions.length !== 1 || typeof candidate.actions[0] !== "string" || candidate.actions[0].includes("*")) return void 0;
+  const expectedAction = candidate.service === "tinycloud.kv" ? "tinycloud.kv/get" : "tinycloud.encryption/decrypt";
+  if (candidate.actions[0] !== expectedAction) return void 0;
+  const space = typeof candidate.space === "string" ? candidate.space : void 0;
+  return {
+    service: candidate.service,
+    ...space === void 0 ? {} : { space },
+    path: candidate.path,
+    actions: [candidate.actions[0]]
+  };
+}
+function parsePermissionHintFromErrorText(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null) return void 0;
+    const root = parsed;
+    const nested = root.error;
+    const nestedRecord = typeof nested === "object" && nested !== null ? nested : void 0;
+    return parsePermissionHint(root.permissionHint) ?? parsePermissionHint(nestedRecord?.permissionHint);
+  } catch {
+    return void 0;
+  }
+}
 function authRequiredError(service) {
   return {
     code: ErrorCodes.AUTH_REQUIRED,
@@ -6755,13 +6792,15 @@ var KVService = class extends BaseService {
           options?.signal
         );
         if (!response.ok) {
-          if (response.status === 401) {
+          if (response.status === 401 || response.status === 403) {
             const errorText2 = await response.text();
             const { resource, action } = parseAuthError(errorText2);
+            const permissionHint = parsePermissionHintFromErrorText(errorText2);
             return err(authUnauthorizedError("kv", errorText2, {
               status: response.status,
               ...action && { requiredAction: action },
-              ...resource && { resource }
+              ...resource && { resource },
+              ...permissionHint === void 0 ? {} : { permissionHint }
             }));
           }
           if (response.status === 404) {
@@ -9316,6 +9355,10 @@ var DataVaultService = class extends BaseService {
       return { status: "node_unreachable" };
     }
     if (!valueResult.ok) {
+      const permissionHint = parsePermissionHint(valueResult.error.meta?.permissionHint);
+      if (valueResult.error.code === "AUTH_UNAUTHORIZED" && permissionHint !== void 0) {
+        return { status: "permission_required", hint: permissionHint };
+      }
       if ((valueResult.error.code === "NOT_FOUND" || valueResult.error.code === "KV_NOT_FOUND") && !hasHttpResponse(valueResult.error)) {
         return { status: "not_found" };
       }
@@ -9339,6 +9382,12 @@ var DataVaultService = class extends BaseService {
       return { status: "decrypt_failed" };
     }
     if (!plaintextResult.ok) {
+      const permissionHint = parsePermissionHint(
+        plaintextResult.error.permissionHint
+      );
+      if (plaintextResult.error.code === "DECRYPT_DENIED" && permissionHint !== void 0) {
+        return { status: "permission_required", hint: permissionHint };
+      }
       if (plaintextResult.error.code === "INVALID_ENVELOPE") {
         return { status: "corrupt_envelope" };
       }
@@ -11158,7 +11207,11 @@ var EncryptionService = class extends BaseService {
         if (error instanceof import_decrypt_transport_response_error.DecryptTransportResponseError) {
           return encErr(
             encryptionError(
-              error.status === 401 || error.status === 403 ? { code: "DECRYPT_DENIED", message: "Node denied decrypt request" } : { code: "INVALID_RESPONSE", message: "Node decrypt request failed" }
+              error.status === 401 || error.status === 403 ? {
+                code: "DECRYPT_DENIED",
+                message: "Node denied decrypt request",
+                ...error.permissionHint === void 0 ? {} : { permissionHint: error.permissionHint }
+              } : { code: "INVALID_RESPONSE", message: "Node decrypt request failed" }
             )
           );
         }
@@ -14812,6 +14865,8 @@ import { readFile as readFile6 } from "fs/promises";
 import { writeFile as writeFile6 } from "fs/promises";
 import { join as join4 } from "path";
 import { homedir } from "os";
+import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
+import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 var SECRETS_SPACE3 = "secrets";
 var SECRET_KV_ABILITIES = {
   get: "tinycloud.kv/get",
@@ -14956,6 +15011,61 @@ async function runSecretOperationAttempt(label, operation) {
     const permissionError = thrownPermissionError(error);
     if (permissionError) return permissionError;
     throw error;
+  }
+}
+async function invokeCanonicalSecretGet(params) {
+  const auth = authOptions(params.options);
+  const target = {
+    profile: params.ctx.profile,
+    host: params.ctx.host,
+    allowOwnerProfile: true,
+    ...auth ?? {}
+  };
+  const input = {
+    name: params.name,
+    ...params.scope === void 0 ? {} : { scope: params.scope },
+    ...params.space === void 0 ? {} : { space: params.space }
+  };
+  const invoke = () => withSpinner(
+    params.label,
+    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation2("tinycloud.secrets.get", 1, target, input)
+  );
+  const first = await invoke();
+  if (first.status !== "authority_required") return first;
+  if (auth?.privateKey !== void 0) return first;
+  const profile = await ProfileManager.getProfile(params.ctx.profile);
+  if (!canRequestOwnerPermissions(profile)) return first;
+  const node = params.node ?? await ensureSecretsNode(params.ctx, params.options);
+  await withSpinner(
+    "Requesting secret permissions...",
+    () => ensureDelegationAuthority({
+      ctx: params.ctx,
+      profile,
+      node,
+      requested: first.missing,
+      expiryOption: void 0,
+      reason: secretPermissionReason("get", params.name),
+      yes: true,
+      force: true,
+      openKeyAcquisition: params.openKeyAcquisition
+    })
+  );
+  return invoke();
+}
+function throwCanonicalSecretGetError(result, name2) {
+  switch (result.status) {
+    case "authority_required":
+      throw new CLIError(
+        "PERMISSION_DENIED",
+        "Permission denied while reading secret",
+        ExitCode.ERROR
+      );
+    case "setup_required":
+      throw new CLIError("NOT_FOUND", `Secret "${name2}" not found`, ExitCode.NOT_FOUND);
+    case "error":
+      throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+    case "ok":
+      throw new Error("Expected a failed canonical secret result.");
   }
 }
 function canRequestOwnerPermissions(profile) {
@@ -15521,26 +15631,26 @@ function registerSecretsCommand(program2, openKeyAcquisition) {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const scopeOptions = resolveSecretScope(options);
-      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
       const secretPath = resolveSecretPath2(name2, scopeOptions).permissionPaths.vault;
       if (options.delegation) {
         const delegated = await resolveDelegatedSecretSource(
           options.delegation,
           secretPath,
-          spaceUri ?? SECRETS_SPACE3
+          legacySpaceUri ?? SECRETS_SPACE3
         );
         const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
         const delegatedCtx = { ...ctx, host: effectiveHost };
-        const node2 = await ensureSecretsNode(delegatedCtx, options);
+        const node = await ensureSecretsNode(delegatedCtx, options);
         const value2 = await withSpinner(
           `Getting secret ${name2}...`,
           () => readDelegatedSecretValue({
-            node: node2,
+            node,
             delegation: delegated.delegation,
             delegationCid: delegated.delegation.cid,
             permissions: delegated.permissions,
             secretPath,
-            space: spaceUri ?? SECRETS_SPACE3,
+            space: legacySpaceUri ?? SECRETS_SPACE3,
             name: name2
           })
         );
@@ -15556,26 +15666,21 @@ function registerSecretsCommand(program2, openKeyAcquisition) {
         outputJson({ name: name2, value: value2 });
         return;
       }
-      const node = await ensureSecretsNode(ctx, options);
-      const secrets2 = secretsServiceForSpace(node, spaceUri);
-      const result = await runSecretOperation({
+      const privateKey = authOptions(options)?.privateKey;
+      const spaceUri = privateKey !== void 0 && options.space !== void 0 && !options.space.startsWith("tinycloud:") ? options.space : legacySpaceUri;
+      const result = await invokeCanonicalSecretGet({
         ctx,
-        node,
-        action: "get",
         name: name2,
-        scopeOptions,
-        space: spaceUri,
+        ...scopeOptions?.scope === void 0 ? {} : { scope: scopeOptions.scope },
+        ...spaceUri === void 0 ? {} : { space: spaceUri },
+        options,
         label: `Getting secret ${name2}...`,
-        operation: () => secrets2.get(name2, scopeOptions),
         openKeyAcquisition
       });
-      if (!result.ok) {
-        if (result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND") {
-          throw new CLIError("NOT_FOUND", `Secret "${name2}" not found`, ExitCode.NOT_FOUND);
-        }
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      if (result.status !== "ok") {
+        throwCanonicalSecretGetError(result, name2);
       }
-      const value = String(result.data);
+      const value = result.output.value;
       if (options.output) {
         await writeFile6(options.output, value);
         outputJson({ name: name2, written: options.output });

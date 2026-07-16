@@ -268,6 +268,7 @@ async function buildPackedGraph(sourceDirectory: string): Promise<void> {
       "operations",
       ["dist/index.js", "dist/index.cjs", "dist/state.js", "dist/state.cjs"],
     ],
+    ["cli", ["dist/index.js", "dist/index.d.ts"]],
   ] as const;
   for (const [name, files] of requiredOutputs) {
     const packageDirectory = tinycloudPackages(sourceDirectory).find(

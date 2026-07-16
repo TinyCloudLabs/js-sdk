@@ -24,6 +24,11 @@
       "import": "./dist/artifacts.js",
       "require": "./dist/artifacts.cjs"
     },
+    "./cli-runtime": {
+      "types": "./dist/cli-runtime.d.ts",
+      "import": "./dist/cli-runtime.js",
+      "require": "./dist/cli-runtime.cjs"
+    },
     "./operations.json": "./generated/operations.json"
   },
   "engines": {
@@ -34,9 +39,9 @@
     "generated/operations.json"
   ],
   "scripts": {
-    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts",
+    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts",
     "clean": "rm -rf dist",
-    "test": "bun test",
+    "test": "bun scripts/test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "check:typecheck-inputs": "tsc --listFilesOnly -p tsconfig.typecheck.json | grep -F 'packages/operations/src/contract.test.ts' && tsc --listFilesOnly -p tsconfig.typecheck.json | grep -F 'packages/operations/test-support/append-profile-record.ts' && tsc --listFilesOnly -p tsconfig.typecheck.json | grep -F 'packages/operations/test-support/hold-profile-store-writer.ts' && tsc --listFilesOnly -p tsconfig.typecheck.json | grep -F 'packages/operations/scripts/generate.ts' && tsc --listFilesOnly -p tsconfig.typecheck.json | grep -F 'packages/operations/tsup.config.ts'",
     "generate": "bun scripts/generate.ts",

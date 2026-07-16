@@ -1,10 +1,10 @@
-import {
-  activateValidatedRuntimeDelegation,
+import type {
+  PermissionEntry,
+  PortableDelegation,
+  RuntimeDelegationActivator,
   TinyCloudNode,
-  type PermissionEntry,
-  type PortableDelegation,
-  type RuntimeDelegationActivator,
 } from "@tinycloud/node-sdk";
+import * as nodeSdk from "@tinycloud/node-sdk";
 
 import type {
   InvocationTarget,
@@ -93,11 +93,20 @@ export async function createInvocationRuntime(
 
   const profileName = summary.profile;
   try {
-    const [session, key, additionalDelegations] = await Promise.all([
-      readSession<StoredSession>(profileName),
-      readJson<Record<string, unknown>>(`${profilePath(profileName)}/key.json`),
-      readAdditionalDelegations<StoredAdditionalDelegation>(profileName),
-    ]);
+    // Keep the value import namespace-shaped so projection modules remain
+    // compatible with lightweight node-sdk test doubles.
+    const {
+      activateValidatedRuntimeDelegation,
+      TinyCloudNode: TinyCloudNodeConstructor,
+    } = nodeSdk;
+    const explicitPrivateKeyOverride = typeof target.privateKey === "string";
+    const [session, key, additionalDelegations] = explicitPrivateKeyOverride
+      ? [null, null, [] as StoredAdditionalDelegation[]]
+      : await Promise.all([
+        readSession<StoredSession>(profileName),
+        readJson<Record<string, unknown>>(`${profilePath(profileName)}/key.json`),
+        readAdditionalDelegations<StoredAdditionalDelegation>(profileName),
+      ]);
     const profile = resolved.profile;
 
     // The inspection summary and authenticated material are intentionally
@@ -105,7 +114,7 @@ export async function createInvocationRuntime(
     // them; otherwise local-owner-key could be authenticated under a stale
     // delegate-session summary and bypass the caller's posture policy.
     const actualPosture = resolvePosture(profile);
-    if (actualPosture !== summary.posture) {
+    if (!explicitPrivateKeyOverride && actualPosture !== summary.posture) {
       return failed(
         { ...summary, posture: actualPosture },
         operationError(
@@ -120,10 +129,10 @@ export async function createInvocationRuntime(
       : typeof profile.privateKey === "string"
       ? profile.privateKey
       : undefined;
-    const selectedPosture = profile.authMethod === "local"
+    const selectedPosture = explicitPrivateKeyOverride || profile.authMethod === "local"
       ? "local-owner-key"
       : summary.posture;
-    if (selectedPosture !== summary.posture) {
+    if (selectedPosture !== summary.posture && !explicitPrivateKeyOverride) {
       return failed(
         { ...summary, posture: selectedPosture },
         operationError(
@@ -132,13 +141,17 @@ export async function createInvocationRuntime(
         ),
       );
     }
-    const node = new TinyCloudNode({
+    const node = new TinyCloudNodeConstructor({
       host: summary.host,
       ...(privateKey === undefined ? {} : { privateKey }),
     });
 
     const activeSession = session === null ? undefined : normalizeSession(session, key);
-    if (activeSession === undefined) {
+    if (explicitPrivateKeyOverride) {
+      // An explicit key is a complete, non-persisted identity. Do not inherit
+      // an OpenKey session (or require one) from the selected profile.
+      await node.signIn();
+    } else if (activeSession === undefined) {
       if (profile.authMethod === "local" && privateKey !== undefined) {
         await node.signIn();
       } else {
@@ -155,6 +168,10 @@ export async function createInvocationRuntime(
     // particular, do not report the persisted verification method if SDK
     // restoration failed to install its key as the live session key.
     const activeSessionDid = normalizeDid(node.sessionDid);
+    const livePrincipalDid = normalizeDid(node.did);
+    const authenticatedSpace = explicitPrivateKeyOverride
+      ? spaceForAuthenticatedPrincipal(livePrincipalDid)
+      : undefined;
     // This API derives from the restored, verified base session rather than
     // from an SDK private field or a second parse of signed authority here.
     const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
@@ -186,6 +203,12 @@ export async function createInvocationRuntime(
       context: {
         summary: {
           ...summary,
+          posture: selectedPosture,
+          ...(livePrincipalDid === undefined ? {} : { principalDid: livePrincipalDid }),
+          ...(explicitPrivateKeyOverride && livePrincipalDid !== undefined
+            ? { ownerDid: livePrincipalDid }
+            : {}),
+          ...(authenticatedSpace === undefined ? {} : { space: authenticatedSpace }),
           ...(activeSessionDid === undefined ? {} : { sessionDid: activeSessionDid }),
         },
         runtime,
@@ -197,6 +220,16 @@ export async function createInvocationRuntime(
       "The selected profile runtime could not be initialized.",
       { retryable: true },
     ));
+  }
+}
+
+function spaceForAuthenticatedPrincipal(principal: string | undefined): string | undefined {
+  if (principal === undefined) return undefined;
+  try {
+    const pkh = nodeSdk.parsePkhDid(principal);
+    return pkh === null ? undefined : nodeSdk.makePkhSpaceId(pkh.address, pkh.chainId, "secrets");
+  } catch {
+    return undefined;
   }
 }
 

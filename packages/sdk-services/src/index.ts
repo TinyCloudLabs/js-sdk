@@ -38,6 +38,7 @@
 export type {
   Result,
   ServiceError,
+  PermissionHint,
   StorageQuotaInfo,
   ErrorCode,
   IServiceContext,
@@ -154,6 +155,8 @@ export {
   storageLimitReachedError,
   parseAuthError,
   authUnauthorizedError,
+  parsePermissionHint,
+  parsePermissionHintFromErrorText,
 } from "./errors";
 
 // Base service

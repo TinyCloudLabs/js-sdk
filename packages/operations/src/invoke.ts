@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 
-import type { PermissionEntry } from "@tinycloud/node-sdk";
+import {
+  makePkhSpaceId,
+  parsePkhDid,
+  parseSpaceUri,
+  type PermissionEntry,
+} from "@tinycloud/node-sdk";
 import { jcsCanonicalize } from "@tinycloud/sdk-core/policy";
 import type { ZodError } from "zod";
 
@@ -22,17 +27,23 @@ import {
   sanitizeThrownOperationError,
 } from "./errors.js";
 import {
-  canonicalizeCapabilities,
-  evaluateAuthority,
+  canonicalizeOperationCapabilities,
+  evaluateOperationAuthority,
+  isExactCapabilityMemberSubset,
   validateExactCapabilities,
 } from "./authority.js";
 import {
   createOrReusePermissionRequest,
+  buildPermissionRequestArtifact,
   type PermissionRequestArtifact,
 } from "./artifacts.js";
 import { redactOperationError } from "./redaction.js";
 import { safeOriginHost } from "./safe-values.js";
 import type { InvocationRuntimeResolution } from "./runtime.js";
+import {
+  operationSpaceResolver,
+  resolveSecretReferenceForOperation,
+} from "./secrets.js";
 
 /** The sole projection-facing execution API. */
 export async function invokeOperation(
@@ -41,14 +52,202 @@ export async function invokeOperation(
   invocationTarget: InvocationTarget,
   unknownInput: unknown,
 ): Promise<OperationResult<unknown>> {
-  const operation: OperationRef = { operationId, operationVersion };
+  const prepared = await prepareInvocation(
+    operationId,
+    operationVersion,
+    invocationTarget,
+    unknownInput,
+  );
+  if (isPreparedError(prepared)) return prepared.result;
+  return executePreparedInvocation(prepared);
+}
+
+/**
+ * CLI-only local-owner acquisition path. The runtime is deliberately created
+ * and retained inside operations so a grant is installed on the exact session
+ * that performs the one retry. The explicit key remains a non-persisted target
+ * value and no runtime object crosses the operations boundary.
+ */
+export async function invokeOperationWithLocalAuthorityRetry(
+  operationId: string,
+  operationVersion: number,
+  invocationTarget: InvocationTarget,
+  unknownInput: unknown,
+): Promise<OperationResult<unknown>> {
   const target = normalizeInvocationTarget(invocationTarget);
   if (target === undefined) {
     return errorResult(
-      operation,
+      { operationId, operationVersion },
       unresolvedContextSummary(),
       operationError("INPUT_INVALID", "The invocation target is invalid."),
     );
+  }
+  if (typeof target.privateKey !== "string" || target.privateKey.length === 0) {
+    return errorResult(
+      { operationId, operationVersion },
+      unresolvedContextSummary(target),
+      operationError(
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "Local authority retry requires an explicit private key.",
+      ),
+    );
+  }
+
+  const prepared = await prepareInvocation(
+    operationId,
+    operationVersion,
+    target,
+    unknownInput,
+  );
+  if (isPreparedError(prepared)) return prepared.result;
+
+  if (
+    prepared.operation.operationId !== "tinycloud.secrets.get" ||
+    prepared.operation.operationVersion !== 1
+  ) {
+    return errorResult(
+      prepared.operation,
+      prepared.runtimeResolution.context.summary,
+      operationError(
+        "OPERATION_NOT_FOUND",
+        "The local CLI authority helper supports only tinycloud.secrets.get@1.",
+      ),
+    );
+  }
+
+  const runtimeContext = prepared.runtimeResolution.context;
+  if (runtimeContext.runtime === undefined) return internalOperationErrorResult(prepared);
+  const operationContext = runtimeContext as RuntimeOperationContext;
+  let planned: CapabilityRequirement[] | undefined;
+  try {
+    planned = exactCapabilities(await prepared.definition.authority(
+      operationContext,
+      prepared.parsedInput.data,
+    ));
+  } catch {
+    return errorResult(
+      prepared.operation,
+      operationContext.summary,
+      operationError(
+        "PERMISSION_HINT_INVALID",
+        "The local CLI authority plan is invalid.",
+      ),
+    );
+  }
+  const planStatus = planned === undefined
+    ? "invalid"
+    : isExactLocalSecretsGetPlan(prepared, planned, operationContext);
+  if (planStatus === "ineligible") {
+    return errorResult(
+      prepared.operation,
+      operationContext.summary,
+      operationError(
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "The explicit private key cannot authorize the requested owner space.",
+      ),
+    );
+  }
+  if (planStatus !== "valid") {
+    return errorResult(
+      prepared.operation,
+      operationContext.summary,
+      operationError(
+        "PERMISSION_HINT_INVALID",
+        "The local CLI authority plan is invalid.",
+      ),
+    );
+  }
+
+  const first = await executePreparedInvocation(prepared, { deferAuthorityRequest: true });
+  if (first.status !== "authority_required") {
+    return first;
+  }
+  if (
+    operationContext.summary.posture !== "local-owner-key" ||
+    !requirementsBelongToAuthenticatedOwner(
+      first.missing as unknown as PermissionEntry[],
+      operationContext.summary.space,
+    )
+  ) {
+    return localAuthorityFailure(prepared);
+  }
+
+  try {
+    const grantRuntimePermissions = (operationContext.runtime.node as {
+      grantRuntimePermissions?: (
+        permissions: PermissionEntry[],
+      ) => Promise<unknown>;
+    }).grantRuntimePermissions;
+    if (typeof grantRuntimePermissions !== "function") {
+      return localAuthorityFailure(prepared);
+    }
+    await grantRuntimePermissions.call(
+      operationContext.runtime.node,
+      first.missing as unknown as PermissionEntry[],
+    );
+
+    const resolveSpace = operationSpaceResolver(
+      operationContext.runtime.node,
+      operationContext.summary.space,
+    );
+    const refreshedGranted = refreshLiveRuntimeAuthority(
+      operationContext.runtime.node,
+      first.missing as unknown as PermissionEntry[],
+      planned as unknown as PermissionEntry[],
+      resolveSpace,
+    );
+    if (refreshedGranted === undefined) {
+      return localAuthorityFailure(prepared);
+    }
+    const retryContext: RuntimeOperationContext = {
+      ...operationContext,
+      runtime: {
+        ...operationContext.runtime,
+        granted: refreshedGranted,
+      },
+    };
+    const retry = await executePreparedInvocation({
+      ...prepared,
+      runtimeResolution: { ok: true, context: retryContext },
+    }, { deferAuthorityRequest: true });
+    return retry.status === "authority_required"
+      ? localAuthorityFailure(prepared)
+      : retry;
+  } catch {
+    return localAuthorityFailure(prepared);
+  }
+}
+
+type PreparedInvocation = Readonly<{
+  operation: OperationRef;
+  definition: OperationDefinition<any, any>;
+  parsedInput: { data: any };
+  runtimeResolution: Extract<InvocationRuntimeResolution, { ok: true }>;
+}> | Readonly<{
+  status: "error";
+  result: OperationResult<never>;
+}>;
+
+function isPreparedError(
+  prepared: PreparedInvocation,
+): prepared is Extract<PreparedInvocation, { status: "error" }> {
+  return "status" in prepared;
+}
+
+async function prepareInvocation(
+  operationId: string,
+  operationVersion: number,
+  invocationTarget: InvocationTarget,
+  unknownInput: unknown,
+): Promise<PreparedInvocation> {
+  const operation: OperationRef = { operationId, operationVersion };
+  const target = normalizeInvocationTarget(invocationTarget);
+  if (target === undefined) {
+    return { status: "error", result: errorResult(
+      operation,
+      unresolvedContextSummary(),
+      operationError("INPUT_INVALID", "The invocation target is invalid."),
+    ) };
   }
   // Load internal registry material only when invoking. This keeps the packed
   // root entrypoint free of auth/runtime SDK initialization until a call is
@@ -60,17 +259,17 @@ export async function invokeOperation(
   // profile access. An unrecognized operation must not cause an invocation to
   // consult profile state.
   if (lookup.status === "operation_not_found") {
-    return errorResult(
+    return { status: "error", result: errorResult(
       operation,
       unresolvedContextSummary(target),
       operationError(
         "OPERATION_NOT_FOUND",
         "The requested operation is not registered.",
       ),
-    );
+    ) };
   }
   if (lookup.status === "operation_version_unsupported") {
-    return errorResult(
+    return { status: "error", result: errorResult(
       operation,
       unresolvedContextSummary(target),
       operationError(
@@ -78,13 +277,13 @@ export async function invokeOperation(
         "The requested operation version is not supported.",
         { details: { supportedVersions: lookup.supportedVersions } },
       ),
-    );
+    ) };
   }
 
   const definition = lookup.definition;
   const parsedInput = definition.input.safeParse(unknownInput);
   if (!parsedInput.success) {
-    return errorResult(
+    return { status: "error", result: errorResult(
       operation,
       unresolvedContextSummary(target),
       operationError(
@@ -94,7 +293,7 @@ export async function invokeOperation(
           details: zodIssueDetails(parsedInput.error),
         },
       ),
-    );
+    ) };
   }
 
   // Only a registered operation with valid input may inspect the pinned
@@ -102,38 +301,40 @@ export async function invokeOperation(
   // availability are decided before any authentication or external effect.
   const inspectionResolution = await resolveRuntime(target, "inspection");
   if (!inspectionResolution.ok) {
-    return errorResult(
+    return { status: "error", result: errorResult(
       operation,
       inspectionResolution.context,
       inspectionResolution.error,
-    );
+    ) };
   }
 
   if (
+    target.privateKey === undefined &&
     !definition.postures.includes(inspectionResolution.context.summary.posture)
   ) {
-    return errorResult(
+    return { status: "error", result: errorResult(
       operation,
       inspectionResolution.context.summary,
       operationError(
         "PROFILE_POSTURE_NOT_ALLOWED",
         "The active profile posture cannot execute this operation.",
       ),
-    );
+    ) };
   }
   if (
+    target.privateKey === undefined &&
     definition.runtime === "authenticated" &&
     isOwnerPosture(inspectionResolution.context.summary.posture) &&
     target.allowOwnerProfile !== true
   ) {
-    return errorResult(
+    return { status: "error", result: errorResult(
       operation,
       inspectionResolution.context.summary,
       operationError(
         "PROFILE_OWNER_OPT_IN_REQUIRED",
         "Owner-profile execution requires explicit opt-in.",
       ),
-    );
+    ) };
   }
 
   const runtimeResolution =
@@ -141,39 +342,58 @@ export async function invokeOperation(
       ? inspectionResolution
       : await resolveRuntime(target, "authenticated");
   if (!runtimeResolution.ok) {
-    return errorResult(
+    return { status: "error", result: errorResult(
       operation,
       runtimeResolution.context,
       runtimeResolution.error,
-    );
+    ) };
   }
   if (definition.runtime === "authenticated") {
     const actualPosture = runtimeResolution.context.summary.posture;
     if (!definition.postures.includes(actualPosture)) {
-      return errorResult(
+      return { status: "error", result: errorResult(
         operation,
         runtimeResolution.context.summary,
         operationError(
           "PROFILE_POSTURE_NOT_ALLOWED",
           "The authenticated profile posture cannot execute this operation.",
         ),
-      );
+      ) };
     }
     if (isOwnerPosture(actualPosture) && target.allowOwnerProfile !== true) {
-      return errorResult(
+      return { status: "error", result: errorResult(
         operation,
         runtimeResolution.context.summary,
         operationError(
           "PROFILE_OWNER_OPT_IN_REQUIRED",
           "Owner-profile execution requires explicit opt-in.",
         ),
-      );
+      ) };
     }
   }
+  return {
+    operation,
+    definition,
+    parsedInput,
+    runtimeResolution,
+  };
+}
+
+async function executePreparedInvocation(
+  prepared: Exclude<PreparedInvocation, { status: "error" }>,
+  options: Readonly<{ deferAuthorityRequest?: boolean }> = {},
+): Promise<OperationResult<unknown>> {
+  const { operation, definition, parsedInput, runtimeResolution } = prepared;
   const runtimeContext =
     runtimeResolution.context.runtime === undefined
       ? undefined
       : (runtimeResolution.context as RuntimeOperationContext);
+  const resolveSpace = runtimeContext === undefined
+    ? undefined
+    : operationSpaceResolver(
+      runtimeContext.runtime.node,
+      runtimeContext.summary.space,
+    );
 
   try {
     const planned = await definition.authority(
@@ -192,9 +412,10 @@ export async function invokeOperation(
       );
     }
 
-    const evaluation = evaluateAuthority(
+    const evaluation = evaluateOperationAuthority(
       (runtimeContext?.runtime.granted ?? []) as unknown as PermissionEntry[],
       required as unknown as PermissionEntry[],
+      resolveSpace,
     );
     if (!evaluation.satisfied) {
       if (runtimeContext === undefined) {
@@ -203,6 +424,38 @@ export async function invokeOperation(
           runtimeResolution.context.summary,
           internalOperationError(),
         );
+      }
+      if (options.deferAuthorityRequest) {
+        try {
+          const request = buildPermissionRequestArtifact({
+            profile: runtimeContext.summary.profile,
+            host: runtimeContext.summary.host,
+            sessionDid: runtimeContext.summary.sessionDid!,
+            posture: runtimeContext.summary.posture,
+            operatorType: runtimeContext.summary.operatorType ?? "human",
+            ...(runtimeContext.summary.ownerDid === undefined
+              ? {}
+              : { ownerDid: runtimeContext.summary.ownerDid }),
+            ...(runtimeContext.summary.space === undefined
+              ? {}
+              : { spaceId: runtimeContext.summary.space }),
+            missing: evaluation.missing as unknown as PermissionEntry[],
+          });
+          return authorityRequiredResult(
+            operation,
+            runtimeResolution.context.summary,
+            parsedInput.data,
+            request,
+            evaluation.missing,
+            runtimeContext.runtime.node,
+          );
+        } catch {
+          return errorResult(
+            operation,
+            runtimeResolution.context.summary,
+            internalOperationError(),
+          );
+        }
       }
       const authority = await persistAuthorityRequest(
         runtimeContext,
@@ -254,10 +507,11 @@ export async function invokeOperation(
         const hinted = exactCapabilities(outcome.missing);
         if (
           hinted === undefined ||
-          !evaluateAuthority(
-            required as unknown as PermissionEntry[],
+          !isExactCapabilityMemberSubset(
             hinted as unknown as PermissionEntry[],
-          ).satisfied
+            required as unknown as PermissionEntry[],
+            resolveSpace,
+          )
         ) {
           return errorResult(
             operation,
@@ -274,6 +528,39 @@ export async function invokeOperation(
             runtimeResolution.context.summary,
             internalOperationError(),
           );
+        }
+        if (options.deferAuthorityRequest) {
+          try {
+            const request = buildPermissionRequestArtifact({
+              profile: runtimeContext.summary.profile,
+              host: runtimeContext.summary.host,
+              sessionDid: runtimeContext.summary.sessionDid!,
+              posture: runtimeContext.summary.posture,
+              operatorType: runtimeContext.summary.operatorType ?? "human",
+              ...(runtimeContext.summary.ownerDid === undefined
+                ? {}
+                : { ownerDid: runtimeContext.summary.ownerDid }),
+              ...(runtimeContext.summary.space === undefined
+                ? {}
+                : { spaceId: runtimeContext.summary.space }),
+              missing: hinted as unknown as PermissionEntry[],
+            });
+            return authorityRequiredResult(
+              operation,
+              runtimeResolution.context.summary,
+              parsedInput.data,
+              request,
+              hinted,
+              runtimeContext.runtime.node,
+              outcome.requiresCallerInput ?? false,
+            );
+          } catch {
+            return errorResult(
+              operation,
+              runtimeResolution.context.summary,
+              internalOperationError(),
+            );
+          }
         }
         const authority = await persistAuthorityRequest(
           runtimeContext,
@@ -451,6 +738,12 @@ async function persistAuthorityRequest(
     };
   }
   try {
+    const resolveSpace = operationSpaceResolver(
+      context.runtime.node,
+      context.summary.space,
+    );
+    const canonicalMissing = canonicalizeOperationCapabilities(missing as unknown as PermissionEntry[], resolveSpace);
+    const canonicalGranted = canonicalizeOperationCapabilities(context.runtime.granted as unknown as PermissionEntry[], resolveSpace);
     const resolution = await createOrReusePermissionRequest({
       profile: context.summary.profile,
       posture: context.summary.posture,
@@ -463,10 +756,11 @@ async function persistAuthorityRequest(
       ...(context.summary.space === undefined
         ? {}
         : { spaceId: context.summary.space }),
-      missing: missing as unknown as PermissionEntry[],
+      missing: canonicalMissing as unknown as PermissionEntry[],
       granted: (force
         ? []
-        : context.runtime.granted) as unknown as PermissionEntry[],
+        : canonicalGranted) as unknown as PermissionEntry[],
+      resolveSpace,
     });
     if (resolution.status !== "created") {
       return {
@@ -480,9 +774,7 @@ async function persistAuthorityRequest(
     return {
       status: "ok",
       request: resolution.request,
-      missing: canonicalizeCapabilities(
-        missing as unknown as PermissionEntry[],
-      ) as CapabilityRequirement[],
+      missing: canonicalMissing as CapabilityRequirement[],
     };
   } catch {
     return {
@@ -544,6 +836,146 @@ function exactCapabilities(
   return validateExactCapabilities(value) as
     | CapabilityRequirement[]
     | undefined;
+}
+
+function requirementsBelongToAuthenticatedOwner(
+  requirements: readonly PermissionEntry[],
+  authenticatedSpace: string | undefined,
+): boolean {
+  const authenticatedOwner = canonicalPkhOwner(authenticatedSpace);
+  if (authenticatedOwner === undefined) return false;
+  return requirements.every((requirement) => {
+    if (requirement.service === "tinycloud.encryption") {
+      return requirement.space === undefined;
+    }
+    const requirementOwner = canonicalPkhOwner(requirement.space);
+    return requirement.service === "tinycloud.kv" && requirementOwner === authenticatedOwner;
+  });
+}
+
+function canonicalPkhOwner(space: string | undefined): string | undefined {
+  if (typeof space !== "string") return undefined;
+  const parsedSpace = parseSpaceUri(space);
+  if (parsedSpace === null) return undefined;
+  try {
+    const pkh = parsePkhDid(parsedSpace.owner);
+    return pkh === null
+      ? undefined
+      : parseSpaceUri(makePkhSpaceId(pkh.address, pkh.chainId, parsedSpace.name))?.owner;
+  } catch {
+    return undefined;
+  }
+}
+
+function isExactLocalSecretsGetPlan(
+  prepared: Exclude<PreparedInvocation, { status: "error" }>,
+  planned: readonly CapabilityRequirement[],
+  context: RuntimeOperationContext,
+): "valid" | "ineligible" | "invalid" {
+  if (
+    prepared.definition.id !== "tinycloud.secrets.get" ||
+    prepared.definition.version !== 1 ||
+    JSON.stringify(prepared.definition.effects) !== JSON.stringify(["read", "local_write"])
+  ) return "invalid";
+
+  const resolveSpace = operationSpaceResolver(context.runtime.node, context.summary.space);
+  let reference;
+  try {
+    reference = resolveSecretReferenceForOperation(
+      prepared.parsedInput.data,
+      context.runtime.node,
+      context.summary.space,
+    );
+  } catch {
+    return "invalid";
+  }
+  const canonicalPlan = canonicalizeOperationCapabilities(
+    planned as unknown as PermissionEntry[],
+    resolveSpace,
+  );
+  if (canonicalPlan.length !== 2) return "invalid";
+  const kv = canonicalPlan.find((permission) => permission.service === "tinycloud.kv");
+  const decrypt = canonicalPlan.find((permission) => permission.service === "tinycloud.encryption");
+  if (kv === undefined || decrypt === undefined) return "invalid";
+  const requestedOwner = canonicalPkhOwner(kv.space);
+  const authenticatedOwner = canonicalPkhOwner(context.summary.space);
+  if (requestedOwner === undefined || authenticatedOwner === undefined || requestedOwner !== authenticatedOwner) {
+    return "ineligible";
+  }
+  if (JSON.stringify(kv) !== JSON.stringify({
+    service: "tinycloud.kv",
+    space: resolveSpace(reference.space),
+    path: reference.permissionPath,
+    actions: ["tinycloud.kv/get"],
+  })) return "invalid";
+  if (
+    JSON.stringify(decrypt) !== JSON.stringify({
+      service: "tinycloud.encryption",
+      path: decrypt.path,
+      actions: ["tinycloud.encryption/decrypt"],
+    }) ||
+    typeof decrypt.path !== "string" ||
+    !decrypt.path.startsWith("urn:tinycloud:encryption:")
+  ) return "invalid";
+  return "valid";
+}
+
+function refreshLiveRuntimeAuthority(
+  node: unknown,
+  requested: readonly PermissionEntry[],
+  planned: readonly PermissionEntry[],
+  resolveSpace: (space: string) => string,
+): readonly CapabilityRequirement[] | undefined {
+  const candidate = node as {
+    hasRuntimePermissions?: (permissions: PermissionEntry[]) => unknown;
+    getVerifiedSessionCapabilities?: () => unknown;
+    getEffectiveRuntimePermissionEntries?: () => unknown;
+  };
+  if (typeof candidate.hasRuntimePermissions !== "function") return undefined;
+  if (candidate.hasRuntimePermissions([...requested]) !== true) return undefined;
+  if (typeof candidate.getVerifiedSessionCapabilities !== "function" ||
+      typeof candidate.getEffectiveRuntimePermissionEntries !== "function") return undefined;
+
+  const base = candidate.getVerifiedSessionCapabilities();
+  const activated = candidate.getEffectiveRuntimePermissionEntries();
+  if (!Array.isArray(base) || !Array.isArray(activated)) return undefined;
+  const exactActivated = validateExactCapabilities(activated);
+  if (exactActivated === undefined) return undefined;
+  const selectedActivated = exactActivated.filter((permission) =>
+    isExactCapabilityMemberSubset([permission], planned, resolveSpace),
+  );
+  if (!isExactCapabilityMemberSubset(requested, selectedActivated, resolveSpace)) return undefined;
+  const combined = canonicalizeOperationCapabilities(
+    [...base, ...selectedActivated],
+    resolveSpace,
+  );
+  return evaluateOperationAuthority(combined, planned as unknown as PermissionEntry[], resolveSpace).satisfied
+    ? combined
+    : undefined;
+}
+
+function localAuthorityFailure(
+  prepared: Exclude<PreparedInvocation, { status: "error" }>,
+): OperationResult<never> {
+  return errorResult(
+    prepared.operation,
+    prepared.runtimeResolution.context.summary,
+    operationError(
+      "NODE_ERROR",
+      "The local owner could not acquire the requested secret permissions.",
+      { retryable: true },
+    ),
+  );
+}
+
+function internalOperationErrorResult(
+  prepared: Exclude<PreparedInvocation, { status: "error" }>,
+): OperationResult<never> {
+  return errorResult(
+    prepared.operation,
+    prepared.runtimeResolution.context.summary,
+    internalOperationError(),
+  );
 }
 
 function isOwnerPosture(posture: OperationContextSummary["posture"]): boolean {
