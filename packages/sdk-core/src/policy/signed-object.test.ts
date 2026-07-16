@@ -201,11 +201,11 @@ describe("signed-object profile vectors", () => {
 });
 
 describe("JCS canonicalization", () => {
-  it("sorts object keys by Unicode code point", () => {
+  it("sorts object keys by raw UTF-16 code units as RFC 8785 requires", () => {
     const supplementary = "\u{10000}";
     const privateUse = "\ue000";
     expect(jcsCanonicalize({ [supplementary]: 1, [privateUse]: 2 })).toBe(
-      `{"${privateUse}":2,"${supplementary}":1}`,
+      `{"${supplementary}":1,"${privateUse}":2}`,
     );
   });
 

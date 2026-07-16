@@ -108,10 +108,14 @@ export type {
 // High-level API
 export {
   TinyCloudNode,
+  UnsupportedSessionRestoreError,
   type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
+  type SecretReadInput,
+  type SecretPermissionHint,
+  type SecretReadResult,
 } from "./TinyCloudNode";
 
 export { AccountService } from "./account/AccountService";
@@ -152,6 +156,7 @@ export {
   DEFAULT_MANIFEST_SPACE,
   DEFAULT_MANIFEST_VERSION,
   VAULT_PERMISSION_SERVICE,
+  CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,
@@ -260,6 +265,7 @@ export type {
   VaultListOptions,
   VaultGrantOptions,
   VaultEntry,
+  VaultNetworkReadResult,
   VaultError,
   ISecretsService,
   SecretPayload,

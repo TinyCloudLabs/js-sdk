@@ -8,7 +8,22 @@ Self-sovereign storage from the terminal. `tc` is the command-line interface for
 npm install -g @tinycloud/cli
 ```
 
-Requires Node.js >= 18.
+Requires Node.js >= 20.
+
+## Operations coverage
+
+The migrated `tc secrets get` path is owned by `@tinycloud/operations` and
+uses delegated authority by default. `tc auth import` is partially migrated:
+the request-bound active-session v1 path is canonical, while legacy delegation
+and permission input forms remain Commander-owned. The complete registration
+ledger is checked in `../operations/coverage.json` and checked against the
+actual Commander tree in CI.
+
+Secret values are never included in permission requests, errors, logs, or
+persisted request/delegation metadata. The terminal may display a successful
+value when explicitly requested; MCP hosts control their own transcript
+retention. Owner authority is an explicit posture choice, not an automatic
+fallback for delegated execution.
 
 ## Quick Start
 

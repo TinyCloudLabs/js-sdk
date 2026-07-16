@@ -1,5 +1,16 @@
 # TC CLI Command Reference
 
+<!-- BEGIN GENERATED TINYCloud operations coverage -->
+This release has **Commander coverage tracked, not complete parity**:
+
+- 1 migrated registration(s).
+- 1 partially migrated registration(s).
+- 111 legacy registration(s) remain Commander-owned.
+
+- `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
+- `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
+<!-- END GENERATED TINYCloud operations coverage -->
+
 ## Global Options
 
 | Flag | Description |

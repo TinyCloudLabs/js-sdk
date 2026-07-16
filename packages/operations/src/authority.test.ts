@@ -1,0 +1,156 @@
+import { expect, test } from "bun:test";
+
+import {
+  canonicalizeCapabilities,
+  evaluateAuthority,
+  evaluateOperationAuthority,
+  permissionIdentity,
+  validateExactCapabilities,
+} from "./authority.js";
+import { operationSpaceResolver } from "./secrets.js";
+
+const keyGet = {
+  service: "tinycloud.kv",
+  space: "secrets",
+  path: "vault/secrets/API_KEY",
+  actions: ["tinycloud.kv/get"],
+};
+
+const keyPut = {
+  ...keyGet,
+  actions: ["tinycloud.kv/put"],
+};
+
+test("evaluates only the exact missing subset with the SDK's public containment semantics", () => {
+  const result = evaluateAuthority(
+    [{
+      service: "tinycloud.kv",
+      space: "secrets",
+      path: "vault/secrets/",
+      actions: ["tinycloud.kv/*"],
+    }],
+    [keyPut, keyGet],
+  );
+
+  expect(result).toEqual({
+    satisfied: true,
+    missing: [],
+  });
+
+  const missing = evaluateAuthority([keyGet], [keyPut, keyGet]);
+  expect(missing).toEqual({
+    satisfied: false,
+    missing: [keyPut],
+  });
+});
+
+test("canonicalizes, sorts, and deduplicates exact capability identities without broadening them", () => {
+  const required = [
+    {
+      ...keyGet,
+      actions: ["tinycloud.kv/put", "tinycloud.kv/get", "tinycloud.kv/get"],
+    },
+    {
+      ...keyGet,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+    },
+    {
+      service: "tinycloud.kv",
+      space: "other-space",
+      path: "vault/secrets/API_KEY",
+      actions: ["tinycloud.kv/get"],
+    },
+  ];
+
+  expect(canonicalizeCapabilities(required)).toEqual([
+    {
+      service: "tinycloud.kv",
+      space: "other-space",
+      path: "vault/secrets/API_KEY",
+      actions: ["tinycloud.kv/get"],
+    },
+    {
+      ...keyGet,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+    },
+  ]);
+
+  const result = evaluateAuthority([], required);
+  expect(result.missing).toEqual(canonicalizeCapabilities(required));
+  expect(result.missing.some((entry) => entry.actions.some((action) => action.includes("*")))).toBe(false);
+});
+
+test("keeps resource scopes in the exact canonical identity", () => {
+  expect(permissionIdentity(keyGet)).not.toBe(permissionIdentity({ ...keyGet, space: "other-space" }));
+  expect(permissionIdentity(keyGet)).not.toBe(permissionIdentity({ ...keyGet, path: "vault/secrets/" }));
+  expect(permissionIdentity(keyGet)).not.toBe(permissionIdentity(keyPut));
+});
+
+test("rejects every planner requirement that v1 exact artifacts cannot preserve", () => {
+  const hiddenField = { ...keyGet } as Record<string, unknown>;
+  Object.defineProperty(hiddenField, "hidden", { value: "dropped-by-json", enumerable: false });
+  const invalid = [
+    [{ ...keyGet, path: "" }],
+    [{ ...keyGet, path: "/" }],
+    [{ ...keyGet, path: "vault/secrets/" }],
+    [{ ...keyGet, service: "tinycloud.*" }],
+    [{ ...keyGet, actions: ["tinycloud.kv/*"] }],
+    [{ ...keyGet, actions: ["tinycloud.kv/get", "tinycloud.kv/get"] }],
+    [{ ...keyGet, caveats: [{ tenant: "one" }] }],
+    [{ ...keyGet, unexpected: "open-world" }],
+    [hiddenField],
+    { not: "an array" },
+  ];
+
+  for (const requirement of invalid) {
+    expect(validateExactCapabilities(requirement)).toBeUndefined();
+  }
+  expect(validateExactCapabilities([keyGet])).toEqual([keyGet]);
+});
+
+test("preserves signed caveat branches in granted-authority canonicalization", () => {
+  const caveated = {
+    ...keyGet,
+    caveats: [{ tenant: "one", nested: { mode: "read" } }],
+  };
+  expect(canonicalizeCapabilities([caveated])).toEqual([caveated]);
+  expect(permissionIdentity(caveated)).not.toBe(permissionIdentity(keyGet));
+});
+
+test("operation authority keeps full space owner identity exact while resolving short names", () => {
+  const ownerA = "tinycloud:pkh:eip155:1:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:secrets";
+  const ownerB = "tinycloud:pkh:eip155:1:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:secrets";
+  const resolveOwnerA = (space: string) => space === "secrets" ? ownerA : space;
+
+  expect(evaluateOperationAuthority(
+    [{ ...keyGet, space: ownerA }],
+    [{ ...keyGet, space: ownerB }],
+    resolveOwnerA,
+  )).toEqual({
+    satisfied: false,
+    missing: [{ ...keyGet, space: ownerB }],
+  });
+  expect(evaluateOperationAuthority(
+    [{ ...keyGet, space: ownerA }],
+    [{ ...keyGet, space: "secrets" }],
+    resolveOwnerA,
+  )).toEqual({ satisfied: true, missing: [] });
+});
+
+test("operation authority treats PKH checksum casing as equivalent but preserves DID text", () => {
+  const checksum = "tinycloud:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F:secrets";
+  const lower = "tinycloud:pkh:eip155:1:0x71c7656ec7ab88b098defb751b7401b5f6d8976f:secrets";
+  const resolve = operationSpaceResolver({}, undefined);
+  expect(evaluateOperationAuthority(
+    [{ ...keyGet, space: checksum }],
+    [{ ...keyGet, space: lower }],
+    resolve,
+  ).satisfied).toBe(true);
+
+  const did = "tinycloud:did:web:EXAMPLE.com:eip155:1:0xABCDEF:Vault";
+  expect(evaluateOperationAuthority(
+    [{ ...keyGet, space: did }],
+    [{ ...keyGet, space: did }],
+    resolve,
+  ).missing).toEqual([]);
+});

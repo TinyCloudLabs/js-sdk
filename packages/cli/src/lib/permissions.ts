@@ -1,6 +1,20 @@
-import { randomBytes } from "node:crypto";
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  buildPermissionRequestArtifact,
+  isPermissionRequestArtifact,
+  type PermissionRequestArtifact,
+} from "@tinycloud/operations/artifacts";
+import {
+  additionalDelegationsPath as sharedAdditionalDelegationsPath,
+  authRequestsPath as sharedAuthRequestsPath,
+  profileStoreMetadataPath,
+  readAdditionalDelegations,
+  readAuthRequests,
+  upsertProfileRecord,
+  withProfileLock,
+  writeJsonAtomic,
+} from "@tinycloud/operations/state";
 import {
   ENCRYPTION_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
@@ -9,12 +23,13 @@ import {
 } from "../../../sdk-core/src/manifest.js";
 import { isCapabilitySubset } from "../../../sdk-core/src/capabilities.js";
 import {
+  type AuthRequestArtifact,
   type PermissionEntry,
   type PortableDelegation,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
 import { PROFILES_DIR } from "../config/constants.js";
-import { fileExists, readJson, writeJson, ensureDir } from "../config/storage.js";
+import { ensureDir, fileExists } from "../config/storage.js";
 import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
@@ -22,10 +37,33 @@ import { resolveSpaceUri } from "./space.js";
 import {
   resolveProfileOperatorType,
   resolveProfilePosture,
-  type CLIOperatorType,
-  type CLIProfilePosture,
   type ProfileConfig,
 } from "../config/types.js";
+
+export { isPermissionRequestArtifact };
+export type { PermissionRequestArtifact };
+
+/**
+ * The public node-sdk request transport deliberately has fewer fields than
+ * the canonical operations artifact. Keep accepting it in the CLI's legacy
+ * request store without changing the canonical operations validator.
+ */
+type StoredPermissionRequestArtifact = PermissionRequestArtifact | AuthRequestArtifact;
+
+export function isCompatiblePermissionRequestArtifact(
+  value: unknown,
+): value is StoredPermissionRequestArtifact {
+  return isPermissionRequestArtifact(value) || isNodeSdkAuthRequestArtifact(value);
+}
+
+function isNodeSdkAuthRequestArtifact(value: unknown): value is AuthRequestArtifact {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Partial<AuthRequestArtifact>;
+  return candidate.kind === "tinycloud.auth.request" &&
+    candidate.version === 1 &&
+    typeof candidate.requestId === "string" &&
+    Array.isArray(candidate.requested);
+}
 
 /**
  * Stored shape for a runtime delegation appended to a profile.
@@ -47,41 +85,13 @@ export interface GrantHistoryEntry {
   expiry?: string;
 }
 
-export interface PermissionRequestArtifact {
-  kind: "tinycloud.auth.request";
-  version: 1;
-  requestId: string;
-  createdAt: string;
-  profile: string;
-  posture: CLIProfilePosture;
-  operatorType: CLIOperatorType;
-  host: string;
-  sessionDid: string;
-  ownerDid?: string;
-  spaceId?: string;
-  requestedExpiry?: string | number;
-  requested: PermissionEntry[];
-  command?: {
-    argv: string[];
-    cwd: string;
-  };
-}
-
-export interface DelegationImportArtifact {
-  kind: "tinycloud.auth.delegation";
-  version: 1;
-  requestId?: string;
-  delegation: PortableDelegation;
-  permissions?: PermissionEntry[];
-}
-
 export function additionalDelegationsPath(profile: string): string {
   // Sibling file keeps legacy session.json schema unchanged for existing readers.
-  return join(PROFILES_DIR, profile, "additional-delegations.json");
+  return sharedAdditionalDelegationsPath(profile);
 }
 
 export function permissionRequestsPath(profile: string): string {
-  return join(PROFILES_DIR, profile, "auth-requests.json");
+  return sharedAuthRequestsPath(profile);
 }
 
 export function grantHistoryPath(profile: string): string {
@@ -97,11 +107,7 @@ export function createPermissionRequestArtifact(params: {
   argv?: string[];
   cwd?: string;
 }): PermissionRequestArtifact {
-  return {
-    kind: "tinycloud.auth.request",
-    version: 1,
-    requestId: `req_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`,
-    createdAt: new Date().toISOString(),
+  return buildPermissionRequestArtifact({
     profile: params.profileName,
     posture: resolveProfilePosture(params.profile),
     operatorType: resolveProfileOperatorType(params.profile),
@@ -110,12 +116,12 @@ export function createPermissionRequestArtifact(params: {
     ownerDid: params.profile.ownerDid,
     spaceId: params.profile.spaceId,
     requestedExpiry: params.requestedExpiry,
-    requested: params.requested,
+    missing: params.requested,
     command: {
       argv: params.argv ?? process.argv.slice(2),
       cwd: params.cwd ?? process.cwd(),
     },
-  };
+  });
 }
 
 function didWithoutFragment(did: string): string {
@@ -126,94 +132,92 @@ function didWithoutFragment(did: string): string {
 export async function loadAdditionalDelegations(
   profile: string,
 ): Promise<StoredAdditionalDelegation[]> {
-  const raw = await readJson<StoredAdditionalDelegation[]>(
-    additionalDelegationsPath(profile),
-  );
-  return Array.isArray(raw) ? raw : [];
+  return readAdditionalDelegations<StoredAdditionalDelegation>(profile);
 }
 
 export async function saveAdditionalDelegations(
   profile: string,
   entries: StoredAdditionalDelegation[],
 ): Promise<void> {
-  const profileDir = join(PROFILES_DIR, profile);
-  await ensureDir(profileDir);
-  await writeJson(additionalDelegationsPath(profile), entries);
+  await replaceSharedRecords(profile, "additional-delegations", entries);
 }
 
 export async function appendAdditionalDelegation(
   profile: string,
   entry: StoredAdditionalDelegation,
 ): Promise<void> {
-  const existing = await loadAdditionalDelegations(profile);
-  const next = existing.filter((item) => item.delegation.cid !== entry.delegation.cid);
-  next.push(entry);
-  await saveAdditionalDelegations(profile, next);
+  await upsertProfileRecord(
+    profile,
+    "additional-delegations",
+    entry.delegation.cid,
+    entry,
+    (candidate) => candidate.delegation.cid,
+  );
 }
 
 export async function loadPermissionRequestArtifacts(
   profile: string,
-): Promise<PermissionRequestArtifact[]> {
-  const raw = await readJson<PermissionRequestArtifact[]>(
-    permissionRequestsPath(profile),
-  );
-  return Array.isArray(raw) ? raw.filter(isPermissionRequestArtifact) : [];
+): Promise<StoredPermissionRequestArtifact[]> {
+  const raw = await readAuthRequests<unknown>(profile);
+  return raw.filter(isCompatiblePermissionRequestArtifact);
 }
 
 export async function savePermissionRequestArtifacts(
   profile: string,
-  entries: PermissionRequestArtifact[],
+  entries: StoredPermissionRequestArtifact[],
 ): Promise<void> {
-  const profileDir = join(PROFILES_DIR, profile);
-  await ensureDir(profileDir);
-  await writeJson(permissionRequestsPath(profile), entries);
+  await replaceSharedRecords(profile, "auth-requests", entries);
 }
 
 export async function appendPermissionRequestArtifact(
   profile: string,
-  artifact: PermissionRequestArtifact,
+  artifact: StoredPermissionRequestArtifact,
 ): Promise<void> {
-  const existing = await loadPermissionRequestArtifacts(profile);
-  const next = existing.filter((item) => item.requestId !== artifact.requestId);
-  next.push(artifact);
-  await savePermissionRequestArtifacts(profile, next);
+  // Retain the legacy parser's behavior of dropping malformed historical
+  // records, while performing that read-modify-write sequence under the
+  // operations-owned profile lock.
+  await withProfileLock(profile, async () => {
+    const existing = (await readAuthRequests<unknown>(profile))
+      .filter(isCompatiblePermissionRequestArtifact);
+    const next = existing.filter((item) => item.requestId !== artifact.requestId);
+    next.push(artifact);
+    await writeSharedRecords(profile, "auth-requests", next);
+  });
+}
+
+async function replaceSharedRecords<T>(
+  profile: string,
+  store: "additional-delegations" | "auth-requests",
+  entries: T[],
+): Promise<void> {
+  await withProfileLock(profile, () => writeSharedRecords(profile, store, entries));
+}
+
+async function writeSharedRecords<T>(
+  profile: string,
+  store: "additional-delegations" | "auth-requests",
+  entries: T[],
+): Promise<void> {
+  const path = store === "additional-delegations"
+    ? additionalDelegationsPath(profile)
+    : permissionRequestsPath(profile);
+  await writeJsonAtomic(path, entries);
+  await writeJsonAtomic(profileStoreMetadataPath(profile, store), { formatVersion: 1 });
 }
 
 export async function getPermissionRequestArtifact(
   profile: string,
   requestId: string,
-): Promise<PermissionRequestArtifact | null> {
+): Promise<StoredPermissionRequestArtifact | null> {
   const existing = await loadPermissionRequestArtifacts(profile);
   return existing.find((item) => item.requestId === requestId) ?? null;
 }
 
 export async function getLastPermissionRequestArtifact(
   profile: string,
-): Promise<PermissionRequestArtifact | null> {
+): Promise<StoredPermissionRequestArtifact | null> {
   const existing = await loadPermissionRequestArtifacts(profile);
   return existing.at(-1) ?? null;
-}
-
-export function isPermissionRequestArtifact(value: unknown): value is PermissionRequestArtifact {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value as Partial<PermissionRequestArtifact>;
-  return (
-    candidate.kind === "tinycloud.auth.request" &&
-    candidate.version === 1 &&
-    typeof candidate.requestId === "string" &&
-    Array.isArray(candidate.requested)
-  );
-}
-
-export function isDelegationImportArtifact(value: unknown): value is DelegationImportArtifact {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value as Partial<DelegationImportArtifact>;
-  return (
-    candidate.kind === "tinycloud.auth.delegation" &&
-    candidate.version === 1 &&
-    candidate.delegation !== undefined &&
-    typeof candidate.delegation === "object"
-  );
 }
 
 export async function replayAdditionalDelegations(

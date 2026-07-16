@@ -106,4 +106,10 @@ describe("resolveSpaceUri default-space precedence", () => {
     );
     expect(uri).toBe(`tinycloud:pkh:eip155:1:${ADDR}:explicit`);
   });
+
+  test("preserves method-specific DID text containing an eip155-looking segment", async () => {
+    profile = { name: "p", address: ADDR, chainId: 1, defaultSpace: "applications" };
+    const didSpace = "tinycloud:did:web:EXAMPLE.com:eip155:1:0xABCDEF:Vault";
+    await expect(resolveSpaceUri(didSpace, "p")).resolves.toBe(didSpace);
+  });
 });

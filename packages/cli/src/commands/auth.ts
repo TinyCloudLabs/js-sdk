@@ -7,6 +7,7 @@ import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { invokeOperation } from "@tinycloud/operations";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
@@ -15,6 +16,7 @@ import {
   resolveProfileOperatorType,
   resolveProfilePosture,
   type AuthMethod,
+  type CLIContext,
   type ProfileConfig,
 } from "../config/types.js";
 
@@ -46,7 +48,7 @@ import {
   createPermissionRequestArtifact,
   getLastPermissionRequestArtifact,
   getPermissionRequestArtifact,
-  isDelegationImportArtifact,
+  isCompatiblePermissionRequestArtifact,
   isPermissionRequestArtifact,
   appendGrantHistory,
   compactPermission,
@@ -60,6 +62,9 @@ import {
   storedAdditionalDelegation,
   type PermissionRequestArtifact,
 } from "../lib/permissions.js";
+
+/** The one function dependency used by owner OpenKey permission acquisition. */
+export type OpenKeyAcquisition = typeof startAuthFlow;
 
 /**
  * Prompt user to choose an auth method interactively.
@@ -391,7 +396,7 @@ export function registerAuthCommand(program: Command): void {
         });
         const parsed = JSON.parse(raw) as unknown;
 
-        if (isPermissionRequestArtifact(parsed)) {
+        if (isCompatiblePermissionRequestArtifact(parsed)) {
           await appendPermissionRequestArtifact(ctx.profile, parsed);
           outputJson({
             imported: true,
@@ -400,6 +405,11 @@ export function registerAuthCommand(program: Command): void {
             requested: parsed.requested,
             next: `tc auth retry ${parsed.requestId}`,
           });
+          return;
+        }
+
+        if (isRequestBoundDelegationEnvelope(parsed)) {
+          await importRequestBoundDelegation(ctx, parsed);
           return;
         }
 
@@ -469,7 +479,7 @@ export function registerAuthCommand(program: Command): void {
         });
         const parsed = JSON.parse(raw) as unknown;
 
-        if (!isPermissionRequestArtifact(parsed)) {
+        if (!isCompatiblePermissionRequestArtifact(parsed)) {
           throw new CLIError(
             "INVALID_AUTH_REQUEST",
             "Auth grant requires a tinycloud.auth.request artifact.",
@@ -535,14 +545,15 @@ export function registerAuthCommand(program: Command): void {
               ExitCode.PERMISSION_DENIED,
             );
           }
-          if (!artifact.command?.argv?.length) {
+          const command = isPermissionRequestArtifact(artifact) ? artifact.command : undefined;
+          if (!command?.argv?.length) {
             throw new CLIError(
               "COMMAND_NOT_CAPTURED",
               `Request ${artifact.requestId} does not include a captured command.`,
               ExitCode.USAGE_ERROR,
             );
           }
-          await execCapturedCommand(artifact.command);
+          await execCapturedCommand(command);
           return;
         }
 
@@ -550,7 +561,7 @@ export function registerAuthCommand(program: Command): void {
           requestId: artifact.requestId,
           covered,
           missing: covered ? [] : artifact.requested,
-          command: artifact.command ?? null,
+          command: isPermissionRequestArtifact(artifact) ? artifact.command ?? null : null,
         });
       } catch (error) {
         handleError(error);
@@ -695,7 +706,7 @@ async function emitPermissionRequestArtifact(
   outputJson(artifact);
 }
 
-async function readAuthArtifactSource(
+export async function readAuthArtifactSource(
   source: string | undefined,
   options: { stdin: boolean },
 ): Promise<string> {
@@ -761,7 +772,7 @@ function normalizeDelegationImport(value: unknown): {
   delegation: PortableDelegation;
   permissions: PermissionEntry[];
 } {
-  if (isDelegationImportArtifact(value)) {
+  if (isLegacyDelegationImportArtifact(value)) {
     const delegation = normalizePortableDelegation(value.delegation);
     return {
       requestId: value.requestId,
@@ -795,6 +806,86 @@ function normalizeDelegationImport(value: unknown): {
     "Auth import must be a tinycloud.auth.delegation artifact, a portable delegation, or a tinycloud.auth.request artifact.",
     ExitCode.USAGE_ERROR,
   );
+}
+
+function isLegacyDelegationImportArtifact(value: unknown): value is {
+  requestId?: string;
+  delegation: PortableDelegation;
+  permissions?: PermissionEntry[];
+} {
+  // A legacy envelope is genuinely unbound only when it has no requestId
+  // member. Request-bound v1 shape always belongs to the canonical route,
+  // even when its request is stale or unknown locally.
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as { kind?: unknown; version?: unknown; requestId?: unknown; delegation?: unknown };
+  return candidate.kind === "tinycloud.auth.delegation" &&
+    candidate.version === 1 &&
+    !Object.hasOwn(candidate, "requestId") &&
+    candidate.delegation !== null &&
+    typeof candidate.delegation === "object";
+}
+
+function isRequestBoundDelegationEnvelope(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as { kind?: unknown; version?: unknown; requestId?: unknown; delegation?: unknown };
+  return candidate.kind === "tinycloud.auth.delegation" &&
+    candidate.version === 1 &&
+    Object.hasOwn(candidate, "requestId");
+}
+
+type AuthImportOutput = {
+  cid: string;
+  effectivePermissions: PermissionEntry[];
+  expiry: string;
+  activated: true;
+};
+
+async function importRequestBoundDelegation(
+  ctx: { profile: string; host: string },
+  artifact: unknown,
+): Promise<void> {
+  const result = await invokeOperation(
+    "tinycloud.auth.import",
+    1,
+    // `tc auth import` is a direct human CLI invocation. This explicit opt-in
+    // preserves owner-profile imports under the operations owner posture gate;
+    // it has no effect on delegate-session execution.
+    { profile: ctx.profile, host: ctx.host, allowOwnerProfile: true },
+    artifact,
+  );
+
+  switch (result.status) {
+    case "ok": {
+      const output = result.output as AuthImportOutput;
+      outputJson({
+        imported: true,
+        activated: output.activated,
+        kind: "tinycloud.auth.delegation",
+        requestId: typeof artifact === "object" && artifact !== null &&
+          typeof (artifact as { requestId?: unknown }).requestId === "string"
+          ? (artifact as { requestId: string }).requestId
+          : null,
+        delegationCid: output.cid,
+        permissions: output.effectivePermissions,
+        expiry: output.expiry,
+      });
+      return;
+    }
+    case "authority_required":
+      throw new CLIError(
+        "AUTHORITY_REQUIRED",
+        "The active session requires additional authority before importing this delegation.",
+        ExitCode.PERMISSION_DENIED,
+      );
+    case "setup_required":
+      throw new CLIError(
+        "SETUP_REQUIRED",
+        "The active profile requires setup before importing this delegation.",
+        ExitCode.ERROR,
+      );
+    case "error":
+      throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+  }
 }
 
 function isStoredDelegationLike(value: unknown): value is {
@@ -841,6 +932,8 @@ export async function ensureDelegationAuthority(params: {
   reason: string;
   yes: boolean;
   force?: boolean;
+  /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
+  openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<void> {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return;
 
@@ -854,8 +947,9 @@ export async function ensureDelegationAuthority(params: {
       );
     }
     const openkeyHost = resolveOpenKeyHost(params.profile);
+    const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
     for (const group of groupPermissionsBySpace(params.requested)) {
-      const delegationData = await startAuthFlow(params.profile.did, {
+      const delegationData = await acquireOpenKey(params.profile.did, {
         jwk: key,
         host: params.ctx.host,
         permissions: group,
@@ -1455,7 +1549,7 @@ export function mergePrivateJwkIntoSession(
 export async function refreshOpenKeySession(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean } = {},
+  options: { paste?: boolean; noPopup?: boolean; openKeyAcquisition?: OpenKeyAcquisition } = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown> }> {
   const key = await ProfileManager.getKey(profileName);
   if (!key) {
@@ -1470,7 +1564,8 @@ export async function refreshOpenKeySession(
   const profile = await ProfileManager.getProfile(profileName);
 
   // Start browser auth flow
-  const delegationData = await startAuthFlow(profile.did, {
+  const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
+  const delegationData = await acquireOpenKey(profile.did, {
     paste: options.paste,
     noPopup: options.noPopup,
     jwk: key,

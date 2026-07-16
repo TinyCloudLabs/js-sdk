@@ -1,0 +1,94 @@
+name: TC-192 I1 TypeScript gate
+
+on:
+  pull_request:
+    paths:
+      - "packages/operations/**"
+      - "packages/sdk-rs/**"
+      - "packages/bootstrap/**"
+      - "packages/sdk-services/**"
+      - "packages/sdk-core/**"
+      - "packages/node-sdk/**"
+      - "packages/cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/setup.sh"
+      - "docs/tc-192-i1-types-gate.md"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/tc-192-i1-types-gate.yml"
+  push:
+    branches: [master]
+    paths:
+      - "packages/operations/**"
+      - "packages/sdk-rs/**"
+      - "packages/bootstrap/**"
+      - "packages/sdk-services/**"
+      - "packages/sdk-core/**"
+      - "packages/node-sdk/**"
+      - "packages/cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/setup.sh"
+      - "docs/tc-192-i1-types-gate.md"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/tc-192-i1-types-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  i1-types:
+    name: I1 operations strict TypeScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Verify pinned Bun runtime
+        run: test "$(bun --version)" = "1.2.0"
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      # The invocation test imports the sdk-core public policy export, so
+      # emit its current runtime and declaration artifacts before testing it.
+      - name: Build SDK package exports
+        run: |
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/sdk-core build
+
+      - name: Build node WASM runtime dependency
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+
+      # Operations typechecking imports the node SDK public types.
+      - name: Build Node SDK package exports
+        run: bun run --cwd packages/node-sdk build
+
+      - name: Typecheck the complete operations program
+        run: bun run typecheck:operations
+
+      - name: Assert complete operations typecheck inputs
+        run: bun run --cwd packages/operations check:typecheck-inputs
+
+      - name: Build, test, and verify the operations catalog
+        run: |
+          bun run --cwd packages/operations build
+          bun run --cwd packages/operations test
+          bun run --cwd packages/operations check:generated

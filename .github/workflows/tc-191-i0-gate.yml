@@ -1,0 +1,136 @@
+name: TC-191 I0 gate
+
+on:
+  pull_request:
+    paths:
+      - "packages/bootstrap/**"
+      - "packages/cli/**"
+      - "packages/operations/**"
+      - "packages/sdk-rs/**"
+      - "packages/sdk-core/**"
+      - "packages/sdk-services/**"
+      - "packages/node-sdk/**"
+      - "packages/web-sdk/**"
+      - "packages/sdk-rs/packages/web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/setup.sh"
+      - "tests/node-sdk/setup.ts"
+      - "tests/mcp-sdk-contract/**"
+      - "docs/tc-191-i0-gate.md"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/tc-191-i0-gate.yml"
+  push:
+    branches: [master]
+    paths:
+      - "packages/bootstrap/**"
+      - "packages/cli/**"
+      - "packages/operations/**"
+      - "packages/sdk-rs/**"
+      - "packages/sdk-core/**"
+      - "packages/sdk-services/**"
+      - "packages/node-sdk/**"
+      - "packages/web-sdk/**"
+      - "packages/sdk-rs/packages/web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/setup.sh"
+      - "tests/node-sdk/setup.ts"
+      - "tests/mcp-sdk-contract/**"
+      - "docs/tc-191-i0-gate.md"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/tc-191-i0-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  i0-gate:
+    name: I0 compatibility and MCP contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Node 20.19.4 for CLI, MCP, and packed graph checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Verify pinned runtimes
+        run: |
+          test "$(node --version)" = "v20.19.4"
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "20"
+          test "$(bun --version)" = "1.2.0"
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      # The operations declaration build imports sdk-core's public types.
+      - name: Build SDK declarations for packed public API checks
+        run: |
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/sdk-core build
+
+      - name: Build SDK WASM runtime dependencies
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/sdk-rs build:wasm:web
+          bun run --cwd packages/sdk-rs/packages/web build
+
+      - name: Build node and web SDK declarations
+        run: |
+          bun run --cwd packages/node-sdk build
+          bun run --cwd packages/web-sdk build
+
+      - name: Build operations package
+        run: bun run --cwd packages/operations build
+
+      - name: Build the packed CLI artifact
+        run: bun run --cwd packages/cli build
+
+      - name: Run focused I0 gate suites offline
+        env:
+          NODE_BINARY: node
+          CLI_NODE_BINARY: node
+          EXPECTED_NODE_MAJOR: "20"
+          NPM_CONFIG_OFFLINE: "true"
+          NPM_CONFIG_REGISTRY: "http://127.0.0.1:9"
+        run: |
+          bun test packages/cli/src/commands/secrets.test.ts
+          bun test packages/cli/src/commands/secrets-owner-retry.test.ts
+          bun test packages/cli/src/commands/auth.test.ts
+          bun test packages/cli/src/lib/permissions.test.ts
+          bun test packages/cli/src/output/errors.test.ts
+          bun test tests/packed-runtime/cli.test.ts
+          bun test tests/mcp-sdk-contract/contract.test.ts
+          bun test tests/mcp-sdk-contract/prerequisites.test.ts
+          bun run --cwd tests/mcp-sdk-contract test:public-api
+
+      - name: Verify Node 20 packed-graph boundary
+        env:
+          NODE_BINARY: node
+          CLI_NODE_BINARY: node
+          EXPECTED_NODE_MAJOR: "20"
+          NPM_CONFIG_OFFLINE: "true"
+          NPM_CONFIG_REGISTRY: "http://127.0.0.1:9"
+        run: |
+          test "$(node --version)" = "v20.19.4"
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "20"
+          bun test tests/packed-runtime/entrypoints.test.ts

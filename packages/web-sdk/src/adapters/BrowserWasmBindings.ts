@@ -1,4 +1,4 @@
-import { IWasmBindings, ISessionManager } from "@tinycloud/sdk-core";
+import { IWasmBindings, ISessionManager, type PersistedSessionProof } from "@tinycloud/sdk-core";
 import { tinycloud, tcwSession, initialized } from "@tinycloud/web-sdk-wasm";
 import { invoke, invokeAny, prepareSession, completeSessionSetup } from "../modules/Storage/tinycloud/module";
 
@@ -18,6 +18,9 @@ export class BrowserWasmBindings implements IWasmBindings {
   get invokeAny() { return invokeAny; }
   get prepareSession() { return prepareSession; }
   get completeSessionSetup() { return completeSessionSetup; }
+  validatePersistedSession(proof: PersistedSessionProof) {
+    return tinycloud.validatePersistedSession(proof);
+  }
   computeCid(data: Uint8Array, codec: bigint): string { return tinycloud.computeCid(data, codec); }
 
   ensureEip55(address: string): string { return tinycloud.ensureEip55(address); }
@@ -61,6 +64,15 @@ export class BrowserWasmBindings implements IWasmBindings {
       actions: string[];
     }[];
   }
+  parseVerifiedRecapFromSiwe(siweString: string) {
+    return tinycloud.parseVerifiedRecapFromSiwe(siweString) as {
+      service: string;
+      space: string;
+      path: string;
+      actions: string[];
+      caveats: Record<string, unknown>[];
+    }[];
+  }
   generateHostSIWEMessage(params: any): string { return tinycloud.generateHostSIWEMessage(params); }
   siweToDelegationHeaders(params: any) { return tinycloud.siweToDelegationHeaders(params); }
   protocolVersion(): number { return tinycloud.protocolVersion(); }
@@ -83,7 +95,11 @@ class BrowserSessionManager implements ISessionManager {
   private inner = new tcwSession.TCWSessionManager();
 
   createSessionKey(id: string): string { return this.inner.createSessionKey(id); }
+  replaceSessionKey(jwk: object, keyId: string): string {
+    return this.inner.replaceSessionKey(jwk, keyId);
+  }
   renameSessionKeyId(oldId: string, newId: string): void { this.inner.renameSessionKeyId(oldId, newId); }
   getDID(keyId: string): string { return this.inner.getDID(keyId); }
   jwk(keyId: string): string | undefined { return this.inner.jwk(keyId); }
+  listSessionKeys(): string[] { return this.inner.listSessionKeys() as string[]; }
 }

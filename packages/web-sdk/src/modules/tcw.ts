@@ -562,13 +562,12 @@ export class TinyCloudWeb {
     }
 
     this._sessionRestoreStatus = "restoring";
-    const loaded = await this.loadPersistedSession(restoreAddress);
-    if (loaded.status !== "loaded") {
-      this._sessionRestoreStatus = loaded.status;
-      return { status: loaded.status };
-    }
-
     try {
+      const loaded = await this.loadPersistedSession(restoreAddress);
+      if (loaded.status !== "loaded") {
+        this._sessionRestoreStatus = loaded.status;
+        return { status: loaded.status };
+      }
       const node = await this.ensureNode();
       await node.restoreSession(restoreDataFromPersisted(loaded.data));
       this.resetSessionScopedCaches();
@@ -578,7 +577,11 @@ export class TinyCloudWeb {
         session: clientSessionFromPersisted(loaded.data),
       };
     } catch (err) {
-      await this.sessionStorage.clear(restoreAddress);
+      // Restore rejection is intentionally transactional. Persisted storage
+      // is user state, and attempting best-effort cleanup here can both mask
+      // the authority error and strand this wrapper in "restoring" when a
+      // storage backend itself fails. Callers can explicitly clear a session
+      // after presenting the recoverable restore failure.
       this._sessionRestoreStatus = "restore-failed";
       return {
         status: "restore-failed",

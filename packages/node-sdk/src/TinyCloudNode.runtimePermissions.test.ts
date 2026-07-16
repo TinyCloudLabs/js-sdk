@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
+import { generateKeyPairSync } from "node:crypto";
 
 import {
+  CaveatedDelegationUnsupportedError,
   canonicalHashHex,
   hexEncode,
   encryptionBase64Decode,
@@ -13,6 +15,7 @@ import {
   type IWasmBindings,
   type NetworkDescriptor,
   type PermissionEntry,
+  ServiceContext,
 } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
@@ -20,6 +23,7 @@ import { TinyCloudNode } from "./TinyCloudNode";
 function makeFakeSessionManager(): ISessionManager {
   return {
     createSessionKey: (id: string) => id,
+    replaceSessionKey: (_jwk: object, keyId: string) => keyId,
     renameSessionKeyId: () => {},
     getDID: (keyId: string) => `did:key:${keyId}`,
     jwk: () => JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "test" }),
@@ -83,6 +87,7 @@ function makeFakeWasmBindings(
     vault_random_bytes: mock(() => new Uint8Array()),
     vault_sha256: mock(() => new Uint8Array()),
     createSessionManager: makeFakeSessionManager,
+    computeCid: () => "bafy-node-secret-read",
   };
 }
 
@@ -216,6 +221,155 @@ async function withActivatedDelegations(fn: () => Promise<void>): Promise<void> 
 }
 
 describe("TinyCloudNode runtime permission delegations", () => {
+  test("routes an explicit secret read through activated KV and decrypt delegations", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const secretsSpaceId = `tinycloud:pkh:eip155:1:${address}:delegated-secrets`;
+    (node as any)._address = address;
+    const networkId = node.getEncryptionNetworkIdForSpace(secretsSpaceId);
+    const descriptor = makeEncryptionDescriptor(networkId, node.did);
+    const crypto = makeEncryptionCrypto();
+    (node as any).createEncryptionCrypto = () => crypto;
+    const { privateKey } = generateKeyPairSync("ed25519");
+    const jwk = privateKey.export({ format: "jwk" });
+    (node as any).auth.tinyCloudSession.jwk = jwk;
+
+    const permissions: PermissionEntry[] = [
+      {
+        service: "tinycloud.kv",
+        space: secretsSpaceId,
+        path: "vault/secrets/ANTHROPIC_API_KEY",
+        actions: ["tinycloud.kv/get"],
+      },
+      {
+        service: "tinycloud.encryption",
+        path: networkId,
+        actions: ["tinycloud.encryption/decrypt"],
+      },
+    ];
+
+    await withActivatedDelegations(async () => {
+      await node.grantRuntimePermissions(permissions);
+    });
+
+    const encryptionInvocations: string[] = [];
+    const unsignedAuthorization = [
+      Buffer.from(JSON.stringify({ alg: "EdDSA" })).toString("base64url"),
+      Buffer.from(JSON.stringify({ aud: "placeholder" })).toString("base64url"),
+      "signature",
+    ].join(".");
+    (node as any).wasmBindings.invokeAny = mock((session: any) => {
+      encryptionInvocations.push(session.delegationHeader.Authorization);
+      return { Authorization: unsignedAuthorization };
+    });
+
+    const originalFetch = globalThis.fetch;
+    const fetchCalls: Array<{ method: string; url: string; body?: string }> = [];
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      const body = typeof init?.body === "string" ? init.body : undefined;
+      fetchCalls.push({ method, url, body });
+      const networkUrl =
+        `https://tinycloud.test/encryption/networks/${encodeURIComponent(networkId)}`;
+      if (method === "GET" && url === networkUrl) {
+        return new Response(JSON.stringify({ descriptor }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (method === "POST" && url === `${networkUrl}/decrypt`) {
+        if (!body) throw new Error("missing decrypt body");
+        const request = JSON.parse(body) as DecryptRequestBody;
+        const symmetricKey = xor(
+          encryptionBase64Decode(descriptor.publicEncryptionKey),
+          encryptionBase64Decode(request.encryptedSymmetricKey),
+        );
+        const wrappedKey = xor(
+          encryptionBase64Decode(request.receiverPublicKey),
+          symmetricKey,
+        );
+        const invocationCid = "bafy-node-secret-read";
+        const requestBodyHash = canonicalHashHex(crypto.sha256, request as any);
+        const response: DecryptResponseBody = {
+          type: "tinycloud.encryption.decrypt-result/v1",
+          targetNode: request.targetNode,
+          networkId: request.networkId,
+          invocationCid,
+          encryptedSymmetricKeyHash: request.encryptedSymmetricKeyHash,
+          receiverPublicKeyHash: request.receiverPublicKeyHash,
+          wrappedKey: encryptionBase64Encode(wrappedKey),
+          alg: request.alg,
+          keyVersion: request.keyVersion,
+          requestHash: hexEncode(
+            crypto.sha256(
+              encryptionUtf8Encode(`${invocationCid}${requestBodyHash}`),
+            ),
+          ),
+          nodeId: node.did,
+          nodeSignature: encryptionBase64Encode(new Uint8Array(64).fill(9)),
+        };
+        return new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    try {
+      const encryption = (node as any).createEncryptionService();
+      const secret = {
+        value: "secret value",
+        createdAt: "2026-07-15T00:00:00.000Z",
+        updatedAt: "2026-07-15T00:00:00.000Z",
+      };
+      const encrypted = await encryption.encryptToNetwork(
+        networkId,
+        encryptionUtf8Encode(JSON.stringify(secret)),
+        { metadata: { "x-vault-content-type": "application/json" } },
+      );
+      expect(encrypted.ok).toBe(true);
+      if (!encrypted.ok) return;
+
+      const fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        expect((init?.headers as Record<string, string>).Authorization).toBe("runtime-token");
+        return new Response(JSON.stringify(encrypted.data), { status: 200 });
+      }) as any;
+    const context = new ServiceContext({
+      invoke: (node as any).invokeWithRuntimePermissions,
+      fetch,
+      hosts: ["https://tinycloud.test"],
+    });
+    context.setSession({
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
+      verificationMethod: "did:key:default",
+      jwk,
+    });
+    (node as any)._serviceContext = context;
+    (node as any)._spaceService = {};
+
+    await expect(node.readSecret({
+      space: secretsSpaceId,
+      name: "ANTHROPIC_API_KEY",
+    })).resolves.toEqual({ status: "ok", value: "secret value" });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(encryptionInvocations).toEqual(["runtime-token"]);
+      expect(invoke.mock.calls[invoke.mock.calls.length - 1][0].delegationHeader.Authorization)
+        .toBe("runtime-token");
+      expect(fetchCalls.some((call) => call.url.endsWith("/decrypt"))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("uses a stored runtime delegation for matching invocations", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
@@ -524,6 +678,148 @@ describe("TinyCloudNode runtime permission delegations", () => {
     );
   });
 
+  test("fails closed when a caveated runtime grant would cross the action-only WASM boundary", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const spaceId = `tinycloud:pkh:eip155:1:${address}:secrets`;
+    const caveats = [{ tenant: "alpha", nested: { region: "us-east-1" } }];
+    const permission: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: "secrets",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      actions: ["tinycloud.kv/put"],
+      caveats,
+    };
+    (node as any).runtimePermissionGrants = [{
+      session: {
+        delegationHeader: { Authorization: "runtime-token" },
+        delegationCid: "runtime-cid",
+        spaceId,
+        verificationMethod: "did:key:default",
+        jwk: { kty: "OKP" },
+      },
+      delegation: {
+        cid: "runtime-cid",
+        delegationHeader: { Authorization: "runtime-token" },
+        spaceId,
+        path: permission.path,
+        actions: permission.actions,
+        caveats,
+        expiry: new Date(Date.now() + 3_600_000),
+        delegateDID: "did:key:default",
+        ownerAddress: address,
+        chainId: 1,
+      },
+      operations: [{
+        spaceId,
+        service: "kv",
+        path: permission.path,
+        action: "tinycloud.kv/put",
+        caveats,
+      }],
+      expiresAt: new Date(Date.now() + 3_600_000),
+      provenance: "delegated",
+    }];
+
+    await expect(node.delegateTo("did:key:backend", [permission]))
+      .rejects.toBeInstanceOf(CaveatedDelegationUnsupportedError);
+    expect((node as any).wasmBindings.createDelegation).not.toHaveBeenCalled();
+  });
+
+  test("rejects an uncaveated public request selected against a caveated runtime grant", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const spaceId = `tinycloud:pkh:eip155:1:${address}:default`;
+    const caveats = [{ tenant: "alpha", nested: { region: "us-east-1" } }];
+    const operation = {
+      spaceId,
+      service: "kv",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      action: "tinycloud.kv/put",
+      caveats,
+    };
+    const grant = {
+      session: {
+        delegationHeader: { Authorization: "runtime-token" },
+        delegationCid: "runtime-cid",
+        spaceId,
+        verificationMethod: "did:key:default",
+        jwk: { kty: "OKP" },
+      },
+      delegation: {
+        cid: "runtime-cid",
+        delegationHeader: { Authorization: "runtime-token" },
+        spaceId,
+        path: operation.path,
+        actions: [operation.action],
+        caveats,
+        expiry: new Date(Date.now() + 3_600_000),
+        delegateDID: "did:key:default",
+        ownerAddress: address,
+        chainId: 1,
+      },
+      operations: [operation],
+      expiresAt: new Date(Date.now() + 3_600_000),
+      provenance: "delegated" as const,
+    };
+    (node as any).runtimePermissionGrants = [grant];
+    const selectGrant = mock((operations: unknown[], options: unknown) =>
+      (node as any).__selectRuntimeGrant(operations, options),
+    );
+    (node as any).__selectRuntimeGrant = (node as any).findGrantForOperations.bind(node);
+    (node as any).findGrantForOperations = selectGrant;
+
+    const result = node.createDelegation({
+      path: operation.path,
+      actions: [operation.action],
+      delegateDID: "did:key:backend",
+    });
+
+    await expect(result).rejects.toMatchObject({
+      name: "CaveatedDelegationUnsupportedError",
+      code: "CAVEATED_DELEGATION_UNSUPPORTED",
+      entries: [{ caveats }],
+    });
+    expect(selectGrant).toHaveBeenCalledTimes(1);
+    const [selectedOperations, selectedOptions] = selectGrant.mock.calls[0] as [
+      Array<Record<string, unknown>>,
+      { excludePrimary: boolean },
+    ];
+    expect(selectedOperations).toEqual([expect.objectContaining({
+      spaceId: operation.spaceId,
+      service: operation.service,
+      path: operation.path,
+      action: operation.action,
+    })]);
+    expect(selectedOperations[0]?.caveats).toBeUndefined();
+    expect(selectedOptions).toEqual({ excludePrimary: true });
+    expect((node as any).wasmBindings.createDelegation).not.toHaveBeenCalled();
+  });
+
+  test("rejects caveated runtime grants before preparing an action-only session", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const permission: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: "secrets",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      actions: ["tinycloud.kv/put"],
+      caveats: [{ tenant: "alpha" }],
+    };
+
+    await expect(node.grantRuntimePermissions([permission]))
+      .rejects.toBeInstanceOf(CaveatedDelegationUnsupportedError);
+    expect((node as any).wasmBindings.prepareSession).not.toHaveBeenCalled();
+  });
+
   test("can reinstall a portable runtime delegation", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
@@ -545,6 +841,69 @@ describe("TinyCloudNode runtime permission delegations", () => {
     });
 
     expect(node.hasRuntimePermissions([permission])).toBe(true);
+  });
+
+  test("projects exact effective runtime entries, preserves caveats, and prunes expiry", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const spaceId = `tinycloud:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F:secrets`;
+    const caveats = [{ tenant: "alpha" }];
+    (node as any).runtimePermissionGrants = [
+      {
+        session: {},
+        delegation: {},
+        operations: [{
+          spaceId: "secrets",
+          service: "kv",
+          path: "vault/secrets/API_KEY",
+          action: "tinycloud.kv/get",
+          caveats,
+        }, {
+          spaceId: "secrets",
+          service: "kv",
+          path: "vault/secrets/API_KEY",
+          action: "tinycloud.kv/put",
+          caveats,
+        }, {
+          resource: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+          service: "encryption",
+          path: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+          action: "tinycloud.encryption/decrypt",
+        }],
+        expiresAt: new Date(Date.now() + 3_600_000),
+        provenance: "runtime",
+      },
+      {
+        session: {},
+        delegation: {},
+        operations: [{
+          spaceId,
+          service: "kv",
+          path: "vault/secrets/EXPIRED",
+          action: "tinycloud.kv/get",
+        }],
+        expiresAt: new Date(Date.now() - 1),
+        provenance: "runtime",
+      },
+    ];
+
+    expect(node.getEffectiveRuntimePermissionEntries()).toEqual([
+      {
+        service: "tinycloud.encryption",
+        path: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+        actions: ["tinycloud.encryption/decrypt"],
+      },
+      {
+        service: "tinycloud.kv",
+        space: spaceId,
+        path: "vault/secrets/API_KEY",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+        caveats,
+      },
+    ]);
+    expect((node as any).runtimePermissionGrants).toHaveLength(1);
   });
 
   test("can reinstall a runtime delegation targeted at fragmentless session DID", async () => {

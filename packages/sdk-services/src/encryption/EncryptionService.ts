@@ -41,6 +41,7 @@ import {
   openWrappedKey,
   verifyDecryptResponse,
 } from "./response";
+import { DecryptTransportResponseError } from "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 import {
   DECRYPT_FACT_TYPE,
   encryptionError,
@@ -83,8 +84,11 @@ export interface DecryptTransport {
     networkId: string;
     authorization: string;
     canonicalBody: string;
+    signal?: AbortSignal;
   }): Promise<DecryptResponseBody>;
 }
+
+export { DecryptTransportResponseError } from "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 
 export interface EncryptionServiceConfig {
   crypto: EncryptionCrypto;
@@ -92,6 +96,8 @@ export interface EncryptionServiceConfig {
   transport: DecryptTransport;
   node?: NodeDescriptorFetcher;
   wellKnown?: WellKnownDescriptorFetcher;
+  /** Bound by an owning service graph to prevent cross-session authority use. */
+  assertActive?: () => void;
   [key: string]: unknown;
 }
 
@@ -120,6 +126,7 @@ export class EncryptionService
     identifier: string,
     ownerDid?: string,
   ): Promise<Result<NetworkDescriptor, EncryptionError>> {
+    this.assertActive();
     const result = await discoverNetworkFn({
       identifier,
       ...(ownerDid !== undefined ? { ownerDid } : {}),
@@ -128,6 +135,7 @@ export class EncryptionService
         ? { wellKnown: this._config.wellKnown }
         : {}),
     });
+    this.assertActive();
     if (!result.ok) return result;
     return encOk(result.data.descriptor);
   }
@@ -138,6 +146,7 @@ export class EncryptionService
     options?: EncryptToNetworkOptions,
   ): Promise<Result<InlineEncryptedEnvelope, EncryptionError>> {
     try {
+      this.assertActive();
       const discovered = await this.discoverNetwork(networkId);
       if (!discovered.ok) return discovered;
       const usable = ensureNetworkUsableForDecrypt(discovered.data);
@@ -173,6 +182,7 @@ export class EncryptionService
     options?: DecryptEnvelopeOptions,
   ): Promise<Result<Uint8Array, EncryptionError>> {
     try {
+      this.assertActive();
       const validated = validateEnvelope(this.crypto, envelope);
       if (!validated.ok) return validated;
       if (
@@ -250,7 +260,16 @@ export class EncryptionService
         facts,
         proof: capabilityProof,
       });
-      if (!built.ok) return built;
+      this.assertActive();
+      if (!built.ok) {
+        if (built.error.code !== "TRANSPORT_ERROR") return built;
+        return encErr(
+          encryptionError({
+            code: "INVALID_INPUT",
+            message: "Unable to build decrypt request",
+          }),
+        );
+      }
 
       let response: DecryptResponseBody;
       try {
@@ -259,8 +278,25 @@ export class EncryptionService
           networkId: envelope.networkId,
           authorization: built.data.authorization,
           canonicalBody: built.data.canonicalBody,
+          signal: this.abortSignal,
         });
+        this.assertActive();
       } catch (error) {
+        if (error instanceof DecryptTransportResponseError) {
+          return encErr(
+            encryptionError(
+              error.status === 401 || error.status === 403
+                ? {
+                  code: "DECRYPT_DENIED",
+                  message: "Node denied decrypt request",
+                  ...(error.permissionHint === undefined
+                    ? {}
+                    : { permissionHint: error.permissionHint }),
+                }
+                : { code: "INVALID_RESPONSE", message: "Node decrypt request failed" },
+            ),
+          );
+        }
         return encErr(
           encryptionError({
             code: "TRANSPORT_ERROR",
@@ -293,10 +329,14 @@ export class EncryptionService
     } catch (error) {
       return encErr(
         encryptionError({
-          code: "TRANSPORT_ERROR",
-          cause: toError(error),
+          code: "INVALID_RESPONSE",
+          message: "Local decryption failed",
         }),
       );
     }
+  }
+
+  private assertActive(): void {
+    this._config.assertActive?.();
   }
 }

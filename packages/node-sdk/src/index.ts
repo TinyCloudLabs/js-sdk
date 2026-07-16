@@ -135,12 +135,16 @@ export type {
 // High-level API
 export {
   TinyCloudNode,
+  UnsupportedSessionRestoreError,
   type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
+  type SecretReadInput,
+  type SecretPermissionHint,
+  type SecretReadResult,
 } from "./TinyCloudNode";
 
 export { AccountService } from "./account/AccountService";
@@ -178,6 +182,7 @@ export {
   DEFAULT_MANIFEST_SPACE,
   DEFAULT_MANIFEST_VERSION,
   VAULT_PERMISSION_SERVICE,
+  CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,
@@ -199,12 +204,19 @@ export { NodeWasmBindings } from "./NodeWasmBindings";
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";
 export type { RestorableSession } from "./DelegatedAccess";
-export { serializeDelegation, deserializeDelegation, grantAuthRequest } from "./delegation";
+export {
+  serializeDelegation,
+  deserializeDelegation,
+  grantAuthRequest,
+  activateValidatedRuntimeDelegation,
+} from "./delegation";
 export type {
   PortableDelegation,
   AuthRequestArtifact,
   AuthDelegationArtifact,
   DelegationAuthority,
+  RuntimeDelegationActivator,
+  ValidatedRuntimeDelegation,
 } from "./delegation";
 
 // Re-export KV service values
@@ -295,6 +307,7 @@ export type {
   VaultListOptions,
   VaultGrantOptions,
   VaultEntry,
+  VaultNetworkReadResult,
   VaultError,
   ISecretsService,
   SecretPayload,
@@ -306,6 +319,7 @@ export type {
 // Re-export encryption service values and helpers
 export {
   EncryptionService,
+  DecryptTransportResponseError,
   parseNetworkId,
   buildNetworkId,
   isNetworkId,

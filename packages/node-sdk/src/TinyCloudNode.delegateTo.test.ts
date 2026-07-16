@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import {
+  CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
   type PermissionEntry,
@@ -66,6 +67,10 @@ function makeFakeSessionManager(): ISessionManager {
     createSessionKey(id: string): string {
       keys.add(id);
       return id;
+    },
+    replaceSessionKey(_jwk: object, keyId: string): string {
+      keys.add(keyId);
+      return keyId;
     },
     renameSessionKeyId(oldId: string, newId: string): void {
       if (keys.has(oldId)) {
@@ -324,6 +329,35 @@ describe("TinyCloudNode.delegateTo", () => {
 
     expect(createDelegationSpy).not.toHaveBeenCalled();
     expect(prepareSessionSpy).not.toHaveBeenCalled();
+  });
+
+  test("fails closed rather than serializing exact caveat branches as action-only authority", async () => {
+    const caveats = [{ tenant: "alpha", nested: { region: "us-east-1" } }];
+    const createDelegationSpy = mock(() => ({}));
+    const wasm = makeFakeWasmBindings({
+      parseRecapFromSiwe: mock(() => [{
+        service: "kv",
+        space: "default",
+        path: "items/",
+        actions: ["tinycloud.kv/get"],
+        caveats,
+      }]) as any,
+      createDelegation: createDelegationSpy as any,
+    });
+    const node = new TinyCloudNode({ wasmBindings: wasm });
+    installFakeSession(node, { siwe: buildSiwe(futureExpiry) });
+
+    const result = node.delegateTo(BOB_DID, [{
+      service: "tinycloud.kv",
+      space: "default",
+      path: "items/",
+      actions: ["tinycloud.kv/get"],
+      caveats,
+    }]);
+
+    await expect(result).rejects.toBeInstanceOf(CaveatedDelegationUnsupportedError);
+    await expect(result).rejects.toMatchObject({ entries: [{ caveats }] });
+    expect(createDelegationSpy).not.toHaveBeenCalled();
   });
 
   test("multi-entry input → ONE UCAN with merged abilities map", async () => {

@@ -23,3 +23,5 @@ packages/sdk-services/dist/
 tests/sdk-services/dist
 tests/node-sdk/benchmarks/results/
 packages/cli/dist
+packages/operations/dist/
+packages/mcp/dist/

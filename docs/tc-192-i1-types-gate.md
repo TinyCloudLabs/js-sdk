@@ -1,0 +1,23 @@
+# TC-192 I1 TypeScript Gate
+
+`.github/workflows/tc-192-i1-types-gate.yml` keeps the complete
+`packages/operations` TypeScript program strict-clean. The package's no-emit
+typecheck configuration covers `src/**/*` (including tests),
+`test-support/**/*`, `scripts/**/*`, and `tsup.config.ts`; its declaration
+build configuration remains scoped to `src` so its published `dist` layout is
+unchanged. The gate runs the package `typecheck` script through the root
+`typecheck:operations` stage command, then asserts the resolved TypeScript
+file list includes each auxiliary program. No compiler option is relaxed.
+
+The gate pins Bun `1.2.0`, verifies that pin before installing with the locked
+dependency graph, emits the public SDK runtime entrypoints needed by the
+invocation suite, and emits the Node SDK runtime entrypoint required by the
+legacy CLI concurrency suite. It then typechecks, builds, tests, and verifies
+the generated operations catalog. The invocation test imports `jcsCanonicalize`
+from the public `@tinycloud/sdk-core/policy` export, so the gate intentionally
+does not reach into SDK source files.
+
+The real CLI contention process imports the workspace node WASM package. The
+gate therefore builds that package with the repository's standard Rust and
+wasm-pack steps before executing the operations suite, and its path filters
+cover the Rust workspace manifests and setup script.

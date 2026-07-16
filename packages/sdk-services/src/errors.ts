@@ -4,7 +4,61 @@
  * Utilities for creating and handling service errors.
  */
 
-import { ServiceError, ErrorCodes, err, serviceError } from "./types";
+import {
+  ServiceError,
+  ErrorCodes,
+  err,
+  serviceError,
+  type PermissionHint,
+} from "./types";
+
+/** Validate one structured node permission hint without accepting raw errors. */
+export function parsePermissionHint(value: unknown): PermissionHint | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const keys = Object.keys(candidate).sort();
+  if (keys.some((key) => !["actions", "path", "service", "space"].includes(key))) return undefined;
+  if (candidate.service !== "tinycloud.kv" && candidate.service !== "tinycloud.encryption") return undefined;
+  if (typeof candidate.path !== "string" || candidate.path.length === 0 || candidate.path.includes("*")) return undefined;
+  if (candidate.service === "tinycloud.kv" &&
+    (typeof candidate.space !== "string" || candidate.space.length === 0 || !candidate.path.startsWith("vault/") || candidate.path.endsWith("/"))) {
+    return undefined;
+  }
+  if (candidate.service === "tinycloud.encryption" &&
+    (candidate.space !== undefined || !candidate.path.startsWith("urn:tinycloud:encryption:") || candidate.path.endsWith(":"))) {
+    return undefined;
+  }
+  if (!Array.isArray(candidate.actions) || candidate.actions.length !== 1 ||
+    typeof candidate.actions[0] !== "string" || candidate.actions[0].includes("*")) return undefined;
+  const expectedAction = candidate.service === "tinycloud.kv"
+    ? "tinycloud.kv/get"
+    : "tinycloud.encryption/decrypt";
+  if (candidate.actions[0] !== expectedAction) return undefined;
+  const space = typeof candidate.space === "string" ? candidate.space : undefined;
+  return {
+    service: candidate.service,
+    ...(space === undefined ? {} : { space }),
+    path: candidate.path,
+    actions: [candidate.actions[0]],
+  };
+}
+
+/** Extract only a validated structured hint from an SDK-owned error body. */
+export function parsePermissionHintFromErrorText(text: string): PermissionHint | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    const root = parsed as Record<string, unknown>;
+    const nested = root.error;
+    const nestedRecord = typeof nested === "object" && nested !== null
+      ? nested as Record<string, unknown>
+      : undefined;
+    return parsePermissionHint(root.permissionHint) ??
+      parsePermissionHint(nestedRecord?.permissionHint);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Create a service error for authentication required.

@@ -15,6 +15,7 @@ export {
   TCWSessionManager,
   prepareSession,
   completeSessionSetup,
+  validatePersistedSession,
   invoke,
   invokeAny,
   computeCid,
@@ -36,6 +37,8 @@ export {
   // whether a requested delegation is derivable from the current session
   // without a fresh wallet prompt.
   parseRecapFromSiwe,
+  // Verifier-v2 ReCap parser that retains every signed caveat branch.
+  parseVerifiedRecapFromSiwe,
   // Protocol version
   protocolVersion,
   // Vault crypto

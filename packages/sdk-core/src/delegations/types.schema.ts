@@ -168,6 +168,8 @@ export const DelegationSchema = z.object({
   path: z.string(),
   /** Actions this delegation authorizes */
   actions: z.array(z.string()),
+  /** Exact ReCap caveats that constrain every action in this scope. */
+  caveats: z.array(z.record(z.string(), z.unknown())).optional(),
   /** When this delegation expires (accepts Date or ISO string from JSON) */
   expiry: z.coerce.date(),
   /** Whether this delegation has been revoked */
@@ -633,6 +635,8 @@ export const DelegatedResourceSchema = z.object({
   path: z.string(),
   /** Full-URN ability strings, e.g. ["tinycloud.kv/get", "tinycloud.kv/put"]. */
   actions: z.array(z.string()),
+  /** Exact ReCap caveats that constrain every action in this scope. */
+  caveats: z.array(z.record(z.string(), z.unknown())).optional(),
 });
 
 export type DelegatedResource = z.infer<typeof DelegatedResourceSchema>;

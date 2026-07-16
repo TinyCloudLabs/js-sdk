@@ -38,6 +38,7 @@
 export type {
   Result,
   ServiceError,
+  PermissionHint,
   StorageQuotaInfo,
   ErrorCode,
   IServiceContext,
@@ -154,6 +155,8 @@ export {
   storageLimitReachedError,
   parseAuthError,
   authUnauthorizedError,
+  parsePermissionHint,
+  parsePermissionHintFromErrorText,
 } from "./errors";
 
 // Base service
@@ -271,6 +274,7 @@ export type {
   VaultListOptions,
   VaultGrantOptions,
   VaultEntry,
+  VaultNetworkReadResult,
   VaultError,
 } from "./vault";
 
@@ -292,6 +296,7 @@ export type {
 // Encryption service (network-scoped one-of-one decrypt)
 export {
   EncryptionService,
+  DecryptTransportResponseError,
   parseNetworkId,
   buildNetworkId,
   isNetworkId,

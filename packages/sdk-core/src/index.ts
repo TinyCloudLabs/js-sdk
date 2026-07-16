@@ -33,7 +33,12 @@ export {
 export { IENSResolver } from "./ens";
 
 // WASM bindings abstraction
-export { IWasmBindings, ISessionManager } from "./wasm";
+export {
+  IWasmBindings,
+  ISessionManager,
+  type PersistedSessionProof,
+  type ValidatedPersistedSessionProof,
+} from "./wasm";
 
 // Signer interface
 export { ISigner, Bytes } from "./signer";
@@ -263,6 +268,7 @@ export {
   type VaultListOptions,
   type VaultGrantOptions,
   type VaultEntry,
+  type VaultNetworkReadResult,
   type VaultError,
   // Secrets Service
   SecretsService,
@@ -277,6 +283,7 @@ export {
   type SecretScopeOptions,
   // Encryption Service (network-scoped)
   EncryptionService,
+  DecryptTransportResponseError,
   parseNetworkId,
   buildNetworkId,
   isNetworkId,
@@ -614,12 +621,15 @@ export {
 // Capability subset checking and recap parsing
 export {
   // Errors
+  CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
   // Functions
   isCapabilitySubset,
   actionContains,
+  canonicalizeRecapCaveats,
   parseRecapCapabilities,
+  recapCaveatsEqual,
   // Types
   type ParseRecapFromSiwe,
   type SubsetCheckResult,
