@@ -608,9 +608,6 @@ describe("resolveManifest — secrets shorthand", () => {
         capabilities: {
           "": ["tinycloud.capabilities/read"],
         },
-        delegation: {
-          "": ["tinycloud.delegation/list"],
-        },
         kv: {
           "vault/secrets/ANTHROPIC_API_KEY": [
             "tinycloud.kv/get",
@@ -999,7 +996,6 @@ describe("resolveManifest — end-to-end composition", () => {
         delegation: { "": [
           "tinycloud.delegation/revoke",
           "tinycloud.delegation/status",
-          "tinycloud.delegation/list",
         ] },
       },
     });

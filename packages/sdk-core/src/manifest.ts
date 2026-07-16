@@ -1222,15 +1222,6 @@ function capabilitiesReadPermission(space: string): ResourceCapability {
   };
 }
 
-function delegationListPermission(space: string): ResourceCapability {
-  return {
-    service: "tinycloud.delegation",
-    space,
-    path: "",
-    actions: ["tinycloud.delegation/list"],
-  };
-}
-
 function withCapabilitiesReadForSpaces(
   resources: readonly ResourceCapability[],
 ): ResourceCapability[] {
@@ -1246,17 +1237,24 @@ function withCapabilitiesReadForSpaces(
   return dedupeResources([
     ...resources,
     ...[...spaces].map(capabilitiesReadPermission),
-    ...[...spaces].map(delegationListPermission),
   ]);
 }
 
 function accountRegistryPermissions(): ResourceCapability[] {
-  return [ACCOUNT_REGISTRY_PATH, "spaces/"].map((path) => ({
-    service: "tinycloud.kv",
-    space: ACCOUNT_REGISTRY_SPACE,
-    path,
-    actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
-  }));
+  return [
+    ...[ACCOUNT_REGISTRY_PATH, "spaces/"].map((path) => ({
+      service: "tinycloud.kv",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
+    })),
+    {
+      service: "tinycloud.delegation",
+      space: ACCOUNT_REGISTRY_SPACE,
+      path: "",
+      actions: ["tinycloud.delegation/list"],
+    },
+  ];
 }
 
 function accountRegistryIndexPermission(): ResourceCapability {
