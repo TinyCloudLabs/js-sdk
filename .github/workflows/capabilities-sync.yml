@@ -44,12 +44,12 @@ env:
   VENDORED: packages/bootstrap/src/generated/capabilities.ts
   UPSTREAM_PATH: generated/capabilities.ts
   # Authoritative diff anchor: the exact tinycloud-node commit the vendored
-  # registry was taken from. This is the release-tag commit for v1.4.5
-  # (git tag v1.4.5 == a20b48f14ccb56eb849c60529a28b5657765faef). Bump this in
-  # lockstep with a re-vendor + the identity test's EXPECTED_NODE_REV + the
-  # sdk-rs Cargo pin tag. Do NOT derive it from the header's
-  # REGISTRY_SOURCE_GIT_SHA (see the header note above).
-  ANCHOR_NODE_REV: a20b48f14ccb56eb849c60529a28b5657765faef
+  # registry was taken from. This is the TC-178 account delegation history
+  # commit. Bump this in
+  # lockstep with a re-vendor + the identity test's EXPECTED_NODE_REV. Update
+  # the sdk-rs Cargo pin when the corresponding node commit is released. Do NOT
+  # derive it from the header's REGISTRY_SOURCE_GIT_SHA (see the header note above).
+  ANCHOR_NODE_REV: b426134e0676a12100ed161276ae6cb6f4570267
 
 jobs:
   diff:
