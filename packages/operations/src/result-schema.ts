@@ -100,21 +100,11 @@ export function canonicalResultJsonSchema(
   operationVersion: number,
   output: JsonSchema,
 ): JsonSchema {
-const permissionRequestArtifactDefinition = prefixLocalReferences(
-  permissionRequestSchema,
-  "#/$defs/permissionRequest",
-) as JsonSchema;
-const permissionRequestDefinition: JsonSchema = {
-  anyOf: [
-    {
-      type: "object",
-      properties: { requestId: { type: "string", minLength: 1 } },
-      required: ["requestId"],
-      additionalProperties: true,
-    },
-    permissionRequestArtifactDefinition,
-  ],
-};
+  const permissionRequestArtifactDefinition = prefixLocalReferences(
+    permissionRequestSchema,
+    "#/$defs/permissionRequest",
+  ) as JsonSchema;
+  const permissionRequestDefinition: JsonSchema = permissionRequestArtifactDefinition;
   const outputDefinition = prefixLocalReferences(output, "#/$defs/output") as JsonSchema;
   const operationRef: JsonSchema = {
     type: "object",

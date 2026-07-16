@@ -91,6 +91,31 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
   expect(secretGet?.effects).toEqual(["read", "local_write"]);
 });
 
+test("generated authority results require the complete strict request artifact", async () => {
+  const catalog = JSON.parse(await readFile(catalogPath, "utf8")) as {
+    operations: CatalogOperation[];
+  };
+  const resultSchema = catalog.operations.find((operation) =>
+    operation.id === "tinycloud.secrets.get"
+  )!.result as { $defs: Record<string, Record<string, unknown>> };
+  const requestSchema = resultSchema.$defs.permissionRequest;
+
+  expect(requestSchema).not.toHaveProperty("anyOf");
+  expect(requestSchema.additionalProperties).toBe(false);
+  expect(requestSchema.required).toEqual([
+    "kind",
+    "version",
+    "requestId",
+    "createdAt",
+    "profile",
+    "posture",
+    "operatorType",
+    "host",
+    "sessionDid",
+    "requested",
+  ]);
+});
+
 test("generation is byte-identical and generated checks do not repair drift", async () => {
   const original = await readFile(catalogPath, "utf8");
 

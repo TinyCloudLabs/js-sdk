@@ -35,6 +35,12 @@ interface HermeticEncryptedNode {
   stop(): void;
 }
 
+export interface AuthRuntimeFixtureOptions {
+  readonly delegateBasePermissions?: boolean;
+  readonly secretPayloadValue?: string;
+  readonly secretPresent?: boolean;
+}
+
 export interface AuthRuntimeFixture {
   readonly profile: string;
   readonly sessionDid: string;
@@ -46,7 +52,7 @@ export interface AuthRuntimeFixture {
  * fresh-runtime restore path used after a process restart.
  */
 export async function createAuthRuntimeFixture(
-  options: Readonly<{ delegateBasePermissions?: boolean }> = {},
+  options: AuthRuntimeFixtureOptions = {},
 ): Promise<AuthRuntimeFixture> {
   const moduleUrl = new URL(
     "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
@@ -54,7 +60,7 @@ export async function createAuthRuntimeFixture(
   ).href;
   const module = await import(moduleUrl) as {
     createHermeticEncryptedNode(
-      options?: Readonly<{ delegateBasePermissions?: boolean }>,
+      options?: AuthRuntimeFixtureOptions,
     ): Promise<HermeticEncryptedNode>;
   };
   const hermetic = await module.createHermeticEncryptedNode(options);

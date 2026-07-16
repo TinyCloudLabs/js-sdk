@@ -8,6 +8,8 @@ import { z } from "zod";
 
 import {
   canonicalizeCapabilities,
+  canonicalizeOperationCapabilities,
+  evaluateOperationAuthority,
   evaluateAuthority,
   validateExactCapabilities,
 } from "../authority.js";
@@ -36,6 +38,7 @@ import {
   readProfile,
   updateProfileStore,
 } from "../state.js";
+import { operationSpaceResolver } from "../secrets.js";
 
 type CapabilitiesInput = Record<never, never>;
 type CapabilitiesOutput = { readonly capabilities: readonly PermissionEntry[] };
@@ -355,7 +358,15 @@ async function importRequestBoundDelegation(
     }
 
     const effectivePermissions = canonicalizeCapabilities(activated.effectivePermissions);
-    if (request.requested.length === 0 || !evaluateAuthority(request.requested, effectivePermissions).satisfied) {
+    const resolveSpace = operationSpaceResolver(
+      context.runtime.node,
+      context.summary.space,
+    );
+    if (request.requested.length === 0 || !evaluateOperationAuthority(
+      request.requested,
+      effectivePermissions,
+      resolveSpace,
+    ).satisfied) {
       return operationFailure(
         "DELEGATION_REJECTED",
         "The delegation exceeds the stored authority request.",
@@ -378,8 +389,8 @@ async function importRequestBoundDelegation(
           if (state.request.profile !== context.summary.profile ||
             !samePrincipal(state.request.sessionDid, sessionDid) ||
             normalizeHost(state.request.host) !== normalizeHost(host) ||
-            JSON.stringify(canonicalizeCapabilities(state.request.requested)) !==
-              JSON.stringify(canonicalizeCapabilities(request.requested))) {
+            JSON.stringify(canonicalizeOperationCapabilities(state.request.requested, resolveSpace)) !==
+              JSON.stringify(canonicalizeOperationCapabilities(request.requested, resolveSpace))) {
             return {
               records,
               result: operationFailure(
