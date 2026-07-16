@@ -182,6 +182,17 @@ function classifySecretRead(
         },
         requiresCallerInput: true,
       };
+    case "permission_required":
+      return {
+        status: "authority_required",
+        missing: [result.hint as unknown as CapabilityRequirement],
+        request: { requestId: "runtime-hint" },
+        approval: {
+          kind: "openkey",
+          requestId: "runtime-hint",
+          fallback: "tc auth grant <request-artifact>",
+        },
+      };
     case "node_unreachable":
       return {
         status: "error",

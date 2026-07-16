@@ -286,7 +286,13 @@ export class EncryptionService
           return encErr(
             encryptionError(
               error.status === 401 || error.status === 403
-                ? { code: "DECRYPT_DENIED", message: "Node denied decrypt request" }
+                ? {
+                  code: "DECRYPT_DENIED",
+                  message: "Node denied decrypt request",
+                  ...(error.permissionHint === undefined
+                    ? {}
+                    : { permissionHint: error.permissionHint }),
+                }
                 : { code: "INVALID_RESPONSE", message: "Node decrypt request failed" },
             ),
           );

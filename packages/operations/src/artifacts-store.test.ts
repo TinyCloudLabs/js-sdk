@@ -139,6 +139,52 @@ test("does not persist an empty request when the required capability is already 
   expect(await listPermissionRequests("delegate")).toEqual([]);
 });
 
+test("operation artifact lifecycle keeps same-named owner requirements exact", async () => {
+  await isolatedHome();
+  const ownerA = "tinycloud:pkh:eip155:1:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:secrets";
+  const ownerB = "tinycloud:pkh:eip155:1:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:secrets";
+  const kv = {
+    service: "tinycloud.kv",
+    space: ownerB,
+    path: "vault/secrets/API_KEY",
+    actions: ["tinycloud.kv/get"],
+  };
+  const decrypt = {
+    service: "tinycloud.encryption",
+    path: "urn:tinycloud:encryption:did:key:z6MkOwnerB:default",
+    actions: ["tinycloud.encryption/decrypt"],
+  };
+  const resolveSpace = (space: string) => space === "secrets" ? ownerB : space;
+
+  const first = await createOrReusePermissionRequest(requestInput({
+    missing: [kv, decrypt],
+    granted: [{ ...kv, space: ownerA }],
+    resolveSpace,
+    createRequestId: () => "req_owner_exact",
+  }));
+  expect(first).toMatchObject({ status: "created", reused: false });
+  if (first.status !== "created") throw new Error("expected request");
+  expect(first.request.requested).toEqual([kv, decrypt].sort((left, right) =>
+    JSON.stringify(left).localeCompare(JSON.stringify(right))));
+
+  const reused = await createOrReusePermissionRequest(requestInput({
+    missing: [decrypt, kv],
+    granted: [{ ...kv, space: ownerA }],
+    resolveSpace,
+    createRequestId: () => "req_owner_exact_new",
+  }));
+  expect(reused).toMatchObject({ status: "created", reused: true, request: { requestId: "req_owner_exact" } });
+
+  const covered = await createOrReusePermissionRequest(requestInput({
+    missing: [decrypt],
+    granted: [{ ...kv, space: ownerB }],
+    resolveSpace,
+    createRequestId: () => "req_owner_decrypt",
+  }));
+  expect(covered).toMatchObject({ status: "created", reused: false, request: { requested: [decrypt] } });
+  expect((await listPermissionRequests("delegate")).map((request) => request.requested)).toEqual([[decrypt]]);
+});
+
 test("prunes only records strictly older than 30 days and removes covered records", async () => {
   await isolatedHome();
   const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1_000);

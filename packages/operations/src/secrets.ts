@@ -58,10 +58,9 @@ export function resolveSecretReference(
 }
 
 /**
- * Resolve the operation's explicit space against the authenticated identity.
- * Omitted input deliberately remains the literal `secrets` space for CLI
- * compatibility; operation authority canonicalization resolves that literal
- * to the same owner-exact identity when comparing grants.
+ * Resolve the operation's space against the authenticated identity. The
+ * public short-name contract remains `secrets`, while an authenticated
+ * operation uses its owner-exact URI for the actual read boundary.
  */
 export function resolveSecretReferenceForOperation(
   input: SecretsGetInput,
@@ -69,7 +68,7 @@ export function resolveSecretReferenceForOperation(
   ownerSpace?: string,
 ): SecretReference {
   const reference = resolveSecretReference(input);
-  if (input.space === undefined) return reference;
+  if (input.space === undefined && ownerSpace === undefined) return reference;
   return {
     ...reference,
     space: resolveOperationSpace(reference.space, node, ownerSpace),
@@ -132,11 +131,16 @@ function canonicalizeSpaceUri(space: string): string {
   if (parts.length < 3 || name === undefined || name === "") {
     throw invalidSecretInput();
   }
-  const owner = parts.slice(1, -1).join(":").replace(
-    /(eip155:\d+:)(0x[0-9a-fA-F]{40})/,
-    (_match, prefix: string, address: string) => `${prefix}${canonicalizeAddress(address)}`,
+  // EIP-155 address casing is interchangeable only in the repository's
+  // anchored PKH space form. Other TinyCloud space/DID syntaxes are opaque
+  // method-specific identifiers and must remain byte-for-byte unchanged.
+  const pkh = space.match(
+    /^tinycloud:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):([^:]+)$/,
   );
-  return `tinycloud:${owner}:${name}`;
+  if (pkh !== null) {
+    return `tinycloud:pkh:eip155:${pkh[1]}:${canonicalizeAddress(pkh[2]!)}:${pkh[3]}`;
+  }
+  return space;
 }
 
 function canonicalizeAddress(address: string): string {

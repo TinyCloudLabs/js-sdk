@@ -47,6 +47,18 @@ export interface ServiceError {
 }
 
 /**
+ * A node-supplied permission hint after strict SDK validation. This is
+ * deliberately narrower than a general capability: no wildcards, caveats,
+ * descriptions, or transport metadata can cross the service boundary.
+ */
+export interface PermissionHint {
+  readonly service: "tinycloud.kv" | "tinycloud.encryption";
+  readonly space?: string;
+  readonly path: string;
+  readonly actions: readonly string[];
+}
+
+/**
  * Storage quota information returned with quota-related errors.
  */
 export interface StorageQuotaInfo {

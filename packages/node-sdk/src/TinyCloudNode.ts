@@ -136,6 +136,10 @@ import {
   type EncryptionCrypto,
   type NetworkDescriptor,
 } from "@tinycloud/sdk-core";
+import {
+  parsePermissionHint,
+  type PermissionHint,
+} from "@tinycloud/sdk-services";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
@@ -168,6 +172,14 @@ export interface SecretReadInput {
   scope?: string;
 }
 
+/** Safe, validated capability hint returned when the node denies one read phase. */
+export interface SecretPermissionHint {
+  readonly service: "tinycloud.kv" | "tinycloud.encryption";
+  readonly space?: string;
+  readonly path: string;
+  readonly actions: readonly string[];
+}
+
 /**
  * Safe classified result for an explicit-space secret read.
  *
@@ -177,6 +189,7 @@ export interface SecretReadInput {
 export type SecretReadResult =
   | { status: "ok"; value: string }
   | { status: "not_found" }
+  | { status: "permission_required"; hint: SecretPermissionHint }
   | { status: "node_unreachable" }
   | { status: "read_failed" }
   | { status: "corrupt_envelope" }
@@ -3174,7 +3187,24 @@ export class TinyCloudNode {
         );
         graph.assertActive();
         if (!response.ok) {
-          throw new DecryptTransportResponseError(response.status);
+          let permissionHint: PermissionHint | undefined;
+          if (response.status === 401 || response.status === 403) {
+            try {
+              const body: unknown = await response.json();
+              const record = typeof body === "object" && body !== null
+                ? body as Record<string, unknown>
+                : undefined;
+              const nested = typeof record?.error === "object" && record.error !== null
+                ? record.error as Record<string, unknown>
+                : undefined;
+              permissionHint = parsePermissionHint(record?.permissionHint) ??
+                parsePermissionHint(nested?.permissionHint);
+            } catch {
+              // A denied response without the SDK-owned structured field is
+              // classified safely below and cannot become a grant hint.
+            }
+          }
+          throw new DecryptTransportResponseError(response.status, permissionHint);
         }
         return (await response.json()) as DecryptResponseBody;
       },
@@ -3937,6 +3967,19 @@ export class TinyCloudNode {
     );
 
     if (result.status !== "ok") {
+      if (result.status === "permission_required") {
+        const hint = parsePermissionHint(result.hint);
+        if (hint === undefined) return { status: "read_failed" };
+        return {
+          status: "permission_required",
+          hint: {
+            service: hint.service,
+            ...(hint.space === undefined ? {} : { space: hint.space }),
+            path: hint.path,
+            actions: [...hint.actions],
+          },
+        };
+      }
       return { status: result.status };
     }
     if (!isSecretPayload(result.entry.value)) {

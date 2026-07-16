@@ -1,5 +1,7 @@
 import {
   activateValidatedRuntimeDelegation,
+  makePkhSpaceId,
+  parsePkhDid,
   TinyCloudNode,
   type PermissionEntry,
   type PortableDelegation,
@@ -161,6 +163,9 @@ export async function createInvocationRuntime(
     // restoration failed to install its key as the live session key.
     const activeSessionDid = normalizeDid(node.sessionDid);
     const livePrincipalDid = normalizeDid(node.did);
+    const authenticatedSpace = explicitPrivateKeyOverride
+      ? spaceForAuthenticatedPrincipal(livePrincipalDid)
+      : undefined;
     // This API derives from the restored, verified base session rather than
     // from an SDK private field or a second parse of signed authority here.
     const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
@@ -197,6 +202,7 @@ export async function createInvocationRuntime(
           ...(explicitPrivateKeyOverride && livePrincipalDid !== undefined
             ? { ownerDid: livePrincipalDid }
             : {}),
+          ...(authenticatedSpace === undefined ? {} : { space: authenticatedSpace }),
           ...(activeSessionDid === undefined ? {} : { sessionDid: activeSessionDid }),
         },
         runtime,
@@ -208,6 +214,16 @@ export async function createInvocationRuntime(
       "The selected profile runtime could not be initialized.",
       { retryable: true },
     ));
+  }
+}
+
+function spaceForAuthenticatedPrincipal(principal: string | undefined): string | undefined {
+  if (principal === undefined) return undefined;
+  try {
+    const pkh = parsePkhDid(principal);
+    return pkh === null ? undefined : makePkhSpaceId(pkh.address, pkh.chainId, "secrets");
+  } catch {
+    return undefined;
   }
 }
 

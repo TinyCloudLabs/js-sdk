@@ -101,6 +101,23 @@ export function evaluateOperationAuthority(
   };
 }
 
+/**
+ * Validate a runtime hint as an exact member of the registered plan. Runtime
+ * nodes may report the one phase that failed, but they may not introduce a
+ * broader, differently-owned, caveated, or otherwise new capability.
+ */
+export function isExactCapabilityMemberSubset(
+  hinted: readonly PermissionEntry[],
+  planned: readonly PermissionEntry[],
+  resolveSpace?: OperationSpaceResolver,
+): boolean {
+  const canonicalHinted = canonicalizeOperationCapabilities(hinted, resolveSpace);
+  const canonicalPlanned = canonicalizeOperationCapabilities(planned, resolveSpace);
+  return canonicalHinted.length > 0 && canonicalHinted.every((hint) => canonicalPlanned.some((plan) =>
+    JSON.stringify(hint) === JSON.stringify(plan),
+  ));
+}
+
 /** Canonical identity used by operation preflight, hints, and artifacts. */
 export function canonicalizeOperationCapabilities(
   permissions: readonly PermissionEntry[],

@@ -24,6 +24,7 @@ import {
 import {
   canonicalizeOperationCapabilities,
   evaluateOperationAuthority,
+  isExactCapabilityMemberSubset,
   validateExactCapabilities,
 } from "./authority.js";
 import {
@@ -262,11 +263,11 @@ export async function invokeOperation(
         const hinted = exactCapabilities(outcome.missing);
         if (
           hinted === undefined ||
-          !evaluateOperationAuthority(
+          !isExactCapabilityMemberSubset(
             hinted as unknown as PermissionEntry[],
             required as unknown as PermissionEntry[],
             resolveSpace,
-          ).satisfied
+          )
         ) {
           return errorResult(
             operation,
@@ -482,6 +483,7 @@ async function persistAuthorityRequest(
       granted: (force
         ? []
         : canonicalGranted) as unknown as PermissionEntry[],
+      resolveSpace,
     });
     if (resolution.status !== "created") {
       return {

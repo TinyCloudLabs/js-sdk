@@ -8,6 +8,7 @@ import type {
   DecryptCapabilityProof,
   IEncryptionService,
 } from "../encryption";
+import type { PermissionHint } from "../types";
 
 export interface VaultNetworkEncryptionConfig {
   /** Default encryption network used for inline vault envelopes. */
@@ -99,6 +100,7 @@ export type VaultNetworkReadResult<T> =
   | { status: "ok"; entry: VaultEntry<T> }
   | { status: "not_found" }
   | { status: "node_unreachable" }
+  | { status: "permission_required"; hint: PermissionHint }
   | { status: "read_failed" }
   | { status: "corrupt_envelope" }
   | { status: "decrypt_failed" }

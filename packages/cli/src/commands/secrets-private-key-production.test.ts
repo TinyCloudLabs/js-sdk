@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Command } from "commander";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { invokeOperation } from "@tinycloud/operations";
 
 const PRIVATE_KEY = "1".repeat(64);
 let home: string | undefined;
@@ -22,6 +23,90 @@ test("production secrets get accepts flag and environment private-key overrides 
     expect(result.output).not.toContain(PRIVATE_KEY);
     expect(result.output).not.toContain("SESSION_NOT_FOUND");
     expect(result.output).toContain("NODE_ERROR");
+  }
+});
+
+test("production private-key planning and execution use the authenticated key owner for flag and env", async () => {
+  const ownerB = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000002:secrets";
+  const capabilities: Array<Record<string, unknown>> = [];
+  const signIn = spyOn(TinyCloudNode.prototype, "signIn").mockImplementation(async function(this: TinyCloudNode) {
+    const node = this as unknown as { _address?: string; _chainId: number };
+    node._address = "0x0000000000000000000000000000000000000002";
+    node._chainId = 1;
+  });
+  const getCapabilities = spyOn(TinyCloudNode.prototype, "getVerifiedSessionCapabilities")
+    .mockImplementation(() => capabilities as never);
+  const network = spyOn(TinyCloudNode.prototype, "getEncryptionNetworkIdForSpace")
+    .mockImplementation(() => "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000002:default");
+  const readSecret = spyOn(TinyCloudNode.prototype, "readSecret")
+    .mockResolvedValue({ status: "ok", value: "owner-b-proof" });
+
+  try {
+    for (const flag of [true, false]) {
+      const firstRun = home === undefined;
+      if (firstRun) home = await mkdtemp(`${tmpdir()}/tinycloud-cli-private-key-owner-`);
+      process.env.TC_HOME = home;
+      if (flag) delete process.env.TC_PRIVATE_KEY;
+      else process.env.TC_PRIVATE_KEY = PRIVATE_KEY;
+
+      const { profileConfigPath, readJson, writeJsonAtomic } = await import("@tinycloud/operations/state");
+      if (firstRun) {
+        await writeJsonAtomic(profileConfigPath("openkey"), {
+          name: "openkey",
+          host: "https://node.invalid",
+          chainId: 1,
+          spaceName: "secrets",
+          spaceId: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets",
+          did: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+          posture: "owner-openkey",
+          operatorType: "human",
+          authMethod: "openkey",
+          createdAt: "2026-07-15T00:00:00.000Z",
+        });
+      }
+
+      capabilities.length = 0;
+      readSecret.mockClear();
+      const first = await invokeOperation(
+        "tinycloud.secrets.get",
+        1,
+        {
+          profile: "openkey",
+          host: "https://node.invalid",
+          allowOwnerProfile: true,
+          privateKey: flag ? PRIVATE_KEY : process.env.TC_PRIVATE_KEY,
+        },
+        { name: "HERMETIC_PRIVATE_KEY_OWNER_CANARY" },
+      );
+      expect(first.status).toBe("authority_required");
+      if (first.status !== "authority_required") throw new Error("expected owner-B authority");
+      expect(first.context.space).toBe(ownerB);
+      expect(first.missing.every((permission) => permission.space === undefined || permission.space === ownerB)).toBe(true);
+      expect(first.request.requested).toEqual(first.missing);
+      expect(readSecret).not.toHaveBeenCalled();
+
+      capabilities.push(...first.missing as Array<Record<string, unknown>>);
+      const second = await invokeOperation(
+        "tinycloud.secrets.get",
+        1,
+        {
+          profile: "openkey",
+          host: "https://node.invalid",
+          allowOwnerProfile: true,
+          privateKey: flag ? PRIVATE_KEY : process.env.TC_PRIVATE_KEY,
+        },
+        { name: "HERMETIC_PRIVATE_KEY_OWNER_CANARY" },
+      );
+      expect(second.status).toBe("ok");
+      expect(readSecret).toHaveBeenCalledWith(expect.objectContaining({ space: ownerB }));
+      expect((await readJson(profileConfigPath("openkey")))?.spaceId).toContain(":0x0000000000000000000000000000000000000001:");
+    }
+    expect(signIn).toHaveBeenCalledTimes(4);
+  } finally {
+    signIn.mockRestore();
+    getCapabilities.mockRestore();
+    network.mockRestore();
+    readSecret.mockRestore();
   }
 });
 

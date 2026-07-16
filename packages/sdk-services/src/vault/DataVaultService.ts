@@ -20,7 +20,7 @@ import {
   IServiceContext,
   ServiceSession,
 } from "../types";
-import { wrapError } from "../errors";
+import { parsePermissionHint, wrapError } from "../errors";
 import type { IKVService } from "../kv/IKVService";
 import type { KVService } from "../kv/KVService";
 import type {
@@ -693,6 +693,10 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     }
 
     if (!valueResult.ok) {
+      const permissionHint = parsePermissionHint(valueResult.error.meta?.permissionHint);
+      if (valueResult.error.code === "AUTH_UNAUTHORIZED" && permissionHint !== undefined) {
+        return { status: "permission_required", hint: permissionHint };
+      }
       if (
         (valueResult.error.code === "NOT_FOUND" ||
           valueResult.error.code === "KV_NOT_FOUND") &&
@@ -731,6 +735,12 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     }
 
     if (!plaintextResult.ok) {
+      const permissionHint = parsePermissionHint(
+        (plaintextResult.error as { permissionHint?: unknown }).permissionHint,
+      );
+      if (plaintextResult.error.code === "DECRYPT_DENIED" && permissionHint !== undefined) {
+        return { status: "permission_required", hint: permissionHint };
+      }
       if (plaintextResult.error.code === "INVALID_ENVELOPE") {
         return { status: "corrupt_envelope" };
       }

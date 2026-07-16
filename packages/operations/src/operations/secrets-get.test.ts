@@ -86,6 +86,27 @@ describe("tinycloud.secrets.get", () => {
     ]);
   });
 
+  test("preserves arbitrary full TinyCloud DID space text during planning and execution", async () => {
+    const didSpace = "tinycloud:did:web:EXAMPLE.com:eip155:1:0xABCDEF:Vault";
+    const input = secretsGetOperationDefinition.input.parse({
+      name: "API_KEY",
+      space: didSpace,
+    });
+    const readSecret = async (readInput: Record<string, string>) => {
+      expect(readInput.space).toBe(didSpace);
+      return { status: "ok", value: "did-space-value" };
+    };
+    const planned = await secretsGetOperationDefinition.authority(
+      context(readSecret) as RuntimeOperationContext,
+      input,
+    );
+    expect(planned[0]).toMatchObject({ service: "tinycloud.kv", space: didSpace });
+    expect(await secretsGetOperationDefinition.execute(context(readSecret), input)).toMatchObject({
+      status: "ok",
+      output: { value: "did-space-value" },
+    });
+  });
+
   test("isolates a throwing scoped network resolver before using a valid local default", async () => {
     const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
     const planned = await secretsGetOperationDefinition.authority(

@@ -143,6 +143,7 @@ export {
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
   type SecretReadInput,
+  type SecretPermissionHint,
   type SecretReadResult,
 } from "./TinyCloudNode";
 

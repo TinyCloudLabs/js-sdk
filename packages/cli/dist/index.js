@@ -172,9 +172,10 @@ var require_decrypt_transport_response_error = __commonJS({
     });
     module.exports = __toCommonJS(DecryptTransportResponseError_exports);
     var DecryptTransportResponseError4 = class extends Error {
-      constructor(status) {
+      constructor(status, permissionHint) {
         super("Node decrypt request failed");
         this.status = status;
+        this.permissionHint = permissionHint;
         this.name = "DecryptTransportResponseError";
       }
     };
@@ -6059,6 +6060,42 @@ var ServiceSessionSchema = external_exports.object({
   /** The session key JWK (required for invoke) */
   jwk: external_exports.object({}).passthrough()
 });
+function parsePermissionHint(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const candidate = value;
+  const keys = Object.keys(candidate).sort();
+  if (keys.some((key) => !["actions", "path", "service", "space"].includes(key))) return void 0;
+  if (candidate.service !== "tinycloud.kv" && candidate.service !== "tinycloud.encryption") return void 0;
+  if (typeof candidate.path !== "string" || candidate.path.length === 0 || candidate.path.includes("*")) return void 0;
+  if (candidate.service === "tinycloud.kv" && (typeof candidate.space !== "string" || candidate.space.length === 0 || !candidate.path.startsWith("vault/") || candidate.path.endsWith("/"))) {
+    return void 0;
+  }
+  if (candidate.service === "tinycloud.encryption" && (candidate.space !== void 0 || !candidate.path.startsWith("urn:tinycloud:encryption:") || candidate.path.endsWith(":"))) {
+    return void 0;
+  }
+  if (!Array.isArray(candidate.actions) || candidate.actions.length !== 1 || typeof candidate.actions[0] !== "string" || candidate.actions[0].includes("*")) return void 0;
+  const expectedAction = candidate.service === "tinycloud.kv" ? "tinycloud.kv/get" : "tinycloud.encryption/decrypt";
+  if (candidate.actions[0] !== expectedAction) return void 0;
+  const space = typeof candidate.space === "string" ? candidate.space : void 0;
+  return {
+    service: candidate.service,
+    ...space === void 0 ? {} : { space },
+    path: candidate.path,
+    actions: [candidate.actions[0]]
+  };
+}
+function parsePermissionHintFromErrorText(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null) return void 0;
+    const root = parsed;
+    const nested = root.error;
+    const nestedRecord = typeof nested === "object" && nested !== null ? nested : void 0;
+    return parsePermissionHint(root.permissionHint) ?? parsePermissionHint(nestedRecord?.permissionHint);
+  } catch {
+    return void 0;
+  }
+}
 function authRequiredError(service) {
   return {
     code: ErrorCodes.AUTH_REQUIRED,
@@ -6755,13 +6792,15 @@ var KVService = class extends BaseService {
           options?.signal
         );
         if (!response.ok) {
-          if (response.status === 401) {
+          if (response.status === 401 || response.status === 403) {
             const errorText2 = await response.text();
             const { resource, action } = parseAuthError(errorText2);
+            const permissionHint = parsePermissionHintFromErrorText(errorText2);
             return err(authUnauthorizedError("kv", errorText2, {
               status: response.status,
               ...action && { requiredAction: action },
-              ...resource && { resource }
+              ...resource && { resource },
+              ...permissionHint === void 0 ? {} : { permissionHint }
             }));
           }
           if (response.status === 404) {
@@ -9316,6 +9355,10 @@ var DataVaultService = class extends BaseService {
       return { status: "node_unreachable" };
     }
     if (!valueResult.ok) {
+      const permissionHint = parsePermissionHint(valueResult.error.meta?.permissionHint);
+      if (valueResult.error.code === "AUTH_UNAUTHORIZED" && permissionHint !== void 0) {
+        return { status: "permission_required", hint: permissionHint };
+      }
       if ((valueResult.error.code === "NOT_FOUND" || valueResult.error.code === "KV_NOT_FOUND") && !hasHttpResponse(valueResult.error)) {
         return { status: "not_found" };
       }
@@ -9339,6 +9382,12 @@ var DataVaultService = class extends BaseService {
       return { status: "decrypt_failed" };
     }
     if (!plaintextResult.ok) {
+      const permissionHint = parsePermissionHint(
+        plaintextResult.error.permissionHint
+      );
+      if (plaintextResult.error.code === "DECRYPT_DENIED" && permissionHint !== void 0) {
+        return { status: "permission_required", hint: permissionHint };
+      }
       if (plaintextResult.error.code === "INVALID_ENVELOPE") {
         return { status: "corrupt_envelope" };
       }
@@ -11158,7 +11207,11 @@ var EncryptionService = class extends BaseService {
         if (error instanceof import_decrypt_transport_response_error.DecryptTransportResponseError) {
           return encErr(
             encryptionError(
-              error.status === 401 || error.status === 403 ? { code: "DECRYPT_DENIED", message: "Node denied decrypt request" } : { code: "INVALID_RESPONSE", message: "Node decrypt request failed" }
+              error.status === 401 || error.status === 403 ? {
+                code: "DECRYPT_DENIED",
+                message: "Node denied decrypt request",
+                ...error.permissionHint === void 0 ? {} : { permissionHint: error.permissionHint }
+              } : { code: "INVALID_RESPONSE", message: "Node decrypt request failed" }
             )
           );
         }

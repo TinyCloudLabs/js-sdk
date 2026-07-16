@@ -8,6 +8,7 @@
  */
 
 import type { Json } from "./canonical";
+import type { PermissionHint } from "../types";
 
 /** Default ciphersuite identifier for v1 envelopes. */
 export const DEFAULT_ENCRYPTION_ALG = "x25519-aes256gcm/v1" as const;
@@ -277,7 +278,7 @@ export type EncryptionErrorInput =
   | { code: "NETWORK_NOT_ACTIVE"; state: string; message?: string }
   | { code: "INVALID_NETWORK_ID"; message: string }
   | { code: "INVALID_ENVELOPE"; message: string }
-  | { code: "DECRYPT_DENIED"; message: string }
+  | { code: "DECRYPT_DENIED"; message: string; permissionHint?: PermissionHint }
   | { code: "INVALID_RESPONSE"; message: string }
   | { code: "RESPONSE_SIGNATURE_INVALID"; message?: string }
   | { code: "RESPONSE_BINDING_MISMATCH"; field: string; message?: string }

@@ -7,6 +7,7 @@ import {
   permissionIdentity,
   validateExactCapabilities,
 } from "./authority.js";
+import { operationSpaceResolver } from "./secrets.js";
 
 const keyGet = {
   service: "tinycloud.kv",
@@ -134,4 +135,22 @@ test("operation authority keeps full space owner identity exact while resolving 
     [{ ...keyGet, space: "secrets" }],
     resolveOwnerA,
   )).toEqual({ satisfied: true, missing: [] });
+});
+
+test("operation authority treats PKH checksum casing as equivalent but preserves DID text", () => {
+  const checksum = "tinycloud:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F:secrets";
+  const lower = "tinycloud:pkh:eip155:1:0x71c7656ec7ab88b098defb751b7401b5f6d8976f:secrets";
+  const resolve = operationSpaceResolver({}, undefined);
+  expect(evaluateOperationAuthority(
+    [{ ...keyGet, space: checksum }],
+    [{ ...keyGet, space: lower }],
+    resolve,
+  ).satisfied).toBe(true);
+
+  const did = "tinycloud:did:web:EXAMPLE.com:eip155:1:0xABCDEF:Vault";
+  expect(evaluateOperationAuthority(
+    [{ ...keyGet, space: did }],
+    [{ ...keyGet, space: did }],
+    resolve,
+  ).missing).toEqual([]);
 });

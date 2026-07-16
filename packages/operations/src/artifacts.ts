@@ -5,8 +5,10 @@ import { z } from "zod";
 
 import {
   canonicalizeCapabilities,
+  evaluateOperationAuthority,
   evaluateAuthority,
 } from "./authority.js";
+import type { OperationSpaceResolver } from "./authority.js";
 import type {
   OperationOperatorType,
   TinyCloudPosture,
@@ -130,6 +132,8 @@ export interface BuildPermissionRequestArtifactInput extends PermissionRequestId
 
 export interface CreateOrReusePermissionRequestInput extends BuildPermissionRequestArtifactInput {
   readonly granted: readonly PermissionEntry[];
+  /** Owner-aware identity resolver used by registered operation callers. */
+  readonly resolveSpace?: OperationSpaceResolver;
   readonly replace?: boolean;
 }
 
@@ -277,7 +281,12 @@ export async function findPermissionRequest(
 export async function createOrReusePermissionRequest(
   input: CreateOrReusePermissionRequestInput,
 ): Promise<PermissionRequestResolution> {
-  const missing = evaluateAuthority(input.granted, input.missing).missing;
+  // Registered operations already computed this exact missing set during
+  // canonical preflight. Do not recompute it with the legacy global matcher:
+  // that matcher intentionally treats same-named short/full spaces as equal.
+  const missing = input.resolveSpace === undefined
+    ? evaluateAuthority(input.granted, input.missing).missing
+    : canonicalizeCapabilities(input.missing);
   const now = input.now ?? (() => new Date());
   const observedNow = now();
   if (Number.isNaN(observedNow.getTime())) throw new TypeError("The artifact clock returned an invalid date.");
@@ -306,6 +315,7 @@ export async function createOrReusePermissionRequest(
         profile: input.profile,
         sessionDid: input.sessionDid,
         granted: input.granted,
+        resolveSpace: input.resolveSpace,
         now: observedNow,
       });
 
@@ -336,6 +346,7 @@ export interface PrunePermissionRequestsInput {
   readonly profile: string;
   readonly sessionDid: string;
   readonly granted: readonly PermissionEntry[];
+  readonly resolveSpace?: OperationSpaceResolver;
   readonly now: Date;
 }
 
@@ -353,7 +364,11 @@ export function prunePermissionRequests(
     // authority, but remain readable and are retained byte-for-byte by the
     // shared format-1 writer for compatibility.
     if (record.requested.length === 0) return true;
-    return !evaluateAuthority(input.granted, record.requested).satisfied;
+    return !evaluateArtifactAuthority(
+      input.granted,
+      record.requested,
+      input.resolveSpace,
+    ).satisfied;
   });
 }
 
@@ -381,7 +396,11 @@ function isSupersededBy(
   ) {
     return false;
   }
-  const remaining = evaluateAuthority(input.granted, record.requested).missing;
+  const remaining = evaluateArtifactAuthority(
+    input.granted,
+    record.requested,
+    input.resolveSpace,
+  ).missing;
   return remaining.length > 0 &&
     permissionRequestArtifactIdentity(record) !==
       createPermissionRequestIdentity({ ...input, missing }) &&
@@ -396,6 +415,16 @@ function permissionRequestArtifactIdentity(record: PermissionRequestArtifact): s
     host: record.host,
     missing: record.requested,
   });
+}
+
+function evaluateArtifactAuthority(
+  granted: readonly PermissionEntry[],
+  required: readonly PermissionEntry[],
+  resolveSpace?: OperationSpaceResolver,
+) {
+  return resolveSpace === undefined
+    ? evaluateAuthority(granted, required)
+    : evaluateOperationAuthority(granted, required, resolveSpace);
 }
 
 function defaultRequestId(now: Date): string {

@@ -33,6 +33,7 @@
     "test:integration": "echo 'Integration tests live in tests/node-sdk workspace'"
   },
   "dependencies": {
+    "@tinycloud/sdk-services": "2.6.3",
     "@tinycloud/sdk-core": "2.7.0-beta.2",
     "@tinycloud/node-sdk-wasm": "1.7.4",
     "siwe": "^3.0.0"
