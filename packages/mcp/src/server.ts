@@ -1,14 +1,18 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio, type StdioServerHandle } from "@modelcontextprotocol/server/stdio";
 
-import { registerTinyCloudTools, type McpStartupSelection } from "./tools.js";
+import { createJsonSchemaValidator, registerTinyCloudTools, type McpStartupSelection } from "./tools.js";
+import { MCP_VERSION } from "./version.js";
 
 export const MCP_SERVER_NAME = "tinycloud-mcp";
-export const MCP_VERSION = "0.1.0-beta.0";
-
+export { MCP_VERSION } from "./version.js";
 export function createTinyCloudMcpServer(selection: McpStartupSelection): McpServer {
-  const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_VERSION });
-  registerTinyCloudTools(server, selection);
+  const validator = createJsonSchemaValidator();
+  const server = new McpServer(
+    { name: MCP_SERVER_NAME, version: MCP_VERSION },
+    { jsonSchemaValidator: validator },
+  );
+  registerTinyCloudTools(server, selection, validator);
   return server;
 }
 

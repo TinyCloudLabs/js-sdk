@@ -46,7 +46,7 @@ export function parseCliOptions(arguments_: readonly string[]): ParsedCliOptions
     }
     if (argument === "--profile") {
       const value = arguments_[index + 1];
-      if (value === undefined || value.startsWith("-")) {
+      if (value === undefined || value.startsWith("-") || value.trim().length === 0) {
         throw new Error("--profile requires a non-empty profile name.");
       }
       profile = value;
@@ -56,7 +56,7 @@ export function parseCliOptions(arguments_: readonly string[]): ParsedCliOptions
     }
     if (argument?.startsWith("--profile=")) {
       const value = argument.slice("--profile=".length);
-      if (value.length === 0) throw new Error("--profile requires a non-empty profile name.");
+      if (value.trim().length === 0) throw new Error("--profile requires a non-empty profile name.");
       profile = value;
       explicitProfile = true;
       continue;
@@ -106,7 +106,7 @@ export async function main(arguments_: readonly string[] = process.argv.slice(2)
 function isDirectInvocation(): boolean {
   const argv = process.argv[1];
   if (argv === undefined) return false;
-  return basename(argv) === "cli.js" || basename(argv) === "tinycloud-mcp";
+  return basename(argv) === "cli.js" || basename(argv) === "cli.cjs" || basename(argv) === "tinycloud-mcp";
 }
 
 if (isDirectInvocation()) {

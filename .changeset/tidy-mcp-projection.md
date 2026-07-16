@@ -1,5 +1,4 @@
 ---
-"@tinycloud/mcp": minor
 "@tinycloud/operations": patch
 ---
 

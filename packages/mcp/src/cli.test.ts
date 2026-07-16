@@ -23,5 +23,9 @@ test("parses startup options and records whether profile selection was explicit"
 
 test("rejects unknown options and missing profile values before transport startup", () => {
   expect(() => parseCliOptions(["--profile"])).toThrow("--profile requires");
+  expect(() => parseCliOptions(["--profile", ""])).toThrow("--profile requires");
+  expect(() => parseCliOptions(["--profile", " \t "])).toThrow("--profile requires");
+  expect(() => parseCliOptions(["--profile="])).toThrow("--profile requires");
+  expect(() => parseCliOptions(["--profile= \t "])).toThrow("--profile requires");
   expect(() => parseCliOptions(["--unexpected"])).toThrow("Unknown option");
 });

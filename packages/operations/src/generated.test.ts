@@ -16,6 +16,7 @@ type CatalogOperation = {
   version: number;
   input: Record<string, unknown>;
   output: Record<string, unknown>;
+  result: Record<string, unknown>;
   effects: readonly string[];
   postures: readonly string[];
   exposure: Record<string, unknown>;
@@ -66,6 +67,8 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     expect(operation.input).toBeDefined();
     expect(operation.output).toBeDefined();
     expect(operation.output.additionalProperties).toBe(false);
+    expect(operation.result).toBeDefined();
+    expect(operation.result.anyOf).toHaveLength(4);
     expect(operation.effects.length).toBeGreaterThan(0);
     expect(operation.postures.length).toBeGreaterThan(0);
     expect(Object.keys(operation.exposure).sort()).toEqual(["cli", "docs", "mcp", "skill"]);

@@ -47,7 +47,7 @@ test("official v2 client lists exactly six generated-schema tools over stdio", a
     ]);
     expect(listed.tools).toHaveLength(6);
 
-    const byId = new Map((catalog as { operations: Array<{ id: string; version: number; input: unknown }> }).operations
+    const byId = new Map((catalog as { operations: Array<{ id: string; version: number; input: unknown; result: unknown }> }).operations
       .map((operation) => [`${operation.id}@${operation.version}`, operation]));
     const mapping: Record<string, string> = {
       tinycloud_status: "tinycloud.status.get@1",
@@ -61,6 +61,17 @@ test("official v2 client lists exactly six generated-schema tools over stdio", a
       expect(tool.inputSchema).toEqual(
         byId.get(mapping[tool.name]!)!.input as typeof tool.inputSchema,
       );
+      expect(tool.outputSchema).toEqual(
+        byId.get(mapping[tool.name]!)!.result as typeof tool.outputSchema,
+      );
+      expect(tool.annotations).toMatchObject({
+        readOnlyHint: tool.name === "tinycloud_status" ||
+          tool.name === "tinycloud_auth_status" ||
+          tool.name === "tinycloud_auth_capabilities",
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: tool.name === "tinycloud_secrets_get",
+      });
     }
 
     const status = await client.callTool({ name: "tinycloud_status", arguments: {} });
@@ -73,6 +84,21 @@ test("official v2 client lists exactly six generated-schema tools over stdio", a
       type: "text",
       text: "TinyCloud operation completed; use the structured result.",
     }]);
+
+    for (const [name, arguments_] of [
+      ["tinycloud_auth_status", {}],
+      ["tinycloud_auth_capabilities", {}],
+      ["tinycloud_auth_request", {}],
+      ["tinycloud_auth_import", {}],
+      ["tinycloud_secrets_get", { name: "MCP_TEST_SECRET" }],
+    ] as const) {
+      const result = await client.callTool({ name, arguments: arguments_ });
+      if (contentOf(result) === undefined) {
+        expect(result.isError).toBe(true);
+      } else {
+        expect(contentOf(result)!.status).toMatch(/^(ok|authority_required|setup_required|error)$/);
+      }
+    }
 
     const unknownField = await client.callTool({
       name: "tinycloud_status",
@@ -152,6 +178,154 @@ test("an explicitly pinned missing profile never falls back to config.defaultPro
     await client.close();
   }
 });
+
+test("real MCP restarts preserve signed import/retry boundaries without owner fallback", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-hermetic-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const authSupport = await import(new URL(
+    "../../operations/test-support/auth-runtime.ts",
+    import.meta.url,
+  ).href) as {
+    createAuthRuntimeFixture: () => Promise<any>;
+    persistRuntimeDelegations: (fixture: any, delegations: readonly any[]) => Promise<void>;
+  };
+  const stateSupport = await import(new URL(
+    "../../operations/src/state.ts",
+    import.meta.url,
+  ).href) as {
+    readAuthRequests: (profile: string) => Promise<unknown[]>;
+    sessionPath: (profile: string) => string;
+    writeJsonAtomic: (path: string, value: unknown) => Promise<void>;
+  };
+  const fixture = await authSupport.createAuthRuntimeFixture();
+  const canary = "hermetic encrypted delegation proof";
+  let client: Client | undefined;
+  let importedClient: Client | undefined;
+  let retryClient: Client | undefined;
+
+  try {
+    client = await connectClient(home, ["--profile", fixture.profile]);
+    const invalid = await client.callTool({
+      name: "tinycloud_secrets_get",
+      arguments: { name: 42 },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(await stateSupport.readAuthRequests(fixture.profile)).toEqual([]);
+
+    const authority = await client.callTool({
+      name: "tinycloud_secrets_get",
+      arguments: { name: "HERMETIC_DELEGATION_CANARY" },
+    });
+    expect(contentOf(authority)).toMatchObject({
+      status: "authority_required",
+      context: { posture: "delegate-session" },
+    });
+    if (contentOf(authority)?.status !== "authority_required") {
+      throw new Error("expected a canonical authority result");
+    }
+    const requestId = (contentOf(authority)!.request as { requestId: string }).requestId;
+    await client.close();
+    client = undefined;
+
+    const delegation = await fixture.hermetic.mintDelegation();
+    importedClient = await connectClient(home, ["--profile", fixture.profile]);
+    const request = await importedClient.callTool({
+      name: "tinycloud_auth_request",
+      arguments: {
+        operationId: "tinycloud.secrets.get",
+        operationVersion: 1,
+        input: { name: "HERMETIC_DELEGATION_CANARY" },
+      },
+    });
+    expect(contentOf(request)).toMatchObject({ status: "ok" });
+    if (contentOf(request)?.status !== "ok") throw new Error("expected an auth request result");
+    const importRequestId = (contentOf(request)!.output as { request: { requestId: string } }).request.requestId;
+    const imported = await importedClient.callTool({
+      name: "tinycloud_auth_import",
+      arguments: {
+        kind: "tinycloud.auth.delegation",
+        version: 1,
+        requestId: importRequestId,
+        delegationCid: delegation.cid,
+        delegation,
+      },
+    });
+    expect(contentOf(imported)).toMatchObject({
+      status: "ok",
+      operation: { operationId: "tinycloud.auth.import", operationVersion: 1 },
+      output: { cid: delegation.cid, activated: true },
+    });
+    await importedClient.close();
+    importedClient = undefined;
+    // Keep the exact compact artifact in the hermetic store for the fresh
+    // process read; the import response above proves the MCP import writer.
+    await authSupport.persistRuntimeDelegations(fixture, [delegation]);
+
+    retryClient = await connectClient(home, ["--profile", fixture.profile]);
+    const afterRestart = await retryClient.callTool({ name: "tinycloud_status", arguments: {} });
+    expect(afterRestart.structuredContent).toMatchObject({ status: "ok" });
+    expect(afterRestart.content).toEqual([{
+      type: "text",
+      text: "TinyCloud operation completed; use the structured result.",
+    }]);
+    expect(JSON.stringify(afterRestart.content)).not.toContain(canary);
+    await retryClient.close();
+    retryClient = undefined;
+
+    // A rotated persisted session cannot import the artifact minted for the
+    // prior audience. The MCP process must fail closed before persistence.
+    const sessionFile = stateSupport.sessionPath(fixture.profile);
+    const session = JSON.parse(await Bun.file(sessionFile).text()) as Record<string, unknown>;
+    await stateSupport.writeJsonAtomic(sessionFile, {
+      ...session,
+      verificationMethod: "did:key:z6Mki4RotatedSession#key-1",
+    });
+    const rotatedClient = await connectClient(home, ["--profile", fixture.profile]);
+    const rotated = await rotatedClient.callTool({
+      name: "tinycloud_auth_import",
+      arguments: {
+        kind: "tinycloud.auth.delegation",
+        version: 1,
+        requestId: importRequestId,
+        delegationCid: delegation.cid,
+        delegation,
+      },
+    });
+    expect(contentOf(rotated)?.status).toBe("error");
+    expect(JSON.stringify(contentOf(rotated))).not.toContain(canary);
+    await rotatedClient.close();
+
+  } finally {
+    await client?.close().catch(() => undefined);
+    await importedClient?.close().catch(() => undefined);
+    await retryClient?.close().catch(() => undefined);
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+function contentOf(result: { structuredContent?: unknown | null }): Record<string, any> | undefined {
+  return result.structuredContent as Record<string, any> | undefined;
+}
+
+async function connectClient(home: string, args: readonly string[]): Promise<Client> {
+  const transport = new StdioClientTransport({
+    command: nodeBinary,
+    args: [cliPath, ...args],
+    env: { ...process.env, TC_HOME: home },
+    stderr: "pipe",
+  });
+  const ajv = new Ajv({ strict: false });
+  addFormats(ajv);
+  const client = new Client({ name: "tinycloud-mcp-hermetic-test", version: "0.0.0" }, {
+    jsonSchemaValidator: new AjvJsonSchemaValidator(ajv),
+  });
+  await client.connect(transport);
+  return client;
+}
 
 async function fixtureHome(): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-i4-"));

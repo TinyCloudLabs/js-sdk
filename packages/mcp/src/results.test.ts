@@ -30,3 +30,34 @@ test("does not serialize authority or setup artifacts into text", () => {
   expect(result.content[0]?.text).not.toContain("secrets.example");
   expect(result.structuredContent.setup).toBeDefined();
 });
+
+test("projects every canonical envelope category through the same fixed text channel", () => {
+  const samples = [
+    {
+      status: "authority_required",
+      operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 },
+      context: { profile: "delegate", host: "https://node.example", posture: "delegate-session" },
+      missing: [{ service: "tinycloud.kv", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+      request: {
+        kind: "tinycloud.auth.request", version: 1, requestId: "req-1",
+        createdAt: "2026-07-16T00:00:00.000Z", profile: "delegate", posture: "delegate-session",
+        operatorType: "agent", host: "https://node.example", sessionDid: "did:key:session",
+        requested: [{ service: "tinycloud.kv", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+      },
+      approval: { kind: "openkey", requestId: "req-1", fallback: "tc auth grant <request-artifact>" },
+      retry: { operationId: "tinycloud.secrets.get", operationVersion: 1, inputDigest: "a".repeat(64), requiresCallerInput: false },
+    },
+    {
+      status: "error",
+      operation: { operationId: "tinycloud.status.get", operationVersion: 1 },
+      context: { profile: "missing", host: "https://node.example", posture: "unauthenticated" },
+      error: { code: "PROFILE_NOT_FOUND", message: "Profile is not available.", retryable: false },
+    },
+  ] as const;
+
+  for (const sample of samples) {
+    const projected = toMcpToolResult(sample);
+    expect(projected.content[0]?.text).not.toContain(JSON.stringify(sample));
+    expect(projected.structuredContent.status).toBe(sample.status);
+  }
+});

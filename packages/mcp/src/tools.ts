@@ -30,11 +30,23 @@ interface CatalogOperation {
   readonly title: string;
   readonly description: string;
   readonly input: Record<string, unknown>;
+  readonly result: Record<string, unknown>;
 }
 
 interface OperationsCatalog {
   readonly operations: readonly CatalogOperation[];
 }
+
+// The require anchor is this module, never the consumer entrypoint. In ESM
+// tsup preserves import.meta.url; in CJS it rewrites the same module-relative
+// anchor to the generated __filename, so both formats stay in MCP's package
+// dependency boundary.
+const packageRequire = createRequire(
+  typeof __dirname === "string" ? join(__dirname, "tools.cjs") : import.meta.url,
+);
+const generatedCatalog = packageRequire(
+  "@tinycloud/operations/operations.json",
+) as OperationsCatalog;
 
 interface ToolBinding {
   readonly name: ToolName;
@@ -96,13 +108,6 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
   },
 ] as const;
 
-const packageRequire = createRequire(
-  typeof __filename === "string" && __filename !== "[eval]"
-    ? __filename
-    : process.argv[1] ?? join(process.cwd(), "package.json"),
-);
-const generatedCatalog = packageRequire("@tinycloud/operations/operations.json") as OperationsCatalog;
-
 export function createJsonSchemaValidator(): AjvJsonSchemaValidator {
   const ajv = new Ajv({ strict: false });
   addFormats(ajv);
@@ -112,7 +117,7 @@ export function createJsonSchemaValidator(): AjvJsonSchemaValidator {
 export function registerTinyCloudTools(
   server: McpServer,
   selection: McpStartupSelection,
-  validator = createJsonSchemaValidator(),
+  validator: AjvJsonSchemaValidator,
 ): void {
   const definitions = new Map(
     generatedCatalog.operations.map((operation) => [
@@ -127,7 +132,14 @@ export function registerTinyCloudTools(
       throw new Error(`Generated operations catalog is missing ${binding.operationId}@${binding.operationVersion}.`);
     }
 
-    const inputSchema = fromJsonSchema(operation.input, validator);
+    const inputSchema = fromJsonSchema(
+      operation.input as Parameters<typeof fromJsonSchema>[0],
+      validator,
+    );
+    const outputSchema = fromJsonSchema(
+      operation.result as unknown as Parameters<typeof fromJsonSchema>[0],
+      validator,
+    );
     const annotations: ToolAnnotations = {
       readOnlyHint: binding.readOnlyHint,
       idempotentHint: binding.idempotentHint,
@@ -141,6 +153,7 @@ export function registerTinyCloudTools(
         title: operation.title,
         description: operation.description,
         inputSchema,
+        outputSchema,
         annotations,
       },
       async (input: unknown): Promise<McpToolResult> => {
