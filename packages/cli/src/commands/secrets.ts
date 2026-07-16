@@ -9,6 +9,10 @@ import {
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
+import {
+  SECRET_DECRYPT_CAPABILITY,
+  secretCapabilityAction,
+} from "@tinycloud/operations/secret-capabilities";
 import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 import { ProfileManager } from "../config/profiles.js";
 import { formatCheck, formatSection, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
@@ -30,21 +34,18 @@ import {
 const SECRETS_SPACE = "secrets";
 type SecretAction = "get" | "put" | "del" | "list";
 type SecretKvAbility =
-  | "tinycloud.kv/get"
-  | "tinycloud.kv/put"
-  | "tinycloud.kv/del"
-  | "tinycloud.kv/list";
+  | ReturnType<typeof secretCapabilityAction>;
 const SECRET_KV_ABILITIES: Record<SecretAction, SecretKvAbility> = {
-  get: "tinycloud.kv/get",
-  put: "tinycloud.kv/put",
-  del: "tinycloud.kv/del",
-  list: "tinycloud.kv/list",
+  get: secretCapabilityAction("get"),
+  put: secretCapabilityAction("put"),
+  del: secretCapabilityAction("del"),
+  list: secretCapabilityAction("list"),
 };
 type SecretResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string; service?: string } };
 
-type CanonicalSecretGetResult = Awaited<ReturnType<typeof invokeOperation>>;
+export type CanonicalSecretGetResult = Awaited<ReturnType<typeof invokeOperation>>;
 
 interface SecretScopeOptions {
   scope?: string;
@@ -324,6 +325,9 @@ async function invokeCanonicalSecretGet(params: {
   // The operations-owned explicit-key path should never return an authority
   // request. Keep this guard for the legacy no-key path only.
   if (auth?.privateKey !== undefined) return first;
+  if (first.context.posture !== "owner-openkey" && first.context.posture !== "local-owner-key") {
+    return first;
+  }
 
   const profile = await ProfileManager.getProfile(params.ctx.profile);
   if (!canRequestOwnerPermissions(profile)) return first;
@@ -344,6 +348,28 @@ async function invokeCanonicalSecretGet(params: {
   );
 
   return invoke();
+}
+
+/** Return the canonical envelope produced by the Commander projection before rendering. */
+export function invokeCommanderSecretGetAdapter(params: {
+  readonly profile: string;
+  readonly host?: string;
+  readonly input: { readonly name: string; readonly scope?: string; readonly space?: string };
+}): Promise<CanonicalSecretGetResult> {
+  return invokeCanonicalSecretGet({
+    ctx: {
+      profile: params.profile,
+      host: params.host ?? "https://node.example",
+      verbose: false,
+      noCache: false,
+      quiet: true,
+    },
+    name: params.input.name,
+    ...(params.input.scope === undefined ? {} : { scope: params.input.scope }),
+    ...(params.input.space === undefined ? {} : { space: params.input.space }),
+    options: {},
+    label: "",
+  });
 }
 
 function throwCanonicalSecretGetError(
@@ -415,7 +441,7 @@ function delegationCoversPath(
   return permissions.some((permission) => {
     if (permission.service !== "tinycloud.kv") return false;
     if (!permissionTargetsSpace(permission, space)) return false;
-    if (!hasPermissionAction(permission.actions, "tinycloud.kv/get")) return false;
+    if (!hasPermissionAction(permission.actions, secretCapabilityAction("get"))) return false;
     return permission.path === path || (permission.path.endsWith("/") && path.startsWith(permission.path));
   });
 }
@@ -438,7 +464,7 @@ function delegationCoversDecrypt(
 ): boolean {
   return permissions.some((permission) => {
     if (permission.service !== "tinycloud.encryption") return false;
-    if (!hasPermissionAction(permission.actions, "tinycloud.encryption/decrypt")) return false;
+    if (!hasPermissionAction(permission.actions, SECRET_DECRYPT_CAPABILITY)) return false;
     return permission.path === networkId;
   });
 }
@@ -792,7 +818,7 @@ async function readDelegatedSecretValue(params: {
   if (!delegationCoversDecrypt(params.permissions, networkId)) {
     throw new CLIError(
       "PERMISSION_DENIED",
-      `Delegation "${params.delegationCid}" does not include tinycloud.encryption/decrypt for ${networkId}.`,
+      `Delegation "${params.delegationCid}" does not include ${SECRET_DECRYPT_CAPABILITY} for ${networkId}.`,
       ExitCode.PERMISSION_DENIED,
     );
   }
@@ -861,7 +887,7 @@ function secretPermissionEntries(params: {
     permissions.push({
       service: "tinycloud.encryption",
       path: networkId,
-      actions: ["tinycloud.encryption/decrypt"],
+      actions: [SECRET_DECRYPT_CAPABILITY],
       skipPrefix: true,
     });
   }
@@ -1035,7 +1061,7 @@ export function registerSecretsCommand(
               detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
               hint: notFound
                 ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} <value>`
-                : "Ask the owner profile to grant tinycloud.kv/get and tinycloud.encryption/decrypt.",
+                : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`,
             });
           }
         } else {

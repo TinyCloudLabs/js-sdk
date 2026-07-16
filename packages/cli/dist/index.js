@@ -741,299 +741,12 @@ var ProfileManager = class _ProfileManager {
   }
 };
 
-// src/auth/local-key.ts
-import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
-import { randomBytes } from "crypto";
-var wasmInitialized = false;
-function ensureWasm() {
-  if (!wasmInitialized) {
-    initPanicHook();
-    wasmInitialized = true;
-  }
-}
-function generateKey() {
-  ensureWasm();
-  const mgr = new TCWSessionManager();
-  const keyId = mgr.createSessionKey("cli");
-  const jwkStr = mgr.jwk(keyId);
-  if (!jwkStr) throw new Error("Failed to generate key");
-  const jwk = JSON.parse(jwkStr);
-  const did = mgr.getDID(keyId);
-  return { jwk, did };
-}
-function keyToDID(jwk) {
-  ensureWasm();
-  const mgr = new TCWSessionManager();
-  const keyId = importKey(mgr, JSON.stringify(jwk), "imported");
-  return mgr.getDID(keyId);
-}
-function generateEthereumPrivateKey() {
-  const keyBytes = randomBytes(32);
-  return "0x" + keyBytes.toString("hex");
-}
-async function deriveAddress(privateKey) {
-  const signer = new PrivateKeySigner(privateKey);
-  return signer.getAddress();
-}
-function addressToDID(address, chainId = 1) {
-  return `did:pkh:eip155:${chainId}:${address}`;
-}
-async function generateLocalIdentity(chainId = 1) {
-  const privateKey = generateEthereumPrivateKey();
-  const address = await deriveAddress(privateKey);
-  const did = addressToDID(address, chainId);
-  return { privateKey, address, did };
-}
-async function localKeySignIn(options) {
-  const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
-  const node = new TinyCloudNode2({
-    privateKey: options.privateKey,
-    host: options.host,
-    autoCreateSpace: true
-  });
-  await node.signIn();
-  const address = await new PrivateKeySigner(options.privateKey).getAddress();
-  const session = node.session;
-  if (!session) {
-    throw new Error("Local key sign-in did not produce a TinyCloud session");
-  }
-  return {
-    spaceId: session.spaceId,
-    address,
-    chainId: 1,
-    delegationHeader: session.delegationHeader,
-    delegationCid: session.delegationCid,
-    jwk: session.jwk,
-    verificationMethod: session.verificationMethod,
-    siwe: session.siwe,
-    signature: session.signature
-  };
-}
+// src/commands/account.ts
+import open from "open";
+import { readFile as readFile3 } from "fs/promises";
 
-// src/auth/browser-auth.ts
-import { createServer } from "http";
-import { createInterface } from "readline";
-var PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
-  "d",
-  "p",
-  "q",
-  "dp",
-  "dq",
-  "qi",
-  "oth",
-  "k"
-]);
-function publicJwkForDelegation(jwk) {
-  const publicJwk = {};
-  for (const [key, value] of Object.entries(jwk)) {
-    if (!PRIVATE_JWK_FIELDS.has(key)) {
-      publicJwk[key] = value;
-    }
-  }
-  return publicJwk;
-}
-async function startAuthFlow(did, options = {}) {
-  if (options.paste) {
-    return pasteFlow(did, options);
-  }
-  try {
-    return await callbackFlow(did, options);
-  } catch {
-    if (isInteractive()) {
-      console.error("Could not open browser. Falling back to manual paste mode.");
-      return pasteFlow(did, options);
-    }
-    throw new Error("Cannot open browser in non-interactive mode. Use --paste flag.");
-  }
-}
-function buildAuthUrl(did, options = {}) {
-  const params = new URLSearchParams();
-  params.set("did", did);
-  if (options.callback) {
-    params.set("callback", options.callback);
-  }
-  if (options.jwk) {
-    const jwkB64 = Buffer.from(
-      JSON.stringify(publicJwkForDelegation(options.jwk))
-    ).toString("base64url");
-    params.set("jwk", jwkB64);
-  }
-  if (options.host) {
-    params.set("host", options.host);
-  }
-  const reason = typeof options.reason === "string" ? options.reason.trim() : "";
-  if (options.permissions?.length) {
-    params.set(
-      "permissions",
-      Buffer.from(JSON.stringify({
-        permissions: options.permissions,
-        ...reason ? { reason } : {}
-      })).toString("base64url")
-    );
-  }
-  if (reason) {
-    params.set("reason", reason);
-  }
-  if (options.expiry !== void 0) {
-    params.set("expiry", String(options.expiry));
-  }
-  const base3 = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
-  return `${base3}/delegate?${params.toString()}`;
-}
-function shouldOpenBrowser(options) {
-  if (options.noPopup) return false;
-  const env = process.env.TC_AUTH_NO_POPUP ?? process.env.TC_NO_POPUP;
-  return env !== "1" && env !== "true";
-}
-async function callbackFlow(did, options = {}) {
-  return new Promise((resolve3, reject) => {
-    let timeout;
-    let settled = false;
-    let rl;
-    function settle(result) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      server.close();
-      if (rl) {
-        rl.close();
-      }
-      if (result.data) {
-        resolve3(result.data);
-      } else {
-        reject(result.error);
-      }
-    }
-    function parsePasteInput(input) {
-      const trimmed = input.trim();
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        const decoded = Buffer.from(trimmed, "base64").toString("utf-8");
-        return JSON.parse(decoded);
-      }
-    }
-    const server = createServer((req, res) => {
-      if (req.method === "POST" && req.url === "/callback") {
-        let body = "";
-        req.on("data", (chunk) => {
-          body += chunk.toString();
-        });
-        req.on("end", () => {
-          try {
-            const data = JSON.parse(body);
-            res.writeHead(200, {
-              "Content-Type": "application/json",
-              "Access-Control-Allow-Origin": "*"
-            });
-            res.end(JSON.stringify({ success: true }));
-            settle({ data });
-          } catch (err2) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Invalid JSON" }));
-            settle({ error: new Error("Invalid delegation data received") });
-          }
-        });
-      } else if (req.method === "OPTIONS") {
-        res.writeHead(204, {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type"
-        });
-        res.end();
-      } else {
-        res.writeHead(404);
-        res.end();
-      }
-    });
-    server.listen(0, "127.0.0.1", async () => {
-      const addr = server.address();
-      if (!addr || typeof addr === "string") {
-        settle({ error: new Error("Failed to start callback server") });
-        return;
-      }
-      const port = addr.port;
-      const callbackUrl = `http://127.0.0.1:${port}/callback`;
-      const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
-      const openBrowser = shouldOpenBrowser(options);
-      if (openBrowser && isInteractive()) {
-        console.error(`Opening browser for authentication...`);
-        console.error(`If the browser doesn't open, visit: ${authUrl}`);
-      } else if (!openBrowser || isInteractive()) {
-        console.error(`Open this URL in a browser to authenticate: ${authUrl}`);
-      }
-      if (openBrowser) {
-        try {
-          const open2 = (await import("open")).default;
-          await open2(authUrl);
-        } catch {
-          server.close();
-          throw new Error("Failed to open browser");
-        }
-      }
-      if (isInteractive()) {
-        console.error(`
-If the browser can't connect back, paste the delegation code here:`);
-        rl = createInterface({
-          input: process.stdin,
-          output: process.stderr
-        });
-        rl.on("line", (input) => {
-          if (settled) return;
-          try {
-            const data = parsePasteInput(input);
-            settle({ data });
-          } catch {
-            console.error("Invalid delegation code. Expected JSON or base64-encoded JSON. Try again:");
-          }
-        });
-      }
-    });
-    timeout = setTimeout(() => {
-      settle({ error: new Error("Authentication timed out after 5 minutes") });
-    }, 5 * 60 * 1e3);
-  });
-}
-async function pasteFlow(did, options = {}) {
-  const authUrl = buildAuthUrl(did, options);
-  console.error(`
-Open this URL in a browser to authenticate:
-`);
-  console.error(`  ${authUrl}
-`);
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stderr
-  });
-  return new Promise((resolve3, reject) => {
-    rl.question("Paste delegation code: ", (input) => {
-      rl.close();
-      try {
-        const data = JSON.parse(input.trim());
-        resolve3(data);
-      } catch {
-        try {
-          const decoded = Buffer.from(input.trim(), "base64").toString("utf-8");
-          const data = JSON.parse(decoded);
-          resolve3(data);
-        } catch {
-          reject(new Error("Invalid delegation code. Expected JSON or base64-encoded JSON."));
-        }
-      }
-    });
-  });
-}
-
-// src/commands/auth.ts
-import { get as httpGet } from "http";
-import { get as httpsGet } from "https";
-import { spawn } from "child_process";
-import { mkdir as mkdir2, readFile as readFile3, writeFile as writeFile2 } from "fs/promises";
-import { dirname as dirname2 } from "path";
-import { createInterface as createInterface2 } from "readline";
-import { grantAuthRequest, principalDidEquals } from "@tinycloud/node-sdk";
-import { invokeOperation } from "@tinycloud/operations";
+// src/lib/sdk.ts
+import { TinyCloudNode } from "@tinycloud/node-sdk";
 
 // src/config/types.ts
 var CLI_PROFILE_POSTURES = [
@@ -1057,9 +770,6 @@ function resolveProfileOperatorType(profile) {
   if (isCLIOperatorType(profile.operatorType)) return profile.operatorType;
   return "human";
 }
-
-// src/lib/sdk.ts
-import { TinyCloudNode } from "@tinycloud/node-sdk";
 
 // src/lib/permissions.ts
 import { appendFile, readFile as readFile2 } from "fs/promises";
@@ -12425,6 +12135,612 @@ async function ensureAuthenticated(ctx, options) {
   return createSDKInstance(ctx, options);
 }
 
+// src/commands/account.ts
+var ACCOUNT_BILLING_URL = "https://account.tinycloud.xyz/billing";
+function registerAccountCommand(program2) {
+  const account = program2.command("account").description("Account applications, spaces, delegations, and billing");
+  account.command("status").description("Show account status").action(async (_options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const status = await node.account.status();
+      assertOk(status);
+      outputJson(status.data);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  const apps = account.command("apps").description("Manage account application registry");
+  apps.command("list").description("List applications registered under account/applications").option("--live", "Read canonical account KV records instead of the SQLite index").action(async (_options, cmd) => {
+    try {
+      const options = _options;
+      const node = await authenticatedNode(cmd);
+      const result = options.live ? await node.account.applications.list() : await node.account.applications.list({ preferIndex: true });
+      assertOk(result);
+      const payload = { applications: result.data, count: result.data.length };
+      if (shouldOutputJson()) {
+        outputJson(payload);
+        return;
+      }
+      if (result.data.length === 0) {
+        process.stdout.write(theme.muted("No account applications registered.") + "\n");
+        return;
+      }
+      process.stdout.write(
+        formatTable(
+          ["App ID", "Name", "Manifests", "Updated"],
+          result.data.map((app) => [
+            app.appId,
+            app.name ?? "\u2014",
+            String(app.manifests.length),
+            app.updatedAt ?? "\u2014"
+          ])
+        ) + "\n"
+      );
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  const spaces = account.command("spaces").description("Manage account space registry");
+  spaces.command("list").description("List spaces registered under account/spaces").option("--live", "Read canonical account KV records instead of the SQLite index").action(async (options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = options.live ? await node.account.spaces.list() : await node.account.spaces.list({ preferIndex: true });
+      assertOk(result);
+      const payload = { spaces: result.data.map(formatSpace), count: result.data.length };
+      if (shouldOutputJson()) {
+        outputJson(payload);
+        return;
+      }
+      if (result.data.length === 0) {
+        process.stdout.write(theme.muted("No account spaces registered.") + "\n");
+        return;
+      }
+      process.stdout.write(
+        formatTable(
+          ["Space", "Type", "Owner", "Status", "Updated"],
+          result.data.map((space) => [
+            space.name,
+            space.type,
+            space.ownerDid,
+            space.status,
+            space.updatedAt ?? "\u2014"
+          ])
+        ) + "\n"
+      );
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  spaces.command("info <space-id>").description("Show a registered account space").action(async (spaceId, _options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.spaces.get(spaceId);
+      assertOk(result);
+      outputJson(formatSpace(result.data));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  spaces.command("register <space-id>").description("Register a space in account/spaces").requiredOption("--name <name>", "Display name for the space").requiredOption("--owner <did>", "Owner DID for the space").option("--type <type>", "Space type: owned, delegated, or discovered", "discovered").option("--permission <permission...>", "Permission strings for the space").action(async (spaceId, options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.spaces.register({
+        spaceId,
+        name: options.name,
+        ownerDid: options.owner,
+        type: options.type,
+        permissions: options.permission ?? [],
+        status: "active"
+      });
+      assertOk(result);
+      outputJson({ space: formatSpace(result.data), registered: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  spaces.command("sync").description("Register currently accessible spaces into account/spaces").action(async (_options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.spaces.syncAccessible();
+      assertOk(result);
+      outputJson({ spaces: result.data.map(formatSpace), count: result.data.length, synced: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  spaces.command("remove <space-id>").alias("delete").description("Remove a space registry entry").action(async (spaceId, _options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.spaces.remove(spaceId);
+      assertOk(result);
+      outputJson({ spaceId, removed: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  apps.command("info <app-id>").description("Show a registered account application").action(async (appId, _options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.applications.get(appId);
+      assertOk(result);
+      outputJson(result.data);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  apps.command("register <manifest>").description("Register an app manifest in account/applications").action(async (manifestSource, _options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const manifest = await loadManifestSource(manifestSource);
+      const result = await node.account.applications.register(manifest);
+      assertOk(result);
+      outputJson({ application: result.data, registered: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  apps.command("remove <app-id>").alias("delete").description("Remove an application registry entry").action(async (appId, _options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.applications.remove(appId);
+      assertOk(result);
+      outputJson({ appId, removed: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  const delegations = account.command("delegations").description("View and revoke account delegations");
+  delegations.command("list").description("List delegations granted by or to this account").option("--granted", "Show only delegations granted by this account").option("--received", "Show only delegations granted to this account").option("--space <space>", "Filter by space name or ID").option("--live", "Read live delegation services instead of the SQLite index").action(async (options, cmd) => {
+    try {
+      if (options.granted && options.received) {
+        throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
+      }
+      const node = await authenticatedNode(cmd);
+      const direction = options.granted ? "granted" : options.received ? "received" : "all";
+      const result = options.live ? await node.account.delegations.list({ direction, space: options.space }) : await node.account.delegations.list({ direction, space: options.space, preferIndex: true });
+      assertOk(result);
+      const payload = { delegations: result.data.map(formatDelegation), count: result.data.length };
+      if (shouldOutputJson()) {
+        outputJson(payload);
+        return;
+      }
+      if (result.data.length === 0) {
+        process.stdout.write(theme.muted("No delegations found.") + "\n");
+        return;
+      }
+      process.stdout.write(
+        formatTable(
+          ["CID", "Direction", "Space", "Counterparty", "Status", "Expiry"],
+          result.data.map((delegation) => [
+            delegation.cid,
+            delegation.direction,
+            delegation.spaceName ?? delegation.spaceId,
+            delegation.counterpartyDid,
+            delegation.status,
+            delegation.expiry.toISOString()
+          ])
+        ) + "\n"
+      );
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  delegations.command("revoke <cid>").description("Revoke an active delegation granted by this account").requiredOption("--space <space>", "Space name or ID containing the delegation").action(async (cid, options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.delegations.revoke({ cid, space: options.space });
+      assertOk(result);
+      outputJson({ cid, space: options.space, revoked: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  const index = account.command("index").description("Manage the materialized account SQLite index");
+  index.command("ensure").description("Create account SQLite index tables if they are missing").action(async (_options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.index.ensure();
+      assertOk(result);
+      outputJson({ ...result.data, ensured: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  index.command("status").description("Show account SQLite index sync status").action(async (_options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.index.status();
+      assertOk(result);
+      outputJson(result.data);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  index.command("rebuild").description("Rebuild account SQLite index from canonical account data").action(async (_options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const result = await node.account.index.rebuild();
+      assertOk(result);
+      outputJson(result.data);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  index.command("query <sql>").description("Query the materialized account SQLite index").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").action(async (sql, options, cmd) => {
+    try {
+      const node = await authenticatedNode(cmd);
+      const params = parseParams(options.params);
+      const result = await node.account.index.query(sql, params);
+      assertOk(result);
+      outputJson(result.data);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  const billing = account.command("billing").description("Open account billing");
+  for (const name2 of ["status", "checkout", "portal"]) {
+    billing.command(name2).description(`${name2 === "status" ? "Show" : "Open"} account billing page`).option("--open", "Open account.tinycloud.xyz in your browser").action(async (options) => {
+      try {
+        if (options.open) {
+          await open(ACCOUNT_BILLING_URL);
+        }
+        outputJson({ url: ACCOUNT_BILLING_URL, opened: Boolean(options.open) });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  }
+}
+async function authenticatedNode(cmd) {
+  const globalOpts = cmd.optsWithGlobals();
+  const ctx = await ProfileManager.resolveContext(globalOpts);
+  return ensureAuthenticated(ctx);
+}
+function assertOk(result) {
+  if (!result.ok) {
+    throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+  }
+}
+async function loadManifestSource(source) {
+  const raw = /^https?:\/\//i.test(source) ? await fetchManifest(source) : await readFile3(source, "utf8");
+  return JSON.parse(raw);
+}
+async function fetchManifest(source) {
+  const response = await fetch(source);
+  if (!response.ok) {
+    throw new CLIError(
+      "MANIFEST_FETCH_FAILED",
+      `Failed to fetch manifest from ${source}: ${response.status} ${response.statusText}`,
+      ExitCode.NETWORK_ERROR
+    );
+  }
+  return response.text();
+}
+function parseParams(input) {
+  if (!input) return void 0;
+  const parsed = JSON.parse(input);
+  if (!Array.isArray(parsed)) {
+    throw new CLIError("INVALID_PARAMS", "--params must be a JSON array.", ExitCode.USAGE_ERROR);
+  }
+  return parsed;
+}
+function formatDelegation(delegation) {
+  return {
+    cid: delegation.cid,
+    direction: delegation.direction,
+    spaceId: delegation.spaceId,
+    spaceName: delegation.spaceName,
+    counterpartyDid: delegation.counterpartyDid,
+    delegateDid: delegation.delegateDid,
+    delegatorDid: delegation.delegatorDid,
+    path: delegation.path,
+    actions: delegation.actions,
+    expiry: delegation.expiry.toISOString(),
+    status: delegation.status,
+    createdAt: delegation.createdAt?.toISOString()
+  };
+}
+function formatSpace(space) {
+  return {
+    ...space,
+    expiresAt: space.expiresAt?.toISOString()
+  };
+}
+
+// src/commands/auth.ts
+import { get as httpGet } from "http";
+import { get as httpsGet } from "https";
+import { spawn } from "child_process";
+import { mkdir as mkdir2, readFile as readFile4, writeFile as writeFile2 } from "fs/promises";
+import { dirname as dirname2 } from "path";
+import { createInterface as createInterface2 } from "readline";
+import { grantAuthRequest, principalDidEquals } from "@tinycloud/node-sdk";
+import { invokeOperation } from "@tinycloud/operations";
+
+// src/auth/browser-auth.ts
+import { createServer } from "http";
+import { createInterface } from "readline";
+var PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
+  "d",
+  "p",
+  "q",
+  "dp",
+  "dq",
+  "qi",
+  "oth",
+  "k"
+]);
+function publicJwkForDelegation(jwk) {
+  const publicJwk = {};
+  for (const [key, value] of Object.entries(jwk)) {
+    if (!PRIVATE_JWK_FIELDS.has(key)) {
+      publicJwk[key] = value;
+    }
+  }
+  return publicJwk;
+}
+async function startAuthFlow(did, options = {}) {
+  if (options.paste) {
+    return pasteFlow(did, options);
+  }
+  try {
+    return await callbackFlow(did, options);
+  } catch {
+    if (isInteractive()) {
+      console.error("Could not open browser. Falling back to manual paste mode.");
+      return pasteFlow(did, options);
+    }
+    throw new Error("Cannot open browser in non-interactive mode. Use --paste flag.");
+  }
+}
+function buildAuthUrl(did, options = {}) {
+  const params = new URLSearchParams();
+  params.set("did", did);
+  if (options.callback) {
+    params.set("callback", options.callback);
+  }
+  if (options.jwk) {
+    const jwkB64 = Buffer.from(
+      JSON.stringify(publicJwkForDelegation(options.jwk))
+    ).toString("base64url");
+    params.set("jwk", jwkB64);
+  }
+  if (options.host) {
+    params.set("host", options.host);
+  }
+  const reason = typeof options.reason === "string" ? options.reason.trim() : "";
+  if (options.permissions?.length) {
+    params.set(
+      "permissions",
+      Buffer.from(JSON.stringify({
+        permissions: options.permissions,
+        ...reason ? { reason } : {}
+      })).toString("base64url")
+    );
+  }
+  if (reason) {
+    params.set("reason", reason);
+  }
+  if (options.expiry !== void 0) {
+    params.set("expiry", String(options.expiry));
+  }
+  const base3 = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
+  return `${base3}/delegate?${params.toString()}`;
+}
+function shouldOpenBrowser(options) {
+  if (options.noPopup) return false;
+  const env = process.env.TC_AUTH_NO_POPUP ?? process.env.TC_NO_POPUP;
+  return env !== "1" && env !== "true";
+}
+async function callbackFlow(did, options = {}) {
+  return new Promise((resolve3, reject) => {
+    let timeout;
+    let settled = false;
+    let rl;
+    function settle(result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      server.close();
+      if (rl) {
+        rl.close();
+      }
+      if (result.data) {
+        resolve3(result.data);
+      } else {
+        reject(result.error);
+      }
+    }
+    function parsePasteInput(input) {
+      const trimmed = input.trim();
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        const decoded = Buffer.from(trimmed, "base64").toString("utf-8");
+        return JSON.parse(decoded);
+      }
+    }
+    const server = createServer((req, res) => {
+      if (req.method === "POST" && req.url === "/callback") {
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        req.on("end", () => {
+          try {
+            const data = JSON.parse(body);
+            res.writeHead(200, {
+              "Content-Type": "application/json",
+              "Access-Control-Allow-Origin": "*"
+            });
+            res.end(JSON.stringify({ success: true }));
+            settle({ data });
+          } catch (err2) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid JSON" }));
+            settle({ error: new Error("Invalid delegation data received") });
+          }
+        });
+      } else if (req.method === "OPTIONS") {
+        res.writeHead(204, {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type"
+        });
+        res.end();
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    server.listen(0, "127.0.0.1", async () => {
+      const addr = server.address();
+      if (!addr || typeof addr === "string") {
+        settle({ error: new Error("Failed to start callback server") });
+        return;
+      }
+      const port = addr.port;
+      const callbackUrl = `http://127.0.0.1:${port}/callback`;
+      const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
+      const openBrowser = shouldOpenBrowser(options);
+      if (openBrowser && isInteractive()) {
+        console.error(`Opening browser for authentication...`);
+        console.error(`If the browser doesn't open, visit: ${authUrl}`);
+      } else if (!openBrowser || isInteractive()) {
+        console.error(`Open this URL in a browser to authenticate: ${authUrl}`);
+      }
+      if (openBrowser) {
+        try {
+          const open2 = (await import("open")).default;
+          await open2(authUrl);
+        } catch {
+          server.close();
+          throw new Error("Failed to open browser");
+        }
+      }
+      if (isInteractive()) {
+        console.error(`
+If the browser can't connect back, paste the delegation code here:`);
+        rl = createInterface({
+          input: process.stdin,
+          output: process.stderr
+        });
+        rl.on("line", (input) => {
+          if (settled) return;
+          try {
+            const data = parsePasteInput(input);
+            settle({ data });
+          } catch {
+            console.error("Invalid delegation code. Expected JSON or base64-encoded JSON. Try again:");
+          }
+        });
+      }
+    });
+    timeout = setTimeout(() => {
+      settle({ error: new Error("Authentication timed out after 5 minutes") });
+    }, 5 * 60 * 1e3);
+  });
+}
+async function pasteFlow(did, options = {}) {
+  const authUrl = buildAuthUrl(did, options);
+  console.error(`
+Open this URL in a browser to authenticate:
+`);
+  console.error(`  ${authUrl}
+`);
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stderr
+  });
+  return new Promise((resolve3, reject) => {
+    rl.question("Paste delegation code: ", (input) => {
+      rl.close();
+      try {
+        const data = JSON.parse(input.trim());
+        resolve3(data);
+      } catch {
+        try {
+          const decoded = Buffer.from(input.trim(), "base64").toString("utf-8");
+          const data = JSON.parse(decoded);
+          resolve3(data);
+        } catch {
+          reject(new Error("Invalid delegation code. Expected JSON or base64-encoded JSON."));
+        }
+      }
+    });
+  });
+}
+
+// src/auth/local-key.ts
+import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
+import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { randomBytes } from "crypto";
+var wasmInitialized = false;
+function ensureWasm() {
+  if (!wasmInitialized) {
+    initPanicHook();
+    wasmInitialized = true;
+  }
+}
+function generateKey() {
+  ensureWasm();
+  const mgr = new TCWSessionManager();
+  const keyId = mgr.createSessionKey("cli");
+  const jwkStr = mgr.jwk(keyId);
+  if (!jwkStr) throw new Error("Failed to generate key");
+  const jwk = JSON.parse(jwkStr);
+  const did = mgr.getDID(keyId);
+  return { jwk, did };
+}
+function keyToDID(jwk) {
+  ensureWasm();
+  const mgr = new TCWSessionManager();
+  const keyId = importKey(mgr, JSON.stringify(jwk), "imported");
+  return mgr.getDID(keyId);
+}
+function generateEthereumPrivateKey() {
+  const keyBytes = randomBytes(32);
+  return "0x" + keyBytes.toString("hex");
+}
+async function deriveAddress(privateKey) {
+  const signer = new PrivateKeySigner(privateKey);
+  return signer.getAddress();
+}
+function addressToDID(address, chainId = 1) {
+  return `did:pkh:eip155:${chainId}:${address}`;
+}
+async function generateLocalIdentity(chainId = 1) {
+  const privateKey = generateEthereumPrivateKey();
+  const address = await deriveAddress(privateKey);
+  const did = addressToDID(address, chainId);
+  return { privateKey, address, did };
+}
+async function localKeySignIn(options) {
+  const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
+  const node = new TinyCloudNode2({
+    privateKey: options.privateKey,
+    host: options.host,
+    autoCreateSpace: true
+  });
+  await node.signIn();
+  const address = await new PrivateKeySigner(options.privateKey).getAddress();
+  const session = node.session;
+  if (!session) {
+    throw new Error("Local key sign-in did not produce a TinyCloud session");
+  }
+  return {
+    spaceId: session.spaceId,
+    address,
+    chainId: 1,
+    delegationHeader: session.delegationHeader,
+    delegationCid: session.delegationCid,
+    jwk: session.jwk,
+    verificationMethod: session.verificationMethod,
+    siwe: session.siwe,
+    signature: session.signature
+  };
+}
+
 // src/commands/auth.ts
 function resolveOpenKeyHost(profile) {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
@@ -12953,7 +13269,7 @@ async function readAuthArtifactSource(source, options) {
   if (source.startsWith("http://") || source.startsWith("https://")) {
     return readUrl(source);
   }
-  return readFile3(source, "utf8");
+  return readFile4(source, "utf8");
 }
 async function readStdin() {
   const chunks = [];
@@ -13578,469 +13894,134 @@ async function refreshOpenKeySession(profileName, host, options = {}) {
   return { profile: updatedProfile, delegationData: sanitizedSession };
 }
 
-// src/commands/init.ts
-function registerInitCommand(program2) {
-  program2.command("init").description("Initialize a new TinyCloud profile").option("--name <profile>", "Profile name", "default").option("--key-only", "Only generate key, skip authentication").option("--host <url>", "TinyCloud node URL").option("--paste", "Use manual paste mode for authentication").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--default-space <name>", "Default space used when --space is omitted (e.g. applications)").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const profileName = options.name;
-      const host = options.host ?? globalOpts.host ?? DEFAULT_HOST;
-      const defaultSpace = options.defaultSpace;
-      if (defaultSpace !== void 0 && !/^[A-Za-z0-9_-]+$/.test(defaultSpace)) {
-        throw new CLIError(
-          "INVALID_SPACE",
-          `Invalid --default-space "${defaultSpace}". Use a short name ([A-Za-z0-9_-]).`,
-          ExitCode.USAGE_ERROR
-        );
-      }
-      if (await ProfileManager.profileExists(profileName)) {
-        throw new CLIError(
-          "PROFILE_EXISTS",
-          `Profile "${profileName}" already exists. Use \`tc profile delete ${profileName}\` first or choose a different name.`,
-          ExitCode.ERROR
-        );
-      }
-      await ProfileManager.ensureConfigDir();
-      const { jwk, did } = await withSpinner("Generating key...", async () => {
-        return generateKey();
-      });
-      await ProfileManager.setKey(profileName, jwk);
-      const profileConfig = {
-        name: profileName,
-        host,
-        chainId: DEFAULT_CHAIN_ID,
-        spaceName: "default",
-        did,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-        ...defaultSpace ? { defaultSpace } : {}
-      };
-      await ProfileManager.setProfile(profileName, profileConfig);
-      const config = await ProfileManager.getConfig();
-      if (profileName === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
-        await ProfileManager.setConfig({ ...config, defaultProfile: profileName });
-      }
-      if (options.keyOnly) {
-        outputJson({
-          profile: profileName,
-          did,
-          host,
-          authenticated: false
-        });
-        return;
-      }
-      const delegationData = await startAuthFlow(did, {
-        paste: options.paste,
-        noPopup: options.popup === false,
-        jwk,
-        host
-      });
-      const sanitizedSession = mergePrivateJwkIntoSession(delegationData, jwk);
-      await ProfileManager.setSession(profileName, sanitizedSession);
-      await ProfileManager.setProfile(profileName, {
-        ...profileConfig,
-        spaceId: sanitizedSession.spaceId,
-        ownerDid: sanitizedSession.ownerDid
-      });
-      outputJson({
-        profile: profileName,
-        did,
-        host,
-        spaceId: sanitizedSession.spaceId,
-        authenticated: true
-      });
-    } catch (error) {
-      handleError(error);
-    }
+// src/commands/completion.ts
+function registerCompletionCommand(program2) {
+  const completion = program2.command("completion").description("Generate shell completions");
+  completion.command("bash").description("Output bash completions").action(() => {
+    const script = generateBashCompletion();
+    process.stdout.write(script);
   });
+  completion.command("zsh").description("Output zsh completions").action(() => {
+    const script = generateZshCompletion();
+    process.stdout.write(script);
+  });
+  completion.command("fish").description("Output fish completions").action(() => {
+    const script = generateFishCompletion();
+    process.stdout.write(script);
+  });
+}
+function generateBashCompletion() {
+  return `# tc bash completion
+_tc_completions() {
+  local cur prev commands subcommands
+  COMPREPLY=()
+  cur="\${COMP_WORDS[COMP_CWORD]}"
+  prev="\${COMP_WORDS[COMP_CWORD-1]}"
+
+  commands="init auth kv space delegation share node profile completion"
+
+  case "\${COMP_WORDS[1]}" in
+    auth) subcommands="login logout rotate status whoami" ;;
+    kv) subcommands="get put delete list head" ;;
+    space) subcommands="list create info switch" ;;
+    delegation) subcommands="create list info revoke" ;;
+    share) subcommands="create receive list revoke" ;;
+    node) subcommands="health version status" ;;
+    profile) subcommands="list create show switch delete" ;;
+    completion) subcommands="bash zsh fish" ;;
+    *) COMPREPLY=( $(compgen -W "\${commands}" -- "\${cur}") ); return ;;
+  esac
+
+  if [ \${COMP_CWORD} -eq 2 ]; then
+    COMPREPLY=( $(compgen -W "\${subcommands}" -- "\${cur}") )
+  fi
+}
+complete -F _tc_completions tc
+`;
+}
+function generateZshCompletion() {
+  return `#compdef tc
+
+_tc() {
+  local -a commands
+  commands=(
+    'init:Initialize a new TinyCloud profile'
+    'auth:Authentication management'
+    'kv:Key-value store operations'
+    'space:Space management'
+    'delegation:Manage delegations'
+    'share:Share data with others'
+    'node:Node health and info'
+    'profile:Profile management'
+    'completion:Generate shell completions'
+  )
+
+  _arguments -C \\
+    '(-p --profile)'{-p,--profile}'[Profile to use]:profile:' \\
+    '(-H --host)'{-H,--host}'[TinyCloud node URL]:url:' \\
+    '(-v --verbose)'{-v,--verbose}'[Enable verbose output]' \\
+    '--no-cache[Disable caching]' \\
+    '(-q --quiet)'{-q,--quiet}'[Suppress non-essential output]' \\
+    '1:command:->cmd' \\
+    '*::arg:->args'
+
+  case $state in
+    cmd)
+      _describe 'command' commands
+      ;;
+    args)
+      case $words[1] in
+        auth) _values 'subcommand' login logout rotate status whoami ;;
+        kv) _values 'subcommand' get put delete list head ;;
+        space) _values 'subcommand' list create info switch ;;
+        delegation) _values 'subcommand' create list info revoke ;;
+        share) _values 'subcommand' create receive list revoke ;;
+        node) _values 'subcommand' health version status ;;
+        profile) _values 'subcommand' list create show switch delete ;;
+        completion) _values 'subcommand' bash zsh fish ;;
+      esac
+      ;;
+  esac
 }
 
-// src/commands/kv.ts
-import { readFile as readFile4 } from "fs/promises";
-import { writeFile as writeFile3 } from "fs/promises";
+_tc
+`;
+}
+function generateFishCompletion() {
+  return `# tc fish completion
+set -l commands init auth kv space delegation share node profile completion
 
-// src/lib/host.ts
-function canonicalizeAddress2(address) {
-  const trimmed = address.trim();
-  return trimmed.startsWith("0x") ? `0x${trimmed.slice(2).toLowerCase()}` : trimmed.toLowerCase();
-}
-async function resolveLocalAddress(profile, profileName) {
-  const session = await ProfileManager.getSession(profileName);
-  const sessAddr = session?.address;
-  if (typeof sessAddr === "string" && sessAddr.length > 0) {
-    return canonicalizeAddress2(sessAddr);
-  }
-  if (profile.address) return canonicalizeAddress2(profile.address);
-  if (profile.ownerDid) {
-    const match = profile.ownerDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
-    if (match) return canonicalizeAddress2(match[1]);
-  }
-  return null;
-}
-function ownerAddressFromSpaceUri(spaceUri) {
-  const match = spaceUri.match(/^tinycloud:pkh:eip155:\d+:(0x[a-fA-F0-9]{40}):/);
-  return match ? canonicalizeAddress2(match[1]) : null;
-}
-function ownerDidFromSpaceUri(spaceUri) {
-  const match = spaceUri.match(/^tinycloud:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40}):/);
-  if (!match) return null;
-  return `did:pkh:eip155:${match[1]}:${canonicalizeAddress2(match[2])}`;
-}
-async function isRootAuthority(spaceUri, profileName) {
-  const profile = await ProfileManager.getProfile(profileName);
-  if (resolveProfilePosture(profile) === "delegate-session") return false;
-  const ownerAddr = ownerAddressFromSpaceUri(spaceUri);
-  if (!ownerAddr) return false;
-  const selfAddr = await resolveLocalAddress(profile, profileName);
-  return selfAddr !== null && selfAddr === ownerAddr;
-}
-function spaceNameFromUri(spaceUri) {
-  return spaceUri.slice(spaceUri.lastIndexOf(":") + 1);
-}
-async function unhostedSpaceError(error, spaceUri, profileName) {
-  if (!spaceUri) return null;
-  const status = error.meta?.status;
-  const isUnhosted = status === 404 && /space not found/i.test(error.message);
-  if (!isUnhosted) return null;
-  const spaceName = spaceNameFromUri(spaceUri);
-  const owner = await isRootAuthority(spaceUri, profileName);
-  const hint = owner ? [
-    "You are the owner. Host it once:",
-    `  tc space host ${spaceName}`,
-    "Then retry."
-  ].join("\n") : [
-    "You are a delegate and CANNOT host this space \u2014 only its owner can.",
-    "Emit a host request:",
-    `  tc space host-request ${spaceName} --emit ./host-request.json`,
-    "Send it to the owner; they run `tc space host` and confirm. Then retry."
-  ].join("\n");
-  const message = owner ? `Space '${spaceName}' (${spaceUri}) is not hosted.` : `Space '${spaceName}' (owner ${ownerDidFromSpaceUri(spaceUri) ?? spaceUri}) is not hosted.`;
-  return new CLIError("SPACE_NOT_HOSTED", message, ExitCode.ERROR, { hint });
-}
-async function resolveHostSpace(name2, profileName) {
-  const resolved = await resolveSpaceUri(name2, profileName);
-  if (!resolved) {
-    throw new Error(`Could not resolve a space for "${name2}".`);
-  }
-  return resolved;
-}
+# Disable file completion by default
+complete -c tc -f
 
-// src/commands/kv.ts
-async function throwKvError(error, spaceUri, profileName) {
-  const hosted = await unhostedSpaceError(error, spaceUri, profileName);
-  if (hosted) throw hosted;
-  throw new CLIError(error.code, error.message, ExitCode.ERROR);
-}
-async function readStdin2() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks);
-}
-async function kvHandle(node, spaceInput, profileName) {
-  const spaceUri = await resolveSpaceUri(spaceInput, profileName);
-  const kv = spaceUri ? node.kvForSpace(spaceUri) : node.kv;
-  return { kv, spaceUri };
-}
-function registerKvCommand(program2) {
-  const kv = program2.command("kv").description("Key-value store operations");
-  kv.command("get <key>").description("Get a value by key").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const wantBytes = !!options.output || !!options.raw;
-      const result = await withSpinner(
-        `Getting ${key}...`,
-        () => kv2.get(key, wantBytes ? { binary: true } : void 0)
-      );
-      if (!result.ok) {
-        const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
-        if (hosted) throw hosted;
-        if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
-          throw new CLIError("NOT_FOUND", `Key "${key}" not found`, ExitCode.NOT_FOUND);
-        }
-        await throwKvError(result.error, spaceUri, ctx.profile);
-      }
-      const data = result.data.data;
-      const metadata = result.data.headers ?? {};
-      if (options.output) {
-        await writeFile3(options.output, data);
-        outputJson({ key, written: options.output });
-        return;
-      }
-      if (options.raw) {
-        process.stdout.write(data);
-        return;
-      }
-      if (shouldOutputJson()) {
-        outputJson({
-          key,
-          data,
-          metadata
-        });
-      } else {
-        const content = typeof data === "string" ? data : JSON.stringify(data);
-        process.stdout.write(content + "\n");
-      }
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  kv.command("put <key> [value]").description("Set a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, value, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      let putValue;
-      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
-      if (sources.length === 0) {
-        throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
-      }
-      if (sources.length > 1) {
-        throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
-      }
-      if (options.file) {
-        putValue = await readFile4(options.file);
-      } else if (options.stdin) {
-        putValue = await readStdin2();
-      } else {
-        try {
-          putValue = JSON.parse(value);
-        } catch {
-          putValue = value;
-        }
-      }
-      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const result = await withSpinner(`Writing ${key}...`, () => kv2.put(key, putValue));
-      if (!result.ok) {
-        await throwKvError(result.error, spaceUri, ctx.profile);
-      }
-      outputJson({ key, written: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  kv.command("delete <key>").description("Delete a key").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const result = await withSpinner(`Deleting ${key}...`, () => kv2.delete(key));
-      if (!result.ok) {
-        await throwKvError(result.error, spaceUri, ctx.profile);
-      }
-      outputJson({ key, deleted: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  kv.command("list").description("List keys").option("--prefix <prefix>", "Filter by key prefix").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const listOptions = options.prefix ? { prefix: options.prefix } : void 0;
-      const result = await withSpinner("Listing keys...", () => kv2.list(listOptions));
-      if (!result.ok) {
-        await throwKvError(result.error, spaceUri, ctx.profile);
-      }
-      const rawData = result.data.data ?? result.data;
-      const keyList = Array.isArray(rawData) ? rawData : rawData?.keys ?? [];
-      if (shouldOutputJson()) {
-        outputJson({
-          keys: keyList,
-          count: keyList.length,
-          prefix: options.prefix ?? null
-        });
-      } else {
-        if (keyList.length === 0) {
-          process.stdout.write(theme.muted("No keys found.") + "\n");
-        } else {
-          const rows = keyList.map((e) => [
-            e.key || e,
-            e.contentLength ? formatBytes(e.contentLength) : "\u2014",
-            e.updatedAt ? formatTimeAgo(e.updatedAt) : "\u2014"
-          ]);
-          process.stdout.write(formatTable(["Key", "Size", "Updated"], rows) + "\n");
-        }
-      }
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  kv.command("head <key>").description("Get metadata for a key (no body)").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const result = await withSpinner(`Checking ${key}...`, () => kv2.head(key));
-      if (!result.ok) {
-        const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
-        if (hosted) throw hosted;
-        if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
-          outputJson({ key, exists: false, metadata: {} });
-          return;
-        }
-        await throwKvError(result.error, spaceUri, ctx.profile);
-      }
-      outputJson({
-        key,
-        exists: true,
-        metadata: result.data.headers ?? {}
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-}
+# Top-level commands
+complete -c tc -n "not __fish_seen_subcommand_from $commands" -a init -d "Initialize a new TinyCloud profile"
+complete -c tc -n "not __fish_seen_subcommand_from $commands" -a auth -d "Authentication management"
+complete -c tc -n "not __fish_seen_subcommand_from $commands" -a kv -d "Key-value store operations"
+complete -c tc -n "not __fish_seen_subcommand_from $commands" -a space -d "Space management"
+complete -c tc -n "not __fish_seen_subcommand_from $commands" -a delegation -d "Manage delegations"
+complete -c tc -n "not __fish_seen_subcommand_from $commands" -a share -d "Share data with others"
+complete -c tc -n "not __fish_seen_subcommand_from $commands" -a node -d "Node health and info"
+complete -c tc -n "not __fish_seen_subcommand_from $commands" -a profile -d "Profile management"
+complete -c tc -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
 
-// src/commands/space.ts
-import { randomBytes as randomBytes2 } from "crypto";
-import { mkdir as mkdir3, writeFile as writeFile4 } from "fs/promises";
-import { dirname as dirname3 } from "path";
-function didWithoutFragment2(did) {
-  const fragment = did.indexOf("#");
-  return fragment === -1 ? did : did.slice(0, fragment);
-}
-function registerSpaceCommand(program2) {
-  const space = program2.command("space").description("Space management");
-  space.command("list").description("List spaces").action(async (_options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const result = await node.spaces.list();
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      if (shouldOutputJson()) {
-        outputJson({ spaces: result.data, count: result.data.length });
-      } else {
-        if (result.data.length === 0) {
-          process.stdout.write(theme.muted("No spaces found.") + "\n");
-        } else {
-          const rows = result.data.map((s) => [
-            s.id || s.spaceId || "\u2014",
-            s.name || "\u2014",
-            s.owner || "\u2014"
-          ]);
-          process.stdout.write(formatTable(["Space ID", "Name", "Owner"], rows) + "\n");
-        }
-      }
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  space.command("create <name>").alias("host").description("Create (host) one of your owned spaces by name").action(async (name2, _options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const spaceId = await node.hostOwnedSpace(name2);
-      outputJson({ spaceId, name: name2, hosted: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  space.command("host-request <name>").description("Emit a request asking the space owner to host it (delegate-only)").option("--emit [file]", "Write the request artifact to file (or stdout when no path)").addHelpText("after", `
+# Subcommands
+complete -c tc -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
+complete -c tc -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
+complete -c tc -n "__fish_seen_subcommand_from space" -a "list create info switch"
+complete -c tc -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"
+complete -c tc -n "__fish_seen_subcommand_from share" -a "create receive list revoke"
+complete -c tc -n "__fish_seen_subcommand_from node" -a "health version status"
+complete -c tc -n "__fish_seen_subcommand_from profile" -a "list create show switch delete"
+complete -c tc -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
 
-A delegate cannot host a space \u2014 only its owner (root authority) can. This
-emits a tinycloud.host.request artifact naming the space and its owner so you
-can hand it to the owner; they run \`tc space host <name>\` and confirm.
-
-If you ARE the owner of the resolved space, this refuses and tells you to host
-it directly with \`tc space host <name>\` (no request needed).
-`).action(async (name2, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const profile = await ProfileManager.getProfile(ctx.profile);
-      const spaceId = await resolveHostSpace(name2, ctx.profile);
-      const spaceName = spaceNameFromUri(spaceId);
-      if (await isRootAuthority(spaceId, ctx.profile)) {
-        throw new CLIError(
-          "ALREADY_ROOT_AUTHORITY",
-          `You are the owner of ${spaceId}. Host it directly: tc space host ${spaceName}`,
-          ExitCode.USAGE_ERROR
-        );
-      }
-      const requesterDid = didWithoutFragment2(profile.sessionDid ?? profile.did);
-      const ownerDid = ownerDidFromSpaceUri(spaceId);
-      if (!ownerDid) {
-        throw new CLIError(
-          "UNRESOLVABLE_OWNER",
-          `Cannot determine the owner of ${spaceId}; host-request needs a pkh space URI.`,
-          ExitCode.USAGE_ERROR
-        );
-      }
-      const artifact = {
-        kind: "tinycloud.host.request",
-        version: 1,
-        requestId: `hostreq_${Date.now().toString(36)}_${randomBytes2(4).toString("hex")}`,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-        spaceName,
-        spaceId,
-        ownerDid,
-        requesterDid,
-        host: ctx.host
-      };
-      await emitHostRequestArtifact(artifact, options.emit);
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  space.command("info [space-id]").description("Get space info").action(async (spaceId, _options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const targetId = spaceId ?? node.spaceId;
-      if (!targetId) {
-        throw new CLIError("NO_SPACE", "No space ID specified and no active space", ExitCode.ERROR);
-      }
-      const profile = await ProfileManager.getProfile(ctx.profile);
-      outputJson({
-        spaceId: targetId,
-        name: profile.spaceName,
-        owner: node.did,
-        host: ctx.host
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  space.command("switch <name>").description("Switch active space").action(async (name2, _options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const profile = await ProfileManager.getProfile(ctx.profile);
-      await ProfileManager.setProfile(ctx.profile, { ...profile, spaceName: name2 });
-      outputJson({ profile: ctx.profile, spaceName: name2, switched: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-}
-async function emitHostRequestArtifact(artifact, emitOption) {
-  if (typeof emitOption === "string" && emitOption.length > 0) {
-    await mkdir3(dirname3(emitOption), { recursive: true });
-    await writeFile4(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
-    outputJson({
-      emitted: true,
-      path: emitOption,
-      requestId: artifact.requestId,
-      spaceName: artifact.spaceName,
-      spaceId: artifact.spaceId,
-      ownerDid: artifact.ownerDid
-    });
-    return;
-  }
-  outputJson(artifact);
+# Global options
+complete -c tc -l profile -s p -d "Profile to use"
+complete -c tc -l host -s H -d "TinyCloud node URL"
+complete -c tc -l verbose -s v -d "Enable verbose output"
+complete -c tc -l no-cache -d "Disable caching"
+complete -c tc -l quiet -s q -d "Suppress non-essential output"
+`;
 }
 
 // src/lib/duration.ts
@@ -14179,1771 +14160,6 @@ function registerDelegationCommand(program2) {
   });
 }
 
-// src/commands/share.ts
-function registerShareCommand(program2) {
-  const share = program2.command("share").description("Share data with others");
-  share.command("create").description("Create a share link").requiredOption("--path <path>", "KV path scope").option("--actions <actions>", "Comma-separated actions", "kv/get").option("--expiry <duration>", "Expiry duration", "7d").option("--web-link", "Generate a web UI link for non-technical recipients").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const actions = options.actions.split(",").map((a) => {
-        const trimmed = a.trim();
-        return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
-      });
-      const expiry = parseExpiry2(options.expiry);
-      const result = await node.sharing.generate({
-        path: options.path,
-        actions,
-        expiry
-      });
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      const output = {
-        token: result.data.token ?? result.data.cid,
-        shareData: result.data.encodedData ?? result.data.url,
-        path: options.path,
-        actions,
-        expiry: expiry.toISOString()
-      };
-      if (options.webLink) {
-        const shareData = result.data.encodedData ?? result.data.url ?? "";
-        output.webLink = `https://openkey.cloud/share?data=${encodeURIComponent(shareData)}`;
-      }
-      outputJson(output);
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  share.command("receive [data]").description("Receive a share").option("--stdin", "Read share data from stdin").action(async (data, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      let shareData;
-      if (options.stdin) {
-        const chunks = [];
-        for await (const chunk of process.stdin) {
-          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-        }
-        shareData = Buffer.concat(chunks).toString("utf-8").trim();
-      } else if (data) {
-        shareData = data;
-      } else {
-        throw new CLIError("USAGE_ERROR", "Must provide share data or use --stdin", ExitCode.USAGE_ERROR);
-      }
-      const result = await node.sharing.receive(shareData);
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({
-        received: true,
-        spaceId: result.data.spaceId,
-        path: result.data.path,
-        actions: result.data.actions
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  share.command("list").description("List active shares").action(async (_options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const result = await node.sharing.list();
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({ shares: result.data, count: result.data.length });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  share.command("revoke <token>").description("Revoke a share").action(async (token, _options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const result = await node.sharing.revoke(token);
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({ token, revoked: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-}
-
-// src/commands/node.ts
-function registerNodeCommand(program2) {
-  const node = program2.command("node").description("Node health and info");
-  node.command("health").description("Check node health").action(async (_options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const start = Date.now();
-      const response = await fetch(`${ctx.host}/healthz`);
-      const latencyMs = Date.now() - start;
-      outputJson({
-        healthy: response.ok,
-        host: ctx.host,
-        latencyMs
-      });
-    } catch (error) {
-      if (error instanceof TypeError && error.message.includes("fetch")) {
-        outputJson({ healthy: false, host: (await ProfileManager.resolveContext(cmd.optsWithGlobals())).host, error: "Connection refused" });
-      } else {
-        handleError(error);
-      }
-    }
-  });
-  node.command("version").description("Get node version").action(async (_options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const response = await fetch(`${ctx.host}/info`);
-      if (!response.ok) {
-        throw new CLIError("NODE_ERROR", `Node returned ${response.status}`, ExitCode.NODE_ERROR);
-      }
-      const data = await response.json();
-      outputJson({ ...data, host: ctx.host });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  node.command("status").description("Combined health and version info").action(async (_options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const start = Date.now();
-      const [healthRes, versionRes] = await Promise.allSettled([
-        fetch(`${ctx.host}/healthz`),
-        fetch(`${ctx.host}/info`)
-      ]);
-      const latencyMs = Date.now() - start;
-      const healthy = healthRes.status === "fulfilled" && healthRes.value.ok;
-      let versionData = {};
-      if (versionRes.status === "fulfilled" && versionRes.value.ok) {
-        versionData = await versionRes.value.json();
-      }
-      outputJson({
-        healthy,
-        host: ctx.host,
-        latencyMs,
-        ...versionData
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-}
-
-// src/commands/profile.ts
-import { createInterface as createInterface3 } from "readline";
-function registerProfileCommand(program2) {
-  const profile = program2.command("profile").description("Profile management");
-  profile.command("list").description("List all profiles").action(async (_options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const config = await ProfileManager.getConfig();
-      const names = await ProfileManager.listProfiles();
-      const profiles = await Promise.all(
-        names.map(async (name2) => {
-          try {
-            const p = await ProfileManager.getProfile(name2);
-            return {
-              name: p.name,
-              host: p.host,
-              did: p.did,
-              posture: resolveProfilePosture(p),
-              operatorType: resolveProfileOperatorType(p),
-              active: name2 === config.defaultProfile
-            };
-          } catch {
-            return {
-              name: name2,
-              host: null,
-              did: null,
-              posture: null,
-              operatorType: null,
-              active: name2 === config.defaultProfile
-            };
-          }
-        })
-      );
-      if (shouldOutputJson()) {
-        outputJson({
-          profiles,
-          defaultProfile: config.defaultProfile
-        });
-      } else {
-        for (const p of profiles) {
-          const marker = p.active ? theme.success("\u25CF ") : "  ";
-          const name2 = p.active ? theme.brand(p.name) : p.name;
-          const host = theme.muted(p.host || "no host");
-          const posture = p.posture ? theme.muted(String(p.posture)) : theme.muted("no posture");
-          process.stdout.write(`${marker}${name2}  ${host}  ${posture}
-`);
-        }
-      }
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  profile.command("create <name>").description("Create a new profile").option("--host <url>", "TinyCloud node URL").option(
-    "--posture <posture>",
-    `Profile posture: ${CLI_PROFILE_POSTURES.join(", ")}. Defaults to owner-openkey.`
-  ).option(
-    "--operator <type>",
-    `Operator type: ${CLI_OPERATOR_TYPES.join(", ")}. Defaults to human.`
-  ).action(async (name2, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const host = options.host ?? globalOpts.host ?? "https://node.tinycloud.xyz";
-      const posture = parseProfilePosture(options.posture);
-      const operatorType = parseOperatorType(options.operator);
-      if (await ProfileManager.profileExists(name2)) {
-        throw new CLIError("PROFILE_EXISTS", `Profile "${name2}" already exists`, ExitCode.ERROR);
-      }
-      await ProfileManager.ensureConfigDir();
-      const { jwk, did } = generateKey();
-      await ProfileManager.setKey(name2, jwk);
-      await ProfileManager.setProfile(name2, {
-        name: name2,
-        host,
-        chainId: 1,
-        spaceName: "default",
-        did,
-        sessionDid: did,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-        posture,
-        operatorType
-      });
-      outputJson({ profile: name2, did, host, posture, operatorType, created: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  profile.command("show [name]").description("Show profile details").action(async (name2, _options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const profileName = name2 ?? ctx.profile;
-      const p = await ProfileManager.getProfile(profileName);
-      const hasKey = await ProfileManager.getKey(profileName) !== null;
-      const hasSession = await ProfileManager.getSession(profileName) !== null;
-      const config = await ProfileManager.getConfig();
-      const isDefault = profileName === config.defaultProfile;
-      const posture = resolveProfilePosture(p);
-      const operatorType = resolveProfileOperatorType(p);
-      if (shouldOutputJson()) {
-        outputJson({
-          ...p,
-          posture,
-          operatorType,
-          hasKey,
-          hasSession,
-          isDefault
-        });
-      } else {
-        process.stdout.write(`${theme.heading(p.name)}${isDefault ? theme.success(" (default)") : ""}
-`);
-        process.stdout.write(formatField("Host", p.host) + "\n");
-        process.stdout.write(formatField("DID", p.did) + "\n");
-        process.stdout.write(formatField("Session DID", p.sessionDid ?? null) + "\n");
-        process.stdout.write(formatField("Posture", posture) + "\n");
-        process.stdout.write(formatField("Operator", operatorType) + "\n");
-        process.stdout.write(formatField("Space", p.spaceId || null) + "\n");
-        process.stdout.write(formatField("Default Space", p.defaultSpace || null) + "\n");
-        process.stdout.write(formatField("Key", hasKey) + "\n");
-        process.stdout.write(formatField("Session", hasSession) + "\n");
-        process.stdout.write(formatField("Created", p.createdAt) + "\n");
-      }
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  profile.command("switch <name>").description("Set default profile").action(async (name2, _options, cmd) => {
-    try {
-      if (!await ProfileManager.profileExists(name2)) {
-        throw new CLIError("PROFILE_NOT_FOUND", `Profile "${name2}" does not exist`, ExitCode.NOT_FOUND);
-      }
-      const config = await ProfileManager.getConfig();
-      await ProfileManager.setConfig({ ...config, defaultProfile: name2 });
-      outputJson({ defaultProfile: name2, switched: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  profile.command("set-default-space [name]").description("Set (or clear) the default space used when --space is omitted").option("--profile <name>", "Profile to modify (defaults to the active profile)").option("--unset", "Clear the default space so commands fall back to the primary space").addHelpText("after", `
-
-The default space is a short space NAME (e.g. "applications"), resolved per
-profile at command time. Precedence for every kv/sql command:
-  explicit --space flag  >  profile defaultSpace  >  primary space.
-
-Examples:
-  $ tc profile set-default-space applications
-  $ tc profile set-default-space applications --profile cli-test
-  $ tc profile set-default-space --unset
-`).action(async (name2, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext({
-        ...globalOpts,
-        profile: options.profile ?? globalOpts.profile
-      });
-      const profileName = ctx.profile;
-      if (!options.unset && (name2 === void 0 || name2 === "")) {
-        throw new CLIError(
-          "USAGE_ERROR",
-          "Provide a space name (e.g. `tc profile set-default-space applications`) or pass --unset.",
-          ExitCode.USAGE_ERROR
-        );
-      }
-      if (!options.unset && !/^[A-Za-z0-9_-]+$/.test(name2)) {
-        throw new CLIError(
-          "INVALID_SPACE",
-          `Invalid space name "${name2}". Use a short name ([A-Za-z0-9_-]).`,
-          ExitCode.USAGE_ERROR
-        );
-      }
-      const p = await ProfileManager.getProfile(profileName);
-      const defaultSpace = options.unset ? void 0 : name2;
-      await ProfileManager.setProfile(profileName, { ...p, defaultSpace });
-      outputJson({ profile: profileName, defaultSpace: defaultSpace ?? null, updated: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  profile.command("delete <name>").description("Delete a profile").action(async (name2, _options, cmd) => {
-    try {
-      if (isInteractive()) {
-        const rl = createInterface3({ input: process.stdin, output: process.stderr });
-        const answer = await new Promise((resolve3) => {
-          rl.question(`Delete profile "${name2}"? This cannot be undone. [y/N] `, resolve3);
-        });
-        rl.close();
-        if (answer.toLowerCase() !== "y") {
-          outputJson({ profile: name2, deleted: false, reason: "Cancelled by user" });
-          return;
-        }
-      }
-      await ProfileManager.deleteProfile(name2);
-      outputJson({ profile: name2, deleted: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-}
-function parseProfilePosture(raw) {
-  if (raw === void 0 || raw === null || raw === "") return "owner-openkey";
-  if (isCLIProfilePosture(raw)) return raw;
-  throw new CLIError(
-    "INVALID_POSTURE",
-    `Invalid posture "${String(raw)}". Use one of: ${CLI_PROFILE_POSTURES.join(", ")}.`,
-    ExitCode.USAGE_ERROR
-  );
-}
-function parseOperatorType(raw) {
-  if (raw === void 0 || raw === null || raw === "") return "human";
-  if (isCLIOperatorType(raw)) return raw;
-  throw new CLIError(
-    "INVALID_OPERATOR",
-    `Invalid operator "${String(raw)}". Use one of: ${CLI_OPERATOR_TYPES.join(", ")}.`,
-    ExitCode.USAGE_ERROR
-  );
-}
-
-// src/commands/completion.ts
-function registerCompletionCommand(program2) {
-  const completion = program2.command("completion").description("Generate shell completions");
-  completion.command("bash").description("Output bash completions").action(() => {
-    const script = generateBashCompletion();
-    process.stdout.write(script);
-  });
-  completion.command("zsh").description("Output zsh completions").action(() => {
-    const script = generateZshCompletion();
-    process.stdout.write(script);
-  });
-  completion.command("fish").description("Output fish completions").action(() => {
-    const script = generateFishCompletion();
-    process.stdout.write(script);
-  });
-}
-function generateBashCompletion() {
-  return `# tc bash completion
-_tc_completions() {
-  local cur prev commands subcommands
-  COMPREPLY=()
-  cur="\${COMP_WORDS[COMP_CWORD]}"
-  prev="\${COMP_WORDS[COMP_CWORD-1]}"
-
-  commands="init auth kv space delegation share node profile completion"
-
-  case "\${COMP_WORDS[1]}" in
-    auth) subcommands="login logout rotate status whoami" ;;
-    kv) subcommands="get put delete list head" ;;
-    space) subcommands="list create info switch" ;;
-    delegation) subcommands="create list info revoke" ;;
-    share) subcommands="create receive list revoke" ;;
-    node) subcommands="health version status" ;;
-    profile) subcommands="list create show switch delete" ;;
-    completion) subcommands="bash zsh fish" ;;
-    *) COMPREPLY=( $(compgen -W "\${commands}" -- "\${cur}") ); return ;;
-  esac
-
-  if [ \${COMP_CWORD} -eq 2 ]; then
-    COMPREPLY=( $(compgen -W "\${subcommands}" -- "\${cur}") )
-  fi
-}
-complete -F _tc_completions tc
-`;
-}
-function generateZshCompletion() {
-  return `#compdef tc
-
-_tc() {
-  local -a commands
-  commands=(
-    'init:Initialize a new TinyCloud profile'
-    'auth:Authentication management'
-    'kv:Key-value store operations'
-    'space:Space management'
-    'delegation:Manage delegations'
-    'share:Share data with others'
-    'node:Node health and info'
-    'profile:Profile management'
-    'completion:Generate shell completions'
-  )
-
-  _arguments -C \\
-    '(-p --profile)'{-p,--profile}'[Profile to use]:profile:' \\
-    '(-H --host)'{-H,--host}'[TinyCloud node URL]:url:' \\
-    '(-v --verbose)'{-v,--verbose}'[Enable verbose output]' \\
-    '--no-cache[Disable caching]' \\
-    '(-q --quiet)'{-q,--quiet}'[Suppress non-essential output]' \\
-    '1:command:->cmd' \\
-    '*::arg:->args'
-
-  case $state in
-    cmd)
-      _describe 'command' commands
-      ;;
-    args)
-      case $words[1] in
-        auth) _values 'subcommand' login logout rotate status whoami ;;
-        kv) _values 'subcommand' get put delete list head ;;
-        space) _values 'subcommand' list create info switch ;;
-        delegation) _values 'subcommand' create list info revoke ;;
-        share) _values 'subcommand' create receive list revoke ;;
-        node) _values 'subcommand' health version status ;;
-        profile) _values 'subcommand' list create show switch delete ;;
-        completion) _values 'subcommand' bash zsh fish ;;
-      esac
-      ;;
-  esac
-}
-
-_tc
-`;
-}
-function generateFishCompletion() {
-  return `# tc fish completion
-set -l commands init auth kv space delegation share node profile completion
-
-# Disable file completion by default
-complete -c tc -f
-
-# Top-level commands
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a init -d "Initialize a new TinyCloud profile"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a auth -d "Authentication management"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a kv -d "Key-value store operations"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a space -d "Space management"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a delegation -d "Manage delegations"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a share -d "Share data with others"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a node -d "Node health and info"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a profile -d "Profile management"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
-
-# Subcommands
-complete -c tc -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
-complete -c tc -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
-complete -c tc -n "__fish_seen_subcommand_from space" -a "list create info switch"
-complete -c tc -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"
-complete -c tc -n "__fish_seen_subcommand_from share" -a "create receive list revoke"
-complete -c tc -n "__fish_seen_subcommand_from node" -a "health version status"
-complete -c tc -n "__fish_seen_subcommand_from profile" -a "list create show switch delete"
-complete -c tc -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
-
-# Global options
-complete -c tc -l profile -s p -d "Profile to use"
-complete -c tc -l host -s H -d "TinyCloud node URL"
-complete -c tc -l verbose -s v -d "Enable verbose output"
-complete -c tc -l no-cache -d "Disable caching"
-complete -c tc -l quiet -s q -d "Suppress non-essential output"
-`;
-}
-
-// src/commands/vault.ts
-import { readFile as readFile5 } from "fs/promises";
-import { writeFile as writeFile5 } from "fs/promises";
-import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
-async function readStdin3() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks);
-}
-function resolvePrivateKey(options) {
-  const key = options.privateKey || process.env.TC_PRIVATE_KEY;
-  if (!key) {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      "Private key required. Use --private-key <hex> or set TC_PRIVATE_KEY env var.",
-      ExitCode.AUTH_REQUIRED
-    );
-  }
-  return key;
-}
-async function unlockVault(node, privateKey) {
-  const signer = new PrivateKeySigner2(privateKey);
-  const result = await node.vault.unlock(signer);
-  if (result && !result.ok) {
-    throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-  }
-}
-function registerVaultCommand(program2) {
-  const vault = program2.command("vault").description("Encrypted vault operations");
-  vault.command("unlock").description("Verify vault unlock works").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
-      outputJson({ unlocked: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  vault.command("put <key> [value]").description("Encrypt and store a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (key, value, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
-      let putValue;
-      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
-      if (sources.length === 0) {
-        throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
-      }
-      if (sources.length > 1) {
-        throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
-      }
-      if (options.file) {
-        putValue = new Uint8Array(await readFile5(options.file));
-      } else if (options.stdin) {
-        putValue = new Uint8Array(await readStdin3());
-      } else {
-        putValue = value;
-      }
-      const result = await withSpinner(`Writing ${key}...`, () => node.vault.put(key, putValue));
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({ key, written: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  vault.command("get <key>").description("Decrypt and retrieve a value").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (key, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
-      const result = await withSpinner(`Getting ${key}...`, () => node.vault.get(key));
-      if (!result.ok) {
-        if (result.error.code === "NOT_FOUND") {
-          throw new CLIError("NOT_FOUND", `Key "${key}" not found`, ExitCode.NOT_FOUND);
-        }
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      const data = result.data.data ?? result.data;
-      if (options.output) {
-        const content = data instanceof Uint8Array ? Buffer.from(data) : typeof data === "string" ? data : JSON.stringify(data);
-        await writeFile5(options.output, content);
-        outputJson({ key, written: options.output });
-        return;
-      }
-      if (options.raw) {
-        const content = data instanceof Uint8Array ? Buffer.from(data) : typeof data === "string" ? data : JSON.stringify(data);
-        process.stdout.write(content);
-        return;
-      }
-      outputJson({
-        key,
-        data: data instanceof Uint8Array ? Buffer.from(data).toString("base64") : data
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  vault.command("delete <key>").description("Delete an encrypted key").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (key, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
-      const result = await withSpinner(`Deleting ${key}...`, () => node.vault.delete(key));
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({ key, deleted: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  vault.command("list").description("List vault keys").option("--prefix <prefix>", "Filter by key prefix").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
-      const listOptions = options.prefix ? { prefix: options.prefix } : void 0;
-      const result = await withSpinner("Listing vault keys...", () => node.vault.list(listOptions));
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      const keys = result.data.data ?? result.data;
-      const keyList = Array.isArray(keys) ? keys : [];
-      outputJson({
-        keys: keyList,
-        count: keyList.length,
-        prefix: options.prefix ?? null
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  vault.command("head <key>").description("Get metadata for a vault key").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (key, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
-      const result = await withSpinner(`Checking ${key}...`, () => node.vault.head(key));
-      if (!result.ok) {
-        if (result.error.code === "NOT_FOUND") {
-          outputJson({ key, exists: false, metadata: {} });
-          return;
-        }
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({
-        key,
-        exists: true,
-        metadata: result.data.headers ?? result.data
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-}
-
-// src/commands/secrets.ts
-import { readFile as readFile6 } from "fs/promises";
-import { writeFile as writeFile6 } from "fs/promises";
-import { join as join4 } from "path";
-import { homedir } from "os";
-import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
-import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
-var SECRETS_SPACE3 = "secrets";
-var SECRET_KV_ABILITIES = {
-  get: "tinycloud.kv/get",
-  put: "tinycloud.kv/put",
-  del: "tinycloud.kv/del",
-  list: "tinycloud.kv/list"
-};
-async function readStdin4() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks);
-}
-function authOptions(options) {
-  const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
-  return privateKey ? { privateKey } : void 0;
-}
-function resolveSecretScope(options) {
-  return options.scope ? { scope: options.scope } : void 0;
-}
-async function resolveSecretSpace(input, profileName) {
-  return resolveSpaceUri(input, profileName, { useProfileDefault: false });
-}
-function secretsServiceForSpace(node, spaceUri) {
-  return spaceUri ? node.secretsForSpace(spaceUri) : node.secrets;
-}
-var SECRET_NAME_RE2 = /^[A-Z][A-Z0-9_]*$/;
-var RESERVED_SECRET_SCOPES2 = /* @__PURE__ */ new Set(["default", "global"]);
-function canonicalizeSecretScope2(scope) {
-  if (scope === void 0) return void 0;
-  const trimmed = scope.trim();
-  if (trimmed === "") {
-    throw new CLIError(
-      "INVALID_SECRET_SCOPE",
-      "Secret scope must be non-empty; omit scope for global secrets.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-  const canonical = trimmed.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-  if (canonical === "") {
-    throw new CLIError(
-      "INVALID_SECRET_SCOPE",
-      "Secret scope must contain at least one letter or number.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-  if (RESERVED_SECRET_SCOPES2.has(canonical)) {
-    throw new CLIError(
-      "INVALID_SECRET_SCOPE",
-      `Secret scope ${JSON.stringify(scope)} is reserved; omit scope for global secrets.`,
-      ExitCode.USAGE_ERROR
-    );
-  }
-  return canonical;
-}
-function resolveSecretPath2(name2, options = {}) {
-  const normalizedName = name2.trim();
-  if (!SECRET_NAME_RE2.test(normalizedName)) {
-    throw new CLIError(
-      "INVALID_SECRET_NAME",
-      `Invalid secret name ${JSON.stringify(name2)}. Secret names must match ${SECRET_NAME_RE2.source}.`,
-      ExitCode.USAGE_ERROR
-    );
-  }
-  const scope = canonicalizeSecretScope2(options.scope);
-  const vaultKey = scope === void 0 ? `secrets/${normalizedName}` : `secrets/scoped/${scope}/${normalizedName}`;
-  return {
-    name: normalizedName,
-    ...scope !== void 0 ? { scope } : {},
-    vaultKey,
-    permissionPaths: {
-      vault: `vault/${vaultKey}`
-    }
-  };
-}
-function resolveSecretListPrefix(options = {}) {
-  const scope = canonicalizeSecretScope2(options.scope);
-  return scope === void 0 ? "vault/secrets/" : `vault/secrets/scoped/${scope}/`;
-}
-function resolveProfilesDir() {
-  const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
-  return join4(home, ".tinycloud", "profiles");
-}
-async function ensureSecretsNode(ctx, options) {
-  const auth = authOptions(options);
-  if (auth?.privateKey) {
-    return ensureAuthenticated(ctx, auth);
-  }
-  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
-  if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
-    const session = await ProfileManager.getSession(ctx.profile);
-    if (!session || isStoredSessionExpired(session)) {
-      await withSpinner(
-        session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
-        () => refreshOpenKeySession(ctx.profile, ctx.host)
-      );
-    }
-  }
-  return ensureAuthenticated(ctx, auth);
-}
-async function runSecretOperation(params) {
-  const first = await runSecretOperationAttempt(params.label, params.operation);
-  if (first.ok || !shouldRequestSecretPermissions(first.error)) {
-    return first;
-  }
-  const profile = await ProfileManager.getProfile(params.ctx.profile);
-  if (!canRequestOwnerPermissions(profile)) {
-    return first;
-  }
-  const requested = secretPermissionEntries({
-    action: params.action,
-    name: params.name,
-    options: params.scopeOptions,
-    space: params.space,
-    node: params.node
-  });
-  await withSpinner(
-    "Requesting secret permissions...",
-    () => ensureDelegationAuthority({
-      ctx: params.ctx,
-      profile,
-      node: params.node,
-      requested,
-      expiryOption: void 0,
-      reason: secretPermissionReason(params.action, params.name),
-      yes: true,
-      force: true,
-      openKeyAcquisition: params.openKeyAcquisition
-    })
-  );
-  return runSecretOperationAttempt(params.label, params.operation);
-}
-function secretPermissionReason(action, name2) {
-  const target = name2 ? ` secret "${name2}"` : " secrets";
-  return `Allow \`tc secrets ${action}${name2 ? ` ${name2}` : ""}\` to access${target} with the required TinyCloud permissions.`;
-}
-async function runSecretOperationAttempt(label, operation) {
-  try {
-    return await withSpinner(label, operation);
-  } catch (error) {
-    const permissionError = thrownPermissionError(error);
-    if (permissionError) return permissionError;
-    throw error;
-  }
-}
-async function invokeCanonicalSecretGet(params) {
-  const auth = authOptions(params.options);
-  const target = {
-    profile: params.ctx.profile,
-    host: params.ctx.host,
-    allowOwnerProfile: true,
-    ...auth ?? {}
-  };
-  const input = {
-    name: params.name,
-    ...params.scope === void 0 ? {} : { scope: params.scope },
-    ...params.space === void 0 ? {} : { space: params.space }
-  };
-  const invoke = () => withSpinner(
-    params.label,
-    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation2("tinycloud.secrets.get", 1, target, input)
-  );
-  const first = await invoke();
-  if (first.status !== "authority_required") return first;
-  if (auth?.privateKey !== void 0) return first;
-  const profile = await ProfileManager.getProfile(params.ctx.profile);
-  if (!canRequestOwnerPermissions(profile)) return first;
-  const node = params.node ?? await ensureSecretsNode(params.ctx, params.options);
-  await withSpinner(
-    "Requesting secret permissions...",
-    () => ensureDelegationAuthority({
-      ctx: params.ctx,
-      profile,
-      node,
-      requested: first.missing,
-      expiryOption: void 0,
-      reason: secretPermissionReason("get", params.name),
-      yes: true,
-      force: true,
-      openKeyAcquisition: params.openKeyAcquisition
-    })
-  );
-  return invoke();
-}
-function throwCanonicalSecretGetError(result, name2) {
-  switch (result.status) {
-    case "authority_required":
-      throw new CLIError(
-        "PERMISSION_DENIED",
-        "Permission denied while reading secret",
-        ExitCode.ERROR
-      );
-    case "setup_required":
-      throw new CLIError("NOT_FOUND", `Secret "${name2}" not found`, ExitCode.NOT_FOUND);
-    case "error":
-      throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-    case "ok":
-      throw new Error("Expected a failed canonical secret result.");
-  }
-}
-function canRequestOwnerPermissions(profile) {
-  const posture = resolveProfilePosture(profile);
-  return posture === "owner-openkey" || posture === "local-owner-key";
-}
-function shouldRequestSecretPermissions(error) {
-  if (error.code !== "PERMISSION_DENIED") return false;
-  return /permission|session expired|autosign|capabilit/i.test(error.message);
-}
-function thrownPermissionError(error) {
-  const record = error;
-  const message = typeof record?.message === "string" ? record.message : String(error);
-  const code2 = typeof record?.code === "string" ? record.code : "PERMISSION_DENIED";
-  if (code2 !== "PERMISSION_DENIED" && !/permission|session expired|autosign|capabilit/i.test(message)) {
-    return null;
-  }
-  return {
-    ok: false,
-    error: {
-      code: "PERMISSION_DENIED",
-      message
-    }
-  };
-}
-function isMissingFileError(error) {
-  const typed = error;
-  return typed?.code === "ENOENT";
-}
-function hasPermissionAction(actions, action) {
-  return actions.some(
-    (entry) => entry === action || entry.endsWith(`/${action.split("/").at(-1)}`) || entry === action.split("/").at(-1)
-  );
-}
-function delegationCoversPath(permissions, path, space = SECRETS_SPACE3) {
-  return permissions.some((permission) => {
-    if (permission.service !== "tinycloud.kv") return false;
-    if (!permissionTargetsSpace(permission, space)) return false;
-    if (!hasPermissionAction(permission.actions, "tinycloud.kv/get")) return false;
-    return permission.path === path || permission.path.endsWith("/") && path.startsWith(permission.path);
-  });
-}
-function spaceMatches(granted, requested) {
-  return granted === requested;
-}
-function permissionTargetsSpace(permission, expectedSpace) {
-  if (permission.service !== "tinycloud.kv") return false;
-  if (typeof permission.space !== "string") return false;
-  const space = permission.space.trim();
-  if (space === "") return false;
-  return spaceMatches(space, expectedSpace);
-}
-function delegationCoversDecrypt(permissions, networkId) {
-  return permissions.some((permission) => {
-    if (permission.service !== "tinycloud.encryption") return false;
-    if (!hasPermissionAction(permission.actions, "tinycloud.encryption/decrypt")) return false;
-    return permission.path === networkId;
-  });
-}
-function parseDelegationExpiry(expiry) {
-  const parsed = expiry instanceof Date ? expiry : typeof expiry === "number" ? new Date(expiry) : new Date(String(expiry));
-  if (Number.isNaN(parsed.getTime())) {
-    throw new CLIError(
-      "INVALID_DELEGATION_SOURCE",
-      "Delegation must include a valid expiry.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-  return parsed;
-}
-function normalizePortableDelegation2(value) {
-  if (value === null || typeof value !== "object") {
-    throw new CLIError(
-      "INVALID_DELEGATION_SOURCE",
-      "Delegation source must contain a PortableDelegation object.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-  const candidate = value;
-  const authorization = candidate.delegationHeader;
-  if (typeof candidate.cid !== "string" || typeof candidate.spaceId !== "string" || typeof candidate.path !== "string" || !Array.isArray(candidate.actions) || typeof candidate.delegateDID !== "string" || typeof candidate.ownerAddress !== "string" || typeof candidate.chainId !== "number" || typeof authorization !== "object" || authorization === null || typeof authorization.Authorization !== "string") {
-    throw new CLIError(
-      "INVALID_DELEGATION_SOURCE",
-      "Delegation source must contain a PortableDelegation object.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-  return {
-    ...candidate,
-    actions: [...candidate.actions],
-    expiry: parseDelegationExpiry(candidate.expiry),
-    delegationHeader: { Authorization: authorization.Authorization }
-  };
-}
-function normalizeDelegationCandidates(value, source) {
-  if (Array.isArray(value)) {
-    return value.flatMap((entry) => normalizeDelegationCandidates(entry, source));
-  }
-  if (value === null || typeof value !== "object") {
-    throw new CLIError(
-      "INVALID_DELEGATION_SOURCE",
-      `Delegation source "${source}" must be a delegation file or imported profile reference.`,
-      ExitCode.USAGE_ERROR
-    );
-  }
-  const candidate = value;
-  if (candidate.delegation !== void 0) {
-    const delegation2 = normalizePortableDelegation2(candidate.delegation);
-    return [{
-      delegation: delegation2,
-      permissions: Array.isArray(candidate.permissions) && candidate.permissions.length > 0 ? candidate.permissions : permissionsFromDelegation2(delegation2)
-    }];
-  }
-  const delegation = normalizePortableDelegation2(candidate);
-  return [{
-    delegation,
-    permissions: permissionsFromDelegation2(delegation)
-  }];
-}
-function permissionsFromDelegation2(delegation) {
-  if (delegation.resources?.length) {
-    return delegation.resources.map((resource) => ({
-      service: resource.service.startsWith("tinycloud.") ? resource.service : `tinycloud.${resource.service}`,
-      space: resource.space,
-      path: resource.path,
-      actions: [...resource.actions]
-    }));
-  }
-  const service = delegation.actions[0]?.includes("/") ? delegation.actions[0].slice(0, delegation.actions[0].indexOf("/")) : "tinycloud.unknown";
-  return [{
-    service,
-    space: delegation.spaceId,
-    path: delegation.path,
-    actions: [...delegation.actions]
-  }];
-}
-async function loadDelegationCandidates(source) {
-  try {
-    const raw = JSON.parse(await readFile6(source, "utf8"));
-    return normalizeDelegationCandidates(raw, source);
-  } catch (error) {
-    if (!isMissingFileError(error)) {
-      if (error instanceof SyntaxError) {
-        throw new CLIError(
-          "INVALID_DELEGATION_SOURCE",
-          `Delegation source "${source}" must be valid JSON.`,
-          ExitCode.USAGE_ERROR
-        );
-      }
-      throw new CLIError(
-        "INVALID_DELEGATION_SOURCE",
-        `Delegation source "${source}" could not be read.`,
-        ExitCode.USAGE_ERROR
-      );
-    }
-  }
-  try {
-    const importedPath = join4(resolveProfilesDir(), source, "additional-delegations.json");
-    const raw = JSON.parse(await readFile6(importedPath, "utf8"));
-    return normalizeDelegationCandidates(raw, source);
-  } catch (error) {
-    if (isMissingFileError(error)) {
-      return [];
-    }
-    if (error instanceof SyntaxError) {
-      throw new CLIError(
-        "INVALID_DELEGATION_SOURCE",
-        `Delegation source "${source}" must be valid JSON.`,
-        ExitCode.USAGE_ERROR
-      );
-    }
-    throw new CLIError(
-      "INVALID_DELEGATION_SOURCE",
-      `Delegation source "${source}" could not be read.`,
-      ExitCode.USAGE_ERROR
-    );
-  }
-}
-function selectDelegationCandidate(candidates, source, secretPath, space = SECRETS_SPACE3) {
-  const liveCandidates = candidates.filter((candidate) => candidate.delegation.expiry.getTime() > Date.now());
-  if (liveCandidates.length === 0) {
-    throw new CLIError(
-      "DELEGATION_EXPIRED",
-      `Delegation source "${source}" has no live delegations.`,
-      ExitCode.PERMISSION_DENIED
-    );
-  }
-  const secretsSpaceCandidates = liveCandidates.filter(
-    (candidate) => candidate.permissions.some((permission) => permissionTargetsSpace(permission, space))
-  );
-  if (secretsSpaceCandidates.length === 0) {
-    throw new CLIError(
-      "PERMISSION_DENIED",
-      `Delegation source "${source}" does not target secrets space "${space}".`,
-      ExitCode.PERMISSION_DENIED
-    );
-  }
-  const exact = secretsSpaceCandidates.find(
-    (candidate) => delegationCoversPath(candidate.permissions, secretPath, space)
-  );
-  if (exact) {
-    return exact;
-  }
-  throw new CLIError(
-    "PERMISSION_DENIED",
-    `Delegation source "${source}" does not cover secret "${secretPath}".`,
-    ExitCode.PERMISSION_DENIED
-  );
-}
-async function resolveDelegatedSecretSource(source, secretPath, space = SECRETS_SPACE3) {
-  const candidates = await loadDelegationCandidates(source);
-  if (candidates.length === 0) {
-    throw new CLIError(
-      "DELEGATION_NOT_FOUND",
-      `Delegation source "${source}" did not resolve to any imported delegations.`,
-      ExitCode.PERMISSION_DENIED
-    );
-  }
-  const selected = selectDelegationCandidate(candidates, source, secretPath, space);
-  return { ...selected, source };
-}
-function mapEncryptionResultError(error) {
-  const code2 = error.code || "DECRYPTION_FAILED";
-  const exitCode = code2 === "PERMISSION_DENIED" ? ExitCode.PERMISSION_DENIED : code2 === "NOT_FOUND" ? ExitCode.NOT_FOUND : code2 === "NETWORK_ERROR" || code2 === "TRANSPORT_ERROR" ? ExitCode.NETWORK_ERROR : ExitCode.ERROR;
-  return new CLIError(code2, error.message, exitCode);
-}
-function parseDecryptedSecretPayload(data, secretPath) {
-  const text = new TextDecoder().decode(data);
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new CLIError(
-      "INVALID_SECRET_PAYLOAD",
-      `Delegated secret "${secretPath}" did not decrypt to valid JSON.`,
-      ExitCode.ERROR
-    );
-  }
-  if (parsed === null || typeof parsed !== "object" || typeof parsed.value !== "string") {
-    throw new CLIError(
-      "INVALID_SECRET_PAYLOAD",
-      `Delegated secret "${secretPath}" did not decrypt to { value: string }.`,
-      ExitCode.ERROR
-    );
-  }
-  return parsed.value;
-}
-async function readDelegatedSecretValue(params) {
-  if (!delegationCoversPath(params.permissions, params.secretPath, params.space ?? SECRETS_SPACE3)) {
-    throw new CLIError(
-      "PERMISSION_DENIED",
-      `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
-      ExitCode.PERMISSION_DENIED
-    );
-  }
-  const access = await params.node.useDelegation(params.delegation);
-  if (typeof access?.kv?.get !== "function") {
-    throw new CLIError(
-      "DELEGATION_INVALID",
-      `Delegation "${params.delegationCid}" did not resolve delegated KV access.`,
-      ExitCode.ERROR
-    );
-  }
-  const envelopeResult = await access.kv.get(params.secretPath, {
-    raw: true,
-    prefix: ""
-  });
-  if (!envelopeResult.ok) {
-    if (envelopeResult.error.code === "NOT_FOUND" || envelopeResult.error.code === "KEY_NOT_FOUND" || envelopeResult.error.code === "KV_NOT_FOUND") {
-      throw new CLIError(
-        "NOT_FOUND",
-        `Secret "${params.name}" not found`,
-        ExitCode.NOT_FOUND
-      );
-    }
-    if (envelopeResult.error.code === "PERMISSION_DENIED") {
-      throw new CLIError(
-        "PERMISSION_DENIED",
-        `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
-        ExitCode.PERMISSION_DENIED
-      );
-    }
-    throw new CLIError(
-      envelopeResult.error.code,
-      envelopeResult.error.message,
-      ExitCode.ERROR
-    );
-  }
-  const rawEnvelope = envelopeResult.data.data;
-  if (typeof rawEnvelope !== "string") {
-    throw new CLIError(
-      "INVALID_ENVELOPE",
-      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
-      ExitCode.ERROR
-    );
-  }
-  let envelope;
-  try {
-    envelope = JSON.parse(rawEnvelope);
-  } catch {
-    throw new CLIError(
-      "INVALID_ENVELOPE",
-      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
-      ExitCode.ERROR
-    );
-  }
-  const networkId = envelope.networkId;
-  if (typeof networkId !== "string") {
-    throw new CLIError(
-      "INVALID_ENVELOPE",
-      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
-      ExitCode.ERROR
-    );
-  }
-  if (!delegationCoversDecrypt(params.permissions, networkId)) {
-    throw new CLIError(
-      "PERMISSION_DENIED",
-      `Delegation "${params.delegationCid}" does not include tinycloud.encryption/decrypt for ${networkId}.`,
-      ExitCode.PERMISSION_DENIED
-    );
-  }
-  const decrypted = await params.node.encryption.decryptEnvelope(
-    envelope,
-    { proofs: [params.delegationCid] }
-  );
-  if (!decrypted.ok) {
-    throw mapEncryptionResultError(decrypted.error);
-  }
-  return parseDecryptedSecretPayload(decrypted.data, params.secretPath);
-}
-function isStoredSessionExpired(session) {
-  const record = session;
-  const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
-  if (direct) return direct.getTime() <= Date.now();
-  if (typeof record.siwe !== "string") return false;
-  const match = record.siwe.match(/^Expiration Time:\s*(.+)$/im);
-  const expiry = match ? parseDate(match[1].trim()) : null;
-  return expiry !== null && expiry.getTime() <= Date.now();
-}
-function parseDate(value) {
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
-  }
-  if (typeof value === "number") {
-    const date2 = new Date(value < 1e10 ? value * 1e3 : value);
-    return Number.isNaN(date2.getTime()) ? null : date2;
-  }
-  if (typeof value !== "string" || value.trim() === "") return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-function secretKvAbility(action) {
-  return SECRET_KV_ABILITIES[action];
-}
-function secretPermissionEntries(params) {
-  const path = params.action === "list" ? resolveSecretListPrefix(params.options) : resolveSecretPath2(params.name ?? "", params.options).permissionPaths.vault;
-  const permissions = [{
-    service: "tinycloud.kv",
-    space: params.space ?? SECRETS_SPACE3,
-    path,
-    actions: [secretKvAbility(params.action)],
-    skipPrefix: true
-  }];
-  if (params.action === "get") {
-    const networkId = "getEncryptionNetworkIdForSpace" in params.node && typeof params.node.getEncryptionNetworkIdForSpace === "function" ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE3) : params.node.getDefaultEncryptionNetworkId();
-    permissions.push({
-      service: "tinycloud.encryption",
-      path: networkId,
-      actions: ["tinycloud.encryption/decrypt"],
-      skipPrefix: true
-    });
-  }
-  return permissions;
-}
-function formatSecretScopeFlag(options) {
-  return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
-}
-function outputSecretDoctor(result) {
-  if (shouldOutputJson()) {
-    outputJson(result);
-    return;
-  }
-  process.stderr.write(formatSection("Secrets") + "\n");
-  for (const check of result.checks) {
-    process.stdout.write(formatCheck(check.ok, check.name, check.detail) + "\n");
-    if (check.hint) {
-      process.stdout.write(`  ${theme.hint(check.hint)}
-`);
-    }
-  }
-  process.stdout.write("\n");
-  if (result.healthy) {
-    process.stdout.write(theme.success("Secrets checks passed.") + "\n");
-  } else {
-    const failed = result.checks.filter((check) => check.ok === false).length;
-    process.stdout.write(theme.warn(`${failed} secrets check${failed > 1 ? "s" : ""} need attention.`) + "\n");
-  }
-}
-function registerSecretsCommand(program2, openKeyAcquisition) {
-  const secrets = program2.command("secrets").description("Encrypted secrets management");
-  const network = secrets.command("network").description("Manage the default secrets encryption network");
-  network.command("show [nameOrNetworkId]").description("Show a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (nameOrNetworkId, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx, authOptions(options));
-      const requested = nameOrNetworkId ?? "default";
-      const networkId = requested.startsWith("urn:tinycloud:encryption:") ? requested : node.getDefaultEncryptionNetworkId(requested);
-      const descriptor = await withSpinner(
-        "Fetching encryption network...",
-        () => node.getEncryptionNetwork(requested)
-      );
-      outputJson({
-        networkId,
-        exists: descriptor !== null,
-        ...descriptor ? { descriptor } : {}
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  network.command("init [name]").description("Create a secrets encryption network if needed").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx, authOptions(options));
-      const descriptor = await withSpinner(
-        "Ensuring encryption network...",
-        () => node.ensureEncryptionNetwork(name2 ?? "default")
-      );
-      outputJson({
-        networkId: descriptor.networkId,
-        state: descriptor.state,
-        descriptor
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("doctor [name]").description("Check secrets setup and optional secret access").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--network <name>", "Encryption network name", "default").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
-      const networkName = options.network ?? "default";
-      const networkId = networkName.startsWith("urn:tinycloud:encryption:") ? networkName : node.getDefaultEncryptionNetworkId(networkName);
-      const descriptor = await withSpinner(
-        "Checking secrets encryption network...",
-        () => node.getEncryptionNetwork(networkName)
-      );
-      const checks = [
-        descriptor ? {
-          name: "Encryption network",
-          ok: descriptor.state === "active" ? true : "warn",
-          detail: `${networkName} (${descriptor.state})`
-        } : {
-          name: "Encryption network",
-          ok: false,
-          detail: `${networkName} not found`,
-          hint: `tc secrets network init ${networkName}`
-        }
-      ];
-      let secret;
-      if (name2) {
-        const scopeOptions = resolveSecretScope(options);
-        const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
-        const secrets2 = secretsServiceForSpace(node, spaceUri);
-        const resolved = resolveSecretPath2(name2, scopeOptions);
-        const result = await runSecretOperation({
-          ctx,
-          node,
-          action: "get",
-          name: name2,
-          scopeOptions,
-          space: spaceUri,
-          label: `Checking secret ${name2}...`,
-          operation: () => secrets2.get(name2, scopeOptions)
-        });
-        if (result.ok) {
-          secret = {
-            name: resolved.name,
-            path: resolved.permissionPaths.vault,
-            ...resolved.scope ? { scope: resolved.scope } : {},
-            exists: true,
-            readable: true
-          };
-          checks.push({
-            name: "Secret access",
-            ok: true,
-            detail: `${resolved.permissionPaths.vault} readable`
-          });
-        } else {
-          const notFound = result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND";
-          secret = {
-            name: resolved.name,
-            path: resolved.permissionPaths.vault,
-            ...resolved.scope ? { scope: resolved.scope } : {},
-            exists: !notFound,
-            readable: false
-          };
-          checks.push({
-            name: "Secret access",
-            ok: false,
-            detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
-            hint: notFound ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} <value>` : "Ask the owner profile to grant tinycloud.kv/get and tinycloud.encryption/decrypt."
-          });
-        }
-      } else {
-        checks.push({
-          name: "Secret access",
-          ok: "warn",
-          detail: "skipped; pass a secret name to verify read access"
-        });
-      }
-      outputSecretDoctor({
-        healthy: checks.every((check) => check.ok !== false),
-        network: {
-          name: networkName,
-          networkId,
-          exists: descriptor !== null,
-          ...descriptor?.state ? { state: descriptor.state } : {}
-        },
-        ...secret ? { secret } : {},
-        checks
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("list").description("List secrets").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
-      const scopeOptions = resolveSecretScope(options);
-      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
-      const secrets2 = secretsServiceForSpace(node, spaceUri);
-      const result = await runSecretOperation({
-        ctx,
-        node,
-        action: "list",
-        scopeOptions,
-        space: spaceUri,
-        label: "Listing secrets...",
-        operation: () => secrets2.list(scopeOptions)
-      });
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      const secretNames = Array.isArray(result.data) ? result.data : [];
-      outputJson({
-        secrets: secretNames,
-        count: secretNames.length,
-        ...options.scope ? { scope: options.scope } : {},
-        ...spaceUri ? { space: spaceUri } : {}
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("get <name>").description("Get a secret value").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--raw", "Output raw value (no JSON wrapping)").option("--value-only", "Output only the secret value (alias for --raw)").option("-o, --output <file>", "Write value to file").option("--delegation <source>", "Delegation file path or imported profile name").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const scopeOptions = resolveSecretScope(options);
-      const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
-      const secretPath = resolveSecretPath2(name2, scopeOptions).permissionPaths.vault;
-      if (options.delegation) {
-        const delegated = await resolveDelegatedSecretSource(
-          options.delegation,
-          secretPath,
-          legacySpaceUri ?? SECRETS_SPACE3
-        );
-        const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
-        const delegatedCtx = { ...ctx, host: effectiveHost };
-        const node = await ensureSecretsNode(delegatedCtx, options);
-        const value2 = await withSpinner(
-          `Getting secret ${name2}...`,
-          () => readDelegatedSecretValue({
-            node,
-            delegation: delegated.delegation,
-            delegationCid: delegated.delegation.cid,
-            permissions: delegated.permissions,
-            secretPath,
-            space: legacySpaceUri ?? SECRETS_SPACE3,
-            name: name2
-          })
-        );
-        if (options.output) {
-          await writeFile6(options.output, value2);
-          outputJson({ name: name2, written: options.output });
-          return;
-        }
-        if (options.raw) {
-          process.stdout.write(value2);
-          return;
-        }
-        outputJson({ name: name2, value: value2 });
-        return;
-      }
-      const privateKey = authOptions(options)?.privateKey;
-      const spaceUri = privateKey !== void 0 && options.space !== void 0 && !options.space.startsWith("tinycloud:") ? options.space : legacySpaceUri;
-      const result = await invokeCanonicalSecretGet({
-        ctx,
-        name: name2,
-        ...scopeOptions?.scope === void 0 ? {} : { scope: scopeOptions.scope },
-        ...spaceUri === void 0 ? {} : { space: spaceUri },
-        options,
-        label: `Getting secret ${name2}...`,
-        openKeyAcquisition
-      });
-      if (result.status !== "ok") {
-        throwCanonicalSecretGetError(result, name2);
-      }
-      const value = result.output.value;
-      if (options.output) {
-        await writeFile6(options.output, value);
-        outputJson({ name: name2, written: options.output });
-        return;
-      }
-      if (options.raw || options.valueOnly) {
-        process.stdout.write(value);
-        return;
-      }
-      outputJson({ name: name2, value });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, value, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
-      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
-      const secrets2 = secretsServiceForSpace(node, spaceUri);
-      let secretValue;
-      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
-      if (sources.length === 0) {
-        throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
-      }
-      if (sources.length > 1) {
-        throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
-      }
-      if (options.file) {
-        secretValue = await readFile6(options.file, "utf-8");
-      } else if (options.stdin) {
-        secretValue = (await readStdin4()).toString("utf-8");
-      } else {
-        secretValue = value;
-      }
-      const scopeOptions = resolveSecretScope(options);
-      const result = await runSecretOperation({
-        ctx,
-        node,
-        action: "put",
-        name: name2,
-        scopeOptions,
-        space: spaceUri,
-        label: `Storing secret ${name2}...`,
-        operation: () => secrets2.put(name2, secretValue, scopeOptions)
-      });
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({ name: name2, written: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("delete <name>").description("Delete a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
-      const scopeOptions = resolveSecretScope(options);
-      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
-      const secrets2 = secretsServiceForSpace(node, spaceUri);
-      const result = await runSecretOperation({
-        ctx,
-        node,
-        action: "del",
-        name: name2,
-        scopeOptions,
-        space: spaceUri,
-        label: `Deleting secret ${name2}...`,
-        operation: () => secrets2.delete(name2, scopeOptions)
-      });
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({ name: name2, deleted: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  network.command("grant <recipientDid> [name]").description("Grant decrypt permission for a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name2, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx, authOptions(options));
-      const networkName = name2 ?? "default";
-      const descriptor = await withSpinner(
-        "Ensuring encryption network...",
-        () => node.ensureEncryptionNetwork(networkName)
-      );
-      const permission = {
-        service: "tinycloud.encryption",
-        path: descriptor.networkId,
-        actions: ["decrypt"]
-      };
-      const result = await withSpinner(
-        `Granting decrypt permission to ${recipientDid}...`,
-        () => node.delegateTo(recipientDid, [permission])
-      );
-      outputJson({
-        networkId: descriptor.networkId,
-        recipientDid,
-        cid: result.delegation.cid,
-        prompted: result.prompted,
-        path: result.delegation.path,
-        actions: result.delegation.actions
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("manage").description("Open the TinyCloud Secrets Manager in your browser").action(async () => {
-    try {
-      const open2 = (await import("open")).default;
-      await open2("https://secrets.tinycloud.xyz");
-      outputJson({ opened: "https://secrets.tinycloud.xyz" });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-}
-
-// src/commands/vars.ts
-import { readFile as readFile7 } from "fs/promises";
-import { writeFile as writeFile7 } from "fs/promises";
-var VARIABLES_PREFIX = "variables/";
-async function readStdin5() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks);
-}
-function resolvePrivateKey2(options) {
-  const key = options.privateKey || process.env.TC_PRIVATE_KEY;
-  if (!key) {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      "Private key required. Use --private-key <hex> or set TC_PRIVATE_KEY env var.",
-      ExitCode.AUTH_REQUIRED
-    );
-  }
-  return key;
-}
-function registerVarsCommand(program2) {
-  const vars = program2.command("vars").description("Plaintext variable management");
-  vars.command("list").description("List variables").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey2(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
-      const result = await withSpinner("Listing variables...", () => prefixedKv.list());
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      const rawData = result.data.data ?? result.data;
-      const keyList = Array.isArray(rawData) ? rawData : rawData?.keys ?? [];
-      outputJson({
-        variables: keyList,
-        count: keyList.length
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  vars.command("get <name>").description("Get a variable value").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey2(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
-      const result = await withSpinner(`Getting variable ${name2}...`, () => prefixedKv.get(name2));
-      if (!result.ok) {
-        if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
-          throw new CLIError("NOT_FOUND", `Variable "${name2}" not found`, ExitCode.NOT_FOUND);
-        }
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      const data = result.data.data;
-      let value;
-      if (typeof data === "string") {
-        try {
-          const parsed = JSON.parse(data);
-          value = parsed.value;
-        } catch {
-          value = data;
-        }
-      } else if (data && typeof data === "object" && "value" in data) {
-        value = data.value;
-      } else {
-        value = typeof data === "string" ? data : JSON.stringify(data);
-      }
-      if (options.output) {
-        await writeFile7(options.output, value);
-        outputJson({ name: name2, written: options.output });
-        return;
-      }
-      if (options.raw) {
-        process.stdout.write(value);
-        return;
-      }
-      outputJson({ name: name2, value });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  vars.command("put <name> [value]").description("Set a variable").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, value, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey2(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      let varValue;
-      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
-      if (sources.length === 0) {
-        throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
-      }
-      if (sources.length > 1) {
-        throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
-      }
-      if (options.file) {
-        varValue = await readFile7(options.file, "utf-8");
-      } else if (options.stdin) {
-        varValue = (await readStdin5()).toString("utf-8");
-      } else {
-        varValue = value;
-      }
-      const payload = {
-        value: varValue,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
-      const result = await withSpinner(`Setting variable ${name2}...`, () => prefixedKv.put(name2, payload));
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({ name: name2, written: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  vars.command("delete <name>").description("Delete a variable").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const privateKey = resolvePrivateKey2(options);
-      const node = await ensureAuthenticated(ctx, { privateKey });
-      const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
-      const result = await withSpinner(`Deleting variable ${name2}...`, () => prefixedKv.delete(name2));
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({ name: name2, deleted: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-}
-
 // src/commands/doctor.ts
 function registerDoctorCommand(program2) {
   program2.command("doctor").description("Run diagnostic checks").action(async (_options, cmd) => {
@@ -16051,270 +14267,9 @@ function registerDoctorCommand(program2) {
   });
 }
 
-// src/commands/sql.ts
-import { writeFile as writeFile8 } from "fs/promises";
-import { resolve } from "path";
-async function dbHandle(node, dbName, spaceInput, profileName) {
-  const spaceUri = await resolveSpaceUri(spaceInput, profileName);
-  const sql = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
-  return { handle: sql.db(dbName), spaceUri };
-}
-async function throwSqlError(error, spaceUri, profileName, prefix) {
-  const hosted = await unhostedSpaceError(error, spaceUri, profileName);
-  if (hosted) throw hosted;
-  const message = prefix ? `${prefix}${error.message}` : error.message;
-  throw new CLIError(error.code, message, ExitCode.ERROR, error.meta);
-}
-function registerSqlCommand(program2) {
-  const sql = program2.command("sql").description("SQLite database operations for your TinyCloud space").addHelpText("after", `
-
-TinyCloud SQL gives each space isolated SQLite databases. Use the default
-database for simple apps, or pass --db to target a named database. Pass
---space to target a non-primary space (e.g. the manifest "applications" space).
-
-Common workflows:
-  $ tc sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
-  $ tc sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
-  $ tc sql query "SELECT id, body FROM notes ORDER BY id"
-  $ tc sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
-  $ tc sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
-  $ tc sql export --db analytics --output analytics.db
-
-Commands:
-  query     Read rows with SELECT statements
-  execute   Run writes and schema changes such as INSERT, UPDATE, DELETE, CREATE, DROP
-  export    Download the raw SQLite database file
-  copy      Copy rows between databases (optionally across spaces)
-
-Tips:
-  - SQL strings should usually be quoted so your shell passes them as one argument.
-  - --params accepts a JSON array and binds values to ? placeholders.
-  - --space accepts a short name ("applications") or full URI ("tinycloud:pkh:eip155:1:0x...:applications").
-  - Add --json for scripting-friendly output.
-`);
-  sql.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
-
-Examples:
-  $ tc sql query "SELECT * FROM notes ORDER BY id"
-  $ tc sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
-  $ tc sql query "SELECT count(*) AS total FROM events" --db analytics --json
-  $ tc sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
-
-Output:
-  Human output is formatted as a table. Piped output or --json returns
-  { "columns": string[], "rows": unknown[][], "rowCount": number }.
-`).action(async (sqlStr, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const params = options.params ? JSON.parse(options.params) : void 0;
-      const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
-      const result = await withSpinner(
-        "Running query...",
-        () => handle.query(sqlStr, params)
-      );
-      if (!result.ok) {
-        await throwSqlError(result.error, spaceUri, ctx.profile);
-      }
-      const { columns, rows, rowCount } = result.data;
-      if (shouldOutputJson()) {
-        outputJson({ columns, rows, rowCount });
-      } else {
-        if (rows.length === 0) {
-          process.stdout.write(theme.muted("No rows returned.") + "\n");
-        } else {
-          const stringRows = rows.map(
-            (row) => row.map((v) => v === null ? "NULL" : String(v))
-          );
-          process.stdout.write(formatTable(columns, stringRows) + "\n");
-          process.stdout.write(theme.muted(`
-${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
-        }
-      }
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  sql.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
-
-Examples:
-  $ tc sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
-  $ tc sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
-  $ tc sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
-  $ tc sql execute "DROP TABLE old_notes" --db archive
-  $ tc sql execute "DELETE FROM conversation WHERE id = ?" --space applications --db xyz.tinycloud.listen/conversations --params '["abc"]'
-
-Output:
-  Returns JSON with the changed row count and last inserted row id when available.
-`).action(async (sqlStr, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const params = options.params ? JSON.parse(options.params) : void 0;
-      const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
-      const result = await withSpinner(
-        "Executing statement...",
-        () => handle.execute(sqlStr, params)
-      );
-      if (!result.ok) {
-        await throwSqlError(result.error, spaceUri, ctx.profile);
-      }
-      outputJson({
-        changes: result.data.changes,
-        lastInsertRowId: result.data.lastInsertRowId
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  sql.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
-
-Examples:
-  $ tc sql export
-  $ tc sql export --db analytics --output analytics.db
-  $ tc sql export --space applications --db xyz.tinycloud.listen/conversations --output listen.db
-
-Output:
-  Writes the database file locally and returns JSON with the path and size.
-`).action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
-      const result = await withSpinner(
-        "Exporting database...",
-        () => handle.export()
-      );
-      if (!result.ok) {
-        await throwSqlError(result.error, spaceUri, ctx.profile);
-      }
-      const blob = result.data;
-      const buffer = Buffer.from(await blob.arrayBuffer());
-      const outputPath = resolve(options.output);
-      await writeFile8(outputPath, buffer);
-      outputJson({
-        file: outputPath,
-        size: blob.size,
-        sizeHuman: formatBytes(blob.size)
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  sql.command("copy").description("Copy rows between SQL databases (optionally across spaces)").requiredOption("--from-db <name>", "Source database name").requiredOption("--to-db <name>", "Destination database name").option("--from-space <name|uri>", "Source space (defaults to primary)").option("--to-space <name|uri>", "Destination space (defaults to primary)").option("--table <name...>", "Restrict copy to specific tables (repeat or comma-separated)").option("--dry-run", "Print the plan without writing", false).addHelpText("after", `
-
-Examples:
-  $ tc sql copy --from-db com.tinycloud.conversation-sync/conversations \\
-                --to-db xyz.tinycloud.listen/conversations \\
-                --space applications --dry-run
-  $ tc sql copy --from-space applications --from-db com.foo/data \\
-                --to-space applications --to-db com.bar/data \\
-                --table conversation --table participant
-
-Notes:
-  - Refuses to run when (resolved space, db) is identical for source and destination.
-  - Does NOT create destination tables. Run the target app once (or use \`tc sql execute\`)
-    to materialize the schema before copying.
-  - One row at a time; suitable for small/medium datasets. Large copies should
-    use \`tc sql export\` + bulk import.
-  - Authorization: the active session/delegation must cover sql/read on source
-    AND sql/write on destination. Otherwise the relevant operation will fail.
-`).action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const fromSpaceInput = options.fromSpace ?? options.space;
-      const toSpaceInput = options.toSpace ?? options.space;
-      const fromSpaceUri = await resolveSpaceUri(fromSpaceInput, ctx.profile) ?? "<primary>";
-      const toSpaceUri = await resolveSpaceUri(toSpaceInput, ctx.profile) ?? "<primary>";
-      if (fromSpaceUri === toSpaceUri && options.fromDb === options.toDb) {
-        throw new CLIError(
-          "SELF_COPY",
-          `Refusing to copy: source and destination resolve to the same (space, db) \u2014 ${fromSpaceUri} / ${options.fromDb}.`,
-          ExitCode.USAGE_ERROR
-        );
-      }
-      const { handle: fromHandle, spaceUri: fromSpaceUriResolved } = await dbHandle(node, options.fromDb, fromSpaceInput, ctx.profile);
-      const { handle: toHandle, spaceUri: toSpaceUriResolved } = await dbHandle(node, options.toDb, toSpaceInput, ctx.profile);
-      let tables;
-      if (options.table && options.table.length > 0) {
-        tables = options.table.flatMap((t) => t.split(",").map((s) => s.trim()).filter(Boolean));
-      } else {
-        const listing = await fromHandle.query(
-          "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        );
-        if (!listing.ok) {
-          await throwSqlError(listing.error, fromSpaceUriResolved, ctx.profile, "Cannot list source tables: ");
-        }
-        tables = listing.data.rows.map((r) => String(r[0]));
-      }
-      if (tables.length === 0) {
-        throw new CLIError(
-          "EMPTY_PLAN",
-          `No tables to copy. Use --table to specify tables, or check that the source database has user tables.`,
-          ExitCode.USAGE_ERROR
-        );
-      }
-      const plan = [];
-      for (const table of tables) {
-        const safe = quoteIdent(table);
-        const countResult = await fromHandle.query(`SELECT count(*) AS n FROM ${safe}`);
-        if (!countResult.ok) {
-          await throwSqlError(countResult.error, fromSpaceUriResolved, ctx.profile, `Cannot count rows in source table "${table}": `);
-        }
-        const rows = Number(countResult.data.rows[0]?.[0] ?? 0);
-        plan.push({ table, rows, copied: 0, skipped: 0 });
-      }
-      if (options.dryRun) {
-        outputJson({
-          dryRun: true,
-          from: { space: fromSpaceUri, db: options.fromDb },
-          to: { space: toSpaceUri, db: options.toDb },
-          tables: plan.map((p) => ({ table: p.table, rows: p.rows }))
-        });
-        return;
-      }
-      for (const entry of plan) {
-        const safe = quoteIdent(entry.table);
-        const fetched = await fromHandle.query(`SELECT * FROM ${safe}`);
-        if (!fetched.ok) {
-          await throwSqlError(fetched.error, fromSpaceUriResolved, ctx.profile, `Failed to read "${entry.table}": `);
-        }
-        const columns = fetched.data.columns;
-        const rows = fetched.data.rows;
-        if (rows.length === 0) continue;
-        const colList = columns.map(quoteIdent).join(", ");
-        const placeholders = columns.map(() => "?").join(", ");
-        const insertSql = `INSERT INTO ${safe} (${colList}) VALUES (${placeholders})`;
-        for (const row of rows) {
-          const writeResult = await toHandle.execute(insertSql, row);
-          if (!writeResult.ok) {
-            await throwSqlError(writeResult.error, toSpaceUriResolved, ctx.profile, `Insert into "${entry.table}" failed after ${entry.copied} row(s): `);
-          }
-          entry.copied += writeResult.data.changes ?? 1;
-        }
-      }
-      outputJson({
-        from: { space: fromSpaceUri, db: options.fromDb },
-        to: { space: toSpaceUri, db: options.toDb },
-        tables: plan.map((p) => ({ table: p.table, rowsRead: p.rows, rowsWritten: p.copied }))
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-}
-function quoteIdent(name2) {
-  return `"${name2.replace(/"/g, '""')}"`;
-}
-
 // src/commands/duckdb.ts
-import { readFile as readFile8, writeFile as writeFile9 } from "fs/promises";
-import { resolve as resolve2 } from "path";
+import { readFile as readFile5, writeFile as writeFile3 } from "fs/promises";
+import { resolve } from "path";
 function registerDuckdbCommand(program2) {
   const duckdb = program2.command("duckdb").description("DuckDB database operations");
   duckdb.command("query <sql>").description("Run a SELECT query").option("--db <name>", "Database name", "default").option("--params <json>", "Bind parameters as JSON array").action(async (sqlStr, options, cmd) => {
@@ -16426,8 +14381,8 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       }
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
-      const outputPath = resolve2(options.output);
-      await writeFile9(outputPath, buffer);
+      const outputPath = resolve(options.output);
+      await writeFile3(outputPath, buffer);
       outputJson({
         file: outputPath,
         size: blob.size,
@@ -16442,8 +14397,8 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const filePath = resolve2(file);
-      const bytes = new Uint8Array(await readFile8(filePath));
+      const filePath = resolve(file);
+      const bytes = new Uint8Array(await readFile5(filePath));
       const result = await withSpinner(
         "Importing database...",
         () => node.duckdb.db(options.db).import(bytes)
@@ -16456,6 +14411,327 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
         size: bytes.byteLength,
         sizeHuman: formatBytes(bytes.byteLength),
         imported: true
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+
+// src/commands/init.ts
+function registerInitCommand(program2) {
+  program2.command("init").description("Initialize a new TinyCloud profile").option("--name <profile>", "Profile name", "default").option("--key-only", "Only generate key, skip authentication").option("--host <url>", "TinyCloud node URL").option("--paste", "Use manual paste mode for authentication").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--default-space <name>", "Default space used when --space is omitted (e.g. applications)").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const profileName = options.name;
+      const host = options.host ?? globalOpts.host ?? DEFAULT_HOST;
+      const defaultSpace = options.defaultSpace;
+      if (defaultSpace !== void 0 && !/^[A-Za-z0-9_-]+$/.test(defaultSpace)) {
+        throw new CLIError(
+          "INVALID_SPACE",
+          `Invalid --default-space "${defaultSpace}". Use a short name ([A-Za-z0-9_-]).`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      if (await ProfileManager.profileExists(profileName)) {
+        throw new CLIError(
+          "PROFILE_EXISTS",
+          `Profile "${profileName}" already exists. Use \`tc profile delete ${profileName}\` first or choose a different name.`,
+          ExitCode.ERROR
+        );
+      }
+      await ProfileManager.ensureConfigDir();
+      const { jwk, did } = await withSpinner("Generating key...", async () => {
+        return generateKey();
+      });
+      await ProfileManager.setKey(profileName, jwk);
+      const profileConfig = {
+        name: profileName,
+        host,
+        chainId: DEFAULT_CHAIN_ID,
+        spaceName: "default",
+        did,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        ...defaultSpace ? { defaultSpace } : {}
+      };
+      await ProfileManager.setProfile(profileName, profileConfig);
+      const config = await ProfileManager.getConfig();
+      if (profileName === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
+        await ProfileManager.setConfig({ ...config, defaultProfile: profileName });
+      }
+      if (options.keyOnly) {
+        outputJson({
+          profile: profileName,
+          did,
+          host,
+          authenticated: false
+        });
+        return;
+      }
+      const delegationData = await startAuthFlow(did, {
+        paste: options.paste,
+        noPopup: options.popup === false,
+        jwk,
+        host
+      });
+      const sanitizedSession = mergePrivateJwkIntoSession(delegationData, jwk);
+      await ProfileManager.setSession(profileName, sanitizedSession);
+      await ProfileManager.setProfile(profileName, {
+        ...profileConfig,
+        spaceId: sanitizedSession.spaceId,
+        ownerDid: sanitizedSession.ownerDid
+      });
+      outputJson({
+        profile: profileName,
+        did,
+        host,
+        spaceId: sanitizedSession.spaceId,
+        authenticated: true
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+
+// src/commands/kv.ts
+import { readFile as readFile6 } from "fs/promises";
+import { writeFile as writeFile4 } from "fs/promises";
+
+// src/lib/host.ts
+function canonicalizeAddress2(address) {
+  const trimmed = address.trim();
+  return trimmed.startsWith("0x") ? `0x${trimmed.slice(2).toLowerCase()}` : trimmed.toLowerCase();
+}
+async function resolveLocalAddress(profile, profileName) {
+  const session = await ProfileManager.getSession(profileName);
+  const sessAddr = session?.address;
+  if (typeof sessAddr === "string" && sessAddr.length > 0) {
+    return canonicalizeAddress2(sessAddr);
+  }
+  if (profile.address) return canonicalizeAddress2(profile.address);
+  if (profile.ownerDid) {
+    const match = profile.ownerDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
+    if (match) return canonicalizeAddress2(match[1]);
+  }
+  return null;
+}
+function ownerAddressFromSpaceUri(spaceUri) {
+  const match = spaceUri.match(/^tinycloud:pkh:eip155:\d+:(0x[a-fA-F0-9]{40}):/);
+  return match ? canonicalizeAddress2(match[1]) : null;
+}
+function ownerDidFromSpaceUri(spaceUri) {
+  const match = spaceUri.match(/^tinycloud:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40}):/);
+  if (!match) return null;
+  return `did:pkh:eip155:${match[1]}:${canonicalizeAddress2(match[2])}`;
+}
+async function isRootAuthority(spaceUri, profileName) {
+  const profile = await ProfileManager.getProfile(profileName);
+  if (resolveProfilePosture(profile) === "delegate-session") return false;
+  const ownerAddr = ownerAddressFromSpaceUri(spaceUri);
+  if (!ownerAddr) return false;
+  const selfAddr = await resolveLocalAddress(profile, profileName);
+  return selfAddr !== null && selfAddr === ownerAddr;
+}
+function spaceNameFromUri(spaceUri) {
+  return spaceUri.slice(spaceUri.lastIndexOf(":") + 1);
+}
+async function unhostedSpaceError(error, spaceUri, profileName) {
+  if (!spaceUri) return null;
+  const status = error.meta?.status;
+  const isUnhosted = status === 404 && /space not found/i.test(error.message);
+  if (!isUnhosted) return null;
+  const spaceName = spaceNameFromUri(spaceUri);
+  const owner = await isRootAuthority(spaceUri, profileName);
+  const hint = owner ? [
+    "You are the owner. Host it once:",
+    `  tc space host ${spaceName}`,
+    "Then retry."
+  ].join("\n") : [
+    "You are a delegate and CANNOT host this space \u2014 only its owner can.",
+    "Emit a host request:",
+    `  tc space host-request ${spaceName} --emit ./host-request.json`,
+    "Send it to the owner; they run `tc space host` and confirm. Then retry."
+  ].join("\n");
+  const message = owner ? `Space '${spaceName}' (${spaceUri}) is not hosted.` : `Space '${spaceName}' (owner ${ownerDidFromSpaceUri(spaceUri) ?? spaceUri}) is not hosted.`;
+  return new CLIError("SPACE_NOT_HOSTED", message, ExitCode.ERROR, { hint });
+}
+async function resolveHostSpace(name2, profileName) {
+  const resolved = await resolveSpaceUri(name2, profileName);
+  if (!resolved) {
+    throw new Error(`Could not resolve a space for "${name2}".`);
+  }
+  return resolved;
+}
+
+// src/commands/kv.ts
+async function throwKvError(error, spaceUri, profileName) {
+  const hosted = await unhostedSpaceError(error, spaceUri, profileName);
+  if (hosted) throw hosted;
+  throw new CLIError(error.code, error.message, ExitCode.ERROR);
+}
+async function readStdin2() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
+async function kvHandle(node, spaceInput, profileName) {
+  const spaceUri = await resolveSpaceUri(spaceInput, profileName);
+  const kv = spaceUri ? node.kvForSpace(spaceUri) : node.kv;
+  return { kv, spaceUri };
+}
+function registerKvCommand(program2) {
+  const kv = program2.command("kv").description("Key-value store operations");
+  kv.command("get <key>").description("Get a value by key").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
+      const wantBytes = !!options.output || !!options.raw;
+      const result = await withSpinner(
+        `Getting ${key}...`,
+        () => kv2.get(key, wantBytes ? { binary: true } : void 0)
+      );
+      if (!result.ok) {
+        const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
+        if (hosted) throw hosted;
+        if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
+          throw new CLIError("NOT_FOUND", `Key "${key}" not found`, ExitCode.NOT_FOUND);
+        }
+        await throwKvError(result.error, spaceUri, ctx.profile);
+      }
+      const data = result.data.data;
+      const metadata = result.data.headers ?? {};
+      if (options.output) {
+        await writeFile4(options.output, data);
+        outputJson({ key, written: options.output });
+        return;
+      }
+      if (options.raw) {
+        process.stdout.write(data);
+        return;
+      }
+      if (shouldOutputJson()) {
+        outputJson({
+          key,
+          data,
+          metadata
+        });
+      } else {
+        const content = typeof data === "string" ? data : JSON.stringify(data);
+        process.stdout.write(content + "\n");
+      }
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  kv.command("put <key> [value]").description("Set a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, value, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      let putValue;
+      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
+      if (sources.length === 0) {
+        throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
+      }
+      if (sources.length > 1) {
+        throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
+      }
+      if (options.file) {
+        putValue = await readFile6(options.file);
+      } else if (options.stdin) {
+        putValue = await readStdin2();
+      } else {
+        try {
+          putValue = JSON.parse(value);
+        } catch {
+          putValue = value;
+        }
+      }
+      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
+      const result = await withSpinner(`Writing ${key}...`, () => kv2.put(key, putValue));
+      if (!result.ok) {
+        await throwKvError(result.error, spaceUri, ctx.profile);
+      }
+      outputJson({ key, written: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  kv.command("delete <key>").description("Delete a key").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
+      const result = await withSpinner(`Deleting ${key}...`, () => kv2.delete(key));
+      if (!result.ok) {
+        await throwKvError(result.error, spaceUri, ctx.profile);
+      }
+      outputJson({ key, deleted: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  kv.command("list").description("List keys").option("--prefix <prefix>", "Filter by key prefix").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
+      const listOptions = options.prefix ? { prefix: options.prefix } : void 0;
+      const result = await withSpinner("Listing keys...", () => kv2.list(listOptions));
+      if (!result.ok) {
+        await throwKvError(result.error, spaceUri, ctx.profile);
+      }
+      const rawData = result.data.data ?? result.data;
+      const keyList = Array.isArray(rawData) ? rawData : rawData?.keys ?? [];
+      if (shouldOutputJson()) {
+        outputJson({
+          keys: keyList,
+          count: keyList.length,
+          prefix: options.prefix ?? null
+        });
+      } else {
+        if (keyList.length === 0) {
+          process.stdout.write(theme.muted("No keys found.") + "\n");
+        } else {
+          const rows = keyList.map((e) => [
+            e.key || e,
+            e.contentLength ? formatBytes(e.contentLength) : "\u2014",
+            e.updatedAt ? formatTimeAgo(e.updatedAt) : "\u2014"
+          ]);
+          process.stdout.write(formatTable(["Key", "Size", "Updated"], rows) + "\n");
+        }
+      }
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  kv.command("head <key>").description("Get metadata for a key (no body)").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
+      const result = await withSpinner(`Checking ${key}...`, () => kv2.head(key));
+      if (!result.ok) {
+        const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
+        if (hosted) throw hosted;
+        if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
+          outputJson({ key, exists: false, metadata: {} });
+          return;
+        }
+        await throwKvError(result.error, spaceUri, ctx.profile);
+      }
+      outputJson({
+        key,
+        exists: true,
+        metadata: result.data.headers ?? {}
       });
     } catch (error) {
       handleError(error);
@@ -19591,7 +17867,7 @@ ipRegex.v6 = (options2) => options2 && options2.exact ? v6exact : new RegExp(`${
 var { toString: toString3 } = Object.prototype;
 
 // src/commands/manifest.ts
-import { readFile as readFile9 } from "fs/promises";
+import { readFile as readFile7 } from "fs/promises";
 var DEFAULT_APP_SPACE = "applications";
 function registerManifestCommand(program2) {
   const manifest = program2.command("manifest").description("Inspect TinyCloud app manifests");
@@ -19614,7 +17890,7 @@ the manifest against the active profile's address/chain so you know which
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const raw = await loadManifestSource(source);
+      const raw = await loadManifestSource2(source);
       const parsed = JSON.parse(raw);
       if (!parsed.app_id) {
         throw new CLIError(
@@ -19693,7 +17969,7 @@ ${theme.heading("Permissions")}
     }
   });
 }
-async function loadManifestSource(source) {
+async function loadManifestSource2(source) {
   if (/^https?:\/\//i.test(source)) {
     const response = await fetch(source);
     if (!response.ok) {
@@ -19705,7 +17981,7 @@ async function loadManifestSource(source) {
     }
     return response.text();
   }
-  return readFile9(source, "utf8");
+  return readFile7(source, "utf8");
 }
 function prefixWithAppId(path, appId) {
   const slash = path.indexOf("/");
@@ -19725,72 +18001,1738 @@ function unique(arr) {
   return Array.from(new Set(arr));
 }
 
-// src/commands/upgrade.ts
-import { execSync as execSync2 } from "child_process";
-import { readFileSync as readFileSync2 } from "fs";
-var PACKAGE_NAME = "@tinycloud/cli";
-function getCurrentVersion() {
-  const pkg = JSON.parse(
-    readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
-  );
-  return pkg.version;
-}
-async function getLatestVersion() {
-  const res = await fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch latest version: ${res.status} ${res.statusText}`);
-  }
-  const data = await res.json();
-  return data.version;
-}
-function detectPackageManager() {
-  try {
-    const bunGlobals = execSync2("bun pm ls -g", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    if (bunGlobals.includes(PACKAGE_NAME)) {
-      return "bun";
-    }
-  } catch {
-  }
-  try {
-    const npmGlobals = execSync2("npm ls -g --depth=0", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    if (npmGlobals.includes(PACKAGE_NAME)) {
-      return "npm";
-    }
-  } catch {
-  }
-  return "bun";
-}
-function registerUpgradeCommand(program2) {
-  program2.command("upgrade").description("Upgrade the TinyCloud CLI to the latest version").action(async () => {
+// src/commands/node.ts
+function registerNodeCommand(program2) {
+  const node = program2.command("node").description("Node health and info");
+  node.command("health").description("Check node health").action(async (_options, cmd) => {
     try {
-      const current = getCurrentVersion();
-      process.stderr.write(theme.muted("Checking for updates...") + "\n");
-      const latest = await getLatestVersion();
-      if (current === latest) {
-        process.stdout.write(theme.success(`Already on latest version (${current})`) + "\n");
-        return;
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const start = Date.now();
+      const response = await fetch(`${ctx.host}/healthz`);
+      const latencyMs = Date.now() - start;
+      outputJson({
+        healthy: response.ok,
+        host: ctx.host,
+        latencyMs
+      });
+    } catch (error) {
+      if (error instanceof TypeError && error.message.includes("fetch")) {
+        outputJson({ healthy: false, host: (await ProfileManager.resolveContext(cmd.optsWithGlobals())).host, error: "Connection refused" });
+      } else {
+        handleError(error);
       }
-      process.stdout.write(`Current: ${theme.warn(current)} \u2192 Latest: ${theme.success(latest)}
+    }
+  });
+  node.command("version").description("Get node version").action(async (_options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const response = await fetch(`${ctx.host}/info`);
+      if (!response.ok) {
+        throw new CLIError("NODE_ERROR", `Node returned ${response.status}`, ExitCode.NODE_ERROR);
+      }
+      const data = await response.json();
+      outputJson({ ...data, host: ctx.host });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  node.command("status").description("Combined health and version info").action(async (_options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const start = Date.now();
+      const [healthRes, versionRes] = await Promise.allSettled([
+        fetch(`${ctx.host}/healthz`),
+        fetch(`${ctx.host}/info`)
+      ]);
+      const latencyMs = Date.now() - start;
+      const healthy = healthRes.status === "fulfilled" && healthRes.value.ok;
+      let versionData = {};
+      if (versionRes.status === "fulfilled" && versionRes.value.ok) {
+        versionData = await versionRes.value.json();
+      }
+      outputJson({
+        healthy,
+        host: ctx.host,
+        latencyMs,
+        ...versionData
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+
+// src/commands/profile.ts
+import { createInterface as createInterface3 } from "readline";
+function registerProfileCommand(program2) {
+  const profile = program2.command("profile").description("Profile management");
+  profile.command("list").description("List all profiles").action(async (_options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const config = await ProfileManager.getConfig();
+      const names = await ProfileManager.listProfiles();
+      const profiles = await Promise.all(
+        names.map(async (name2) => {
+          try {
+            const p = await ProfileManager.getProfile(name2);
+            return {
+              name: p.name,
+              host: p.host,
+              did: p.did,
+              posture: resolveProfilePosture(p),
+              operatorType: resolveProfileOperatorType(p),
+              active: name2 === config.defaultProfile
+            };
+          } catch {
+            return {
+              name: name2,
+              host: null,
+              did: null,
+              posture: null,
+              operatorType: null,
+              active: name2 === config.defaultProfile
+            };
+          }
+        })
+      );
+      if (shouldOutputJson()) {
+        outputJson({
+          profiles,
+          defaultProfile: config.defaultProfile
+        });
+      } else {
+        for (const p of profiles) {
+          const marker = p.active ? theme.success("\u25CF ") : "  ";
+          const name2 = p.active ? theme.brand(p.name) : p.name;
+          const host = theme.muted(p.host || "no host");
+          const posture = p.posture ? theme.muted(String(p.posture)) : theme.muted("no posture");
+          process.stdout.write(`${marker}${name2}  ${host}  ${posture}
 `);
-      const pm = detectPackageManager();
-      const cmd = pm === "bun" ? `bun install -g ${PACKAGE_NAME}@latest` : `npm install -g ${PACKAGE_NAME}@latest`;
-      process.stderr.write(theme.muted(`Upgrading via ${pm}...`) + "\n\n");
-      try {
-        execSync2(cmd, { stdio: "inherit" });
-        process.stdout.write("\n" + theme.success(`Upgraded to ${latest}`) + "\n");
-      } catch {
-        process.stderr.write("\n" + theme.warn("Automatic upgrade failed.") + "\n");
-        process.stderr.write(theme.muted("Try running manually:") + "\n");
-        process.stderr.write(`  ${theme.command(`bun install -g ${PACKAGE_NAME}@latest`)}
-`);
-        process.stderr.write(theme.muted("  or") + "\n");
-        process.stderr.write(`  ${theme.command(`npm install -g ${PACKAGE_NAME}@latest`)}
-`);
+        }
       }
     } catch (error) {
       handleError(error);
     }
   });
+  profile.command("create <name>").description("Create a new profile").option("--host <url>", "TinyCloud node URL").option(
+    "--posture <posture>",
+    `Profile posture: ${CLI_PROFILE_POSTURES.join(", ")}. Defaults to owner-openkey.`
+  ).option(
+    "--operator <type>",
+    `Operator type: ${CLI_OPERATOR_TYPES.join(", ")}. Defaults to human.`
+  ).action(async (name2, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const host = options.host ?? globalOpts.host ?? "https://node.tinycloud.xyz";
+      const posture = parseProfilePosture(options.posture);
+      const operatorType = parseOperatorType(options.operator);
+      if (await ProfileManager.profileExists(name2)) {
+        throw new CLIError("PROFILE_EXISTS", `Profile "${name2}" already exists`, ExitCode.ERROR);
+      }
+      await ProfileManager.ensureConfigDir();
+      const { jwk, did } = generateKey();
+      await ProfileManager.setKey(name2, jwk);
+      await ProfileManager.setProfile(name2, {
+        name: name2,
+        host,
+        chainId: 1,
+        spaceName: "default",
+        did,
+        sessionDid: did,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        posture,
+        operatorType
+      });
+      outputJson({ profile: name2, did, host, posture, operatorType, created: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  profile.command("show [name]").description("Show profile details").action(async (name2, _options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const profileName = name2 ?? ctx.profile;
+      const p = await ProfileManager.getProfile(profileName);
+      const hasKey = await ProfileManager.getKey(profileName) !== null;
+      const hasSession = await ProfileManager.getSession(profileName) !== null;
+      const config = await ProfileManager.getConfig();
+      const isDefault = profileName === config.defaultProfile;
+      const posture = resolveProfilePosture(p);
+      const operatorType = resolveProfileOperatorType(p);
+      if (shouldOutputJson()) {
+        outputJson({
+          ...p,
+          posture,
+          operatorType,
+          hasKey,
+          hasSession,
+          isDefault
+        });
+      } else {
+        process.stdout.write(`${theme.heading(p.name)}${isDefault ? theme.success(" (default)") : ""}
+`);
+        process.stdout.write(formatField("Host", p.host) + "\n");
+        process.stdout.write(formatField("DID", p.did) + "\n");
+        process.stdout.write(formatField("Session DID", p.sessionDid ?? null) + "\n");
+        process.stdout.write(formatField("Posture", posture) + "\n");
+        process.stdout.write(formatField("Operator", operatorType) + "\n");
+        process.stdout.write(formatField("Space", p.spaceId || null) + "\n");
+        process.stdout.write(formatField("Default Space", p.defaultSpace || null) + "\n");
+        process.stdout.write(formatField("Key", hasKey) + "\n");
+        process.stdout.write(formatField("Session", hasSession) + "\n");
+        process.stdout.write(formatField("Created", p.createdAt) + "\n");
+      }
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  profile.command("switch <name>").description("Set default profile").action(async (name2, _options, cmd) => {
+    try {
+      if (!await ProfileManager.profileExists(name2)) {
+        throw new CLIError("PROFILE_NOT_FOUND", `Profile "${name2}" does not exist`, ExitCode.NOT_FOUND);
+      }
+      const config = await ProfileManager.getConfig();
+      await ProfileManager.setConfig({ ...config, defaultProfile: name2 });
+      outputJson({ defaultProfile: name2, switched: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  profile.command("set-default-space [name]").description("Set (or clear) the default space used when --space is omitted").option("--profile <name>", "Profile to modify (defaults to the active profile)").option("--unset", "Clear the default space so commands fall back to the primary space").addHelpText("after", `
+
+The default space is a short space NAME (e.g. "applications"), resolved per
+profile at command time. Precedence for every kv/sql command:
+  explicit --space flag  >  profile defaultSpace  >  primary space.
+
+Examples:
+  $ tc profile set-default-space applications
+  $ tc profile set-default-space applications --profile cli-test
+  $ tc profile set-default-space --unset
+`).action(async (name2, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext({
+        ...globalOpts,
+        profile: options.profile ?? globalOpts.profile
+      });
+      const profileName = ctx.profile;
+      if (!options.unset && (name2 === void 0 || name2 === "")) {
+        throw new CLIError(
+          "USAGE_ERROR",
+          "Provide a space name (e.g. `tc profile set-default-space applications`) or pass --unset.",
+          ExitCode.USAGE_ERROR
+        );
+      }
+      if (!options.unset && !/^[A-Za-z0-9_-]+$/.test(name2)) {
+        throw new CLIError(
+          "INVALID_SPACE",
+          `Invalid space name "${name2}". Use a short name ([A-Za-z0-9_-]).`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      const p = await ProfileManager.getProfile(profileName);
+      const defaultSpace = options.unset ? void 0 : name2;
+      await ProfileManager.setProfile(profileName, { ...p, defaultSpace });
+      outputJson({ profile: profileName, defaultSpace: defaultSpace ?? null, updated: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  profile.command("delete <name>").description("Delete a profile").action(async (name2, _options, cmd) => {
+    try {
+      if (isInteractive()) {
+        const rl = createInterface3({ input: process.stdin, output: process.stderr });
+        const answer = await new Promise((resolve3) => {
+          rl.question(`Delete profile "${name2}"? This cannot be undone. [y/N] `, resolve3);
+        });
+        rl.close();
+        if (answer.toLowerCase() !== "y") {
+          outputJson({ profile: name2, deleted: false, reason: "Cancelled by user" });
+          return;
+        }
+      }
+      await ProfileManager.deleteProfile(name2);
+      outputJson({ profile: name2, deleted: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+function parseProfilePosture(raw) {
+  if (raw === void 0 || raw === null || raw === "") return "owner-openkey";
+  if (isCLIProfilePosture(raw)) return raw;
+  throw new CLIError(
+    "INVALID_POSTURE",
+    `Invalid posture "${String(raw)}". Use one of: ${CLI_PROFILE_POSTURES.join(", ")}.`,
+    ExitCode.USAGE_ERROR
+  );
+}
+function parseOperatorType(raw) {
+  if (raw === void 0 || raw === null || raw === "") return "human";
+  if (isCLIOperatorType(raw)) return raw;
+  throw new CLIError(
+    "INVALID_OPERATOR",
+    `Invalid operator "${String(raw)}". Use one of: ${CLI_OPERATOR_TYPES.join(", ")}.`,
+    ExitCode.USAGE_ERROR
+  );
+}
+
+// src/commands/secrets.ts
+import { readFile as readFile8 } from "fs/promises";
+import { writeFile as writeFile5 } from "fs/promises";
+import { join as join4 } from "path";
+import { homedir } from "os";
+import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
+import {
+  SECRET_DECRYPT_CAPABILITY,
+  secretCapabilityAction
+} from "@tinycloud/operations/secret-capabilities";
+import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
+var SECRETS_SPACE3 = "secrets";
+var SECRET_KV_ABILITIES = {
+  get: secretCapabilityAction("get"),
+  put: secretCapabilityAction("put"),
+  del: secretCapabilityAction("del"),
+  list: secretCapabilityAction("list")
+};
+async function readStdin3() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
+function authOptions(options) {
+  const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
+  return privateKey ? { privateKey } : void 0;
+}
+function resolveSecretScope(options) {
+  return options.scope ? { scope: options.scope } : void 0;
+}
+async function resolveSecretSpace(input, profileName) {
+  return resolveSpaceUri(input, profileName, { useProfileDefault: false });
+}
+function secretsServiceForSpace(node, spaceUri) {
+  return spaceUri ? node.secretsForSpace(spaceUri) : node.secrets;
+}
+var SECRET_NAME_RE2 = /^[A-Z][A-Z0-9_]*$/;
+var RESERVED_SECRET_SCOPES2 = /* @__PURE__ */ new Set(["default", "global"]);
+function canonicalizeSecretScope2(scope) {
+  if (scope === void 0) return void 0;
+  const trimmed = scope.trim();
+  if (trimmed === "") {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      "Secret scope must be non-empty; omit scope for global secrets.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  const canonical = trimmed.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  if (canonical === "") {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      "Secret scope must contain at least one letter or number.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  if (RESERVED_SECRET_SCOPES2.has(canonical)) {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      `Secret scope ${JSON.stringify(scope)} is reserved; omit scope for global secrets.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return canonical;
+}
+function resolveSecretPath2(name2, options = {}) {
+  const normalizedName = name2.trim();
+  if (!SECRET_NAME_RE2.test(normalizedName)) {
+    throw new CLIError(
+      "INVALID_SECRET_NAME",
+      `Invalid secret name ${JSON.stringify(name2)}. Secret names must match ${SECRET_NAME_RE2.source}.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  const scope = canonicalizeSecretScope2(options.scope);
+  const vaultKey = scope === void 0 ? `secrets/${normalizedName}` : `secrets/scoped/${scope}/${normalizedName}`;
+  return {
+    name: normalizedName,
+    ...scope !== void 0 ? { scope } : {},
+    vaultKey,
+    permissionPaths: {
+      vault: `vault/${vaultKey}`
+    }
+  };
+}
+function resolveSecretListPrefix2(options = {}) {
+  const scope = canonicalizeSecretScope2(options.scope);
+  return scope === void 0 ? "vault/secrets/" : `vault/secrets/scoped/${scope}/`;
+}
+function resolveProfilesDir() {
+  const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+  return join4(home, ".tinycloud", "profiles");
+}
+async function ensureSecretsNode(ctx, options) {
+  const auth = authOptions(options);
+  if (auth?.privateKey) {
+    return ensureAuthenticated(ctx, auth);
+  }
+  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+  if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+    const session = await ProfileManager.getSession(ctx.profile);
+    if (!session || isStoredSessionExpired(session)) {
+      await withSpinner(
+        session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
+        () => refreshOpenKeySession(ctx.profile, ctx.host)
+      );
+    }
+  }
+  return ensureAuthenticated(ctx, auth);
+}
+async function runSecretOperation(params) {
+  const first = await runSecretOperationAttempt(params.label, params.operation);
+  if (first.ok || !shouldRequestSecretPermissions(first.error)) {
+    return first;
+  }
+  const profile = await ProfileManager.getProfile(params.ctx.profile);
+  if (!canRequestOwnerPermissions(profile)) {
+    return first;
+  }
+  const requested = secretPermissionEntries({
+    action: params.action,
+    name: params.name,
+    options: params.scopeOptions,
+    space: params.space,
+    node: params.node
+  });
+  await withSpinner(
+    "Requesting secret permissions...",
+    () => ensureDelegationAuthority({
+      ctx: params.ctx,
+      profile,
+      node: params.node,
+      requested,
+      expiryOption: void 0,
+      reason: secretPermissionReason(params.action, params.name),
+      yes: true,
+      force: true,
+      openKeyAcquisition: params.openKeyAcquisition
+    })
+  );
+  return runSecretOperationAttempt(params.label, params.operation);
+}
+function secretPermissionReason(action, name2) {
+  const target = name2 ? ` secret "${name2}"` : " secrets";
+  return `Allow \`tc secrets ${action}${name2 ? ` ${name2}` : ""}\` to access${target} with the required TinyCloud permissions.`;
+}
+async function runSecretOperationAttempt(label, operation) {
+  try {
+    return await withSpinner(label, operation);
+  } catch (error) {
+    const permissionError = thrownPermissionError(error);
+    if (permissionError) return permissionError;
+    throw error;
+  }
+}
+async function invokeCanonicalSecretGet(params) {
+  const auth = authOptions(params.options);
+  const target = {
+    profile: params.ctx.profile,
+    host: params.ctx.host,
+    allowOwnerProfile: true,
+    ...auth ?? {}
+  };
+  const input = {
+    name: params.name,
+    ...params.scope === void 0 ? {} : { scope: params.scope },
+    ...params.space === void 0 ? {} : { space: params.space }
+  };
+  const invoke = () => withSpinner(
+    params.label,
+    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation2("tinycloud.secrets.get", 1, target, input)
+  );
+  const first = await invoke();
+  if (first.status !== "authority_required") return first;
+  if (auth?.privateKey !== void 0) return first;
+  if (first.context.posture !== "owner-openkey" && first.context.posture !== "local-owner-key") {
+    return first;
+  }
+  const profile = await ProfileManager.getProfile(params.ctx.profile);
+  if (!canRequestOwnerPermissions(profile)) return first;
+  const node = params.node ?? await ensureSecretsNode(params.ctx, params.options);
+  await withSpinner(
+    "Requesting secret permissions...",
+    () => ensureDelegationAuthority({
+      ctx: params.ctx,
+      profile,
+      node,
+      requested: first.missing,
+      expiryOption: void 0,
+      reason: secretPermissionReason("get", params.name),
+      yes: true,
+      force: true,
+      openKeyAcquisition: params.openKeyAcquisition
+    })
+  );
+  return invoke();
+}
+function throwCanonicalSecretGetError(result, name2) {
+  switch (result.status) {
+    case "authority_required":
+      throw new CLIError(
+        "PERMISSION_DENIED",
+        "Permission denied while reading secret",
+        ExitCode.ERROR
+      );
+    case "setup_required":
+      throw new CLIError("NOT_FOUND", `Secret "${name2}" not found`, ExitCode.NOT_FOUND);
+    case "error":
+      throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+    case "ok":
+      throw new Error("Expected a failed canonical secret result.");
+  }
+}
+function canRequestOwnerPermissions(profile) {
+  const posture = resolveProfilePosture(profile);
+  return posture === "owner-openkey" || posture === "local-owner-key";
+}
+function shouldRequestSecretPermissions(error) {
+  if (error.code !== "PERMISSION_DENIED") return false;
+  return /permission|session expired|autosign|capabilit/i.test(error.message);
+}
+function thrownPermissionError(error) {
+  const record = error;
+  const message = typeof record?.message === "string" ? record.message : String(error);
+  const code2 = typeof record?.code === "string" ? record.code : "PERMISSION_DENIED";
+  if (code2 !== "PERMISSION_DENIED" && !/permission|session expired|autosign|capabilit/i.test(message)) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      code: "PERMISSION_DENIED",
+      message
+    }
+  };
+}
+function isMissingFileError(error) {
+  const typed = error;
+  return typed?.code === "ENOENT";
+}
+function hasPermissionAction(actions, action) {
+  return actions.some(
+    (entry) => entry === action || entry.endsWith(`/${action.split("/").at(-1)}`) || entry === action.split("/").at(-1)
+  );
+}
+function delegationCoversPath(permissions, path, space = SECRETS_SPACE3) {
+  return permissions.some((permission) => {
+    if (permission.service !== "tinycloud.kv") return false;
+    if (!permissionTargetsSpace(permission, space)) return false;
+    if (!hasPermissionAction(permission.actions, secretCapabilityAction("get"))) return false;
+    return permission.path === path || permission.path.endsWith("/") && path.startsWith(permission.path);
+  });
+}
+function spaceMatches(granted, requested) {
+  return granted === requested;
+}
+function permissionTargetsSpace(permission, expectedSpace) {
+  if (permission.service !== "tinycloud.kv") return false;
+  if (typeof permission.space !== "string") return false;
+  const space = permission.space.trim();
+  if (space === "") return false;
+  return spaceMatches(space, expectedSpace);
+}
+function delegationCoversDecrypt(permissions, networkId) {
+  return permissions.some((permission) => {
+    if (permission.service !== "tinycloud.encryption") return false;
+    if (!hasPermissionAction(permission.actions, SECRET_DECRYPT_CAPABILITY)) return false;
+    return permission.path === networkId;
+  });
+}
+function parseDelegationExpiry(expiry) {
+  const parsed = expiry instanceof Date ? expiry : typeof expiry === "number" ? new Date(expiry) : new Date(String(expiry));
+  if (Number.isNaN(parsed.getTime())) {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      "Delegation must include a valid expiry.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return parsed;
+}
+function normalizePortableDelegation2(value) {
+  if (value === null || typeof value !== "object") {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      "Delegation source must contain a PortableDelegation object.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  const candidate = value;
+  const authorization = candidate.delegationHeader;
+  if (typeof candidate.cid !== "string" || typeof candidate.spaceId !== "string" || typeof candidate.path !== "string" || !Array.isArray(candidate.actions) || typeof candidate.delegateDID !== "string" || typeof candidate.ownerAddress !== "string" || typeof candidate.chainId !== "number" || typeof authorization !== "object" || authorization === null || typeof authorization.Authorization !== "string") {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      "Delegation source must contain a PortableDelegation object.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return {
+    ...candidate,
+    actions: [...candidate.actions],
+    expiry: parseDelegationExpiry(candidate.expiry),
+    delegationHeader: { Authorization: authorization.Authorization }
+  };
+}
+function normalizeDelegationCandidates(value, source) {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => normalizeDelegationCandidates(entry, source));
+  }
+  if (value === null || typeof value !== "object") {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      `Delegation source "${source}" must be a delegation file or imported profile reference.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  const candidate = value;
+  if (candidate.delegation !== void 0) {
+    const delegation2 = normalizePortableDelegation2(candidate.delegation);
+    return [{
+      delegation: delegation2,
+      permissions: Array.isArray(candidate.permissions) && candidate.permissions.length > 0 ? candidate.permissions : permissionsFromDelegation2(delegation2)
+    }];
+  }
+  const delegation = normalizePortableDelegation2(candidate);
+  return [{
+    delegation,
+    permissions: permissionsFromDelegation2(delegation)
+  }];
+}
+function permissionsFromDelegation2(delegation) {
+  if (delegation.resources?.length) {
+    return delegation.resources.map((resource) => ({
+      service: resource.service.startsWith("tinycloud.") ? resource.service : `tinycloud.${resource.service}`,
+      space: resource.space,
+      path: resource.path,
+      actions: [...resource.actions]
+    }));
+  }
+  const service = delegation.actions[0]?.includes("/") ? delegation.actions[0].slice(0, delegation.actions[0].indexOf("/")) : "tinycloud.unknown";
+  return [{
+    service,
+    space: delegation.spaceId,
+    path: delegation.path,
+    actions: [...delegation.actions]
+  }];
+}
+async function loadDelegationCandidates(source) {
+  try {
+    const raw = JSON.parse(await readFile8(source, "utf8"));
+    return normalizeDelegationCandidates(raw, source);
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      if (error instanceof SyntaxError) {
+        throw new CLIError(
+          "INVALID_DELEGATION_SOURCE",
+          `Delegation source "${source}" must be valid JSON.`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      throw new CLIError(
+        "INVALID_DELEGATION_SOURCE",
+        `Delegation source "${source}" could not be read.`,
+        ExitCode.USAGE_ERROR
+      );
+    }
+  }
+  try {
+    const importedPath = join4(resolveProfilesDir(), source, "additional-delegations.json");
+    const raw = JSON.parse(await readFile8(importedPath, "utf8"));
+    return normalizeDelegationCandidates(raw, source);
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return [];
+    }
+    if (error instanceof SyntaxError) {
+      throw new CLIError(
+        "INVALID_DELEGATION_SOURCE",
+        `Delegation source "${source}" must be valid JSON.`,
+        ExitCode.USAGE_ERROR
+      );
+    }
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      `Delegation source "${source}" could not be read.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+}
+function selectDelegationCandidate(candidates, source, secretPath, space = SECRETS_SPACE3) {
+  const liveCandidates = candidates.filter((candidate) => candidate.delegation.expiry.getTime() > Date.now());
+  if (liveCandidates.length === 0) {
+    throw new CLIError(
+      "DELEGATION_EXPIRED",
+      `Delegation source "${source}" has no live delegations.`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const secretsSpaceCandidates = liveCandidates.filter(
+    (candidate) => candidate.permissions.some((permission) => permissionTargetsSpace(permission, space))
+  );
+  if (secretsSpaceCandidates.length === 0) {
+    throw new CLIError(
+      "PERMISSION_DENIED",
+      `Delegation source "${source}" does not target secrets space "${space}".`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const exact = secretsSpaceCandidates.find(
+    (candidate) => delegationCoversPath(candidate.permissions, secretPath, space)
+  );
+  if (exact) {
+    return exact;
+  }
+  throw new CLIError(
+    "PERMISSION_DENIED",
+    `Delegation source "${source}" does not cover secret "${secretPath}".`,
+    ExitCode.PERMISSION_DENIED
+  );
+}
+async function resolveDelegatedSecretSource(source, secretPath, space = SECRETS_SPACE3) {
+  const candidates = await loadDelegationCandidates(source);
+  if (candidates.length === 0) {
+    throw new CLIError(
+      "DELEGATION_NOT_FOUND",
+      `Delegation source "${source}" did not resolve to any imported delegations.`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const selected = selectDelegationCandidate(candidates, source, secretPath, space);
+  return { ...selected, source };
+}
+function mapEncryptionResultError(error) {
+  const code2 = error.code || "DECRYPTION_FAILED";
+  const exitCode = code2 === "PERMISSION_DENIED" ? ExitCode.PERMISSION_DENIED : code2 === "NOT_FOUND" ? ExitCode.NOT_FOUND : code2 === "NETWORK_ERROR" || code2 === "TRANSPORT_ERROR" ? ExitCode.NETWORK_ERROR : ExitCode.ERROR;
+  return new CLIError(code2, error.message, exitCode);
+}
+function parseDecryptedSecretPayload(data, secretPath) {
+  const text = new TextDecoder().decode(data);
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new CLIError(
+      "INVALID_SECRET_PAYLOAD",
+      `Delegated secret "${secretPath}" did not decrypt to valid JSON.`,
+      ExitCode.ERROR
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || typeof parsed.value !== "string") {
+    throw new CLIError(
+      "INVALID_SECRET_PAYLOAD",
+      `Delegated secret "${secretPath}" did not decrypt to { value: string }.`,
+      ExitCode.ERROR
+    );
+  }
+  return parsed.value;
+}
+async function readDelegatedSecretValue(params) {
+  if (!delegationCoversPath(params.permissions, params.secretPath, params.space ?? SECRETS_SPACE3)) {
+    throw new CLIError(
+      "PERMISSION_DENIED",
+      `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const access = await params.node.useDelegation(params.delegation);
+  if (typeof access?.kv?.get !== "function") {
+    throw new CLIError(
+      "DELEGATION_INVALID",
+      `Delegation "${params.delegationCid}" did not resolve delegated KV access.`,
+      ExitCode.ERROR
+    );
+  }
+  const envelopeResult = await access.kv.get(params.secretPath, {
+    raw: true,
+    prefix: ""
+  });
+  if (!envelopeResult.ok) {
+    if (envelopeResult.error.code === "NOT_FOUND" || envelopeResult.error.code === "KEY_NOT_FOUND" || envelopeResult.error.code === "KV_NOT_FOUND") {
+      throw new CLIError(
+        "NOT_FOUND",
+        `Secret "${params.name}" not found`,
+        ExitCode.NOT_FOUND
+      );
+    }
+    if (envelopeResult.error.code === "PERMISSION_DENIED") {
+      throw new CLIError(
+        "PERMISSION_DENIED",
+        `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
+        ExitCode.PERMISSION_DENIED
+      );
+    }
+    throw new CLIError(
+      envelopeResult.error.code,
+      envelopeResult.error.message,
+      ExitCode.ERROR
+    );
+  }
+  const rawEnvelope = envelopeResult.data.data;
+  if (typeof rawEnvelope !== "string") {
+    throw new CLIError(
+      "INVALID_ENVELOPE",
+      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
+      ExitCode.ERROR
+    );
+  }
+  let envelope;
+  try {
+    envelope = JSON.parse(rawEnvelope);
+  } catch {
+    throw new CLIError(
+      "INVALID_ENVELOPE",
+      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
+      ExitCode.ERROR
+    );
+  }
+  const networkId = envelope.networkId;
+  if (typeof networkId !== "string") {
+    throw new CLIError(
+      "INVALID_ENVELOPE",
+      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
+      ExitCode.ERROR
+    );
+  }
+  if (!delegationCoversDecrypt(params.permissions, networkId)) {
+    throw new CLIError(
+      "PERMISSION_DENIED",
+      `Delegation "${params.delegationCid}" does not include ${SECRET_DECRYPT_CAPABILITY} for ${networkId}.`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const decrypted = await params.node.encryption.decryptEnvelope(
+    envelope,
+    { proofs: [params.delegationCid] }
+  );
+  if (!decrypted.ok) {
+    throw mapEncryptionResultError(decrypted.error);
+  }
+  return parseDecryptedSecretPayload(decrypted.data, params.secretPath);
+}
+function isStoredSessionExpired(session) {
+  const record = session;
+  const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
+  if (direct) return direct.getTime() <= Date.now();
+  if (typeof record.siwe !== "string") return false;
+  const match = record.siwe.match(/^Expiration Time:\s*(.+)$/im);
+  const expiry = match ? parseDate(match[1].trim()) : null;
+  return expiry !== null && expiry.getTime() <= Date.now();
+}
+function parseDate(value) {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "number") {
+    const date2 = new Date(value < 1e10 ? value * 1e3 : value);
+    return Number.isNaN(date2.getTime()) ? null : date2;
+  }
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+function secretKvAbility(action) {
+  return SECRET_KV_ABILITIES[action];
+}
+function secretPermissionEntries(params) {
+  const path = params.action === "list" ? resolveSecretListPrefix2(params.options) : resolveSecretPath2(params.name ?? "", params.options).permissionPaths.vault;
+  const permissions = [{
+    service: "tinycloud.kv",
+    space: params.space ?? SECRETS_SPACE3,
+    path,
+    actions: [secretKvAbility(params.action)],
+    skipPrefix: true
+  }];
+  if (params.action === "get") {
+    const networkId = "getEncryptionNetworkIdForSpace" in params.node && typeof params.node.getEncryptionNetworkIdForSpace === "function" ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE3) : params.node.getDefaultEncryptionNetworkId();
+    permissions.push({
+      service: "tinycloud.encryption",
+      path: networkId,
+      actions: [SECRET_DECRYPT_CAPABILITY],
+      skipPrefix: true
+    });
+  }
+  return permissions;
+}
+function formatSecretScopeFlag(options) {
+  return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
+}
+function outputSecretDoctor(result) {
+  if (shouldOutputJson()) {
+    outputJson(result);
+    return;
+  }
+  process.stderr.write(formatSection("Secrets") + "\n");
+  for (const check of result.checks) {
+    process.stdout.write(formatCheck(check.ok, check.name, check.detail) + "\n");
+    if (check.hint) {
+      process.stdout.write(`  ${theme.hint(check.hint)}
+`);
+    }
+  }
+  process.stdout.write("\n");
+  if (result.healthy) {
+    process.stdout.write(theme.success("Secrets checks passed.") + "\n");
+  } else {
+    const failed = result.checks.filter((check) => check.ok === false).length;
+    process.stdout.write(theme.warn(`${failed} secrets check${failed > 1 ? "s" : ""} need attention.`) + "\n");
+  }
+}
+function registerSecretsCommand(program2, openKeyAcquisition) {
+  const secrets = program2.command("secrets").description("Encrypted secrets management");
+  const network = secrets.command("network").description("Manage the default secrets encryption network");
+  network.command("show [nameOrNetworkId]").description("Show a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (nameOrNetworkId, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const requested = nameOrNetworkId ?? "default";
+      const networkId = requested.startsWith("urn:tinycloud:encryption:") ? requested : node.getDefaultEncryptionNetworkId(requested);
+      const descriptor = await withSpinner(
+        "Fetching encryption network...",
+        () => node.getEncryptionNetwork(requested)
+      );
+      outputJson({
+        networkId,
+        exists: descriptor !== null,
+        ...descriptor ? { descriptor } : {}
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  network.command("init [name]").description("Create a secrets encryption network if needed").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const descriptor = await withSpinner(
+        "Ensuring encryption network...",
+        () => node.ensureEncryptionNetwork(name2 ?? "default")
+      );
+      outputJson({
+        networkId: descriptor.networkId,
+        state: descriptor.state,
+        descriptor
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("doctor [name]").description("Check secrets setup and optional secret access").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--network <name>", "Encryption network name", "default").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureSecretsNode(ctx, options);
+      const networkName = options.network ?? "default";
+      const networkId = networkName.startsWith("urn:tinycloud:encryption:") ? networkName : node.getDefaultEncryptionNetworkId(networkName);
+      const descriptor = await withSpinner(
+        "Checking secrets encryption network...",
+        () => node.getEncryptionNetwork(networkName)
+      );
+      const checks = [
+        descriptor ? {
+          name: "Encryption network",
+          ok: descriptor.state === "active" ? true : "warn",
+          detail: `${networkName} (${descriptor.state})`
+        } : {
+          name: "Encryption network",
+          ok: false,
+          detail: `${networkName} not found`,
+          hint: `tc secrets network init ${networkName}`
+        }
+      ];
+      let secret;
+      if (name2) {
+        const scopeOptions = resolveSecretScope(options);
+        const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+        const secrets2 = secretsServiceForSpace(node, spaceUri);
+        const resolved = resolveSecretPath2(name2, scopeOptions);
+        const result = await runSecretOperation({
+          ctx,
+          node,
+          action: "get",
+          name: name2,
+          scopeOptions,
+          space: spaceUri,
+          label: `Checking secret ${name2}...`,
+          operation: () => secrets2.get(name2, scopeOptions)
+        });
+        if (result.ok) {
+          secret = {
+            name: resolved.name,
+            path: resolved.permissionPaths.vault,
+            ...resolved.scope ? { scope: resolved.scope } : {},
+            exists: true,
+            readable: true
+          };
+          checks.push({
+            name: "Secret access",
+            ok: true,
+            detail: `${resolved.permissionPaths.vault} readable`
+          });
+        } else {
+          const notFound = result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND";
+          secret = {
+            name: resolved.name,
+            path: resolved.permissionPaths.vault,
+            ...resolved.scope ? { scope: resolved.scope } : {},
+            exists: !notFound,
+            readable: false
+          };
+          checks.push({
+            name: "Secret access",
+            ok: false,
+            detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
+            hint: notFound ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} <value>` : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`
+          });
+        }
+      } else {
+        checks.push({
+          name: "Secret access",
+          ok: "warn",
+          detail: "skipped; pass a secret name to verify read access"
+        });
+      }
+      outputSecretDoctor({
+        healthy: checks.every((check) => check.ok !== false),
+        network: {
+          name: networkName,
+          networkId,
+          exists: descriptor !== null,
+          ...descriptor?.state ? { state: descriptor.state } : {}
+        },
+        ...secret ? { secret } : {},
+        checks
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("list").description("List secrets").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureSecretsNode(ctx, options);
+      const scopeOptions = resolveSecretScope(options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const secrets2 = secretsServiceForSpace(node, spaceUri);
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "list",
+        scopeOptions,
+        space: spaceUri,
+        label: "Listing secrets...",
+        operation: () => secrets2.list(scopeOptions)
+      });
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      const secretNames = Array.isArray(result.data) ? result.data : [];
+      outputJson({
+        secrets: secretNames,
+        count: secretNames.length,
+        ...options.scope ? { scope: options.scope } : {},
+        ...spaceUri ? { space: spaceUri } : {}
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("get <name>").description("Get a secret value").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--raw", "Output raw value (no JSON wrapping)").option("--value-only", "Output only the secret value (alias for --raw)").option("-o, --output <file>", "Write value to file").option("--delegation <source>", "Delegation file path or imported profile name").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const scopeOptions = resolveSecretScope(options);
+      const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const secretPath = resolveSecretPath2(name2, scopeOptions).permissionPaths.vault;
+      if (options.delegation) {
+        const delegated = await resolveDelegatedSecretSource(
+          options.delegation,
+          secretPath,
+          legacySpaceUri ?? SECRETS_SPACE3
+        );
+        const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
+        const delegatedCtx = { ...ctx, host: effectiveHost };
+        const node = await ensureSecretsNode(delegatedCtx, options);
+        const value2 = await withSpinner(
+          `Getting secret ${name2}...`,
+          () => readDelegatedSecretValue({
+            node,
+            delegation: delegated.delegation,
+            delegationCid: delegated.delegation.cid,
+            permissions: delegated.permissions,
+            secretPath,
+            space: legacySpaceUri ?? SECRETS_SPACE3,
+            name: name2
+          })
+        );
+        if (options.output) {
+          await writeFile5(options.output, value2);
+          outputJson({ name: name2, written: options.output });
+          return;
+        }
+        if (options.raw) {
+          process.stdout.write(value2);
+          return;
+        }
+        outputJson({ name: name2, value: value2 });
+        return;
+      }
+      const privateKey = authOptions(options)?.privateKey;
+      const spaceUri = privateKey !== void 0 && options.space !== void 0 && !options.space.startsWith("tinycloud:") ? options.space : legacySpaceUri;
+      const result = await invokeCanonicalSecretGet({
+        ctx,
+        name: name2,
+        ...scopeOptions?.scope === void 0 ? {} : { scope: scopeOptions.scope },
+        ...spaceUri === void 0 ? {} : { space: spaceUri },
+        options,
+        label: `Getting secret ${name2}...`,
+        openKeyAcquisition
+      });
+      if (result.status !== "ok") {
+        throwCanonicalSecretGetError(result, name2);
+      }
+      const value = result.output.value;
+      if (options.output) {
+        await writeFile5(options.output, value);
+        outputJson({ name: name2, written: options.output });
+        return;
+      }
+      if (options.raw || options.valueOnly) {
+        process.stdout.write(value);
+        return;
+      }
+      outputJson({ name: name2, value });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, value, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureSecretsNode(ctx, options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const secrets2 = secretsServiceForSpace(node, spaceUri);
+      let secretValue;
+      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
+      if (sources.length === 0) {
+        throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
+      }
+      if (sources.length > 1) {
+        throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
+      }
+      if (options.file) {
+        secretValue = await readFile8(options.file, "utf-8");
+      } else if (options.stdin) {
+        secretValue = (await readStdin3()).toString("utf-8");
+      } else {
+        secretValue = value;
+      }
+      const scopeOptions = resolveSecretScope(options);
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "put",
+        name: name2,
+        scopeOptions,
+        space: spaceUri,
+        label: `Storing secret ${name2}...`,
+        operation: () => secrets2.put(name2, secretValue, scopeOptions)
+      });
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      outputJson({ name: name2, written: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("delete <name>").description("Delete a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureSecretsNode(ctx, options);
+      const scopeOptions = resolveSecretScope(options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const secrets2 = secretsServiceForSpace(node, spaceUri);
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "del",
+        name: name2,
+        scopeOptions,
+        space: spaceUri,
+        label: `Deleting secret ${name2}...`,
+        operation: () => secrets2.delete(name2, scopeOptions)
+      });
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      outputJson({ name: name2, deleted: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  network.command("grant <recipientDid> [name]").description("Grant decrypt permission for a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name2, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const networkName = name2 ?? "default";
+      const descriptor = await withSpinner(
+        "Ensuring encryption network...",
+        () => node.ensureEncryptionNetwork(networkName)
+      );
+      const permission = {
+        service: "tinycloud.encryption",
+        path: descriptor.networkId,
+        actions: ["decrypt"]
+      };
+      const result = await withSpinner(
+        `Granting decrypt permission to ${recipientDid}...`,
+        () => node.delegateTo(recipientDid, [permission])
+      );
+      outputJson({
+        networkId: descriptor.networkId,
+        recipientDid,
+        cid: result.delegation.cid,
+        prompted: result.prompted,
+        path: result.delegation.path,
+        actions: result.delegation.actions
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("manage").description("Open the TinyCloud Secrets Manager in your browser").action(async () => {
+    try {
+      const open2 = (await import("open")).default;
+      await open2("https://secrets.tinycloud.xyz");
+      outputJson({ opened: "https://secrets.tinycloud.xyz" });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+
+// src/commands/share.ts
+function registerShareCommand(program2) {
+  const share = program2.command("share").description("Share data with others");
+  share.command("create").description("Create a share link").requiredOption("--path <path>", "KV path scope").option("--actions <actions>", "Comma-separated actions", "kv/get").option("--expiry <duration>", "Expiry duration", "7d").option("--web-link", "Generate a web UI link for non-technical recipients").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const actions = options.actions.split(",").map((a) => {
+        const trimmed = a.trim();
+        return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
+      });
+      const expiry = parseExpiry2(options.expiry);
+      const result = await node.sharing.generate({
+        path: options.path,
+        actions,
+        expiry
+      });
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      const output = {
+        token: result.data.token ?? result.data.cid,
+        shareData: result.data.encodedData ?? result.data.url,
+        path: options.path,
+        actions,
+        expiry: expiry.toISOString()
+      };
+      if (options.webLink) {
+        const shareData = result.data.encodedData ?? result.data.url ?? "";
+        output.webLink = `https://openkey.cloud/share?data=${encodeURIComponent(shareData)}`;
+      }
+      outputJson(output);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  share.command("receive [data]").description("Receive a share").option("--stdin", "Read share data from stdin").action(async (data, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      let shareData;
+      if (options.stdin) {
+        const chunks = [];
+        for await (const chunk of process.stdin) {
+          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        }
+        shareData = Buffer.concat(chunks).toString("utf-8").trim();
+      } else if (data) {
+        shareData = data;
+      } else {
+        throw new CLIError("USAGE_ERROR", "Must provide share data or use --stdin", ExitCode.USAGE_ERROR);
+      }
+      const result = await node.sharing.receive(shareData);
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      outputJson({
+        received: true,
+        spaceId: result.data.spaceId,
+        path: result.data.path,
+        actions: result.data.actions
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  share.command("list").description("List active shares").action(async (_options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const result = await node.sharing.list();
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      outputJson({ shares: result.data, count: result.data.length });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  share.command("revoke <token>").description("Revoke a share").action(async (token, _options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const result = await node.sharing.revoke(token);
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      outputJson({ token, revoked: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+
+// src/commands/space.ts
+import { randomBytes as randomBytes2 } from "crypto";
+import { mkdir as mkdir3, writeFile as writeFile6 } from "fs/promises";
+import { dirname as dirname3 } from "path";
+function didWithoutFragment2(did) {
+  const fragment = did.indexOf("#");
+  return fragment === -1 ? did : did.slice(0, fragment);
+}
+function registerSpaceCommand(program2) {
+  const space = program2.command("space").description("Space management");
+  space.command("list").description("List spaces").action(async (_options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const result = await node.spaces.list();
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      if (shouldOutputJson()) {
+        outputJson({ spaces: result.data, count: result.data.length });
+      } else {
+        if (result.data.length === 0) {
+          process.stdout.write(theme.muted("No spaces found.") + "\n");
+        } else {
+          const rows = result.data.map((s) => [
+            s.id || s.spaceId || "\u2014",
+            s.name || "\u2014",
+            s.owner || "\u2014"
+          ]);
+          process.stdout.write(formatTable(["Space ID", "Name", "Owner"], rows) + "\n");
+        }
+      }
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  space.command("create <name>").alias("host").description("Create (host) one of your owned spaces by name").action(async (name2, _options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const spaceId = await node.hostOwnedSpace(name2);
+      outputJson({ spaceId, name: name2, hosted: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  space.command("host-request <name>").description("Emit a request asking the space owner to host it (delegate-only)").option("--emit [file]", "Write the request artifact to file (or stdout when no path)").addHelpText("after", `
+
+A delegate cannot host a space \u2014 only its owner (root authority) can. This
+emits a tinycloud.host.request artifact naming the space and its owner so you
+can hand it to the owner; they run \`tc space host <name>\` and confirm.
+
+If you ARE the owner of the resolved space, this refuses and tells you to host
+it directly with \`tc space host <name>\` (no request needed).
+`).action(async (name2, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const profile = await ProfileManager.getProfile(ctx.profile);
+      const spaceId = await resolveHostSpace(name2, ctx.profile);
+      const spaceName = spaceNameFromUri(spaceId);
+      if (await isRootAuthority(spaceId, ctx.profile)) {
+        throw new CLIError(
+          "ALREADY_ROOT_AUTHORITY",
+          `You are the owner of ${spaceId}. Host it directly: tc space host ${spaceName}`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      const requesterDid = didWithoutFragment2(profile.sessionDid ?? profile.did);
+      const ownerDid = ownerDidFromSpaceUri(spaceId);
+      if (!ownerDid) {
+        throw new CLIError(
+          "UNRESOLVABLE_OWNER",
+          `Cannot determine the owner of ${spaceId}; host-request needs a pkh space URI.`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      const artifact = {
+        kind: "tinycloud.host.request",
+        version: 1,
+        requestId: `hostreq_${Date.now().toString(36)}_${randomBytes2(4).toString("hex")}`,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        spaceName,
+        spaceId,
+        ownerDid,
+        requesterDid,
+        host: ctx.host
+      };
+      await emitHostRequestArtifact(artifact, options.emit);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  space.command("info [space-id]").description("Get space info").action(async (spaceId, _options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const targetId = spaceId ?? node.spaceId;
+      if (!targetId) {
+        throw new CLIError("NO_SPACE", "No space ID specified and no active space", ExitCode.ERROR);
+      }
+      const profile = await ProfileManager.getProfile(ctx.profile);
+      outputJson({
+        spaceId: targetId,
+        name: profile.spaceName,
+        owner: node.did,
+        host: ctx.host
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  space.command("switch <name>").description("Switch active space").action(async (name2, _options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const profile = await ProfileManager.getProfile(ctx.profile);
+      await ProfileManager.setProfile(ctx.profile, { ...profile, spaceName: name2 });
+      outputJson({ profile: ctx.profile, spaceName: name2, switched: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+async function emitHostRequestArtifact(artifact, emitOption) {
+  if (typeof emitOption === "string" && emitOption.length > 0) {
+    await mkdir3(dirname3(emitOption), { recursive: true });
+    await writeFile6(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+    outputJson({
+      emitted: true,
+      path: emitOption,
+      requestId: artifact.requestId,
+      spaceName: artifact.spaceName,
+      spaceId: artifact.spaceId,
+      ownerDid: artifact.ownerDid
+    });
+    return;
+  }
+  outputJson(artifact);
+}
+
+// src/commands/sql.ts
+import { writeFile as writeFile7 } from "fs/promises";
+import { resolve as resolve2 } from "path";
+async function dbHandle(node, dbName, spaceInput, profileName) {
+  const spaceUri = await resolveSpaceUri(spaceInput, profileName);
+  const sql = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
+  return { handle: sql.db(dbName), spaceUri };
+}
+async function throwSqlError(error, spaceUri, profileName, prefix) {
+  const hosted = await unhostedSpaceError(error, spaceUri, profileName);
+  if (hosted) throw hosted;
+  const message = prefix ? `${prefix}${error.message}` : error.message;
+  throw new CLIError(error.code, message, ExitCode.ERROR, error.meta);
+}
+function registerSqlCommand(program2) {
+  const sql = program2.command("sql").description("SQLite database operations for your TinyCloud space").addHelpText("after", `
+
+TinyCloud SQL gives each space isolated SQLite databases. Use the default
+database for simple apps, or pass --db to target a named database. Pass
+--space to target a non-primary space (e.g. the manifest "applications" space).
+
+Common workflows:
+  $ tc sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ tc sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
+  $ tc sql query "SELECT id, body FROM notes ORDER BY id"
+  $ tc sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
+  $ tc sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
+  $ tc sql export --db analytics --output analytics.db
+
+Commands:
+  query     Read rows with SELECT statements
+  execute   Run writes and schema changes such as INSERT, UPDATE, DELETE, CREATE, DROP
+  export    Download the raw SQLite database file
+  copy      Copy rows between databases (optionally across spaces)
+
+Tips:
+  - SQL strings should usually be quoted so your shell passes them as one argument.
+  - --params accepts a JSON array and binds values to ? placeholders.
+  - --space accepts a short name ("applications") or full URI ("tinycloud:pkh:eip155:1:0x...:applications").
+  - Add --json for scripting-friendly output.
+`);
+  sql.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
+
+Examples:
+  $ tc sql query "SELECT * FROM notes ORDER BY id"
+  $ tc sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
+  $ tc sql query "SELECT count(*) AS total FROM events" --db analytics --json
+  $ tc sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
+
+Output:
+  Human output is formatted as a table. Piped output or --json returns
+  { "columns": string[], "rows": unknown[][], "rowCount": number }.
+`).action(async (sqlStr, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const params = options.params ? JSON.parse(options.params) : void 0;
+      const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
+      const result = await withSpinner(
+        "Running query...",
+        () => handle.query(sqlStr, params)
+      );
+      if (!result.ok) {
+        await throwSqlError(result.error, spaceUri, ctx.profile);
+      }
+      const { columns, rows, rowCount } = result.data;
+      if (shouldOutputJson()) {
+        outputJson({ columns, rows, rowCount });
+      } else {
+        if (rows.length === 0) {
+          process.stdout.write(theme.muted("No rows returned.") + "\n");
+        } else {
+          const stringRows = rows.map(
+            (row) => row.map((v) => v === null ? "NULL" : String(v))
+          );
+          process.stdout.write(formatTable(columns, stringRows) + "\n");
+          process.stdout.write(theme.muted(`
+${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
+        }
+      }
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  sql.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
+
+Examples:
+  $ tc sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ tc sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
+  $ tc sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
+  $ tc sql execute "DROP TABLE old_notes" --db archive
+  $ tc sql execute "DELETE FROM conversation WHERE id = ?" --space applications --db xyz.tinycloud.listen/conversations --params '["abc"]'
+
+Output:
+  Returns JSON with the changed row count and last inserted row id when available.
+`).action(async (sqlStr, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const params = options.params ? JSON.parse(options.params) : void 0;
+      const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
+      const result = await withSpinner(
+        "Executing statement...",
+        () => handle.execute(sqlStr, params)
+      );
+      if (!result.ok) {
+        await throwSqlError(result.error, spaceUri, ctx.profile);
+      }
+      outputJson({
+        changes: result.data.changes,
+        lastInsertRowId: result.data.lastInsertRowId
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  sql.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
+
+Examples:
+  $ tc sql export
+  $ tc sql export --db analytics --output analytics.db
+  $ tc sql export --space applications --db xyz.tinycloud.listen/conversations --output listen.db
+
+Output:
+  Writes the database file locally and returns JSON with the path and size.
+`).action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const { handle, spaceUri } = await dbHandle(node, options.db, options.space, ctx.profile);
+      const result = await withSpinner(
+        "Exporting database...",
+        () => handle.export()
+      );
+      if (!result.ok) {
+        await throwSqlError(result.error, spaceUri, ctx.profile);
+      }
+      const blob = result.data;
+      const buffer = Buffer.from(await blob.arrayBuffer());
+      const outputPath = resolve2(options.output);
+      await writeFile7(outputPath, buffer);
+      outputJson({
+        file: outputPath,
+        size: blob.size,
+        sizeHuman: formatBytes(blob.size)
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  sql.command("copy").description("Copy rows between SQL databases (optionally across spaces)").requiredOption("--from-db <name>", "Source database name").requiredOption("--to-db <name>", "Destination database name").option("--from-space <name|uri>", "Source space (defaults to primary)").option("--to-space <name|uri>", "Destination space (defaults to primary)").option("--table <name...>", "Restrict copy to specific tables (repeat or comma-separated)").option("--dry-run", "Print the plan without writing", false).addHelpText("after", `
+
+Examples:
+  $ tc sql copy --from-db com.tinycloud.conversation-sync/conversations \\
+                --to-db xyz.tinycloud.listen/conversations \\
+                --space applications --dry-run
+  $ tc sql copy --from-space applications --from-db com.foo/data \\
+                --to-space applications --to-db com.bar/data \\
+                --table conversation --table participant
+
+Notes:
+  - Refuses to run when (resolved space, db) is identical for source and destination.
+  - Does NOT create destination tables. Run the target app once (or use \`tc sql execute\`)
+    to materialize the schema before copying.
+  - One row at a time; suitable for small/medium datasets. Large copies should
+    use \`tc sql export\` + bulk import.
+  - Authorization: the active session/delegation must cover sql/read on source
+    AND sql/write on destination. Otherwise the relevant operation will fail.
+`).action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const fromSpaceInput = options.fromSpace ?? options.space;
+      const toSpaceInput = options.toSpace ?? options.space;
+      const fromSpaceUri = await resolveSpaceUri(fromSpaceInput, ctx.profile) ?? "<primary>";
+      const toSpaceUri = await resolveSpaceUri(toSpaceInput, ctx.profile) ?? "<primary>";
+      if (fromSpaceUri === toSpaceUri && options.fromDb === options.toDb) {
+        throw new CLIError(
+          "SELF_COPY",
+          `Refusing to copy: source and destination resolve to the same (space, db) \u2014 ${fromSpaceUri} / ${options.fromDb}.`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      const { handle: fromHandle, spaceUri: fromSpaceUriResolved } = await dbHandle(node, options.fromDb, fromSpaceInput, ctx.profile);
+      const { handle: toHandle, spaceUri: toSpaceUriResolved } = await dbHandle(node, options.toDb, toSpaceInput, ctx.profile);
+      let tables;
+      if (options.table && options.table.length > 0) {
+        tables = options.table.flatMap((t) => t.split(",").map((s) => s.trim()).filter(Boolean));
+      } else {
+        const listing = await fromHandle.query(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        );
+        if (!listing.ok) {
+          await throwSqlError(listing.error, fromSpaceUriResolved, ctx.profile, "Cannot list source tables: ");
+        }
+        tables = listing.data.rows.map((r) => String(r[0]));
+      }
+      if (tables.length === 0) {
+        throw new CLIError(
+          "EMPTY_PLAN",
+          `No tables to copy. Use --table to specify tables, or check that the source database has user tables.`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      const plan = [];
+      for (const table of tables) {
+        const safe = quoteIdent(table);
+        const countResult = await fromHandle.query(`SELECT count(*) AS n FROM ${safe}`);
+        if (!countResult.ok) {
+          await throwSqlError(countResult.error, fromSpaceUriResolved, ctx.profile, `Cannot count rows in source table "${table}": `);
+        }
+        const rows = Number(countResult.data.rows[0]?.[0] ?? 0);
+        plan.push({ table, rows, copied: 0, skipped: 0 });
+      }
+      if (options.dryRun) {
+        outputJson({
+          dryRun: true,
+          from: { space: fromSpaceUri, db: options.fromDb },
+          to: { space: toSpaceUri, db: options.toDb },
+          tables: plan.map((p) => ({ table: p.table, rows: p.rows }))
+        });
+        return;
+      }
+      for (const entry of plan) {
+        const safe = quoteIdent(entry.table);
+        const fetched = await fromHandle.query(`SELECT * FROM ${safe}`);
+        if (!fetched.ok) {
+          await throwSqlError(fetched.error, fromSpaceUriResolved, ctx.profile, `Failed to read "${entry.table}": `);
+        }
+        const columns = fetched.data.columns;
+        const rows = fetched.data.rows;
+        if (rows.length === 0) continue;
+        const colList = columns.map(quoteIdent).join(", ");
+        const placeholders = columns.map(() => "?").join(", ");
+        const insertSql = `INSERT INTO ${safe} (${colList}) VALUES (${placeholders})`;
+        for (const row of rows) {
+          const writeResult = await toHandle.execute(insertSql, row);
+          if (!writeResult.ok) {
+            await throwSqlError(writeResult.error, toSpaceUriResolved, ctx.profile, `Insert into "${entry.table}" failed after ${entry.copied} row(s): `);
+          }
+          entry.copied += writeResult.data.changes ?? 1;
+        }
+      }
+      outputJson({
+        from: { space: fromSpaceUri, db: options.fromDb },
+        to: { space: toSpaceUri, db: options.toDb },
+        tables: plan.map((p) => ({ table: p.table, rowsRead: p.rows, rowsWritten: p.copied }))
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+function quoteIdent(name2) {
+  return `"${name2.replace(/"/g, '""')}"`;
 }
 
 // src/commands/status.ts
@@ -20094,7 +20036,7 @@ function formatProfile(profile) {
   if (profile.delegations.length > 0) {
     lines.push("  delegations:");
     for (const delegation of profile.delegations) {
-      lines.push(`    ${formatDelegation(delegation)}`);
+      lines.push(`    ${formatDelegation2(delegation)}`);
     }
   }
   if (profile.issues.length > 0) {
@@ -20129,7 +20071,7 @@ function formatSession(session) {
   }
   return `${theme.success("present")}${formatExpiresAt(session.expiresAt)}`;
 }
-function formatDelegation(delegation) {
+function formatDelegation2(delegation) {
   const state = delegation.expired === true ? theme.warn("expired") : theme.success("active");
   return [
     delegation.cid,
@@ -20145,318 +20087,408 @@ function plural(count, label) {
   return `${count} ${label}${count === 1 ? "" : "s"}`;
 }
 
-// src/commands/account.ts
-import open from "open";
-import { readFile as readFile10 } from "fs/promises";
-var ACCOUNT_BILLING_URL = "https://account.tinycloud.xyz/billing";
-function registerAccountCommand(program2) {
-  const account = program2.command("account").description("Account applications, spaces, delegations, and billing");
-  account.command("status").description("Show account status").action(async (_options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const status = await node.account.status();
-      assertOk(status);
-      outputJson(status.data);
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  const apps = account.command("apps").description("Manage account application registry");
-  apps.command("list").description("List applications registered under account/applications").option("--live", "Read canonical account KV records instead of the SQLite index").action(async (_options, cmd) => {
-    try {
-      const options = _options;
-      const node = await authenticatedNode(cmd);
-      const result = options.live ? await node.account.applications.list() : await node.account.applications.list({ preferIndex: true });
-      assertOk(result);
-      const payload = { applications: result.data, count: result.data.length };
-      if (shouldOutputJson()) {
-        outputJson(payload);
-        return;
-      }
-      if (result.data.length === 0) {
-        process.stdout.write(theme.muted("No account applications registered.") + "\n");
-        return;
-      }
-      process.stdout.write(
-        formatTable(
-          ["App ID", "Name", "Manifests", "Updated"],
-          result.data.map((app) => [
-            app.appId,
-            app.name ?? "\u2014",
-            String(app.manifests.length),
-            app.updatedAt ?? "\u2014"
-          ])
-        ) + "\n"
-      );
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  const spaces = account.command("spaces").description("Manage account space registry");
-  spaces.command("list").description("List spaces registered under account/spaces").option("--live", "Read canonical account KV records instead of the SQLite index").action(async (options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const result = options.live ? await node.account.spaces.list() : await node.account.spaces.list({ preferIndex: true });
-      assertOk(result);
-      const payload = { spaces: result.data.map(formatSpace), count: result.data.length };
-      if (shouldOutputJson()) {
-        outputJson(payload);
-        return;
-      }
-      if (result.data.length === 0) {
-        process.stdout.write(theme.muted("No account spaces registered.") + "\n");
-        return;
-      }
-      process.stdout.write(
-        formatTable(
-          ["Space", "Type", "Owner", "Status", "Updated"],
-          result.data.map((space) => [
-            space.name,
-            space.type,
-            space.ownerDid,
-            space.status,
-            space.updatedAt ?? "\u2014"
-          ])
-        ) + "\n"
-      );
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  spaces.command("info <space-id>").description("Show a registered account space").action(async (spaceId, _options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const result = await node.account.spaces.get(spaceId);
-      assertOk(result);
-      outputJson(formatSpace(result.data));
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  spaces.command("register <space-id>").description("Register a space in account/spaces").requiredOption("--name <name>", "Display name for the space").requiredOption("--owner <did>", "Owner DID for the space").option("--type <type>", "Space type: owned, delegated, or discovered", "discovered").option("--permission <permission...>", "Permission strings for the space").action(async (spaceId, options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const result = await node.account.spaces.register({
-        spaceId,
-        name: options.name,
-        ownerDid: options.owner,
-        type: options.type,
-        permissions: options.permission ?? [],
-        status: "active"
-      });
-      assertOk(result);
-      outputJson({ space: formatSpace(result.data), registered: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  spaces.command("sync").description("Register currently accessible spaces into account/spaces").action(async (_options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const result = await node.account.spaces.syncAccessible();
-      assertOk(result);
-      outputJson({ spaces: result.data.map(formatSpace), count: result.data.length, synced: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  spaces.command("remove <space-id>").alias("delete").description("Remove a space registry entry").action(async (spaceId, _options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const result = await node.account.spaces.remove(spaceId);
-      assertOk(result);
-      outputJson({ spaceId, removed: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  apps.command("info <app-id>").description("Show a registered account application").action(async (appId, _options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const result = await node.account.applications.get(appId);
-      assertOk(result);
-      outputJson(result.data);
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  apps.command("register <manifest>").description("Register an app manifest in account/applications").action(async (manifestSource, _options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const manifest = await loadManifestSource2(manifestSource);
-      const result = await node.account.applications.register(manifest);
-      assertOk(result);
-      outputJson({ application: result.data, registered: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  apps.command("remove <app-id>").alias("delete").description("Remove an application registry entry").action(async (appId, _options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const result = await node.account.applications.remove(appId);
-      assertOk(result);
-      outputJson({ appId, removed: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  const delegations = account.command("delegations").description("View and revoke account delegations");
-  delegations.command("list").description("List delegations granted by or to this account").option("--granted", "Show only delegations granted by this account").option("--received", "Show only delegations granted to this account").option("--space <space>", "Filter by space name or ID").option("--live", "Read live delegation services instead of the SQLite index").action(async (options, cmd) => {
-    try {
-      if (options.granted && options.received) {
-        throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
-      }
-      const node = await authenticatedNode(cmd);
-      const direction = options.granted ? "granted" : options.received ? "received" : "all";
-      const result = options.live ? await node.account.delegations.list({ direction, space: options.space }) : await node.account.delegations.list({ direction, space: options.space, preferIndex: true });
-      assertOk(result);
-      const payload = { delegations: result.data.map(formatDelegation2), count: result.data.length };
-      if (shouldOutputJson()) {
-        outputJson(payload);
-        return;
-      }
-      if (result.data.length === 0) {
-        process.stdout.write(theme.muted("No delegations found.") + "\n");
-        return;
-      }
-      process.stdout.write(
-        formatTable(
-          ["CID", "Direction", "Space", "Counterparty", "Status", "Expiry"],
-          result.data.map((delegation) => [
-            delegation.cid,
-            delegation.direction,
-            delegation.spaceName ?? delegation.spaceId,
-            delegation.counterpartyDid,
-            delegation.status,
-            delegation.expiry.toISOString()
-          ])
-        ) + "\n"
-      );
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  delegations.command("revoke <cid>").description("Revoke an active delegation granted by this account").requiredOption("--space <space>", "Space name or ID containing the delegation").action(async (cid, options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const result = await node.account.delegations.revoke({ cid, space: options.space });
-      assertOk(result);
-      outputJson({ cid, space: options.space, revoked: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  const index = account.command("index").description("Manage the materialized account SQLite index");
-  index.command("ensure").description("Create account SQLite index tables if they are missing").action(async (_options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const result = await node.account.index.ensure();
-      assertOk(result);
-      outputJson({ ...result.data, ensured: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  index.command("status").description("Show account SQLite index sync status").action(async (_options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const result = await node.account.index.status();
-      assertOk(result);
-      outputJson(result.data);
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  index.command("rebuild").description("Rebuild account SQLite index from canonical account data").action(async (_options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const result = await node.account.index.rebuild();
-      assertOk(result);
-      outputJson(result.data);
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  index.command("query <sql>").description("Query the materialized account SQLite index").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").action(async (sql, options, cmd) => {
-    try {
-      const node = await authenticatedNode(cmd);
-      const params = parseParams(options.params);
-      const result = await node.account.index.query(sql, params);
-      assertOk(result);
-      outputJson(result.data);
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  const billing = account.command("billing").description("Open account billing");
-  for (const name2 of ["status", "checkout", "portal"]) {
-    billing.command(name2).description(`${name2 === "status" ? "Show" : "Open"} account billing page`).option("--open", "Open account.tinycloud.xyz in your browser").action(async (options) => {
-      try {
-        if (options.open) {
-          await open(ACCOUNT_BILLING_URL);
-        }
-        outputJson({ url: ACCOUNT_BILLING_URL, opened: Boolean(options.open) });
-      } catch (error) {
-        handleError(error);
-      }
-    });
+// src/commands/upgrade.ts
+import { execSync as execSync2 } from "child_process";
+import { readFileSync as readFileSync2 } from "fs";
+var PACKAGE_NAME = "@tinycloud/cli";
+function getCurrentVersion() {
+  const pkg = JSON.parse(
+    readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
+  );
+  return pkg.version;
+}
+async function getLatestVersion() {
+  const res = await fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch latest version: ${res.status} ${res.statusText}`);
   }
+  const data = await res.json();
+  return data.version;
 }
-async function authenticatedNode(cmd) {
-  const globalOpts = cmd.optsWithGlobals();
-  const ctx = await ProfileManager.resolveContext(globalOpts);
-  return ensureAuthenticated(ctx);
+function detectPackageManager() {
+  try {
+    const bunGlobals = execSync2("bun pm ls -g", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    if (bunGlobals.includes(PACKAGE_NAME)) {
+      return "bun";
+    }
+  } catch {
+  }
+  try {
+    const npmGlobals = execSync2("npm ls -g --depth=0", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    if (npmGlobals.includes(PACKAGE_NAME)) {
+      return "npm";
+    }
+  } catch {
+  }
+  return "bun";
 }
-function assertOk(result) {
-  if (!result.ok) {
+function registerUpgradeCommand(program2) {
+  program2.command("upgrade").description("Upgrade the TinyCloud CLI to the latest version").action(async () => {
+    try {
+      const current = getCurrentVersion();
+      process.stderr.write(theme.muted("Checking for updates...") + "\n");
+      const latest = await getLatestVersion();
+      if (current === latest) {
+        process.stdout.write(theme.success(`Already on latest version (${current})`) + "\n");
+        return;
+      }
+      process.stdout.write(`Current: ${theme.warn(current)} \u2192 Latest: ${theme.success(latest)}
+`);
+      const pm = detectPackageManager();
+      const cmd = pm === "bun" ? `bun install -g ${PACKAGE_NAME}@latest` : `npm install -g ${PACKAGE_NAME}@latest`;
+      process.stderr.write(theme.muted(`Upgrading via ${pm}...`) + "\n\n");
+      try {
+        execSync2(cmd, { stdio: "inherit" });
+        process.stdout.write("\n" + theme.success(`Upgraded to ${latest}`) + "\n");
+      } catch {
+        process.stderr.write("\n" + theme.warn("Automatic upgrade failed.") + "\n");
+        process.stderr.write(theme.muted("Try running manually:") + "\n");
+        process.stderr.write(`  ${theme.command(`bun install -g ${PACKAGE_NAME}@latest`)}
+`);
+        process.stderr.write(theme.muted("  or") + "\n");
+        process.stderr.write(`  ${theme.command(`npm install -g ${PACKAGE_NAME}@latest`)}
+`);
+      }
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+
+// src/commands/vault.ts
+import { readFile as readFile9 } from "fs/promises";
+import { writeFile as writeFile8 } from "fs/promises";
+import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
+async function readStdin4() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
+function resolvePrivateKey(options) {
+  const key = options.privateKey || process.env.TC_PRIVATE_KEY;
+  if (!key) {
+    throw new CLIError(
+      "AUTH_REQUIRED",
+      "Private key required. Use --private-key <hex> or set TC_PRIVATE_KEY env var.",
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  return key;
+}
+async function unlockVault(node, privateKey) {
+  const signer = new PrivateKeySigner2(privateKey);
+  const result = await node.vault.unlock(signer);
+  if (result && !result.ok) {
     throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
   }
 }
-async function loadManifestSource2(source) {
-  const raw = /^https?:\/\//i.test(source) ? await fetchManifest(source) : await readFile10(source, "utf8");
-  return JSON.parse(raw);
+function registerVaultCommand(program2) {
+  const vault = program2.command("vault").description("Encrypted vault operations");
+  vault.command("unlock").description("Verify vault unlock works").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const privateKey = resolvePrivateKey(options);
+      const node = await ensureAuthenticated(ctx, { privateKey });
+      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
+      outputJson({ unlocked: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  vault.command("put <key> [value]").description("Encrypt and store a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (key, value, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const privateKey = resolvePrivateKey(options);
+      const node = await ensureAuthenticated(ctx, { privateKey });
+      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
+      let putValue;
+      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
+      if (sources.length === 0) {
+        throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
+      }
+      if (sources.length > 1) {
+        throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
+      }
+      if (options.file) {
+        putValue = new Uint8Array(await readFile9(options.file));
+      } else if (options.stdin) {
+        putValue = new Uint8Array(await readStdin4());
+      } else {
+        putValue = value;
+      }
+      const result = await withSpinner(`Writing ${key}...`, () => node.vault.put(key, putValue));
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      outputJson({ key, written: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  vault.command("get <key>").description("Decrypt and retrieve a value").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (key, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const privateKey = resolvePrivateKey(options);
+      const node = await ensureAuthenticated(ctx, { privateKey });
+      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
+      const result = await withSpinner(`Getting ${key}...`, () => node.vault.get(key));
+      if (!result.ok) {
+        if (result.error.code === "NOT_FOUND") {
+          throw new CLIError("NOT_FOUND", `Key "${key}" not found`, ExitCode.NOT_FOUND);
+        }
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      const data = result.data.data ?? result.data;
+      if (options.output) {
+        const content = data instanceof Uint8Array ? Buffer.from(data) : typeof data === "string" ? data : JSON.stringify(data);
+        await writeFile8(options.output, content);
+        outputJson({ key, written: options.output });
+        return;
+      }
+      if (options.raw) {
+        const content = data instanceof Uint8Array ? Buffer.from(data) : typeof data === "string" ? data : JSON.stringify(data);
+        process.stdout.write(content);
+        return;
+      }
+      outputJson({
+        key,
+        data: data instanceof Uint8Array ? Buffer.from(data).toString("base64") : data
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  vault.command("delete <key>").description("Delete an encrypted key").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (key, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const privateKey = resolvePrivateKey(options);
+      const node = await ensureAuthenticated(ctx, { privateKey });
+      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
+      const result = await withSpinner(`Deleting ${key}...`, () => node.vault.delete(key));
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      outputJson({ key, deleted: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  vault.command("list").description("List vault keys").option("--prefix <prefix>", "Filter by key prefix").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const privateKey = resolvePrivateKey(options);
+      const node = await ensureAuthenticated(ctx, { privateKey });
+      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
+      const listOptions = options.prefix ? { prefix: options.prefix } : void 0;
+      const result = await withSpinner("Listing vault keys...", () => node.vault.list(listOptions));
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      const keys = result.data.data ?? result.data;
+      const keyList = Array.isArray(keys) ? keys : [];
+      outputJson({
+        keys: keyList,
+        count: keyList.length,
+        prefix: options.prefix ?? null
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  vault.command("head <key>").description("Get metadata for a vault key").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (key, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const privateKey = resolvePrivateKey(options);
+      const node = await ensureAuthenticated(ctx, { privateKey });
+      await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
+      const result = await withSpinner(`Checking ${key}...`, () => node.vault.head(key));
+      if (!result.ok) {
+        if (result.error.code === "NOT_FOUND") {
+          outputJson({ key, exists: false, metadata: {} });
+          return;
+        }
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      outputJson({
+        key,
+        exists: true,
+        metadata: result.data.headers ?? result.data
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
 }
-async function fetchManifest(source) {
-  const response = await fetch(source);
-  if (!response.ok) {
+
+// src/commands/vars.ts
+import { readFile as readFile10 } from "fs/promises";
+import { writeFile as writeFile9 } from "fs/promises";
+var VARIABLES_PREFIX = "variables/";
+async function readStdin5() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
+function resolvePrivateKey2(options) {
+  const key = options.privateKey || process.env.TC_PRIVATE_KEY;
+  if (!key) {
     throw new CLIError(
-      "MANIFEST_FETCH_FAILED",
-      `Failed to fetch manifest from ${source}: ${response.status} ${response.statusText}`,
-      ExitCode.NETWORK_ERROR
+      "AUTH_REQUIRED",
+      "Private key required. Use --private-key <hex> or set TC_PRIVATE_KEY env var.",
+      ExitCode.AUTH_REQUIRED
     );
   }
-  return response.text();
+  return key;
 }
-function parseParams(input) {
-  if (!input) return void 0;
-  const parsed = JSON.parse(input);
-  if (!Array.isArray(parsed)) {
-    throw new CLIError("INVALID_PARAMS", "--params must be a JSON array.", ExitCode.USAGE_ERROR);
-  }
-  return parsed;
+function registerVarsCommand(program2) {
+  const vars = program2.command("vars").description("Plaintext variable management");
+  vars.command("list").description("List variables").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const privateKey = resolvePrivateKey2(options);
+      const node = await ensureAuthenticated(ctx, { privateKey });
+      const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
+      const result = await withSpinner("Listing variables...", () => prefixedKv.list());
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      const rawData = result.data.data ?? result.data;
+      const keyList = Array.isArray(rawData) ? rawData : rawData?.keys ?? [];
+      outputJson({
+        variables: keyList,
+        count: keyList.length
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  vars.command("get <name>").description("Get a variable value").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const privateKey = resolvePrivateKey2(options);
+      const node = await ensureAuthenticated(ctx, { privateKey });
+      const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
+      const result = await withSpinner(`Getting variable ${name2}...`, () => prefixedKv.get(name2));
+      if (!result.ok) {
+        if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
+          throw new CLIError("NOT_FOUND", `Variable "${name2}" not found`, ExitCode.NOT_FOUND);
+        }
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      const data = result.data.data;
+      let value;
+      if (typeof data === "string") {
+        try {
+          const parsed = JSON.parse(data);
+          value = parsed.value;
+        } catch {
+          value = data;
+        }
+      } else if (data && typeof data === "object" && "value" in data) {
+        value = data.value;
+      } else {
+        value = typeof data === "string" ? data : JSON.stringify(data);
+      }
+      if (options.output) {
+        await writeFile9(options.output, value);
+        outputJson({ name: name2, written: options.output });
+        return;
+      }
+      if (options.raw) {
+        process.stdout.write(value);
+        return;
+      }
+      outputJson({ name: name2, value });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  vars.command("put <name> [value]").description("Set a variable").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, value, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const privateKey = resolvePrivateKey2(options);
+      const node = await ensureAuthenticated(ctx, { privateKey });
+      let varValue;
+      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
+      if (sources.length === 0) {
+        throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
+      }
+      if (sources.length > 1) {
+        throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
+      }
+      if (options.file) {
+        varValue = await readFile10(options.file, "utf-8");
+      } else if (options.stdin) {
+        varValue = (await readStdin5()).toString("utf-8");
+      } else {
+        varValue = value;
+      }
+      const payload = {
+        value: varValue,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
+      const result = await withSpinner(`Setting variable ${name2}...`, () => prefixedKv.put(name2, payload));
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      outputJson({ name: name2, written: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  vars.command("delete <name>").description("Delete a variable").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name2, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const privateKey = resolvePrivateKey2(options);
+      const node = await ensureAuthenticated(ctx, { privateKey });
+      const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
+      const result = await withSpinner(`Deleting variable ${name2}...`, () => prefixedKv.delete(name2));
+      if (!result.ok) {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      }
+      outputJson({ name: name2, deleted: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
 }
-function formatDelegation2(delegation) {
-  return {
-    cid: delegation.cid,
-    direction: delegation.direction,
-    spaceId: delegation.spaceId,
-    spaceName: delegation.spaceName,
-    counterpartyDid: delegation.counterpartyDid,
-    delegateDid: delegation.delegateDid,
-    delegatorDid: delegation.delegatorDid,
-    path: delegation.path,
-    actions: delegation.actions,
-    expiry: delegation.expiry.toISOString(),
-    status: delegation.status,
-    createdAt: delegation.createdAt?.toISOString()
-  };
-}
-function formatSpace(space) {
-  return {
-    ...space,
-    expiresAt: space.expiresAt?.toISOString()
-  };
+
+// src/command-registry.ts
+function registerTinyCloudCommands(program2) {
+  registerInitCommand(program2);
+  registerAuthCommand(program2);
+  registerKvCommand(program2);
+  registerSpaceCommand(program2);
+  registerDelegationCommand(program2);
+  registerShareCommand(program2);
+  registerNodeCommand(program2);
+  registerProfileCommand(program2);
+  registerCompletionCommand(program2);
+  registerVaultCommand(program2);
+  registerSecretsCommand(program2);
+  registerVarsCommand(program2);
+  registerDoctorCommand(program2);
+  registerSqlCommand(program2);
+  registerDuckdbCommand(program2);
+  registerManifestCommand(program2);
+  registerUpgradeCommand(program2);
+  registerStatusCommand(program2);
+  registerAccountCommand(program2);
 }
 
 // src/index.ts
@@ -20491,25 +20523,7 @@ program.hook("preAction", async (thisCommand) => {
     }
   }
 });
-registerInitCommand(program);
-registerAuthCommand(program);
-registerKvCommand(program);
-registerSpaceCommand(program);
-registerDelegationCommand(program);
-registerShareCommand(program);
-registerNodeCommand(program);
-registerProfileCommand(program);
-registerCompletionCommand(program);
-registerVaultCommand(program);
-registerSecretsCommand(program);
-registerVarsCommand(program);
-registerDoctorCommand(program);
-registerSqlCommand(program);
-registerDuckdbCommand(program);
-registerManifestCommand(program);
-registerUpgradeCommand(program);
-registerStatusCommand(program);
-registerAccountCommand(program);
+registerTinyCloudCommands(program);
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}
 `);
 program.addHelpText("afterAll", () => {

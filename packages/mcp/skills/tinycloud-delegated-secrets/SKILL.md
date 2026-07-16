@@ -15,6 +15,16 @@ The following facts are generated from `@tinycloud/operations/operations.json`:
 - `tinycloud_status` -> `tinycloud.status.get@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
 <!-- END GENERATED TINYCloud operation facts -->
 
+<!-- BEGIN GENERATED TINYCloud operations coverage -->
+Coverage is generated from the Commander registration ledger; legacy commands are not MCP tools.
+
+- 1 migrated registration(s).
+- 1 partially migrated registration(s).
+- 111 legacy registration(s) remain Commander-owned.
+- `auth import [source]` → `tinycloud.auth.import@1` (partially-migrated; remaining legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
+- `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
+<!-- END GENERATED TINYCloud operations coverage -->
+
 ## Workflow
 
 1. Inspect posture first with `tinycloud_status` or `tinycloud_auth_status`.
@@ -45,3 +55,8 @@ apply their own sensitive-result retention and access controls.
 This proving surface uses local stdio only. It has no continuation tool,
 resources, prompts, elicitation, remote transport, generic permission grant,
 or secret mutation tool.
+
+This is an experimental, publication-deferred surface while the MCP SDK v2
+gate is `unpublishable-defer`. Delegated posture is the default; owner-profile
+data access requires explicit opt-in. The user must enter secrets only in
+Secret Manager, never in chat.

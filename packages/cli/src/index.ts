@@ -9,25 +9,7 @@ const { version } = JSON.parse(
 import { theme } from "./output/theme.js";
 import { isInteractive } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
-import { registerInitCommand } from "./commands/init.js";
-import { registerAuthCommand } from "./commands/auth.js";
-import { registerKvCommand } from "./commands/kv.js";
-import { registerSpaceCommand } from "./commands/space.js";
-import { registerDelegationCommand } from "./commands/delegation.js";
-import { registerShareCommand } from "./commands/share.js";
-import { registerNodeCommand } from "./commands/node.js";
-import { registerProfileCommand } from "./commands/profile.js";
-import { registerCompletionCommand } from "./commands/completion.js";
-import { registerVaultCommand } from "./commands/vault.js";
-import { registerSecretsCommand } from "./commands/secrets.js";
-import { registerVarsCommand } from "./commands/vars.js";
-import { registerDoctorCommand } from "./commands/doctor.js";
-import { registerSqlCommand } from "./commands/sql.js";
-import { registerDuckdbCommand } from "./commands/duckdb.js";
-import { registerManifestCommand } from "./commands/manifest.js";
-import { registerUpgradeCommand } from "./commands/upgrade.js";
-import { registerStatusCommand } from "./commands/status.js";
-import { registerAccountCommand } from "./commands/account.js";
+import { registerTinyCloudCommands } from "./command-registry.js";
 
 const program = new Command();
 
@@ -73,25 +55,7 @@ program.hook("preAction", async (thisCommand) => {
   }
 });
 
-registerInitCommand(program);
-registerAuthCommand(program);
-registerKvCommand(program);
-registerSpaceCommand(program);
-registerDelegationCommand(program);
-registerShareCommand(program);
-registerNodeCommand(program);
-registerProfileCommand(program);
-registerCompletionCommand(program);
-registerVaultCommand(program);
-registerSecretsCommand(program);
-registerVarsCommand(program);
-registerDoctorCommand(program);
-registerSqlCommand(program);
-registerDuckdbCommand(program);
-registerManifestCommand(program);
-registerUpgradeCommand(program);
-registerStatusCommand(program);
-registerAccountCommand(program);
+registerTinyCloudCommands(program);
 
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}\n`);
 

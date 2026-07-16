@@ -21,6 +21,9 @@
     "build": "tsup",
     "clean": "rm -rf dist",
     "dev": "tsup --watch",
+    "generate:reference": "bun scripts/generate-reference.ts",
+    "check:generated": "bun scripts/generate-reference.ts --check",
+    "check:coverage": "bun scripts/check-coverage.ts",
     "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts"
   },
   "dependencies": {

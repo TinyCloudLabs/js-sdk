@@ -21,6 +21,7 @@ import { TinyCloudNode } from "../TinyCloudNode";
 
 const OWNER_PRIVATE_KEY = "1".padStart(64, "0");
 const DELEGATE_PRIVATE_KEY = "2".padStart(64, "0");
+const ROTATED_DELEGATE_PRIVATE_KEY = "3".padStart(64, "0");
 const OWNER_CHAIN_ID = 1;
 const SECRET_PATH = "vault/secrets/HERMETIC_DELEGATION_CANARY";
 const PLAINTEXT = "hermetic encrypted delegation proof";
@@ -79,11 +80,11 @@ function hasExactCapability(
   payload: CompactPayload,
   resource: string,
   action: string,
-  delegationCid: string,
+  delegationCids: ReadonlySet<string>,
 ): boolean {
   return (
     payload.att?.[resource]?.[action] !== undefined &&
-    payload.prf?.includes(delegationCid) === true
+    payload.prf?.some((cid) => delegationCids.has(cid)) === true
   );
 }
 
@@ -108,7 +109,7 @@ class LoopbackEncryptedNode {
   private envelope?: InlineEncryptedEnvelope;
   private spaceId?: string;
   private networkId?: string;
-  private delegationCid?: string;
+  private readonly delegationCids = new Set<string>();
   private secretPresent = true;
 
   constructor() {
@@ -131,7 +132,7 @@ class LoopbackEncryptedNode {
   }): void {
     this.spaceId = input.spaceId;
     this.networkId = input.networkId;
-    this.delegationCid = input.delegationCid;
+    this.delegationCids.add(input.delegationCid);
     this.envelope = input.envelope;
   }
 
@@ -186,9 +187,8 @@ class LoopbackEncryptedNode {
     envelope: InlineEncryptedEnvelope;
     spaceId: string;
     networkId: string;
-    delegationCid: string;
   } {
-    if (!this.envelope || !this.spaceId || !this.networkId || !this.delegationCid) {
+    if (!this.envelope || !this.spaceId || !this.networkId || this.delegationCids.size === 0) {
       throw new Error("loopback encrypted node is not configured");
     }
   }
@@ -258,7 +258,7 @@ class LoopbackEncryptedNode {
           payload,
           resource,
           "tinycloud.kv/get",
-          this.delegationCid,
+          this.delegationCids,
         )
       ) {
         return new Response("delegated kv/get proof required", { status: 403 });
@@ -285,7 +285,7 @@ class LoopbackEncryptedNode {
           payload,
           this.networkId,
           "tinycloud.encryption/decrypt",
-          this.delegationCid,
+          this.delegationCids,
         )
       ) {
         return new Response("delegated decrypt proof required", { status: 403 });
@@ -422,6 +422,7 @@ export interface HermeticEncryptedNode {
   readonly permissions: readonly PermissionEntry[];
   readonly unrelatedAudience: string;
   createRestoredDelegate(): TinyCloudNode;
+  createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
   mintDelegation(): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
   mintDelegationWithPermissions(
     permissions: PermissionEntry[],
@@ -565,6 +566,31 @@ export async function createHermeticEncryptedNode(
     unrelatedAudience,
     createRestoredDelegate: () =>
       new TinyCloudNode({ host: transport.host, wasmBindings: transport.wasm }),
+    async createRotatedRestorableSession() {
+      const rotatedRuntime = makeNode(
+        transport.host,
+        ROTATED_DELEGATE_PRIVATE_KEY,
+        transport.wasm,
+      );
+      const rotatedAddress = await rotatedRuntime.signer.getAddress();
+      const rotatedSession = await makeSession(rotatedRuntime.node, rotatedRuntime.signer, {
+        address: rotatedAddress,
+        spaceId,
+        abilities: {},
+      });
+      return {
+        delegationHeader: rotatedSession.delegationHeader,
+        delegationCid: rotatedSession.delegationCid,
+        spaceId: rotatedSession.spaceId,
+        jwk: rotatedSession.jwk,
+        verificationMethod: rotatedSession.verificationMethod,
+        address: rotatedSession.address,
+        chainId: rotatedSession.chainId,
+        siwe: rotatedSession.siwe,
+        signature: rotatedSession.signature,
+        tinycloudHosts: [transport.host],
+      };
+    },
     mintDelegation: () => mint(delegateAudience),
     mintDelegationWithPermissions: (requestedPermissions) =>
       ownerRuntime.node.delegateTo(delegateAudience, requestedPermissions).then(({ delegation }) => {

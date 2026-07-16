@@ -1,0 +1,82 @@
+name: Operations and MCP conformance
+
+on:
+  pull_request:
+    paths:
+      - "packages/operations/**"
+      - "packages/cli/**"
+      - "packages/mcp/**"
+      - "packages/node-sdk/**"
+      - "packages/sdk-core/**"
+      - "packages/sdk-services/**"
+      - "packages/sdk-rs/**"
+      - "tests/operations-mcp-conformance/**"
+      - "scripts/check-operations-mcp*.ts"
+      - "scripts/generate-operations-mcp.ts"
+      - ".github/workflows/operations-mcp.yml"
+      - "package.json"
+      - "bun.lock"
+  push:
+    branches: [master]
+    paths:
+      - "packages/operations/**"
+      - "packages/cli/**"
+      - "packages/mcp/**"
+      - "tests/operations-mcp-conformance/**"
+      - "scripts/check-operations-mcp*.ts"
+      - "scripts/generate-operations-mcp.ts"
+      - ".github/workflows/operations-mcp.yml"
+      - "package.json"
+      - "bun.lock"
+
+concurrency:
+  group: operations-mcp-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.0"
+      - run: bun install --frozen-lockfile
+      - name: Build SDK runtime prerequisites
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/sdk-core build
+          bun run --cwd packages/node-sdk build
+      - name: Build operations package for source scanners
+        run: bun run --cwd packages/operations build
+      - name: Generate and scan authored coverage
+        run: |
+          bun run check:operations-mcp
+          bun run check:operations-mcp-boundaries
+      - name: Build operations, CLI, and MCP
+        run: |
+          bun run --cwd packages/cli build
+          bun run --cwd packages/mcp build
+      - name: Run focused conformance and concurrency tests
+        run: |
+          bun test tests/operations-mcp-conformance/conformance.test.ts
+          bun test packages/operations/src/legacy-cli-concurrency.test.ts
+          bun test packages/cli/src/commands/auth.test.ts
+          bun test packages/cli/src/commands/secrets.test.ts
+          bun test packages/cli/src/commands/secrets-owner-retry.test.ts
+          bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts
+      - name: Verify generated files and coverage ledger
+        run: |
+          bun run check:operations-mcp
+          bun run --cwd packages/cli check:coverage
+      - name: Verify packed Node 20 fixtures
+        run: bun run check:operations-mcp-pack

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const packageDirectory = resolve(scriptDirectory, "..");
 const operationsCatalogPath = resolve(packageDirectory, "../operations/generated/operations.json");
+const coveragePath = resolve(packageDirectory, "../operations/coverage.json");
 const factsPath = resolve(packageDirectory, "generated/mcp-facts.json");
 const skillPath = resolve(packageDirectory, "skills/tinycloud-delegated-secrets/SKILL.md");
 
@@ -22,6 +23,14 @@ interface OperationsCatalog {
   readonly operations: readonly CatalogOperation[];
 }
 
+interface CoverageEntry {
+  readonly command: string;
+  readonly status: "legacy" | "partially-migrated" | "migrated" | "excluded";
+  readonly operationId?: string;
+  readonly operationVersion?: number;
+  readonly remainingLegacyInputs?: readonly string[];
+}
+
 const TOOL_NAMES: Record<string, string> = {
   "tinycloud.status.get": "tinycloud_status",
   "tinycloud.auth.status": "tinycloud_auth_status",
@@ -32,6 +41,7 @@ const TOOL_NAMES: Record<string, string> = {
 };
 
 const catalog = JSON.parse(await readFile(operationsCatalogPath, "utf8")) as OperationsCatalog;
+const coverage = JSON.parse(await readFile(coveragePath, "utf8")) as { commands: readonly CoverageEntry[] };
 const operations = [...catalog.operations].sort((left, right) =>
   left.id.localeCompare(right.id) || left.version - right.version,
 );
@@ -56,11 +66,27 @@ const generatedBlock = [
   ),
   "<!-- END GENERATED TINYCloud operation facts -->",
 ].join("\n");
+const counts = new Map<string, number>();
+for (const entry of coverage.commands) counts.set(entry.status, (counts.get(entry.status) ?? 0) + 1);
+const generatedCoverageBlock = [
+  "<!-- BEGIN GENERATED TINYCloud operations coverage -->",
+  "Coverage is generated from the Commander registration ledger; legacy commands are not MCP tools.",
+  "",
+  `- ${counts.get("migrated") ?? 0} migrated registration(s).`,
+  `- ${counts.get("partially-migrated") ?? 0} partially migrated registration(s).`,
+  `- ${counts.get("legacy") ?? 0} legacy registration(s) remain Commander-owned.`,
+  ...coverage.commands
+    .filter((entry) => entry.status === "migrated" || entry.status === "partially-migrated")
+    .map((entry) => `- \`${entry.command}\` → \`${entry.operationId}@${entry.operationVersion}\` (${entry.status}${entry.remainingLegacyInputs ? `; remaining legacy inputs: ${entry.remainingLegacyInputs.join(", ")}` : ""}).`),
+  "<!-- END GENERATED TINYCloud operations coverage -->",
+].join("\n");
 
 const existingSkill = await readFile(skillPath, "utf8");
 const blockPattern = /<!-- BEGIN GENERATED TINYCloud operation facts -->[\s\S]*?<!-- END GENERATED TINYCloud operation facts -->/;
+const coveragePattern = /<!-- BEGIN GENERATED TINYCloud operations coverage -->[\s\S]*?<!-- END GENERATED TINYCloud operations coverage -->/;
 if (!blockPattern.test(existingSkill)) throw new Error("Skill is missing its generated facts markers.");
-const generatedSkill = `${existingSkill.replace(blockPattern, generatedBlock).trimEnd()}\n`;
+if (!coveragePattern.test(existingSkill)) throw new Error("Skill is missing its generated coverage markers.");
+const generatedSkill = `${existingSkill.replace(blockPattern, generatedBlock).replace(coveragePattern, generatedCoverageBlock).trimEnd()}\n`;
 
 if (process.argv.includes("--check")) {
   const [existingFacts, currentSkill] = await Promise.all([
