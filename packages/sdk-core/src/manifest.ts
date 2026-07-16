@@ -1222,6 +1222,15 @@ function capabilitiesReadPermission(space: string): ResourceCapability {
   };
 }
 
+function delegationListPermission(space: string): ResourceCapability {
+  return {
+    service: "tinycloud.delegation",
+    space,
+    path: "",
+    actions: ["tinycloud.delegation/list"],
+  };
+}
+
 function withCapabilitiesReadForSpaces(
   resources: readonly ResourceCapability[],
 ): ResourceCapability[] {
@@ -1237,6 +1246,7 @@ function withCapabilitiesReadForSpaces(
   return dedupeResources([
     ...resources,
     ...[...spaces].map(capabilitiesReadPermission),
+    ...[...spaces].map(delegationListPermission),
   ]);
 }
 
