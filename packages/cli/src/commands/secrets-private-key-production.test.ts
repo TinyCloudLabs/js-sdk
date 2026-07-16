@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { Command } from "commander";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
+import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 
 const PRIVATE_KEY = "1".repeat(64);
 let home: string | undefined;
@@ -133,6 +134,26 @@ test("CLI explicit-key acquisition uses one live local-owner runtime for OpenKey
     .mockImplementation(function(this: TinyCloudNode) {
       return [...(runtimeGrants.get(this) ?? [])] as never;
     });
+  const hasRuntimePermissions = spyOn(TinyCloudNode.prototype, "hasRuntimePermissions")
+    .mockImplementation(function(this: TinyCloudNode, requested) {
+      const granted = runtimeGrants.get(this) ?? [];
+      return requested.every((permission) => granted.some((candidate) =>
+        JSON.stringify(candidate) === JSON.stringify(permission)
+      ));
+    });
+  const getRuntimePermissionDelegations = spyOn(TinyCloudNode.prototype, "getRuntimePermissionDelegations")
+    .mockImplementation(function(this: TinyCloudNode) {
+      const granted = runtimeGrants.get(this) ?? [];
+      return [{
+        cid: `runtime-${this.sessionDid}`,
+        resources: granted.map((permission) => ({
+          service: String(permission.service).replace(/^tinycloud\./, ""),
+          space: permission.space ?? "encryption",
+          path: permission.path,
+          actions: permission.actions,
+        })),
+      }] as never;
+    });
   const grant = spyOn(TinyCloudNode.prototype, "grantRuntimePermissions")
     .mockImplementation(async function(this: TinyCloudNode, requested) {
       const grants = runtimeGrants.get(this) ?? [];
@@ -221,47 +242,11 @@ test("CLI explicit-key acquisition uses one live local-owner runtime for OpenKey
             stderr.write = originalStderr;
             process.exit = originalExit;
           }
-
-          const requestsText = await readFile(authRequestsPath(profileName), "utf8");
-          const requests = JSON.parse(requestsText) as Array<Record<string, any>>;
-          expect(requests).toHaveLength(1);
-          const request = requests[0]!;
-          const ownerBPrefix = ownerB.slice(0, ownerB.lastIndexOf(":"));
-          const expectedSpace = space === ownerA
-            ? ownerA
-            : space === undefined
-            ? ownerB
-            : `${ownerBPrefix}:${space}`;
-          const { requestId: _requestId, createdAt: _createdAt, sessionDid: _sessionDid, requested, ...stableRequest } = request;
-          expect(stableRequest).toEqual({
-            kind: "tinycloud.auth.request",
-            version: 1,
-            profile: profileName,
-            posture: "local-owner-key",
-            operatorType: "agent",
-            host: "https://node.invalid",
-            ownerDid: ownerBPrefix.replace("tinycloud:pkh", "did:pkh"),
-            spaceId: ownerB,
-          });
-          expect(requested).toEqual([
-            {
-              service: "tinycloud.encryption",
-              path: networkB,
-              actions: ["tinycloud.encryption/decrypt"],
-            },
-            {
-              service: "tinycloud.kv",
-              space: expectedSpace,
-              path: "vault/secrets/LIVE_OWNER_KEY_CANARY",
-              actions: ["tinycloud.kv/get"],
-            },
-          ]);
-          expect(JSON.stringify(requests)).not.toContain(PRIVATE_KEY);
+          await expect(access(authRequestsPath(profileName))).rejects.toMatchObject({ code: "ENOENT" });
           if (space === ownerA) {
             expect(acquisitions).toHaveLength(acquisitionsBefore);
             expect(reads).toBe(readsBefore);
           } else {
-            expect(requests[0]?.sessionDid).toBe(acquisitions.at(-1)?.sessionDid.split("#", 1)[0]);
             expect(acquisitions.at(-1)?.node).toBe(readNodes.at(-1));
           }
 
@@ -276,6 +261,8 @@ test("CLI explicit-key acquisition uses one live local-owner runtime for OpenKey
   } finally {
     signIn.mockRestore();
     getCapabilities.mockRestore();
+    hasRuntimePermissions.mockRestore();
+    getRuntimePermissionDelegations.mockRestore();
     grant.mockRestore();
     network.mockRestore();
     readSecret.mockRestore();
@@ -285,6 +272,161 @@ test("CLI explicit-key acquisition uses one live local-owner runtime for OpenKey
   expect(reads).toBe(8);
   expect(acquisitions).toHaveLength(8);
   expect(signIns).toBe(12);
+});
+
+test("published secrets helper fails closed on unproven, broad, and wrong-owner authority", async () => {
+  const ownerA = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets";
+  const network = "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000002:default";
+  const modes = ["noop", "partial", "false", "has-throw", "throw", "broad", "ownerless", "unrecognized", "success"] as const;
+  let mode: (typeof modes)[number] = "noop";
+  const grants = new WeakMap<object, Array<Record<string, unknown>>>();
+  let grantCalls = 0;
+  let reads = 0;
+
+  const signIn = spyOn(TinyCloudNode.prototype, "signIn").mockImplementation(async function(this: TinyCloudNode) {
+    const node = this as unknown as { _address?: string; _chainId: number };
+    node._address = "0x0000000000000000000000000000000000000002";
+    node._chainId = 1;
+    grants.set(this, []);
+  });
+  const getCapabilities = spyOn(TinyCloudNode.prototype, "getVerifiedSessionCapabilities")
+    .mockImplementation(function(this: TinyCloudNode) {
+      return [...(grants.get(this) ?? [])] as never;
+    });
+  const grant = spyOn(TinyCloudNode.prototype, "grantRuntimePermissions")
+    .mockImplementation(async function(this: TinyCloudNode, requested) {
+      grantCalls += 1;
+      if (mode === "throw") throw new Error("attacker grant detail");
+      if (mode === "noop" || mode === "false" || mode === "has-throw") return [];
+      const selected = mode === "partial" ? requested.slice(0, 1) : requested;
+      const next = selected.map((permission) => mode === "broad"
+        ? { ...permission, path: "vault/secrets/*" }
+        : mode === "ownerless" && permission.service === "tinycloud.kv"
+        ? Object.fromEntries(Object.entries(permission).filter(([key]) => key !== "space"))
+        : mode === "unrecognized"
+        ? { ...permission, service: "tinycloud.future" }
+        : permission) as Array<Record<string, unknown>>;
+      grants.set(this, next);
+      return [];
+    });
+  const hasRuntimePermissions = spyOn(TinyCloudNode.prototype, "hasRuntimePermissions")
+    .mockImplementation(function(this: TinyCloudNode, requested) {
+      if (mode === "false") return false;
+      if (mode === "has-throw") throw new Error("attacker authority detail");
+      if (mode === "broad" || mode === "ownerless" || mode === "unrecognized") return true;
+      if (mode === "broad") return true;
+      const granted = grants.get(this) ?? [];
+      return requested.every((permission) => granted.some((candidate) =>
+        JSON.stringify(candidate) === JSON.stringify(permission)
+      ));
+    });
+  const getRuntimePermissionDelegations = spyOn(TinyCloudNode.prototype, "getRuntimePermissionDelegations")
+    .mockImplementation(function(this: TinyCloudNode) {
+      const granted = grants.get(this) ?? [];
+      return [{
+        cid: `probe-${this.sessionDid}`,
+        resources: granted.map((permission) => ({
+          service: String(permission.service).replace(/^tinycloud\./, ""),
+          space: permission.space ?? "encryption",
+          path: permission.path,
+          actions: permission.actions,
+        })),
+      }] as never;
+    });
+  const networkLookup = spyOn(TinyCloudNode.prototype, "getEncryptionNetworkIdForSpace")
+    .mockImplementation(() => network);
+  const readSecret = spyOn(TinyCloudNode.prototype, "readSecret")
+    .mockImplementation(async () => {
+      reads += 1;
+      return { status: "ok", value: "must-not-leak" };
+    });
+
+  try {
+    for (const currentMode of modes) {
+      mode = currentMode;
+      const probeHome = await mkdtemp(`${tmpdir()}/tinycloud-cli-helper-probe-`);
+      process.env.TC_HOME = probeHome;
+      const { profileConfigPath, authRequestsPath, writeJsonAtomic } = await import("@tinycloud/operations/state");
+      await writeJsonAtomic(profileConfigPath("probe"), {
+        name: "probe",
+        host: "https://node.invalid",
+        chainId: 1,
+        spaceName: "secrets",
+        spaceId: ownerA,
+        did: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+        posture: "owner-openkey",
+        operatorType: "agent",
+        authMethod: "openkey",
+        createdAt: "2026-07-15T00:00:00.000Z",
+      });
+      grantCalls = 0;
+      reads = 0;
+      const result = await invokeSecretsGetWithLocalAuthorityRetry(
+        { profile: "probe", host: "https://node.invalid", allowOwnerProfile: true, privateKey: PRIVATE_KEY },
+        { name: "HELPER_PROBE_CANARY" },
+      );
+      if (currentMode === "success") {
+        expect(result).toMatchObject({ status: "ok", output: { value: "must-not-leak" } });
+        expect(grantCalls).toBe(1);
+        expect(reads).toBe(1);
+      } else {
+        expect(result).toMatchObject({ status: "error", error: { code: "NODE_ERROR" } });
+        expect(grantCalls).toBe(1);
+        expect(reads).toBe(0);
+      }
+      await expect(access(authRequestsPath("probe"))).rejects.toMatchObject({ code: "ENOENT" });
+      await rm(probeHome, { recursive: true, force: true });
+    }
+
+    const wrongOwnerHome = await mkdtemp(`${tmpdir()}/tinycloud-cli-helper-wrong-owner-`);
+    process.env.TC_HOME = wrongOwnerHome;
+    const { profileConfigPath: wrongOwnerProfileConfigPath, writeJsonAtomic: writeWrongOwnerJson } = await import("@tinycloud/operations/state");
+    await writeWrongOwnerJson(wrongOwnerProfileConfigPath("probe"), {
+      name: "probe",
+      host: "https://node.invalid",
+      chainId: 1,
+      spaceName: "secrets",
+      spaceId: ownerA,
+      did: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+      posture: "owner-openkey",
+      operatorType: "agent",
+      authMethod: "openkey",
+      createdAt: "2026-07-15T00:00:00.000Z",
+    });
+    grantCalls = 0;
+    reads = 0;
+    const wrongOwner = await invokeSecretsGetWithLocalAuthorityRetry(
+      { profile: "probe", host: "https://node.invalid", allowOwnerProfile: true, privateKey: PRIVATE_KEY },
+      { name: "HELPER_PROBE_CANARY", space: ownerA },
+    );
+    expect(wrongOwner).toMatchObject({ status: "error", error: { code: "PERMISSION_HINT_INVALID" } });
+    expect(grantCalls).toBe(0);
+    expect(reads).toBe(0);
+    const arbitrarySpace = await invokeSecretsGetWithLocalAuthorityRetry(
+      { profile: "probe", host: "https://node.invalid", allowOwnerProfile: true, privateKey: PRIVATE_KEY },
+      {
+        name: "HELPER_PROBE_CANARY",
+        space: "tinycloud:did:web:EXAMPLE.com:eip155:1:0xABCDEF:Vault",
+      },
+    );
+    expect(arbitrarySpace).toMatchObject({ status: "error", error: { code: "PERMISSION_HINT_INVALID" } });
+    expect(grantCalls).toBe(0);
+    expect(reads).toBe(0);
+    await rm(wrongOwnerHome, { recursive: true, force: true });
+
+    const futureAttempt = await (invokeSecretsGetWithLocalAuthorityRetry as unknown as (...args: unknown[]) => Promise<unknown>)
+      ("tinycloud.status.get", 1, {}, {});
+    expect(futureAttempt).toMatchObject({ status: "error", error: { code: "INPUT_INVALID" } });
+  } finally {
+    delete process.env.TC_HOME;
+    signIn.mockRestore();
+    getCapabilities.mockRestore();
+    grant.mockRestore();
+    hasRuntimePermissions.mockRestore();
+    getRuntimePermissionDelegations.mockRestore();
+    networkLookup.mockRestore();
+    readSecret.mockRestore();
+  }
 });
 
 async function runWithPrivateKey(options: Readonly<{ flag: boolean }>): Promise<{

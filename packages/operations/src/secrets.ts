@@ -1,3 +1,10 @@
+import {
+  canonicalizeAddress,
+  makePkhSpaceId,
+  parsePkhDid,
+  parseSpaceUri,
+} from "@tinycloud/node-sdk";
+
 import { OperationInvocationError, operationError } from "./errors.js";
 
 const DEFAULT_SECRETS_SPACE = "secrets";
@@ -86,10 +93,8 @@ export function operationSpaceResolver(
 function resolveOperationSpace(space: string, node: unknown, ownerSpace?: string): string {
   if (space.startsWith("tinycloud:")) return canonicalizeSpaceUri(space);
 
-  if (ownerSpace?.startsWith("tinycloud:")) {
-    const owner = ownerSpace.slice("tinycloud:".length).split(":").slice(0, -1).join(":");
-    if (owner.length > 0) return canonicalizeSpaceUri(`tinycloud:${owner}:${space}`);
-  }
+  const ownerSpaceId = ownerSpace === undefined ? undefined : ownedSpaceForName(ownerSpace, space);
+  if (ownerSpaceId !== undefined) return ownerSpaceId;
 
   const candidate = node as {
     resolveOwnedSpace?: (spaceName: string) => unknown;
@@ -109,20 +114,28 @@ function resolveOperationSpace(space: string, node: unknown, ownerSpace?: string
   // A restored delegate session carries the owner's primary space even though
   // node.did is the delegate/session principal. This is the same owner
   // identity used by the CLI space resolver.
-  if (typeof candidate.spaceId === "string" && candidate.spaceId.startsWith("tinycloud:")) {
-    const owner = candidate.spaceId.slice("tinycloud:".length).split(":").slice(0, -1).join(":");
-    if (owner.length > 0) return canonicalizeSpaceUri(`tinycloud:${owner}:${space}`);
+  if (typeof candidate.spaceId === "string") {
+    const resolved = ownedSpaceForName(candidate.spaceId, space);
+    if (resolved !== undefined) return resolved;
   }
 
   const did = typeof candidate.did === "string" ? candidate.did : undefined;
-  const didMatch = did?.match(/^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/);
-  const address = typeof candidate.address === "string" ? candidate.address : undefined;
-  const resolvedAddress = address ?? didMatch?.[2];
-  const chainId = didMatch?.[1];
-  if (resolvedAddress === undefined || chainId === undefined) {
+  const pkh = did === undefined ? null : parsePkhDid(did);
+  if (pkh === null) {
     throw invalidSecretInput();
   }
-  return `tinycloud:pkh:eip155:${chainId}:${canonicalizeAddress(resolvedAddress)}:${space}`;
+  return makePkhSpaceId(pkh.address, pkh.chainId, space);
+}
+
+function ownedSpaceForName(ownerSpace: string, name: string): string | undefined {
+  const parsed = parseSpaceUri(ownerSpace);
+  if (parsed === null) return undefined;
+  try {
+    const pkh = parsePkhDid(parsed.owner);
+    return pkh === null ? undefined : makePkhSpaceId(pkh.address, pkh.chainId, name);
+  } catch {
+    return undefined;
+  }
 }
 
 function canonicalizeSpaceUri(space: string): string {
@@ -138,16 +151,9 @@ function canonicalizeSpaceUri(space: string): string {
     /^tinycloud:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):([^:]+)$/,
   );
   if (pkh !== null) {
-    return `tinycloud:pkh:eip155:${pkh[1]}:${canonicalizeAddress(pkh[2]!)}:${pkh[3]}`;
+    return `tinycloud:pkh:eip155:${pkh[1]}:${canonicalizeAddress(pkh[2]!).toLowerCase()}:${pkh[3]}`;
   }
   return space;
-}
-
-function canonicalizeAddress(address: string): string {
-  const trimmed = address.trim();
-  return trimmed.startsWith("0x")
-    ? `0x${trimmed.slice(2).toLowerCase()}`
-    : trimmed.toLowerCase();
 }
 
 /** Builds a setup action URL without ever accepting a secret value. */

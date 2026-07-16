@@ -63,6 +63,11 @@ mock.module("@tinycloud/node-sdk", () => ({
     }
   },
   grantAuthRequest: async () => ({}),
+  canonicalizeAddress: (address: string) => address.toLowerCase(),
+  makePkhSpaceId: (address: string, chainId: number, name: string) =>
+    `tinycloud:pkh:eip155:${chainId}:${address.toLowerCase()}:${name}`,
+  parsePkhDid: () => null,
+  parseSpaceUri: () => null,
   activateValidatedRuntimeDelegation: async () => ({
     cid: "bafy-owner-openkey",
     effectivePermissions: [],

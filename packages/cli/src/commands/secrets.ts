@@ -9,7 +9,7 @@ import {
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
-import { invokeOperationWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
+import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 import { ProfileManager } from "../config/profiles.js";
 import { formatCheck, formatSection, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
@@ -316,7 +316,7 @@ async function invokeCanonicalSecretGet(params: {
   const invoke = () => withSpinner(
     params.label,
     () => auth?.privateKey
-      ? invokeOperationWithLocalAuthorityRetry("tinycloud.secrets.get", 1, target, input)
+      ? invokeSecretsGetWithLocalAuthorityRetry(target, input)
       : invokeOperation("tinycloud.secrets.get", 1, target, input),
   );
   const first = await invoke();

@@ -14866,7 +14866,7 @@ import { writeFile as writeFile6 } from "fs/promises";
 import { join as join4 } from "path";
 import { homedir } from "os";
 import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
-import { invokeOperationWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
+import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 var SECRETS_SPACE3 = "secrets";
 var SECRET_KV_ABILITIES = {
   get: "tinycloud.kv/get",
@@ -15028,7 +15028,7 @@ async function invokeCanonicalSecretGet(params) {
   };
   const invoke = () => withSpinner(
     params.label,
-    () => auth?.privateKey ? invokeOperationWithLocalAuthorityRetry("tinycloud.secrets.get", 1, target, input) : invokeOperation2("tinycloud.secrets.get", 1, target, input)
+    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation2("tinycloud.secrets.get", 1, target, input)
   );
   const first = await invoke();
   if (first.status !== "authority_required") return first;

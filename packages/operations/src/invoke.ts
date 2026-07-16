@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 
-import type { PermissionEntry } from "@tinycloud/node-sdk";
+import {
+  makePkhSpaceId,
+  parsePkhDid,
+  parseSpaceUri,
+  type PermissionEntry,
+} from "@tinycloud/node-sdk";
 import { jcsCanonicalize } from "@tinycloud/sdk-core/policy";
 import type { ZodError } from "zod";
 
@@ -29,12 +34,16 @@ import {
 } from "./authority.js";
 import {
   createOrReusePermissionRequest,
+  buildPermissionRequestArtifact,
   type PermissionRequestArtifact,
 } from "./artifacts.js";
 import { redactOperationError } from "./redaction.js";
 import { safeOriginHost } from "./safe-values.js";
 import type { InvocationRuntimeResolution } from "./runtime.js";
-import { operationSpaceResolver } from "./secrets.js";
+import {
+  operationSpaceResolver,
+  resolveSecretReferenceForOperation,
+} from "./secrets.js";
 
 /** The sole projection-facing execution API. */
 export async function invokeOperation(
@@ -73,61 +82,104 @@ export async function invokeOperationWithLocalAuthorityRetry(
   );
   if (isPreparedError(prepared)) return prepared.result;
 
-  const first = await executePreparedInvocation(prepared);
+  if (
+    prepared.operation.operationId !== "tinycloud.secrets.get" ||
+    prepared.operation.operationVersion !== 1
+  ) {
+    return errorResult(
+      prepared.operation,
+      prepared.runtimeResolution.context.summary,
+      operationError(
+        "OPERATION_NOT_FOUND",
+        "The local CLI authority helper supports only tinycloud.secrets.get@1.",
+      ),
+    );
+  }
+
+  const runtimeContext = prepared.runtimeResolution.context;
+  if (runtimeContext.runtime === undefined) return internalOperationErrorResult(prepared);
+  const operationContext = runtimeContext as RuntimeOperationContext;
+  let planned: CapabilityRequirement[] | undefined;
+  try {
+    planned = exactCapabilities(await prepared.definition.authority(
+      operationContext,
+      prepared.parsedInput.data,
+    ));
+  } catch {
+    return errorResult(
+      prepared.operation,
+      operationContext.summary,
+      operationError(
+        "PERMISSION_HINT_INVALID",
+        "The local CLI authority plan is invalid.",
+      ),
+    );
+  }
+  if (
+    planned === undefined ||
+    !isExactLocalSecretsGetPlan(prepared, planned, operationContext)
+  ) {
+    return errorResult(
+      prepared.operation,
+      operationContext.summary,
+      operationError(
+        "PERMISSION_HINT_INVALID",
+        "The local CLI authority plan is invalid.",
+      ),
+    );
+  }
+
+  const first = await executePreparedInvocation(prepared, { deferAuthorityRequest: true });
   if (
     first.status !== "authority_required" ||
     invocationTarget.privateKey === undefined ||
-    prepared.runtimeResolution.context.runtime === undefined ||
-    prepared.runtimeResolution.context.summary.posture !== "local-owner-key" ||
+    operationContext.summary.posture !== "local-owner-key" ||
     !requirementsBelongToAuthenticatedOwner(
       first.missing as unknown as PermissionEntry[],
-      prepared.runtimeResolution.context.summary.space,
+      operationContext.summary.space,
     )
   ) {
     return first;
   }
 
-  const runtimeContext = prepared.runtimeResolution.context as RuntimeOperationContext;
   try {
-    const grantRuntimePermissions = (runtimeContext.runtime.node as {
+    const grantRuntimePermissions = (operationContext.runtime.node as {
       grantRuntimePermissions?: (
         permissions: PermissionEntry[],
       ) => Promise<unknown>;
     }).grantRuntimePermissions;
     if (typeof grantRuntimePermissions !== "function") return first;
     await grantRuntimePermissions.call(
-      runtimeContext.runtime.node,
+      operationContext.runtime.node,
       first.missing as unknown as PermissionEntry[],
     );
 
     const resolveSpace = operationSpaceResolver(
-      runtimeContext.runtime.node,
-      runtimeContext.summary.space,
+      operationContext.runtime.node,
+      operationContext.summary.space,
     );
+    const refreshedGranted = refreshLiveRuntimeAuthority(
+      operationContext.runtime.node,
+      first.missing as unknown as PermissionEntry[],
+      planned as unknown as PermissionEntry[],
+      resolveSpace,
+    );
+    if (refreshedGranted === undefined) {
+      return localAuthorityFailure(prepared);
+    }
     const retryContext: RuntimeOperationContext = {
-      ...runtimeContext,
+      ...operationContext,
       runtime: {
-        ...runtimeContext.runtime,
-        granted: [
-          ...runtimeContext.runtime.granted,
-          ...canonicalizeOperationCapabilities(first.missing as unknown as PermissionEntry[], resolveSpace),
-        ],
+        ...operationContext.runtime,
+        granted: refreshedGranted,
       },
     };
     return executePreparedInvocation({
       ...prepared,
       runtimeResolution: { ok: true, context: retryContext },
-    });
+    }, { deferAuthorityRequest: true });
   } catch {
-    return errorResult(
-      first.operation,
-      runtimeContext.summary,
-      operationError(
-        "NODE_ERROR",
-        "The local owner could not acquire the requested secret permissions.",
-        { retryable: true },
-      ),
-    );
+    return localAuthorityFailure(prepared);
   }
 }
 
@@ -294,6 +346,7 @@ async function prepareInvocation(
 
 async function executePreparedInvocation(
   prepared: Exclude<PreparedInvocation, { status: "error" }>,
+  options: Readonly<{ deferAuthorityRequest?: boolean }> = {},
 ): Promise<OperationResult<unknown>> {
   const { operation, definition, parsedInput, runtimeResolution } = prepared;
   const runtimeContext =
@@ -336,6 +389,38 @@ async function executePreparedInvocation(
           runtimeResolution.context.summary,
           internalOperationError(),
         );
+      }
+      if (options.deferAuthorityRequest) {
+        try {
+          const request = buildPermissionRequestArtifact({
+            profile: runtimeContext.summary.profile,
+            host: runtimeContext.summary.host,
+            sessionDid: runtimeContext.summary.sessionDid!,
+            posture: runtimeContext.summary.posture,
+            operatorType: runtimeContext.summary.operatorType ?? "human",
+            ...(runtimeContext.summary.ownerDid === undefined
+              ? {}
+              : { ownerDid: runtimeContext.summary.ownerDid }),
+            ...(runtimeContext.summary.space === undefined
+              ? {}
+              : { spaceId: runtimeContext.summary.space }),
+            missing: evaluation.missing as unknown as PermissionEntry[],
+          });
+          return authorityRequiredResult(
+            operation,
+            runtimeResolution.context.summary,
+            parsedInput.data,
+            request,
+            evaluation.missing,
+            runtimeContext.runtime.node,
+          );
+        } catch {
+          return errorResult(
+            operation,
+            runtimeResolution.context.summary,
+            internalOperationError(),
+          );
+        }
       }
       const authority = await persistAuthorityRequest(
         runtimeContext,
@@ -689,18 +774,193 @@ function requirementsBelongToAuthenticatedOwner(
   requirements: readonly PermissionEntry[],
   authenticatedSpace: string | undefined,
 ): boolean {
-  const authenticatedOwner = ownerForSpace(authenticatedSpace);
+  const authenticatedOwner = canonicalPkhOwner(authenticatedSpace);
   if (authenticatedOwner === undefined) return false;
   return requirements.every((requirement) => {
-    const requirementOwner = ownerForSpace(requirement.space);
-    return requirementOwner === undefined || requirementOwner === authenticatedOwner;
+    if (requirement.service === "tinycloud.encryption") {
+      return requirement.space === undefined;
+    }
+    const requirementOwner = canonicalPkhOwner(requirement.space);
+    return requirement.service === "tinycloud.kv" && requirementOwner === authenticatedOwner;
   });
 }
 
-function ownerForSpace(space: string | undefined): string | undefined {
-  if (typeof space !== "string" || !space.startsWith("tinycloud:")) return undefined;
-  const parts = space.split(":");
-  return parts.length > 2 ? parts.slice(1, -1).join(":") : undefined;
+function canonicalPkhOwner(space: string | undefined): string | undefined {
+  if (typeof space !== "string") return undefined;
+  const parsedSpace = parseSpaceUri(space);
+  if (parsedSpace === null) return undefined;
+  try {
+    const pkh = parsePkhDid(parsedSpace.owner);
+    return pkh === null
+      ? undefined
+      : parseSpaceUri(makePkhSpaceId(pkh.address, pkh.chainId, parsedSpace.name))?.owner;
+  } catch {
+    return undefined;
+  }
+}
+
+function isExactLocalSecretsGetPlan(
+  prepared: Exclude<PreparedInvocation, { status: "error" }>,
+  planned: readonly CapabilityRequirement[],
+  context: RuntimeOperationContext,
+): boolean {
+  if (
+    prepared.definition.id !== "tinycloud.secrets.get" ||
+    prepared.definition.version !== 1 ||
+    JSON.stringify(prepared.definition.effects) !== JSON.stringify(["read", "local_write"])
+  ) return false;
+
+  const resolveSpace = operationSpaceResolver(context.runtime.node, context.summary.space);
+  let reference;
+  try {
+    reference = resolveSecretReferenceForOperation(
+      prepared.parsedInput.data,
+      context.runtime.node,
+      context.summary.space,
+    );
+  } catch {
+    return false;
+  }
+  const canonicalPlan = canonicalizeOperationCapabilities(
+    planned as unknown as PermissionEntry[],
+    resolveSpace,
+  );
+  if (canonicalPlan.length !== 2) return false;
+  const kv = canonicalPlan.find((permission) => permission.service === "tinycloud.kv");
+  const decrypt = canonicalPlan.find((permission) => permission.service === "tinycloud.encryption");
+  if (kv === undefined || decrypt === undefined || canonicalPkhOwner(kv.space) === undefined) return false;
+  if (canonicalPkhOwner(kv.space) !== canonicalPkhOwner(context.summary.space)) return false;
+  if (JSON.stringify(kv) !== JSON.stringify({
+    service: "tinycloud.kv",
+    space: resolveSpace(reference.space),
+    path: reference.permissionPath,
+    actions: ["tinycloud.kv/get"],
+  })) return false;
+  if (
+    JSON.stringify(decrypt) !== JSON.stringify({
+      service: "tinycloud.encryption",
+      path: decrypt.path,
+      actions: ["tinycloud.encryption/decrypt"],
+    }) ||
+    typeof decrypt.path !== "string" ||
+    !decrypt.path.startsWith("urn:tinycloud:encryption:")
+  ) return false;
+  return true;
+}
+
+function refreshLiveRuntimeAuthority(
+  node: unknown,
+  requested: readonly PermissionEntry[],
+  planned: readonly PermissionEntry[],
+  resolveSpace: (space: string) => string,
+): readonly CapabilityRequirement[] | undefined {
+  const candidate = node as {
+    hasRuntimePermissions?: (permissions: PermissionEntry[]) => unknown;
+    getVerifiedSessionCapabilities?: () => unknown;
+    getRuntimePermissionDelegations?: (permissions?: PermissionEntry[]) => unknown;
+  };
+  if (typeof candidate.hasRuntimePermissions !== "function") return undefined;
+  if (candidate.hasRuntimePermissions([...requested]) !== true) return undefined;
+  if (typeof candidate.getVerifiedSessionCapabilities !== "function" ||
+      typeof candidate.getRuntimePermissionDelegations !== "function") return undefined;
+
+  const base = candidate.getVerifiedSessionCapabilities();
+  const delegations = candidate.getRuntimePermissionDelegations([...requested]);
+  if (!Array.isArray(base) || !Array.isArray(delegations)) return undefined;
+  const activatedByDelegation = delegations.map(runtimeDelegationPermissions);
+  if (activatedByDelegation.some((permissions) => permissions === undefined)) return undefined;
+  const activated = activatedByDelegation.flatMap((permissions) => permissions!);
+  const exactActivated = validateExactCapabilities(activated);
+  if (
+    exactActivated === undefined ||
+    !isExactCapabilityMemberSubset(exactActivated, planned, resolveSpace) ||
+    !isExactCapabilityMemberSubset(requested, exactActivated, resolveSpace)
+  ) return undefined;
+  return canonicalizeOperationCapabilities(
+    [...base, ...exactActivated],
+    resolveSpace,
+  );
+}
+
+function runtimeDelegationPermissions(value: unknown): PermissionEntry[] | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const delegation = value as {
+    resources?: unknown;
+    spaceId?: unknown;
+    path?: unknown;
+    actions?: unknown;
+  };
+  if ("resources" in delegation) {
+    if (!Array.isArray(delegation.resources) || delegation.resources.length === 0) return undefined;
+    const permissions = delegation.resources.map((resource): PermissionEntry | undefined => {
+      if (typeof resource !== "object" || resource === null) return undefined;
+      const entry = resource as Record<string, unknown>;
+      if (
+        Object.keys(entry).some((key) => !new Set(["service", "space", "path", "actions", "caveats"]).has(key)) ||
+        typeof entry.service !== "string" ||
+        typeof entry.space !== "string" ||
+        typeof entry.path !== "string" ||
+        !Array.isArray(entry.actions) ||
+        !entry.actions.every((action) => typeof action === "string")
+      ) return undefined;
+      if ("caveats" in entry) return undefined;
+      const service = entry.service === "kv" ? "tinycloud.kv" :
+        entry.service === "encryption" ? "tinycloud.encryption" : entry.service;
+      return {
+        service,
+        ...(service === "tinycloud.encryption" ? {} :
+          { space: entry.space }),
+        path: entry.path,
+        actions: [...entry.actions] as string[],
+      };
+    });
+    return permissions.every((permission) => permission !== undefined)
+      ? permissions as PermissionEntry[]
+      : undefined;
+  }
+  if (
+    typeof delegation.spaceId !== "string" ||
+    typeof delegation.path !== "string" ||
+    !Array.isArray(delegation.actions) ||
+    !delegation.actions.every((action) => typeof action === "string")
+  ) return undefined;
+  return (delegation.actions as string[]).map((action) => {
+    const service = action.startsWith("tinycloud.encryption/")
+      ? "tinycloud.encryption"
+      : action.startsWith("tinycloud.kv/")
+      ? "tinycloud.kv"
+      : action.split("/", 1)[0]!;
+    return {
+      service,
+      ...(service === "tinycloud.encryption" ? {} : { space: delegation.spaceId as string }),
+      path: delegation.path as string,
+      actions: [action],
+    };
+  });
+}
+
+function localAuthorityFailure(
+  prepared: Exclude<PreparedInvocation, { status: "error" }>,
+): OperationResult<never> {
+  return errorResult(
+    prepared.operation,
+    prepared.runtimeResolution.context.summary,
+    operationError(
+      "NODE_ERROR",
+      "The local owner could not acquire the requested secret permissions.",
+      { retryable: true },
+    ),
+  );
+}
+
+function internalOperationErrorResult(
+  prepared: Exclude<PreparedInvocation, { status: "error" }>,
+): OperationResult<never> {
+  return errorResult(
+    prepared.operation,
+    prepared.runtimeResolution.context.summary,
+    internalOperationError(),
+  );
 }
 
 function isOwnerPosture(posture: OperationContextSummary["posture"]): boolean {

@@ -226,24 +226,11 @@ export async function createInvocationRuntime(
 function spaceForAuthenticatedPrincipal(principal: string | undefined): string | undefined {
   if (principal === undefined) return undefined;
   try {
-    const pkh = parsePkhDidForSpace(principal);
-    return pkh === null ? undefined : makePkhSpaceId(pkh.address, pkh.chainId, "secrets");
+    const pkh = nodeSdk.parsePkhDid(principal);
+    return pkh === null ? undefined : nodeSdk.makePkhSpaceId(pkh.address, pkh.chainId, "secrets");
   } catch {
     return undefined;
   }
-}
-
-function parsePkhDidForSpace(did: string): { address: string; chainId: number } | null {
-  const match = did.match(/^did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40})$/);
-  return match === null
-    ? null
-    : { chainId: Number(match[1]), address: match[2]! };
-}
-
-function makePkhSpaceId(address: string, chainId: number, name: string): string {
-  return `tinycloud:pkh:eip155:${chainId}:${address.startsWith("0x")
-    ? `0x${address.slice(2).toLowerCase()}`
-    : address.toLowerCase()}:${name}`;
 }
 
 function normalizeSession(
