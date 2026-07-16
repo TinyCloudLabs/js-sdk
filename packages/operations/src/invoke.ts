@@ -74,10 +74,29 @@ export async function invokeOperationWithLocalAuthorityRetry(
   invocationTarget: InvocationTarget,
   unknownInput: unknown,
 ): Promise<OperationResult<unknown>> {
+  const target = normalizeInvocationTarget(invocationTarget);
+  if (target === undefined) {
+    return errorResult(
+      { operationId, operationVersion },
+      unresolvedContextSummary(),
+      operationError("INPUT_INVALID", "The invocation target is invalid."),
+    );
+  }
+  if (typeof target.privateKey !== "string" || target.privateKey.length === 0) {
+    return errorResult(
+      { operationId, operationVersion },
+      unresolvedContextSummary(target),
+      operationError(
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "Local authority retry requires an explicit private key.",
+      ),
+    );
+  }
+
   const prepared = await prepareInvocation(
     operationId,
     operationVersion,
-    invocationTarget,
+    target,
     unknownInput,
   );
   if (isPreparedError(prepared)) return prepared.result;
@@ -115,10 +134,20 @@ export async function invokeOperationWithLocalAuthorityRetry(
       ),
     );
   }
-  if (
-    planned === undefined ||
-    !isExactLocalSecretsGetPlan(prepared, planned, operationContext)
-  ) {
+  const planStatus = planned === undefined
+    ? "invalid"
+    : isExactLocalSecretsGetPlan(prepared, planned, operationContext);
+  if (planStatus === "ineligible") {
+    return errorResult(
+      prepared.operation,
+      operationContext.summary,
+      operationError(
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "The explicit private key cannot authorize the requested owner space.",
+      ),
+    );
+  }
+  if (planStatus !== "valid") {
     return errorResult(
       prepared.operation,
       operationContext.summary,
@@ -130,16 +159,17 @@ export async function invokeOperationWithLocalAuthorityRetry(
   }
 
   const first = await executePreparedInvocation(prepared, { deferAuthorityRequest: true });
+  if (first.status !== "authority_required") {
+    return first;
+  }
   if (
-    first.status !== "authority_required" ||
-    invocationTarget.privateKey === undefined ||
     operationContext.summary.posture !== "local-owner-key" ||
     !requirementsBelongToAuthenticatedOwner(
       first.missing as unknown as PermissionEntry[],
       operationContext.summary.space,
     )
   ) {
-    return first;
+    return localAuthorityFailure(prepared);
   }
 
   try {
@@ -148,7 +178,9 @@ export async function invokeOperationWithLocalAuthorityRetry(
         permissions: PermissionEntry[],
       ) => Promise<unknown>;
     }).grantRuntimePermissions;
-    if (typeof grantRuntimePermissions !== "function") return first;
+    if (typeof grantRuntimePermissions !== "function") {
+      return localAuthorityFailure(prepared);
+    }
     await grantRuntimePermissions.call(
       operationContext.runtime.node,
       first.missing as unknown as PermissionEntry[],
@@ -174,10 +206,13 @@ export async function invokeOperationWithLocalAuthorityRetry(
         granted: refreshedGranted,
       },
     };
-    return executePreparedInvocation({
+    const retry = await executePreparedInvocation({
       ...prepared,
       runtimeResolution: { ok: true, context: retryContext },
     }, { deferAuthorityRequest: true });
+    return retry.status === "authority_required"
+      ? localAuthorityFailure(prepared)
+      : retry;
   } catch {
     return localAuthorityFailure(prepared);
   }
@@ -494,6 +529,39 @@ async function executePreparedInvocation(
             internalOperationError(),
           );
         }
+        if (options.deferAuthorityRequest) {
+          try {
+            const request = buildPermissionRequestArtifact({
+              profile: runtimeContext.summary.profile,
+              host: runtimeContext.summary.host,
+              sessionDid: runtimeContext.summary.sessionDid!,
+              posture: runtimeContext.summary.posture,
+              operatorType: runtimeContext.summary.operatorType ?? "human",
+              ...(runtimeContext.summary.ownerDid === undefined
+                ? {}
+                : { ownerDid: runtimeContext.summary.ownerDid }),
+              ...(runtimeContext.summary.space === undefined
+                ? {}
+                : { spaceId: runtimeContext.summary.space }),
+              missing: hinted as unknown as PermissionEntry[],
+            });
+            return authorityRequiredResult(
+              operation,
+              runtimeResolution.context.summary,
+              parsedInput.data,
+              request,
+              hinted,
+              runtimeContext.runtime.node,
+              outcome.requiresCallerInput ?? false,
+            );
+          } catch {
+            return errorResult(
+              operation,
+              runtimeResolution.context.summary,
+              internalOperationError(),
+            );
+          }
+        }
         const authority = await persistAuthorityRequest(
           runtimeContext,
           hinted,
@@ -803,12 +871,12 @@ function isExactLocalSecretsGetPlan(
   prepared: Exclude<PreparedInvocation, { status: "error" }>,
   planned: readonly CapabilityRequirement[],
   context: RuntimeOperationContext,
-): boolean {
+): "valid" | "ineligible" | "invalid" {
   if (
     prepared.definition.id !== "tinycloud.secrets.get" ||
     prepared.definition.version !== 1 ||
     JSON.stringify(prepared.definition.effects) !== JSON.stringify(["read", "local_write"])
-  ) return false;
+  ) return "invalid";
 
   const resolveSpace = operationSpaceResolver(context.runtime.node, context.summary.space);
   let reference;
@@ -819,23 +887,27 @@ function isExactLocalSecretsGetPlan(
       context.summary.space,
     );
   } catch {
-    return false;
+    return "invalid";
   }
   const canonicalPlan = canonicalizeOperationCapabilities(
     planned as unknown as PermissionEntry[],
     resolveSpace,
   );
-  if (canonicalPlan.length !== 2) return false;
+  if (canonicalPlan.length !== 2) return "invalid";
   const kv = canonicalPlan.find((permission) => permission.service === "tinycloud.kv");
   const decrypt = canonicalPlan.find((permission) => permission.service === "tinycloud.encryption");
-  if (kv === undefined || decrypt === undefined || canonicalPkhOwner(kv.space) === undefined) return false;
-  if (canonicalPkhOwner(kv.space) !== canonicalPkhOwner(context.summary.space)) return false;
+  if (kv === undefined || decrypt === undefined) return "invalid";
+  const requestedOwner = canonicalPkhOwner(kv.space);
+  const authenticatedOwner = canonicalPkhOwner(context.summary.space);
+  if (requestedOwner === undefined || authenticatedOwner === undefined || requestedOwner !== authenticatedOwner) {
+    return "ineligible";
+  }
   if (JSON.stringify(kv) !== JSON.stringify({
     service: "tinycloud.kv",
     space: resolveSpace(reference.space),
     path: reference.permissionPath,
     actions: ["tinycloud.kv/get"],
-  })) return false;
+  })) return "invalid";
   if (
     JSON.stringify(decrypt) !== JSON.stringify({
       service: "tinycloud.encryption",
@@ -844,8 +916,8 @@ function isExactLocalSecretsGetPlan(
     }) ||
     typeof decrypt.path !== "string" ||
     !decrypt.path.startsWith("urn:tinycloud:encryption:")
-  ) return false;
-  return true;
+  ) return "invalid";
+  return "valid";
 }
 
 function refreshLiveRuntimeAuthority(
@@ -857,86 +929,29 @@ function refreshLiveRuntimeAuthority(
   const candidate = node as {
     hasRuntimePermissions?: (permissions: PermissionEntry[]) => unknown;
     getVerifiedSessionCapabilities?: () => unknown;
-    getRuntimePermissionDelegations?: (permissions?: PermissionEntry[]) => unknown;
+    getEffectiveRuntimePermissionEntries?: () => unknown;
   };
   if (typeof candidate.hasRuntimePermissions !== "function") return undefined;
   if (candidate.hasRuntimePermissions([...requested]) !== true) return undefined;
   if (typeof candidate.getVerifiedSessionCapabilities !== "function" ||
-      typeof candidate.getRuntimePermissionDelegations !== "function") return undefined;
+      typeof candidate.getEffectiveRuntimePermissionEntries !== "function") return undefined;
 
   const base = candidate.getVerifiedSessionCapabilities();
-  const delegations = candidate.getRuntimePermissionDelegations([...requested]);
-  if (!Array.isArray(base) || !Array.isArray(delegations)) return undefined;
-  const activatedByDelegation = delegations.map(runtimeDelegationPermissions);
-  if (activatedByDelegation.some((permissions) => permissions === undefined)) return undefined;
-  const activated = activatedByDelegation.flatMap((permissions) => permissions!);
+  const activated = candidate.getEffectiveRuntimePermissionEntries();
+  if (!Array.isArray(base) || !Array.isArray(activated)) return undefined;
   const exactActivated = validateExactCapabilities(activated);
   if (
     exactActivated === undefined ||
     !isExactCapabilityMemberSubset(exactActivated, planned, resolveSpace) ||
     !isExactCapabilityMemberSubset(requested, exactActivated, resolveSpace)
   ) return undefined;
-  return canonicalizeOperationCapabilities(
+  const combined = canonicalizeOperationCapabilities(
     [...base, ...exactActivated],
     resolveSpace,
   );
-}
-
-function runtimeDelegationPermissions(value: unknown): PermissionEntry[] | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const delegation = value as {
-    resources?: unknown;
-    spaceId?: unknown;
-    path?: unknown;
-    actions?: unknown;
-  };
-  if ("resources" in delegation) {
-    if (!Array.isArray(delegation.resources) || delegation.resources.length === 0) return undefined;
-    const permissions = delegation.resources.map((resource): PermissionEntry | undefined => {
-      if (typeof resource !== "object" || resource === null) return undefined;
-      const entry = resource as Record<string, unknown>;
-      if (
-        Object.keys(entry).some((key) => !new Set(["service", "space", "path", "actions", "caveats"]).has(key)) ||
-        typeof entry.service !== "string" ||
-        typeof entry.space !== "string" ||
-        typeof entry.path !== "string" ||
-        !Array.isArray(entry.actions) ||
-        !entry.actions.every((action) => typeof action === "string")
-      ) return undefined;
-      if ("caveats" in entry) return undefined;
-      const service = entry.service === "kv" ? "tinycloud.kv" :
-        entry.service === "encryption" ? "tinycloud.encryption" : entry.service;
-      return {
-        service,
-        ...(service === "tinycloud.encryption" ? {} :
-          { space: entry.space }),
-        path: entry.path,
-        actions: [...entry.actions] as string[],
-      };
-    });
-    return permissions.every((permission) => permission !== undefined)
-      ? permissions as PermissionEntry[]
-      : undefined;
-  }
-  if (
-    typeof delegation.spaceId !== "string" ||
-    typeof delegation.path !== "string" ||
-    !Array.isArray(delegation.actions) ||
-    !delegation.actions.every((action) => typeof action === "string")
-  ) return undefined;
-  return (delegation.actions as string[]).map((action) => {
-    const service = action.startsWith("tinycloud.encryption/")
-      ? "tinycloud.encryption"
-      : action.startsWith("tinycloud.kv/")
-      ? "tinycloud.kv"
-      : action.split("/", 1)[0]!;
-    return {
-      service,
-      ...(service === "tinycloud.encryption" ? {} : { space: delegation.spaceId as string }),
-      path: delegation.path as string,
-      actions: [action],
-    };
-  });
+  return evaluateOperationAuthority(combined, planned as unknown as PermissionEntry[], resolveSpace).satisfied
+    ? combined
+    : undefined;
 }
 
 function localAuthorityFailure(

@@ -3,8 +3,10 @@ import { CaveatedDelegationUnsupportedError as SdkCoreError } from "@tinycloud/s
 import { parsePermissionHint } from "@tinycloud/sdk-services";
 
 import { CaveatedDelegationUnsupportedError as CoreError } from "./core";
+import { TinyCloudNode as CoreTinyCloudNode } from "./core";
 import {
   CaveatedDelegationUnsupportedError as RootError,
+  TinyCloudNode as RootTinyCloudNode,
   type SecretPermissionHint,
   type SecretReadResult,
 } from "./index";
@@ -24,4 +26,11 @@ test("exposes the validated secret permission-hint API", () => {
   const result: SecretReadResult = { status: "permission_required", hint };
   expect(parsePermissionHint(hint)).toEqual(hint);
   expect(result.status).toBe("permission_required");
+});
+
+test("exposes the effective runtime capability contract from root and core", () => {
+  expect(RootTinyCloudNode.prototype.getEffectiveRuntimePermissionEntries).toBe(
+    CoreTinyCloudNode.prototype.getEffectiveRuntimePermissionEntries,
+  );
+  expect(typeof RootTinyCloudNode.prototype.getEffectiveRuntimePermissionEntries).toBe("function");
 });

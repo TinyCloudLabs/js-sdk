@@ -309,6 +309,32 @@ function nextResult<T>(
 }
 
 mock.module("@tinycloud/node-sdk", () => ({
+  canonicalizeAddress: (address: string) => address.toLowerCase(),
+  makePkhSpaceId: (address: string, chainId: number, name: string) =>
+    `tinycloud:pkh:eip155:${chainId}:${address.toLowerCase()}:${name}`,
+  parsePkhDid: (did: string) => {
+    const match = /^did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40})$/.exec(did);
+    return match === null
+      ? null
+      : {
+        method: "pkh",
+        namespace: "eip155",
+        chainId: Number(match[1]),
+        address: match[2]!.toLowerCase(),
+      };
+  },
+  parseSpaceUri: (space: string) => {
+    const match = /^tinycloud:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):(.+)$/.exec(space);
+    if (match !== null) {
+      return {
+        owner: `did:pkh:eip155:${match[1]}:${match[2]!.toLowerCase()}`,
+        name: match[3]!,
+        chainId: match[1]!,
+        address: match[2]!.toLowerCase(),
+      };
+    }
+    return /^[a-zA-Z0-9_-]+$/.test(space) ? { owner: "", name: space } : null;
+  },
   NodeWasmBindings: class NodeWasmBindings {
     parseRecapFromSiwe(): unknown[] {
       return [];

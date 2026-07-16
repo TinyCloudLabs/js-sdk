@@ -843,6 +843,69 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect(node.hasRuntimePermissions([permission])).toBe(true);
   });
 
+  test("projects exact effective runtime entries, preserves caveats, and prunes expiry", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const spaceId = `tinycloud:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F:secrets`;
+    const caveats = [{ tenant: "alpha" }];
+    (node as any).runtimePermissionGrants = [
+      {
+        session: {},
+        delegation: {},
+        operations: [{
+          spaceId: "secrets",
+          service: "kv",
+          path: "vault/secrets/API_KEY",
+          action: "tinycloud.kv/get",
+          caveats,
+        }, {
+          spaceId: "secrets",
+          service: "kv",
+          path: "vault/secrets/API_KEY",
+          action: "tinycloud.kv/put",
+          caveats,
+        }, {
+          resource: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+          service: "encryption",
+          path: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+          action: "tinycloud.encryption/decrypt",
+        }],
+        expiresAt: new Date(Date.now() + 3_600_000),
+        provenance: "runtime",
+      },
+      {
+        session: {},
+        delegation: {},
+        operations: [{
+          spaceId,
+          service: "kv",
+          path: "vault/secrets/EXPIRED",
+          action: "tinycloud.kv/get",
+        }],
+        expiresAt: new Date(Date.now() - 1),
+        provenance: "runtime",
+      },
+    ];
+
+    expect(node.getEffectiveRuntimePermissionEntries()).toEqual([
+      {
+        service: "tinycloud.encryption",
+        path: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+        actions: ["tinycloud.encryption/decrypt"],
+      },
+      {
+        service: "tinycloud.kv",
+        space: spaceId,
+        path: "vault/secrets/API_KEY",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+        caveats,
+      },
+    ]);
+    expect((node as any).runtimePermissionGrants).toHaveLength(1);
+  });
+
   test("can reinstall a runtime delegation targeted at fragmentless session DID", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,

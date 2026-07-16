@@ -105,6 +105,7 @@ import {
   CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
+  canonicalizeRecapCaveats,
   recapCaveatsEqual,
   expandPermissionEntries as expandPermissionEntriesCore,
   isCapabilitySubset,
@@ -114,6 +115,7 @@ import {
   type AbilitiesMap,
   resourceCapabilitiesToAbilitiesMap,
   SERVICE_LONG_TO_SHORT,
+  SERVICE_SHORT_TO_LONG,
   KV,
   SQL,
   DUCKDB,
@@ -4147,6 +4149,74 @@ export class TinyCloudNode {
     const expanded = this.expandPermissionEntries(permissions);
     return this.findRuntimeGrantsForPermissionEntries(expanded, session).map(
       (grant) => grant.delegation,
+    );
+  }
+
+  /**
+   * Return the effective capabilities of installed runtime grants.
+   *
+   * The result is projected from the SDK's activated, expiry-pruned grant
+   * operations rather than from PortableDelegation transport metadata. Base
+   * session authority is intentionally omitted; callers that need the full
+   * live authority must combine this with {@link getVerifiedSessionCapabilities}.
+   */
+  getEffectiveRuntimePermissionEntries(): PermissionEntry[] {
+    const session = this.currentTinyCloudSession();
+    if (!session) return [];
+
+    this.pruneExpiredRuntimePermissionGrants();
+    const grouped = new Map<string, PermissionEntry>();
+    for (const grant of this.runtimePermissionGrants) {
+      if (grant.provenance === "primary") continue;
+      for (const operation of grant.operations) {
+        const service = SERVICE_SHORT_TO_LONG[operation.service];
+        if (service === undefined || typeof operation.path !== "string" ||
+          typeof operation.action !== "string") {
+          continue;
+        }
+
+        let space: string | undefined;
+        if (service !== "tinycloud.encryption") {
+          if (typeof operation.spaceId !== "string") continue;
+          try {
+            space = this.resolvePermissionSpace(operation.spaceId, session);
+          } catch {
+            continue;
+          }
+        }
+
+        const caveats = operation.caveats === undefined || operation.caveats.length === 0
+          ? undefined
+          : cloneRecapCaveats(operation.caveats);
+        const identity = JSON.stringify({
+          service,
+          ...(space === undefined ? {} : { space }),
+          path: operation.path,
+          caveats: canonicalizeRecapCaveats(caveats),
+        });
+        const existing = grouped.get(identity);
+        if (existing === undefined) {
+          grouped.set(identity, {
+            service,
+            ...(space === undefined ? {} : { space }),
+            path: operation.path,
+            actions: [operation.action],
+            ...(caveats === undefined ? {} : { caveats }),
+          });
+          continue;
+        }
+        if (!existing.actions.includes(operation.action)) {
+          existing.actions.push(operation.action);
+          existing.actions.sort();
+        }
+      }
+    }
+
+    return [...grouped.values()].sort((left, right) =>
+      left.service.localeCompare(right.service) ||
+      (left.space ?? "").localeCompare(right.space ?? "") ||
+      left.path.localeCompare(right.path) ||
+      left.actions.join("\u0000").localeCompare(right.actions.join("\u0000")),
     );
   }
 

@@ -321,9 +321,8 @@ async function invokeCanonicalSecretGet(params: {
   );
   const first = await invoke();
   if (first.status !== "authority_required") return first;
-  // Explicit keys use the operations-owned local acquisition/retry path. If
-  // its exact request is cross-owner, preserve the authority result rather
-  // than falling back to the persisted profile's OpenKey posture.
+  // The operations-owned explicit-key path should never return an authority
+  // request. Keep this guard for the legacy no-key path only.
   if (auth?.privateKey !== undefined) return first;
 
   const profile = await ProfileManager.getProfile(params.ctx.profile);

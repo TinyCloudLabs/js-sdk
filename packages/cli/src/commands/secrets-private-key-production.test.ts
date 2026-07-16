@@ -28,6 +28,75 @@ test("production secrets get accepts flag and environment private-key overrides 
   }
 });
 
+test("local authority helper requires an explicit key before runtime preparation", async () => {
+  home = await mkdtemp(`${tmpdir()}/tinycloud-cli-private-key-required-`);
+  process.env.TC_HOME = home;
+  const result = await invokeSecretsGetWithLocalAuthorityRetry(
+    { profile: "missing", host: "https://node.invalid", allowOwnerProfile: true },
+    { name: "MISSING_EXPLICIT_KEY" },
+  );
+  expect(result).toMatchObject({
+    status: "error",
+    error: { code: "PROFILE_POSTURE_NOT_ALLOWED" },
+  });
+  const { authRequestsPath } = await import("@tinycloud/operations/state");
+  await expect(access(authRequestsPath("missing"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("local authority helper converts a missing grant API to NODE_ERROR", async () => {
+  home = await mkdtemp(`${tmpdir()}/tinycloud-cli-private-key-grant-api-`);
+  process.env.TC_HOME = home;
+  const { profileConfigPath, authRequestsPath, writeJsonAtomic } = await import("@tinycloud/operations/state");
+  await writeJsonAtomic(profileConfigPath("probe"), {
+    name: "probe",
+    host: "https://node.invalid",
+    chainId: 1,
+    spaceName: "secrets",
+    spaceId: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000002:secrets",
+    did: "did:pkh:eip155:1:0x0000000000000000000000000000000000000002",
+    posture: "owner-openkey",
+    operatorType: "agent",
+    authMethod: "openkey",
+    createdAt: "2026-07-15T00:00:00.000Z",
+  });
+
+  const originalGrant = TinyCloudNode.prototype.grantRuntimePermissions;
+  const signIn = spyOn(TinyCloudNode.prototype, "signIn").mockImplementation(async function(this: TinyCloudNode) {
+    const node = this as unknown as { _address?: string; _chainId: number };
+    node._address = "0x0000000000000000000000000000000000000002";
+    node._chainId = 1;
+  });
+  const getCapabilities = spyOn(TinyCloudNode.prototype, "getVerifiedSessionCapabilities")
+    .mockReturnValue([]);
+  const network = spyOn(TinyCloudNode.prototype, "getEncryptionNetworkIdForSpace")
+    .mockReturnValue("urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000002:default");
+  const readSecret = spyOn(TinyCloudNode.prototype, "readSecret");
+  Object.defineProperty(TinyCloudNode.prototype, "grantRuntimePermissions", {
+    configurable: true,
+    writable: true,
+    value: undefined,
+  });
+  try {
+    const result = await invokeSecretsGetWithLocalAuthorityRetry(
+      { profile: "probe", host: "https://node.invalid", allowOwnerProfile: true, privateKey: PRIVATE_KEY },
+      { name: "MISSING_GRANT_API" },
+    );
+    expect(result).toMatchObject({ status: "error", error: { code: "NODE_ERROR" } });
+    expect(readSecret).not.toHaveBeenCalled();
+    await expect(access(authRequestsPath("probe"))).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    Object.defineProperty(TinyCloudNode.prototype, "grantRuntimePermissions", {
+      configurable: true,
+      writable: true,
+      value: originalGrant,
+    });
+    signIn.mockRestore();
+    getCapabilities.mockRestore();
+    network.mockRestore();
+    readSecret.mockRestore();
+  }
+});
+
 test("production private-key planning and execution use the authenticated key owner for flag and env", async () => {
   const ownerB = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000002:secrets";
   const capabilities: Array<Record<string, unknown>> = [];
@@ -131,6 +200,10 @@ test("CLI explicit-key acquisition uses one live local-owner runtime for OpenKey
     runtimeGrants.set(this, []);
   });
   const getCapabilities = spyOn(TinyCloudNode.prototype, "getVerifiedSessionCapabilities")
+    .mockImplementation(function(this: TinyCloudNode) {
+      return [...(runtimeGrants.get(this) ?? [])] as never;
+    });
+  const getEffectiveCapabilities = spyOn(TinyCloudNode.prototype, "getEffectiveRuntimePermissionEntries")
     .mockImplementation(function(this: TinyCloudNode) {
       return [...(runtimeGrants.get(this) ?? [])] as never;
     });
@@ -261,6 +334,7 @@ test("CLI explicit-key acquisition uses one live local-owner runtime for OpenKey
   } finally {
     signIn.mockRestore();
     getCapabilities.mockRestore();
+    getEffectiveCapabilities.mockRestore();
     hasRuntimePermissions.mockRestore();
     getRuntimePermissionDelegations.mockRestore();
     grant.mockRestore();
@@ -277,7 +351,7 @@ test("CLI explicit-key acquisition uses one live local-owner runtime for OpenKey
 test("published secrets helper fails closed on unproven, broad, and wrong-owner authority", async () => {
   const ownerA = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets";
   const network = "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000002:default";
-  const modes = ["noop", "partial", "false", "has-throw", "throw", "broad", "ownerless", "unrecognized", "success"] as const;
+  const modes = ["noop", "partial", "false", "has-throw", "throw", "broad", "ownerless", "caveated-flat", "unrecognized", "missing-proof", "retry-hint", "success"] as const;
   let mode: (typeof modes)[number] = "noop";
   const grants = new WeakMap<object, Array<Record<string, unknown>>>();
   let grantCalls = 0;
@@ -293,6 +367,10 @@ test("published secrets helper fails closed on unproven, broad, and wrong-owner 
     .mockImplementation(function(this: TinyCloudNode) {
       return [...(grants.get(this) ?? [])] as never;
     });
+  const getEffectiveCapabilities = spyOn(TinyCloudNode.prototype, "getEffectiveRuntimePermissionEntries")
+    .mockImplementation(function(this: TinyCloudNode) {
+      return mode === "missing-proof" ? undefined as never : [...(grants.get(this) ?? [])] as never;
+    });
   const grant = spyOn(TinyCloudNode.prototype, "grantRuntimePermissions")
     .mockImplementation(async function(this: TinyCloudNode, requested) {
       grantCalls += 1;
@@ -303,6 +381,8 @@ test("published secrets helper fails closed on unproven, broad, and wrong-owner 
         ? { ...permission, path: "vault/secrets/*" }
         : mode === "ownerless" && permission.service === "tinycloud.kv"
         ? Object.fromEntries(Object.entries(permission).filter(([key]) => key !== "space"))
+        : mode === "caveated-flat"
+        ? { ...permission, caveats: [{ tenant: "attacker" }] }
         : mode === "unrecognized"
         ? { ...permission, service: "tinycloud.future" }
         : permission) as Array<Record<string, unknown>>;
@@ -313,7 +393,7 @@ test("published secrets helper fails closed on unproven, broad, and wrong-owner 
     .mockImplementation(function(this: TinyCloudNode, requested) {
       if (mode === "false") return false;
       if (mode === "has-throw") throw new Error("attacker authority detail");
-      if (mode === "broad" || mode === "ownerless" || mode === "unrecognized") return true;
+      if (mode === "broad" || mode === "ownerless" || mode === "caveated-flat" || mode === "unrecognized" || mode === "missing-proof") return true;
       if (mode === "broad") return true;
       const granted = grants.get(this) ?? [];
       return requested.every((permission) => granted.some((candidate) =>
@@ -336,8 +416,19 @@ test("published secrets helper fails closed on unproven, broad, and wrong-owner 
   const networkLookup = spyOn(TinyCloudNode.prototype, "getEncryptionNetworkIdForSpace")
     .mockImplementation(() => network);
   const readSecret = spyOn(TinyCloudNode.prototype, "readSecret")
-    .mockImplementation(async () => {
+    .mockImplementation(async (input) => {
       reads += 1;
+      if (mode === "retry-hint") {
+        return {
+          status: "permission_required",
+          hint: {
+            service: "tinycloud.kv",
+            space: input.space,
+            path: `vault/secrets/${input.name}`,
+            actions: ["tinycloud.kv/get"],
+          },
+        } as never;
+      }
       return { status: "ok", value: "must-not-leak" };
     });
 
@@ -372,7 +463,7 @@ test("published secrets helper fails closed on unproven, broad, and wrong-owner 
       } else {
         expect(result).toMatchObject({ status: "error", error: { code: "NODE_ERROR" } });
         expect(grantCalls).toBe(1);
-        expect(reads).toBe(0);
+        expect(reads).toBe(currentMode === "retry-hint" ? 1 : 0);
       }
       await expect(access(authRequestsPath("probe"))).rejects.toMatchObject({ code: "ENOENT" });
       await rm(probeHome, { recursive: true, force: true });
@@ -399,7 +490,7 @@ test("published secrets helper fails closed on unproven, broad, and wrong-owner 
       { profile: "probe", host: "https://node.invalid", allowOwnerProfile: true, privateKey: PRIVATE_KEY },
       { name: "HELPER_PROBE_CANARY", space: ownerA },
     );
-    expect(wrongOwner).toMatchObject({ status: "error", error: { code: "PERMISSION_HINT_INVALID" } });
+    expect(wrongOwner).toMatchObject({ status: "error", error: { code: "PROFILE_POSTURE_NOT_ALLOWED" } });
     expect(grantCalls).toBe(0);
     expect(reads).toBe(0);
     const arbitrarySpace = await invokeSecretsGetWithLocalAuthorityRetry(
@@ -409,7 +500,7 @@ test("published secrets helper fails closed on unproven, broad, and wrong-owner 
         space: "tinycloud:did:web:EXAMPLE.com:eip155:1:0xABCDEF:Vault",
       },
     );
-    expect(arbitrarySpace).toMatchObject({ status: "error", error: { code: "PERMISSION_HINT_INVALID" } });
+    expect(arbitrarySpace).toMatchObject({ status: "error", error: { code: "PROFILE_POSTURE_NOT_ALLOWED" } });
     expect(grantCalls).toBe(0);
     expect(reads).toBe(0);
     await rm(wrongOwnerHome, { recursive: true, force: true });
@@ -417,6 +508,7 @@ test("published secrets helper fails closed on unproven, broad, and wrong-owner 
     const futureAttempt = await (invokeSecretsGetWithLocalAuthorityRetry as unknown as (...args: unknown[]) => Promise<unknown>)
       ("tinycloud.status.get", 1, {}, {});
     expect(futureAttempt).toMatchObject({ status: "error", error: { code: "INPUT_INVALID" } });
+    expect(getRuntimePermissionDelegations).not.toHaveBeenCalled();
   } finally {
     delete process.env.TC_HOME;
     signIn.mockRestore();
@@ -424,6 +516,7 @@ test("published secrets helper fails closed on unproven, broad, and wrong-owner 
     grant.mockRestore();
     hasRuntimePermissions.mockRestore();
     getRuntimePermissionDelegations.mockRestore();
+    getEffectiveCapabilities.mockRestore();
     networkLookup.mockRestore();
     readSecret.mockRestore();
   }
