@@ -40,6 +40,8 @@ function makeWasmBindings(): IWasmBindings {
       delegationHeader: { Authorization: "c2hhcmUtYXV0aC1oZWFkZXI" },
     })),
     ensureEip55: (address: string) => address,
+    makeSpaceId: (address: string, chainId: number, name: string) =>
+      `tinycloud:pkh:eip155:${chainId}:${address}:${name}`,
   } as unknown as IWasmBindings;
 }
 
