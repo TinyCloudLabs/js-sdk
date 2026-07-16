@@ -1,5 +1,25 @@
 # @tinycloudlabs/web-sdk
 
+## 2.7.0-beta.4
+
+### Patch Changes
+
+- d6d5ef1: Restore persisted sessions with their original private Ed25519 signer. Verify the signed SIWE, ReCap, Cacao header/CID, address, chain, session DID, and expiry before installing authority; atomically replace the auth/core/service host context while retaining every live secondary signer. Retired service graphs abort outstanding work and cannot reuse old encryption authority. Browser restore now preserves spaces and policy expiry, and rejected restores leave persisted storage untouched.
+- cd8c11f: Add an explicit-space classified secret-read API that preserves safe KV,
+  envelope, decrypt, and payload failure phases without changing legacy secret
+  reads.
+- Updated dependencies [f5b1c75]
+- Updated dependencies [b982b90]
+- Updated dependencies [160c16e]
+- Updated dependencies [d6d5ef1]
+- Updated dependencies [8777823]
+- Updated dependencies [cd8c11f]
+- Updated dependencies [1606a6f]
+- Updated dependencies [96b9e21]
+  - @tinycloud/sdk-core@2.7.0-beta.4
+  - @tinycloud/node-sdk@2.7.0-beta.4
+  - @tinycloud/web-sdk-wasm@1.7.5-beta.0
+
 ## 2.7.0-beta.3
 
 ### Minor Changes

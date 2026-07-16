@@ -1,5 +1,11 @@
 # @tinycloudlabs/web-sdk-wasm
 
+## 1.7.5-beta.0
+
+### Patch Changes
+
+- d6d5ef1: Restore persisted sessions with their original private Ed25519 signer. Verify the signed SIWE, ReCap, Cacao header/CID, address, chain, session DID, and expiry before installing authority; atomically replace the auth/core/service host context while retaining every live secondary signer. Retired service graphs abort outstanding work and cannot reuse old encryption authority. Browser restore now preserves spaces and policy expiry, and rejected restores leave persisted storage untouched.
+
 ## 1.7.4
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @tinycloud/bootstrap
 
+## 2.6.0-beta.1
+
+### Patch Changes
+
+- 940ff1d: Bundle the bootstrap package's internal graph so its advertised CommonJS entrypoints load on supported Node 20 runtimes.
+- b982b90: Declare Node 20 or newer as the supported runtime floor for the complete published SDK and Operations graph, including the CLI and Node WASM bindings.
+
 ## 2.6.0-beta.0
 
 ### Minor Changes

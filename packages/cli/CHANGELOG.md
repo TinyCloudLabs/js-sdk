@@ -1,5 +1,43 @@
 # @tinycloud/cli
 
+## 0.7.7-beta.7
+
+### Patch Changes
+
+- 5c32147: Add the I5 Commander coverage ledger and deterministic registration check,
+  cross-surface canonical-envelope fixtures, generated coverage references,
+  source-boundary checks, and Node 20 packed-artifact conformance gates. MCP
+  publication remains deferred while the SDK v2 beta gate is `unpublishable-defer`.
+- a5b557a: Resolve explicit-key secret spaces against the authenticated owner and keep
+  local-owner acquisition and its single retry on one live runtime session.
+- 2721f9d: Add the experimental operations package foundation and depend on its exact prerelease from the CLI.
+- f5b1c75: Repair I2 release artifacts: bundle ESM-only multiformats dependencies for Node CommonJS consumers, preserve safe delegation mismatch details, and publish the canonical CLI auth import route.
+- b982b90: Declare Node 20 or newer as the supported runtime floor for the complete published SDK and Operations graph, including the CLI and Node WASM bindings.
+- 206533a: Route request-bound v1 delegation imports through TinyCloud operations while retaining legacy auth-import compatibility paths.
+- abe8083: Implement the canonical `tinycloud.secrets.get` operation and route `tc secrets get` through it while preserving Commander rendering and owner authorization behavior.
+- Updated dependencies [492a656]
+- Updated dependencies [940ff1d]
+- Updated dependencies [5172cf9]
+- Updated dependencies [5c32147]
+- Updated dependencies [a5b557a]
+- Updated dependencies [2721f9d]
+- Updated dependencies [f5b1c75]
+- Updated dependencies [39cc055]
+- Updated dependencies [b982b90]
+- Updated dependencies [96b9e21]
+- Updated dependencies [160c16e]
+- Updated dependencies [d6d5ef1]
+- Updated dependencies [8777823]
+- Updated dependencies [abe8083]
+- Updated dependencies [cd8c11f]
+- Updated dependencies [1606a6f]
+- Updated dependencies [c62f72a]
+- Updated dependencies [1c73181]
+- Updated dependencies [96b9e21]
+  - @tinycloud/operations@0.1.0-beta.1
+  - @tinycloud/node-sdk-wasm@1.7.5-beta.0
+  - @tinycloud/node-sdk@2.7.0-beta.4
+
 ## 0.7.7-beta.6
 
 ### Patch Changes

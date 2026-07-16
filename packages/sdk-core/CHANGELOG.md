@@ -1,5 +1,25 @@
 # @tinycloudlabs/sdk-core
 
+## 2.7.0-beta.4
+
+### Patch Changes
+
+- f5b1c75: Repair I2 release artifacts: bundle ESM-only multiformats dependencies for Node CommonJS consumers, preserve safe delegation mismatch details, and publish the canonical CLI auth import route.
+- b982b90: Declare Node 20 or newer as the supported runtime floor for the complete published SDK and Operations graph, including the CLI and Node WASM bindings.
+- 160c16e: Canonicalize JSON object keys using RFC 8785 raw UTF-16 code-unit ordering,
+  including astral-plane keys. Update operations' exact sdk-core dependency at
+  release so retry digests use the corrected canonicalization.
+- d6d5ef1: Restore persisted sessions with their original private Ed25519 signer. Verify the signed SIWE, ReCap, Cacao header/CID, address, chain, session DID, and expiry before installing authority; atomically replace the auth/core/service host context while retaining every live secondary signer. Retired service graphs abort outstanding work and cannot reuse old encryption authority. Browser restore now preserves spaces and policy expiry, and rejected restores leave persisted storage untouched.
+- cd8c11f: Add an explicit-space classified secret-read API that preserves safe KV,
+  envelope, decrypt, and payload failure phases without changing legacy secret
+  reads.
+- Updated dependencies [940ff1d]
+- Updated dependencies [b982b90]
+- Updated dependencies [d6d5ef1]
+- Updated dependencies [cd8c11f]
+  - @tinycloud/bootstrap@2.6.0-beta.1
+  - @tinycloud/sdk-services@2.7.0-beta.4
+
 ## 2.7.0-beta.3
 
 ### Minor Changes

@@ -1,5 +1,31 @@
 # @tinycloudlabs/node-sdk
 
+## 2.7.0-beta.4
+
+### Minor Changes
+
+- cd8c11f: Add an explicit-space classified secret-read API that preserves safe KV,
+  envelope, decrypt, and payload failure phases without changing legacy secret
+  reads.
+- 1606a6f: Expose exact, expiry-pruned effective capabilities from activated runtime grants.
+
+### Patch Changes
+
+- f5b1c75: Repair I2 release artifacts: bundle ESM-only multiformats dependencies for Node CommonJS consumers, preserve safe delegation mismatch details, and publish the canonical CLI auth import route.
+- b982b90: Declare Node 20 or newer as the supported runtime floor for the complete published SDK and Operations graph, including the CLI and Node WASM bindings.
+- d6d5ef1: Restore persisted sessions with their original private Ed25519 signer. Verify the signed SIWE, ReCap, Cacao header/CID, address, chain, session DID, and expiry before installing authority; atomically replace the auth/core/service host context while retaining every live secondary signer. Retired service graphs abort outstanding work and cannot reuse old encryption authority. Browser restore now preserves spaces and policy expiry, and rejected restores leave persisted storage untouched.
+- 8777823: Add a CID-bound `activateValidatedRuntimeDelegation` helper that validates and installs compact UCAN runtime delegations.
+- 96b9e21: Add `TinyCloudNode#getVerifiedSessionCapabilities` for the authenticated session's signed ReCap authority.
+- Updated dependencies [940ff1d]
+- Updated dependencies [f5b1c75]
+- Updated dependencies [b982b90]
+- Updated dependencies [160c16e]
+- Updated dependencies [d6d5ef1]
+- Updated dependencies [cd8c11f]
+  - @tinycloud/node-sdk-wasm@1.7.5-beta.0
+  - @tinycloud/sdk-core@2.7.0-beta.4
+  - @tinycloud/sdk-services@2.7.0-beta.4
+
 ## 2.7.0-beta.3
 
 ### Minor Changes
