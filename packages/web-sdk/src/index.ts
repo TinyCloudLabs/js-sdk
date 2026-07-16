@@ -6,6 +6,7 @@ export {
   SessionRestoreResult,
   SessionRestoreStatus,
 } from "./modules/tcw";
+export type { SecretReadInput, SecretReadResult } from "@tinycloud/node-sdk";
 
 // Browser Adapters
 export {
@@ -222,6 +223,7 @@ export {
   type VaultListOptions,
   type VaultGrantOptions,
   type VaultEntry,
+  type VaultNetworkReadResult,
   type VaultError,
   type ISecretsService,
   type SecretPayload,
@@ -233,6 +235,7 @@ export {
 // Re-export encryption service types and helpers from sdk-core
 export {
   EncryptionService,
+  DecryptTransportResponseError,
   canonicalizeNetworkId,
   parseNetworkId,
   parseCanonicalNetworkId,

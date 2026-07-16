@@ -3,6 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  PROFILE_LOCK_CHILD_NORMAL_EXIT_TIMEOUT_MS,
+  PROFILE_LOCK_CHILD_SIGKILL_TIMEOUT_MS,
+  PROFILE_LOCK_CHILD_SIGTERM_TIMEOUT_MS,
+  PROFILE_LOCK_CHILD_STDERR_CLOSE_TIMEOUT_MS,
+  PROFILE_LOCK_TEST_TIMEOUT_MS,
   signalProfileLockProtocol,
   waitForProfileLockProtocol,
 } from "./test-support/profile-lock-protocol.js";
@@ -10,16 +15,22 @@ import { createAuthRuntimeFixture } from "../test-support/auth-runtime.js";
 
 const homes: string[] = [];
 const children: ReturnType<typeof Bun.spawn>[] = [];
+const IMPORT_SESSION_JWK = {
+  kid: "default",
+  kty: "OKP",
+  crv: "Ed25519",
+  x: "_-blweCZLIwOuj1KBbrF7bGGw81NLwRzmrvfi7N46cA",
+  d: "scYXUfcu6A0rf1QDt7ne3yT-UmALHjnMEFB9GnKiJqE",
+};
+const IMPORT_SESSION_VERIFICATION_METHOD =
+  "did:key:z6MkwgCDSaxUVbFokAd689S3EY5b3sxN3Ub22hZMdLBcDKPm#z6MkwgCDSaxUVbFokAd689S3EY5b3sxN3Ub22hZMdLBcDKPm";
 
 afterEach(async () => {
-  await Promise.all(children.splice(0).map(async (child) => {
-    if (child.exitCode === null) child.kill("SIGTERM");
-    await child.exited;
-  }));
+  await Promise.all(children.splice(0).map(terminateChild));
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
 
-test("tc auth import waits on the operations lock and preserves both shared stores", async () => {
+test("tc auth import contends for the operations lock and preserves auth requests", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-legacy-cli-concurrency-"));
   homes.push(home);
   const profile = "delegate";
@@ -47,7 +58,7 @@ test("tc auth import waits on the operations lock and preserves both shared stor
     releasePath,
   ], env);
   children.push(holder);
-  await waitForProfileLockProtocol(readyPath, "the operations writer to hold the profile lock");
+  await waitForChildSignal(holder, readyPath, "the operations writer to hold the profile lock");
 
   const legacy = Bun.spawn([
     process.execPath,
@@ -67,7 +78,10 @@ test("tc auth import waits on the operations lock and preserves both shared stor
   // The signal is emitted only after the real CLI's lock mkdir saw the
   // holder's lock directory. This prevents a slow CLI startup from turning
   // the test back into a merely concurrent launch.
-  await waitForContention(legacy, contendedPath, "tc auth import to contend on the profile lock");
+  // The production 2s acquisition limit intentionally remains unchanged:
+  // the observed Linux delay was before this signal, while this test still
+  // proves the real post-contention release and next lock poll fit that limit.
+  await waitForChildSignal(legacy, contendedPath, "tc auth import to contend on the profile lock");
   expect(legacy.exitCode).toBeNull();
   await signalProfileLockProtocol(releasePath);
 
@@ -77,11 +91,9 @@ test("tc auth import waits on the operations lock and preserves both shared stor
     .sort((left, right) => left.requestId.localeCompare(right.requestId));
   expect(records).toEqual([heldRequest, importedRequest]);
   expect(await readStoreMetadata(home, profile, "auth-requests")).toEqual({ formatVersion: 1 });
+}, { timeout: PROFILE_LOCK_TEST_TIMEOUT_MS });
 
-  await verifyAdditionalDelegationContention();
-});
-
-async function verifyAdditionalDelegationContention(): Promise<void> {
+test("tc auth import contends for the operations lock and preserves additional delegations", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-additional-delegation-concurrency-"));
   homes.push(home);
   const profile = "delegate";
@@ -121,7 +133,7 @@ async function verifyAdditionalDelegationContention(): Promise<void> {
       releasePath,
     ], env);
     children.push(holder);
-    await waitForProfileLockProtocol(readyPath, "the operations writer to hold the profile lock");
+    await waitForChildSignal(holder, readyPath, "the operations writer to hold the profile lock");
 
     const writer = Bun.spawn([
       process.execPath,
@@ -138,7 +150,7 @@ async function verifyAdditionalDelegationContention(): Promise<void> {
     });
     children.push(writer);
 
-    await waitForContention(writer, contendedPath, "tc auth import to contend on the profile lock");
+    await waitForChildSignal(writer, contendedPath, "tc auth import to contend on the profile lock");
     expect(writer.exitCode).toBeNull();
     await signalProfileLockProtocol(releasePath);
 
@@ -175,32 +187,76 @@ function spawn(command: string[], env: Record<string, string | undefined>) {
 
 async function expectChildExit(child: ReturnType<typeof Bun.spawn>, name: string): Promise<void> {
   const [exitCode, stderr] = await Promise.all([
-    child.exited,
+    waitForChildExit(child, name),
     readChildStderr(child),
   ]);
   expect(exitCode, `${name} failed:\n${stderr}`).toBe(0);
 }
 
-async function waitForContention(
+async function waitForChildSignal(
   child: ReturnType<typeof Bun.spawn>,
   signalPath: string,
   description: string,
 ): Promise<void> {
+  const abortController = new AbortController();
   const outcome = await Promise.race([
-    waitForProfileLockProtocol(signalPath, description).then(() => "contended" as const),
+    waitForProfileLockProtocol(signalPath, description, undefined, abortController.signal)
+      .then(() => "signaled" as const),
     child.exited.then((exitCode) => ({ exitCode })),
-  ]);
-  if (outcome === "contended") return;
+  ]).finally(() => abortController.abort());
+  if (outcome === "signaled") return;
 
   const stderr = await readChildStderr(child);
   throw new Error(`${description} exited early (${outcome.exitCode}):\n${stderr}`);
+}
+
+async function waitForChildExit(
+  child: ReturnType<typeof Bun.spawn>,
+  name: string,
+  timeoutMs = PROFILE_LOCK_CHILD_NORMAL_EXIT_TIMEOUT_MS,
+): Promise<number> {
+  return await withTimeout(child.exited, `${name} did not exit`, timeoutMs);
+}
+
+async function terminateChild(child: ReturnType<typeof Bun.spawn>): Promise<void> {
+  if (child.exitCode !== null) return;
+  child.kill("SIGTERM");
+  try {
+    await waitForChildExit(child, "test child cleanup after SIGTERM", PROFILE_LOCK_CHILD_SIGTERM_TIMEOUT_MS);
+  } catch {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await waitForChildExit(child, "test child cleanup after SIGKILL", PROFILE_LOCK_CHILD_SIGKILL_TIMEOUT_MS);
+  }
 }
 
 async function readChildStderr(child: ReturnType<typeof Bun.spawn>): Promise<string> {
   if (!(child.stderr instanceof ReadableStream)) {
     throw new Error("Expected child stderr to be piped.");
   }
-  return new Response(child.stderr).text();
+  return await withTimeout(
+    new Response(child.stderr).text(),
+    "Child stderr did not close",
+    PROFILE_LOCK_CHILD_STDERR_CLOSE_TIMEOUT_MS,
+  );
+}
+
+async function withTimeout<T>(promise: Promise<T>, description: string, timeoutMs: number): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error(`${description} within ${timeoutMs}ms.`)),
+      timeoutMs,
+    );
+    void promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function readStoredRecords<T>(

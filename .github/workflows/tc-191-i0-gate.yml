@@ -3,10 +3,15 @@ name: TC-191 I0 gate
 on:
   pull_request:
     paths:
-      - "packages/cli/src/**"
+      - "packages/bootstrap/**"
+      - "packages/cli/**"
+      - "packages/operations/**"
       - "packages/sdk-rs/**"
       - "packages/sdk-core/**"
+      - "packages/sdk-services/**"
       - "packages/node-sdk/**"
+      - "packages/web-sdk/**"
+      - "packages/sdk-rs/packages/web/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/setup.sh"
@@ -19,10 +24,15 @@ on:
   push:
     branches: [master]
     paths:
-      - "packages/cli/src/**"
+      - "packages/bootstrap/**"
+      - "packages/cli/**"
+      - "packages/operations/**"
       - "packages/sdk-rs/**"
       - "packages/sdk-core/**"
+      - "packages/sdk-services/**"
       - "packages/node-sdk/**"
+      - "packages/web-sdk/**"
+      - "packages/sdk-rs/packages/web/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/setup.sh"
@@ -69,30 +79,28 @@ jobs:
         run: bun install --frozen-lockfile
 
       # The operations declaration build imports sdk-core's public types.
-      - name: Build SDK package exports
+      - name: Build SDK declarations for packed public API checks
         run: |
           bun run --cwd packages/bootstrap build
           bun run --cwd packages/sdk-services build
           bun run --cwd packages/sdk-core build
 
-      - name: Build node WASM runtime dependency
+      - name: Build SDK WASM runtime dependencies
         run: |
           bun run --cwd packages/sdk-rs build:wasm:node
           bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/sdk-rs build:wasm:web
+          bun run --cwd packages/sdk-rs/packages/web build
 
-      - name: Build node SDK runtime entrypoint
-        working-directory: packages/node-sdk
-        run: >-
-          bunx --no-install tsup --no-config src/index.ts --format esm,cjs
-          --target es2020 --sourcemap
-          --external @tinycloud/sdk-core
-          --external @tinycloud/node-sdk-wasm
-          --external siwe
-          --external events
-          --external fs
-          --external path
+      - name: Build node and web SDK declarations
+        run: |
+          bun run --cwd packages/node-sdk build
+          bun run --cwd packages/web-sdk build
 
-      - name: Run seven focused I0 gate suites offline
+      - name: Build operations package
+        run: bun run --cwd packages/operations build
+
+      - name: Run focused I0 gate suites offline
         env:
           NODE_BINARY: node
           NPM_CONFIG_OFFLINE: "true"
@@ -105,3 +113,4 @@ jobs:
           bun test packages/cli/src/output/errors.test.ts
           bun test tests/mcp-sdk-contract/contract.test.ts
           bun test tests/mcp-sdk-contract/prerequisites.test.ts
+          bun run --cwd tests/mcp-sdk-contract test:public-api

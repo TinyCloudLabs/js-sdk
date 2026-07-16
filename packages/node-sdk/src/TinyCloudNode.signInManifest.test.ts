@@ -164,6 +164,36 @@ async function withFetchResponses(
   }
 }
 
+async function withActivationResponses(
+  responses: Response[],
+  fn: (fetchMock: any) => Promise<void>,
+): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const expectedAuthorization = "Bearer manifest-activation-fixture";
+  const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const authorization = new Headers(init?.headers).get("authorization");
+    if (authorization !== expectedAuthorization) {
+      return originalFetch(input, init);
+    }
+    if (!url.endsWith("/delegate") || init?.method !== "POST") {
+      throw new Error(`unexpected activation fetch: ${url}`);
+    }
+    const response = responses.shift();
+    if (!response) {
+      throw new Error("unexpected activation fetch");
+    }
+    return response;
+  });
+
+  globalThis.fetch = fetchMock as any;
+  try {
+    await fn(fetchMock);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 /**
  * Stub out the post-prepareSession network calls so signIn can complete
  * without contacting a real server. We monkey-patch the inner auth
@@ -700,11 +730,11 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const node = makeNodeWithSigner(makeFakeWasmBindings());
     const auth = (node as any).auth;
     auth._tinyCloudSession = {
-      delegationHeader: { Authorization: "Bearer fake" },
+      delegationHeader: { Authorization: "Bearer manifest-activation-fixture" },
     };
     auth.hostOwnedSpace = mock(async () => true);
 
-    await withFetchResponses(
+    await withActivationResponses(
       [
         new Response(JSON.stringify({ activated: [], skipped: [accountSpaceId] }), {
           status: 200,

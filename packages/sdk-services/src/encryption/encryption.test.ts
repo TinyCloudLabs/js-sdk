@@ -694,7 +694,9 @@ describe("decrypt response verification", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("RESPONSE_BINDING_MISMATCH");
-      expect(result.error.field).toBe("nodeId");
+      if (result.error.code === "RESPONSE_BINDING_MISMATCH") {
+        expect(result.error.field).toBe("nodeId");
+      }
     }
   });
 

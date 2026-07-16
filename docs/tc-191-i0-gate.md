@@ -17,8 +17,9 @@ package is published or approved by this increment.
 
 CI enforcement lives in `.github/workflows/tc-191-i0-gate.yml`. It pins Node
 `20.19.4` and the repository-declared Bun `1.2.0`, installs only with
-`bun install --frozen-lockfile`, emits the local JavaScript workspace entrypoints
-needed by the CLI suites, then runs the seven focused suites below. The test step
+`bun install --frozen-lockfile`, builds the local workspace entrypoints and the
+operations package needed by the CLI suites, then runs the seven focused suites
+below. The test step
 sets npm offline and its registry to loopback, so the local `npm pack` engine
 check cannot use the npm registry. The suites use fake/local boundaries; they do
 not call OpenKey or public TinyCloud nodes.
@@ -90,4 +91,5 @@ bun test tests/mcp-sdk-contract/prerequisites.test.ts # 2 pass
 The raw stdio protocol check has a 10-second local-process deadline only to
 allow CI process scheduling; it has no network retry or external dependency.
 
-`packages/operations` and `packages/mcp` are intentionally not created in I0.
+`packages/mcp` is intentionally not created in I0. The I1 operations package is
+built in this gate because I1 CLI suites import its published `./state` entrypoint.
