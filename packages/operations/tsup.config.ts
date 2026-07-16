@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const packageDirectory = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/state.ts', 'src/cli-runtime.ts'],
+  entry: ['src/index.ts', 'src/state.ts', 'src/cli-runtime.ts', 'src/profile.ts'],
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,

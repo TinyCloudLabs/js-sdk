@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "tools": [
+    {
+      "name": "tinycloud_auth_capabilities",
+      "operationId": "tinycloud.auth.capabilities",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": false
+    },
+    {
+      "name": "tinycloud_auth_import",
+      "operationId": "tinycloud.auth.import",
+      "operationVersion": 1,
+      "effects": [
+        "local_write"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": false
+    },
+    {
+      "name": "tinycloud_auth_request",
+      "operationId": "tinycloud.auth.request",
+      "operationVersion": 1,
+      "effects": [
+        "local_write"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": false
+    },
+    {
+      "name": "tinycloud_auth_status",
+      "operationId": "tinycloud.auth.status",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key",
+        "unauthenticated"
+      ],
+      "sensitiveOutput": false
+    },
+    {
+      "name": "tinycloud_secrets_get",
+      "operationId": "tinycloud.secrets.get",
+      "operationVersion": 1,
+      "effects": [
+        "read",
+        "local_write"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud_status",
+      "operationId": "tinycloud.status.get",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key",
+        "unauthenticated"
+      ],
+      "sensitiveOutput": false
+    }
+  ]
+}

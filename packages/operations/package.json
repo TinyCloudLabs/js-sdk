@@ -29,6 +29,11 @@
       "import": "./dist/cli-runtime.js",
       "require": "./dist/cli-runtime.cjs"
     },
+    "./profile": {
+      "types": "./dist/profile.d.ts",
+      "import": "./dist/profile.js",
+      "require": "./dist/profile.cjs"
+    },
     "./operations.json": "./generated/operations.json"
   },
   "engines": {
@@ -39,7 +44,7 @@
     "generated/operations.json"
   ],
   "scripts": {
-    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts",
+    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts --entry src/profile.ts",
     "clean": "rm -rf dist",
     "test": "bun scripts/test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json",
