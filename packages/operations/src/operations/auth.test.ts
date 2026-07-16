@@ -260,12 +260,14 @@ test("import rejects malformed, host, audience, expiry, session-rotation, and CI
   }
 });
 
-test("imports a real signed delegation idempotently and a fresh runtime replays only its signed authority", async () => {
+test("imports a real signed hostless delegation idempotently and a fresh runtime replays only its signed authority", async () => {
   const fixture = await createAuthRuntimeFixture();
   try {
     const runtime = await runtimeContext(fixture.profile);
     const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
     const delegation = await fixture.hermetic.mintDelegation();
+    const hostlessDelegation = withoutDelegationHost(delegation);
+    expect(hostlessDelegation.host).toBeUndefined();
     const importer = importDefinition();
     const artifact = {
       ...importArtifact(requestId, delegation),
@@ -276,8 +278,12 @@ test("imports a real signed delegation idempotently and a fresh runtime replays 
       }],
     };
 
-    const first = await importer.execute(runtime, artifact);
-    const second = await importer.execute(runtime, artifact);
+    const hostlessArtifact = {
+      ...artifact,
+      delegation: hostlessDelegation,
+    };
+    const first = await importer.execute(runtime, hostlessArtifact);
+    const second = await importer.execute(runtime, hostlessArtifact);
     expect(first).toMatchObject({
       status: "ok",
       output: {
@@ -301,6 +307,75 @@ test("imports a real signed delegation idempotently and a fresh runtime replays 
     expect(fresh.context.runtime.granted).toEqual(
       canonicalizeCapabilities(fixture.hermetic.permissions),
     );
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("imports a real signed delegation with an explicit selected profile host", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const delegation = await fixture.hermetic.mintDelegation();
+    const explicitHostDelegation = { ...delegation, host: fixture.hermetic.host };
+
+    const result = await importDefinition().execute(
+      runtime,
+      importArtifact(requestId, explicitHostDelegation),
+    );
+
+    expect(result).toMatchObject({
+      status: "ok",
+      output: {
+        cid: delegation.cid,
+        host: fixture.hermetic.host,
+        activated: true,
+        alreadyPresent: false,
+      },
+    });
+    expect(await readAdditionalDelegations(fixture.profile)).toHaveLength(1);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("rejects a real hostless delegation when the stored request substitutes localhost for 127.0.0.1", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const substitutedHost = fixture.hermetic.host.replace("127.0.0.1", "localhost");
+    const requests = await readAuthRequestRecords(fixture.profile);
+    await writeJsonAtomic(authRequestsPath(fixture.profile), requests.map((request) =>
+      request.requestId === requestId ? { ...request, host: substitutedHost } : request,
+    ));
+
+    const node = runtime.runtime.node as {
+      useRuntimeDelegation(delegation: unknown): Promise<void>;
+    };
+    const activate = node.useRuntimeDelegation.bind(node);
+    let activationCalls = 0;
+    node.useRuntimeDelegation = async (delegation) => {
+      activationCalls += 1;
+      await activate(delegation);
+    };
+
+    const delegation = await fixture.hermetic.mintDelegation();
+    const result = await importDefinition().execute(
+      runtime,
+      importArtifact(requestId, withoutDelegationHost(delegation)),
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: {
+        code: "DELEGATION_HOST_MISMATCH",
+        details: { expectedHost: fixture.hermetic.host, artifactHost: substitutedHost },
+      },
+    });
+    expect(activationCalls).toBe(0);
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
   } finally {
     fixture.hermetic.stop();
   }
@@ -602,6 +677,12 @@ function importArtifact(requestId: string, delegation: StoredRuntimeDelegation) 
     requestId,
     delegation,
   };
+}
+
+function withoutDelegationHost(delegation: StoredRuntimeDelegation): StoredRuntimeDelegation {
+  const hostless = { ...delegation };
+  delete (hostless as { host?: string }).host;
+  return hostless;
 }
 
 async function readAuthRequestRecords(profile: string): Promise<Record<string, unknown>[]> {

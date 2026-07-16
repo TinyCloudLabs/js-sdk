@@ -322,8 +322,8 @@ async function importRequestBoundDelegation(
     if (explicitHost !== undefined && typeof explicitHost !== "string") {
       return invalidDelegation();
     }
-    if (typeof explicitHost === "string" && normalizeHost(explicitHost) !== normalizeHost(request.host)) {
-      return hostMismatch(request.host, explicitHost);
+    if (typeof explicitHost === "string" && normalizeHost(explicitHost) !== normalizeHost(host)) {
+      return hostMismatch(host, explicitHost);
     }
     const expiry = normalizeExpiry(rawDelegation.expiry);
     if (expiry === undefined) return invalidDelegation();
@@ -338,14 +338,14 @@ async function importRequestBoundDelegation(
     const delegation = {
       ...rawDelegation,
       expiry,
-      host: explicitHost ?? request.host,
+      host: explicitHost ?? host,
     } as PortableDelegation;
     let activated: Awaited<ReturnType<typeof activateValidatedRuntimeDelegation>>;
     try {
       activated = await activateValidatedRuntimeDelegation(
         context.runtime.node as RuntimeDelegationActivator,
         delegation,
-        { host: request.host },
+        { host },
       );
     } catch {
       return operationFailure(
@@ -377,7 +377,7 @@ async function importRequestBoundDelegation(
           }
           if (state.request.profile !== context.summary.profile ||
             !samePrincipal(state.request.sessionDid, sessionDid) ||
-            normalizeHost(state.request.host) !== normalizeHost(request.host) ||
+            normalizeHost(state.request.host) !== normalizeHost(host) ||
             JSON.stringify(canonicalizeCapabilities(state.request.requested)) !==
               JSON.stringify(canonicalizeCapabilities(request.requested))) {
             return {
@@ -465,6 +465,9 @@ async function importState(
         "The delegation does not reference a stored request for this profile.",
       ),
     };
+  }
+  if (normalizeHost(request.host) !== normalizeHost(host)) {
+    return { ok: false, result: hostMismatch(host, request.host) };
   }
   if (!samePrincipal(request.sessionDid, sessionDid)) {
     return { ok: false, result: audienceMismatch(sessionDid, request.sessionDid) };
