@@ -993,7 +993,10 @@ describe("resolveManifest — end-to-end composition", () => {
     expect(resourceCapabilitiesToSpaceAbilitiesMap(resolved.resources)).toEqual({
       "feed-space": {
         capabilities: { "": ["tinycloud.capabilities/read"] },
-        delegation: { "": ["tinycloud.delegation/revoke", "tinycloud.delegation/status"] },
+        delegation: { "": [
+          "tinycloud.delegation/revoke",
+          "tinycloud.delegation/status",
+        ] },
       },
     });
   });

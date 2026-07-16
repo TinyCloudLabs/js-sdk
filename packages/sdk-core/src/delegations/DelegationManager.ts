@@ -22,6 +22,12 @@ import {
   Delegation,
   DelegationStatus,
   DelegationStatusSchema,
+  DelegationRevocationReceipt,
+  DelegationRevocationReceiptSchema,
+  AccountDelegationPage,
+  AccountDelegationPageSchema,
+  AccountDelegationQueryOptionsSchema,
+  AccountDelegationQueryOptions,
   CreateDelegationParams,
   DelegationChain,
   DelegationManagerConfig,
@@ -91,6 +97,7 @@ export class DelegationManager {
   private invoke: InvokeFunction;
   private invokeAny?: InvokeAnyFunction;
   private fetchFn: FetchFunction;
+  private accountSpaceId?: string;
 
   /**
    * Creates a new DelegationManager instance.
@@ -103,6 +110,7 @@ export class DelegationManager {
     this.invoke = config.invoke;
     this.invokeAny = config.invokeAny;
     this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
+    this.accountSpaceId = config.accountSpaceId;
   }
 
   /**
@@ -273,7 +281,7 @@ export class DelegationManager {
    * }
    * ```
    */
-  async revoke(cid: string): Promise<Result<void>> {
+  async revoke(cid: string): Promise<Result<DelegationRevocationReceipt>> {
     if (!cid) {
       return {
         ok: false,
@@ -333,7 +341,19 @@ export class DelegationManager {
         };
       }
 
-      return { ok: true, data: undefined };
+      const parsed = DelegationRevocationReceiptSchema.safeParse(await response.json());
+      if (!parsed.success || parsed.data.cid !== cid) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.REVOCATION_FAILED,
+            "Node returned an invalid delegation revocation receipt",
+            undefined,
+            { cid },
+          ),
+        };
+      }
+      return { ok: true, data: parsed.data };
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         return {
@@ -432,6 +452,89 @@ export class DelegationManager {
           DelegationErrorCodes.NETWORK_ERROR,
           `Network error during delegation status: ${String(error)}`,
           error instanceof Error ? error : undefined
+        ),
+      };
+    }
+  }
+
+  /** Query lifecycle-complete delegation history for the authenticated account. */
+  async query(
+    options: AccountDelegationQueryOptions = {},
+  ): Promise<Result<AccountDelegationPage>> {
+    const validated = AccountDelegationQueryOptionsSchema.safeParse(options);
+    if (!validated.success) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.INVALID_INPUT,
+          "Invalid delegation query options",
+          undefined,
+          { issues: validated.error.issues },
+        ),
+      };
+    }
+    if (!this.invokeAny) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.NOT_INITIALIZED,
+          "Delegation query requires an invokeAny function",
+        ),
+      };
+    }
+    if (!this.accountSpaceId) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.NOT_INITIALIZED,
+          "Delegation query requires an account space",
+        ),
+      };
+    }
+    try {
+      const invocationHeaders = this.invokeAny(this.session, [{
+        spaceId: this.accountSpaceId,
+        service: "delegation",
+        path: "",
+        action: DelegationAction.LIST,
+      }]);
+      const headers = Object.fromEntries(new Headers(invocationHeaders).entries());
+      headers["content-type"] = "application/json";
+      const response = await this.fetchFn(`${this.host}/delegation/query`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(validated.data),
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.NETWORK_ERROR,
+            `Failed to query delegations: ${response.status} - ${errorText}`,
+            undefined,
+            { status: response.status },
+          ),
+        };
+      }
+      const parsed = AccountDelegationPageSchema.safeParse(await response.json());
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.INVALID_TOKEN,
+            "Node returned an invalid delegation query response",
+          ),
+        };
+      }
+      return { ok: true, data: parsed.data };
+    } catch (error) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.NETWORK_ERROR,
+          `Network error during delegation query: ${String(error)}`,
+          error instanceof Error ? error : undefined,
         ),
       };
     }

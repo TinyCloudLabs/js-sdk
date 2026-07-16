@@ -9,7 +9,10 @@ describe("DelegationManager.revoke", () => {
     } as ServiceSession;
     const invoke = mock(() => ({ Authorization: "TinyCloudInvocation fixture" }));
     const invokeAny = mock(() => ({ Authorization: "TinyCloudRevocation fixture" }));
-    const fetch = mock(async () => new Response(null, { status: 200 }));
+    const fetch = mock(async () => new Response(JSON.stringify({
+      revoked: true,
+      cid: "bafy-child",
+    }), { status: 200, headers: { "content-type": "application/json" } }));
     const manager = new DelegationManager({
       hosts: ["https://node.tinycloud.xyz"],
       session,
@@ -32,6 +35,7 @@ describe("DelegationManager.revoke", () => {
       method: "POST",
       headers: { Authorization: "TinyCloudRevocation fixture" },
     });
+    expect(result).toEqual({ ok: true, data: { revoked: true, cid: "bafy-child" } });
   });
 
   test("fails closed when raw-resource signing is unavailable", async () => {
@@ -53,6 +57,127 @@ describe("DelegationManager.revoke", () => {
       }),
     });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test("rejects a malformed or mismatched node receipt", async () => {
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session: { spaceId: "space" } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny: mock(() => ({ Authorization: "fixture" })),
+      fetch: mock(async () => new Response(JSON.stringify({
+        revoked: true,
+        cid: "bafy-other",
+      }), { status: 200, headers: { "content-type": "application/json" } })),
+    });
+
+    expect((await manager.revoke("bafy-child")).ok).toBe(false);
+  });
+});
+
+describe("DelegationManager.query", () => {
+  test("rejects invalid filters before signing or sending a request", async () => {
+    const invokeAny = mock(() => ({ Authorization: "unused" }));
+    const fetch = mock(async () => new Response(null, { status: 200 }));
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session: { spaceId: "space" } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny,
+      fetch,
+    });
+
+    const result = await manager.query({ limit: 101 } as never);
+
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "INVALID_INPUT" }),
+    });
+    expect(invokeAny).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test("makes one signed account request and preserves resources, caveats, and dates", async () => {
+    const session = { spaceId: "tinycloud:pkh:eip155:1:owner:applications" } as ServiceSession;
+    const accountSpaceId = "tinycloud:pkh:eip155:1:owner:account";
+    const invokeAny = mock(() => ({ Authorization: "query" }));
+    const fetch = mock(async () => new Response(JSON.stringify({
+      schemaVersion: 2,
+      items: [{
+        cid: "bafy-child",
+        direction: "granted",
+        delegatorDid: "did:pkh:eip155:1:owner",
+        delegateDid: "did:pkh:eip155:1:bob",
+        resources: [{
+          resource: "tinycloud:pkh:eip155:1:owner:files/kv/docs",
+          actions: ["tinycloud.kv/get"],
+          caveats: [{ prefix: "reports/" }],
+        }],
+        parents: [],
+        issuedAt: "2026-07-15T12:00:00Z",
+        notBefore: null,
+        expiresAt: "2026-07-16T12:00:00Z",
+        status: "active",
+      }],
+      nextCursor: "bafy-child",
+    }), { headers: { "content-type": "application/json" } }));
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      accountSpaceId,
+      session,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny,
+      fetch,
+    });
+
+    const result = await manager.query({ direction: "granted", limit: 25 });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.items[0]?.issuedAt).toBeInstanceOf(Date);
+      expect(result.data.items[0]?.resources[0]?.caveats).toEqual([{ prefix: "reports/" }]);
+    }
+    expect(invokeAny).toHaveBeenCalledTimes(1);
+    expect(invokeAny).toHaveBeenCalledWith(session, [{
+      spaceId: accountSpaceId,
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/list",
+    }]);
+    expect(fetch).toHaveBeenCalledWith("https://node.tinycloud.xyz/delegation/query", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ direction: "granted", limit: 25 }),
+    }));
+    const request = fetch.mock.calls[0]?.[1];
+    expect(new Headers(request?.headers).get("Authorization")).toBe("query");
+    expect(new Headers(request?.headers).get("Content-Type")).toBe("application/json");
+  });
+
+  test("rejects non-RFC3339 delegation timestamps", async () => {
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      accountSpaceId: "tinycloud:pkh:eip155:1:owner:account",
+      session: { spaceId: "tinycloud:pkh:eip155:1:owner:account" } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny: mock(() => ({ Authorization: "query" })),
+      fetch: mock(async () => new Response(JSON.stringify({
+        schemaVersion: 2,
+        items: [{
+          cid: "bafy-child",
+          direction: "granted",
+          delegatorDid: "did:pkh:eip155:1:owner",
+          delegateDid: "did:pkh:eip155:1:bob",
+          resources: [],
+          parents: [],
+          issuedAt: 0,
+          notBefore: null,
+          expiresAt: "July 16, 2026",
+          status: "active",
+        }],
+      }), { headers: { "content-type": "application/json" } })),
+    });
+
+    expect((await manager.query()).ok).toBe(false);
   });
 });
 
