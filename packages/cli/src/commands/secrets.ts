@@ -207,19 +207,21 @@ function resolveProfilesDir(): string {
 async function ensureSecretsNode(
   ctx: CLIContext,
   options: { privateKey?: string },
+  openKeyAcquisition?: OpenKeyAcquisition,
+  selectedProfile?: ProfileConfig,
 ): Promise<TinyCloudNode> {
   const auth = authOptions(options);
   if (auth?.privateKey) {
     return ensureAuthenticated(ctx, auth);
   }
 
-  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+  const profile = selectedProfile ?? await ProfileManager.getProfile(ctx.profile).catch(() => null);
   if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
     const session = await ProfileManager.getSession(ctx.profile);
     if (!session || isStoredSessionExpired(session)) {
       await withSpinner(
         session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
-        () => refreshOpenKeySession(ctx.profile, ctx.host),
+        () => refreshOpenKeySession(ctx.profile, ctx.host, { openKeyAcquisition }),
       );
     }
   }
@@ -302,6 +304,7 @@ async function invokeCanonicalSecretGet(params: {
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<CanonicalSecretGetResult> {
   const auth = authOptions(params.options);
+  let ownerNode: TinyCloudNode | undefined;
   const target = {
     profile: params.ctx.profile,
     host: params.ctx.host,
@@ -320,7 +323,21 @@ async function invokeCanonicalSecretGet(params: {
       ? invokeSecretsGetWithLocalAuthorityRetry(target, input)
       : invokeOperation("tinycloud.secrets.get", 1, target, input),
   );
-  const first = await invoke();
+  let first = await invoke();
+  if (first.status === "error" &&
+    first.error.code === "SESSION_NOT_FOUND" &&
+    auth?.privateKey === undefined) {
+    const profile = await ProfileManager.getProfile(params.ctx.profile);
+    if (profile.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+      ownerNode = await ensureSecretsNode(
+        params.ctx,
+        params.options,
+        params.openKeyAcquisition,
+        profile,
+      );
+      first = await invoke();
+    }
+  }
   if (first.status !== "authority_required") return first;
   // The operations-owned explicit-key path should never return an authority
   // request. Keep this guard for the legacy no-key path only.
@@ -331,7 +348,11 @@ async function invokeCanonicalSecretGet(params: {
 
   const profile = await ProfileManager.getProfile(params.ctx.profile);
   if (!canRequestOwnerPermissions(profile)) return first;
-  const node = params.node ?? await ensureSecretsNode(params.ctx, params.options);
+  const node = params.node ?? ownerNode ?? await ensureSecretsNode(
+    params.ctx,
+    params.options,
+    params.openKeyAcquisition,
+  );
 
   await withSpinner("Requesting secret permissions...", () =>
     ensureDelegationAuthority({
@@ -384,9 +405,30 @@ function throwCanonicalSecretGetError(
         ExitCode.ERROR,
       );
     case "setup_required":
-      throw new CLIError("NOT_FOUND", `Secret "${name}" not found`, ExitCode.NOT_FOUND);
+      throw new CLIError(
+        "NOT_FOUND",
+        result.setup.message,
+        ExitCode.NOT_FOUND,
+        { hint: `${result.setup.url}\n${result.setup.message}`, setup: result.setup },
+      );
     case "error":
-      throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      if (result.error.code === "SESSION_NOT_FOUND" ||
+        (result.error.code === "PROFILE_POSTURE_NOT_ALLOWED" && result.context.posture === "unauthenticated")) {
+        throw new CLIError(
+          "AUTH_REQUIRED",
+          "Not signed in to TinyCloud.",
+          ExitCode.AUTH_REQUIRED,
+          { hint: `Sign in with: tc --profile ${result.context.profile} auth login` },
+        );
+      }
+      if (result.error.code === "NODE_UNREACHABLE") {
+        throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
+      }
+      throw new CLIError(
+        result.error.code,
+        result.error.message,
+        result.error.code === "PERMISSION_HINT_INVALID" ? ExitCode.PERMISSION_DENIED : ExitCode.ERROR,
+      );
     case "ok":
       throw new Error("Expected a failed canonical secret result.");
   }

@@ -24,6 +24,23 @@ export interface McpStartupSelection {
   readonly allowOwnerProfile: boolean;
 }
 
+export interface McpInvocationTarget {
+  readonly profile: string;
+  readonly allowOwnerProfile?: true;
+}
+
+/** Project one startup selection into the only owner-sensitive target shape. */
+export function invocationTargetForMcp(
+  selection: McpStartupSelection,
+): McpInvocationTarget {
+  return {
+    profile: selection.profile,
+    ...(selection.explicitProfile && selection.allowOwnerProfile
+      ? { allowOwnerProfile: true }
+      : {}),
+  };
+}
+
 interface CatalogOperation {
   readonly id: string;
   readonly version: number;
@@ -157,16 +174,10 @@ export function registerTinyCloudTools(
         annotations,
       },
       async (input: unknown): Promise<McpToolResult> => {
-        const allowOwnerProfile = binding.name === "tinycloud_secrets_get"
-          ? selection.explicitProfile && selection.allowOwnerProfile
-          : true;
         const result = await invokeOperation(
           binding.operationId,
           binding.operationVersion,
-          {
-            profile: selection.profile,
-            ...(allowOwnerProfile ? { allowOwnerProfile: true } : {}),
-          },
+          invocationTargetForMcp(selection),
           input,
         );
         return toMcpToolResult(result);

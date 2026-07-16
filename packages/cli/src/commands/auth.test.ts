@@ -795,7 +795,19 @@ describe("CLI auth import command", () => {
     expect(recorded.outputs[0]).toMatchObject({ imported: true, activated: true });
   });
 
-  test("accepts a v1 delegation artifact with an optional host and requestId", async () => {
+  test("routes a v1 delegation artifact with an optional host and requestId canonically", async () => {
+    storedImportRequest = makeStoredImportRequest();
+    operationRecorded.results.push({
+      status: "ok",
+      operation: { operationId: "tinycloud.auth.import", operationVersion: 1 },
+      context: { profile: "default", host: activeHost, posture: "delegate-session" },
+      output: {
+        cid: "bafy-v1-artifact",
+        effectivePermissions: storedImportRequest.requested,
+        expiry: "2099-01-01T00:00:00.000Z",
+        activated: true,
+      },
+    });
     const source = join(tempDir, "v1-artifact.json");
     await writeFile(source, JSON.stringify({
       kind: "tinycloud.auth.delegation",
@@ -807,12 +819,12 @@ describe("CLI auth import command", () => {
     await runAuthCommand(["auth", "import", source]);
 
     expect(recorded.errors).toEqual([]);
-    expect(importRecorded.useRuntimeDelegation).toEqual([{ cid: "bafy-v1-artifact" }]);
+    expect(operationRecorded.calls).toHaveLength(1);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
     expect(recorded.outputs[0]).toMatchObject({ requestId: "req_v1", delegationCid: "bafy-v1-artifact", activated: true });
-    expect(operationRecorded.calls).toEqual([]);
   });
 
-  test("keeps an unmatched cross-user v1 delegation envelope on the legacy path", async () => {
+  test("fails closed without persistence when a v1 request-bound artifact is unknown", async () => {
     const source = join(tempDir, "unmatched-cross-user-v1.json");
     await writeFile(source, JSON.stringify({
       kind: "tinycloud.auth.delegation",
@@ -824,15 +836,43 @@ describe("CLI auth import command", () => {
       }),
     }), "utf8");
 
+    operationRecorded.results.push({
+      status: "error",
+      error: {
+        code: "DELEGATION_ARTIFACT_INVALID",
+        message: "The delegation does not reference a stored request for this profile.",
+        retryable: false,
+      },
+    });
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors.pop()).toMatchObject({ code: "DELEGATION_ARTIFACT_INVALID", exitCode: 1 });
+    expect(operationRecorded.calls).toHaveLength(1);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(importRecorded.bootstrappedDelegations).toEqual([]);
+  });
+
+  test("keeps a genuinely unbound v1 envelope on the documented legacy path", async () => {
+    const source = join(tempDir, "unbound-v1.json");
+    await writeFile(source, JSON.stringify({
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      delegation: makePortableDelegation({
+        delegateDID: "did:pkh:eip155:1:0xOtherUser",
+        cid: "bafy-unbound-legacy",
+      }),
+    }), "utf8");
+
     await runAuthCommand(["auth", "import", source]);
 
     expect(recorded.errors).toEqual([]);
     expect(operationRecorded.calls).toEqual([]);
     expect(importRecorded.appendedDelegations).toHaveLength(1);
-    expect(importRecorded.useRuntimeDelegation).toEqual([]);
     expect(recorded.outputs[0]).toMatchObject({
-      requestId: "req_for_another_profile",
-      delegationCid: "bafy-unmatched-cross-user",
+      requestId: null,
+      delegationCid: "bafy-unbound-legacy",
       activated: false,
     });
   });

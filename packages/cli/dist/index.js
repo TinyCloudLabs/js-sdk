@@ -13020,9 +13020,8 @@ function registerAuthCommand(program2) {
         });
         return;
       }
-      const requestId = await requestBoundDelegationRequestId(ctx, parsed);
-      if (requestId !== void 0) {
-        await importRequestBoundDelegation(ctx, parsed, requestId);
+      if (isRequestBoundDelegationEnvelope(parsed)) {
+        await importRequestBoundDelegation(ctx, parsed);
         return;
       }
       const imported = normalizeDelegationImport(parsed);
@@ -13338,19 +13337,14 @@ function normalizeDelegationImport(value) {
 function isLegacyDelegationImportArtifact(value) {
   if (value === null || typeof value !== "object") return false;
   const candidate = value;
-  return candidate.kind === "tinycloud.auth.delegation" && candidate.version === 1 && candidate.delegation !== null && typeof candidate.delegation === "object";
+  return candidate.kind === "tinycloud.auth.delegation" && candidate.version === 1 && !Object.hasOwn(candidate, "requestId") && candidate.delegation !== null && typeof candidate.delegation === "object";
 }
-async function requestBoundDelegationRequestId(ctx, value) {
-  const requestId = delegationEnvelopeRequestId(value);
-  if (requestId === void 0) return void 0;
-  return await getPermissionRequestArtifact(ctx.profile, requestId) === null ? void 0 : requestId;
-}
-function delegationEnvelopeRequestId(value) {
-  if (value === null || typeof value !== "object") return void 0;
+function isRequestBoundDelegationEnvelope(value) {
+  if (value === null || typeof value !== "object") return false;
   const candidate = value;
-  return candidate.kind === "tinycloud.auth.delegation" && candidate.version === 1 && typeof candidate.requestId === "string" ? candidate.requestId : void 0;
+  return candidate.kind === "tinycloud.auth.delegation" && candidate.version === 1 && Object.hasOwn(candidate, "requestId");
 }
-async function importRequestBoundDelegation(ctx, artifact, requestId) {
+async function importRequestBoundDelegation(ctx, artifact) {
   const result = await invokeOperation(
     "tinycloud.auth.import",
     1,
@@ -13367,7 +13361,7 @@ async function importRequestBoundDelegation(ctx, artifact, requestId) {
         imported: true,
         activated: output.activated,
         kind: "tinycloud.auth.delegation",
-        requestId,
+        requestId: typeof artifact === "object" && artifact !== null && typeof artifact.requestId === "string" ? artifact.requestId : null,
         delegationCid: output.cid,
         permissions: output.effectivePermissions,
         expiry: output.expiry
@@ -13870,7 +13864,8 @@ async function refreshOpenKeySession(profileName, host, options = {}) {
     );
   }
   const profile = await ProfileManager.getProfile(profileName);
-  const delegationData = await startAuthFlow(profile.did, {
+  const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
+  const delegationData = await acquireOpenKey(profile.did, {
     paste: options.paste,
     noPopup: options.noPopup,
     jwk: key,
@@ -18376,18 +18371,18 @@ function resolveProfilesDir() {
   const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
   return join4(home, ".tinycloud", "profiles");
 }
-async function ensureSecretsNode(ctx, options) {
+async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfile) {
   const auth = authOptions(options);
   if (auth?.privateKey) {
     return ensureAuthenticated(ctx, auth);
   }
-  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+  const profile = selectedProfile ?? await ProfileManager.getProfile(ctx.profile).catch(() => null);
   if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
     const session = await ProfileManager.getSession(ctx.profile);
     if (!session || isStoredSessionExpired(session)) {
       await withSpinner(
         session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
-        () => refreshOpenKeySession(ctx.profile, ctx.host)
+        () => refreshOpenKeySession(ctx.profile, ctx.host, { openKeyAcquisition })
       );
     }
   }
@@ -18440,6 +18435,7 @@ async function runSecretOperationAttempt(label, operation) {
 }
 async function invokeCanonicalSecretGet(params) {
   const auth = authOptions(params.options);
+  let ownerNode;
   const target = {
     profile: params.ctx.profile,
     host: params.ctx.host,
@@ -18455,7 +18451,19 @@ async function invokeCanonicalSecretGet(params) {
     params.label,
     () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation2("tinycloud.secrets.get", 1, target, input)
   );
-  const first = await invoke();
+  let first = await invoke();
+  if (first.status === "error" && first.error.code === "SESSION_NOT_FOUND" && auth?.privateKey === void 0) {
+    const profile2 = await ProfileManager.getProfile(params.ctx.profile);
+    if (profile2.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
+      ownerNode = await ensureSecretsNode(
+        params.ctx,
+        params.options,
+        params.openKeyAcquisition,
+        profile2
+      );
+      first = await invoke();
+    }
+  }
   if (first.status !== "authority_required") return first;
   if (auth?.privateKey !== void 0) return first;
   if (first.context.posture !== "owner-openkey" && first.context.posture !== "local-owner-key") {
@@ -18463,7 +18471,11 @@ async function invokeCanonicalSecretGet(params) {
   }
   const profile = await ProfileManager.getProfile(params.ctx.profile);
   if (!canRequestOwnerPermissions(profile)) return first;
-  const node = params.node ?? await ensureSecretsNode(params.ctx, params.options);
+  const node = params.node ?? ownerNode ?? await ensureSecretsNode(
+    params.ctx,
+    params.options,
+    params.openKeyAcquisition
+  );
   await withSpinner(
     "Requesting secret permissions...",
     () => ensureDelegationAuthority({
@@ -18489,9 +18501,30 @@ function throwCanonicalSecretGetError(result, name2) {
         ExitCode.ERROR
       );
     case "setup_required":
-      throw new CLIError("NOT_FOUND", `Secret "${name2}" not found`, ExitCode.NOT_FOUND);
+      throw new CLIError(
+        "NOT_FOUND",
+        result.setup.message,
+        ExitCode.NOT_FOUND,
+        { hint: `${result.setup.url}
+${result.setup.message}`, setup: result.setup }
+      );
     case "error":
-      throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      if (result.error.code === "SESSION_NOT_FOUND" || result.error.code === "PROFILE_POSTURE_NOT_ALLOWED" && result.context.posture === "unauthenticated") {
+        throw new CLIError(
+          "AUTH_REQUIRED",
+          "Not signed in to TinyCloud.",
+          ExitCode.AUTH_REQUIRED,
+          { hint: `Sign in with: tc --profile ${result.context.profile} auth login` }
+        );
+      }
+      if (result.error.code === "NODE_UNREACHABLE") {
+        throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
+      }
+      throw new CLIError(
+        result.error.code,
+        result.error.message,
+        result.error.code === "PERMISSION_HINT_INVALID" ? ExitCode.PERMISSION_DENIED : ExitCode.ERROR
+      );
     case "ok":
       throw new Error("Expected a failed canonical secret result.");
   }

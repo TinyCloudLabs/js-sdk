@@ -13,6 +13,7 @@ type CLIErrorLike = {
   code: string;
   message: string;
   exitCode: number;
+  metadata?: Record<string, unknown>;
 };
 
 type SecretResult<T> =
@@ -119,6 +120,7 @@ const recorded = {
   delegatedKvGets: [] as Array<{ path: string; options: { raw: boolean; prefix: string } }>,
   decryptEnvelopeCalls: [] as Array<{ envelope: unknown; options: { proofs: string[] } }>,
 };
+let canonicalResultOverride: unknown | null = null;
 
 let currentNode: FakeNode;
 let outputJsonRequested = false;
@@ -157,6 +159,7 @@ function resetRecorded(): void {
   recorded.sessionRefreshes.length = 0;
   recorded.delegatedKvGets.length = 0;
   recorded.decryptEnvelopeCalls.length = 0;
+  canonicalResultOverride = null;
 }
 
 function makeDescriptor(
@@ -416,6 +419,7 @@ mock.module("@tinycloud/operations", () => ({
   ) => {
     expect(operationId).toBe("tinycloud.secrets.get");
     expect(operationVersion).toBe(1);
+    if (canonicalResultOverride !== null) return canonicalResultOverride;
     const targetSpace = input.space ?? "secrets";
     const read = await currentNode.readSecret({
       space: targetSpace,
@@ -525,6 +529,7 @@ mock.module("../output/errors.js", () => ({
       public code: string,
       message: string,
       public exitCode: number,
+      public metadata?: Record<string, unknown>,
     ) {
       super(message);
       this.name = "CLIError";
@@ -568,6 +573,44 @@ beforeEach(() => {
 });
 
 describe("CLI secrets commands", () => {
+  test("preserves canonical auth, network, and Secret Manager compatibility mappings", async () => {
+    canonicalResultOverride = {
+      status: "error",
+      operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 },
+      context: { profile: "default", host: "https://tinycloud.test", posture: "unauthenticated" },
+      error: { code: "PROFILE_POSTURE_NOT_ALLOWED", message: "Not authenticated.", retryable: false },
+    };
+    await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
+    const authError = recorded.errors.pop() as CLIErrorLike;
+    expect(authError).toMatchObject({ code: "AUTH_REQUIRED", exitCode: 3 });
+    expect(authError.metadata?.hint).toContain("auth login");
+
+    canonicalResultOverride = {
+      status: "error",
+      operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 },
+      context: { profile: "default", host: "https://tinycloud.test", posture: "owner-openkey" },
+      error: { code: "NODE_UNREACHABLE", message: "The TinyCloud node could not be reached.", retryable: true },
+    };
+    await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
+    expect(recorded.errors.pop()).toMatchObject({ code: "NETWORK_ERROR", exitCode: 6 });
+
+    const setup = {
+      kind: "secret_manager",
+      secret: { name: "ANTHROPIC_API_KEY", space: "secrets" },
+      url: "https://secrets.tinycloud.xyz/setup?name=ANTHROPIC_API_KEY",
+      message: "Enter this secret in Secret Manager, then retry the operation.",
+    };
+    canonicalResultOverride = {
+      status: "setup_required",
+      operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 },
+      context: { profile: "default", host: "https://tinycloud.test", posture: "owner-openkey" },
+      setup,
+      retry: { operationId: "tinycloud.secrets.get", operationVersion: 1, inputDigest: "digest", requiresCallerInput: true },
+    };
+    await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
+    expect(recorded.errors.pop()).toMatchObject({ code: "NOT_FOUND", exitCode: 4, metadata: { setup } });
+  });
+
   test("preserves the get help spelling and output aliases", () => {
     const program = new Command();
     registerSecretsCommand(program);

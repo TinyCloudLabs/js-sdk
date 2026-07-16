@@ -239,16 +239,25 @@ export async function listPermissionRequests(
   profile: string,
   context?: LegacyRequestContext,
 ): Promise<PermissionRequestArtifact[]> {
-  return (await readAuthRequests<unknown>(profile)).map((value) => {
+  const records: PermissionRequestArtifact[] = [];
+  for (const value of await readAuthRequests<unknown>(profile)) {
     const canonical = PermissionRequestArtifactSchema.safeParse(value);
-    if (canonical.success) return canonical.data;
+    if (canonical.success) {
+      if (context !== undefined && principal(canonical.data.sessionDid) !== principal(context.sessionDid)) {
+        continue;
+      }
+      records.push(canonical.data);
+      continue;
+    }
     const legacy = LegacyPermissionRequestArtifactSchema.safeParse(value);
     if (!legacy.success) throw new TypeError("Stored authority request is malformed.");
     if (context === undefined) {
       throw new TypeError("Legacy authority requests require the selected invocation context.");
     }
-    return normalizeLegacyPermissionRequest(legacy.data, context);
-  });
+    if (principal(legacy.data.sessionDid) !== principal(context.sessionDid)) continue;
+    records.push(normalizeLegacyPermissionRequest(legacy.data, context));
+  }
+  return records;
 }
 
 export async function findPermissionRequest(
@@ -295,12 +304,18 @@ export async function createOrReusePermissionRequest(
     input.profile,
     "auth-requests",
     (rawRecords) => {
-      const records = rawRecords.map((value) => {
+      const records: PermissionRequestArtifact[] = [];
+      for (const value of rawRecords) {
         const canonical = PermissionRequestArtifactSchema.safeParse(value);
-        if (canonical.success) return canonical.data;
+        if (canonical.success) {
+          if (principal(canonical.data.sessionDid) !== principal(input.sessionDid)) continue;
+          records.push(canonical.data);
+          continue;
+        }
         const legacy = LegacyPermissionRequestArtifactSchema.safeParse(value);
         if (!legacy.success) throw new TypeError("Stored authority request is malformed.");
-        return normalizeLegacyPermissionRequest(legacy.data, {
+        if (principal(legacy.data.sessionDid) !== principal(input.sessionDid)) continue;
+        records.push(normalizeLegacyPermissionRequest(legacy.data, {
           profile: input.profile,
           host: input.host,
           sessionDid: input.sessionDid,
@@ -309,8 +324,8 @@ export async function createOrReusePermissionRequest(
           ...(input.ownerDid === undefined ? {} : { ownerDid: input.ownerDid }),
           ...(input.spaceId === undefined ? {} : { spaceId: input.spaceId }),
           now: observedNow,
-        });
-      });
+        }));
+      }
       const retained = prunePermissionRequests(records, {
         profile: input.profile,
         sessionDid: input.sessionDid,
@@ -359,7 +374,7 @@ export function prunePermissionRequests(
   return records.filter((record) => {
     const createdAt = Date.parse(record.createdAt);
     if (!Number.isFinite(createdAt) || createdAt < cutoff) return false;
-    if (record.profile === input.profile && record.sessionDid !== input.sessionDid) return false;
+    if (record.profile === input.profile && principal(record.sessionDid) !== principal(input.sessionDid)) return false;
     // Empty request arrays are historical CLI records. They carry no
     // authority, but remain readable and are retained byte-for-byte by the
     // shared format-1 writer for compatibility.

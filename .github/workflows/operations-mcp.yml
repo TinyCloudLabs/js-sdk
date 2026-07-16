@@ -74,6 +74,12 @@ jobs:
           bun test packages/cli/src/commands/secrets.test.ts
           bun test packages/cli/src/commands/secrets-owner-retry.test.ts
           bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts
+      - name: Run production private-key secrets regression in isolation
+        run: bun test packages/cli/src/commands/secrets-private-key-production.test.ts
+      - name: Run MCP CLI regression in isolation
+        run: bun test packages/mcp/src/cli.test.ts
+      - name: Run packed MCP CLI regression in isolation
+        run: bun test packages/mcp/src/packed-cli.test.ts
       - name: Verify generated files and coverage ledger
         run: |
           bun run check:operations-mcp
