@@ -1,5 +1,13 @@
 # @tinycloud/bootstrap
 
+## 2.6.0-beta.0
+
+### Minor Changes
+
+- f7a1d4f: Add signed account-wide delegation history queries with lifecycle and revocation
+  status, plus CID-bound delegation revocation receipts and the account-scoped
+  delegation control capabilities used by SDK sessions.
+
 ## 2.5.1
 
 ### Patch Changes
