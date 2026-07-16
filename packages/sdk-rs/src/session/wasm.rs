@@ -55,19 +55,24 @@ impl TCWSessionManager {
         self.manager.create_session_key(key_id)
     }
 
-    // #[allow(non_snake_case)]
-    // pub fn importSessionKey(
-    //     &mut self,
-    //     js_jwk: JsValue,
-    //     key_id: Option<String>,
-    //     override_key_id: bool,
-    // ) -> Result<String, String> {
-    //     let key    = match serde_wasm_bindgen::from_value(js_jwk) {
-    //         Ok(key) => key,
-    //         Err(e) => return Err(e.to_string()),
-    //     };
-    //     self.manager.test_import_session_key(key, key_id, override_key_id)
-    // }
+    /// Replace an existing session key with a persisted private Ed25519 JWK.
+    ///
+    /// The manager validates the private JWK before replacing the existing
+    /// entry. This is intentionally exposed on both the Node and browser WASM
+    /// builds so restore flows share one key lifecycle.
+    #[allow(non_snake_case)]
+    pub fn replaceSessionKey(&mut self, js_jwk: JsValue, key_id: String) -> Result<String, String> {
+        // Serde represents an explicitly supplied JSON `null` as `None` for
+        // optional fields. `alg: null` is therefore observably different from
+        // an omitted `alg` and must not be accepted as the latter.
+        let raw: serde_json::Value =
+            serde_wasm_bindgen::from_value(js_jwk.clone()).map_err(|e| e.to_string())?;
+        if raw.get("alg").is_some_and(serde_json::Value::is_null) {
+            return Err("session key alg must be EdDSA when present".to_string());
+        }
+        let key = serde_wasm_bindgen::from_value(js_jwk).map_err(|e| e.to_string())?;
+        self.manager.replace_session_key(key, key_id)
+    }
 
     #[allow(non_snake_case)]
     /// List the available session keys.

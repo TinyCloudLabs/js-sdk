@@ -19,6 +19,7 @@ import {
   sessionPath,
   tinycloudConfigPath,
   tinycloudHomePath,
+  updateProfileStore,
   upsertProfileRecord,
   writeJsonAtomic,
   writeSession,
@@ -140,6 +141,32 @@ test("atomically appends records and replaces duplicate explicit keys", async ()
     { delegation: { cid: "bafy-two" }, revision: 1 },
     { delegation: { cid: "bafy-one" }, revision: 2 },
   ]);
+});
+
+test("updates a format-1 record store under the one profile lock without changing its legacy array layout", async () => {
+  await isolatedHome();
+  const profile = "delegate";
+  await upsertProfileRecord(
+    profile,
+    "auth-requests",
+    "req-old",
+    request("req-old"),
+    (candidate) => candidate.requestId,
+  );
+
+  const count = await updateProfileStore(
+    profile,
+    "auth-requests",
+    (records: readonly { requestId: string; revision: number }[]) => ({
+      records: [...records, request("req-new")],
+      result: records.length + 1,
+    }),
+  );
+
+  expect(count).toBe(2);
+  expect(await readFile(authRequestsPath(profile), "utf8")).toBe(
+    '[\n  {\n    "requestId": "req-old",\n    "revision": 1\n  },\n  {\n    "requestId": "req-new",\n    "revision": 1\n  }\n]\n',
+  );
 });
 
 test("writes and removes sessions under the profile lock with legacy JSON bytes", async () => {

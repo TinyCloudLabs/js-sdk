@@ -25,6 +25,10 @@ function createSessionManager(): ISessionManager {
     createSessionKey(id: string): string {
       return ensureKey(id);
     },
+    replaceSessionKey(jwk: object, keyId: string): string {
+      keys.set(keyId, JSON.stringify(jwk));
+      return keyId;
+    },
     renameSessionKeyId(oldId: string, newId: string): void {
       const value = keys.get(oldId);
       if (value) {

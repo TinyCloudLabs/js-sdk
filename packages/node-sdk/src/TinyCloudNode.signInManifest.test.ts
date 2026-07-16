@@ -57,6 +57,10 @@ function makeFakeSessionManager(): ISessionManager {
       keys.add(id);
       return id;
     },
+    replaceSessionKey(_jwk: object, keyId: string): string {
+      keys.add(keyId);
+      return keyId;
+    },
     renameSessionKeyId(oldId: string, newId: string): void {
       if (!keys.has(oldId)) throw new Error(`Key ${oldId} does not exist.`);
       keys.delete(oldId);
@@ -160,6 +164,36 @@ async function withFetchResponses(
   }
 }
 
+async function withActivationResponses(
+  responses: Response[],
+  fn: (fetchMock: any) => Promise<void>,
+): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const expectedAuthorization = "Bearer manifest-activation-fixture";
+  const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const authorization = new Headers(init?.headers).get("authorization");
+    if (authorization !== expectedAuthorization) {
+      return originalFetch(input, init);
+    }
+    if (!url.endsWith("/delegate") || init?.method !== "POST") {
+      throw new Error(`unexpected activation fetch: ${url}`);
+    }
+    const response = responses.shift();
+    if (!response) {
+      throw new Error("unexpected activation fetch");
+    }
+    return response;
+  });
+
+  globalThis.fetch = fetchMock as any;
+  try {
+    await fn(fetchMock);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 /**
  * Stub out the post-prepareSession network calls so signIn can complete
  * without contacting a real server. We monkey-patch the inner auth
@@ -226,6 +260,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const firstKeyId = node.session?.sessionKey;
     expect(firstKeyId).toStartWith("session-");
     expect(node.sessionDid).toBe(`did:key:z6MkTest-${firstKeyId}`);
+    const capturedEncryption = node.encryption;
 
     await new Promise((resolve) => setTimeout(resolve, 2));
     await withFetchResponses(
@@ -253,6 +288,76 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     expect(secondKeyId).toStartWith("session-");
     expect(secondKeyId).not.toBe(firstKeyId);
     expect(node.sessionDid).toBe(`did:key:z6MkTest-${secondKeyId}`);
+    await expect((capturedEncryption as any).config.node.fetchByNetworkId(
+      "urn:tinycloud:encryption:did:key:z6MkTest:default",
+    )).rejects.toThrow("Service graph has been retired");
+    await expect((capturedEncryption as any).config.signer.signDecryptInvocation({
+      targetNode: "did:key:z6MkNode",
+      networkId: "urn:tinycloud:encryption:did:key:z6MkTest:default",
+      body: {},
+      facts: [],
+    })).rejects.toThrow("Service graph has been retired");
+  });
+
+  test("rejects captured encryption discovery after a later wallet sign-in retires its graph", async () => {
+    const originalFetch = globalThis.fetch;
+    let discoveryRequested = false;
+    let requestSignal: AbortSignal | undefined;
+    let releaseDiscovery!: (response: Response) => void;
+    let markDiscoveryStarted!: () => void;
+    const discoveryStarted = new Promise<void>((resolve) => { markDiscoveryStarted = resolve; });
+    const info = () => new Response(JSON.stringify({
+      protocol: 1,
+      version: "test",
+      features: [],
+      nodeId: "did:key:z6MkNode",
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    const activation = () => new Response(JSON.stringify({
+      activated: ["space://test"],
+      skipped: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    globalThis.fetch = mock((url: string, init?: RequestInit) => {
+      if (url.includes("/encryption/networks/")) {
+        if (discoveryRequested) return Promise.resolve(new Response(null, { status: 404 }));
+        discoveryRequested = true;
+        requestSignal = init?.signal;
+        markDiscoveryStarted();
+        return new Promise<Response>((resolve) => { releaseDiscovery = resolve; });
+      }
+      if (url.includes("/info")) return Promise.resolve(info());
+      return Promise.resolve(activation());
+    }) as typeof fetch;
+
+    try {
+      const node = makeNodeWithSigner(makeFakeWasmBindings(), {
+        autoBootstrapAccount: false,
+        includeAccountRegistryPermissions: false,
+        manifest: {
+          app_id: "xyz.tinycloud.feed.host",
+          name: "Feed Host",
+          defaults: false,
+          permissions: [],
+        },
+      });
+      await node.signIn();
+
+      const captured = node.encryption;
+      const inFlight = captured.discoverNetwork(
+        "urn:tinycloud:encryption:did:key:zTest:network",
+      );
+      await discoveryStarted;
+
+      await node.signIn();
+      expect(requestSignal?.aborted).toBe(true);
+      releaseDiscovery(new Response(null, { status: 404 }));
+
+      await expect(inFlight).rejects.toThrow("Service graph has been retired");
+      await expect(captured.discoverNetwork(
+        "urn:tinycloud:encryption:did:key:zTest:network",
+      )).rejects.toThrow("Service graph has been retired");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("no manifest → uses defaultActions (legacy fallback)", async () => {
@@ -625,11 +730,11 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const node = makeNodeWithSigner(makeFakeWasmBindings());
     const auth = (node as any).auth;
     auth._tinyCloudSession = {
-      delegationHeader: { Authorization: "Bearer fake" },
+      delegationHeader: { Authorization: "Bearer manifest-activation-fixture" },
     };
     auth.hostOwnedSpace = mock(async () => true);
 
-    await withFetchResponses(
+    await withActivationResponses(
       [
         new Response(JSON.stringify({ activated: [], skipped: [accountSpaceId] }), {
           status: 200,

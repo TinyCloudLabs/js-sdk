@@ -50,6 +50,8 @@ export interface PermissionEntry {
    * Already-expanded URNs are passed through unchanged.
    */
   actions: string[];
+  /** Exact ReCap caveat branches when this authority came from a signed ReCap. */
+  caveats?: Record<string, unknown>[];
   /** When true, the manifest prefix is NOT prepended to `path`. Default false. */
   skipPrefix?: boolean;
   /** Per-entry expiry override, ms-format. */
@@ -794,6 +796,13 @@ function validatePermissionEntry(p: unknown, path: string): void {
       vaultActionExpansion(action);
     }
   }
+  if (entry.caveats !== undefined &&
+    (!Array.isArray(entry.caveats) || entry.caveats.some((caveat) =>
+      caveat === null || typeof caveat !== "object" || Array.isArray(caveat)
+    ))
+  ) {
+    throw new ManifestValidationError(`${path}.caveats must be an array of objects`);
+  }
   if (entry.expiry !== undefined) {
     parseExpiry(entry.expiry);
   }
@@ -1174,6 +1183,9 @@ function clonePermissionEntry(entry: PermissionEntry): PermissionEntry {
     ...(entry.space !== undefined ? { space: entry.space } : {}),
     path: entry.path,
     actions: [...entry.actions],
+    ...(entry.caveats !== undefined
+      ? { caveats: JSON.parse(JSON.stringify(entry.caveats)) as Record<string, unknown>[] }
+      : {}),
     ...(entry.skipPrefix !== undefined ? { skipPrefix: entry.skipPrefix } : {}),
     ...(entry.expiry !== undefined ? { expiry: entry.expiry } : {}),
     ...(entry.description !== undefined

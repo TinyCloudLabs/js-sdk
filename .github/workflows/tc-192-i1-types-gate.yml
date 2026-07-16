@@ -77,19 +77,9 @@ jobs:
           bun run --cwd packages/sdk-rs build:wasm:node
           bun run --cwd packages/sdk-rs/packages/node build
 
-      # The legacy CLI concurrency test imports the node SDK package while
-      # exercising an operations state writer.
-      - name: Build Node SDK runtime entrypoint
-        working-directory: packages/node-sdk
-        run: >-
-          bunx --no-install tsup --no-config src/index.ts --format esm,cjs
-          --target es2020 --sourcemap
-          --external @tinycloud/sdk-core
-          --external @tinycloud/node-sdk-wasm
-          --external siwe
-          --external events
-          --external fs
-          --external path
+      # Operations typechecking imports the node SDK public types.
+      - name: Build Node SDK package exports
+        run: bun run --cwd packages/node-sdk build
 
       - name: Typecheck the complete operations program
         run: bun run typecheck:operations

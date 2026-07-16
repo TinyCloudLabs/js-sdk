@@ -58,11 +58,13 @@ import {
   ISigner,
   type InvokeAnyFunction,
   type InvokeFunction,
+  type FetchFunction,
   INotificationHandler,
   SilentNotificationHandler,
   IENSResolver,
   IWasmBindings,
   ISessionManager,
+  type WasmRecapEntry,
   ISpaceCreationHandler,
   SignInOptions,
   // v2 services
@@ -100,8 +102,10 @@ import {
   // Capability-chain delegation
   type PermissionEntry,
   ENCRYPTION_PERMISSION_SERVICE,
+  CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
+  recapCaveatsEqual,
   expandPermissionEntries as expandPermissionEntriesCore,
   isCapabilitySubset,
   parseRecapCapabilities,
@@ -307,6 +311,170 @@ function didPrincipalMatches(actual: string, expected: string): boolean {
   }
 }
 
+function clonePersistedSessionJwk(jwk: unknown): object {
+  if (jwk === null || typeof jwk !== "object" || Array.isArray(jwk)) {
+    throw new Error("Persisted session has an invalid private Ed25519 session key.");
+  }
+
+  try {
+    const serialized = JSON.stringify(jwk);
+    const cloned = serialized === undefined ? undefined : JSON.parse(serialized);
+    if (cloned === null || typeof cloned !== "object" || Array.isArray(cloned)) {
+      throw new Error("invalid JWK object");
+    }
+    return cloned;
+  } catch {
+    throw new Error("Persisted session has an invalid private Ed25519 session key.");
+  }
+}
+
+function cloneRecapCaveats(
+  caveats: readonly Record<string, unknown>[] | undefined,
+): Record<string, unknown>[] {
+  if (!caveats) return [];
+  const cloneJson = (value: unknown): unknown => {
+    if (value === null || typeof value === "boolean" || typeof value === "string") {
+      return value;
+    }
+    if (typeof value === "number") {
+      if (Number.isFinite(value)) return value;
+      throw new Error("ReCap caveats must contain only JSON values.");
+    }
+    if (Array.isArray(value)) return value.map(cloneJson);
+    if (typeof value === "object") {
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new Error("ReCap caveats must contain only JSON values.");
+      }
+      const copy: Record<string, unknown> = Object.create(null);
+      for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+        copy[key] = cloneJson(nested);
+      }
+      return copy;
+    }
+    throw new Error("ReCap caveats must contain only JSON values.");
+  };
+  try {
+    return JSON.parse(JSON.stringify(caveats.map(cloneJson))) as Record<string, unknown>[];
+  } catch {
+    throw new Error("Verified persisted session ReCap contains invalid caveats.");
+  }
+}
+
+/** One replaceable set of services bound to a single host/session authority. */
+class ServiceGraphLifetime {
+  private readonly abortController = new AbortController();
+  private readonly contexts = new Set<ServiceContext>();
+  private retired = false;
+
+  constructor(
+    private readonly invokeFn: InvokeFunction,
+    private readonly invokeAnyFn: InvokeAnyFunction,
+    private readonly fetchFn: FetchFunction,
+  ) {}
+
+  readonly invoke: InvokeFunction = (session, service, path, action, facts) => {
+    this.assertActive();
+    return this.invokeFn(session, service, path, action, facts);
+  };
+
+  readonly invokeAny: InvokeAnyFunction = (session, entries, facts) => {
+    this.assertActive();
+    return this.invokeAnyFn(session, entries, facts);
+  };
+
+  readonly fetch: FetchFunction = (url, init) => {
+    this.assertActive();
+    return this.fetchFn(url, {
+      ...init,
+      signal: this.combineSignals(init?.signal),
+    });
+  };
+
+  track(context: ServiceContext): ServiceContext {
+    this.assertActive();
+    this.contexts.add(context);
+    return context;
+  }
+
+  retire(): void {
+    if (this.retired) return;
+    this.retired = true;
+    this.abortController.abort();
+    try {
+      for (const context of this.contexts) {
+        try {
+          const retire = (context as ServiceContext & { retire?: () => void }).retire;
+          if (retire) retire.call(context);
+          else context.abort();
+        } catch (error) {
+          // Graph replacement is committed before retirement. A custom
+          // service's best-effort cleanup must not roll that replacement back
+          // or leave later contexts active.
+          console.error("Error retiring service graph context:", error);
+        }
+      }
+    } finally {
+      this.contexts.clear();
+    }
+  }
+
+  assertActive(): void {
+    if (this.retired) {
+      throw new Error("Service graph has been retired by session replacement.");
+    }
+  }
+
+  private combineSignals(signal?: AbortSignal): AbortSignal {
+    if (!signal) return this.abortController.signal;
+    const combined = new AbortController();
+    const abort = () => combined.abort();
+    if (signal.aborted || this.abortController.signal.aborted) {
+      abort();
+    } else {
+      signal.addEventListener("abort", abort, { once: true });
+      this.abortController.signal.addEventListener("abort", abort, { once: true });
+    }
+    return combined.signal;
+  }
+}
+
+export class UnsupportedSessionRestoreError extends Error {
+  readonly code = "RESTORE_SESSION_KEY_REPLACEMENT_UNSUPPORTED" as const;
+
+  constructor(reason = "it cannot replace and enumerate every live session signer") {
+    super(`Persisted session restore is unsupported by this WASM binding because ${reason}.`);
+    this.name = "UnsupportedSessionRestoreError";
+  }
+}
+
+function canonicalRestoredVerificationMethod(
+  canonicalVerificationMethod: string,
+  persistedVerificationMethod: unknown,
+): string | undefined {
+  if (typeof persistedVerificationMethod !== "string") return undefined;
+  const principal = canonicalVerificationMethod.split("#", 1)[0];
+  return persistedVerificationMethod === principal ||
+    persistedVerificationMethod === canonicalVerificationMethod
+    ? canonicalVerificationMethod
+    : undefined;
+}
+
+function persistedExpiry(value: unknown): Date {
+  if (typeof value !== "string") {
+    throw new Error("Persisted session without a SIWE expiration must include expiresAt.");
+  }
+  const expiry = new Date(value);
+  if (!Number.isFinite(expiry.getTime()) || expiry.getTime() <= Date.now()) {
+    throw new Error("Persisted session expiry is invalid or expired.");
+  }
+  return expiry;
+}
+
+function sameInstant(left: Date, right: Date): boolean {
+  return left.getTime() === right.getTime();
+}
+
 function sharingActionsToAbilities(path: string, actions: string[]): AbilitiesMap | undefined {
   const abilities: AbilitiesMap = {};
 
@@ -442,6 +610,8 @@ interface RuntimePermissionOperation {
   service: string;
   path: string;
   action: string;
+  /** Exact signed ReCap attenuation for this action, if any. */
+  caveats?: Record<string, unknown>[];
 }
 
 interface RuntimePermissionGrant {
@@ -588,6 +758,7 @@ export class TinyCloudNode {
   private _chainId: number = 1;
   private wasmBindings: IWasmBindings;
   private sessionManager: ISessionManager;
+  private _serviceGraph!: ServiceGraphLifetime;
   private _serviceContext?: ServiceContext;
   private _kv?: KVService;
   private _sql?: SQLService;
@@ -677,13 +848,37 @@ export class TinyCloudNode {
     action,
     facts,
   ) => {
-    return this.wasmBindings.invoke(
-      this.selectInvocationSession(session, service, path, action),
-      service,
+    const operation: RuntimePermissionOperation = {
+      spaceId: session.spaceId,
+      service: this.invocationServiceName(service),
       path,
       action,
-      facts,
+    };
+    const grant = this.findGrantForOperation(operation);
+    const grantedOperation = grant?.operations.find((candidate) =>
+      this.operationCovers(candidate, operation),
     );
+    const invocationSession = !grant || grant.provenance === "primary"
+      ? session
+      : grant.session;
+
+    // The legacy single-capability binding has no caveat parameter.  Calling
+    // it for a restored caveated grant would silently broaden the authority,
+    // so mint the equivalent one-entry aggregate invocation instead.
+    if ((grantedOperation?.caveats?.length ?? 0) > 0) {
+      if (!this.wasmBindings.invokeAny) {
+        throw new Error("WASM binding does not support caveat-preserving invocation");
+      }
+      return this.wasmBindings.invokeAny(invocationSession, [{
+        spaceId: invocationSession.spaceId,
+        service,
+        path,
+        action,
+        caveats: cloneRecapCaveats(grantedOperation!.caveats),
+      }], facts);
+    }
+
+    return this.wasmBindings.invoke(invocationSession, service, path, action, facts);
   };
 
   private readonly invokeAnyWithRuntimePermissions: InvokeAnyFunction = (
@@ -694,18 +889,33 @@ export class TinyCloudNode {
     if (!this.wasmBindings.invokeAny) {
       throw new Error("WASM binding does not support invokeAny");
     }
-    const grant = this.findGrantForOperations(
-      entries.flatMap((entry) => {
-        const operation = this.operationFromInvokeAnyEntry(entry);
-        return operation ? [operation] : [];
-      }),
-    );
+    const operations = entries.flatMap((entry) => {
+      const operation = this.operationFromInvokeAnyEntry(entry);
+      return operation ? [operation] : [];
+    });
+    const grant = this.findGrantForOperations(operations);
     // When the primary grant wins, invoke with the PASSED session (its scoped
     // target `spaceId`), not the stored primary `ServiceSession` — see
     // `selectInvocationSession` for the wrong-space rationale (TC-111 follow-up).
     const invocationSession =
       !grant || grant.provenance === "primary" ? session : grant.session;
-    return this.wasmBindings.invokeAny(invocationSession, entries, facts);
+    const caveatPreservingEntries = grant
+      ? entries.map((entry) => {
+        const requested = this.operationFromInvokeAnyEntry(entry);
+        const granted = requested && grant.operations.find((candidate) =>
+          this.operationCovers(candidate, requested),
+        );
+        if (!granted?.caveats?.length) {
+          return entry;
+        }
+        if (entry.caveats !== undefined &&
+          !recapCaveatsEqual(entry.caveats, granted.caveats)) {
+          throw new Error("Invocation caveats do not match signed ReCap authority.");
+        }
+        return { ...entry, caveats: cloneRecapCaveats(granted.caveats) };
+      })
+      : entries;
+    return this.wasmBindings.invokeAny(invocationSession, caveatPreservingEntries, facts);
   };
 
   /**
@@ -772,6 +982,8 @@ export class TinyCloudNode {
     }
     this.sessionKeyJwk = JSON.parse(jwkStr);
 
+    this._serviceGraph = this.createServiceGraphLifetime();
+
     // Initialize capability registry for all users (needed for tracking received delegations)
     this._capabilityRegistry = new CapabilityKeyRegistry();
 
@@ -786,11 +998,13 @@ export class TinyCloudNode {
     // Initialize SharingService for receive-only access (no session required)
     // This allows session-only users to receive sharing links without signIn()
     // Full capabilities (generate) are added after signIn()
+    const receiveOnlyGraph = this._serviceGraph;
     this._sharingService = new SharingService({
       hosts: [this.config.host!],
       // session: undefined - not needed for receive()
-      invoke: this.invokeWithRuntimePermissions,
-      fetch: globalThis.fetch.bind(globalThis),
+      invoke: receiveOnlyGraph.invoke,
+      fetch: receiveOnlyGraph.fetch,
+      assertActive: () => receiveOnlyGraph.assertActive(),
       keyProvider: this._keyProvider,
       registry: this._capabilityRegistry,
       createDelegationWasm: (params) => this.createDelegationWrapper(params),
@@ -805,12 +1019,12 @@ export class TinyCloudNode {
         const prefix = config.pathPrefix?.replace(/\/$/, '');
         const kvService = new KVService({ prefix });
         // Create a new service context for the KV service
-        const kvContext = new ServiceContext({
+        const kvContext = receiveOnlyGraph.track(new ServiceContext({
           invoke: config.invoke,
           fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
           hosts: config.hosts,
           telemetry: this.config.telemetry,
-        });
+        }));
         kvContext.setSession(config.session);
         kvService.initialize(kvContext);
         return kvService;
@@ -879,6 +1093,17 @@ export class TinyCloudNode {
       config.capabilityRequest === undefined &&
       (config.prefix ?? "default") === "default" &&
       isOpenKeyAutoSignStrategy(config.signStrategy);
+  }
+
+  private createServiceGraphLifetime(): ServiceGraphLifetime {
+    return new ServiceGraphLifetime(
+      this.invokeWithRuntimePermissions,
+      this.invokeAnyWithRuntimePermissions,
+      // Resolve fetch at request time. This keeps the graph-owned lifetime
+      // signal while preserving the SDK's existing injectable global fetch
+      // behavior (including adapters that install it after construction).
+      (url, init) => globalThis.fetch(url, init),
+    );
   }
 
   private syncResolvedHostFromAuth(): void {
@@ -1075,6 +1300,15 @@ export class TinyCloudNode {
 
     await this.tc.signIn(options);
     this.syncResolvedHostFromAuth();
+
+    // Bind the replacement services to the runtime dependencies active for
+    // this sign-in and permanently retire anything captured from the previous
+    // session. The authorization flow above remains transactional: a rejected
+    // sign-in leaves the existing graph untouched.
+    const oldGraph = this._serviceGraph;
+    this._serviceGraph = this.createServiceGraphLifetime();
+    oldGraph.retire();
+    this.tc.retireServices();
 
     // NodeUserAuthorization renames the constructor's "default" key when it
     // creates the signed-in session. Keep node-level key accessors in sync so
@@ -1435,7 +1669,7 @@ export class TinyCloudNode {
     }
     let operations: RuntimePermissionOperation[] = [];
     try {
-      const entries = this.wasmBindings.parseRecapFromSiwe(siwe);
+      const entries = this.parseRecapWithCaveats(siwe);
       if (Array.isArray(entries)) {
         operations = entries.flatMap((entry) => {
           const service = this.invocationServiceName(entry.service);
@@ -1446,6 +1680,7 @@ export class TinyCloudNode {
             service,
             path: entry.path,
             action,
+            caveats: cloneRecapCaveats(entry.caveats),
           }));
         });
       }
@@ -1885,6 +2120,8 @@ export class TinyCloudNode {
     delegationHeader: { Authorization: string };
     delegationCid: string;
     spaceId: string;
+    /** Additional capability spaces persisted with the primary session. */
+    spaces?: Record<string, string>;
     jwk: object;
     verificationMethod: string;
     address?: string;
@@ -1899,11 +2136,16 @@ export class TinyCloudNode {
      */
     siwe?: string;
     /**
-     * The wallet/OpenKey signature over `siwe`. Optional because the
-     * runtime doesn't re-verify it — it's persisted alongside the SIWE
-     * for callers that need to round-trip the full session shape.
+     * The wallet/OpenKey signature over `siwe`. When any signed-session
+     * metadata is restored, this is required and verified in WASM before
+     * local ReCap or expiry authority is installed.
      */
     signature?: string;
+    /**
+     * Persisted policy expiry. Required when an otherwise valid SIWE omits
+     * `Expiration Time`; restore never invents a new renewable lifetime.
+     */
+    expiresAt?: string;
     /**
      * The TinyCloud hosts this session was created against (from
      * {@link PersistedSessionData.tinycloudHosts}). When present they are
@@ -1918,132 +2160,515 @@ export class TinyCloudNode {
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
 
-    // Reset services so they get recreated with new session
-    this._kv = undefined;
-    this._sql = undefined;
-    this._duckdb = undefined;
-    this._hooks = undefined;
-    this._vault = undefined;
-    this._encryption = undefined;
-    this._baseVaults.clear();
-    this._baseSecrets.clear();
-    this._secrets.clear();
-    this._spaceService = undefined;
-    this._serviceContext = undefined;
-    this.runtimePermissionGrants = [];
+    // Build every part of the restored state against a disposable manager.
+    // Nothing live is touched until the commit below.
+    const restoredJwk = clonePersistedSessionJwk(sessionData.jwk);
+    if (
+      sessionData.chainId !== undefined &&
+      (!Number.isSafeInteger(sessionData.chainId) || sessionData.chainId <= 0)
+    ) {
+      throw new Error("Persisted session chain ID must be a positive safe integer.");
+    }
+    const stagedManager = this.wasmBindings.createSessionManager();
+    const stagedReplace = stagedManager.replaceSessionKey;
+    const liveKeys = this.sessionManager.listSessionKeys;
+    const stagedKeys = stagedManager.listSessionKeys;
+    if (
+      typeof stagedReplace !== "function" ||
+      typeof liveKeys !== "function" ||
+      typeof stagedKeys !== "function"
+    ) {
+      throw new UnsupportedSessionRestoreError();
+    }
+    let stagedKeyId: string;
+    let stagedJwk: object;
+    let canonicalVerificationMethod: string;
+    try {
+      // Replacing a primary signer without a complete key inventory silently
+      // loses receive/share keys. Require the capability rather than guessing.
+      const keyIds = liveKeys.call(this.sessionManager);
+      if (!Array.isArray(keyIds) || !keyIds.every((keyId) => typeof keyId === "string")) {
+        throw new UnsupportedSessionRestoreError("it cannot reliably enumerate every live session signer");
+      }
+      for (const keyId of keyIds) {
+        if (keyId === this.sessionKeyId) continue;
+        const jwk = this.sessionManager.jwk(keyId);
+        if (!jwk) throw new Error("missing live session key");
+        stagedReplace.call(stagedManager, clonePersistedSessionJwk(JSON.parse(jwk)), keyId);
+      }
+      stagedKeyId = stagedReplace.call(stagedManager, restoredJwk, this.sessionKeyId);
+      const stagedJwkJson = stagedManager.jwk(stagedKeyId);
+      if (!stagedJwkJson) throw new Error("missing restored session key");
+      stagedJwk = clonePersistedSessionJwk(JSON.parse(stagedJwkJson));
+      canonicalVerificationMethod = stagedManager.getDID(stagedKeyId);
+    } catch (error) {
+      if (error instanceof UnsupportedSessionRestoreError) throw error;
+      throw new Error("Persisted session has an invalid private Ed25519 session key.");
+    }
+    const restoredVerificationMethod = canonicalRestoredVerificationMethod(
+      canonicalVerificationMethod,
+      sessionData.verificationMethod,
+    );
+    if (!restoredVerificationMethod) {
+      throw new Error(
+        "Persisted session verification method does not match its private Ed25519 session key.",
+      );
+    }
+    const proofValues = [
+      sessionData.siwe,
+      sessionData.signature,
+      sessionData.address,
+      sessionData.chainId,
+    ];
+    const hasPersistedProof = proofValues.every((value) => value !== undefined);
+    if (!hasPersistedProof && (proofValues.some((value) => value !== undefined) || sessionData.expiresAt !== undefined)) {
+      throw new Error("Persisted session authority metadata is incomplete.");
+    }
 
-    const restoredAddress = sessionData.address
-      ? canonicalizeAddress(sessionData.address)
+    const restoredAddress = hasPersistedProof
+      ? canonicalizeAddress(sessionData.address!)
       : undefined;
-    if (restoredAddress) {
-      this._address = restoredAddress;
+    let stagedSessionExpiry = new Date(0);
+    let stagedRecap: WasmRecapEntry[] = [];
+    if (hasPersistedProof) {
+      if (typeof this.wasmBindings.validatePersistedSession !== "function") {
+        throw new UnsupportedSessionRestoreError("it cannot verify persisted SIWE authority");
+      }
+      const verified = this.wasmBindings.validatePersistedSession({
+        delegationHeader: sessionData.delegationHeader,
+        delegationCid: sessionData.delegationCid,
+        spaceId: sessionData.spaceId,
+        jwk: stagedJwk,
+        address: restoredAddress!,
+        chainId: sessionData.chainId!,
+        siwe: sessionData.siwe!,
+        signature: sessionData.signature!,
+      });
+      const exactRecap = verified.verifiedRecap;
+      if (!Array.isArray(exactRecap) || !exactRecap.every((entry) =>
+        entry !== null && typeof entry === "object" &&
+        typeof entry.service === "string" &&
+        typeof entry.space === "string" &&
+        typeof entry.path === "string" &&
+        Array.isArray(entry.actions) && entry.actions.every((action) => typeof action === "string") &&
+        Array.isArray(entry.caveats) && entry.caveats.every((caveat) =>
+          caveat !== null && typeof caveat === "object" && !Array.isArray(caveat)
+        )
+      )) {
+        throw new UnsupportedSessionRestoreError(
+          "it cannot reconstruct caveat-preserving persisted ReCap authority",
+        );
+      }
+      stagedRecap = exactRecap.map((entry) => ({
+        service: entry.service,
+        space: entry.space,
+        path: entry.path,
+        actions: [...entry.actions],
+        caveats: cloneRecapCaveats(entry.caveats),
+      }));
+      const signedExpiry = verified.expiresAt === undefined
+        ? undefined
+        : persistedExpiry(verified.expiresAt);
+      const persistedPolicyExpiry = sessionData.expiresAt === undefined
+        ? undefined
+        : persistedExpiry(sessionData.expiresAt);
+      if (signedExpiry && persistedPolicyExpiry && !sameInstant(signedExpiry, persistedPolicyExpiry)) {
+        throw new Error("Persisted session expiry does not match its signed SIWE authority.");
+      }
+      stagedSessionExpiry = signedExpiry ?? persistedPolicyExpiry ?? persistedExpiry(undefined);
     }
-    if (sessionData.chainId) {
-      this._chainId = sessionData.chainId;
-    }
-
-    // Resolve the host the restored session should target, mirroring what a
-    // fresh signIn() would have done. Priority:
-    //   1. explicitHost   — local dev / pinned node, never override
-    //   2. persisted hosts — the node this session was created against
-    //   3. registry/fallback resolution — old sessions that predate the
-    //      persisted tinycloudHosts field
-    // Without this, the ServiceContext below (and every service call) would
-    // silently target the default host instead of the user's actual node.
     const resolvedHost = await this.resolveRestoredHost(
       sessionData.tinycloudHosts,
       restoredAddress,
       sessionData.chainId,
     );
-    if (resolvedHost) {
-      this.config.host = resolvedHost;
-    }
-
-    // Create service context
-    this._serviceContext = new ServiceContext({
-      invoke: this.invokeWithRuntimePermissions,
-      invokeAny: this.invokeAnyWithRuntimePermissions,
-      fetch: globalThis.fetch.bind(globalThis),
-      hosts: [this.config.host!],
-      telemetry: this.config.telemetry,
-    });
-
-    // Create and register KV service
-    this._kv = new KVService({});
-    this._kv.initialize(this._serviceContext);
-    this._serviceContext.registerService('kv', this._kv);
-
-    // Create and register SQL service
-    this._sql = new SQLService({});
-    this._sql.initialize(this._serviceContext);
-    this._serviceContext.registerService('sql', this._sql);
-
-    // Create and register DuckDB service
-    this._duckdb = new DuckDbService({});
-    this._duckdb.initialize(this._serviceContext);
-    this._serviceContext.registerService('duckdb', this._duckdb);
-
-    this._hooks = new HooksService({});
-    this._hooks.initialize(this._serviceContext);
-    this._serviceContext.registerService('hooks', this._hooks);
-
-    // Set session on context
+    const stagedHost = resolvedHost ?? this.config.host!;
+    // Never blend a metadata-light restore with the prior wallet identity.
+    const stagedAddress = restoredAddress;
+    const stagedChainId = sessionData.chainId ?? 1;
+    const stagedNodeDid = stagedAddress
+      ? pkhDid(stagedAddress, stagedChainId)
+      : canonicalVerificationMethod;
     const serviceSession: ServiceSession = {
       delegationHeader: sessionData.delegationHeader,
       delegationCid: sessionData.delegationCid,
       spaceId: sessionData.spaceId,
-      verificationMethod: sessionData.verificationMethod,
-      jwk: sessionData.jwk,
+      verificationMethod: restoredVerificationMethod,
+      jwk: stagedJwk,
     };
-    this._serviceContext.setSession(serviceSession);
-
-    // Create and register Vault service (matches initializeServices behavior)
-    this._vault = this.createVaultService(sessionData.spaceId, this._kv!);
-    this._vault.initialize(this._serviceContext);
-    this._serviceContext.registerService('vault', this._vault);
-
-    // Initialize v2 services
-    this.initializeV2Services(serviceSession);
-
-    // Rehydrate a TinyCloudSession on whatever surface is available. In
-    // wallet mode the auth layer holds it; in session-only mode (OpenKey,
-    // public-space restore, …) `this.auth` is null and we fall back to
-    // `_restoredTcSession` on the node itself. Both surfaces are read by
-    // {@link currentTinyCloudSession} so callers don't have to care.
-    //
-    // Required for `useRuntimeDelegation` / `hasRuntimePermissions` /
-    // `getRuntimePermissionDelegations` to work after a session restore —
-    // without this they bail with `SessionExpiredError(new Date(0))`.
-    if (sessionData.siwe && restoredAddress && sessionData.chainId) {
-      const tcSession: TinyCloudSession = {
-        address: restoredAddress,
-        chainId: sessionData.chainId,
-        sessionKey: JSON.stringify(sessionData.jwk),
+    const stagedTcSession: TinyCloudSession | undefined =
+      hasPersistedProof ? {
+        address: restoredAddress!,
+        chainId: sessionData.chainId!,
+        sessionKey: JSON.stringify(stagedJwk),
         spaceId: sessionData.spaceId,
+        spaces: sessionData.spaces,
         delegationCid: sessionData.delegationCid,
         delegationHeader: sessionData.delegationHeader,
-        verificationMethod: sessionData.verificationMethod,
-        jwk: sessionData.jwk as { [k: string]: unknown },
-        siwe: sessionData.siwe,
-        signature: sessionData.signature ?? "",
-      };
-      if (this.auth) {
-        // Pass the now-resolved host so the auth layer's host-needing
-        // methods (ensureSpaceExists/hostSpace) don't throw "hosts have
-        // not been resolved" on a restored session.
-        this.auth.setRestoredTinyCloudSession(
-          tcSession,
-          this.config.host ? [this.config.host] : undefined,
-        );
-      } else {
-        this._restoredTcSession = tcSession;
-      }
+        verificationMethod: restoredVerificationMethod,
+        jwk: stagedJwk as { [k: string]: unknown },
+        siwe: sessionData.siwe!,
+        signature: sessionData.signature!,
+      } : undefined;
+    const stagedPrimary = this.stagePrimarySessionState(
+      stagedTcSession,
+      stagedNodeDid,
+      stagedHost,
+      stagedSessionExpiry,
+      stagedRecap,
+    );
+    const stagedGraph = this.stageRestoredServiceGraph({
+      host: stagedHost,
+      manager: stagedManager,
+      serviceSession,
+      verificationMethod: canonicalVerificationMethod,
+      nodeDid: stagedNodeDid,
+      address: stagedAddress,
+      chainId: stagedChainId,
+      tinyCloudSession: stagedTcSession,
+      sessionExpiry: stagedSessionExpiry,
+      recap: stagedRecap,
+    });
 
-      // Register the restored primary session's own recap as the highest-trust
-      // runtime grant, mirroring signIn() (TC-111). Grants were cleared above,
-      // so no dupes. Only runs when the restored session carries a `siwe`.
-      this.registerPrimarySessionGrant(tcSession);
+    // Every operation below is a non-throwing pointer/value swap.
+    const oldGraph = this._serviceGraph;
+    const oldCore = this.tc;
+    this.sessionManager = stagedManager;
+    this.sessionKeyId = stagedKeyId;
+    this.sessionKeyJwk = stagedJwk;
+    if (resolvedHost) this.config.host = resolvedHost;
+    this._address = stagedAddress;
+    this._chainId = stagedChainId;
+    this._serviceContext = stagedGraph.serviceContext;
+    this._kv = stagedGraph.kv;
+    this._sql = stagedGraph.sql;
+    this._duckdb = stagedGraph.duckdb;
+    this._hooks = stagedGraph.hooks;
+    this._vault = stagedGraph.vault;
+    this._encryption = stagedGraph.encryption;
+    this._capabilityRegistry = stagedGraph.capabilityRegistry;
+    this._keyProvider = stagedGraph.keyProvider;
+    this._sharingService = stagedGraph.sharingService;
+    this._delegationManager = stagedGraph.delegationManager;
+    this._spaceService = stagedGraph.spaceService;
+    this._serviceGraph = stagedGraph.graph;
+    this._baseSecrets = new Map();
+    this._secrets = new Map();
+    this._publicKV = undefined;
+    this._account = undefined;
+    this.tc = stagedGraph.core;
+    this._recapOperationsCache = stagedPrimary.cache;
+    this.runtimePermissionGrants = stagedPrimary.grants;
+    if (this.auth) {
+      this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost]);
+      this._restoredTcSession = undefined;
+    } else {
+      this._restoredTcSession = stagedTcSession;
     }
+    oldGraph.retire();
+    (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
+  }
+
+  private stagePrimarySessionState(
+    session: TinyCloudSession | undefined,
+    verificationMethod: string,
+    host: string,
+    sessionExpiry: Date,
+    recap: WasmRecapEntry[],
+  ): { cache: { siwe: string; operations: RuntimePermissionOperation[] } | undefined; grants: RuntimePermissionGrant[] } {
+    if (!session?.siwe) return { cache: undefined, grants: [] };
+    let operations: RuntimePermissionOperation[] = [];
+    operations = recap.flatMap((entry) => {
+      const service = this.invocationServiceName(entry.service);
+      return entry.actions.map((action) => ({
+        ...(this.isEncryptionNetworkOperation(service, entry.path) ? { resource: entry.path } : { spaceId: entry.space }),
+        service,
+        path: entry.path,
+        action,
+        caveats: cloneRecapCaveats(entry.caveats),
+      }));
+    });
+    const cache = { siwe: session.siwe, operations };
+    // Restored authority has no host-activation result yet. Importing a skip
+    // list from an unrelated prior session would erase valid restored grants.
+    if (operations.length === 0) return { cache, grants: [] };
+    const expiresAt = sessionExpiry;
+    return {
+      cache,
+      grants: [{
+        session: {
+          delegationHeader: session.delegationHeader,
+          delegationCid: session.delegationCid,
+          spaceId: session.spaceId,
+          verificationMethod: session.verificationMethod,
+          jwk: session.jwk,
+        },
+        delegation: {
+          cid: session.delegationCid,
+          delegationHeader: session.delegationHeader,
+          delegateDID: session.verificationMethod,
+          delegatorDID: verificationMethod,
+          spaceId: session.spaceId,
+          path: "",
+          actions: [...new Set(operations.map((operation) => operation.action))],
+          expiry: expiresAt,
+          allowSubDelegation: true,
+          ownerAddress: session.address,
+          chainId: session.chainId,
+          host,
+        },
+        operations,
+        expiresAt,
+        provenance: "primary",
+      }],
+    };
+  }
+
+  private stageRestoredServiceGraph(input: {
+    host: string;
+    manager: ISessionManager;
+    serviceSession: ServiceSession;
+    verificationMethod: string;
+    nodeDid: string;
+    address: string | undefined;
+    chainId: number;
+    tinyCloudSession: TinyCloudSession | undefined;
+    sessionExpiry: Date;
+    recap: WasmRecapEntry[];
+  }): {
+    core: TinyCloud | null;
+    graph: ServiceGraphLifetime;
+    serviceContext: ServiceContext;
+    kv: KVService;
+    sql: SQLService;
+    duckdb: DuckDbService;
+    hooks: HooksService;
+    vault: DataVaultService;
+    encryption: EncryptionService;
+    capabilityRegistry: CapabilityKeyRegistry;
+    keyProvider: WasmKeyProvider;
+    sharingService: SharingService;
+    delegationManager: DelegationManager;
+    spaceService: SpaceService;
+  } {
+    // TinyCloud owns the public-KV service graph. Stage a replacement core
+    // context alongside the node graph so repeated cross-host restores cannot
+    // leave publicKV pointed at a stale or uninitialized context.
+    const graph = this.createServiceGraphLifetime();
+    const core = this.auth
+      ? new TinyCloud(this.auth, {
+        invokeAny: graph.invokeAny,
+        telemetry: this.config.telemetry,
+      })
+      : null;
+    if (core) {
+      core.initializeServices(graph.invoke, [input.host], graph.fetch);
+      const coreContext = graph.track(core.serviceContext as ServiceContext);
+      coreContext.setSession(input.serviceSession);
+    }
+    const serviceContext = graph.track(new ServiceContext({
+      invoke: graph.invoke,
+      invokeAny: graph.invokeAny,
+      fetch: graph.fetch,
+      hosts: [input.host],
+      telemetry: this.config.telemetry,
+    }));
+    const kv = new KVService({});
+    kv.initialize(serviceContext);
+    serviceContext.registerService('kv', kv);
+    const sql = new SQLService({});
+    sql.initialize(serviceContext);
+    serviceContext.registerService('sql', sql);
+    const duckdb = new DuckDbService({});
+    duckdb.initialize(serviceContext);
+    serviceContext.registerService('duckdb', duckdb);
+    const hooks = new HooksService({});
+    hooks.initialize(serviceContext);
+    serviceContext.registerService('hooks', hooks);
+    serviceContext.setSession(input.serviceSession);
+    const encryption = this.createEncryptionService({
+      graph,
+      host: input.host,
+      session: input.serviceSession,
+      did: input.nodeDid,
+      address: input.address,
+      chainId: input.chainId,
+    });
+    encryption.initialize(serviceContext);
+    serviceContext.registerService('encryption', encryption);
+    const vault = this.createVaultService(input.serviceSession.spaceId, kv, encryption, {
+      host: input.host,
+      did: input.nodeDid,
+      address: input.address,
+      chainId: input.chainId,
+      serviceGraph: graph,
+    });
+    vault.initialize(serviceContext);
+    serviceContext.registerService('vault', vault);
+
+    const capabilityRegistry = new CapabilityKeyRegistry();
+    if (input.tinyCloudSession) {
+      const session = input.tinyCloudSession;
+      // ReCap entries are returned by the verifier that authenticated this
+      // SIWE. Persisted space metadata is only a routing hint and cannot add
+      // an unsigned space, path, or action to the registry.
+      const delegations: Delegation[] = input.recap.map((entry) => ({
+          cid: session.delegationCid,
+          delegateDID: session.verificationMethod,
+          spaceId: entry.space,
+          path: entry.path,
+          actions: [...entry.actions],
+          caveats: cloneRecapCaveats(entry.caveats),
+          expiry: input.sessionExpiry,
+          isRevoked: false,
+          allowSubDelegation: true,
+        }));
+      if (delegations.length > 0) {
+        capabilityRegistry.registerKey({
+          id: session.sessionKey,
+          did: session.verificationMethod,
+          type: "session",
+          jwk: session.jwk as JWK,
+          priority: 0,
+        }, delegations);
+      }
+    }
+    const delegationManager = new DelegationManager({
+      hosts: [input.host],
+      session: input.serviceSession,
+      invoke: graph.invoke,
+      invokeAny: graph.invokeAny,
+      fetch: graph.fetch,
+    });
+    const keyProvider = new WasmKeyProvider({ sessionManager: input.manager });
+    const sharingService = new SharingService({
+      hosts: [input.host],
+      invoke: graph.invoke,
+      fetch: graph.fetch,
+      assertActive: () => graph.assertActive(),
+      keyProvider,
+      registry: capabilityRegistry,
+      createDelegationWasm: (params) => this.createDelegationWrapper(params),
+      computeCid: (data, codec) => {
+        if (!this.wasmBindings.computeCid) throw new Error("computeCid is unavailable");
+        return this.wasmBindings.computeCid(data, codec);
+      },
+      createKVService: (config) => {
+        const service = new KVService({ prefix: config.pathPrefix?.replace(/\/$/, '') });
+        const context = graph.track(new ServiceContext({
+          invoke: config.invoke,
+          fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
+          hosts: config.hosts,
+          telemetry: this.config.telemetry,
+        }));
+        context.setSession(config.session);
+        service.initialize(context);
+        return service;
+      },
+    });
+    sharingService.updateConfig({
+      session: input.serviceSession,
+      delegationManager,
+      sessionExpiry: input.sessionExpiry,
+      createDelegationWasm: (params) => {
+        graph.assertActive();
+        return this.createDelegationWrapper(params);
+      },
+      onRootDelegationNeeded: this.signer ? async (params) => {
+        graph.assertActive();
+        const delegation = await this.createRootDelegationForSharing(
+          params,
+          () => graph.assertActive(),
+        );
+        graph.assertActive();
+        return delegation;
+      } : undefined,
+    });
+    const spaceService = new SpaceService({
+      hosts: [input.host],
+      session: input.serviceSession,
+      invoke: graph.invoke,
+      fetch: graph.fetch,
+      capabilityRegistry,
+      userDid: input.nodeDid,
+      createKVService: (spaceId) => {
+        graph.assertActive();
+        const scopedKv = new KVService({});
+        const context = graph.track(new ServiceContext({
+          invoke: graph.invoke,
+          invokeAny: graph.invokeAny,
+          fetch: graph.fetch,
+          hosts: [input.host],
+          telemetry: this.config.telemetry,
+        }));
+        context.setSession({ ...input.serviceSession, spaceId });
+        scopedKv.initialize(context);
+        return scopedKv;
+      },
+      createVaultService: (spaceId) => {
+        graph.assertActive();
+        const scopedKv = new KVService({});
+        const context = graph.track(new ServiceContext({
+          invoke: graph.invoke,
+          invokeAny: graph.invokeAny,
+          fetch: graph.fetch,
+          hosts: [input.host],
+          telemetry: this.config.telemetry,
+        }));
+        context.setSession({ ...input.serviceSession, spaceId });
+        scopedKv.initialize(context);
+        const scopedVault = this.createVaultService(spaceId, scopedKv, encryption, {
+          host: input.host,
+          did: input.nodeDid,
+          address: input.address,
+          chainId: input.chainId,
+          serviceGraph: graph,
+        });
+        scopedVault.initialize(context);
+        return scopedVault;
+      },
+      createSecretsService: (spaceId) => {
+        graph.assertActive();
+        return this.secretsForSpace(spaceId);
+      },
+      createDelegation: async (params) => {
+        graph.assertActive();
+        try {
+          const portableDelegation = await this.createDelegation({
+            delegateDID: params.delegateDID,
+            path: params.path,
+            actions: params.actions,
+            disableSubDelegation: params.disableSubDelegation,
+            expiryMs: params.expiry ? params.expiry.getTime() - Date.now() : undefined,
+          });
+          return { ok: true as const, data: {
+            cid: portableDelegation.cid,
+            delegateDID: portableDelegation.delegateDID,
+            delegatorDID: this.did,
+            spaceId: portableDelegation.spaceId,
+            path: portableDelegation.path,
+            actions: portableDelegation.actions,
+            expiry: portableDelegation.expiry,
+            isRevoked: false,
+            allowSubDelegation: !portableDelegation.disableSubDelegation,
+            createdAt: new Date(),
+            authHeader: portableDelegation.delegationHeader.Authorization,
+          }};
+        } catch (error) {
+          return { ok: false as const, error: {
+            code: "CREATION_FAILED",
+            message: error instanceof Error ? error.message : String(error),
+            service: "delegation",
+          }};
+        }
+      },
+      onSpaceRegistered: async (space) => {
+        graph.assertActive();
+        await this.account.spaces.register(space);
+      },
+    });
+    spaceService.updateConfig({ sharingService });
+    return { core, graph, serviceContext, kv, sql, duckdb, hooks, vault, encryption, capabilityRegistry, keyProvider, sharingService, delegationManager, spaceService };
   }
 
   /**
@@ -2242,16 +2867,21 @@ export class TinyCloudNode {
     }
 
     // Initialize TinyCloud core services (needed for publicKV, ensurePublicSpace)
-    this.tc!.initializeServices(this.invokeWithRuntimePermissions, [this.config.host!]);
+    this.tc!.initializeServices(
+      this._serviceGraph.invoke,
+      [this.config.host!],
+      this._serviceGraph.fetch,
+    );
+    this._serviceGraph.track(this.tc!.serviceContext as ServiceContext);
 
     // Create service context
-    this._serviceContext = new ServiceContext({
-      invoke: this.invokeWithRuntimePermissions,
-      invokeAny: this.invokeAnyWithRuntimePermissions,
-      fetch: globalThis.fetch.bind(globalThis),
+    this._serviceContext = this._serviceGraph.track(new ServiceContext({
+      invoke: this._serviceGraph.invoke,
+      invokeAny: this._serviceGraph.invokeAny,
+      fetch: this._serviceGraph.fetch,
       hosts: [this.config.host!],
       telemetry: this.config.telemetry,
-    });
+    }));
 
     // Create and register KV service
     this._kv = new KVService({});
@@ -2300,12 +2930,12 @@ export class TinyCloudNode {
   private createSpaceScopedKVService(spaceId: string): KVService {
     const kvService = new KVService({});
     if (this._serviceContext) {
-      const spaceScopedContext = new ServiceContext({
+      const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
         invoke: this._serviceContext.invoke,
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
-      });
+      }));
       const session = this._serviceContext.session;
       if (session) {
         spaceScopedContext.setSession({ ...session, spaceId });
@@ -2340,6 +2970,19 @@ export class TinyCloudNode {
 
   private requireServiceSession(): ServiceSession {
     const session = this._serviceContext?.session;
+    if (!session) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+    return session;
+  }
+
+  /**
+   * Runtime-permission helpers can be used from an authenticated Node session
+   * before its public ServiceContext is initialized. They still need the
+   * current signed session, never an optional or stale authority object.
+   */
+  private requireEncryptionSession(): ServiceSession {
+    const session = this._serviceContext?.session ?? this.auth?.tinyCloudSession;
     if (!session) {
       throw new Error("Not signed in. Call signIn() first.");
     }
@@ -2410,14 +3053,18 @@ export class TinyCloudNode {
     networkId: string;
     action: string;
     facts: NetworkInvocationFact;
+  }, binding?: {
+    graph: ServiceGraphLifetime;
+    session: ServiceSession;
   }): Promise<{ authorization: string; invocationCid: string }> {
+    binding?.graph.assertActive();
     if (!this.wasmBindings.invokeAny) {
       throw new Error("WASM binding does not support raw-resource invokeAny");
     }
     if (!this.wasmBindings.computeCid) {
       throw new Error("WASM binding does not support invocation CID computation");
     }
-    const session = this.requireServiceSession();
+    const session = binding?.session ?? this.requireEncryptionSession();
     const headers = this.invokeAnyWithRuntimePermissions(
       session,
       [
@@ -2436,6 +3083,7 @@ export class TinyCloudNode {
       input.targetNode,
       session.jwk,
     );
+    binding?.graph.assertActive();
     return {
       authorization: audienceBound,
       invocationCid: this.wasmBindings.computeCid(
@@ -2445,12 +3093,51 @@ export class TinyCloudNode {
     };
   }
 
-  private createEncryptionService(): EncryptionService {
+  private async fetchEncryptionNetworkAt(
+    host: string,
+    networkId: string,
+    fetchFn: FetchFunction,
+  ): Promise<NetworkDescriptor | null> {
+    const response = await fetchFn(
+      `${host}/encryption/networks/${encodeURIComponent(networkId)}`,
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch encryption network ${networkId}: HTTP ${response.status} ${await response.text()}`,
+      );
+    }
+    const body = (await response.json()) as {
+      descriptor?: NetworkDescriptor;
+    } | NetworkDescriptor;
+    return "descriptor" in body && body.descriptor ? body.descriptor : body as NetworkDescriptor;
+  }
+
+  private createEncryptionService(binding?: {
+    graph: ServiceGraphLifetime;
+    host: string;
+    session: ServiceSession;
+    did: string;
+    address: string | undefined;
+    chainId: number;
+  }): EncryptionService {
+    const graph = binding?.graph ?? this._serviceGraph;
+    const host = binding?.host ?? this.config.host!;
+    // The public service path always has a ServiceContext. Keep the auth-session
+    // fallback for the internal runtime-permission helpers, which construct an
+    // encryption service before a ServiceContext is installed. Both paths bind
+    // the resulting service to this graph, so a later graph replacement still
+    // retires the captured service permanently.
+    const session = binding?.session ?? this.requireEncryptionSession();
+    const did = binding?.did ?? this.did;
+    const address = binding?.address ?? this._address;
+    const chainId = binding?.chainId ?? this._chainId;
     const crypto = this.createEncryptionCrypto();
     const transport: DecryptTransport = {
-      postDecrypt: async ({ networkId, authorization, canonicalBody }) => {
-        const response = await fetch(
-          `${this.config.host}/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
+      postDecrypt: async ({ networkId, authorization, canonicalBody, signal }) => {
+        graph.assertActive();
+        const response = await graph.fetch(
+          `${host}/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
           {
             method: "POST",
             headers: {
@@ -2458,8 +3145,10 @@ export class TinyCloudNode {
               "Content-Type": "application/json",
             },
             body: canonicalBody,
+            signal,
           },
         );
+        graph.assertActive();
         if (!response.ok) {
           throw new DecryptTransportResponseError(response.status);
         }
@@ -2472,12 +3161,14 @@ export class TinyCloudNode {
         signDecryptInvocation: async (
           input: BuildDecryptInvocationInput,
         ): Promise<BuiltDecryptInvocation> => {
+          graph.assertActive();
           const signed = await this.signRawNetworkAuthorization({
             targetNode: input.targetNode,
             networkId: input.networkId,
             action: DECRYPT_ACTION,
             facts: input.facts,
-          });
+          }, { graph, session });
+          graph.assertActive();
           return {
             ...signed,
             canonicalBody: canonicalizeEncryptionJson(
@@ -2488,31 +3179,39 @@ export class TinyCloudNode {
       },
       transport,
       node: {
-        fetchByNetworkId: (networkId) => this.getEncryptionNetwork(networkId),
+        fetchByNetworkId: async (networkId) => {
+          graph.assertActive();
+          const descriptor = await this.fetchEncryptionNetworkAt(host, networkId, graph.fetch);
+          graph.assertActive();
+          return descriptor;
+        },
       },
       wellKnown: {
         fetchWellKnown: async (principal, discoveryKey) => {
-          if (!this._address || !didPrincipalMatches(principal, this.did)) {
+          graph.assertActive();
+          if (!address || !didPrincipalMatches(principal, did)) {
             return null;
           }
-          if (!this.config.host) {
+          const publicSpaceId = makePublicSpaceId(address, chainId);
+          const encodedKey = discoveryKey.split("/").map(encodeURIComponent).join("/");
+          const response = await graph.fetch(
+            `${host}/public/${encodeURIComponent(publicSpaceId)}/kv/${encodedKey}`,
+            { method: "GET" },
+          );
+          graph.assertActive();
+          if (!response.ok) {
             return null;
           }
-          const publicSpaceId = makePublicSpaceId(this._address, this._chainId);
-          const result = await TinyCloud.readPublicSpace<
-            NetworkDescriptor | { descriptor?: NetworkDescriptor }
-          >(this.config.host, publicSpaceId, discoveryKey);
-          if (!result.ok) {
-            return null;
-          }
-          const body = result.data as
+          const body = await response.json() as
             | NetworkDescriptor
             | { descriptor?: NetworkDescriptor };
+          graph.assertActive();
           return "descriptor" in body && body.descriptor
             ? body.descriptor
             : (body as NetworkDescriptor);
         },
       },
+      assertActive: () => graph.assertActive(),
     });
   }
 
@@ -2528,20 +3227,37 @@ export class TinyCloudNode {
     return this._encryption;
   }
 
-  private createVaultService(spaceId: string, kv: IKVService): DataVaultService {
+  private createVaultService(
+    spaceId: string,
+    kv: IKVService,
+    encryptionService = this.getEncryptionService(),
+    nodeContext?: {
+      host: string;
+      did: string;
+      address: string | undefined;
+      chainId: number;
+      serviceGraph?: ServiceGraphLifetime;
+    },
+  ): DataVaultService {
     const wasm = this.wasmBindings;
+    const serviceGraph = nodeContext?.serviceGraph ?? this._serviceGraph;
     const vaultCrypto = createVaultCrypto({
       vault_encrypt: wasm.vault_encrypt, vault_decrypt: wasm.vault_decrypt, vault_derive_key: wasm.vault_derive_key,
       vault_x25519_from_seed: wasm.vault_x25519_from_seed, vault_x25519_dh: wasm.vault_x25519_dh,
       vault_random_bytes: wasm.vault_random_bytes, vault_sha256: wasm.vault_sha256,
     });
     const self = this;
+    const did = nodeContext?.did ?? this.did;
+    const address = nodeContext?.address ?? this._address;
+    const chainId = nodeContext?.chainId ?? this._chainId;
+    const host = nodeContext?.host ?? this.config.host!;
+    const ownerDid = this.ownerDidFromSpaceId(spaceId) ?? did;
     return new DataVaultService({
       spaceId,
       crypto: vaultCrypto,
       encryption: {
-        networkId: this.getEncryptionNetworkIdForSpace(spaceId),
-        service: this.getEncryptionService(),
+        networkId: `urn:tinycloud:encryption:${ownerDid}:${DEFAULT_ENCRYPTION_NETWORK_NAME}`,
+        service: encryptionService,
         decryptCapabilityProof: () => ({
           proofs: [this.requireServiceSession().delegationCid],
         }),
@@ -2550,20 +3266,24 @@ export class TinyCloudNode {
         kv,
         ensurePublicSpace: async () => {
           try {
+            serviceGraph.assertActive();
             await self.ensurePublicSpace();
             return { ok: true as const, data: undefined };
           } catch (error) {
             return { ok: false as const, error: { code: "STORAGE_ERROR", message: error instanceof Error ? error.message : String(error), service: "vault" } };
           }
         },
-        get publicKV() { return self._publicKV ?? self.tc!.publicKV; },
+        get publicKV() {
+          serviceGraph.assertActive();
+          return self._publicKV ?? self.tc!.publicKV;
+        },
         readPublicSpace: <T>(host: string, targetSpaceId: string, key: string) =>
           TinyCloud.readPublicSpace<T>(host, targetSpaceId, key),
         makePublicSpaceId: TinyCloud.makePublicSpaceId,
-        did: this.did,
-        address: this._address ?? "",
-        chainId: this._chainId,
-        hosts: [this.config.host!],
+        did,
+        address: address ?? "",
+        chainId,
+        hosts: [host],
       },
     });
   }
@@ -2573,6 +3293,8 @@ export class TinyCloudNode {
    * @internal
    */
   private initializeV2Services(serviceSession: ServiceSession): void {
+    const graph = this._serviceGraph;
+
     // Initialize CapabilityKeyRegistry
     this._capabilityRegistry = new CapabilityKeyRegistry();
 
@@ -2626,23 +3348,25 @@ export class TinyCloudNode {
     this._delegationManager = new DelegationManager({
       hosts: [this.config.host!],
       session: serviceSession,
-      invoke: this.invokeWithRuntimePermissions,
-      invokeAny: this.invokeAnyWithRuntimePermissions,
-      fetch: globalThis.fetch.bind(globalThis),
+      invoke: graph.invoke,
+      invokeAny: graph.invokeAny,
+      fetch: graph.fetch,
     });
 
     // Initialize SpaceService
     this._spaceService = new SpaceService({
       hosts: [this.config.host!],
       session: serviceSession,
-      invoke: this.wasmBindings.invoke,
-      fetch: globalThis.fetch.bind(globalThis),
+      invoke: graph.invoke,
+      fetch: graph.fetch,
       capabilityRegistry: this._capabilityRegistry,
       userDid: this.did,
       createKVService: (spaceId: string) => {
+        graph.assertActive();
         return this.createSpaceScopedKVService(spaceId);
       },
       createVaultService: (spaceId: string) => {
+        graph.assertActive();
         const kvService = this.createSpaceScopedKVService(spaceId);
         const vaultService = this.createVaultService(spaceId, kvService);
         if (this._serviceContext) {
@@ -2651,11 +3375,13 @@ export class TinyCloudNode {
         return vaultService;
       },
       createSecretsService: (spaceId: string) => {
+        graph.assertActive();
         return this.secretsForSpace(spaceId);
       },
       // Enable space.delegations.create() via SIWE-based delegation
       createDelegation: async (params) => {
         try {
+          graph.assertActive();
           // Use the existing createDelegation method which calls /delegate with SIWE
           const portableDelegation = await this.createDelegation({
             delegateDID: params.delegateDID,
@@ -2695,22 +3421,55 @@ export class TinyCloudNode {
         }
       },
       onSpaceRegistered: async (space) => {
+        graph.assertActive();
         await this.account.spaces.register(space);
       },
     });
 
-    // Update SharingService with full capabilities (session + createDelegation)
-    // SharingService was initialized in constructor for receive-only access
-    this._sharingService.updateConfig({
+    // A SharingService retains its invoke/fetch functions and lifetime guard.
+    // Recreate it for this graph instead of updating the receive-only instance
+    // from the graph that was just retired during a subsequent sign-in.
+    this._sharingService = new SharingService({
+      hosts: [this.config.host!],
       session: serviceSession,
+      invoke: graph.invoke,
+      fetch: graph.fetch,
+      assertActive: () => graph.assertActive(),
+      keyProvider: this._keyProvider,
+      registry: this._capabilityRegistry,
       delegationManager: this._delegationManager,
       sessionExpiry: this.getSessionExpiry(),
-      // WASM-based delegation creation (preferred - no server roundtrip)
-      createDelegationWasm: (params) => this.createDelegationWrapper(params),
-      // Root delegation for long-lived share links (bypasses session expiry)
-      // In node-sdk we have direct signer access, so no popup needed
+      createDelegationWasm: (params) => {
+        graph.assertActive();
+        return this.createDelegationWrapper(params);
+      },
+      computeCid: (data, codec) => {
+        if (!this.wasmBindings.computeCid) throw new Error("computeCid is unavailable");
+        return this.wasmBindings.computeCid(data, codec);
+      },
+      createKVService: (config) => {
+        graph.assertActive();
+        const service = new KVService({ prefix: config.pathPrefix?.replace(/\/$/, "") });
+        const context = graph.track(new ServiceContext({
+          invoke: config.invoke,
+          fetch: config.fetch ?? graph.fetch,
+          hosts: config.hosts,
+          telemetry: this.config.telemetry,
+        }));
+        context.setSession(config.session);
+        service.initialize(context);
+        return service;
+      },
       onRootDelegationNeeded: this.signer
-        ? async (params) => this.createRootDelegationForSharing(params)
+        ? async (params) => {
+          graph.assertActive();
+          const delegation = await this.createRootDelegationForSharing(
+            params,
+            () => graph.assertActive(),
+          );
+          graph.assertActive();
+          return delegation;
+        }
         : undefined,
     });
 
@@ -2787,7 +3546,12 @@ export class TinyCloudNode {
    * with expiry longer than the current session.
    * @internal
    */
-  async createOwnerDelegation(params: CreateOwnerDelegationParams): Promise<OwnerDelegationReceipt> {
+  async createOwnerDelegation(
+    params: CreateOwnerDelegationParams,
+    assertActive?: () => void,
+  ): Promise<OwnerDelegationReceipt> {
+    const assertOwnerGraphActive = assertActive ?? this._serviceGraph.assertActive.bind(this._serviceGraph);
+    assertOwnerGraphActive();
     if (!params.delegateDid.startsWith("did:key:") || params.actions.length === 0 || params.path.length === 0) {
       throw new Error("Owner delegation requires an external did:key audience and bounded capabilities");
     }
@@ -2813,8 +3577,10 @@ export class TinyCloudNode {
       delegateUri: params.delegateDid,
     });
     const signature = await this.signer.signMessage(prepared.siwe);
+    assertOwnerGraphActive();
     const delegationSession = this.wasmBindings.completeSessionSetup({ ...prepared, signature });
     const activation = await activateSessionWithHost(host, delegationSession.delegationHeader);
+    assertOwnerGraphActive();
     if (!activation.success) {
       throw new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim());
     }
@@ -2849,7 +3615,7 @@ export class TinyCloudNode {
     path: string;
     actions: string[];
     requestedExpiry: Date;
-  }): Promise<Delegation | undefined> {
+  }, assertActive?: () => void): Promise<Delegation | undefined> {
     try {
       return (await this.createOwnerDelegation({
         delegateDid: params.shareKeyDID,
@@ -2857,8 +3623,9 @@ export class TinyCloudNode {
         path: params.path,
         actions: params.actions,
         expiresAt: params.requestedExpiry,
-      })).delegation;
+      }, assertActive)).delegation;
     } catch {
+      assertActive?.();
       return undefined;
     }
   }
@@ -2939,13 +3706,13 @@ export class TinyCloudNode {
     }
 
     const sql = new SQLService({});
-    const spaceScopedContext = new ServiceContext({
+    const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
       invoke: this._serviceContext.invoke,
       invokeAny: this._serviceContext.invokeAny,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
       telemetry: this.config.telemetry,
-    });
+    }));
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     sql.initialize(spaceScopedContext);
     return sql;
@@ -2971,12 +3738,12 @@ export class TinyCloudNode {
     }
 
     const kv = new KVService({});
-    const spaceScopedContext = new ServiceContext({
+    const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
       invoke: this._serviceContext.invoke,
       invokeAny: this._serviceContext.invokeAny,
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
-    });
+    }));
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     kv.initialize(spaceScopedContext);
     return kv;
@@ -3020,21 +3787,11 @@ export class TinyCloudNode {
     const networkId = nameOrNetworkId.startsWith("urn:tinycloud:encryption:")
       ? nameOrNetworkId
       : this.getDefaultEncryptionNetworkId(nameOrNetworkId);
-    const response = await fetch(
-      `${this.config.host}/encryption/networks/${encodeURIComponent(networkId)}`,
+    return this.fetchEncryptionNetworkAt(
+      this.config.host!,
+      networkId,
+      globalThis.fetch.bind(globalThis),
     );
-    if (response.status === 404) {
-      return null;
-    }
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch encryption network ${networkId}: HTTP ${response.status} ${await response.text()}`,
-      );
-    }
-    const body = (await response.json()) as {
-      descriptor?: NetworkDescriptor;
-    } | NetworkDescriptor;
-    return "descriptor" in body && body.descriptor ? body.descriptor : body as NetworkDescriptor;
   }
 
   async createEncryptionNetwork(
@@ -3404,6 +4161,7 @@ export class TinyCloudNode {
         "grantRuntimePermissions requires wallet mode with a signer or privateKey.",
       );
     }
+    this.assertDelegationCaveatsPreservable(expanded);
 
     const rawEntries = expanded.filter((entry) =>
       this.isEncryptionPermissionEntry(entry)
@@ -3706,12 +4464,12 @@ export class TinyCloudNode {
     // Cache a properly authorized public KV service using the new delegation
     if (this._serviceContext) {
       const publicKV = new KVService({ prefix: "" });
-      const publicContext = new ServiceContext({
-        invoke: this.invokeWithRuntimePermissions,
-        fetch: this._serviceContext.fetch,
+      const publicContext = this._serviceGraph.track(new ServiceContext({
+        invoke: this._serviceGraph.invoke,
+        fetch: this._serviceGraph.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
-      });
+      }));
       publicContext.setSession({
         delegationHeader: delegationSession.delegationHeader,
         delegationCid: delegationSession.delegationCid,
@@ -3784,13 +4542,16 @@ export class TinyCloudNode {
     return this.delegationManager.status(cid);
   }
 
-  /** Compute the canonical CID of a compact delegation authorization. */
+  /** Compute the canonical CID of a compact UCAN or DAG-CBOR delegation authorization. */
   computeDelegationCid(authorization: string): string {
     if (!authorization || !this.wasmBindings.computeCid) {
       throw new Error("Delegation CID computation is unavailable");
     }
+    const compact = authorization.replace(/^Bearer /i, "");
     return this.wasmBindings.computeCid(
-      new TextEncoder().encode(authorization),
+      compact.includes(".")
+        ? new TextEncoder().encode(compact)
+        : decodeAuthorizationBytes(authorization),
       0x55n,
     );
   }
@@ -3927,6 +4688,7 @@ export class TinyCloudNode {
             "createDelegation method.",
         );
       }
+      this.assertDelegationCaveatsPreservable(expandedEntries);
       const delegation = await this.createDelegationLegacyWalletPath(
         did,
         expandedEntries[0],
@@ -3948,7 +4710,7 @@ export class TinyCloudNode {
     //    surface a clear TypeError rather than silently falling
     //    through.
     const granted = parseRecapCapabilities(
-      (siwe: string) => this.wasmBindings.parseRecapFromSiwe(siwe),
+      (siwe: string) => this.parseRecapWithCaveats(siwe),
       session.siwe,
     );
     const { subset, missing } = isCapabilitySubset(expandedEntries, granted);
@@ -3963,8 +4725,9 @@ export class TinyCloudNode {
       // the primary session's spaceId (the wrong-space class). Exclude the
       // primary explicitly; failure then degrades to
       // PermissionNotInManifestError instead of a wrong-space delegation.
+      const runtimeOperations = this.permissionEntriesToOperations(expandedEntries, session);
       const runtimeGrant = this.findGrantForOperations(
-        this.permissionEntriesToOperations(expandedEntries, session),
+        runtimeOperations,
         { excludePrimary: true },
       );
       if (runtimeGrant) {
@@ -3981,6 +4744,7 @@ export class TinyCloudNode {
           expandedEntries,
           runtimeExpiration,
           runtimeGrant,
+          runtimeOperations,
         );
         return { delegation, prompted: false };
       }
@@ -4070,6 +4834,7 @@ export class TinyCloudNode {
         "createDelegationViaWasmPath requires a non-empty entries array",
       );
     }
+    this.assertDelegationCaveatsPreservable(entries);
 
     // Translate non-raw manifest `space` fields into the server-side
     // spaceId. Encryption entries target raw network URNs, not spaces.
@@ -4196,7 +4961,10 @@ export class TinyCloudNode {
     entries: PermissionEntry[],
     expirationTime: Date,
     grant: RuntimePermissionGrant,
+    requestedOperations: RuntimePermissionOperation[],
   ): Promise<PortableDelegation> {
+    this.assertRuntimeGrantCaveatsPreservable(entries, requestedOperations, grant);
+    this.assertDelegationCaveatsPreservable(entries);
     const result = this.createDelegationWrapper({
       session: grant.session,
       delegateDID: did,
@@ -4258,6 +5026,91 @@ export class TinyCloudNode {
     permissions: PermissionEntry[],
   ): PermissionEntry[] {
     return expandPermissionEntriesCore(permissions);
+  }
+
+  /**
+   * The current WASM child-delegation APIs accept action-only maps. Refuse any
+   * constrained branch rather than signing a broader action-only child UCAN.
+   */
+  private assertDelegationCaveatsPreservable(entries: PermissionEntry[]): void {
+    const caveated = entries.filter((entry) =>
+      !recapCaveatsEqual(entry.caveats, undefined)
+    );
+    if (caveated.length > 0) {
+      throw new CaveatedDelegationUnsupportedError(caveated);
+    }
+  }
+
+  /**
+   * Runtime grant selection intentionally allows an uncaveated operation to
+   * select a caveated grant so invocation can restore the signed caveat before
+   * crossing the caveat-aware WASM boundary. Child delegation cannot do that:
+   * it only accepts action maps, so reject the selected constrained branch.
+   */
+  private assertRuntimeGrantCaveatsPreservable(
+    entries: PermissionEntry[],
+    requestedOperations: RuntimePermissionOperation[],
+    grant: RuntimePermissionGrant,
+  ): void {
+    let operationIndex = 0;
+    const caveated: PermissionEntry[] = [];
+    for (const entry of entries) {
+      for (const action of entry.actions) {
+        const requested = requestedOperations[operationIndex++];
+        if (!requested) continue;
+        const constrained = grant.operations.find((granted) =>
+          this.operationCovers(granted, requested) &&
+          !recapCaveatsEqual(granted.caveats, undefined),
+        );
+        if (constrained) {
+          caveated.push({
+            ...entry,
+            actions: [action],
+            caveats: cloneRecapCaveats(constrained.caveats),
+          });
+        }
+      }
+    }
+    if (caveated.length > 0) {
+      throw new CaveatedDelegationUnsupportedError(caveated);
+    }
+  }
+
+  /** Reject caveated parent branches before action-only child signing. */
+  private assertPortableDelegationCaveatsPreservable(
+    delegation: PortableDelegation,
+  ): void {
+    const entries: PermissionEntry[] = [];
+    const add = (
+      service: string,
+      space: string,
+      path: string,
+      actions: string[],
+      caveats: readonly Record<string, unknown>[] | undefined,
+    ): void => {
+      if (recapCaveatsEqual(caveats, undefined)) return;
+      entries.push({
+        service: service.startsWith("tinycloud.") ? service : `tinycloud.${service}`,
+        space,
+        path,
+        actions: [...actions],
+        caveats: cloneRecapCaveats(caveats),
+      });
+    };
+
+    add(
+      delegation.actions[0]?.split("/", 1)[0] ?? "tinycloud.unknown",
+      delegation.spaceId,
+      delegation.path,
+      delegation.actions,
+      delegation.caveats,
+    );
+    for (const resource of delegation.resources ?? []) {
+      add(resource.service, resource.space, resource.path, resource.actions, resource.caveats);
+    }
+    if (entries.length > 0) {
+      throw new CaveatedDelegationUnsupportedError(entries);
+    }
   }
 
   private shortServiceName(service: string): string {
@@ -4327,6 +5180,7 @@ export class TinyCloudNode {
         service,
         path: entry.path,
         action,
+        ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
       }));
     });
   }
@@ -4337,7 +5191,7 @@ export class TinyCloudNode {
   ): boolean {
     try {
       const granted = parseRecapCapabilities(
-        (siwe: string) => this.wasmBindings.parseRecapFromSiwe(siwe),
+        (siwe: string) => this.parseRecapWithCaveats(siwe),
         session.siwe,
       );
       return isCapabilitySubset(entries, granted).subset;
@@ -4360,6 +5214,7 @@ export class TinyCloudNode {
         service,
         path: entry.path,
         action,
+        ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
       }));
     });
   }
@@ -4471,6 +5326,7 @@ export class TinyCloudNode {
       space: this.isEncryptionPermissionEntry(entry) ? "encryption" : spaceId,
       path: entry.path,
       actions: [...entry.actions],
+      ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
     }));
   }
 
@@ -4491,6 +5347,7 @@ export class TinyCloudNode {
         service,
         path: resource.path,
         action,
+        caveats: cloneRecapCaveats(resource.caveats),
       }));
     });
   }
@@ -4510,6 +5367,7 @@ export class TinyCloudNode {
       space: delegation.spaceId,
       path: delegation.path,
       actions,
+      ...(delegation.caveats === undefined ? {} : { caveats: cloneRecapCaveats(delegation.caveats) }),
     }));
   }
 
@@ -4658,6 +5516,15 @@ export class TinyCloudNode {
       return false;
     }
 
+    // A caller that already carries a caveat can only be covered by the exact
+    // same signed attenuation.  An uncaveated request is decorated with the
+    // grant's caveat immediately before WASM signs it.
+    if (requested.caveats !== undefined &&
+      !recapCaveatsEqual(granted.caveats, requested.caveats)
+    ) {
+      return false;
+    }
+
     if (granted.resource !== undefined || requested.resource !== undefined) {
       return granted.resource !== undefined &&
         requested.resource !== undefined &&
@@ -4706,6 +5573,12 @@ export class TinyCloudNode {
       : service;
   }
 
+  /** Prefer the v2 caveat-preserving parser while retaining old custom WASM. */
+  private parseRecapWithCaveats(siwe: string): WasmRecapEntry[] {
+    return this.wasmBindings.parseVerifiedRecapFromSiwe?.(siwe)
+      ?? this.wasmBindings.parseRecapFromSiwe(siwe);
+  }
+
   private isEncryptionNetworkOperation(service: string, path: string): boolean {
     return service === "encryption" &&
       path.startsWith("urn:tinycloud:encryption:");
@@ -4717,6 +5590,7 @@ export class TinyCloudNode {
     service: string;
     path: string;
     action: string;
+    caveats?: Record<string, unknown>[];
   }): RuntimePermissionOperation | undefined {
     const service = this.invocationServiceName(entry.service);
     if (typeof entry.resource === "string") {
@@ -4725,6 +5599,7 @@ export class TinyCloudNode {
         service,
         path: entry.path,
         action: entry.action,
+        ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
       };
     }
     if (this.isEncryptionNetworkOperation(service, entry.path)) {
@@ -4733,6 +5608,7 @@ export class TinyCloudNode {
         service,
         path: entry.path,
         action: entry.action,
+        ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
       };
     }
     if (typeof entry.spaceId === "string") {
@@ -4741,6 +5617,7 @@ export class TinyCloudNode {
         service,
         path: entry.path,
         action: entry.action,
+        ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
       };
     }
     return undefined;
@@ -5227,6 +6104,8 @@ export class TinyCloudNode {
       expiryMs?: number;
     }
   ): Promise<PortableDelegation> {
+    this.assertPortableDelegationCaveatsPreservable(parentDelegation);
+
     if (!this.signer) {
       throw new Error("Cannot createSubDelegation() in session-only mode. Requires wallet mode.");
     }

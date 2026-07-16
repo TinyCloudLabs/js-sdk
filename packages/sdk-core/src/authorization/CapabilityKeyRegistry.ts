@@ -19,7 +19,7 @@ import type {
   Delegation,
   IngestOptions,
 } from "../delegations/types";
-import { actionContains } from "../capabilities";
+import { actionContains, recapCaveatsEqual } from "../capabilities";
 
 // =============================================================================
 // Service Name
@@ -76,8 +76,8 @@ export interface StoredDelegationChain {
 interface DelegationStore {
   /** Delegations indexed by key ID */
   byKey: Map<string, Delegation[]>;
-  /** Delegations indexed by CID */
-  byCid: Map<string, StoredDelegationChain>;
+  /** Delegations indexed by CID. A single signed ReCap can carry many scopes. */
+  byCid: Map<string, StoredDelegationChain[]>;
   /** Capability entries indexed by "resource|action" key */
   byCapability: Map<string, CapabilityEntry[]>;
 }
@@ -274,9 +274,17 @@ export class CapabilityKeyRegistry implements ICapabilityKeyRegistry {
     // Get delegations for this key
     const delegations = this.store.byKey.get(keyId) || [];
 
-    // Remove from byCid
+    // Remove this key's entries without dropping other scopes from the same
+    // signed ReCap.
     for (const delegation of delegations) {
-      this.store.byCid.delete(delegation.cid);
+      const chains = this.store.byCid.get(delegation.cid);
+      if (!chains) continue;
+      const remaining = chains.filter((chain) => chain.keyId !== keyId);
+      if (remaining.length === 0) {
+        this.store.byCid.delete(delegation.cid);
+      } else {
+        this.store.byCid.set(delegation.cid, remaining);
+      }
     }
 
     // Remove from byCapability
@@ -489,7 +497,7 @@ export class CapabilityKeyRegistry implements ICapabilityKeyRegistry {
   revokeDelegation(cid: string): Result<void, ServiceError> {
     const stored = this.store.byCid.get(cid);
 
-    if (!stored) {
+    if (!stored || stored.length === 0) {
       return err(
         serviceError(
           CapabilityKeyRegistryErrorCodes.KEY_NOT_FOUND,
@@ -499,15 +507,12 @@ export class CapabilityKeyRegistry implements ICapabilityKeyRegistry {
       );
     }
 
-    // Mark the delegation as revoked
-    stored.delegation.isRevoked = true;
-
-    // Update in byKey
-    const keyDelegations = this.store.byKey.get(stored.keyId);
-    if (keyDelegations) {
-      const delegation = keyDelegations.find((d) => d.cid === cid);
-      if (delegation) {
-        delegation.isRevoked = true;
+    // A CID identifies the signed delegation as a whole, including every
+    // scope reconstructed from its ReCap.
+    for (const chain of stored) chain.delegation.isRevoked = true;
+    for (const keyDelegations of this.store.byKey.values()) {
+      for (const delegation of keyDelegations) {
+        if (delegation.cid === cid) delegation.isRevoked = true;
       }
     }
 
@@ -570,19 +575,23 @@ export class CapabilityKeyRegistry implements ICapabilityKeyRegistry {
   private addDelegation(key: KeyInfo, delegation: Delegation): void {
     // Add to byKey
     const keyDelegations = this.store.byKey.get(key.id) || [];
-    if (!keyDelegations.some((d) => d.cid === delegation.cid)) {
+    if (!keyDelegations.some((d) => this.sameDelegationScope(d, delegation))) {
       keyDelegations.push(delegation);
       this.store.byKey.set(key.id, keyDelegations);
     }
 
     // Add to byCid
-    if (!this.store.byCid.has(delegation.cid)) {
-      this.store.byCid.set(delegation.cid, {
+    const chains = this.store.byCid.get(delegation.cid) ?? [];
+    if (!chains.some((chain) =>
+      chain.keyId === key.id && this.sameDelegationScope(chain.delegation, delegation)
+    )) {
+      chains.push({
         delegation,
         parentCid: delegation.parentCid,
         keyId: key.id,
         storedAt: new Date(),
       });
+      this.store.byCid.set(delegation.cid, chains);
     }
 
     // Add to byCapability for each action
@@ -591,7 +600,9 @@ export class CapabilityKeyRegistry implements ICapabilityKeyRegistry {
       const entries = this.store.byCapability.get(capKey) || [];
 
       // Check if we already have an entry for this exact delegation
-      const existingEntry = entries.find((e) => e.delegation.cid === delegation.cid);
+      const existingEntry = entries.find((e) =>
+        this.sameDelegationScope(e.delegation, delegation)
+      );
 
       if (existingEntry) {
         // Add this key if not already present
@@ -626,6 +637,15 @@ export class CapabilityKeyRegistry implements ICapabilityKeyRegistry {
     return `${resource}|${action}`;
   }
 
+  private sameDelegationScope(left: Delegation, right: Delegation): boolean {
+    return left.cid === right.cid &&
+      left.spaceId === right.spaceId &&
+      left.path === right.path &&
+      left.actions.length === right.actions.length &&
+      left.actions.every((action) => right.actions.includes(action)) &&
+      recapCaveatsEqual(left.caveats, right.caveats);
+  }
+
   /**
    * Find capability entries that match a resource and action.
    *
@@ -658,7 +678,9 @@ export class CapabilityKeyRegistry implements ICapabilityKeyRegistry {
 
         // Check if the entry's resource pattern matches the requested resource
         if (this.resourceMatchesPattern(resource, entry.resource)) {
-          if (!results.some((r) => r.delegation.cid === entry.delegation.cid)) {
+          if (!results.some((r) =>
+            this.sameDelegationScope(r.delegation, entry.delegation)
+          )) {
             results.push(entry);
           }
         }

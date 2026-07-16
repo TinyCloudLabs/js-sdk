@@ -4,12 +4,14 @@ export interface RestorableSessionData {
   delegationHeader: { Authorization: string };
   delegationCid: string;
   spaceId: string;
+  spaces?: Record<string, string>;
   jwk: object;
   verificationMethod: string;
   address: string;
   chainId: number;
   siwe: string;
   signature: string;
+  expiresAt: string;
   /**
    * Hosts the session was created against. Absent for sessions persisted
    * before this field existed; in that case the node re-resolves lazily.
@@ -52,12 +54,14 @@ export function restoreDataFromPersisted(
     delegationHeader: data.tinycloudSession.delegationHeader,
     delegationCid: data.tinycloudSession.delegationCid,
     spaceId: data.tinycloudSession.spaceId,
+    spaces: data.tinycloudSession.spaces,
     jwk,
     verificationMethod: data.tinycloudSession.verificationMethod,
     address: data.address,
     chainId: data.chainId,
     siwe: data.siwe,
     signature: data.signature,
+    expiresAt: data.expiresAt,
     tinycloudHosts: data.tinycloudHosts,
   };
 }

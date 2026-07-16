@@ -109,7 +109,7 @@ export abstract class BaseService implements IService {
    * Combines the service-level abort with context-level abort.
    */
   protected get abortSignal(): AbortSignal {
-    return this.abortController.signal;
+    return this.combineSignals();
   }
 
   /**
@@ -240,7 +240,11 @@ export abstract class BaseService implements IService {
    */
   protected combineSignals(...signals: (AbortSignal | undefined)[]): AbortSignal {
     const controller = new AbortController();
-    const allSignals = [this.abortSignal, ...signals.filter(Boolean)] as AbortSignal[];
+    const allSignals = [
+      this.abortController.signal,
+      this.context?.abortSignal,
+      ...signals.filter(Boolean),
+    ].filter(Boolean) as AbortSignal[];
 
     for (const signal of allSignals) {
       if (signal.aborted) {

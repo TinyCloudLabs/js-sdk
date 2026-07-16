@@ -135,6 +135,7 @@ export type {
 // High-level API
 export {
   TinyCloudNode,
+  UnsupportedSessionRestoreError,
   type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,
@@ -180,6 +181,7 @@ export {
   DEFAULT_MANIFEST_SPACE,
   DEFAULT_MANIFEST_VERSION,
   VAULT_PERMISSION_SERVICE,
+  CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,
@@ -201,12 +203,19 @@ export { NodeWasmBindings } from "./NodeWasmBindings";
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";
 export type { RestorableSession } from "./DelegatedAccess";
-export { serializeDelegation, deserializeDelegation, grantAuthRequest } from "./delegation";
+export {
+  serializeDelegation,
+  deserializeDelegation,
+  grantAuthRequest,
+  activateValidatedRuntimeDelegation,
+} from "./delegation";
 export type {
   PortableDelegation,
   AuthRequestArtifact,
   AuthDelegationArtifact,
   DelegationAuthority,
+  RuntimeDelegationActivator,
+  ValidatedRuntimeDelegation,
 } from "./delegation";
 
 // Re-export KV service values

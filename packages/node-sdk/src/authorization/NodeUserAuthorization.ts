@@ -360,6 +360,38 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
   }
 
+  /** @internal Atomically adopt the state staged by TinyCloudNode.restoreSession. */
+  installRestoredSession(
+    sessionManager: ISessionManager,
+    session: TinyCloudSession | undefined,
+    hosts?: string[],
+  ): void {
+    this.sessionManager = sessionManager;
+    // Restore is a complete session replacement, not an additive update. In
+    // particular, a second restore may target a different host and must not
+    // retain skip decisions from the previous activation.
+    this.tinycloudHosts = hosts && hosts.length > 0 ? [...hosts] : undefined;
+    this._lastActivationSkippedSpaceIds = [];
+    if (!session) {
+      this._session = undefined;
+      this._tinyCloudSession = undefined;
+      this._address = undefined;
+      this._chainId = undefined;
+      return;
+    }
+    this._tinyCloudSession = { ...session };
+    this._address = session.address;
+    this._chainId = session.chainId;
+    this._session = {
+      address: session.address,
+      walletAddress: session.address,
+      chainId: session.chainId,
+      sessionKey: session.sessionKey,
+      siwe: session.siwe,
+      signature: session.signature,
+    };
+  }
+
   /**
    * Ensure `tinycloudHosts` are resolved before a host-needing call.
    *

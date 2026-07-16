@@ -16,6 +16,7 @@ export namespace tcwSession {
 
 export namespace tinycloud {
   export import completeSessionSetup = lib.completeSessionSetup;
+  export import validatePersistedSession = lib.validatePersistedSession;
   export import generateHostSIWEMessage = lib.generateHostSIWEMessage;
   export import siweToDelegationHeaders = lib.siweToDelegationHeaders;
   export import invoke = lib.invoke;
@@ -34,6 +35,7 @@ export namespace tinycloud {
   // whether a requested delegation is derivable from the current session
   // without a fresh wallet prompt.
   export import parseRecapFromSiwe = lib.parseRecapFromSiwe;
+  export import parseVerifiedRecapFromSiwe = lib.parseVerifiedRecapFromSiwe;
   // Protocol version
   export import protocolVersion = lib.protocolVersion;
   // Vault crypto

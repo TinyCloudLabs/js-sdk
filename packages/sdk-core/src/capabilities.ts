@@ -58,6 +58,25 @@ export class SessionExpiredError extends Error {
   }
 }
 
+/**
+ * Thrown when the installed WASM delegation boundary cannot encode every
+ * constrained ReCap branch in a requested child delegation.
+ */
+export class CaveatedDelegationUnsupportedError extends Error {
+  /** Stable machine-readable error code for fail-closed caveated delegation. */
+  code = "CAVEATED_DELEGATION_UNSUPPORTED" as const;
+  /** Requested entries whose constrained ReCap branches cannot be preserved. */
+  entries: PermissionEntry[];
+
+  constructor(entries: PermissionEntry[]) {
+    super(
+      "Cannot create a caveated delegation because this WASM delegation boundary cannot preserve every ReCap caveat branch exactly."
+    );
+    this.name = "CaveatedDelegationUnsupportedError";
+    this.entries = entries.map(cloneEntry);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Space normalization
 // ---------------------------------------------------------------------------
@@ -177,7 +196,66 @@ function canonicalizeEntryMatches(
       return false;
     }
   }
+  // There is no safe general partial ordering for arbitrary ReCap caveat
+  // objects. A caveated authority therefore only covers the same caveat set;
+  // treating it as uncaveated would authorize a broader child delegation.
+  if (!recapCaveatsEqual(requested.caveats, granted.caveats)) {
+    return false;
+  }
   return true;
+}
+
+/**
+ * Compare ReCap caveat branch sets without losing signed branch structure.
+ *
+ * ReCap represents an unconstrained ability as `[{}]`, while SDK callers can
+ * represent that same authority as `undefined` or `[]`. Those three forms are
+ * equivalent. Every other branch, including an unconstrained branch mixed
+ * with a constrained one, remains part of the canonical comparison.
+ */
+export function recapCaveatsEqual(
+  left: readonly Record<string, unknown>[] | undefined,
+  right: readonly Record<string, unknown>[] | undefined,
+): boolean {
+  return canonicalizeRecapCaveats(left) === canonicalizeRecapCaveats(right);
+}
+
+/**
+ * Canonicalize a ReCap caveat branch set for exact equality checks.
+ *
+ * Object keys and branch order do not affect equality. A lone unconstrained
+ * branch is normalized to the SDK's empty-caveat representation, but an
+ * unconstrained branch in a mixed set is deliberately retained.
+ */
+export function canonicalizeRecapCaveats(
+  caveats: readonly Record<string, unknown>[] | undefined,
+): string {
+  const canonicalize = (value: unknown): string => {
+    if (value === null || typeof value === "boolean" || typeof value === "string") {
+      return JSON.stringify(value);
+    }
+    if (typeof value === "number") {
+      if (Number.isFinite(value)) return JSON.stringify(value);
+      throw new Error("ReCap caveats must contain only JSON values.");
+    }
+    if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
+    if (typeof value === "object") {
+      const object = value as Record<string, unknown>;
+      const prototype = Object.getPrototypeOf(object);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new Error("ReCap caveats must contain only JSON values.");
+      }
+      return `{${Object.keys(object).sort().map((key) =>
+        `${JSON.stringify(key)}:${canonicalize(object[key])}`,
+      ).join(",")}}`;
+    }
+    throw new Error("ReCap caveats must contain only JSON values.");
+  };
+  const branches = (caveats ?? []).map(canonicalize).sort();
+  if (branches.length === 0 || (branches.length === 1 && branches[0] === "{}")) {
+    return "[]";
+  }
+  return `[${branches.join(",")}]`;
 }
 
 /** Return whether a granted action pattern covers one requested action. */
@@ -213,6 +291,9 @@ function cloneEntry(entry: PermissionEntry): PermissionEntry {
     ...(entry.space !== undefined ? { space: entry.space } : {}),
     path: entry.path,
     actions: [...entry.actions],
+    ...(entry.caveats !== undefined
+      ? { caveats: JSON.parse(JSON.stringify(entry.caveats)) as Record<string, unknown>[] }
+      : {}),
     ...(entry.skipPrefix !== undefined ? { skipPrefix: entry.skipPrefix } : {}),
     ...(entry.expiry !== undefined ? { expiry: entry.expiry } : {}),
   };
@@ -235,6 +316,8 @@ export interface WasmRecapEntry {
   space: string;
   path: string;
   actions: string[];
+  /** Exact ReCap caveats shared by every action in this entry. */
+  caveats?: Record<string, unknown>[];
 }
 
 /**
@@ -289,6 +372,9 @@ export function parseRecapCapabilities(
       space: normalizeSpace(entry.space),
       path: entry.path,
       actions: [...entry.actions],
+      ...(entry.caveats === undefined
+        ? {}
+        : { caveats: JSON.parse(JSON.stringify(entry.caveats)) as Record<string, unknown>[] }),
     };
   });
 

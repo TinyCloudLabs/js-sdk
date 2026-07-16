@@ -555,3 +555,78 @@ describe("parseRecapCapabilities normalizes space", () => {
     expect(out[0].space).toBe("default");
   });
 });
+
+describe("ReCap caveats", () => {
+  const caveat = { tenant: "alpha", nested: { region: "us-east-1" } };
+  const granted: PermissionEntry[] = [{
+    service: "tinycloud.kv",
+    space: "default",
+    path: "narrow",
+    actions: ["tinycloud.kv/get"],
+    caveats: [caveat],
+  }];
+
+  it("does not treat caveated authority as an uncaveated delegation ceiling", () => {
+    expect(isCapabilitySubset([{
+      service: "tinycloud.kv",
+      space: "default",
+      path: "narrow",
+      actions: ["tinycloud.kv/get"],
+    }], granted).subset).toBe(false);
+    expect(isCapabilitySubset([{
+      ...granted[0]!,
+      caveats: [{ nested: { region: "us-east-1" }, tenant: "alpha" }],
+    }], granted).subset).toBe(true);
+  });
+
+  it("keeps exact caveat branches when normalizing raw WASM ReCap entries", () => {
+    const output = parseRecapCapabilities(() => [{
+      service: "kv",
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+      path: "narrow",
+      actions: ["tinycloud.kv/get"],
+      caveats: [caveat],
+    }], "fake-siwe");
+    expect(output[0]?.caveats).toEqual([caveat]);
+  });
+
+  it("equates only the empty and purely unconstrained caveat forms", () => {
+    const requested = {
+      service: "tinycloud.kv",
+      space: "default",
+      path: "narrow",
+      actions: ["tinycloud.kv/get"],
+    } satisfies PermissionEntry;
+
+    for (const caveats of [undefined, [], [{}]] as const) {
+      expect(isCapabilitySubset([
+        { ...requested, ...(caveats === undefined ? {} : { caveats }) },
+      ], [{ ...requested, caveats: [{}] }]).subset).toBe(true);
+    }
+  });
+
+  it("canonicalizes object keys and branch order without dropping mixed unconstrained branches", () => {
+    const requested = {
+      service: "tinycloud.kv",
+      space: "default",
+      path: "narrow",
+      actions: ["tinycloud.kv/get"],
+    } satisfies PermissionEntry;
+    const constrained = { tenant: "alpha", nested: { region: "us-east-1" } };
+
+    expect(isCapabilitySubset([{
+      ...requested,
+      caveats: [{ nested: { region: "us-east-1" }, tenant: "alpha" }, {}],
+    }], [{
+      ...requested,
+      caveats: [{}, constrained],
+    }]).subset).toBe(true);
+    expect(isCapabilitySubset([{
+      ...requested,
+      caveats: [{}, constrained],
+    }], [{
+      ...requested,
+      caveats: [constrained],
+    }]).subset).toBe(false);
+  });
+});

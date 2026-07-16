@@ -14,6 +14,15 @@ import {
 
 const homes: string[] = [];
 const children: ReturnType<typeof Bun.spawn>[] = [];
+const IMPORT_SESSION_JWK = {
+  kid: "default",
+  kty: "OKP",
+  crv: "Ed25519",
+  x: "_-blweCZLIwOuj1KBbrF7bGGw81NLwRzmrvfi7N46cA",
+  d: "scYXUfcu6A0rf1QDt7ne3yT-UmALHjnMEFB9GnKiJqE",
+};
+const IMPORT_SESSION_VERIFICATION_METHOD =
+  "did:key:z6MkwgCDSaxUVbFokAd689S3EY5b3sxN3Ub22hZMdLBcDKPm#z6MkwgCDSaxUVbFokAd689S3EY5b3sxN3Ub22hZMdLBcDKPm";
 
 afterEach(async () => {
   await Promise.all(children.splice(0).map(terminateChild));
@@ -256,8 +265,8 @@ async function writeDelegationImportProfile(home: string, profile: string): Prom
       host: "https://node.tinycloud.test",
       chainId: 1,
       spaceName: "secrets",
-      did: "did:key:session",
-      sessionDid: "did:key:session",
+      did: IMPORT_SESSION_VERIFICATION_METHOD.split("#", 1)[0],
+      sessionDid: IMPORT_SESSION_VERIFICATION_METHOD.split("#", 1)[0],
       createdAt: "2026-07-14T12:00:00.000Z",
       posture: "delegate-session",
       operatorType: "agent",
@@ -267,10 +276,10 @@ async function writeDelegationImportProfile(home: string, profile: string): Prom
       delegationHeader: { Authorization: "Bearer existing-session" },
       delegationCid: "bafy-existing-session",
       spaceId: "tinycloud:pkh:eip155:1:0xOwner:secrets",
-      jwk: { d: "test-private-key" },
-      verificationMethod: "did:key:session",
+      jwk: IMPORT_SESSION_JWK,
+      verificationMethod: IMPORT_SESSION_VERIFICATION_METHOD,
     }), "utf8"),
-    writeFile(join(profileDir, "key.json"), JSON.stringify({ d: "test-private-key" }), "utf8"),
+    writeFile(join(profileDir, "key.json"), JSON.stringify({ d: IMPORT_SESSION_JWK.d }), "utf8"),
   ]);
 }
 

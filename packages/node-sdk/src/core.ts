@@ -108,6 +108,7 @@ export type {
 // High-level API
 export {
   TinyCloudNode,
+  UnsupportedSessionRestoreError,
   type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,
@@ -154,6 +155,7 @@ export {
   DEFAULT_MANIFEST_SPACE,
   DEFAULT_MANIFEST_VERSION,
   VAULT_PERMISSION_SERVICE,
+  CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,

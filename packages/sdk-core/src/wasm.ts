@@ -11,6 +11,40 @@ import type { InvokeAnyFunction, InvokeFunction } from "@tinycloud/sdk-services"
 import type { WasmRecapEntry } from "./capabilities";
 
 /**
+ * The persisted authority material that must be verified as one unit before a
+ * restored session can use its ReCap or lifetime locally.
+ */
+export interface PersistedSessionProof {
+  delegationHeader: { Authorization: string };
+  delegationCid: string;
+  spaceId: string;
+  /** @deprecated Ignored by validation; capabilities come from the signed ReCap. */
+  spaces?: Record<string, string>;
+  jwk: object;
+  /** @deprecated Ignored by validation; the verification method is derived from `jwk`. */
+  verificationMethod?: string;
+  address: string;
+  chainId: number;
+  siwe: string;
+  signature: string;
+}
+
+/** Canonical facts produced by the WASM-side persisted-session verifier. */
+export interface ValidatedPersistedSessionProof {
+  /** The SIWE expiration exactly as signed, when the SIWE contains one. */
+  expiresAt?: string;
+  /** @deprecated Legacy caveat-free witness; restore does not trust it. */
+  recap?: WasmRecapEntry[];
+  /**
+   * Exact, caveat-preserving ReCap reconstruction from a verifier that
+   * implements persisted-session validation v2. This remains optional so a
+   * pre-existing custom binding stays source-compatible, but restore rejects
+   * authenticated authority unless this witness is available.
+   */
+  verifiedRecap?: Array<WasmRecapEntry & { caveats: Record<string, unknown>[] }>;
+}
+
+/**
  * Platform-agnostic WASM bindings interface.
  *
  * Each platform provides its own implementation:
@@ -43,6 +77,13 @@ export interface IWasmBindings {
    * Returns an empty array when the SIWE has no recap resource.
    */
   parseRecapFromSiwe: (siweString: string) => WasmRecapEntry[];
+  /**
+   * Optional verifier-v2 parser that preserves ReCap caveats. Kept optional
+   * so existing custom bindings remain source-compatible.
+   */
+  parseVerifiedRecapFromSiwe?: (siweString: string) => Array<WasmRecapEntry & {
+    caveats: Record<string, unknown>[];
+  }>;
   /** Generate a host SIWE message for space activation */
   generateHostSIWEMessage: (params: any) => string;
   /** Convert a signed SIWE message to delegation headers */
@@ -69,6 +110,16 @@ export interface IWasmBindings {
   /** Factory for session managers */
   createSessionManager: () => ISessionManager;
 
+  /**
+   * Verify a persisted EIP-191 SIWE proof and bind it to its reconstructed
+   * Cacao header/CID, session DID, address, chain and ReCap spaces. Optional
+   * so pre-existing custom bindings remain type-compatible; restore rejects
+   * authenticated persisted data when the primitive is unavailable.
+   */
+  validatePersistedSession?: (
+    proof: PersistedSessionProof,
+  ) => ValidatedPersistedSessionProof;
+
   /** Ensure WASM module is initialized (optional — some bindings auto-init) */
   ensureInitialized?: () => Promise<void>;
 }
@@ -81,6 +132,13 @@ export interface IWasmBindings {
 export interface ISessionManager {
   /** Create a new session key with the given ID, returns the DID */
   createSessionKey(id: string): string;
+  /**
+   * Optional for custom bindings built before persisted-key restore.
+   * `restoreSession` detects support at runtime.
+   */
+  replaceSessionKey?(jwk: object, keyId: string): string;
+  /** List every live key so a primary-key replacement cannot discard shares. */
+  listSessionKeys?(): string[];
   /** Rename a session key ID */
   renameSessionKeyId(oldId: string, newId: string): void;
   /** Get the DID for a session key */
