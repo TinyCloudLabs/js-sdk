@@ -940,13 +940,13 @@ function refreshLiveRuntimeAuthority(
   const activated = candidate.getEffectiveRuntimePermissionEntries();
   if (!Array.isArray(base) || !Array.isArray(activated)) return undefined;
   const exactActivated = validateExactCapabilities(activated);
-  if (
-    exactActivated === undefined ||
-    !isExactCapabilityMemberSubset(exactActivated, planned, resolveSpace) ||
-    !isExactCapabilityMemberSubset(requested, exactActivated, resolveSpace)
-  ) return undefined;
+  if (exactActivated === undefined) return undefined;
+  const selectedActivated = exactActivated.filter((permission) =>
+    isExactCapabilityMemberSubset([permission], planned, resolveSpace),
+  );
+  if (!isExactCapabilityMemberSubset(requested, selectedActivated, resolveSpace)) return undefined;
   const combined = canonicalizeOperationCapabilities(
-    [...base, ...exactActivated],
+    [...base, ...selectedActivated],
     resolveSpace,
   );
   return evaluateOperationAuthority(combined, planned as unknown as PermissionEntry[], resolveSpace).satisfied

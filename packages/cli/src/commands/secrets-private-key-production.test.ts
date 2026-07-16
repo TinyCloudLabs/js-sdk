@@ -522,6 +522,101 @@ test("published secrets helper fails closed on unproven, broad, and wrong-owner 
   }
 });
 
+test("published secrets helper ignores an unrelated exact runtime grant", async () => {
+  const owner = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000002:secrets";
+  const unrelated = {
+    service: "tinycloud.kv",
+    space: owner,
+    path: "vault/secrets/UNRELATED_EXACT_CANARY",
+    actions: ["tinycloud.kv/get"],
+  } as const;
+  const grants = new WeakMap<object, Array<Record<string, unknown>>>();
+  const grantRequests: Array<readonly Record<string, unknown>[]> = [];
+  let reads = 0;
+
+  const signIn = spyOn(TinyCloudNode.prototype, "signIn").mockImplementation(async function(this: TinyCloudNode) {
+    const node = this as unknown as { _address?: string; _chainId: number };
+    node._address = "0x0000000000000000000000000000000000000002";
+    node._chainId = 1;
+    grants.set(this, [unrelated]);
+  });
+  const getCapabilities = spyOn(TinyCloudNode.prototype, "getVerifiedSessionCapabilities")
+    .mockReturnValue([]);
+  const getEffectiveCapabilities = spyOn(TinyCloudNode.prototype, "getEffectiveRuntimePermissionEntries")
+    .mockImplementation(function(this: TinyCloudNode) {
+      return [...(grants.get(this) ?? [])] as never;
+    });
+  const hasRuntimePermissions = spyOn(TinyCloudNode.prototype, "hasRuntimePermissions")
+    .mockImplementation(function(this: TinyCloudNode, requested) {
+      const granted = grants.get(this) ?? [];
+      return requested.every((permission) => granted.some((candidate) =>
+        JSON.stringify(candidate) === JSON.stringify(permission)
+      ));
+    });
+  const grant = spyOn(TinyCloudNode.prototype, "grantRuntimePermissions")
+    .mockImplementation(async function(this: TinyCloudNode, requested) {
+      grantRequests.push(requested as unknown as readonly Record<string, unknown>[]);
+      grants.set(this, [...(grants.get(this) ?? []), ...requested as unknown as Array<Record<string, unknown>>]);
+      return [];
+    });
+  const getRuntimePermissionDelegations = spyOn(TinyCloudNode.prototype, "getRuntimePermissionDelegations")
+    .mockReturnValue([]);
+  const network = spyOn(TinyCloudNode.prototype, "getEncryptionNetworkIdForSpace")
+    .mockReturnValue("urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000002:default");
+  const readSecret = spyOn(TinyCloudNode.prototype, "readSecret")
+    .mockImplementation(async () => {
+      reads += 1;
+      return { status: "ok", value: "unrelated-grant-proof" };
+    });
+
+  const probeHome = await mkdtemp(`${tmpdir()}/tinycloud-cli-helper-unrelated-exact-`);
+  process.env.TC_HOME = probeHome;
+  try {
+    const { authRequestsPath, additionalDelegationsPath, profileConfigPath, sessionPath, writeJsonAtomic } =
+      await import("@tinycloud/operations/state");
+    await writeJsonAtomic(profileConfigPath("probe"), {
+      name: "probe",
+      host: "https://node.invalid",
+      chainId: 1,
+      spaceName: "secrets",
+      spaceId: owner,
+      did: "did:pkh:eip155:1:0x0000000000000000000000000000000000000002",
+      posture: "owner-openkey",
+      operatorType: "agent",
+      authMethod: "openkey",
+      createdAt: "2026-07-15T00:00:00.000Z",
+    });
+
+    const result = await invokeSecretsGetWithLocalAuthorityRetry(
+      { profile: "probe", host: "https://node.invalid", allowOwnerProfile: true, privateKey: PRIVATE_KEY },
+      { name: "TARGET_EXACT_CANARY" },
+    );
+    expect(result).toMatchObject({ status: "ok", output: { value: "unrelated-grant-proof" } });
+    expect(grantRequests).toHaveLength(1);
+    expect(grantRequests[0]).toHaveLength(2);
+    expect(grantRequests[0]).not.toContainEqual(unrelated);
+    expect(grantRequests[0]?.every((permission) =>
+      !JSON.stringify(permission).includes("*") && !("caveats" in permission)
+    )).toBe(true);
+    expect(reads).toBe(1);
+    await expect(access(authRequestsPath("probe"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(sessionPath("probe"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(additionalDelegationsPath("probe"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(getRuntimePermissionDelegations).not.toHaveBeenCalled();
+  } finally {
+    await rm(probeHome, { recursive: true, force: true });
+    delete process.env.TC_HOME;
+    signIn.mockRestore();
+    getCapabilities.mockRestore();
+    getEffectiveCapabilities.mockRestore();
+    hasRuntimePermissions.mockRestore();
+    grant.mockRestore();
+    getRuntimePermissionDelegations.mockRestore();
+    network.mockRestore();
+    readSecret.mockRestore();
+  }
+});
+
 async function runWithPrivateKey(options: Readonly<{ flag: boolean }>): Promise<{
   signInCalls: number;
   output: string;
