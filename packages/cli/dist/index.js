@@ -28,9 +28,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../js-sdk-integration/node_modules/ms/index.js
+// ../../node_modules/ms/index.js
 var require_ms = __commonJS({
-  "../../../js-sdk-integration/node_modules/ms/index.js"(exports, module) {
+  "../../node_modules/ms/index.js"(exports, module) {
     "use strict";
     var s = 1e3;
     var m = s * 60;
@@ -145,9 +145,9 @@ var require_ms = __commonJS({
   }
 });
 
-// ../../../js-sdk-integration/packages/sdk-services/dist/internal/decrypt-transport-response-error.cjs
+// ../sdk-services/dist/internal/decrypt-transport-response-error.cjs
 var require_decrypt_transport_response_error = __commonJS({
-  "../../../js-sdk-integration/packages/sdk-services/dist/internal/decrypt-transport-response-error.cjs"(exports, module) {
+  "../sdk-services/dist/internal/decrypt-transport-response-error.cjs"(exports, module) {
     "use strict";
     var __defProp3 = Object.defineProperty;
     var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
@@ -792,7 +792,7 @@ import {
 // ../sdk-core/src/manifest.ts
 var import_ms = __toESM(require_ms(), 1);
 
-// ../../../js-sdk-integration/node_modules/zod/v3/external.js
+// ../../node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
   BRAND: () => BRAND,
@@ -904,7 +904,7 @@ __export(external_exports, {
   void: () => voidType
 });
 
-// ../../../js-sdk-integration/node_modules/zod/v3/helpers/util.js
+// ../../node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
   util2.assertEqual = (_) => {
@@ -1038,7 +1038,7 @@ var getParsedType = (data) => {
   }
 };
 
-// ../../../js-sdk-integration/node_modules/zod/v3/ZodError.js
+// ../../node_modules/zod/v3/ZodError.js
 var ZodIssueCode = util.arrayToEnum([
   "invalid_type",
   "invalid_literal",
@@ -1156,7 +1156,7 @@ ZodError.create = (issues) => {
   return error;
 };
 
-// ../../../js-sdk-integration/node_modules/zod/v3/locales/en.js
+// ../../node_modules/zod/v3/locales/en.js
 var errorMap = (issue, _ctx) => {
   let message;
   switch (issue.code) {
@@ -1259,7 +1259,7 @@ var errorMap = (issue, _ctx) => {
 };
 var en_default = errorMap;
 
-// ../../../js-sdk-integration/node_modules/zod/v3/errors.js
+// ../../node_modules/zod/v3/errors.js
 var overrideErrorMap = en_default;
 function setErrorMap(map) {
   overrideErrorMap = map;
@@ -1268,7 +1268,7 @@ function getErrorMap() {
   return overrideErrorMap;
 }
 
-// ../../../js-sdk-integration/node_modules/zod/v3/helpers/parseUtil.js
+// ../../node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
   const { data, path, errorMaps, issueData } = params;
   const fullPath = [...path, ...issueData.path || []];
@@ -1378,14 +1378,14 @@ var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
 
-// ../../../js-sdk-integration/node_modules/zod/v3/helpers/errorUtil.js
+// ../../node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 (function(errorUtil2) {
   errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
   errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
 
-// ../../../js-sdk-integration/node_modules/zod/v3/types.js
+// ../../node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
   constructor(parent, value, path, key) {
     this._cachedPath = [];
@@ -4833,7 +4833,7 @@ var coerce = {
 };
 var NEVER = INVALID;
 
-// ../../../js-sdk-integration/packages/bootstrap/dist/index.js
+// ../bootstrap/dist/index.js
 var CAPABILITIES = [
   { urn: "tinycloud.kv/get", service: "tinycloud.kv", status: "active" },
   { urn: "tinycloud.kv/list", service: "tinycloud.kv", status: "active" },
@@ -5339,7 +5339,7 @@ var BOOTSTRAP_ALLOWLIST = Object.freeze(
   ])
 );
 
-// ../../../js-sdk-integration/packages/sdk-services/dist/index.js
+// ../sdk-services/dist/index.js
 var import_decrypt_transport_response_error = __toESM(require_decrypt_transport_response_error(), 1);
 var import_decrypt_transport_response_error2 = __toESM(require_decrypt_transport_response_error(), 1);
 var import_decrypt_transport_response_error3 = __toESM(require_decrypt_transport_response_error(), 1);
@@ -14754,7 +14754,7 @@ function registerKvCommand(program2) {
   });
 }
 
-// ../../../js-sdk-integration/packages/sdk-core/dist/index.js
+// ../sdk-core/dist/index.js
 import { SiweMessage } from "siwe";
 import crypto2 from "crypto";
 var import_ms2 = __toESM(require_ms(), 1);
