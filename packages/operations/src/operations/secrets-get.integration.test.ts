@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
@@ -8,19 +8,36 @@ import { invokeOperation } from "../invoke.js";
 import { listPermissionRequests } from "../artifacts.js";
 import { createAuthRuntimeFixture, persistRuntimeDelegations } from "../../test-support/auth-runtime.js";
 
-let home: string;
+let isolatedTestTail = Promise.resolve();
 
-beforeEach(async () => {
-  home = await mkdtemp(`${tmpdir()}/tinycloud-secrets-i3-`);
-  process.env.TC_HOME = home;
-});
+function isolatedTest(name: string, body: () => Promise<unknown>): void {
+  test(name, async () => {
+    const predecessor = isolatedTestTail;
+    let release!: () => void;
+    isolatedTestTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await predecessor;
 
-afterEach(async () => {
-  delete process.env.TC_HOME;
-  await rm(home, { recursive: true, force: true });
-});
+    const previousTcHome = process.env.TC_HOME;
+    let home: string | undefined;
+    try {
+      home = await mkdtemp(`${tmpdir()}/tinycloud-secrets-i3-`);
+      process.env.TC_HOME = home;
+      return await body();
+    } finally {
+      try {
+        if (previousTcHome === undefined) delete process.env.TC_HOME;
+        else process.env.TC_HOME = previousTcHome;
+        if (home !== undefined) await rm(home, { recursive: true, force: true });
+      } finally {
+        release();
+      }
+    }
+  });
+}
 
-test("registered secret invocation preflights the exact KV/encryption union", async () => {
+isolatedTest("registered secret invocation preflights the exact KV/encryption union", async () => {
   const fixture = await createAuthRuntimeFixture();
   const readSecret = spyOn(TinyCloudNode.prototype, "readSecret");
   try {
@@ -48,7 +65,7 @@ test("registered secret invocation preflights the exact KV/encryption union", as
   }
 });
 
-test("registered authority accepts only the exact KV/encryption union", async () => {
+isolatedTest("registered authority accepts only the exact KV/encryption union", async () => {
   const fixture = await createAuthRuntimeFixture();
   const readSecret = spyOn(TinyCloudNode.prototype, "readSecret");
   try {
@@ -90,7 +107,7 @@ test("registered authority accepts only the exact KV/encryption union", async ()
   }
 });
 
-test("registered planning is owner-exact for full and explicit short spaces", async () => {
+isolatedTest("registered planning is owner-exact for full and explicit short spaces", async () => {
   const fixture = await createAuthRuntimeFixture();
   const readSecret = spyOn(TinyCloudNode.prototype, "readSecret");
   try {
@@ -124,7 +141,7 @@ test("registered planning is owner-exact for full and explicit short spaces", as
   }
 });
 
-test("registered secret execution preserves classified node failures and thrown reads", async () => {
+isolatedTest("registered secret execution preserves classified node failures and thrown reads", async () => {
   const fixture = await createAuthRuntimeFixture();
   const full = await fixture.hermetic.mintDelegation();
   await persistRuntimeDelegations(fixture, [full]);
@@ -150,7 +167,9 @@ test("registered secret execution preserves classified node failures and thrown 
     if (absent.status !== "setup_required") throw new Error("expected setup");
     expect(absent.setup.url).toContain("HERMETIC_DELEGATION_CANARY");
 
-    readSecret.mockRejectedValue(new Error("private node detail"));
+    readSecret.mockImplementation(async () => {
+      throw new Error("private node detail");
+    });
     const thrown = await invokeSecret(fixture.profile);
     expect(thrown).toMatchObject({ status: "error", error: { code: "NODE_ERROR" } });
     expect(JSON.stringify(thrown)).not.toContain("private node detail");
@@ -160,7 +179,7 @@ test("registered secret execution preserves classified node failures and thrown 
   }
 });
 
-test("registered runtime hints persist only the exact planned phase", async () => {
+isolatedTest("registered runtime hints persist only the exact planned phase", async () => {
   const fixture = await createAuthRuntimeFixture();
   const full = await fixture.hermetic.mintDelegation();
   await persistRuntimeDelegations(fixture, [full]);
@@ -211,7 +230,7 @@ test("registered runtime hints persist only the exact planned phase", async () =
   }
 });
 
-test("registered runtime rejects wrong-owner, broad, and unknown hints without persisting", async () => {
+isolatedTest("registered runtime rejects wrong-owner, broad, and unknown hints without persisting", async () => {
   const fixture = await createAuthRuntimeFixture();
   const full = await fixture.hermetic.mintDelegation();
   await persistRuntimeDelegations(fixture, [full]);
@@ -239,7 +258,7 @@ test("registered runtime rejects wrong-owner, broad, and unknown hints without p
   }
 });
 
-test("registered runtime owner retry reads once and retries exactly once after a classified hint", async () => {
+isolatedTest("registered runtime owner retry reads once and retries exactly once after a classified hint", async () => {
   const fixture = await createAuthRuntimeFixture();
   const full = await fixture.hermetic.mintDelegation();
   await persistRuntimeDelegations(fixture, [full]);
