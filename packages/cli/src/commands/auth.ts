@@ -409,7 +409,7 @@ export function registerAuthCommand(program: Command): void {
         }
 
         if (isRequestBoundDelegationEnvelope(parsed)) {
-          await importRequestBoundDelegation(ctx, parsed);
+          await importRequestBoundDelegationWithBootstrap(ctx, parsed);
           return;
         }
 
@@ -839,6 +839,34 @@ type AuthImportOutput = {
   expiry: string;
   activated: true;
 };
+
+async function importRequestBoundDelegationWithBootstrap(
+  ctx: { profile: string; host: string },
+  artifact: unknown,
+): Promise<void> {
+  const session = await ProfileManager.getSession(ctx.profile);
+  if (session !== null) {
+    await importRequestBoundDelegation(ctx, artifact);
+    return;
+  }
+
+  const profile = await ProfileManager.getProfile(ctx.profile);
+  if (resolveProfilePosture(profile) !== "delegate-session") {
+    await importRequestBoundDelegation(ctx, artifact);
+    return;
+  }
+
+  const candidate = artifact as { delegation: PortableDelegation };
+  const delegation = normalizePortableDelegation(candidate.delegation);
+  try {
+    await bootstrapDelegatedSession(ctx, delegation);
+    await importRequestBoundDelegation(ctx, artifact);
+  } catch (error) {
+    await ProfileManager.clearSession(ctx.profile);
+    await ProfileManager.setProfile(ctx.profile, profile);
+    throw error;
+  }
+}
 
 async function importRequestBoundDelegation(
   ctx: { profile: string; host: string },

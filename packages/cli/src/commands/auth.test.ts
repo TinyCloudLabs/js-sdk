@@ -285,6 +285,7 @@ const importRecorded = {
 
 let ensureAuthenticatedError: Error | null = null;
 let storedImportRequest: Record<string, unknown> | null = null;
+let bootstrapDelegatedSessionError: Error | null = null;
 
 const importedNode = {
   hasRuntimePermissions: () => authNodeHasRuntimePermissions,
@@ -308,6 +309,7 @@ mock.module("../lib/sdk.js", () => ({
   },
   bootstrapDelegatedSession: async (_ctx: unknown, delegation: { cid: string }) => {
     importRecorded.bootstrappedDelegations.push({ cid: delegation.cid });
+    if (bootstrapDelegatedSessionError) throw bootstrapDelegatedSessionError;
     return importedNode;
   },
 }));
@@ -695,7 +697,9 @@ describe("CLI auth import command", () => {
     importRecorded.appendedRequests.length = 0;
     importRecorded.bootstrappedDelegations.length = 0;
     ensureAuthenticatedError = null;
+    bootstrapDelegatedSessionError = null;
     importSessionDid = "did:key:z6MkSession#z6MkSession";
+    profiles.set("default", makeProfile({ posture: "owner-openkey" }));
     tempDir = await mkdtemp(join(tmpdir(), "tc-auth-import-"));
   });
 
@@ -822,6 +826,113 @@ describe("CLI auth import command", () => {
     expect(operationRecorded.calls).toHaveLength(1);
     expect(importRecorded.useRuntimeDelegation).toEqual([]);
     expect(recorded.outputs[0]).toMatchObject({ requestId: "req_v1", delegationCid: "bafy-v1-artifact", activated: true });
+  });
+
+  test("bootstraps a fresh delegate profile before canonically importing its first request-bound delegation", async () => {
+    const originalProfile = makeProfile({ posture: "delegate-session" });
+    profiles.set("default", originalProfile);
+    storedImportRequest = makeStoredImportRequest();
+    operationRecorded.results.push({
+      status: "ok",
+      operation: { operationId: "tinycloud.auth.import", operationVersion: 1 },
+      context: { profile: "default", host: activeHost, posture: "delegate-session" },
+      output: {
+        cid: "bafy-first-bound",
+        effectivePermissions: storedImportRequest.requested,
+        expiry: "2099-01-01T00:00:00.000Z",
+        activated: true,
+      },
+    });
+    const artifact = {
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "req_first_bound",
+      delegation: makePortableDelegation({
+        delegateDID: "did:key:z6MkSession",
+        cid: "bafy-first-bound",
+      }),
+    };
+    const source = join(tempDir, "first-bound.json");
+    await writeFile(source, JSON.stringify(artifact), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(importRecorded.bootstrappedDelegations).toEqual([{ cid: "bafy-first-bound" }]);
+    expect(operationRecorded.calls).toEqual([{
+      operationId: "tinycloud.auth.import",
+      operationVersion: 1,
+      target: { profile: "default", host: activeHost, allowOwnerProfile: true },
+      input: artifact,
+    }]);
+    expect(recorded.clearSessions).toEqual([]);
+    expect(recorded.setProfiles).toEqual([]);
+    expect(recorded.outputs[0]).toMatchObject({
+      requestId: "req_first_bound",
+      delegationCid: "bafy-first-bound",
+      activated: true,
+    });
+  });
+
+  test("rolls back a fresh delegate bootstrap when canonical request-bound validation rejects it", async () => {
+    const originalProfile = makeProfile({ posture: "delegate-session" });
+    profiles.set("default", originalProfile);
+    operationRecorded.results.push({
+      status: "error",
+      error: {
+        code: "DELEGATION_REJECTED",
+        message: "The delegation exceeds the stored authority request.",
+        retryable: false,
+      },
+    });
+    const artifact = {
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "req_rejected_first",
+      delegation: makePortableDelegation({
+        delegateDID: "did:key:z6MkSession",
+        cid: "bafy-rejected-first",
+      }),
+    };
+    const source = join(tempDir, "rejected-first.json");
+    await writeFile(source, JSON.stringify(artifact), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors.pop()).toMatchObject({ code: "DELEGATION_REJECTED", exitCode: 1 });
+    expect(importRecorded.bootstrappedDelegations).toEqual([{ cid: "bafy-rejected-first" }]);
+    expect(recorded.clearSessions).toEqual(["default"]);
+    expect(recorded.setProfiles).toEqual([{ profile: "default", data: originalProfile }]);
+    expect(profiles.get("default")).toEqual(originalProfile);
+    expect(sessions.get("default")).toBeUndefined();
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+  });
+
+  test("rolls back a fresh delegate profile when provisional bootstrap itself fails", async () => {
+    const originalProfile = makeProfile({ posture: "delegate-session" });
+    profiles.set("default", originalProfile);
+    bootstrapDelegatedSessionError = new Error("Invalid bootstrap delegation");
+    const artifact = {
+      kind: "tinycloud.auth.delegation",
+      version: 1,
+      requestId: "req_invalid_bootstrap",
+      delegation: makePortableDelegation({
+        delegateDID: "did:key:z6MkSession",
+        cid: "bafy-invalid-bootstrap",
+      }),
+    };
+    const source = join(tempDir, "invalid-bootstrap.json");
+    await writeFile(source, JSON.stringify(artifact), "utf8");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors).toEqual([bootstrapDelegatedSessionError]);
+    expect(operationRecorded.calls).toEqual([]);
+    expect(recorded.clearSessions).toEqual(["default"]);
+    expect(recorded.setProfiles).toEqual([{ profile: "default", data: originalProfile }]);
+    expect(profiles.get("default")).toEqual(originalProfile);
+    expect(sessions.get("default")).toBeUndefined();
   });
 
   test("fails closed without persistence when a v1 request-bound artifact is unknown", async () => {

@@ -103,6 +103,7 @@ class LoopbackEncryptedNode {
     signedInvocation: false,
     delegatedKvRead: false,
     delegatedDecrypt: false,
+    delegatedKvResources: [] as string[],
   };
 
   private readonly server: ReturnType<typeof Bun.serve>;
@@ -110,6 +111,7 @@ class LoopbackEncryptedNode {
   private spaceId?: string;
   private networkId?: string;
   private readonly delegationCids = new Set<string>();
+  private readonly kvData = new Map<string, Map<string, unknown>>();
   private secretPresent = true;
 
   constructor() {
@@ -139,6 +141,10 @@ class LoopbackEncryptedNode {
   configureNetwork(spaceId: string, networkId: string): void {
     this.spaceId = spaceId;
     this.networkId = networkId;
+  }
+
+  configureKv(spaceId: string, entries: Readonly<Record<string, unknown>>): void {
+    this.kvData.set(spaceId.toLowerCase(), new Map(Object.entries(entries)));
   }
 
   setSecretPresent(value: boolean): void {
@@ -225,7 +231,11 @@ class LoopbackEncryptedNode {
     if (url.pathname === "/delegate" && request.method === "POST") {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
-      const payload = verifiedCompactPayload(authorization);
+      // Wallet-mode runtime grant activation uses a signed CACAO header;
+      // portable child grants use compact UCANs and are verified here.
+      const payload = authorization.replace(/^Bearer /i, "").split(".").length === 3
+        ? verifiedCompactPayload(authorization)
+        : {};
       if (payload.iss) this.observed.signingIssuers.push(payload.iss);
       const cid = this.cidForAuthorization(authorization);
       if (this.rejectedActivationCids.has(cid)) {
@@ -233,6 +243,7 @@ class LoopbackEncryptedNode {
       }
       this.observed.signedDelegation = true;
       this.activations.add(cid);
+      this.delegationCids.add(cid);
       return this.json({ activated: [cid], skipped: [] });
     }
 
@@ -246,12 +257,46 @@ class LoopbackEncryptedNode {
       return this.json(this.descriptor());
     }
 
-    this.assertConfigured();
     if (url.pathname === "/invoke" && request.method === "POST") {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
       const payload = verifiedCompactPayload(authorization);
       if (payload.iss) this.observed.signingIssuers.push(payload.iss);
+      const capability = Object.entries(payload.att ?? {}).flatMap(([resource, actions]) =>
+        Object.keys(actions).map((action) => ({ resource, action }))
+      ).filter(({ action }) => action === "tinycloud.kv/get" || action === "tinycloud.kv/list")
+        .find(({ resource, action }) => {
+          const separator = resource.lastIndexOf("/kv/");
+          const boundary = separator >= 0
+            ? separator
+            : resource.endsWith("/kv")
+            ? resource.length - 3
+            : -1;
+          return boundary >= 0 && this.kvData.has(resource.slice(0, boundary).toLowerCase()) &&
+            hasExactCapability(payload, resource, action, this.delegationCids);
+        });
+      if (capability) {
+        const separator = capability.resource.lastIndexOf("/kv/");
+        const compactSeparator = capability.resource.endsWith("/kv")
+          ? capability.resource.length - 3
+          : -1;
+        const boundary = separator >= 0 ? separator : compactSeparator;
+        const targetSpace = boundary >= 0 ? capability.resource.slice(0, boundary) : "";
+        const path = separator >= 0 ? capability.resource.slice(separator + 4) : "";
+        const entries = this.kvData.get(targetSpace.toLowerCase());
+        if (entries) {
+          this.observed.signedInvocation = true;
+          this.observed.delegatedKvRead = true;
+          this.observed.delegatedKvResources.push(`${capability.action}:${capability.resource.toLowerCase()}`);
+          if (capability.action === "tinycloud.kv/list") {
+            return this.json([...entries.keys()].filter((key) => key.startsWith(path)).sort());
+          }
+          if (!entries.has(path)) return new Response("not found", { status: 404 });
+          return this.json(entries.get(path));
+        }
+      }
+
+      this.assertConfigured();
       const resource = `${this.spaceId}/kv/${SECRET_PATH}`;
       if (
         !hasExactCapability(
@@ -270,6 +315,7 @@ class LoopbackEncryptedNode {
     }
 
     if (url.pathname.endsWith("/decrypt") && request.method === "POST") {
+      this.assertConfigured();
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
       const payload = verifiedCompactPayload(authorization);
@@ -419,6 +465,11 @@ export interface HermeticEncryptedNode {
     signature: string;
     tinycloudHosts: string[];
   };
+  readonly ownerRestorableSession: HermeticEncryptedNode["restorableSession"];
+  readonly ownerPrivateKey: string;
+  readonly ownerDid: string;
+  readonly accountSpaceId: string;
+  readonly applicationsSpaceId: string;
   readonly permissions: readonly PermissionEntry[];
   readonly unrelatedAudience: string;
   createRestoredDelegate(): TinyCloudNode;
@@ -436,6 +487,7 @@ export interface HermeticEncryptedNode {
     delegation: ValidatedRuntimeDelegation,
     expectedSigningIssuer?: string,
   ): void;
+  assertDelegatedKvResources(resources: readonly string[]): void;
   stop(): void;
 }
 
@@ -463,6 +515,8 @@ export async function createHermeticEncryptedNode(
   const spaceId = transport.wasm.makeSpaceId(ownerAddress, OWNER_CHAIN_ID, "secrets");
   const ownerDid = `did:pkh:eip155:${OWNER_CHAIN_ID}:${transport.wasm.ensureEip55(ownerAddress)}`;
   const networkId = `urn:tinycloud:encryption:${ownerDid}:default`;
+  const accountSpaceId = transport.wasm.makeSpaceId(ownerAddress, OWNER_CHAIN_ID, "account").toLowerCase();
+  const applicationsSpaceId = transport.wasm.makeSpaceId(ownerAddress, OWNER_CHAIN_ID, "applications").toLowerCase();
   const permissions: PermissionEntry[] = [
     {
       service: "tinycloud.encryption",
@@ -478,12 +532,36 @@ export async function createHermeticEncryptedNode(
   ];
   transport.configureNetwork(spaceId, networkId);
   transport.setSecretPresent(options.secretPresent ?? true);
+  transport.configureKv(accountSpaceId, {
+    "spaces/applications": {
+      spaceId: applicationsSpaceId,
+      name: "applications",
+      ownerDid,
+      type: "owned",
+      permissions: ["tinycloud.kv/get", "tinycloud.kv/list"],
+      status: "active",
+    },
+    "applications/agent-demo": {
+      appId: "agent-demo",
+      manifests: [{ name: "Agent Demo" }],
+      name: "Agent Demo",
+    },
+  });
+  transport.configureKv(applicationsSpaceId, {
+    "agents/demo/profile": { name: "Ada", role: "operator" },
+    "agents/demo/settings": { notifications: true },
+    "agents/sibling/private": { hidden: true },
+  });
 
   const ownerSession = await makeSession(ownerRuntime.node, ownerRuntime.signer, {
     address: ownerAddress,
     spaceId,
     abilities: { kv: { [SECRET_PATH]: ["tinycloud.kv/get"] } },
-    rawAbilities: { [networkId]: ["tinycloud.encryption/decrypt"] },
+    rawAbilities: {
+      [networkId]: ["tinycloud.encryption/decrypt"],
+      [`${accountSpaceId}/kv/spaces/`]: ["tinycloud.kv/get", "tinycloud.kv/list"],
+      [`${applicationsSpaceId}/kv/agents/demo/profile`]: ["tinycloud.kv/get"],
+    },
   });
   installSession(ownerRuntime.node, ownerSession);
 
@@ -562,6 +640,22 @@ export async function createHermeticEncryptedNode(
       signature: delegateSession.signature,
       tinycloudHosts: [transport.host],
     },
+    ownerRestorableSession: {
+      delegationHeader: ownerSession.delegationHeader,
+      delegationCid: ownerSession.delegationCid,
+      spaceId: ownerSession.spaceId,
+      jwk: ownerSession.jwk,
+      verificationMethod: ownerSession.verificationMethod,
+      address: ownerSession.address,
+      chainId: ownerSession.chainId,
+      siwe: ownerSession.siwe,
+      signature: ownerSession.signature,
+      tinycloudHosts: [transport.host],
+    },
+    ownerPrivateKey: OWNER_PRIVATE_KEY,
+    ownerDid,
+    accountSpaceId,
+    applicationsSpaceId,
     permissions,
     unrelatedAudience,
     createRestoredDelegate: () =>
@@ -633,6 +727,13 @@ export async function createHermeticEncryptedNode(
         principalDidEquals(issuer, expectedSigningIssuer)
       )) {
         throw new Error("loopback did not observe a signature from the expected restored session key");
+      }
+    },
+    assertDelegatedKvResources(resources) {
+      for (const resource of resources) {
+        if (!transport.observed.delegatedKvResources.includes(resource)) {
+          throw new Error(`loopback did not validate delegated KV resource ${resource}`);
+        }
       }
     },
     stop: () => transport.stop(),

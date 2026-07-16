@@ -4,7 +4,7 @@ import catalog from "@tinycloud/operations/operations.json";
 
 import { TOOL_NAMES, toolBindingsForTest } from "./tools.js";
 
-test("has exactly the reviewed six-tool operation mapping", () => {
+test("has exactly the reviewed ten-tool operation mapping", () => {
   const bindings = toolBindingsForTest();
   expect(bindings.map((binding) => binding.name)).toEqual([...TOOL_NAMES]);
   expect(bindings).toEqual([
@@ -13,9 +13,13 @@ test("has exactly the reviewed six-tool operation mapping", () => {
     expect.objectContaining({ name: "tinycloud_auth_capabilities", operationId: "tinycloud.auth.capabilities", operationVersion: 1 }),
     expect.objectContaining({ name: "tinycloud_auth_request", operationId: "tinycloud.auth.request", operationVersion: 1 }),
     expect.objectContaining({ name: "tinycloud_auth_import", operationId: "tinycloud.auth.import", operationVersion: 1 }),
+    expect.objectContaining({ name: "tinycloud_account_spaces_list", operationId: "tinycloud.account.spaces.list", operationVersion: 1 }),
+    expect.objectContaining({ name: "tinycloud_account_applications_list", operationId: "tinycloud.account.applications.list", operationVersion: 1 }),
+    expect.objectContaining({ name: "tinycloud_kv_list", operationId: "tinycloud.kv.list", operationVersion: 1 }),
+    expect.objectContaining({ name: "tinycloud_kv_get", operationId: "tinycloud.kv.get", operationVersion: 1 }),
     expect.objectContaining({ name: "tinycloud_secrets_get", operationId: "tinycloud.secrets.get", operationVersion: 1 }),
   ]);
-  expect((catalog as { operations: unknown[] }).operations).toHaveLength(6);
+  expect((catalog as { operations: unknown[] }).operations).toHaveLength(10);
 });
 
 test("does not register a continuation tool or any non-tool MCP surface", async () => {

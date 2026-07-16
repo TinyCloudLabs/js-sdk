@@ -26,6 +26,11 @@ interface HermeticEncryptedNode {
     readonly spaceId: string;
     readonly verificationMethod: string;
   } & Record<string, unknown>;
+  readonly ownerRestorableSession: HermeticEncryptedNode["restorableSession"];
+  readonly ownerPrivateKey: string;
+  readonly ownerDid: string;
+  readonly accountSpaceId: string;
+  readonly applicationsSpaceId: string;
   readonly permissions: readonly PermissionEntry[];
   readonly unrelatedAudience: string;
   createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
@@ -33,6 +38,7 @@ interface HermeticEncryptedNode {
   mintDelegationWithPermissions(permissions: PermissionEntry[]): Promise<StoredRuntimeDelegation>;
   readAndDecrypt(node: unknown, delegation: unknown): Promise<void>;
   assertNarrowDelegatedReadAndDecrypt(delegation: unknown, expectedSigningIssuer?: string): void;
+  assertDelegatedKvResources(resources: readonly string[]): void;
   stop(): void;
 }
 
@@ -44,6 +50,7 @@ export interface AuthRuntimeFixtureOptions {
 
 export interface AuthRuntimeFixture {
   readonly profile: string;
+  readonly ownerProfile: string;
   readonly sessionDid: string;
   readonly hermetic: HermeticEncryptedNode;
 }
@@ -66,6 +73,7 @@ export async function createAuthRuntimeFixture(
   };
   const hermetic = await module.createHermeticEncryptedNode(options);
   const profile = "delegate";
+  const ownerProfile = "owner";
   const sessionDid = hermetic.restorableSession.verificationMethod.split("#", 1)[0]!;
 
   try {
@@ -83,12 +91,28 @@ export async function createAuthRuntimeFixture(
       createdAt: "2026-07-15T00:00:00.000Z",
     });
     await writeJsonAtomic(sessionPath(profile), hermetic.restorableSession);
+    await writeJsonAtomic(profileConfigPath(ownerProfile), {
+      name: ownerProfile,
+      host: hermetic.host,
+      chainId: hermetic.ownerRestorableSession.chainId,
+      spaceName: "secrets",
+      spaceId: hermetic.ownerRestorableSession.spaceId,
+      did: hermetic.ownerDid,
+      sessionDid: hermetic.ownerRestorableSession.verificationMethod.split("#", 1)[0],
+      posture: "local-owner-key",
+      operatorType: "human",
+      authMethod: "local",
+      privateKey: hermetic.ownerPrivateKey,
+      address: hermetic.ownerRestorableSession.address,
+      createdAt: "2026-07-15T00:00:00.000Z",
+    });
+    await writeJsonAtomic(sessionPath(ownerProfile), hermetic.ownerRestorableSession);
   } catch (error) {
     hermetic.stop();
     throw error;
   }
 
-  return { profile, sessionDid, hermetic };
+  return { profile, ownerProfile, sessionDid, hermetic };
 }
 
 /** Persist only real compact delegations; display metadata is deliberately not authority. */

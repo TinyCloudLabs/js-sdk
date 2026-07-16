@@ -82,6 +82,10 @@ process.stdout.write(JSON.stringify(tools));
     tinycloud_auth_capabilities: "tinycloud.auth.capabilities",
     tinycloud_auth_request: "tinycloud.auth.request",
     tinycloud_auth_import: "tinycloud.auth.import",
+    tinycloud_account_spaces_list: "tinycloud.account.spaces.list",
+    tinycloud_account_applications_list: "tinycloud.account.applications.list",
+    tinycloud_kv_list: "tinycloud.kv.list",
+    tinycloud_kv_get: "tinycloud.kv.get",
     tinycloud_secrets_get: "tinycloud.secrets.get",
   };
   for (const format of ["esm", "cjs"] as const) {
@@ -97,7 +101,7 @@ process.stdout.write(JSON.stringify(tools));
       name: string;
       title: string;
     }>;
-    expect(tools).toHaveLength(6);
+    expect(tools).toHaveLength(10);
     expect(tools.map((tool) => tool.title)).toEqual(
       tools.map((tool) => titlesByOperation.get(operationByTool[tool.name]!)!),
     );

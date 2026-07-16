@@ -1,7 +1,6 @@
 {
   "name": "@tinycloud/mcp",
   "version": "0.1.0-beta.1",
-  "private": true,
   "description": "TinyCloud delegated operations MCP server",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",

@@ -5,7 +5,6 @@ import {
   PermissionEntry,
   principalDidEquals,
 } from "@tinycloud/sdk-core";
-import type { TinyCloudNode } from "./TinyCloudNode";
 
 /**
  * A portable delegation that can be transported between users.
@@ -108,8 +107,11 @@ export interface DelegationAuthority {
  */
 export interface RuntimeDelegationActivator {
   readonly sessionDid: string;
+  readonly did?: string;
+  readonly isSessionOnly?: boolean;
   computeDelegationCid(authorization: string): string;
   useRuntimeDelegation(delegation: PortableDelegation): Promise<void>;
+  useDelegation?(delegation: PortableDelegation): Promise<unknown>;
   getRuntimePermissionDelegations(): PortableDelegation[];
 }
 
@@ -378,7 +380,7 @@ function resourcesMatch(
  * remains the authority and delegation-chain validation boundary.
  */
 export async function activateValidatedRuntimeDelegation(
-  node: RuntimeDelegationActivator | TinyCloudNode,
+  node: RuntimeDelegationActivator,
   delegation: PortableDelegation,
   options: { host: string },
 ): Promise<ValidatedRuntimeDelegation> {
@@ -457,7 +459,16 @@ export async function activateValidatedRuntimeDelegation(
     host,
   };
 
-  await node.useRuntimeDelegation(installedCandidate);
+  if (
+    node.isSessionOnly === true &&
+    typeof node.did === "string" &&
+    principalDidEquals(node.did, node.sessionDid) &&
+    typeof node.useDelegation === "function"
+  ) {
+    await node.useDelegation(installedCandidate);
+  } else {
+    await node.useRuntimeDelegation(installedCandidate);
+  }
   const installed = node
     .getRuntimePermissionDelegations()
     .find((candidate) => candidate.cid === cid);

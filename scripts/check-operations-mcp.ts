@@ -65,8 +65,8 @@ const registered = new Set(catalog.operations.map((operation) => `${operation.id
 for (const path of [resolve(cli, "src/commands/secrets.ts"), resolve(cli, "src/commands/auth.ts"), resolve(mcp, "src/tools.ts")]) {
   const source = await readFile(path, "utf8");
   const references = [
-    ...source.matchAll(/invokeOperation\(\s*["'](tinycloud\.[a-z]+\.[a-z]+)["']\s*,\s*(\d+)/g),
-    ...source.matchAll(/operationId:\s*["'](tinycloud\.[a-z]+\.[a-z]+)["'][\s\S]{0,120}?operationVersion:\s*(\d+)/g),
+    ...source.matchAll(/invokeOperation\(\s*["'](tinycloud(?:\.[a-z]+)+)["']\s*,\s*(\d+)/g),
+    ...source.matchAll(/operationId:\s*["'](tinycloud(?:\.[a-z]+)+)["'][\s\S]{0,120}?operationVersion:\s*(\d+)/g),
   ];
   for (const match of references) {
     const operationId = match[1]!;

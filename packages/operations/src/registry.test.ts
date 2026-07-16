@@ -2,16 +2,21 @@ import { expect, spyOn, test } from "bun:test";
 
 import { invokeOperation } from "./invoke.js";
 import { authOperationDefinitions } from "./operations/auth.js";
+import { explorationOperationDefinitions } from "./operations/exploration.js";
 import { secretsGetOperationDefinitions } from "./operations/secrets-get.js";
 import { statusOperationDefinitions } from "./operations/status.js";
 import { lookupOperation, operationDefinitionsForCatalog } from "./registry.js";
 import { createAuthRuntimeFixture } from "../test-support/auth-runtime.js";
 
 const expectedOperationIds = [
+  "tinycloud.account.applications.list",
+  "tinycloud.account.spaces.list",
   "tinycloud.auth.capabilities",
   "tinycloud.auth.import",
   "tinycloud.auth.request",
   "tinycloud.auth.status",
+  "tinycloud.kv.get",
+  "tinycloud.kv.list",
   "tinycloud.secrets.get",
   "tinycloud.status.get",
 ] as const;
@@ -25,8 +30,9 @@ test("registry contains exactly the reviewed v1 operations", () => {
   expect([
     ...statusOperationDefinitions,
     ...authOperationDefinitions,
+    ...explorationOperationDefinitions,
     ...secretsGetOperationDefinitions,
-  ]).toHaveLength(6);
+  ]).toHaveLength(10);
 });
 
 test("registry resolves each v1 operation and rejects unknown versions", () => {
