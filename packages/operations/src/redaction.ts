@@ -3,7 +3,8 @@ import type {
   OperationDefinition,
   OperationRef,
 } from "./contract.js";
-import type { OperationError } from "./errors.js";
+import type { OperationError, OperationErrorCode } from "./errors.js";
+import { safeOriginHost, safeSessionDid } from "./safe-values.js";
 
 export const REDACTED_VALUE = "[REDACTED]";
 
@@ -88,13 +89,13 @@ export function createSafeOperationDiagnostic(
 }
 
 export function redactOperationError(
-  definition: Pick<OperationDefinition<unknown, unknown>, "sensitivity">,
+  _definition: Pick<OperationDefinition<unknown, unknown>, "sensitivity">,
   error: OperationError,
 ): OperationError {
   const details =
     error.details === undefined
       ? undefined
-      : redactOperationValue(definition, error.details);
+      : redactSafeErrorDetails(error.code, error.details);
 
   return {
     code: error.code,
@@ -103,12 +104,93 @@ export function redactOperationError(
     ...(details === undefined
       ? {}
       : {
-          details: isRecord(details)
-            ? details
-            : { redacted: details },
+          details: isRecord(details) ? details : { redacted: details },
         }),
   };
 }
+
+/**
+ * Error details are a separate, code-owned channel. Only fields with an
+ * explicit stable policy can cross the canonical result or diagnostic
+ * boundary; arbitrary handler details are dropped rather than redacted by
+ * input pointers, which could accidentally preserve a transport secret.
+ */
+const SAFE_ERROR_DETAIL_POLICIES: Readonly<
+  Partial<
+    Record<
+      OperationErrorCode,
+      Readonly<Record<string, (value: unknown) => unknown | undefined>>
+    >
+  >
+> = {
+  INPUT_INVALID: {
+    issues: (value) =>
+      Array.isArray(value) ? safeIssueCodes(value) : undefined,
+  },
+  OPERATION_VERSION_UNSUPPORTED: {
+    supportedVersions: (value) =>
+      Array.isArray(value) && value.every((item) => Number.isInteger(item))
+        ? value
+        : undefined,
+  },
+  DELEGATION_AUDIENCE_MISMATCH: {
+    expectedSessionDid: safeSessionDid,
+    artifactAudience: safeSessionDid,
+  },
+  DELEGATION_HOST_MISMATCH: {
+    expectedHost: safeOriginHost,
+    artifactHost: safeOriginHost,
+  },
+};
+
+function redactSafeErrorDetails(
+  code: OperationErrorCode,
+  details: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> | undefined {
+  const policy = SAFE_ERROR_DETAIL_POLICIES[code];
+  if (policy === undefined) return undefined;
+
+  const safeDetails: Record<string, unknown> = {};
+  for (const [key, sanitize] of Object.entries(policy)) {
+    if (!hasOwn(details, key)) continue;
+    const value = sanitize(details[key]);
+    if (value !== undefined) safeDetails[key] = value;
+  }
+  return Object.keys(safeDetails).length === 0 ? undefined : safeDetails;
+}
+
+function safeIssueCodes(
+  value: readonly unknown[],
+): readonly Readonly<{ code: string }>[] | undefined {
+  const codes = value.map((issue) => {
+    if (!isRecord(issue) || typeof issue.code !== "string") return undefined;
+    return SAFE_ISSUE_CODES.has(issue.code) ? { code: issue.code } : undefined;
+  });
+  return codes.every(
+    (issue): issue is Readonly<{ code: string }> => issue !== undefined,
+  )
+    ? codes
+    : undefined;
+}
+
+const SAFE_ISSUE_CODES = new Set([
+  "invalid_type",
+  "invalid_literal",
+  "custom",
+  "invalid_union",
+  "invalid_union_discriminator",
+  "invalid_enum_value",
+  "unrecognized_keys",
+  "invalid_arguments",
+  "invalid_return_type",
+  "invalid_date",
+  "invalid_string",
+  "too_small",
+  "too_big",
+  "invalid_intersection_types",
+  "not_multiple_of",
+  "not_finite",
+]);
 
 function redactPointer(value: unknown, pointer: string): unknown {
   if (pointer === "") {

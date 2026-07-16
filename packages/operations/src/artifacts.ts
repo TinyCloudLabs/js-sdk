@@ -17,11 +17,13 @@ export { evaluateAuthority } from "./authority.js";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1_000;
 
-const PermissionEntrySchema = z.object({
+/** The shared wire schema for SDK PermissionEntry values, including signed ReCap caveats. */
+export const PermissionEntrySchema = z.object({
   service: z.string().min(1),
   space: z.string().min(1).optional(),
   path: z.string(),
   actions: z.array(z.string().min(1)).min(1),
+  caveats: z.array(z.record(z.unknown())).optional(),
   skipPrefix: z.boolean().optional(),
   expiry: z.string().min(1).optional(),
   description: z.string().optional(),
@@ -30,6 +32,15 @@ const PermissionEntrySchema = z.object({
 const CommandSchema = z.object({
   argv: z.array(z.string()).min(1),
   cwd: z.string().min(1),
+}).strict();
+
+const LegacyPermissionRequestArtifactSchema = z.object({
+  kind: z.literal("tinycloud.auth.request"),
+  version: z.literal(1),
+  requestId: z.string(),
+  sessionDid: z.string().min(1),
+  requested: z.array(PermissionEntrySchema),
+  requestedExpiry: z.union([z.string(), z.number().finite()]).optional(),
 }).strict();
 
 const PortableDelegationSchema: z.ZodType<Record<string, unknown>> = z.lazy(() => z.object({
@@ -62,7 +73,7 @@ export const PermissionRequestArtifactSchema = z.object({
   ownerDid: z.string().min(1).optional(),
   spaceId: z.string().min(1).optional(),
   requestedExpiry: z.union([z.string().min(1), z.number().finite()]).optional(),
-  requested: z.array(PermissionEntrySchema).min(1),
+  requested: z.array(PermissionEntrySchema),
   command: CommandSchema.optional(),
 }).strict();
 
@@ -82,8 +93,22 @@ export const DelegationImportArtifactSchema = z.object({
 
 export type PermissionRequestArtifact = z.infer<typeof PermissionRequestArtifactSchema>;
 export type DelegationImportArtifact = z.infer<typeof DelegationImportArtifactSchema>;
+/** The minimal public node-sdk request shape accepted by the legacy reader. */
+export type LegacyPermissionRequestArtifact = z.infer<typeof LegacyPermissionRequestArtifactSchema>;
 export type ArtifactClock = () => Date;
 export type RequestIdSource = () => string;
+
+/** Invocation-owned values used to safely complete a legacy request record. */
+export interface LegacyRequestContext {
+  readonly profile: string;
+  readonly host: string;
+  readonly sessionDid: string;
+  readonly posture: TinyCloudPosture;
+  readonly operatorType: OperationOperatorType;
+  readonly ownerDid?: string;
+  readonly spaceId?: string;
+  readonly now?: Date;
+}
 
 export interface PermissionRequestIdentityInput {
   readonly profile: string;
@@ -130,6 +155,38 @@ export function isDelegationImportArtifact(value: unknown): value is DelegationI
   return DelegationImportArtifactSchema.safeParse(value).success;
 }
 
+function normalizeLegacyPermissionRequest(
+  value: LegacyPermissionRequestArtifact,
+  context: LegacyRequestContext,
+): PermissionRequestArtifact {
+  if (principal(value.sessionDid) !== principal(context.sessionDid)) {
+    throw new TypeError("Stored authority request belongs to a different session.");
+  }
+  const createdAt = context.now ?? new Date();
+  if (Number.isNaN(createdAt.getTime())) {
+    throw new TypeError("The legacy authority request has no usable creation time.");
+  }
+  return {
+    kind: "tinycloud.auth.request",
+    version: 1,
+    requestId: value.requestId,
+    createdAt: createdAt.toISOString(),
+    profile: context.profile,
+    posture: context.posture,
+    operatorType: context.operatorType,
+    host: context.host,
+    sessionDid: context.sessionDid,
+    ...(context.ownerDid === undefined ? {} : { ownerDid: context.ownerDid }),
+    ...(context.spaceId === undefined ? {} : { spaceId: context.spaceId }),
+    ...(value.requestedExpiry === undefined ? {} : { requestedExpiry: value.requestedExpiry }),
+    requested: canonicalizeCapabilities(value.requested),
+  } as PermissionRequestArtifact;
+}
+
+function principal(value: string): string {
+  return value.split("#", 1)[0]!;
+}
+
 /**
  * Stable exact identity used only for request reuse. It binds a request to its
  * selected profile, active session DID, host, and canonical missing subset.
@@ -174,16 +231,37 @@ export function buildPermissionRequestArtifact(
 }
 
 /** Reads only valid canonical v1 records and refuses malformed stored artifacts. */
-export async function listPermissionRequests(profile: string): Promise<PermissionRequestArtifact[]> {
-  return (await readAuthRequests<unknown>(profile)).map(validatePermissionRequestArtifact);
+export async function listPermissionRequests(
+  profile: string,
+  context?: LegacyRequestContext,
+): Promise<PermissionRequestArtifact[]> {
+  return (await readAuthRequests<unknown>(profile)).map((value) => {
+    const canonical = PermissionRequestArtifactSchema.safeParse(value);
+    if (canonical.success) return canonical.data;
+    const legacy = LegacyPermissionRequestArtifactSchema.safeParse(value);
+    if (!legacy.success) throw new TypeError("Stored authority request is malformed.");
+    if (context === undefined) {
+      throw new TypeError("Legacy authority requests require the selected invocation context.");
+    }
+    return normalizeLegacyPermissionRequest(legacy.data, context);
+  });
 }
 
 export async function findPermissionRequest(
   profile: string,
   requestId: string,
-  identity: Pick<PermissionRequestIdentityInput, "sessionDid" | "host">,
+  identity: Pick<PermissionRequestIdentityInput, "sessionDid" | "host"> &
+    Partial<Omit<LegacyRequestContext, "profile" | "host" | "sessionDid">>,
 ): Promise<PermissionRequestArtifact | null> {
-  const records = await listPermissionRequests(profile);
+  const records = await listPermissionRequests(profile, {
+    profile,
+    host: identity.host,
+    sessionDid: identity.sessionDid,
+    posture: identity.posture ?? "delegate-session",
+    operatorType: identity.operatorType ?? "human",
+    ...(identity.ownerDid === undefined ? {} : { ownerDid: identity.ownerDid }),
+    ...(identity.spaceId === undefined ? {} : { spaceId: identity.spaceId }),
+  });
   return records.find((record) =>
     record.requestId === requestId &&
     record.sessionDid === identity.sessionDid &&
@@ -208,7 +286,22 @@ export async function createOrReusePermissionRequest(
     input.profile,
     "auth-requests",
     (rawRecords) => {
-      const records = rawRecords.map(validatePermissionRequestArtifact);
+      const records = rawRecords.map((value) => {
+        const canonical = PermissionRequestArtifactSchema.safeParse(value);
+        if (canonical.success) return canonical.data;
+        const legacy = LegacyPermissionRequestArtifactSchema.safeParse(value);
+        if (!legacy.success) throw new TypeError("Stored authority request is malformed.");
+        return normalizeLegacyPermissionRequest(legacy.data, {
+          profile: input.profile,
+          host: input.host,
+          sessionDid: input.sessionDid,
+          posture: input.posture,
+          operatorType: input.operatorType,
+          ...(input.ownerDid === undefined ? {} : { ownerDid: input.ownerDid }),
+          ...(input.spaceId === undefined ? {} : { spaceId: input.spaceId }),
+          now: observedNow,
+        });
+      });
       const retained = prunePermissionRequests(records, {
         profile: input.profile,
         sessionDid: input.sessionDid,
@@ -256,6 +349,10 @@ export function prunePermissionRequests(
     const createdAt = Date.parse(record.createdAt);
     if (!Number.isFinite(createdAt) || createdAt < cutoff) return false;
     if (record.profile === input.profile && record.sessionDid !== input.sessionDid) return false;
+    // Empty request arrays are historical CLI records. They carry no
+    // authority, but remain readable and are retained byte-for-byte by the
+    // shared format-1 writer for compatibility.
+    if (record.requested.length === 0) return true;
     return !evaluateAuthority(input.granted, record.requested).satisfied;
   });
 }

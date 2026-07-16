@@ -67,6 +67,7 @@ mock.module("@tinycloud/sdk-services", () => {
 
 const {
   diffPermissions,
+  isCompatiblePermissionRequestArtifact,
   loadManifestPermissions,
   resolvePermissionSpaces,
 } = await import("./permissions.js");
@@ -199,6 +200,138 @@ test("snapshots the shipped session, delegation, and request writer layouts", as
   } finally {
     await rm(home, { recursive: true, force: true });
   }
+});
+
+test("reads the minimal public node-sdk auth request artifact from the request store", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc-minimal-request-store-"));
+  const permissionsUrl = new URL("./permissions.ts", import.meta.url).href;
+  const script = `
+    const {
+      appendPermissionRequestArtifact,
+      loadPermissionRequestArtifacts,
+    } = await import(${JSON.stringify(permissionsUrl)});
+    const request = {
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_minimal_store",
+      sessionDid: "did:key:z6MkSession",
+      requested: [{
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/KEY",
+        actions: ["tinycloud.kv/get"],
+      }],
+    };
+    await appendPermissionRequestArtifact("snapshot", request);
+    process.stdout.write(JSON.stringify(await loadPermissionRequestArtifacts("snapshot")));
+  `;
+
+  try {
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      env: { ...process.env, HOME: home },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual([{
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_minimal_store",
+      sessionDid: "did:key:z6MkSession",
+      requested: [{
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/KEY",
+        actions: ["tinycloud.kv/get"],
+      }],
+    }]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("reads empty requests and prior legacy request shapes from the request store", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc-legacy-request-store-"));
+  const permissionsUrl = new URL("./permissions.ts", import.meta.url).href;
+  const script = `
+    const {
+      appendPermissionRequestArtifact,
+      loadPermissionRequestArtifacts,
+    } = await import(${JSON.stringify(permissionsUrl)});
+    const requests = [
+      {
+        kind: "tinycloud.auth.request",
+        version: 1,
+        requestId: "req_empty_legacy",
+        requested: [],
+      },
+      {
+        kind: "tinycloud.auth.request",
+        version: 1,
+        requestId: "req_prior_cli",
+        did: "did:key:z6MkLegacyRequester",
+        requested: [],
+        requestedExpiry: 3600,
+      },
+    ];
+    for (const request of requests) {
+      await appendPermissionRequestArtifact("snapshot", request);
+    }
+    process.stdout.write(JSON.stringify(await loadPermissionRequestArtifacts("snapshot")));
+  `;
+
+  try {
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      env: { ...process.env, HOME: home },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual([
+      {
+        kind: "tinycloud.auth.request",
+        version: 1,
+        requestId: "req_empty_legacy",
+        requested: [],
+      },
+      {
+        kind: "tinycloud.auth.request",
+        version: 1,
+        requestId: "req_prior_cli",
+        did: "did:key:z6MkLegacyRequester",
+        requested: [],
+        requestedExpiry: 3600,
+      },
+    ]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("keeps the legacy request discriminator independent of optional metadata", () => {
+  expect(isCompatiblePermissionRequestArtifact({
+    kind: "tinycloud.auth.request",
+    version: 1,
+    requestId: "",
+    requested: [],
+  })).toBe(true);
+  expect(isCompatiblePermissionRequestArtifact({
+    kind: "tinycloud.auth.request",
+    version: 1,
+    requestId: "req_prior_cli",
+    did: "did:key:z6MkLegacyRequester",
+    requested: [],
+  })).toBe(true);
 });
 
 function manifestSource(manifest: Record<string, unknown>): string {

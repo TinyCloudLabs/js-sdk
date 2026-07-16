@@ -8,7 +8,9 @@ export default defineConfig({
   ],
   format: ["esm", "cjs"],
   dts: true,
-  bundle: false,
+  // Bundle the package's internal entrypoint graph so the generated CJS files
+  // never require `.js` siblings inside this `type: module` package.
+  bundle: true,
   clean: true,
   sourcemap: true,
   splitting: false,

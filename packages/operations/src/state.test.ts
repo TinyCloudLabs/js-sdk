@@ -329,6 +329,12 @@ for (const [name, contents] of [
   ["a profile with an invalid posture", { ...legacyProfile, posture: "not-a-posture" }],
   ["a profile with an invalid operator type", { ...legacyProfile, operatorType: "robot" }],
   ["a profile with an invalid auth method", { ...legacyProfile, authMethod: "password" }],
+  ["a delegate profile with local owner authentication", {
+    ...legacyProfile,
+    posture: "delegate-session",
+    authMethod: "local",
+    privateKey: "1".padStart(64, "0"),
+  }],
 ] as const) {
   test(`returns PROFILE_NOT_FOUND instead of an owner context for ${name}`, async () => {
     await isolatedHome();

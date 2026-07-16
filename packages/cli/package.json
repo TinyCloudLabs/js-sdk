@@ -15,7 +15,7 @@
     "bin"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsup",
@@ -30,7 +30,8 @@
     "chalk": "^5.3.0",
     "commander": "^14.0.0",
     "open": "^11.0.0",
-    "ora": "^9.3.0"
+    "ora": "^9.3.0",
+    "siwe": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^20",

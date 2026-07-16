@@ -51,11 +51,12 @@ jobs:
   i0-gate:
     name: I0 compatibility and MCP contract
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Select Node 20.19.4 for CLI, MCP, and packed graph checks
+        uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
 
@@ -72,12 +73,14 @@ jobs:
 
       - name: Verify pinned runtimes
         run: |
+          test "$(node --version)" = "v20.19.4"
           test "$(node -p 'process.versions.node.split(".")[0]')" = "20"
           test "$(bun --version)" = "1.2.0"
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
+      # The operations declaration build imports sdk-core's public types.
       - name: Build SDK declarations for packed public API checks
         run: |
           bun run --cwd packages/bootstrap build
@@ -99,9 +102,14 @@ jobs:
       - name: Build operations package
         run: bun run --cwd packages/operations build
 
+      - name: Build the packed CLI artifact
+        run: bun run --cwd packages/cli build
+
       - name: Run focused I0 gate suites offline
         env:
           NODE_BINARY: node
+          CLI_NODE_BINARY: node
+          EXPECTED_NODE_MAJOR: "20"
           NPM_CONFIG_OFFLINE: "true"
           NPM_CONFIG_REGISTRY: "http://127.0.0.1:9"
         run: |
@@ -110,6 +118,19 @@ jobs:
           bun test packages/cli/src/commands/auth.test.ts
           bun test packages/cli/src/lib/permissions.test.ts
           bun test packages/cli/src/output/errors.test.ts
+          bun test tests/packed-runtime/cli.test.ts
           bun test tests/mcp-sdk-contract/contract.test.ts
           bun test tests/mcp-sdk-contract/prerequisites.test.ts
           bun run --cwd tests/mcp-sdk-contract test:public-api
+
+      - name: Verify Node 20 packed-graph boundary
+        env:
+          NODE_BINARY: node
+          CLI_NODE_BINARY: node
+          EXPECTED_NODE_MAJOR: "20"
+          NPM_CONFIG_OFFLINE: "true"
+          NPM_CONFIG_REGISTRY: "http://127.0.0.1:9"
+        run: |
+          test "$(node --version)" = "v20.19.4"
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "20"
+          bun test tests/packed-runtime/entrypoints.test.ts

@@ -247,13 +247,29 @@ export async function updateProfileStore<T, Result>(
   },
   options: ProfileLockOptions = {},
 ): Promise<Result> {
-  return withProfileLock(profile, async () => {
-    const current = await readProfileStore<T>(profile, store);
-    const next = await update(current.records);
-    await writeJsonAtomic(profileStorePath(profile, store), next.records);
-    await writeFormatOneMetadata(profile, store);
-    return next.result;
-  }, options);
+  return withProfileLock(
+    profile,
+    () => updateProfileStoreWhileLocked(profile, store, update),
+    options,
+  );
+}
+
+/** The caller must already own this profile's lock. */
+async function updateProfileStoreWhileLocked<T, Result>(
+  profile: string,
+  store: Exclude<ProfileStoreName, "session">,
+  update: (
+    records: readonly T[],
+  ) => Promise<{ readonly records: readonly T[]; readonly result: Result }> | {
+    readonly records: readonly T[];
+    readonly result: Result;
+  },
+): Promise<Result> {
+  const current = await readProfileStore<T>(profile, store);
+  const next = await update(current.records);
+  await writeJsonAtomic(profileStorePath(profile, store), next.records);
+  await writeFormatOneMetadata(profile, store);
+  return next.result;
 }
 
 export async function writeSession<T extends object>(

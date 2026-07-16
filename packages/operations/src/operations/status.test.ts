@@ -1,7 +1,8 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, mock, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { TinyCloudNode } from "@tinycloud/node-sdk";
 
 import type {
   OperationContext,
@@ -15,6 +16,8 @@ import {
   tinycloudConfigPath,
   writeJsonAtomic,
 } from "../state.js";
+import { invokeOperation } from "../invoke.js";
+import * as registry from "../registry.js";
 import { statusOperationDefinitions } from "./status.js";
 
 type StatusOutput = {
@@ -44,6 +47,10 @@ afterEach(async () => {
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
+});
+
+afterAll(() => {
+  mock.restore();
 });
 
 test("defines exactly the two internal read-only v1 status operations with strict empty input", () => {
@@ -133,6 +140,38 @@ test("returns an owner-safe summary without a session while preserving operator 
       liveAdditionalDelegationCount: 0,
     },
   });
+});
+
+test("invokes canonical status without constructing or signing a node for a missing local-owner session", async () => {
+  await isolatedHome();
+  await writeJsonAtomic(profileConfigPath("owner"), {
+    name: "owner",
+    host: "https://node.tinycloud.test",
+    chainId: 1,
+    spaceName: "secrets",
+    did: "did:pkh:eip155:1:0xowner",
+    ownerDid: "did:pkh:eip155:1:0xowner",
+    authMethod: "local",
+    privateKey: "private-key-canary",
+    createdAt: "2026-07-15T00:00:00.000Z",
+  });
+  await writeJsonAtomic(additionalDelegationsPath("owner"), []);
+  const status = definition("tinycloud.status.get");
+  spyOn(registry, "lookupOperation").mockImplementation((id, version) =>
+    id === status.id && version === status.version
+      ? { status: "found", definition: status as OperationDefinition<unknown, unknown> }
+      : { status: "operation_not_found" },
+  );
+  const signIn = spyOn(TinyCloudNode.prototype, "signIn");
+
+  const result = await invokeOperation("tinycloud.status.get", 1, { profile: "owner" }, {});
+
+  expect(result).toMatchObject({
+    status: "ok",
+    context: { profile: "owner", posture: "local-owner-key" },
+    output: { session: { present: false, expired: null, expiresAt: null } },
+  });
+  expect(signIn).not.toHaveBeenCalled();
 });
 
 test("reports a missing session and treats expiry at the boundary as expired", async () => {
