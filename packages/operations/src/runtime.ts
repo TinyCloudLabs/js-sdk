@@ -1,12 +1,10 @@
-import {
-  activateValidatedRuntimeDelegation,
-  makePkhSpaceId,
-  parsePkhDid,
+import type {
+  PermissionEntry,
+  PortableDelegation,
+  RuntimeDelegationActivator,
   TinyCloudNode,
-  type PermissionEntry,
-  type PortableDelegation,
-  type RuntimeDelegationActivator,
 } from "@tinycloud/node-sdk";
+import * as nodeSdk from "@tinycloud/node-sdk";
 
 import type {
   InvocationTarget,
@@ -95,11 +93,20 @@ export async function createInvocationRuntime(
 
   const profileName = summary.profile;
   try {
-    const [session, key, additionalDelegations] = await Promise.all([
-      readSession<StoredSession>(profileName),
-      readJson<Record<string, unknown>>(`${profilePath(profileName)}/key.json`),
-      readAdditionalDelegations<StoredAdditionalDelegation>(profileName),
-    ]);
+    // Keep the value import namespace-shaped so projection modules remain
+    // compatible with lightweight node-sdk test doubles.
+    const {
+      activateValidatedRuntimeDelegation,
+      TinyCloudNode: TinyCloudNodeConstructor,
+    } = nodeSdk;
+    const explicitPrivateKeyOverride = typeof target.privateKey === "string";
+    const [session, key, additionalDelegations] = explicitPrivateKeyOverride
+      ? [null, null, [] as StoredAdditionalDelegation[]]
+      : await Promise.all([
+        readSession<StoredSession>(profileName),
+        readJson<Record<string, unknown>>(`${profilePath(profileName)}/key.json`),
+        readAdditionalDelegations<StoredAdditionalDelegation>(profileName),
+      ]);
     const profile = resolved.profile;
 
     // The inspection summary and authenticated material are intentionally
@@ -107,7 +114,7 @@ export async function createInvocationRuntime(
     // them; otherwise local-owner-key could be authenticated under a stale
     // delegate-session summary and bypass the caller's posture policy.
     const actualPosture = resolvePosture(profile);
-    if (actualPosture !== summary.posture) {
+    if (!explicitPrivateKeyOverride && actualPosture !== summary.posture) {
       return failed(
         { ...summary, posture: actualPosture },
         operationError(
@@ -122,7 +129,6 @@ export async function createInvocationRuntime(
       : typeof profile.privateKey === "string"
       ? profile.privateKey
       : undefined;
-    const explicitPrivateKeyOverride = typeof target.privateKey === "string";
     const selectedPosture = explicitPrivateKeyOverride || profile.authMethod === "local"
       ? "local-owner-key"
       : summary.posture;
@@ -135,7 +141,7 @@ export async function createInvocationRuntime(
         ),
       );
     }
-    const node = new TinyCloudNode({
+    const node = new TinyCloudNodeConstructor({
       host: summary.host,
       ...(privateKey === undefined ? {} : { privateKey }),
     });
@@ -220,11 +226,24 @@ export async function createInvocationRuntime(
 function spaceForAuthenticatedPrincipal(principal: string | undefined): string | undefined {
   if (principal === undefined) return undefined;
   try {
-    const pkh = parsePkhDid(principal);
+    const pkh = parsePkhDidForSpace(principal);
     return pkh === null ? undefined : makePkhSpaceId(pkh.address, pkh.chainId, "secrets");
   } catch {
     return undefined;
   }
+}
+
+function parsePkhDidForSpace(did: string): { address: string; chainId: number } | null {
+  const match = did.match(/^did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40})$/);
+  return match === null
+    ? null
+    : { chainId: Number(match[1]), address: match[2]! };
+}
+
+function makePkhSpaceId(address: string, chainId: number, name: string): string {
+  return `tinycloud:pkh:eip155:${chainId}:${address.startsWith("0x")
+    ? `0x${address.slice(2).toLowerCase()}`
+    : address.toLowerCase()}:${name}`;
 }
 
 function normalizeSession(

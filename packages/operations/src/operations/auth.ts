@@ -1,8 +1,8 @@
-import {
-  activateValidatedRuntimeDelegation,
-  type PermissionEntry,
-  type PortableDelegation,
-  type RuntimeDelegationActivator,
+import * as nodeSdk from "@tinycloud/node-sdk";
+import type {
+  PermissionEntry,
+  PortableDelegation,
+  RuntimeDelegationActivator,
 } from "@tinycloud/node-sdk";
 import { z } from "zod";
 
@@ -340,9 +340,9 @@ async function importRequestBoundDelegation(
       expiry,
       host: explicitHost ?? host,
     } as PortableDelegation;
-    let activated: Awaited<ReturnType<typeof activateValidatedRuntimeDelegation>>;
+    let activated: Awaited<ReturnType<typeof nodeSdk.activateValidatedRuntimeDelegation>>;
     try {
-      activated = await activateValidatedRuntimeDelegation(
+      activated = await nodeSdk.activateValidatedRuntimeDelegation(
         context.runtime.node as RuntimeDelegationActivator,
         delegation,
         { host },

@@ -14866,6 +14866,7 @@ import { writeFile as writeFile6 } from "fs/promises";
 import { join as join4 } from "path";
 import { homedir } from "os";
 import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
+import { invokeOperationWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 var SECRETS_SPACE3 = "secrets";
 var SECRET_KV_ABILITIES = {
   get: "tinycloud.kv/get",
@@ -15027,10 +15028,11 @@ async function invokeCanonicalSecretGet(params) {
   };
   const invoke = () => withSpinner(
     params.label,
-    () => invokeOperation2("tinycloud.secrets.get", 1, target, input)
+    () => auth?.privateKey ? invokeOperationWithLocalAuthorityRetry("tinycloud.secrets.get", 1, target, input) : invokeOperation2("tinycloud.secrets.get", 1, target, input)
   );
   const first = await invoke();
   if (first.status !== "authority_required") return first;
+  if (auth?.privateKey !== void 0) return first;
   const profile = await ProfileManager.getProfile(params.ctx.profile);
   if (!canRequestOwnerPermissions(profile)) return first;
   const node = params.node ?? await ensureSecretsNode(params.ctx, params.options);
@@ -15629,13 +15631,13 @@ function registerSecretsCommand(program2, openKeyAcquisition) {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const scopeOptions = resolveSecretScope(options);
-      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
       const secretPath = resolveSecretPath2(name2, scopeOptions).permissionPaths.vault;
       if (options.delegation) {
         const delegated = await resolveDelegatedSecretSource(
           options.delegation,
           secretPath,
-          spaceUri ?? SECRETS_SPACE3
+          legacySpaceUri ?? SECRETS_SPACE3
         );
         const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
         const delegatedCtx = { ...ctx, host: effectiveHost };
@@ -15648,7 +15650,7 @@ function registerSecretsCommand(program2, openKeyAcquisition) {
             delegationCid: delegated.delegation.cid,
             permissions: delegated.permissions,
             secretPath,
-            space: spaceUri ?? SECRETS_SPACE3,
+            space: legacySpaceUri ?? SECRETS_SPACE3,
             name: name2
           })
         );
@@ -15664,6 +15666,8 @@ function registerSecretsCommand(program2, openKeyAcquisition) {
         outputJson({ name: name2, value: value2 });
         return;
       }
+      const privateKey = authOptions(options)?.privateKey;
+      const spaceUri = privateKey !== void 0 && options.space !== void 0 && !options.space.startsWith("tinycloud:") ? options.space : legacySpaceUri;
       const result = await invokeCanonicalSecretGet({
         ctx,
         name: name2,
