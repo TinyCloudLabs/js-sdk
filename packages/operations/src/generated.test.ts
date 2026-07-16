@@ -35,14 +35,14 @@ async function runGenerator(...arguments_: readonly string[]): Promise<number> {
   return process.exited;
 }
 
-test("the I2 catalog is generated from internal registry material", async () => {
+test("the catalog is generated from internal registry material", async () => {
   const generator = await readFile(generatorPath, "utf8");
 
   expect(generator).toContain('from "../src/registry.js"');
   expect(generator).not.toContain('from "../src/index.ts"');
 });
 
-test("the I2 catalog contains exactly the registered v1 definitions", async () => {
+test("the catalog contains exactly the registered v1 definitions", async () => {
   const catalog = JSON.parse(await readFile(catalogPath, "utf8")) as {
     schemaVersion: number;
     stableErrors: readonly string[];
@@ -56,10 +56,11 @@ test("the I2 catalog contains exactly the registered v1 definitions", async () =
     "tinycloud.auth.import@1",
     "tinycloud.auth.request@1",
     "tinycloud.auth.status@1",
+    "tinycloud.secrets.get@1",
     "tinycloud.status.get@1",
   ]);
-  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(5);
-  expect(catalog.operations).toHaveLength(5);
+  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(6);
+  expect(catalog.operations).toHaveLength(6);
 
   for (const operation of catalog.operations) {
     expect(operation.input).toBeDefined();
@@ -81,6 +82,10 @@ test("the I2 catalog contains exactly the registered v1 definitions", async () =
   const requestInput = byId.get("tinycloud.auth.request")?.input.anyOf as Array<Record<string, unknown>>;
   expect(requestInput).toHaveLength(2);
   expect(requestInput.every((branch) => branch.additionalProperties === false)).toBe(true);
+
+  const secretGet = byId.get("tinycloud.secrets.get");
+  expect(secretGet?.sensitivity).toEqual({ input: false, output: true });
+  expect(secretGet?.effects).toEqual(["read", "local_write"]);
 });
 
 test("generation is byte-identical and generated checks do not repair drift", async () => {

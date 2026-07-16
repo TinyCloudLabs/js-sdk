@@ -24,6 +24,7 @@ const profile = {
 };
 
 const secretAttempts: string[] = [];
+let operationAttempts = 0;
 const installedDelegations: string[] = [];
 
 const node = {
@@ -92,6 +93,50 @@ mock.module("../lib/sdk.js", () => ({
   bootstrapDelegatedSession: async () => node,
 }));
 
+mock.module("@tinycloud/operations", () => ({
+  invokeOperation: async (
+    operationId: string,
+    operationVersion: number,
+  ) => {
+    expect(operationId).toBe("tinycloud.secrets.get");
+    expect(operationVersion).toBe(1);
+    if (operationAttempts === 0) {
+      operationAttempts += 1;
+      return {
+        status: "authority_required" as const,
+        operation: { operationId, operationVersion },
+        context: { profile: "default", host: profile.host, posture: "owner-openkey" as const },
+        missing: [
+          {
+            service: "tinycloud.kv",
+            space: "secrets",
+            path: "vault/secrets/ANTHROPIC_API_KEY",
+            actions: ["tinycloud.kv/get"],
+          },
+          {
+            service: "tinycloud.encryption",
+            path: NETWORK_ID,
+            actions: ["tinycloud.encryption/decrypt"],
+          },
+        ],
+        request: { requestId: "request-owner" },
+        approval: { kind: "openkey" as const, requestId: "request-owner", fallback: "tc auth grant" },
+        retry: { operationId, operationVersion, inputDigest: "digest", requiresCallerInput: false },
+      };
+    }
+    if (operationAttempts === 1) {
+      operationAttempts += 1;
+      return {
+        status: "ok" as const,
+        operation: { operationId, operationVersion },
+        context: { profile: "default", host: profile.host, posture: "owner-openkey" as const },
+        output: { value: SECRET_VALUE_CANARY },
+      };
+    }
+    throw new Error("operation retried more than once");
+  },
+}));
+
 mock.module("../auth/local-key.js", () => ({
   generateLocalIdentity: async () => ({}),
   deriveAddress: async () => "0xOwner",
@@ -115,6 +160,7 @@ afterAll(async () => {
 describe("owner secrets get OpenKey retry", () => {
   test("acquires once and retries the secret exactly once through the real owner path", async () => {
     secretAttempts.length = 0;
+    operationAttempts = 0;
     installedDelegations.length = 0;
     let acquisitions = 0;
     let stdout = "";
@@ -148,7 +194,7 @@ describe("owner secrets get OpenKey retry", () => {
     }
 
     expect(acquisitions).toBe(1);
-    expect(secretAttempts).toEqual(["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"]);
+    expect(operationAttempts).toBe(2);
     expect(installedDelegations).toEqual(["bafy-owner-openkey"]);
     expect(stdout).toBe(
       [

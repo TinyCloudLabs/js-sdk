@@ -39,6 +39,12 @@ type FakeNode = {
   getDefaultEncryptionNetworkId(name?: string): string;
   getEncryptionNetworkIdForSpace(spaceId: string, name?: string): string;
   secretsForSpace(spaceId: string): FakeNode["secrets"];
+  readSecret(input: { space: string; name: string; scope?: string }): Promise<
+    | { status: "ok"; value: string }
+    | { status: "not_found" }
+    | { status: "permission_required" }
+    | { status: "read_failed" }
+  >;
   secrets: {
     list(options?: { scope?: string }): Promise<{ ok: true; data: string[] } | { ok: false; error: { code: string; message: string; service?: string } }>;
     get(name: string, options?: { scope?: string }): Promise<{ ok: true; data: string } | { ok: false; error: { code: string; message: string; service?: string } }>;
@@ -220,6 +226,21 @@ function makeFakeNode(overrides: {
         return nextResult(overrides.deleteResult, { ok: true as const, data: undefined });
       },
     },
+    async readSecret(input: { space: string; name: string; scope?: string }) {
+      const service = input.space === "secrets" ? this.secrets : this.secretsForSpace(input.space);
+      const result = await service.get(
+        input.name,
+        input.scope === undefined ? undefined : { scope: input.scope },
+      );
+      if (result.ok) return { status: "ok" as const, value: result.data };
+      if (result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND") {
+        return { status: "not_found" as const };
+      }
+      if (result.error.code === "PERMISSION_DENIED") {
+        return { status: "permission_required" as const };
+      }
+      return { status: "read_failed" as const };
+    },
     encryption: {
       async decryptEnvelope(envelope: unknown, options: { proofs: string[] }) {
         recorded.decryptEnvelopeCalls.push({ envelope, options });
@@ -357,6 +378,71 @@ mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async (ctx: unknown, options: unknown) => {
     recorded.ensureAuthenticated.push({ ctx, options });
     return currentNode;
+  },
+}));
+
+mock.module("@tinycloud/operations", () => ({
+  invokeOperation: async (
+    operationId: string,
+    operationVersion: number,
+    _target: unknown,
+    input: { name: string; scope?: string; space?: string },
+  ) => {
+    expect(operationId).toBe("tinycloud.secrets.get");
+    expect(operationVersion).toBe(1);
+    const targetSpace = input.space ?? "secrets";
+    const read = await currentNode.readSecret({
+      space: targetSpace,
+      name: input.name,
+      ...(input.scope === undefined ? {} : { scope: input.scope }),
+    });
+    if (read.status === "ok") {
+      return {
+        status: "ok" as const,
+        operation: { operationId, operationVersion },
+        context: { profile: "default", host: "https://tinycloud.test", posture: "owner-openkey" as const },
+        output: { value: read.value },
+      };
+    }
+    if (read.status === "permission_required") {
+      const networkId = currentNode.getEncryptionNetworkIdForSpace(targetSpace);
+      return {
+        status: "authority_required" as const,
+        operation: { operationId, operationVersion },
+        context: { profile: "default", host: "https://tinycloud.test", posture: currentProfile.posture },
+        missing: [
+          {
+            service: "tinycloud.kv",
+            space: targetSpace,
+            path: `vault/secrets${input.scope ? `/scoped/${input.scope.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-")}` : ""}/${input.name}`,
+            actions: ["tinycloud.kv/get"],
+          },
+          {
+            service: "tinycloud.encryption",
+            path: networkId,
+            actions: ["tinycloud.encryption/decrypt"],
+          },
+        ],
+        request: { requestId: "request-secret-get" },
+        approval: { kind: "openkey" as const, requestId: "request-secret-get", fallback: "tc auth grant" },
+        retry: { operationId, operationVersion, inputDigest: "digest", requiresCallerInput: false },
+      };
+    }
+    if (read.status === "not_found") {
+      return {
+        status: "setup_required" as const,
+        operation: { operationId, operationVersion },
+        context: { profile: "default", host: "https://tinycloud.test", posture: currentProfile.posture },
+        setup: { kind: "secret_manager", url: "https://secrets.tinycloud.xyz" },
+        retry: { operationId, operationVersion, inputDigest: "digest", requiresCallerInput: true },
+      };
+    }
+    return {
+      status: "error" as const,
+      operation: { operationId, operationVersion },
+      context: { profile: "default", host: "https://tinycloud.test", posture: currentProfile.posture },
+      error: { code: "SECRET_READ_FAILED" as const, message: "The secret ciphertext could not be read.", retryable: false },
+    };
   },
 }));
 
@@ -750,7 +836,7 @@ describe("CLI secrets commands", () => {
 
     await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "--space", "other"]);
 
-    expect(recorded.secretsForSpaceCalls).toEqual([targetSpace]);
+    expect(recorded.secretsForSpaceCalls).toEqual([targetSpace, targetSpace]);
     expect(recorded.getCalls).toEqual([
       { name: "ANTHROPIC_API_KEY", options: undefined },
       { name: "ANTHROPIC_API_KEY", options: undefined },
@@ -764,13 +850,11 @@ describe("CLI secrets commands", () => {
             space: targetSpace,
             path: "vault/secrets/ANTHROPIC_API_KEY",
             actions: ["tinycloud.kv/get"],
-            skipPrefix: true,
           },
           {
             service: "tinycloud.encryption",
             path: targetNetwork,
             actions: ["tinycloud.encryption/decrypt"],
-            skipPrefix: true,
           },
         ],
       },
@@ -1107,13 +1191,11 @@ describe("CLI secrets commands", () => {
             space: "secrets",
             path: "vault/secrets/ANTHROPIC_API_KEY",
             actions: ["tinycloud.kv/get"],
-            skipPrefix: true,
           },
           {
             service: "tinycloud.encryption",
             path: DEFAULT_NETWORK_ID,
             actions: ["tinycloud.encryption/decrypt"],
-            skipPrefix: true,
           },
         ],
       },
@@ -1288,13 +1370,11 @@ describe("CLI secrets commands", () => {
               space: "secrets",
               path: "vault/secrets/ASSEMBLYAI_API_KEY",
               actions: ["tinycloud.kv/get"],
-              skipPrefix: true,
             },
             {
               service: "tinycloud.encryption",
               path: DEFAULT_NETWORK_ID,
               actions: ["tinycloud.encryption/decrypt"],
-              skipPrefix: true,
             },
           ],
         },

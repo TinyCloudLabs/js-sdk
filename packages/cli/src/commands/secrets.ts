@@ -8,6 +8,7 @@ import {
   type PortableDelegation,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
+import { invokeOperation } from "@tinycloud/operations";
 import { ProfileManager } from "../config/profiles.js";
 import { formatCheck, formatSection, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
@@ -41,6 +42,8 @@ const SECRET_KV_ABILITIES: Record<SecretAction, SecretKvAbility> = {
 type SecretResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string; service?: string } };
+
+type CanonicalSecretGetResult = Awaited<ReturnType<typeof invokeOperation>>;
 
 interface SecretScopeOptions {
   scope?: string;
@@ -283,6 +286,76 @@ async function runSecretOperationAttempt<T>(
     const permissionError = thrownPermissionError(error);
     if (permissionError) return permissionError;
     throw error;
+  }
+}
+
+async function invokeCanonicalSecretGet(params: {
+  ctx: CLIContext;
+  node: TinyCloudNode;
+  name: string;
+  scope?: string;
+  space?: string;
+  options: { privateKey?: string };
+  label: string;
+  openKeyAcquisition?: OpenKeyAcquisition;
+}): Promise<CanonicalSecretGetResult> {
+  const auth = authOptions(params.options);
+  const target = {
+    profile: params.ctx.profile,
+    host: params.ctx.host,
+    allowOwnerProfile: true,
+    ...(auth ?? {}),
+  };
+  const input = {
+    name: params.name,
+    ...(params.scope === undefined ? {} : { scope: params.scope }),
+    ...(params.space === undefined ? {} : { space: params.space }),
+  };
+
+  const invoke = () => withSpinner(
+    params.label,
+    () => invokeOperation("tinycloud.secrets.get", 1, target, input),
+  );
+  const first = await invoke();
+  if (first.status !== "authority_required") return first;
+
+  const profile = await ProfileManager.getProfile(params.ctx.profile);
+  if (!canRequestOwnerPermissions(profile)) return first;
+
+  await withSpinner("Requesting secret permissions...", () =>
+    ensureDelegationAuthority({
+      ctx: params.ctx,
+      profile,
+      node: params.node,
+      requested: first.missing as PermissionEntry[],
+      expiryOption: undefined,
+      reason: secretPermissionReason("get", params.name),
+      yes: true,
+      force: true,
+      openKeyAcquisition: params.openKeyAcquisition,
+    }),
+  );
+
+  return invoke();
+}
+
+function throwCanonicalSecretGetError(
+  result: CanonicalSecretGetResult,
+  name: string,
+): never {
+  switch (result.status) {
+    case "authority_required":
+      throw new CLIError(
+        "PERMISSION_DENIED",
+        "Permission denied while reading secret",
+        ExitCode.ERROR,
+      );
+    case "setup_required":
+      throw new CLIError("NOT_FOUND", `Secret "${name}" not found`, ExitCode.NOT_FOUND);
+    case "error":
+      throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+    case "ok":
+      throw new Error("Expected a failed canonical secret result.");
   }
 }
 
@@ -1081,30 +1154,22 @@ export function registerSecretsCommand(
         }
 
         const node = await ensureSecretsNode(ctx, options);
-        const secrets = secretsServiceForSpace(node, spaceUri);
-        const result = await runSecretOperation({
+        const result = await invokeCanonicalSecretGet({
           ctx,
           node,
-          action: "get",
           name,
-          scopeOptions,
-          space: spaceUri,
+          ...(scopeOptions?.scope === undefined ? {} : { scope: scopeOptions.scope }),
+          ...(spaceUri === undefined ? {} : { space: spaceUri }),
+          options,
           label: `Getting secret ${name}...`,
-          operation: () => secrets.get(name, scopeOptions),
           openKeyAcquisition,
         });
 
-        if (!result.ok) {
-          if (
-            result.error.code === "NOT_FOUND" ||
-            result.error.code === "KEY_NOT_FOUND"
-          ) {
-            throw new CLIError("NOT_FOUND", `Secret "${name}" not found`, ExitCode.NOT_FOUND);
-          }
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        if (result.status !== "ok") {
+          throwCanonicalSecretGetError(result, name);
         }
 
-        const value = String(result.data);
+        const value = result.output.value;
 
         if (options.output) {
           await writeFile(options.output, value);
