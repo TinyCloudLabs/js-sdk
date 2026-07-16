@@ -1,7 +1,9 @@
 import type { OperationDefinition, OperationId } from "./contract.js";
+import { authOperationDefinitions } from "./operations/auth.js";
+import { statusOperationDefinitions } from "./operations/status.js";
 
 export type OperationLookup =
-  | Readonly<{ status: "found"; definition: OperationDefinition<unknown, unknown> }>
+  | Readonly<{ status: "found"; definition: OperationDefinition<any, any> }>
   | Readonly<{ status: "operation_not_found" }>
   | Readonly<{
       status: "operation_version_unsupported";
@@ -9,21 +11,31 @@ export type OperationLookup =
     }>;
 
 /**
- * I1 intentionally has no registered operations. Later increments add internal
- * definitions here; there is no exported registration hook for projections.
+ * The closed v1 catalog is assembled from internal definitions. There is no
+ * exported registration hook for projections or a handler bypass API.
  */
-const operationDefinitions: readonly OperationDefinition<unknown, unknown>[] = [];
+let operationDefinitions: readonly OperationDefinition<any, any>[] | undefined;
+
+function registeredOperationDefinitions(): readonly OperationDefinition<any, any>[] {
+  // Auth handlers consult lookupOperation while executing. Lazy assembly keeps
+  // that internal dependency out of the module-initialization cycle.
+  operationDefinitions ??= [
+    ...statusOperationDefinitions,
+    ...authOperationDefinitions,
+  ];
+  return operationDefinitions;
+}
 
 /** Internal generator input; package exports prevent projection access. */
-export function operationDefinitionsForCatalog(): readonly OperationDefinition<unknown, unknown>[] {
-  return operationDefinitions;
+export function operationDefinitionsForCatalog(): readonly OperationDefinition<any, any>[] {
+  return registeredOperationDefinitions();
 }
 
 export function lookupOperation(
   operationId: OperationId,
   operationVersion: number,
 ): OperationLookup {
-  const matchingId = operationDefinitions.filter(
+  const matchingId = registeredOperationDefinitions().filter(
     (definition) => definition.id === operationId,
   );
   if (matchingId.length === 0) {

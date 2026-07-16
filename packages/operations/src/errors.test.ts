@@ -8,7 +8,7 @@ import {
   sanitizeThrownOperationError,
 } from "./errors.js";
 
-test("defines every stable I1 operation error code", () => {
+test("defines every stable v1 operation error code", () => {
   expect(OPERATION_ERROR_CODES).toEqual([
     "INPUT_INVALID",
     "OPERATION_NOT_FOUND",

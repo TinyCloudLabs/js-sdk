@@ -60,7 +60,7 @@ afterAll(() => {
   mock.restore();
 });
 
-test("defines exactly the three unregistered v1 auth operations", () => {
+test("defines exactly the three internal v1 auth operations", () => {
   expect(authOperationDefinitions.map((definition) => [definition.id, definition.version])).toEqual([
     ["tinycloud.auth.capabilities", 1],
     ["tinycloud.auth.request", 1],

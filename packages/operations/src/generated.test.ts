@@ -11,6 +11,19 @@ const packageDirectory = resolve(sourceDirectory, "..");
 const catalogPath = resolve(packageDirectory, "generated/operations.json");
 const generatorPath = resolve(packageDirectory, "scripts/generate.ts");
 
+type CatalogOperation = {
+  id: string;
+  version: number;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  effects: readonly string[];
+  postures: readonly string[];
+  exposure: Record<string, unknown>;
+  sensitivity: { input: boolean; output: boolean };
+  stableErrors: readonly string[];
+  authority: { dynamic: boolean };
+};
+
 async function runGenerator(...arguments_: readonly string[]): Promise<number> {
   const process = Bun.spawn({
     cmd: ["bun", "scripts/generate.ts", ...arguments_],
@@ -22,25 +35,52 @@ async function runGenerator(...arguments_: readonly string[]): Promise<number> {
   return process.exited;
 }
 
-test("the I1 catalog is generated from internal registry material", async () => {
+test("the I2 catalog is generated from internal registry material", async () => {
   const generator = await readFile(generatorPath, "utf8");
 
   expect(generator).toContain('from "../src/registry.js"');
   expect(generator).not.toContain('from "../src/index.ts"');
 });
 
-test("the empty I1 catalog has the stable schema required by later operations", async () => {
+test("the I2 catalog contains exactly the registered v1 definitions", async () => {
   const catalog = JSON.parse(await readFile(catalogPath, "utf8")) as {
     schemaVersion: number;
     stableErrors: readonly string[];
-    operations: readonly unknown[];
+    operations: CatalogOperation[];
   };
 
-  expect(catalog).toEqual({
-    schemaVersion: 1,
-    stableErrors: OPERATION_ERROR_CODES,
-    operations: [],
-  });
+  expect(catalog.schemaVersion).toBe(1);
+  expect(catalog.stableErrors).toEqual(OPERATION_ERROR_CODES);
+  expect(catalog.operations.map((operation) => `${operation.id}@${operation.version}`)).toEqual([
+    "tinycloud.auth.capabilities@1",
+    "tinycloud.auth.import@1",
+    "tinycloud.auth.request@1",
+    "tinycloud.auth.status@1",
+    "tinycloud.status.get@1",
+  ]);
+  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(5);
+  expect(catalog.operations).toHaveLength(5);
+
+  for (const operation of catalog.operations) {
+    expect(operation.input).toBeDefined();
+    expect(operation.output).toBeDefined();
+    expect(operation.output.additionalProperties).toBe(false);
+    expect(operation.effects.length).toBeGreaterThan(0);
+    expect(operation.postures.length).toBeGreaterThan(0);
+    expect(Object.keys(operation.exposure).sort()).toEqual(["cli", "docs", "mcp", "skill"]);
+    expect(operation.sensitivity).toBeDefined();
+    expect(operation.stableErrors).toEqual(OPERATION_ERROR_CODES);
+    expect(operation.authority).toEqual({ dynamic: true });
+  }
+
+  const byId = new Map(catalog.operations.map((operation) => [operation.id, operation]));
+  for (const operationId of ["tinycloud.auth.capabilities", "tinycloud.auth.status", "tinycloud.status.get"]) {
+    expect(byId.get(operationId)?.input.additionalProperties).toBe(false);
+  }
+  expect(byId.get("tinycloud.auth.import")?.input.additionalProperties).toBe(false);
+  const requestInput = byId.get("tinycloud.auth.request")?.input.anyOf as Array<Record<string, unknown>>;
+  expect(requestInput).toHaveLength(2);
+  expect(requestInput.every((branch) => branch.additionalProperties === false)).toBe(true);
 });
 
 test("generation is byte-identical and generated checks do not repair drift", async () => {

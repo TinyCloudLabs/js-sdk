@@ -31,7 +31,6 @@ import {
   type PermissionRequestArtifact,
 } from "./artifacts.js";
 import { redactOperationError } from "./redaction.js";
-import { lookupOperation } from "./registry.js";
 import type { InvocationRuntimeResolution } from "./runtime.js";
 
 /** The sole projection-facing execution API. */
@@ -50,6 +49,10 @@ export async function invokeOperation(
       operationError("INPUT_INVALID", "The invocation target is invalid."),
     );
   }
+  // Load internal registry material only when invoking. This keeps the packed
+  // root entrypoint free of auth/runtime SDK initialization until a call is
+  // made, while preserving registry resolution before input or profile access.
+  const { lookupOperation } = await import("./registry.js");
   const lookup = lookupOperation(operationId, operationVersion);
 
   // Registry resolution is deliberately complete before any input parsing or
