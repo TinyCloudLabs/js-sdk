@@ -21,8 +21,8 @@ import {
 const EXPECTED_VERSION = 1;
 const EXPECTED_SOURCE_SHA256 =
   "daecd38d908d05d622684b580501dc38c5945b0499ce7eb3a18d77663b93c73a";
-// tinycloud-node TC-178 account delegation history commit.
-const EXPECTED_NODE_REV = "b426134e0676a12100ed161276ae6cb6f4570267";
+// tinycloud-node v1.4.10 release-tag commit containing TC-178.
+const EXPECTED_NODE_REV = "b7a4b0b42606cefe144a19b6d2ebbbb4d2060c85";
 
 const WORKFLOW = join(
   import.meta.dir,
