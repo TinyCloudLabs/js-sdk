@@ -526,6 +526,14 @@ export interface TinyCloudNodeConfig {
   tinycloudRegistryUrl?: string | null;
   /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
   tinycloudFallbackHosts?: string[] | null;
+  /** Probe for a locally-running TinyCloud node before registry/fallback resolution. Default: true. */
+  autoDiscoverLocalNode?: boolean;
+  /** Local loopback node URL to probe. Default: http://127.0.0.1:8000. */
+  localNodeUrl?: string;
+  /** Known `*.local.tinycloud.link` subdomain name, probed directly. */
+  localLinkName?: string;
+  /** Expected local node DID. A locally-discovered node whose DID differs is rejected. */
+  expectedNodeDid?: string;
   /** Space prefix for this user's space. Optional - only needed for signIn() */
   prefix?: string;
   /** Domain for SIWE messages (default: derived from host) */
@@ -1081,6 +1089,10 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: config.tinycloudFallbackHosts,
+      autoDiscoverLocalNode: config.autoDiscoverLocalNode,
+      localNodeUrl: config.localNodeUrl,
+      localLinkName: config.localLinkName,
+      expectedNodeDid: config.expectedNodeDid,
       autoCreateSpace: useBootstrapSignInRequest ? false : config.autoCreateSpace,
       enablePublicSpace: config.enablePublicSpace ?? true,
       spaceCreationHandler: useBootstrapSignInRequest
@@ -2743,6 +2755,10 @@ export class TinyCloudNode {
     const resolved = await resolveTinyCloudHosts(pkhDid(address, chainId), {
       registryUrl: this.config.tinycloudRegistryUrl,
       fallbackHosts: this.config.tinycloudFallbackHosts,
+      autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
+      localNodeUrl: this.config.localNodeUrl,
+      localLinkName: this.config.localLinkName,
+      expectedNodeDid: this.config.expectedNodeDid,
     });
     return resolved.hosts[0];
   }
@@ -2812,6 +2828,10 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
+      autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
+      localNodeUrl: this.config.localNodeUrl,
+      localLinkName: this.config.localLinkName,
+      expectedNodeDid: this.config.expectedNodeDid,
       autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: useBootstrapSignInRequest
@@ -2874,6 +2894,10 @@ export class TinyCloudNode {
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
+      autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
+      localNodeUrl: this.config.localNodeUrl,
+      localLinkName: this.config.localLinkName,
+      expectedNodeDid: this.config.expectedNodeDid,
       autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: useBootstrapSignInRequest

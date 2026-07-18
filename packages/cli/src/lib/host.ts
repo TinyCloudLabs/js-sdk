@@ -1,8 +1,68 @@
+import {
+  discoverLocalTinyCloudNode,
+  type LocalNodeIdentityStore,
+} from "@tinycloud/sdk-core";
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { resolveSpaceUri } from "./space.js";
+
+/**
+ * Trust-on-first-use pin store persisted in the profile's profile.json
+ * (`pinnedLocalNodeDids`). A missing profile (e.g. during `tc init`) reads
+ * as no pin and skips persisting — discovery still works, TOFU just stays
+ * in-memory for that invocation.
+ */
+export function profileLocalNodeIdentityStore(
+  profileName: string,
+): LocalNodeIdentityStore {
+  return {
+    get: async (url) => {
+      const profile = await ProfileManager.getProfile(profileName).catch(
+        () => null,
+      );
+      return profile?.pinnedLocalNodeDids?.[url];
+    },
+    set: async (url, nodeDid) => {
+      const profile = await ProfileManager.getProfile(profileName).catch(
+        () => null,
+      );
+      if (!profile) return;
+      await ProfileManager.setProfile(profileName, {
+        ...profile,
+        pinnedLocalNodeDids: {
+          ...profile.pinnedLocalNodeDids,
+          [url]: nodeDid,
+        },
+      });
+    },
+  };
+}
+
+/**
+ * Probe for a locally-running TinyCloud node using the profile's discovery
+ * knobs and profile-persisted DID pins. Returns the verified local node URL,
+ * or null when discovery is disabled, nothing local is running, or the local
+ * node fails identity verification — callers fall back to their normal host.
+ */
+export async function discoverLocalNodeHost(
+  profileName: string,
+): Promise<string | null> {
+  const profile = await ProfileManager.getProfile(profileName).catch(
+    () => null,
+  );
+  if (profile?.autoDiscoverLocalNode === false) {
+    return null;
+  }
+  const discovered = await discoverLocalTinyCloudNode({
+    localNodeUrl: profile?.localNodeUrl,
+    localLinkName: profile?.localLinkName,
+    expectedNodeDid: profile?.expectedNodeDid,
+    identityStore: profileLocalNodeIdentityStore(profileName),
+  });
+  return discovered?.url ?? null;
+}
 
 /** Minimal shape of a kv/sql service error this module inspects. */
 interface ServiceErrorLike {
