@@ -936,7 +936,7 @@ function kvFailure(
       status: "error",
       error: operationError(
         "KV_CONFLICT",
-        "The TinyCloud KV object changed concurrently; read its current ETag before retrying.",
+        "A database serialization conflict prevented the conditional KV mutation; re-read the key state, which may still be absent, before deciding whether to retry.",
         { retryable: true },
       ),
     };
