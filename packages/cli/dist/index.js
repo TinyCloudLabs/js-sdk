@@ -5357,6 +5357,9 @@ var ErrorCodes = {
   // KV-specific errors
   KV_NOT_FOUND: "KV_NOT_FOUND",
   KV_WRITE_FAILED: "KV_WRITE_FAILED",
+  KV_PRECONDITION_FAILED: "KV_PRECONDITION_FAILED",
+  KV_CONFLICT: "KV_CONFLICT",
+  KV_RESPONSE_TOO_LARGE: "KV_RESPONSE_TOO_LARGE",
   // SQL-specific errors
   SQL_ERROR: "SQL_ERROR",
   SQL_PERMISSION_DENIED: "SQL_PERMISSION_DENIED",
@@ -6303,7 +6306,7 @@ var KVService = class extends BaseService {
    * @param signal - Optional abort signal
    * @returns Fetch response
    */
-  async invokeOperation(path, action, body, signal) {
+  async invokeOperation(path, action, body, signal, extraHeaders) {
     const session = this.context.session;
     const headers = this.context.invoke(
       session,
@@ -6311,9 +6314,10 @@ var KVService = class extends BaseService {
       path,
       action
     );
+    const requestHeaders = Array.isArray(headers) ? [...headers, ...Object.entries(extraHeaders ?? {})] : { ...headers, ...extraHeaders };
     return this.context.fetch(`${this.host}/invoke`, {
       method: "POST",
-      headers,
+      headers: requestHeaders,
       body,
       signal: this.combineSignals(signal)
     });
@@ -6495,13 +6499,21 @@ var KVService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
+      if (options?.maxResponseBytes !== void 0 && (!Number.isSafeInteger(options.maxResponseBytes) || options.maxResponseBytes <= 0)) {
+        return err(serviceError(
+          ErrorCodes.INVALID_INPUT,
+          "KV maxResponseBytes must be a positive safe integer",
+          "kv"
+        ));
+      }
       const path = this.getFullPath(key, options?.prefix);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.GET,
           void 0,
-          options?.signal
+          options?.signal,
+          options?.maxResponseBytes === void 0 ? void 0 : { "x-tinycloud-max-response-bytes": String(options.maxResponseBytes) }
         );
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) {
@@ -6519,6 +6531,14 @@ var KVService = class extends BaseService {
             return this.classifyNotFound(response, key);
           }
           const errorText = await response.text();
+          if (response.status === 413) {
+            return err(serviceError(
+              ErrorCodes.KV_RESPONSE_TOO_LARGE,
+              `KV value at key "${key}" exceeds the requested response limit`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
@@ -6550,6 +6570,13 @@ var KVService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
+      if (options?.ifMatch !== void 0 && options.ifNoneMatch !== void 0) {
+        return err(serviceError(
+          ErrorCodes.INVALID_INPUT,
+          "KV put cannot combine ifMatch and ifNoneMatch",
+          "kv"
+        ));
+      }
       const path = this.getFullPath(key, options?.prefix);
       const body = this.serializePutValue(value, options?.contentType);
       try {
@@ -6557,7 +6584,11 @@ var KVService = class extends BaseService {
           path,
           KVAction.PUT,
           body,
-          options?.signal
+          options?.signal,
+          {
+            ...options?.ifMatch === void 0 ? {} : { "if-match": options.ifMatch },
+            ...options?.ifNoneMatch === void 0 ? {} : { "if-none-match": options.ifNoneMatch }
+          }
         );
         if (!response.ok) {
           if (response.status === 401) {
@@ -6570,6 +6601,22 @@ var KVService = class extends BaseService {
             }));
           }
           const errorText = await response.text();
+          if (response.status === 412) {
+            return err(serviceError(
+              ErrorCodes.KV_PRECONDITION_FAILED,
+              `KV precondition failed for key "${key}"`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
+          if (response.status === 503 && (options?.ifMatch !== void 0 || options?.ifNoneMatch !== void 0)) {
+            return err(serviceError(
+              ErrorCodes.KV_CONFLICT,
+              `Concurrent KV update conflicted for key "${key}"`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
           const quotaError = this.handleQuotaErrorResponse(
             response,
             errorText,
@@ -6705,6 +6752,13 @@ var KVService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
+      if (options?.limit !== void 0 && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1e3)) {
+        return err(serviceError(
+          ErrorCodes.INVALID_INPUT,
+          "KV list limit must be an integer from 1 through 1000",
+          "kv"
+        ));
+      }
       let listPath = options?.prefix ?? this._config.prefix ?? "";
       if (options?.path) {
         listPath = listPath ? `${listPath}/${options.path}` : options.path;
@@ -6714,7 +6768,8 @@ var KVService = class extends BaseService {
           listPath,
           KVAction.LIST,
           void 0,
-          options?.signal
+          options?.signal,
+          options?.limit === void 0 ? void 0 : { "x-tinycloud-limit": String(options.limit) }
         );
         if (!response.ok) {
           if (response.status === 401) {
@@ -6744,7 +6799,10 @@ var KVService = class extends BaseService {
             (key) => key.startsWith(prefixWithSlash) ? key.slice(prefixWithSlash.length) : key
           );
         }
-        return ok({ keys });
+        return ok({
+          keys,
+          ...response.headers.get("x-tinycloud-truncated") === null ? {} : { truncated: response.headers.get("x-tinycloud-truncated") === "true" }
+        });
       } catch (error) {
         return err(wrapError2("kv", error));
       }
@@ -6764,7 +6822,8 @@ var KVService = class extends BaseService {
           path,
           KVAction.DELETE,
           void 0,
-          options?.signal
+          options?.signal,
+          options?.ifMatch === void 0 ? void 0 : { "if-match": options.ifMatch }
         );
         if (!response.ok) {
           if (response.status === 401) {
@@ -6780,6 +6839,22 @@ var KVService = class extends BaseService {
             return this.classifyNotFound(response, key);
           }
           const errorText = await response.text();
+          if (response.status === 412) {
+            return err(serviceError(
+              ErrorCodes.KV_PRECONDITION_FAILED,
+              `KV precondition failed for key "${key}"`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
+          if (response.status === 503 && options?.ifMatch !== void 0) {
+            return err(serviceError(
+              ErrorCodes.KV_CONFLICT,
+              `Concurrent KV delete conflicted for key "${key}"`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
@@ -6789,7 +6864,10 @@ var KVService = class extends BaseService {
             )
           );
         }
-        return ok(void 0);
+        return ok({
+          data: void 0,
+          headers: this.createResponseHeaders(response.headers)
+        });
       } catch (error) {
         return err(wrapError2("kv", error));
       }
@@ -7095,10 +7173,17 @@ var SQLService = class extends BaseService {
         return err(authRequiredError("sql"));
       }
       try {
+        const body = {
+          action: "query",
+          sql,
+          params: serializeSqlValues(params ?? [])
+        };
+        if (options?.maxRows !== void 0) body.maxRows = options.maxRows;
+        if (options?.maxBytes !== void 0) body.maxBytes = options.maxBytes;
         const response = await this.invokeSQL(
           dbName,
           this.actionForSql(sql, SQLAction.READ),
-          { action: "query", sql, params: params ?? [] },
+          body,
           options?.signal
         );
         if (!response.ok) {
@@ -7120,7 +7205,7 @@ var SQLService = class extends BaseService {
         const body = {
           action: "execute",
           sql,
-          params: params ?? []
+          params: serializeSqlValues(params ?? [])
         };
         if (options?.schema) {
           body.schema = options.schema;
@@ -7444,6 +7529,11 @@ function validateMigrationOptions(options) {
     }
   }
   return null;
+}
+function serializeSqlValues(values) {
+  return values.map(
+    (value) => value instanceof Uint8Array ? Array.from(value) : value
+  );
 }
 function migrationKey(namespace, id) {
   return `${encodeURIComponent(namespace)}:${encodeURIComponent(id)}`;

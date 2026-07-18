@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/mcp",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.0",
   "description": "TinyCloud delegated operations MCP server",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -53,7 +53,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0-beta.4",
-    "@tinycloud/operations": "0.1.0"
+    "@tinycloud/operations": "0.2.0-beta.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0-beta.4",
