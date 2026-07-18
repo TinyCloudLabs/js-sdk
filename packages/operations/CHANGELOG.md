@@ -1,5 +1,17 @@
 # @tinycloud/operations
 
+## 0.2.0
+
+### Minor Changes
+
+- 7ecd455: Add bounded, byte-safe TinyCloud KV CRUD operations to MCP, including metadata reads, tagged content writes, create/replace/upsert modes, optimistic concurrency with ETags, and conditional deletion.
+- 7ecd455: Add exact-database delegated SQLite schema inspection, parser-approved bounded read queries, and explicitly acknowledged parameterized DML execution to the canonical operations and MCP surfaces. SQL requests now forward hard row and byte limits where applicable and encode BLOB parameters byte-exactly.
+
+### Patch Changes
+
+- @tinycloud/node-sdk@2.8.0
+- @tinycloud/sdk-core@2.8.0
+
 ## 0.2.0-beta.0
 
 ### Minor Changes
