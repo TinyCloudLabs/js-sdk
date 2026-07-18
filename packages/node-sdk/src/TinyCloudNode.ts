@@ -3479,6 +3479,65 @@ export class TinyCloudNode {
           };
         }
       },
+      // Enable space.create() via the host-activation ceremony (register the
+      // space owner-side, then activate the current session on it). Uses the
+      // same host the session's delegationHeader was minted against.
+      hostSpace: async (spaceId: string) => {
+        try {
+          const created = await (
+            this.auth as NodeUserAuthorization
+          ).hostPublicSpace(spaceId); // routes to hostSpace(spaceId)
+          if (!created) {
+            return {
+              ok: false as const,
+              error: {
+                code: "SPACE_CREATION_FAILED",
+                message: `Failed to host space: ${spaceId}`,
+                service: "space",
+              },
+            };
+          }
+
+          const host = this.hosts[0] ?? this.config.host;
+          const tcSession = this.auth?.tinyCloudSession;
+          if (!host || !tcSession) {
+            return {
+              ok: false as const,
+              error: {
+                code: "SPACE_CREATION_FAILED",
+                message: "Space hosting requires an active session and host",
+                service: "space",
+              },
+            };
+          }
+
+          const act = await activateSessionWithHost(
+            host,
+            tcSession.delegationHeader,
+          );
+          if (!act.success) {
+            return {
+              ok: false as const,
+              error: {
+                code: "SPACE_CREATION_FAILED",
+                message: `Activation failed: ${act.error ?? act.status}`,
+                service: "space",
+              },
+            };
+          }
+
+          return { ok: true as const, data: undefined };
+        } catch (error) {
+          return {
+            ok: false as const,
+            error: {
+              code: "NETWORK_ERROR",
+              message: error instanceof Error ? error.message : String(error),
+              service: "space",
+            },
+          };
+        }
+      },
       onSpaceRegistered: async (space) => {
         graph.assertActive();
         await this.account.spaces.register(space);

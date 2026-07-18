@@ -479,6 +479,8 @@ export {
   // Delegation creation types
   SpaceDelegationParams,
   CreateDelegationFunction,
+  // Space hosting type
+  HostSpaceFunction,
 } from "./spaces";
 
 // Protocol version checking
