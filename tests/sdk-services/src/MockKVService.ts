@@ -320,7 +320,10 @@ export class MockKVService implements IKVService {
     return ok({ keys });
   }
 
-  async delete(key: string, options?: KVDeleteOptions): Promise<Result<void>> {
+  async delete(
+    key: string,
+    options?: KVDeleteOptions
+  ): Promise<Result<KVResponse<void>>> {
     this.recordOperation("delete", key, undefined, options);
 
     const fullKey = this.getFullKey(key, options?.prefix);
@@ -338,14 +341,18 @@ export class MockKVService implements IKVService {
       return err(serviceError(ErrorCodes.ABORTED, "Request aborted", "kv"));
     }
 
-    if (!this._store.has(fullKey)) {
+    const stored = this._store.get(fullKey);
+    if (!stored) {
       return err(
         serviceError(ErrorCodes.KV_NOT_FOUND, `Key not found: ${key}`, "kv")
       );
     }
 
     this._store.delete(fullKey);
-    return ok(undefined);
+    return ok({
+      data: undefined as void,
+      headers: this.createHeaders(stored),
+    });
   }
 
   async head(
