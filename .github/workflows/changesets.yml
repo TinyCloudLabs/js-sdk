@@ -218,9 +218,13 @@ jobs:
       - name: Create GitHub Release
         run: |
           VERSION=$(node -e "console.log(require('./packages/web-sdk/package.json').version)")
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
-            --generate-notes \
-            --target master
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "GitHub release v${VERSION} already exists; package-only release is complete."
+          else
+            gh release create "v${VERSION}" \
+              --title "v${VERSION}" \
+              --generate-notes \
+              --target master
+          fi
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
