@@ -2,6 +2,16 @@
   "name": "@tinycloud/mcp",
   "version": "0.2.0",
   "description": "TinyCloud delegated operations MCP server",
+  "keywords": [
+    "tinycloud",
+    "mcp",
+    "model-context-protocol",
+    "agents",
+    "delegation",
+    "ucan",
+    "kv",
+    "sqlite"
+  ],
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
   "type": "module",
@@ -63,6 +73,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/tinycloudlabs/web-sdk"
-  }
+    "url": "https://github.com/TinyCloudLabs/js-sdk"
+  },
+  "homepage": "https://docs.tinycloud.xyz/cli/mcp"
 }
