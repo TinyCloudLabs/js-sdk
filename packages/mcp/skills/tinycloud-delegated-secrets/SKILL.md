@@ -13,9 +13,15 @@ The following facts are generated from `@tinycloud/operations/operations.json`:
 - `tinycloud_auth_import` -> `tinycloud.auth.import@1`; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_auth_request` -> `tinycloud.auth.request@1`; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_auth_status` -> `tinycloud.auth.status@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
+- `tinycloud_kv_delete` -> `tinycloud.kv.delete@1`; effects: destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_kv_get` -> `tinycloud.kv.get@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_kv_head` -> `tinycloud.kv.head@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_kv_list` -> `tinycloud.kv.list@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_kv_put` -> `tinycloud.kv.put@1`; effects: write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_secrets_get` -> `tinycloud.secrets.get@1`; effects: read, local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_sql_execute` -> `tinycloud.sql.execute@1`; effects: write, destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_sql_query` -> `tinycloud.sql.query@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_sql_schema_inspect` -> `tinycloud.sql.schema.inspect@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_status` -> `tinycloud.status.get@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
 <!-- END GENERATED TINYCloud operation facts -->
 
@@ -44,11 +50,19 @@ Coverage is generated from the Commander registration ledger; legacy commands ar
 4. Choose a non-secrets space from those results. Use `tinycloud_kv_list` with
    an exact space and prefix. Follow the same request, owner grant, import,
    restart, and retry sequence when authority is required.
-5. Use `tinycloud_kv_get` for one exact returned key. A list grant does not
-   imply get authority; request and import the exact get grant when required.
-6. Do not broaden a path, substitute a sibling key, change the audience, or
-   use generic KV tools against a secrets space. Use `tinycloud_secrets_get`
-   for secrets.
+5. Use `tinycloud_kv_get` for one exact returned key. The default base64
+   representation is byte-exact; request `text` or `json` only when the stored
+   bytes have that encoding. A list grant does not imply get authority.
+6. Before replacing or deleting existing data, call `tinycloud_kv_head` and
+   pass its ETag. Use `tinycloud_kv_put` mode `create` to reject collisions,
+   `replace` with an ETag for optimistic concurrency, or `upsert` only when the
+   user explicitly permits overwriting the key.
+7. Use `tinycloud_kv_delete` with the observed ETag when deleting an existing
+   object. Treat a precondition failure as a concurrent change and inspect the
+   object again rather than retrying blindly.
+8. Do not broaden a path, substitute a sibling key, change the audience, or
+   use generic KV tools against account or secrets spaces. Use
+   `tinycloud_secrets_get` for secrets.
 
 ## Secret workflow
 
@@ -77,9 +91,9 @@ transcripts, caches, or evaluation records. TinyCloud controls only its own
 logs and local profile state, not host-side transcript retention. Hosts should
 apply their own sensitive-result retention and access controls.
 
-This proving surface uses local stdio only. It has no continuation tool,
-resources, prompts, elicitation, remote transport, generic permission grant,
-or secret mutation tool.
+This surface uses local stdio only. It has no continuation tool, resources,
+prompts, elicitation, remote transport, generic permission grant, or secret
+mutation tool.
 
 This is a beta surface. Delegated posture is the default; owner-profile data
 access requires explicit opt-in. The user must enter secrets only in Secret

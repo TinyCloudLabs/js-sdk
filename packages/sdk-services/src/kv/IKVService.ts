@@ -137,7 +137,7 @@ export interface IKVService extends IService {
    * }
    * ```
    */
-  delete(key: string, options?: KVDeleteOptions): Promise<Result<void>>;
+  delete(key: string, options?: KVDeleteOptions): Promise<Result<KVResponse<void>>>;
 
   /**
    * Get metadata for a key without retrieving the value.

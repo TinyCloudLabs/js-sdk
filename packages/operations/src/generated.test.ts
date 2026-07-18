@@ -59,13 +59,19 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     "tinycloud.auth.import@1",
     "tinycloud.auth.request@1",
     "tinycloud.auth.status@1",
+    "tinycloud.kv.delete@1",
     "tinycloud.kv.get@1",
+    "tinycloud.kv.head@1",
     "tinycloud.kv.list@1",
+    "tinycloud.kv.put@1",
     "tinycloud.secrets.get@1",
+    "tinycloud.sql.execute@1",
+    "tinycloud.sql.query@1",
+    "tinycloud.sql.schema.inspect@1",
     "tinycloud.status.get@1",
   ]);
-  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(10);
-  expect(catalog.operations).toHaveLength(10);
+  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(16);
+  expect(catalog.operations).toHaveLength(16);
 
   for (const operation of catalog.operations) {
     expect(operation.input).toBeDefined();
@@ -93,6 +99,18 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
   const secretGet = byId.get("tinycloud.secrets.get");
   expect(secretGet?.sensitivity).toEqual({ input: false, output: true });
   expect(secretGet?.effects).toEqual(["read", "local_write"]);
+
+  const sqlExecute = byId.get("tinycloud.sql.execute");
+  expect(sqlExecute?.input).toMatchObject({
+    properties: {
+      acknowledgeDatabaseWideAuthority: {
+        const: true,
+        description: expect.stringContaining("full read/write/schema mutation authority"),
+      },
+    },
+    required: expect.arrayContaining(["acknowledgeDatabaseWideAuthority"]),
+  });
+  expect(sqlExecute?.effects).toEqual(["write", "destructive"]);
 });
 
 test("generated authority results require the complete strict request artifact", async () => {

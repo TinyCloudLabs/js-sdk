@@ -87,6 +87,20 @@
       "sensitiveOutput": false
     },
     {
+      "name": "tinycloud_kv_delete",
+      "operationId": "tinycloud.kv.delete",
+      "operationVersion": 1,
+      "effects": [
+        "destructive"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": false
+    },
+    {
       "name": "tinycloud_kv_get",
       "operationId": "tinycloud.kv.get",
       "operationVersion": 1,
@@ -99,6 +113,20 @@
         "local-owner-key"
       ],
       "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud_kv_head",
+      "operationId": "tinycloud.kv.head",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": false
     },
     {
       "name": "tinycloud_kv_list",
@@ -115,12 +143,69 @@
       "sensitiveOutput": true
     },
     {
+      "name": "tinycloud_kv_put",
+      "operationId": "tinycloud.kv.put",
+      "operationVersion": 1,
+      "effects": [
+        "write"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": false
+    },
+    {
       "name": "tinycloud_secrets_get",
       "operationId": "tinycloud.secrets.get",
       "operationVersion": 1,
       "effects": [
         "read",
         "local_write"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud_sql_execute",
+      "operationId": "tinycloud.sql.execute",
+      "operationVersion": 1,
+      "effects": [
+        "write",
+        "destructive"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud_sql_query",
+      "operationId": "tinycloud.sql.query",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud_sql_schema_inspect",
+      "operationId": "tinycloud.sql.schema.inspect",
+      "operationVersion": 1,
+      "effects": [
+        "read"
       ],
       "postures": [
         "owner-openkey",

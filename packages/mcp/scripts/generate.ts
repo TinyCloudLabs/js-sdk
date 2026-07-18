@@ -41,6 +41,12 @@ const TOOL_NAMES: Record<string, string> = {
   "tinycloud.account.applications.list": "tinycloud_account_applications_list",
   "tinycloud.kv.list": "tinycloud_kv_list",
   "tinycloud.kv.get": "tinycloud_kv_get",
+  "tinycloud.kv.head": "tinycloud_kv_head",
+  "tinycloud.kv.put": "tinycloud_kv_put",
+  "tinycloud.kv.delete": "tinycloud_kv_delete",
+  "tinycloud.sql.schema.inspect": "tinycloud_sql_schema_inspect",
+  "tinycloud.sql.query": "tinycloud_sql_query",
+  "tinycloud.sql.execute": "tinycloud_sql_execute",
   "tinycloud.secrets.get": "tinycloud_secrets_get",
 };
 

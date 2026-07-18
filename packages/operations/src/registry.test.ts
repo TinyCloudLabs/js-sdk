@@ -4,6 +4,7 @@ import { invokeOperation } from "./invoke.js";
 import { authOperationDefinitions } from "./operations/auth.js";
 import { explorationOperationDefinitions } from "./operations/exploration.js";
 import { secretsGetOperationDefinitions } from "./operations/secrets-get.js";
+import { sqlOperationDefinitions } from "./operations/sql.js";
 import { statusOperationDefinitions } from "./operations/status.js";
 import { lookupOperation, operationDefinitionsForCatalog } from "./registry.js";
 import { createAuthRuntimeFixture } from "../test-support/auth-runtime.js";
@@ -15,9 +16,15 @@ const expectedOperationIds = [
   "tinycloud.auth.import",
   "tinycloud.auth.request",
   "tinycloud.auth.status",
+  "tinycloud.kv.delete",
   "tinycloud.kv.get",
+  "tinycloud.kv.head",
   "tinycloud.kv.list",
+  "tinycloud.kv.put",
   "tinycloud.secrets.get",
+  "tinycloud.sql.execute",
+  "tinycloud.sql.query",
+  "tinycloud.sql.schema.inspect",
   "tinycloud.status.get",
 ] as const;
 
@@ -31,8 +38,9 @@ test("registry contains exactly the reviewed v1 operations", () => {
     ...statusOperationDefinitions,
     ...authOperationDefinitions,
     ...explorationOperationDefinitions,
+    ...sqlOperationDefinitions,
     ...secretsGetOperationDefinitions,
-  ]).toHaveLength(10);
+  ]).toHaveLength(16);
 });
 
 test("registry resolves each v1 operation and rejects unknown versions", () => {

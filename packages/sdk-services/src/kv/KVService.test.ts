@@ -508,6 +508,70 @@ describe("KVService.get binary", () => {
   });
 });
 
+describe("KVService bounded and conditional requests", () => {
+  test("forwards node-enforced get and list limits and reports truncation", async () => {
+    const requests: FetchRequestInit[] = [];
+    const service = new KVService({});
+    service.initialize(createContext(async (_url, init) => {
+      requests.push(init ?? {});
+      const listed = headerValue(init?.headers, "x-tinycloud-limit") !== undefined;
+      const result = response(true, 200, listed ? ["a"] : "value");
+      if (listed) {
+        result.headers.get = (name: string) =>
+          name.toLowerCase() === "x-tinycloud-truncated" ? "true" : null;
+      }
+      return result;
+    }));
+
+    expect((await service.get("a", { binary: true, maxResponseBytes: 1024 })).ok).toBe(true);
+    const listed = await service.list({ limit: 10 });
+    expect(listed).toEqual({ ok: true, data: { keys: ["a"], truncated: true } });
+    expect(headerValue(requests[0]?.headers, "x-tinycloud-max-response-bytes")).toBe("1024");
+    expect(headerValue(requests[1]?.headers, "x-tinycloud-limit")).toBe("10");
+  });
+
+  test("forwards create, replace, and conditional delete headers", async () => {
+    const requests: FetchRequestInit[] = [];
+    const service = new KVService({});
+    service.initialize(createContext(async (_url, init) => {
+      requests.push(init ?? {});
+      const result = response(true, 200, "");
+      result.headers.get = (name: string) =>
+        name.toLowerCase() === "etag" ? '"blake3-current"' : null;
+      return result;
+    }));
+
+    await service.put("new", "value", { ifNoneMatch: "*" });
+    await service.put("existing", "value", { ifMatch: '"v1"' });
+    const deleted = await service.delete("existing", { ifMatch: '"v2"' });
+    expect(headerValue(requests[0]?.headers, "if-none-match")).toBe("*");
+    expect(headerValue(requests[1]?.headers, "if-match")).toBe('"v1"');
+    expect(headerValue(requests[2]?.headers, "if-match")).toBe('"v2"');
+    expect(deleted).toMatchObject({
+      ok: true,
+      data: { headers: { etag: '"blake3-current"' } },
+    });
+  });
+
+  test("classifies node limit and precondition responses", async () => {
+    const service = new KVService({});
+    let status = 413;
+    service.initialize(createContext(async () => response(false, status, "failed")));
+    const oversized = await service.get("large", { maxResponseBytes: 1 });
+    expect(oversized).toMatchObject({ ok: false, error: { code: ErrorCodes.KV_RESPONSE_TOO_LARGE } });
+    status = 412;
+    const put = await service.put("exists", "value", { ifNoneMatch: "*" });
+    const deleted = await service.delete("changed", { ifMatch: '"old"' });
+    expect(put).toMatchObject({ ok: false, error: { code: ErrorCodes.KV_PRECONDITION_FAILED } });
+    expect(deleted).toMatchObject({ ok: false, error: { code: ErrorCodes.KV_PRECONDITION_FAILED } });
+    status = 503;
+    const putConflict = await service.put("changed", "value", { ifMatch: '"blake3-old"' });
+    const deleteConflict = await service.delete("changed", { ifMatch: '"blake3-old"' });
+    expect(putConflict).toMatchObject({ ok: false, error: { code: ErrorCodes.KV_CONFLICT } });
+    expect(deleteConflict).toMatchObject({ ok: false, error: { code: ErrorCodes.KV_CONFLICT } });
+  });
+});
+
 describe("KVService 404 classification (unhosted space vs missing key)", () => {
   function service(body: string) {
     const svc = new KVService({});

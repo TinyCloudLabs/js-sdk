@@ -144,7 +144,10 @@ export interface IPrefixedKVService {
    * // -> Deletes: /app.myapp.com/old-settings.json
    * ```
    */
-  delete(key: string, options?: Omit<KVDeleteOptions, 'prefix'>): Promise<Result<void>>;
+  delete(
+    key: string,
+    options?: Omit<KVDeleteOptions, 'prefix'>
+  ): Promise<Result<KVResponse<void>>>;
 
   /**
    * Get metadata for a key without retrieving the value.
@@ -221,7 +224,7 @@ interface IKVServiceLike {
 
   list(options?: KVListOptions): Promise<Result<KVListResponse>>;
 
-  delete(key: string, options?: KVDeleteOptions): Promise<Result<void>>;
+  delete(key: string, options?: KVDeleteOptions): Promise<Result<KVResponse<void>>>;
 
   head(key: string, options?: KVHeadOptions): Promise<Result<KVResponse<void>>>;
 
@@ -361,7 +364,10 @@ export class PrefixedKVService implements IPrefixedKVService {
   /**
    * Delete a key.
    */
-  async delete(key: string, options?: Omit<KVDeleteOptions, 'prefix'>): Promise<Result<void>> {
+  async delete(
+    key: string,
+    options?: Omit<KVDeleteOptions, 'prefix'>
+  ): Promise<Result<KVResponse<void>>> {
     const fullKey = this.getFullKey(key);
     return this._kv.delete(fullKey, { ...options, prefix: '' });
   }

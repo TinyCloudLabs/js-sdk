@@ -33,6 +33,12 @@ export interface QueryOptions {
    * Custom abort signal for this operation.
    */
   signal?: AbortSignal;
+
+  /** Maximum rows the node may return. Nodes without limit support ignore it. */
+  maxRows?: number;
+
+  /** Maximum serialized result bytes the node may return. */
+  maxBytes?: number;
 }
 
 /**
@@ -88,7 +94,7 @@ export interface QueryResponse<T = Record<string, unknown>> {
  */
 export interface ExecuteResponse {
   changes: number;
-  lastInsertRowId: number;
+  lastInsertRowId: number | null;
 }
 
 /**
