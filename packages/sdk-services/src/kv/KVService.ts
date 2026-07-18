@@ -868,7 +868,10 @@ export class KVService extends BaseService implements IKVService {
   /**
    * Delete a key.
    */
-  async delete(key: string, options?: KVDeleteOptions): Promise<Result<void>> {
+  async delete(
+    key: string,
+    options?: KVDeleteOptions
+  ): Promise<Result<KVResponse<void>>> {
     return this.withTelemetry("delete", key, async () => {
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
@@ -921,7 +924,10 @@ export class KVService extends BaseService implements IKVService {
           );
         }
 
-        return ok(undefined);
+        return ok({
+          data: undefined as void,
+          headers: this.createResponseHeaders(response.headers),
+        });
       } catch (error) {
         return err(wrapError("kv", error));
       }

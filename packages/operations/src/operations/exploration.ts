@@ -126,7 +126,10 @@ interface KvOperationHandle {
     ifNoneMatch?: "*";
     ifMatch?: string;
   }>): Promise<KvOperationResult<{ readonly data: void; readonly headers: KvMetadata }>>;
-  delete(key: string, options: Readonly<{ ifMatch?: string }>): Promise<KvOperationResult<void>>;
+  delete(key: string, options: Readonly<{ ifMatch?: string }>): Promise<KvOperationResult<{
+    readonly data: void;
+    readonly headers: KvMetadata;
+  }>>;
 }
 
 const MAX_KV_VALUE_BYTES = 1024 * 1024;
@@ -153,10 +156,14 @@ const ContentTypeSchema = z.string().min(1).max(128).refine(
   (value) => !/[\x00-\x1f\x7f]/.test(value),
   "Invalid content type.",
 );
+const JsonNumberSchema = z.number().finite().refine(
+  (value) => !Number.isInteger(value) || Number.isSafeInteger(value),
+  "JSON integer values must be JavaScript safe integers.",
+);
 const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
   z.null(),
   z.boolean(),
-  z.number().finite(),
+  JsonNumberSchema,
   z.string(),
   z.array(JsonValueSchema),
   z.record(JsonValueSchema),
@@ -620,7 +627,12 @@ async function executeKvDelete(
     if (!result.ok) return kvFailure(result.error, "delete the KV value");
     return {
       status: "ok",
-      output: { space, key: input.key, deleted: true, ...(input.etag === undefined ? {} : { etag: input.etag }) },
+      output: {
+        space,
+        key: input.key,
+        deleted: true,
+        ...(result.data.headers.etag === undefined ? {} : { etag: result.data.headers.etag }),
+      },
     };
   } catch (error) {
     return caughtKvFailure(error, "delete the KV value");

@@ -29,7 +29,7 @@ function context(node: Record<string, unknown>): RuntimeOperationContext {
   };
 }
 
-function response(data: unknown) {
+function response(data: unknown, headers: Readonly<Record<string, unknown>> = {}) {
   return {
     ok: true as const,
     data: {
@@ -38,6 +38,7 @@ function response(data: unknown) {
         contentType: "application/json",
         contentLength: 17,
         get: () => null,
+        ...headers,
       },
     },
   };
@@ -233,7 +234,7 @@ describe("generic KV exploration operations", () => {
           },
           async delete(key: string, options: unknown) {
             calls.push({ method: "delete", key, options });
-            return { ok: true, data: undefined };
+            return response(undefined, { etag: '"blake3-deleted"' });
           },
         };
       },
@@ -255,7 +256,13 @@ describe("generic KV exploration operations", () => {
       expect(await operation.authority(runtime, input)).toEqual([{
         service: "tinycloud.kv", space: OWNER_APPLICATIONS, path: "documents/one", actions: [action],
       }]);
-      expect((await operation.execute(runtime, input)).status).toBe("ok");
+      const result = await operation.execute(runtime, input);
+      expect(result.status).toBe("ok");
+      if (id === "tinycloud.kv.delete") {
+        expect(result).toMatchObject({
+          output: { deleted: true, etag: '"blake3-deleted"' },
+        });
+      }
     }
     expect(calls).toEqual([
       { method: "head", key: "documents/one" },
@@ -273,6 +280,7 @@ describe("generic KV exploration operations", () => {
       { space: "applications", key: "a", mode: "replace", content: { encoding: "utf8", value: "x" } },
       { space: "applications", key: "a", mode: "create", content: { encoding: "base64", value: "not-base64" } },
       { space: "applications", key: "a", mode: "create", content: { encoding: "utf8", value: "x".repeat(1024 * 1024 + 1) } },
+      { space: "applications", key: "a", mode: "create", content: { encoding: "json", value: Number.MAX_SAFE_INTEGER + 1 } },
     ]) {
       expect(operation.input.safeParse(input).success).toBe(false);
     }

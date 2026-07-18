@@ -535,15 +535,22 @@ describe("KVService bounded and conditional requests", () => {
     const service = new KVService({});
     service.initialize(createContext(async (_url, init) => {
       requests.push(init ?? {});
-      return response(true, 200, "");
+      const result = response(true, 200, "");
+      result.headers.get = (name: string) =>
+        name.toLowerCase() === "etag" ? '"blake3-current"' : null;
+      return result;
     }));
 
     await service.put("new", "value", { ifNoneMatch: "*" });
     await service.put("existing", "value", { ifMatch: '"v1"' });
-    await service.delete("existing", { ifMatch: '"v2"' });
+    const deleted = await service.delete("existing", { ifMatch: '"v2"' });
     expect(headerValue(requests[0]?.headers, "if-none-match")).toBe("*");
     expect(headerValue(requests[1]?.headers, "if-match")).toBe('"v1"');
     expect(headerValue(requests[2]?.headers, "if-match")).toBe('"v2"');
+    expect(deleted).toMatchObject({
+      ok: true,
+      data: { headers: { etag: '"blake3-current"' } },
+    });
   });
 
   test("classifies node limit and precondition responses", async () => {
