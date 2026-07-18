@@ -5,10 +5,10 @@
     "@tinycloud/node-demo": "0.0.27",
     "tinycloud-openkey-example-app": "0.0.25",
     "openkey-vite": "0.0.23",
-    "tinycloud-web-sdk-example-app": "0.0.2",
+    "tinycloud-web-sdk-example-app": "0.0.3",
     "@tinycloud/bootstrap": "2.6.0",
     "@tinycloud/cli": "0.7.8",
-    "@tinycloud/mcp": "0.2.0",
+    "@tinycloud/mcp": "0.2.1",
     "@tinycloud/node-sdk": "2.8.0",
     "@tinycloud/operations": "0.2.0",
     "@tinycloud/sdk-core": "2.8.0",
@@ -23,7 +23,5 @@
     "@tinycloud/operations-mcp-conformance": "0.0.0",
     "@tinycloud/sdk-services-test": "13.0.0"
   },
-  "changesets": [
-    "fresh-mcp-discovery"
-  ]
+  "changesets": []
 }

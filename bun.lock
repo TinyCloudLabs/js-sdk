@@ -117,7 +117,7 @@
     },
     "apps/web-sdk-example": {
       "name": "tinycloud-web-sdk-example-app",
-      "version": "0.0.2",
+      "version": "0.0.3",
       "dependencies": {
         "@radix-ui/react-accordion": "^1.2.3",
         "@radix-ui/react-alert-dialog": "^1.1.6",
@@ -201,7 +201,7 @@
     },
     "packages/mcp": {
       "name": "@tinycloud/mcp",
-      "version": "0.2.1-beta.0",
+      "version": "0.2.1",
       "bin": {
         "tinycloud-mcp": "./bin/tinycloud-mcp",
       },

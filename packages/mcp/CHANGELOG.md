@@ -1,5 +1,12 @@
 # @tinycloud/mcp
 
+## 0.2.1
+
+### Patch Changes
+
+- a2adb87: Publish the stable 16-tool MCP setup, delegated workflow, KV CRUD, and SQLite
+  surface in the npm README and package discovery metadata.
+
 ## 0.2.1-beta.0
 
 ### Patch Changes
