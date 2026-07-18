@@ -260,6 +260,26 @@ describe("SQLService permissions", () => {
     ]);
   });
 
+  test("execute serializes BLOB parameters as byte arrays", async () => {
+    const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
+    let requestInit: FetchRequestInit | undefined;
+    const service = new SQLService();
+    service.initialize(createContext(async (_url, init) => {
+      requestInit = init;
+      return response(true, 200, { changes: 1, lastInsertRowId: 1 });
+    }, invokeCalls));
+
+    expect((await service.execute(
+      "INSERT INTO notes (payload) VALUES (?)",
+      [new Uint8Array([0, 127, 255])],
+    )).ok).toBe(true);
+    expect(JSON.parse(requestInit?.body as string)).toEqual({
+      action: "execute",
+      sql: "INSERT INTO notes (payload) VALUES (?)",
+      params: [[0, 127, 255]],
+    });
+  });
+
   test("migrations.apply creates metadata table, applies pending SQL, and records ids", async () => {
     const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
     const invokeAnyCalls: Array<{ entries: Array<{ service: string; path: string; action: string }> }> = [];

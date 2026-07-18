@@ -19,6 +19,7 @@ The following facts are generated from `@tinycloud/operations/operations.json`:
 - `tinycloud_kv_list` -> `tinycloud.kv.list@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_kv_put` -> `tinycloud.kv.put@1`; effects: write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_secrets_get` -> `tinycloud.secrets.get@1`; effects: read, local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_sql_execute` -> `tinycloud.sql.execute@1`; effects: write, destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_sql_query` -> `tinycloud.sql.query@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_sql_schema_inspect` -> `tinycloud.sql.schema.inspect@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_status` -> `tinycloud.status.get@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.

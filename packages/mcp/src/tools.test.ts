@@ -22,14 +22,15 @@ test("has exactly the reviewed KV CRUD and SQLite operation mapping", () => {
     expect.objectContaining({ name: "tinycloud_kv_delete", operationId: "tinycloud.kv.delete", operationVersion: 1, destructiveHint: true }),
     expect.objectContaining({ name: "tinycloud_sql_schema_inspect", operationId: "tinycloud.sql.schema.inspect", operationVersion: 1 }),
     expect.objectContaining({ name: "tinycloud_sql_query", operationId: "tinycloud.sql.query", operationVersion: 1 }),
+    expect.objectContaining({ name: "tinycloud_sql_execute", operationId: "tinycloud.sql.execute", operationVersion: 1 }),
     expect.objectContaining({ name: "tinycloud_secrets_get", operationId: "tinycloud.secrets.get", operationVersion: 1 }),
   ]);
-  expect((catalog as { operations: unknown[] }).operations).toHaveLength(15);
+  expect((catalog as { operations: unknown[] }).operations).toHaveLength(16);
 });
 
-test("registers SQL tools with read-only, idempotent, non-destructive annotations", () => {
+test("registers exact SQL read and mutation annotations", () => {
   for (const binding of toolBindingsForTest().filter((candidate) =>
-    candidate.name.startsWith("tinycloud_sql_"))) {
+    candidate.name.startsWith("tinycloud_sql_") && candidate.name !== "tinycloud_sql_execute")) {
     expect(binding).toMatchObject({
       readOnlyHint: true,
       idempotentHint: true,
@@ -37,6 +38,13 @@ test("registers SQL tools with read-only, idempotent, non-destructive annotation
       openWorldHint: true,
     });
   }
+  expect(toolBindingsForTest().find((candidate) => candidate.name === "tinycloud_sql_execute"))
+    .toMatchObject({
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
+    });
 });
 
 test("does not register a continuation tool or any non-tool MCP surface", async () => {

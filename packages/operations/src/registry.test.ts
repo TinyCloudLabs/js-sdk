@@ -22,6 +22,7 @@ const expectedOperationIds = [
   "tinycloud.kv.list",
   "tinycloud.kv.put",
   "tinycloud.secrets.get",
+  "tinycloud.sql.execute",
   "tinycloud.sql.query",
   "tinycloud.sql.schema.inspect",
   "tinycloud.status.get",
@@ -39,7 +40,7 @@ test("registry contains exactly the reviewed v1 operations", () => {
     ...explorationOperationDefinitions,
     ...sqlOperationDefinitions,
     ...secretsGetOperationDefinitions,
-  ]).toHaveLength(15);
+  ]).toHaveLength(16);
 });
 
 test("registry resolves each v1 operation and rejects unknown versions", () => {

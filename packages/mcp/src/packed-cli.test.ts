@@ -91,6 +91,7 @@ process.stdout.write(JSON.stringify(tools));
     tinycloud_kv_delete: "tinycloud.kv.delete",
     tinycloud_sql_schema_inspect: "tinycloud.sql.schema.inspect",
     tinycloud_sql_query: "tinycloud.sql.query",
+    tinycloud_sql_execute: "tinycloud.sql.execute",
     tinycloud_secrets_get: "tinycloud.secrets.get",
   };
   for (const format of ["esm", "cjs"] as const) {
@@ -106,7 +107,7 @@ process.stdout.write(JSON.stringify(tools));
       name: string;
       title: string;
     }>;
-    expect(tools).toHaveLength(15);
+    expect(tools).toHaveLength(16);
     expect(tools.map((tool) => tool.title)).toEqual(
       tools.map((tool) => titlesByOperation.get(operationByTool[tool.name]!)!),
     );

@@ -195,7 +195,7 @@ export class SQLService extends BaseService implements ISQLService {
         const body: Record<string, unknown> = {
           action: "execute",
           sql,
-          params: params ?? [],
+          params: serializeSqlValues(params ?? []),
         };
         if (options?.schema) {
           body.schema = options.schema;

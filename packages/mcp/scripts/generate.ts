@@ -46,6 +46,7 @@ const TOOL_NAMES: Record<string, string> = {
   "tinycloud.kv.delete": "tinycloud_kv_delete",
   "tinycloud.sql.schema.inspect": "tinycloud_sql_schema_inspect",
   "tinycloud.sql.query": "tinycloud_sql_query",
+  "tinycloud.sql.execute": "tinycloud_sql_execute",
   "tinycloud.secrets.get": "tinycloud_secrets_get",
 };
 

@@ -53,9 +53,10 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
       "tinycloud_kv_delete",
       "tinycloud_sql_schema_inspect",
       "tinycloud_sql_query",
+      "tinycloud_sql_execute",
       "tinycloud_secrets_get",
     ]);
-    expect(listed.tools).toHaveLength(15);
+    expect(listed.tools).toHaveLength(16);
 
     const byId = new Map((catalog as { operations: Array<{ id: string; version: number; input: unknown; result: unknown }> }).operations
       .map((operation) => [`${operation.id}@${operation.version}`, operation]));
@@ -74,6 +75,7 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
       tinycloud_kv_delete: "tinycloud.kv.delete@1",
       tinycloud_sql_schema_inspect: "tinycloud.sql.schema.inspect@1",
       tinycloud_sql_query: "tinycloud.sql.query@1",
+      tinycloud_sql_execute: "tinycloud.sql.execute@1",
       tinycloud_secrets_get: "tinycloud.secrets.get@1",
     };
     for (const tool of listed.tools) {
@@ -89,10 +91,11 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
           "tinycloud_auth_import",
           "tinycloud_kv_put",
           "tinycloud_kv_delete",
+          "tinycloud_sql_execute",
           "tinycloud_secrets_get",
         ].includes(tool.name),
-        idempotentHint: true,
-        destructiveHint: ["tinycloud_kv_put", "tinycloud_kv_delete"].includes(tool.name),
+        idempotentHint: tool.name !== "tinycloud_sql_execute",
+        destructiveHint: ["tinycloud_kv_put", "tinycloud_kv_delete", "tinycloud_sql_execute"].includes(tool.name),
         openWorldHint: [
           "tinycloud_account_spaces_list",
           "tinycloud_account_applications_list",
@@ -103,6 +106,7 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
           "tinycloud_kv_delete",
           "tinycloud_sql_schema_inspect",
           "tinycloud_sql_query",
+          "tinycloud_sql_execute",
           "tinycloud_secrets_get",
         ].includes(tool.name),
       });
@@ -133,6 +137,7 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
       ["tinycloud_kv_delete", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.delete", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_sql_schema_inspect", { space: "applications", database: "notes" }, { status: "error", operation: { operationId: "tinycloud.sql.schema.inspect", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_sql_query", { space: "applications", database: "notes", sql: "SELECT 1" }, { status: "error", operation: { operationId: "tinycloud.sql.query", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_sql_execute", { space: "applications", database: "notes", sql: "DELETE FROM notes WHERE id = ?", params: [1], acknowledgeDatabaseWideAuthority: true }, { status: "error", operation: { operationId: "tinycloud.sql.execute", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_secrets_get", { name: "MCP_TEST_SECRET" }, { status: "error", operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
     ] as const;
     for (const [name, arguments_, expected] of expectedToolResults) {

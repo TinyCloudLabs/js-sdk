@@ -227,6 +227,131 @@ describe("SQLite read operations", () => {
   });
 });
 
+describe("SQLite DML operation", () => {
+  test("plans disclosed exact-database write authority and executes parameterized DML", async () => {
+    const calls: unknown[][] = [];
+    const node = sqlWriteNode(async (...args: unknown[]) => {
+      calls.push(args);
+      return { ok: true, data: { changes: 1, lastInsertRowId: 42 } };
+    });
+    const operation = definition("tinycloud.sql.execute");
+    const input = operation.input.parse({
+      space: "applications",
+      database: "com.example.notes/data.sqlite",
+      sql: "INSERT INTO notes (body, payload) VALUES (?, ?)",
+      params: ["hello", { type: "blob", base64: "AH//" }],
+      acknowledgeDatabaseWideAuthority: true,
+    });
+
+    expect(await operation.authority(context(node), input)).toEqual([{
+      service: "tinycloud.sql",
+      space: OWNER_APPLICATIONS,
+      path: "com.example.notes/data.sqlite",
+      actions: ["tinycloud.sql/write"],
+      description: expect.stringContaining("full read/write/schema mutation authority"),
+    }]);
+    expect(await operation.execute(context(node), input)).toEqual({
+      status: "ok",
+      output: {
+        space: OWNER_APPLICATIONS,
+        database: "com.example.notes/data.sqlite",
+        statementType: "insert",
+        changes: 1,
+        lastInsertRowId: 42,
+        authorityNotice: expect.stringContaining("full read/write/schema mutation authority"),
+      },
+    });
+    expect(calls).toEqual([[
+      "INSERT INTO notes (body, payload) VALUES (?, ?)",
+      ["hello", new Uint8Array([0, 127, 255])],
+    ]]);
+  });
+
+  test("accepts only one positional-parameterized INSERT, UPDATE, or DELETE", () => {
+    const operation = definition("tinycloud.sql.execute");
+    const base = {
+      space: "applications",
+      database: "notes",
+      acknowledgeDatabaseWideAuthority: true,
+    };
+    for (const [sql, params] of [
+      ["INSERT INTO notes (body) VALUES (?)", ["hello"]],
+      ["UPDATE notes SET body = ? WHERE id = ?", ["changed", 1]],
+      ["DELETE FROM notes WHERE id = ?", [1]],
+    ] as const) {
+      expect(operation.input.safeParse({ ...base, sql, params }).success).toBe(true);
+    }
+
+    for (const [sql, params] of [
+      ["SELECT * FROM notes WHERE id = ?", [1]],
+      ["CREATE TABLE hidden (id INTEGER)", [1]],
+      ["PRAGMA table_info(?)", ["notes"]],
+      ["EXPLAIN DELETE FROM notes WHERE id = ?", [1]],
+      ["DELETE FROM notes WHERE id = ?; DELETE FROM notes WHERE id = ?", [1, 2]],
+      ["WITH doomed AS (SELECT ?) DELETE FROM notes WHERE id IN (SELECT * FROM doomed)", [1]],
+      ["INSERT INTO notes (body) VALUES ('literal')", []],
+      ["UPDATE notes SET body = ? WHERE id = ?", ["missing-id"]],
+    ] as const) {
+      expect(operation.input.safeParse({ ...base, sql, params }).success).toBe(false);
+    }
+    expect(operation.input.safeParse({
+      ...base,
+      sql: "DELETE FROM notes WHERE id = ?",
+      params: [1],
+      acknowledgeDatabaseWideAuthority: false,
+    }).success).toBe(false);
+  });
+
+  test("rejects protected spaces before write authority planning or execution", async () => {
+    let handles = 0;
+    const runtime = context({
+      sqlForSpace() {
+        handles += 1;
+        throw new Error("must not execute");
+      },
+    });
+    const operation = definition("tinycloud.sql.execute");
+    const parsed = operation.input.parse({
+      space: "account",
+      database: "account",
+      sql: "DELETE FROM sessions WHERE id = ?",
+      params: [1],
+      acknowledgeDatabaseWideAuthority: true,
+    });
+    await expect(operation.authority(runtime, parsed)).rejects.toMatchObject({
+      operationError: { code: "INPUT_INVALID" },
+    });
+    expect(await operation.execute(runtime, parsed)).toMatchObject({
+      status: "error",
+      error: { code: "INPUT_INVALID" },
+    });
+    expect(handles).toBe(0);
+  });
+
+  test("rejects unsafe mutation metadata", async () => {
+    const operation = definition("tinycloud.sql.execute");
+    const input = operation.input.parse({
+      space: "applications",
+      database: "notes",
+      sql: "DELETE FROM notes WHERE id = ?",
+      params: [1],
+      acknowledgeDatabaseWideAuthority: true,
+    });
+    for (const data of [
+      { changes: Number.MAX_SAFE_INTEGER + 1, lastInsertRowId: null },
+      { changes: 1, lastInsertRowId: Number.MAX_SAFE_INTEGER + 1 },
+    ]) {
+      expect(await operation.execute(context(sqlWriteNode(async () => ({
+        ok: true,
+        data,
+      }))), input)).toMatchObject({
+        status: "error",
+        error: { code: "SQL_VALUE_UNSAFE" },
+      });
+    }
+  });
+});
+
 function sqlNode(query: (...args: unknown[]) => Promise<unknown>) {
   return {
     sqlForSpace(space: string) {
@@ -235,6 +360,20 @@ function sqlNode(query: (...args: unknown[]) => Promise<unknown>) {
         db(database: string) {
           expect(database.length).toBeGreaterThan(0);
           return { query };
+        },
+      };
+    },
+  };
+}
+
+function sqlWriteNode(execute: (...args: unknown[]) => Promise<unknown>) {
+  return {
+    sqlForSpace(space: string) {
+      expect(space).toBe(OWNER_APPLICATIONS);
+      return {
+        db(database: string) {
+          expect(database.length).toBeGreaterThan(0);
+          return { execute };
         },
       };
     },

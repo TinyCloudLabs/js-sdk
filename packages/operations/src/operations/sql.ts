@@ -23,6 +23,8 @@ const SCHEMA_MAX_ROWS = 500;
 const SCHEMA_MAX_BYTES = 1024 * 1024;
 const MAX_PARAMETERS = 100;
 const MAX_SQL_LENGTH = 64 * 1024;
+const SQL_WRITE_AUTHORITY_NOTICE =
+  "Approving tinycloud.sql/write grants full read/write/schema mutation authority over this exact database; the MCP tool itself accepts only one parameterized INSERT, UPDATE, or DELETE.";
 
 const SCHEMA_QUERY = `SELECT type, name, tbl_name, sql
 FROM sqlite_schema
@@ -51,6 +53,12 @@ interface SqlQueryInput extends SqlTargetInput {
   readonly maxBytes?: number;
 }
 
+interface SqlExecuteInput extends SqlTargetInput {
+  readonly sql: string;
+  readonly params: readonly SqlInputValue[];
+  readonly acknowledgeDatabaseWideAuthority: true;
+}
+
 interface SqlLimitsOutput {
   readonly maxRows: number;
   readonly maxBytes: number;
@@ -77,6 +85,15 @@ interface SqlQueryOutput {
   readonly rows: readonly (readonly SqlOutputValue[])[];
   readonly rowCount: number;
   readonly limits: SqlLimitsOutput;
+}
+
+interface SqlExecuteOutput {
+  readonly space: string;
+  readonly database: string;
+  readonly statementType: "insert" | "update" | "delete";
+  readonly changes: number;
+  readonly lastInsertRowId: number | null;
+  readonly authorityNotice: typeof SQL_WRITE_AUTHORITY_NOTICE;
 }
 
 const sqlParser = new nodeSqlParser.Parser();
@@ -109,6 +126,34 @@ const SqlInputValueSchema: z.ZodType<SqlInputValue> = z.union([
   z.string().max(MAX_MAX_BYTES),
   z.object({ type: z.literal("blob"), base64: Base64Schema }).strict(),
 ]);
+const SqlParamsSchema = z.array(SqlInputValueSchema).max(MAX_PARAMETERS).superRefine(
+  (params, context) => {
+    const totalBytes = params.reduce<number>(
+      (total, value) => total + sqlInputValueBytes(value),
+      0,
+    );
+    if (totalBytes > MAX_MAX_BYTES) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "SQLite query parameters exceed the 4 MiB input limit.",
+      });
+    }
+  },
+);
+const RequiredSqlParamsSchema = z.array(SqlInputValueSchema).min(1).max(MAX_PARAMETERS).superRefine(
+  (params, context) => {
+    const totalBytes = params.reduce<number>(
+      (total, value) => total + sqlInputValueBytes(value),
+      0,
+    );
+    if (totalBytes > MAX_MAX_BYTES) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "SQLite query parameters exceed the 4 MiB input limit.",
+      });
+    }
+  },
+);
 const SqlOutputValueSchema: z.ZodType<SqlOutputValue> = z.union([
   z.null(),
   SafeNumberSchema,
@@ -134,18 +179,25 @@ const SqlQueryInputSchema: z.ZodType<SqlQueryInput> = z.object({
       });
     }
   }),
-  params: z.array(SqlInputValueSchema).max(MAX_PARAMETERS).superRefine((params, context) => {
-    const totalBytes = params.reduce((total, value) => total + sqlInputValueBytes(value), 0);
-    if (totalBytes > MAX_MAX_BYTES) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "SQLite query parameters exceed the 4 MiB input limit.",
-      });
-    }
-  }).optional(),
+  params: SqlParamsSchema.optional(),
   maxRows: z.number().int().positive().max(MAX_MAX_ROWS).optional(),
   maxBytes: z.number().int().positive().max(MAX_MAX_BYTES).optional(),
 }).strict();
+const SqlExecuteInputSchema: z.ZodType<SqlExecuteInput> = z.object({
+  space: SpaceSchema,
+  database: DatabaseSchema,
+  sql: z.string().min(1).max(MAX_SQL_LENGTH),
+  params: RequiredSqlParamsSchema,
+  acknowledgeDatabaseWideAuthority: z.literal(true).describe(SQL_WRITE_AUTHORITY_NOTICE),
+}).strict().superRefine((input, context) => {
+  if (parseSingleDmlStatement(input.sql, input.params.length) === undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sql"],
+      message: "SQL must parse as exactly one parameterized INSERT, UPDATE, or DELETE with one value per positional placeholder.",
+    });
+  }
+});
 
 const SqlLimitsOutputSchema: z.ZodType<SqlLimitsOutput> = z.object({
   maxRows: z.number().int().positive(),
@@ -172,6 +224,14 @@ const SqlQueryOutputSchema: z.ZodType<SqlQueryOutput> = z.object({
   rowCount: z.number().int().nonnegative(),
   limits: SqlLimitsOutputSchema,
 }).strict();
+const SqlExecuteOutputSchema: z.ZodType<SqlExecuteOutput> = z.object({
+  space: z.string().min(1),
+  database: z.string().min(1),
+  statementType: z.enum(["insert", "update", "delete"]),
+  changes: z.number().int().nonnegative(),
+  lastInsertRowId: z.number().int().nullable(),
+  authorityNotice: z.literal(SQL_WRITE_AUTHORITY_NOTICE),
+}).strict();
 
 const AUTHENTICATED_POSTURES: readonly TinyCloudPosture[] = [
   "owner-openkey",
@@ -195,10 +255,15 @@ const SQL_QUERY_SENSITIVITY: OperationSensitivity = {
   input: ["/database", "/sql", "/params"],
   output: ["/columns", "/rows"],
 };
+const SQL_EXECUTE_SENSITIVITY: OperationSensitivity = {
+  input: ["/database", "/sql", "/params"],
+  output: ["/lastInsertRowId"],
+};
 
 type SqlDefinition =
   | OperationDefinition<SqlTargetInput, SqlSchemaInspectOutput>
-  | OperationDefinition<SqlQueryInput, SqlQueryOutput>;
+  | OperationDefinition<SqlQueryInput, SqlQueryOutput>
+  | OperationDefinition<SqlExecuteInput, SqlExecuteOutput>;
 
 export const sqlOperationDefinitions: readonly SqlDefinition[] = [
   {
@@ -232,6 +297,22 @@ export const sqlOperationDefinitions: readonly SqlDefinition[] = [
     authority: planSqlRead,
     execute: executeSqlQuery,
   },
+  {
+    id: "tinycloud.sql.execute",
+    version: 1,
+    title: "Execute a TinyCloud SQLite DML statement",
+    description: `Run exactly one parameterized INSERT, UPDATE, or DELETE against one exact TinyCloud SQLite database. ${SQL_WRITE_AUTHORITY_NOTICE}`,
+    input: SqlExecuteInputSchema,
+    output: SqlExecuteOutputSchema,
+    effects: ["write", "destructive"],
+    runtime: "authenticated",
+    postures: AUTHENTICATED_POSTURES,
+    exposure: SQL_EXPOSURE,
+    sensitivity: SQL_EXECUTE_SENSITIVITY,
+    invalidInputErrorCode: "SQL_QUERY_INVALID",
+    authority: planSqlWrite,
+    execute: executeSqlDml,
+  },
 ];
 
 async function planSqlRead(
@@ -244,6 +325,20 @@ async function planSqlRead(
     space,
     path: input.database,
     actions: ["tinycloud.sql/read"],
+  }];
+}
+
+async function planSqlWrite(
+  context: RuntimeOperationContext,
+  input: SqlExecuteInput,
+): Promise<readonly CapabilityRequirement[]> {
+  const space = resolveSqlSpace(context, input.space);
+  return [{
+    service: "tinycloud.sql",
+    space,
+    path: input.database,
+    actions: ["tinycloud.sql/write"],
+    description: SQL_WRITE_AUTHORITY_NOTICE,
   }];
 }
 
@@ -320,13 +415,85 @@ async function executeSqlQuery(
   }
 }
 
+async function executeSqlDml(
+  context: OperationContext,
+  input: SqlExecuteInput,
+): Promise<OperationExecutionOutcome<SqlExecuteOutput>> {
+  try {
+    const statementType = parseSingleDmlStatement(input.sql, input.params.length);
+    if (statementType === undefined) {
+      return {
+        status: "error",
+        error: operationError(
+          "SQL_QUERY_INVALID",
+          "SQL must parse as exactly one parameterized INSERT, UPDATE, or DELETE with one value per positional placeholder.",
+        ),
+      };
+    }
+
+    const runtime = runtimeContext(context);
+    const space = resolveSqlSpace(runtime, input.space);
+    const result = await runtimeNode(runtime)
+      .sqlForSpace(space)
+      .db(input.database)
+      .execute(input.sql, input.params.map(decodeSqlInputValue));
+    if (!result.ok) return nodeFailure("execute the SQLite statement");
+    const normalized = normalizeExecuteResult(result.data);
+    return {
+      status: "ok",
+      output: {
+        space,
+        database: input.database,
+        statementType,
+        ...normalized,
+        authorityNotice: SQL_WRITE_AUTHORITY_NOTICE,
+      },
+    };
+  } catch (error) {
+    return sqlFailure(error, "execute the SQLite statement");
+  }
+}
+
 function isSingleReadQuery(sql: string): boolean {
+  const ast = parseSingleStatement(sql);
+  return ast !== undefined && ast.type === "select";
+}
+
+function parseSingleDmlStatement(
+  sql: string,
+  parameterCount: number,
+): "insert" | "update" | "delete" | undefined {
+  const ast = parseSingleStatement(sql);
+  if (
+    ast === undefined ||
+    (ast.type !== "insert" && ast.type !== "update" && ast.type !== "delete") ||
+    ast.with !== undefined && ast.with !== null
+  ) {
+    return undefined;
+  }
+  const placeholders = countPositionalParameters(ast);
+  return placeholders > 0 && placeholders === parameterCount ? ast.type : undefined;
+}
+
+function parseSingleStatement(sql: string): Record<string, unknown> | undefined {
   try {
     const ast = sqlParser.astify(sql, { database: "sqlite" }) as unknown;
-    return !Array.isArray(ast) && isRecord(ast) && ast.type === "select";
+    return !Array.isArray(ast) && isRecord(ast) ? ast : undefined;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+function countPositionalParameters(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.reduce((count, entry) => count + countPositionalParameters(entry), 0);
+  }
+  if (!isRecord(value)) return 0;
+  const current = value.type === "origin" && value.value === "?" ? 1 : 0;
+  return Object.values(value).reduce<number>(
+    (count, entry) => count + countPositionalParameters(entry),
+    current,
+  );
 }
 
 function decodeSqlInputValue(value: SqlInputValue): null | number | string | Uint8Array {
@@ -391,6 +558,26 @@ function normalizeSqlOutputValue(value: unknown): SqlOutputValue {
     return encodeBlob(Uint8Array.from(value.data));
   }
   throw unsafeSqlValue("The node returned an unsupported SQLite value.");
+}
+
+function normalizeExecuteResult(
+  value: unknown,
+): Readonly<{ changes: number; lastInsertRowId: number | null }> {
+  if (
+    !isRecord(value) ||
+    !Number.isSafeInteger(value.changes) ||
+    (value.changes as number) < 0 ||
+    (
+      value.lastInsertRowId !== null &&
+      !Number.isSafeInteger(value.lastInsertRowId)
+    )
+  ) {
+    throw unsafeSqlValue("The node returned SQLite mutation metadata that cannot be represented safely in JavaScript.");
+  }
+  return {
+    changes: value.changes as number,
+    lastInsertRowId: value.lastInsertRowId as number | null,
+  };
 }
 
 function schemaObject(row: readonly SqlOutputValue[]): SqlSchemaInspectOutput["objects"][number] {
