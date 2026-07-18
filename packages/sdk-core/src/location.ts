@@ -24,8 +24,18 @@ export interface LocationRecord extends LocationRecordPayload {
   signature: string;
 }
 
+/**
+ * Where a resolved TinyCloud host came from, ordered highest to lowest
+ * priority. `local-loopback` and `local-link` are probed + identity-verified
+ * (see {@link discoverLocalTinyCloudNode}); the rest are resolved the same
+ * way they always have been (no liveness probing). New local-discovery
+ * sources (e.g. a future `tunnel` or `mdns` source) slot in next to
+ * `local-link` without touching the unprobed sources below them.
+ */
 export type LocationSource =
   | "explicit"
+  | "local-loopback"
+  | "local-link"
   | "blockchain"
   | "centralized"
   | "fallback";
@@ -33,6 +43,15 @@ export type LocationSource =
 export const DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL =
   "https://registry.tinycloud.xyz";
 export const DEFAULT_TINYCLOUD_FALLBACK_HOST = "https://node.tinycloud.xyz";
+
+/** Default local loopback node URL probed before registry/fallback resolution. */
+export const DEFAULT_LOCAL_NODE_URL = "http://127.0.0.1:8000";
+/** Probe timeout for the local loopback candidate. No retries. */
+export const LOCAL_LOOPBACK_PROBE_TIMEOUT_MS = 250;
+/** Probe timeout for local.tinycloud.link candidates. No retries. */
+export const LOCAL_LINK_PROBE_TIMEOUT_MS = 750;
+/** Hostname suffix identifying a local-link tunnel candidate. */
+export const LOCAL_LINK_HOST_SUFFIX = ".local.tinycloud.link";
 
 export interface LocationCandidate {
   source: LocationSource;
@@ -77,6 +96,61 @@ export interface ResolvedTinyCloudHosts {
   location: ResolvedCloudLocation;
 }
 
+/**
+ * Trust-on-first-use pin store for locally-discovered node identities, keyed
+ * by candidate URL. The first successful `/info` check for a URL with no
+ * existing pin adopts and pins that node's DID; every later check for the
+ * same URL must match the pin. Implementations: CLI (profile store), web
+ * (localStorage), node-sdk (config-provided callback, else in-memory).
+ */
+export interface LocalNodeIdentityStore {
+  get(url: string): string | undefined | Promise<string | undefined>;
+  set(url: string, nodeDid: string): void | Promise<void>;
+}
+
+/** In-memory {@link LocalNodeIdentityStore}. Does not persist across process restarts. */
+export function createInMemoryLocalNodeIdentityStore(): LocalNodeIdentityStore {
+  const pins = new Map<string, string>();
+  return {
+    get: (url) => pins.get(url),
+    set: (url, nodeDid) => {
+      pins.set(url, nodeDid);
+    },
+  };
+}
+
+export interface DiscoverLocalTinyCloudNodeOptions {
+  /**
+   * Subject DID used to look up the registry LocationRecord for
+   * `*.local.tinycloud.link` multiaddrs (source `local-link`). Omit to skip
+   * that lookup — the local-loopback and `localLinkName` candidates don't
+   * need it.
+   */
+  subject?: string;
+  /** Enable local-node auto-discovery. Default true. */
+  autoDiscoverLocalNode?: boolean;
+  /** Local loopback node URL to probe. Default http://127.0.0.1:8000. */
+  localNodeUrl?: string;
+  /** Known `*.local.tinycloud.link` subdomain name, probed directly. */
+  localLinkName?: string;
+  /** Centralized location registry URL, used for the `local-link` registry lookup. Default https://registry.tinycloud.xyz. */
+  registryUrl?: string | null;
+  /** Expected local node DID. Wins over any pinned value; a mismatch rejects the candidate. */
+  expectedNodeDid?: string;
+  /** Pin store for trust-on-first-use identity verification. Defaults to an in-memory store. */
+  identityStore?: LocalNodeIdentityStore;
+  /** Verify the registry LocationRecord signature before trusting its `local-link` multiaddrs. Default true. */
+  verifyRecords?: boolean;
+  /** Custom fetch implementation. Defaults to globalThis.fetch. */
+  fetch?: typeof fetch;
+}
+
+export interface DiscoveredLocalTinyCloudNode {
+  source: Extract<LocationSource, "local-loopback" | "local-link">;
+  url: string;
+  nodeDid: string;
+}
+
 export interface ResolveTinyCloudHostsOptions {
   /** Highest-priority TinyCloud HTTP host URLs or multiaddrs supplied directly. */
   explicitHosts?: string[];
@@ -90,6 +164,20 @@ export interface ResolveTinyCloudHostsOptions {
   fetch?: typeof fetch;
   /** Verify centralized/blockchain record signatures. Default true. */
   verifyRecords?: boolean;
+  /**
+   * Probe for a locally-running TinyCloud node before falling back to
+   * registry/hosted resolution. Default true. Setting false restores the
+   * exact pre-TC-106 resolution order (registry → fallback).
+   */
+  autoDiscoverLocalNode?: boolean;
+  /** Local loopback node URL to probe. Default http://127.0.0.1:8000. */
+  localNodeUrl?: string;
+  /** Known `*.local.tinycloud.link` subdomain name, probed directly. */
+  localLinkName?: string;
+  /** Expected local node DID. Wins over any pinned value; a mismatch rejects the candidate. */
+  expectedNodeDid?: string;
+  /** Pin store for trust-on-first-use local node identity verification. Defaults to an in-memory store. */
+  localNodeIdentityStore?: LocalNodeIdentityStore;
 }
 
 export type LocationCandidateInput =
@@ -284,6 +372,36 @@ export async function resolveTinyCloudHosts(
   subject: string,
   options: ResolveTinyCloudHostsOptions = {},
 ): Promise<ResolvedTinyCloudHosts> {
+  const hasExplicitHosts =
+    options.explicitHosts !== undefined && options.explicitHosts.length > 0;
+
+  // Explicit config wins outright — same as before TC-106, no local probe.
+  if (!hasExplicitHosts && (options.autoDiscoverLocalNode ?? true)) {
+    const local = await discoverLocalTinyCloudNode({
+      subject,
+      autoDiscoverLocalNode: true,
+      localNodeUrl: options.localNodeUrl,
+      localLinkName: options.localLinkName,
+      registryUrl: options.registryUrl,
+      expectedNodeDid: options.expectedNodeDid,
+      identityStore: options.localNodeIdentityStore,
+      verifyRecords: options.verifyRecords,
+      fetch: options.fetch,
+    });
+    if (local) {
+      const multiaddrs = [httpUrlToMultiaddr(local.url)];
+      const candidate: LocationCandidate = { source: local.source, multiaddrs };
+      const location: ResolvedCloudLocation = {
+        subject,
+        source: local.source,
+        multiaddrs,
+        attempts: [{ source: local.source, candidate }],
+        resolvedAt: new Date().toISOString(),
+      };
+      return { hosts: [local.url], location };
+    }
+  }
+
   const location = await resolveCloudLocation(subject, {
     explicitMultiaddrs: hostsToMultiaddrs(options.explicitHosts),
     blockchain: options.blockchain,
@@ -304,6 +422,236 @@ export async function resolveTinyCloudHosts(
     hosts: location.multiaddrs.map((addr) => multiaddrToHttpUrl(addr)),
     location,
   };
+}
+
+/**
+ * Probe for a locally-running TinyCloud node and verify its identity before
+ * trusting it. Tries, in order: the local loopback URL, the explicit
+ * `localLinkName` candidate (if given), then any `*.local.tinycloud.link`
+ * multiaddr found in the subject's registry LocationRecord (if `subject` and
+ * a registry are given). Each candidate is probed with `GET {url}/healthz`
+ * (short timeout, no retries) — any failure (refused, timeout, NXDOMAIN,
+ * offline) silently skips to the next candidate, no error, no log above
+ * debug level. A candidate that answers healthy is then identity-checked via
+ * `GET {url}/info`: if an expected DID is known (explicit or previously
+ * pinned), the node's `node_did` must match or the candidate is rejected; if
+ * no expectation exists yet, the DID is trusted and pinned (TOFU).
+ *
+ * Returns `null` (never throws) when no local node is found or verified —
+ * callers fall through to their normal remote resolution.
+ */
+export async function discoverLocalTinyCloudNode(
+  options: DiscoverLocalTinyCloudNodeOptions = {},
+): Promise<DiscoveredLocalTinyCloudNode | null> {
+  if ((options.autoDiscoverLocalNode ?? true) === false) {
+    return null;
+  }
+
+  const fetchFn = options.fetch ?? globalThis.fetch;
+  const identityStore =
+    options.identityStore ?? defaultLocalNodeIdentityStore;
+
+  // Cheap, static candidates first — no network round trip beyond the probe
+  // itself. The registry lookup below is only reached if these don't pan
+  // out, so the common case (a node running at the default loopback) never
+  // pays for an extra registry request.
+  const staticCandidates: LocalNodeCandidate[] = [
+    {
+      source: "local-loopback",
+      url: options.localNodeUrl ?? DEFAULT_LOCAL_NODE_URL,
+      timeoutMs: LOCAL_LOOPBACK_PROBE_TIMEOUT_MS,
+    },
+  ];
+  if (options.localLinkName) {
+    staticCandidates.push({
+      source: "local-link",
+      url: `https://${options.localLinkName}${LOCAL_LINK_HOST_SUFFIX}`,
+      timeoutMs: LOCAL_LINK_PROBE_TIMEOUT_MS,
+    });
+  }
+
+  for (const candidate of staticCandidates) {
+    const adopted = await probeAndVerifyLocalCandidate(
+      candidate,
+      fetchFn,
+      identityStore,
+      options.expectedNodeDid,
+    );
+    if (adopted) {
+      return adopted;
+    }
+  }
+
+  const registryCandidates = await fetchRegistryLocalLinkCandidates(
+    options,
+    fetchFn,
+    staticCandidates,
+  );
+  for (const candidate of registryCandidates) {
+    const adopted = await probeAndVerifyLocalCandidate(
+      candidate,
+      fetchFn,
+      identityStore,
+      options.expectedNodeDid,
+    );
+    if (adopted) {
+      return adopted;
+    }
+  }
+
+  return null;
+}
+
+const defaultLocalNodeIdentityStore = createInMemoryLocalNodeIdentityStore();
+
+function debugLog(message: string): void {
+  console.debug(`[tinycloud:location] ${message}`);
+}
+
+interface LocalNodeCandidate {
+  source: Extract<LocationSource, "local-loopback" | "local-link">;
+  url: string;
+  timeoutMs: number;
+}
+
+async function probeAndVerifyLocalCandidate(
+  candidate: LocalNodeCandidate,
+  fetchFn: typeof fetch,
+  identityStore: LocalNodeIdentityStore,
+  expectedNodeDid: string | undefined,
+): Promise<DiscoveredLocalTinyCloudNode | null> {
+  const healthy = await probeHealthz(candidate.url, candidate.timeoutMs, fetchFn);
+  if (!healthy) {
+    return null;
+  }
+
+  const info = await fetchLocalNodeInfo(candidate.url, candidate.timeoutMs, fetchFn);
+  if (!info?.nodeDid) {
+    debugLog(`local node at ${candidate.url} did not report a node_did; skipping`);
+    return null;
+  }
+
+  const expected = expectedNodeDid ?? (await identityStore.get(candidate.url));
+  if (expected !== undefined) {
+    if (expected !== info.nodeDid) {
+      debugLog(
+        `local node DID mismatch at ${candidate.url}: expected ${expected}, got ${info.nodeDid}`,
+      );
+      return null;
+    }
+  } else {
+    await identityStore.set(candidate.url, info.nodeDid);
+  }
+
+  return { source: candidate.source, url: candidate.url, nodeDid: info.nodeDid };
+}
+
+/**
+ * Look up the subject's registry LocationRecord and extract any
+ * `*.local.tinycloud.link` multiaddrs as additional local-link candidates.
+ * Only called once the cheap static candidates have failed. Never throws —
+ * registry failures here are opportunistic and fall through to the
+ * unchanged remote resolution that runs when local discovery finds nothing.
+ */
+async function fetchRegistryLocalLinkCandidates(
+  options: DiscoverLocalTinyCloudNodeOptions,
+  fetchFn: typeof fetch,
+  existingCandidates: LocalNodeCandidate[],
+): Promise<LocalNodeCandidate[]> {
+  if (!options.subject || options.registryUrl === null) {
+    return [];
+  }
+
+  const registryUrl = options.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL;
+  try {
+    const record = await fetchLocationRecord(registryUrl, options.subject, fetchFn);
+    if (!record) {
+      return [];
+    }
+
+    const shouldVerify = options.verifyRecords ?? true;
+    if (shouldVerify && !(await verifyLocationRecord(record))) {
+      debugLog(
+        `registry record signature invalid for ${options.subject}; skipping local-link lookup`,
+      );
+      return [];
+    }
+
+    return extractLocalLinkUrls(record)
+      .filter((url) => !existingCandidates.some((c) => c.url === url))
+      .map((url) => ({
+        source: "local-link" as const,
+        url,
+        timeoutMs: LOCAL_LINK_PROBE_TIMEOUT_MS,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/** Extract `https://*.local.tinycloud.link` URLs from a LocationRecord's multiaddrs. */
+function extractLocalLinkUrls(record: LocationRecord | null): string[] {
+  if (!record) {
+    return [];
+  }
+  const urls: string[] = [];
+  for (const addr of record.multiaddrs) {
+    let url: string;
+    try {
+      url = multiaddrToHttpUrl(addr);
+    } catch {
+      continue;
+    }
+    if (isLocalLinkUrl(url)) {
+      urls.push(url);
+    }
+  }
+  return urls;
+}
+
+function isLocalLinkUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" && parsed.hostname.endsWith(LOCAL_LINK_HOST_SUFFIX)
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function probeHealthz(
+  url: string,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<boolean> {
+  try {
+    const response = await fetchFn(`${url.replace(/\/$/, "")}/healthz`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchLocalNodeInfo(
+  url: string,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<{ nodeDid?: string } | null> {
+  try {
+    const response = await fetchFn(`${url.replace(/\/$/, "")}/info`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const body = (await response.json()) as { node_did?: string };
+    return { nodeDid: body.node_did };
+  } catch {
+    return null;
+  }
 }
 
 export function multiaddrToHttpUrl(input: string): string {

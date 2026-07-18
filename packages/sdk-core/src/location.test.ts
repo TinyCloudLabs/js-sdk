@@ -78,6 +78,7 @@ describe("resolveTinyCloudHosts", () => {
     const requests: string[] = [];
 
     const resolved = await resolveTinyCloudHosts(subject, {
+      autoDiscoverLocalNode: false,
       fetch: async (input) => {
         requests.push(String(input));
         return new Response("{}", { status: 404 });
@@ -120,6 +121,7 @@ describe("resolveTinyCloudHosts", () => {
     const resolved = await resolveTinyCloudHosts(subject, {
       registryUrl,
       verifyRecords: false,
+      autoDiscoverLocalNode: false,
       fetch: async (input) => {
         requests.push(String(input));
         return Response.json({ record });
