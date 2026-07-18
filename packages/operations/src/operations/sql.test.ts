@@ -350,6 +350,30 @@ describe("SQLite DML operation", () => {
       });
     }
   });
+
+  test("classifies SQL mutation failures without retrying deterministic errors", async () => {
+    const operation = definition("tinycloud.sql.execute");
+    const input = operation.input.parse({
+      space: "applications",
+      database: "notes",
+      sql: "DELETE FROM notes WHERE id = ?",
+      params: [1],
+      acknowledgeDatabaseWideAuthority: true,
+    });
+    for (const [error, retryable] of [
+      [{ code: "SQL_ERROR", meta: { status: 400 } }, false],
+      [{ code: "NETWORK_ERROR", meta: { status: 503 } }, true],
+      [{ code: "SQL_QUOTA_EXCEEDED", meta: { status: 429 } }, true],
+    ] as const) {
+      expect(await operation.execute(context(sqlWriteNode(async () => ({
+        ok: false,
+        error,
+      }))), input)).toMatchObject({
+        status: "error",
+        error: { code: "SQL_EXECUTION_FAILED", retryable },
+      });
+    }
+  });
 });
 
 function sqlNode(query: (...args: unknown[]) => Promise<unknown>) {

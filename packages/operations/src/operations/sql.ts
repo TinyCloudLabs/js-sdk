@@ -437,7 +437,7 @@ async function executeSqlDml(
       .sqlForSpace(space)
       .db(input.database)
       .execute(input.sql, input.params.map(decodeSqlInputValue));
-    if (!result.ok) return nodeFailure("execute the SQLite statement");
+    if (!result.ok) return sqlMutationFailure(result.error);
     const normalized = normalizeExecuteResult(result.data);
     return {
       status: "ok",
@@ -675,6 +675,24 @@ function sqlServiceFailure(
     };
   }
   return nodeFailure(action);
+}
+
+function sqlMutationFailure(error: unknown): OperationExecutionOutcome<never> {
+  const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
+  const status = isRecord(error) && isRecord(error.meta) && typeof error.meta.status === "number"
+    ? error.meta.status
+    : undefined;
+  const retryable = code === "NETWORK_ERROR"
+    || status === 429
+    || (status !== undefined && status >= 500);
+  return {
+    status: "error",
+    error: operationError(
+      "SQL_EXECUTION_FAILED",
+      "The SQLite statement could not be executed.",
+      { retryable },
+    ),
+  };
 }
 
 function isCanonicalBase64(value: string): boolean {

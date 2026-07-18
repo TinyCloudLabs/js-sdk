@@ -564,6 +564,11 @@ describe("KVService bounded and conditional requests", () => {
     const deleted = await service.delete("changed", { ifMatch: '"old"' });
     expect(put).toMatchObject({ ok: false, error: { code: ErrorCodes.KV_PRECONDITION_FAILED } });
     expect(deleted).toMatchObject({ ok: false, error: { code: ErrorCodes.KV_PRECONDITION_FAILED } });
+    status = 503;
+    const putConflict = await service.put("changed", "value", { ifMatch: '"blake3-old"' });
+    const deleteConflict = await service.delete("changed", { ifMatch: '"blake3-old"' });
+    expect(putConflict).toMatchObject({ ok: false, error: { code: ErrorCodes.KV_CONFLICT } });
+    expect(deleteConflict).toMatchObject({ ok: false, error: { code: ErrorCodes.KV_CONFLICT } });
   });
 });
 

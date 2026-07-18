@@ -632,6 +632,18 @@ export class KVService extends BaseService implements IKVService {
             ));
           }
 
+          if (
+            response.status === 503 &&
+            (options?.ifMatch !== undefined || options?.ifNoneMatch !== undefined)
+          ) {
+            return err(serviceError(
+              ErrorCodes.KV_CONFLICT,
+              `Concurrent KV update conflicted for key "${key}"`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
+
           // Check for storage quota errors (402, 413)
           const quotaError = this.handleQuotaErrorResponse(
             response,
@@ -910,6 +922,14 @@ export class KVService extends BaseService implements IKVService {
             return err(serviceError(
               ErrorCodes.KV_PRECONDITION_FAILED,
               `KV precondition failed for key "${key}"`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
+          if (response.status === 503 && options?.ifMatch !== undefined) {
+            return err(serviceError(
+              ErrorCodes.KV_CONFLICT,
+              `Concurrent KV delete conflicted for key "${key}"`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             ));

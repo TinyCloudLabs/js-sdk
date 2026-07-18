@@ -9,6 +9,7 @@ const OWNER_ACCOUNT =
   "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:account";
 const OWNER_APPLICATIONS =
   "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:applications";
+const ETAG = `"blake3-${"a".repeat(64)}"`;
 
 function definition(id: string) {
   const found = explorationOperationDefinitions.find((candidate) => candidate.id === id);
@@ -234,7 +235,7 @@ describe("generic KV exploration operations", () => {
           },
           async delete(key: string, options: unknown) {
             calls.push({ method: "delete", key, options });
-            return response(undefined, { etag: '"blake3-deleted"' });
+            return response(undefined, { etag: ETAG });
           },
         };
       },
@@ -247,7 +248,7 @@ describe("generic KV exploration operations", () => {
         content: { encoding: "utf8", value: "hello" },
       }, "tinycloud.kv/put"],
       ["tinycloud.kv.delete", {
-        space: "applications", key: "documents/one", etag: '"v1"',
+        space: "applications", key: "documents/one", etag: ETAG,
       }, "tinycloud.kv/del"],
     ] as const;
     for (const [id, raw, action] of cases) {
@@ -260,7 +261,7 @@ describe("generic KV exploration operations", () => {
       expect(result.status).toBe("ok");
       if (id === "tinycloud.kv.delete") {
         expect(result).toMatchObject({
-          output: { deleted: true, etag: '"blake3-deleted"' },
+          output: { deleted: true, etag: ETAG },
         });
       }
     }
@@ -270,7 +271,7 @@ describe("generic KV exploration operations", () => {
         method: "put", key: "documents/one", value: [104, 101, 108, 108, 111],
         options: { contentType: "text/plain;charset=UTF-8", ifNoneMatch: "*" },
       },
-      { method: "delete", key: "documents/one", options: { ifMatch: '"v1"' } },
+      { method: "delete", key: "documents/one", options: { ifMatch: ETAG } },
     ]);
   });
 
@@ -281,9 +282,53 @@ describe("generic KV exploration operations", () => {
       { space: "applications", key: "a", mode: "create", content: { encoding: "base64", value: "not-base64" } },
       { space: "applications", key: "a", mode: "create", content: { encoding: "utf8", value: "x".repeat(1024 * 1024 + 1) } },
       { space: "applications", key: "a", mode: "create", content: { encoding: "json", value: Number.MAX_SAFE_INTEGER + 1 } },
+      { space: "applications", key: "a", mode: "replace", etag: '"v1"', content: { encoding: "utf8", value: "x" } },
     ]) {
       expect(operation.input.safeParse(input).success).toBe(false);
     }
+  });
+
+  test("rejects oversized responses and unsafe JSON integers under node version skew", async () => {
+    const operation = definition("tinycloud.kv.get");
+    for (const [bytes, representation, code] of [
+      [new Uint8Array(1024 * 1024 + 1), "base64", "KV_RESPONSE_TOO_LARGE"],
+      [new TextEncoder().encode('{"id":9007199254740993}'), "json", "OUTPUT_INVALID"],
+    ] as const) {
+      const input = operation.input.parse({
+        space: "applications",
+        key: "documents/one",
+        representation,
+      });
+      const result = await operation.execute(context({
+        kvForSpace() {
+          return { async get() { return response(bytes); } };
+        },
+      }), input);
+      expect(result).toMatchObject({ status: "error", error: { code } });
+    }
+  });
+
+  test("surfaces conditional write conflicts as retryable ETag refreshes", async () => {
+    const operation = definition("tinycloud.kv.put");
+    const input = operation.input.parse({
+      space: "applications",
+      key: "documents/one",
+      mode: "create",
+      content: { encoding: "utf8", value: "hello" },
+    });
+    const result = await operation.execute(context({
+      kvForSpace() {
+        return {
+          async put() {
+            return { ok: false, error: { code: "KV_CONFLICT", meta: { status: 503 } } };
+          },
+        };
+      },
+    }), input);
+    expect(result).toMatchObject({
+      status: "error",
+      error: { code: "KV_CONFLICT", retryable: true },
+    });
   });
 
   test("rejects every generic KV operation for account and secrets spaces", async () => {

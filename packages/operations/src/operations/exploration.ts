@@ -151,7 +151,10 @@ const KeySchema = z.string().min(1).refine(
   "Invalid KV key.",
 );
 const LimitSchema = z.number().int().min(1).max(1000);
-const StrongEtagSchema = z.string().max(256).regex(/^"[^"\r\n]*"$/, "A strong quoted ETag is required.");
+const StrongEtagSchema = z.string().regex(
+  /^"blake3-[0-9a-f]{64}"$/,
+  "A strong TinyCloud BLAKE3 ETag is required.",
+);
 const ContentTypeSchema = z.string().min(1).max(128).refine(
   (value) => !/[\x00-\x1f\x7f]/.test(value),
   "Invalid content type.",
@@ -546,6 +549,9 @@ async function executeKvGet(
     });
     if (!result.ok) return kvFailure(result.error, "read the KV value");
     const bytes = result.data.data;
+    if (bytes.byteLength > MAX_KV_VALUE_BYTES) {
+      return kvFailure({ code: "KV_RESPONSE_TOO_LARGE" }, "read the KV value");
+    }
     const encoded = encodeKvValue(bytes, input.representation ?? "base64");
     if (!encoded.ok) return encoded.outcome;
     return {
@@ -787,7 +793,20 @@ function encodeKvValue(
   }
   if (representation === "text") return { ok: true, value: text, encoding: "text" };
   try {
-    return { ok: true, value: JSON.parse(text) as JsonValue, encoding: "json" };
+    const parsed = JsonValueSchema.safeParse(JSON.parse(text));
+    if (!parsed.success) {
+      return {
+        ok: false,
+        outcome: {
+          status: "error",
+          error: operationError(
+            "OUTPUT_INVALID",
+            "The KV JSON contains a number that cannot be represented safely.",
+          ),
+        },
+      };
+    }
+    return { ok: true, value: parsed.data, encoding: "json" };
   } catch {
     return {
       ok: false,
@@ -850,6 +869,16 @@ function kvFailure(
   }
   if (error.code === "KV_PRECONDITION_FAILED") {
     return { status: "error", error: operationError("KV_PRECONDITION_FAILED", "The TinyCloud KV object changed or already exists.") };
+  }
+  if (error.code === "KV_CONFLICT") {
+    return {
+      status: "error",
+      error: operationError(
+        "KV_CONFLICT",
+        "The TinyCloud KV object changed concurrently; read its current ETag before retrying.",
+        { retryable: true },
+      ),
+    };
   }
   if (error.code === "KV_RESPONSE_TOO_LARGE") {
     return { status: "error", error: operationError("KV_RESPONSE_TOO_LARGE", `The TinyCloud KV value exceeds ${MAX_KV_VALUE_BYTES} bytes.`) };
