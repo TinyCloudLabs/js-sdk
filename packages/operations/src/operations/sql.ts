@@ -437,7 +437,7 @@ async function executeSqlDml(
       .sqlForSpace(space)
       .db(input.database)
       .execute(input.sql, input.params.map(decodeSqlInputValue));
-    if (!result.ok) return sqlMutationFailure(result.error);
+    if (!result.ok) return sqlMutationFailure();
     const normalized = normalizeExecuteResult(result.data);
     return {
       status: "ok",
@@ -677,20 +677,13 @@ function sqlServiceFailure(
   return nodeFailure(action);
 }
 
-function sqlMutationFailure(error: unknown): OperationExecutionOutcome<never> {
-  const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
-  const status = isRecord(error) && isRecord(error.meta) && typeof error.meta.status === "number"
-    ? error.meta.status
-    : undefined;
-  const retryable = code === "NETWORK_ERROR"
-    || status === 429
-    || (status !== undefined && status >= 500);
+function sqlMutationFailure(): OperationExecutionOutcome<never> {
   return {
     status: "error",
     error: operationError(
       "SQL_EXECUTION_FAILED",
-      "The SQLite statement could not be executed.",
-      { retryable },
+      "The SQLite statement outcome is unknown; inspect database state before considering another write.",
+      { retryable: false },
     ),
   };
 }

@@ -351,7 +351,7 @@ describe("SQLite DML operation", () => {
     }
   });
 
-  test("classifies SQL mutation failures without retrying deterministic errors", async () => {
+  test("never automatically retries a failed non-idempotent SQL mutation", async () => {
     const operation = definition("tinycloud.sql.execute");
     const input = operation.input.parse({
       space: "applications",
@@ -360,17 +360,17 @@ describe("SQLite DML operation", () => {
       params: [1],
       acknowledgeDatabaseWideAuthority: true,
     });
-    for (const [error, retryable] of [
-      [{ code: "SQL_ERROR", meta: { status: 400 } }, false],
-      [{ code: "NETWORK_ERROR", meta: { status: 503 } }, true],
-      [{ code: "SQL_QUOTA_EXCEEDED", meta: { status: 429 } }, true],
+    for (const error of [
+      { code: "SQL_ERROR", meta: { status: 400 } },
+      { code: "NETWORK_ERROR", meta: { status: 503 } },
+      { code: "SQL_QUOTA_EXCEEDED", meta: { status: 429 } },
     ] as const) {
       expect(await operation.execute(context(sqlWriteNode(async () => ({
         ok: false,
         error,
       }))), input)).toMatchObject({
         status: "error",
-        error: { code: "SQL_EXECUTION_FAILED", retryable },
+        error: { code: "SQL_EXECUTION_FAILED", retryable: false },
       });
     }
   });

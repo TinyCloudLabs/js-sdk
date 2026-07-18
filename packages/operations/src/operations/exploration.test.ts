@@ -52,19 +52,19 @@ describe("account exploration operations", () => {
       kvForSpace(space: string) {
         calls.push({ space, method: "handle" });
         return {
-          async list(options: { prefix: string }) {
-            calls.push({ space, method: "list", value: options.prefix });
-            return { ok: true, data: { keys: ["spaces/applications"] } };
+          async list(options: { prefix: string; limit: number }) {
+            calls.push({ space, method: "list", value: `${options.prefix}:${options.limit}` });
+            return { ok: true, data: { keys: ["spaces/applications"], truncated: false } };
           },
-          async get(key: string) {
-            calls.push({ space, method: "get", value: key });
-            return response({
+          async get(key: string, options: { binary: true; maxResponseBytes: number }) {
+            calls.push({ space, method: "get", value: `${key}:${options.maxResponseBytes}` });
+            return response(new TextEncoder().encode(JSON.stringify({
               space_id: OWNER_APPLICATIONS,
               name: "applications",
               type: "owned",
               permissions: ["tinycloud.kv/get"],
               status: "active",
-            });
+            })));
           },
         };
       },
@@ -89,8 +89,8 @@ describe("account exploration operations", () => {
     expect(operation.output.safeParse(result.output).success).toBe(true);
     expect(calls).toEqual([
       { space: OWNER_ACCOUNT, method: "handle" },
-      { space: OWNER_ACCOUNT, method: "list", value: "spaces/" },
-      { space: OWNER_ACCOUNT, method: "get", value: "spaces/applications" },
+      { space: OWNER_ACCOUNT, method: "list", value: "spaces/:1000" },
+      { space: OWNER_ACCOUNT, method: "get", value: "spaces/applications:1048576" },
     ]);
   });
 
@@ -100,15 +100,17 @@ describe("account exploration operations", () => {
       kvForSpace(space: string) {
         spaces.push(space);
         return {
-          async list() {
-            return { ok: true, data: { keys: ["applications/com.example.notes"] } };
+          async list(options: unknown) {
+            expect(options).toEqual({ prefix: "applications/", limit: 1000 });
+            return { ok: true, data: { keys: ["applications/com.example.notes"], truncated: false } };
           },
-          async get() {
-            return response({
+          async get(_key: string, options: unknown) {
+            expect(options).toEqual({ binary: true, maxResponseBytes: 1024 * 1024 });
+            return response(new TextEncoder().encode(JSON.stringify({
               app_id: "com.example.notes",
               manifests: [{ app_id: "com.example.notes", name: "Notes", knowledge: true }],
               manifest_hash: "abc123",
-            });
+            })));
           },
         };
       },
@@ -128,6 +130,36 @@ describe("account exploration operations", () => {
       },
     });
     expect(spaces).toEqual([OWNER_ACCOUNT]);
+  });
+
+  test("fails closed on truncated or oversized account registries", async () => {
+    const operation = definition("tinycloud.account.spaces.list");
+    const truncated = await operation.execute(context({
+      kvForSpace() {
+        return {
+          async list(options: unknown) {
+            expect(options).toEqual({ prefix: "spaces/", limit: 1000 });
+            return { ok: true, data: { keys: [], truncated: true } };
+          },
+        };
+      },
+    }), {});
+    expect(truncated).toMatchObject({ status: "error", error: { code: "OUTPUT_INVALID" } });
+
+    const oversized = await operation.execute(context({
+      kvForSpace() {
+        return {
+          async list() {
+            return { ok: true, data: { keys: ["spaces/oversized"], truncated: false } };
+          },
+          async get(_key: string, options: unknown) {
+            expect(options).toEqual({ binary: true, maxResponseBytes: 1024 * 1024 });
+            return response(new Uint8Array(1024 * 1024 + 1));
+          },
+        };
+      },
+    }), {});
+    expect(oversized).toMatchObject({ status: "error", error: { code: "KV_RESPONSE_TOO_LARGE" } });
   });
 });
 

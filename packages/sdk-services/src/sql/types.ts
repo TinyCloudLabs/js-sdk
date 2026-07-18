@@ -94,7 +94,7 @@ export interface QueryResponse<T = Record<string, unknown>> {
  */
 export interface ExecuteResponse {
   changes: number;
-  lastInsertRowId: number;
+  lastInsertRowId: number | null;
 }
 
 /**

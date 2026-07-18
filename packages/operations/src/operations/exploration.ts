@@ -134,6 +134,8 @@ interface KvOperationHandle {
 
 const MAX_KV_VALUE_BYTES = 1024 * 1024;
 const DEFAULT_KV_LIST_LIMIT = 100;
+const MAX_ACCOUNT_REGISTRY_RECORDS = 1000;
+const MAX_ACCOUNT_REGISTRY_BYTES = 4 * 1024 * 1024;
 
 const EmptyInputSchema: z.ZodType<EmptyInput> = z.object({}).strict();
 const SpaceSchema = z.string().min(1).refine(
@@ -479,11 +481,12 @@ async function executeAccountSpacesList(
 ): Promise<OperationExecutionOutcome<AccountSpacesOutput>> {
   try {
     const entries = await readAccountRegistry(context, "spaces/");
-    if (!entries.ok) return nodeFailure("list account spaces");
+    if (!entries.ok) return entries.outcome;
     const spaces = entries.records
       .map(({ key, value }) => projectAccountSpace(key, value))
       .sort((left, right) => left.name.localeCompare(right.name) || left.spaceId.localeCompare(right.spaceId));
-    return { status: "ok", output: { spaces, count: spaces.length } };
+    const output = { spaces, count: spaces.length };
+    return accountRegistryOutput(output);
   } catch {
     return nodeFailure("list account spaces");
   }
@@ -495,11 +498,12 @@ async function executeAccountApplicationsList(
 ): Promise<OperationExecutionOutcome<AccountApplicationsOutput>> {
   try {
     const entries = await readAccountRegistry(context, "applications/");
-    if (!entries.ok) return nodeFailure("list account applications");
+    if (!entries.ok) return entries.outcome;
     const applications = entries.records
       .map(({ key, value }) => projectAccountApplication(key, value))
       .sort((left, right) => left.appId.localeCompare(right.appId));
-    return { status: "ok", output: { applications, count: applications.length } };
+    const output = { applications, count: applications.length };
+    return accountRegistryOutput(output);
   } catch {
     return nodeFailure("list account applications");
   }
@@ -681,19 +685,63 @@ async function readAccountRegistry(
   prefix: "spaces/" | "applications/",
 ): Promise<
   | Readonly<{ ok: true; records: readonly Readonly<{ key: string; value: Record<string, unknown> }>[] }>
-  | Readonly<{ ok: false }>
+  | Readonly<{ ok: false; outcome: OperationExecutionOutcome<never> }>
 > {
   const runtime = runtimeContext(context);
   const accountSpace = resolveSpace(runtime, "account");
-  const kv = runtimeNode(runtime).kvForSpace(accountSpace);
-  const listed = await kv.list({ prefix });
-  if (!listed.ok) return { ok: false };
+  const kv = runtimeNode(runtime).kvForSpace(accountSpace) as unknown as KvOperationHandle;
+  const listed = await kv.list({ prefix, limit: MAX_ACCOUNT_REGISTRY_RECORDS });
+  if (!listed.ok) return { ok: false, outcome: nodeFailure("list the account registry") };
+  if (listed.data.truncated === true) {
+    return {
+      ok: false,
+      outcome: {
+        status: "error",
+        error: operationError(
+          "OUTPUT_INVALID",
+          `The TinyCloud account registry exceeds the ${MAX_ACCOUNT_REGISTRY_RECORDS}-record exploration limit.`,
+        ),
+      },
+    };
+  }
 
   const records: Array<Readonly<{ key: string; value: Record<string, unknown> }>> = [];
+  let totalBytes = 0;
   for (const key of listed.data.keys) {
-    const loaded = await kv.get<unknown>(key);
-    if (!loaded.ok || !isRecord(loaded.data.data)) return { ok: false };
-    records.push({ key, value: loaded.data.data });
+    const loaded = await kv.get(key, {
+      binary: true,
+      maxResponseBytes: MAX_KV_VALUE_BYTES,
+    });
+    if (!loaded.ok) {
+      return { ok: false, outcome: kvFailure(loaded.error, "read the account registry") };
+    }
+    const bytes = loaded.data.data;
+    totalBytes += bytes.byteLength;
+    if (bytes.byteLength > MAX_KV_VALUE_BYTES || totalBytes > MAX_ACCOUNT_REGISTRY_BYTES) {
+      return {
+        ok: false,
+        outcome: {
+          status: "error",
+          error: operationError(
+            "KV_RESPONSE_TOO_LARGE",
+            `The TinyCloud account registry exceeds the ${MAX_ACCOUNT_REGISTRY_BYTES}-byte exploration limit.`,
+          ),
+        },
+      };
+    }
+    try {
+      const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      if (!isRecord(value)) throw new TypeError("Account registry values must be JSON objects.");
+      records.push({ key, value });
+    } catch {
+      return {
+        ok: false,
+        outcome: {
+          status: "error",
+          error: operationError("OUTPUT_INVALID", "The TinyCloud account registry contains an invalid record."),
+        },
+      };
+    }
   }
   return { ok: true, records };
 }
@@ -858,6 +906,19 @@ function projectKvMetadata(headers: {
 function caughtKvFailure(error: unknown, action: string): OperationExecutionOutcome<never> {
   if (error instanceof OperationInvocationError) return { status: "error", error: error.operationError };
   return nodeFailure(action);
+}
+
+function accountRegistryOutput<T>(output: T): OperationExecutionOutcome<T> {
+  if (Buffer.byteLength(JSON.stringify(output), "utf8") > MAX_ACCOUNT_REGISTRY_BYTES) {
+    return {
+      status: "error",
+      error: operationError(
+        "KV_RESPONSE_TOO_LARGE",
+        `The TinyCloud account registry exceeds the ${MAX_ACCOUNT_REGISTRY_BYTES}-byte exploration limit.`,
+      ),
+    };
+  }
+  return { status: "ok", output };
 }
 
 function kvFailure(
