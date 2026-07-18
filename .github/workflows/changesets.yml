@@ -154,7 +154,41 @@ jobs:
         run: |
           bun changeset pre exit
           bun changeset version
-          bun install
+
+      - name: Normalize unversioned private workspaces
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const files = execFileSync('find', [
+            'apps', 'packages', 'tests', '-name', 'package.json',
+            '-not', '-path', '*/node_modules/*'
+          ], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+
+          for (const file of files) {
+            const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+            if (!pkg.private || pkg.version !== null) continue;
+
+            delete pkg.version;
+            fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+
+            const changelog = path.join(path.dirname(file), 'CHANGELOG.md');
+            if (fs.existsSync(changelog)) {
+              const expected = `# ${pkg.name}\n\n## null`;
+              const actual = fs.readFileSync(changelog, 'utf8').trim();
+              if (actual !== expected) {
+                throw new Error(`Refusing to remove non-generated changelog: ${changelog}`);
+              }
+              fs.unlinkSync(changelog);
+            }
+
+            console.log(`Restored unversioned private workspace: ${pkg.name}`);
+          }
+          NODE
+
+      - run: bun install
 
       - name: Build
         run: bun run build:release
