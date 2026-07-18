@@ -172,6 +172,34 @@
       "sensitiveOutput": true
     },
     {
+      "name": "tinycloud_sql_query",
+      "operationId": "tinycloud.sql.query",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud_sql_schema_inspect",
+      "operationId": "tinycloud.sql.schema.inspect",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
       "name": "tinycloud_status",
       "operationId": "tinycloud.status.get",
       "operationVersion": 1,

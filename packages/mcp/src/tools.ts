@@ -20,6 +20,8 @@ export const TOOL_NAMES = [
   "tinycloud_kv_head",
   "tinycloud_kv_put",
   "tinycloud_kv_delete",
+  "tinycloud_sql_schema_inspect",
+  "tinycloud_sql_query",
   "tinycloud_secrets_get",
 ] as const;
 
@@ -189,6 +191,24 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     readOnlyHint: false,
     idempotentHint: true,
     destructiveHint: true,
+    openWorldHint: true,
+  },
+  {
+    name: "tinycloud_sql_schema_inspect",
+    operationId: "tinycloud.sql.schema.inspect",
+    operationVersion: 1,
+    readOnlyHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: true,
+  },
+  {
+    name: "tinycloud_sql_query",
+    operationId: "tinycloud.sql.query",
+    operationVersion: 1,
+    readOnlyHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
     openWorldHint: true,
   },
   {

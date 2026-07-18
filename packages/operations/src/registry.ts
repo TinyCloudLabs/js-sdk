@@ -2,6 +2,7 @@ import type { OperationDefinition, OperationId } from "./contract.js";
 import { authOperationDefinitions } from "./operations/auth.js";
 import { explorationOperationDefinitions } from "./operations/exploration.js";
 import { secretsGetOperationDefinitions } from "./operations/secrets-get.js";
+import { sqlOperationDefinitions } from "./operations/sql.js";
 import { statusOperationDefinitions } from "./operations/status.js";
 
 export type OperationLookup =
@@ -25,6 +26,7 @@ function registeredOperationDefinitions(): readonly OperationDefinition<any, any
     ...statusOperationDefinitions,
     ...authOperationDefinitions,
     ...explorationOperationDefinitions,
+    ...sqlOperationDefinitions,
     ...secretsGetOperationDefinitions,
   ];
   return operationDefinitions;

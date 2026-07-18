@@ -44,6 +44,8 @@ const TOOL_NAMES: Record<string, string> = {
   "tinycloud.kv.head": "tinycloud_kv_head",
   "tinycloud.kv.put": "tinycloud_kv_put",
   "tinycloud.kv.delete": "tinycloud_kv_delete",
+  "tinycloud.sql.schema.inspect": "tinycloud_sql_schema_inspect",
+  "tinycloud.sql.query": "tinycloud_sql_query",
   "tinycloud.secrets.get": "tinycloud_secrets_get",
 };
 

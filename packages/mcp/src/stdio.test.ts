@@ -19,7 +19,7 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
 
-test("official v2 client lists exactly the generated KV CRUD tools over stdio", async () => {
+test("official v2 client lists exactly the generated KV CRUD and SQLite tools over stdio", async () => {
   const home = await fixtureHome();
   const transport = new StdioClientTransport({
     command: nodeBinary,
@@ -51,9 +51,11 @@ test("official v2 client lists exactly the generated KV CRUD tools over stdio", 
       "tinycloud_kv_head",
       "tinycloud_kv_put",
       "tinycloud_kv_delete",
+      "tinycloud_sql_schema_inspect",
+      "tinycloud_sql_query",
       "tinycloud_secrets_get",
     ]);
-    expect(listed.tools).toHaveLength(13);
+    expect(listed.tools).toHaveLength(15);
 
     const byId = new Map((catalog as { operations: Array<{ id: string; version: number; input: unknown; result: unknown }> }).operations
       .map((operation) => [`${operation.id}@${operation.version}`, operation]));
@@ -70,6 +72,8 @@ test("official v2 client lists exactly the generated KV CRUD tools over stdio", 
       tinycloud_kv_head: "tinycloud.kv.head@1",
       tinycloud_kv_put: "tinycloud.kv.put@1",
       tinycloud_kv_delete: "tinycloud.kv.delete@1",
+      tinycloud_sql_schema_inspect: "tinycloud.sql.schema.inspect@1",
+      tinycloud_sql_query: "tinycloud.sql.query@1",
       tinycloud_secrets_get: "tinycloud.secrets.get@1",
     };
     for (const tool of listed.tools) {
@@ -97,6 +101,8 @@ test("official v2 client lists exactly the generated KV CRUD tools over stdio", 
           "tinycloud_kv_head",
           "tinycloud_kv_put",
           "tinycloud_kv_delete",
+          "tinycloud_sql_schema_inspect",
+          "tinycloud_sql_query",
           "tinycloud_secrets_get",
         ].includes(tool.name),
       });
@@ -125,6 +131,8 @@ test("official v2 client lists exactly the generated KV CRUD tools over stdio", 
       ["tinycloud_kv_head", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.head", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_put", { space: "applications", key: "agents/example", mode: "create", content: { encoding: "utf8", value: "hello" } }, { status: "error", operation: { operationId: "tinycloud.kv.put", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_delete", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.delete", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_sql_schema_inspect", { space: "applications", database: "notes" }, { status: "error", operation: { operationId: "tinycloud.sql.schema.inspect", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_sql_query", { space: "applications", database: "notes", sql: "SELECT 1" }, { status: "error", operation: { operationId: "tinycloud.sql.query", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_secrets_get", { name: "MCP_TEST_SECRET" }, { status: "error", operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
     ] as const;
     for (const [name, arguments_, expected] of expectedToolResults) {

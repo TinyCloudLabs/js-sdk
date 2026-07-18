@@ -113,6 +113,33 @@ describe("SQLService permissions", () => {
     });
   });
 
+  test("query forwards hard result limits and serializes BLOB parameters as bytes", async () => {
+    const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
+    let requestInit: FetchRequestInit | undefined;
+
+    const service = new SQLService();
+    service.initialize(
+      createContext(async (_url, init) => {
+        requestInit = init;
+        return response(true, 200, { columns: [], rows: [], rowCount: 0 });
+      }, invokeCalls),
+    );
+
+    const result = await service.query("SELECT ?", [new Uint8Array([0, 127, 255])], {
+      maxRows: 100,
+      maxBytes: 1024,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(requestInit?.body as string)).toEqual({
+      action: "query",
+      sql: "SELECT ?",
+      params: [[0, 127, 255]],
+      maxRows: 100,
+      maxBytes: 1024,
+    });
+  });
+
   test("query recognizes PRAGMA after leading comments", async () => {
     const invokeCalls: Array<{ service: string; path: string; action: string }> = [];
 

@@ -153,10 +153,18 @@ export class SQLService extends BaseService implements ISQLService {
       }
 
       try {
+        const body: Record<string, unknown> = {
+          action: "query",
+          sql,
+          params: serializeSqlValues(params ?? []),
+        };
+        if (options?.maxRows !== undefined) body.maxRows = options.maxRows;
+        if (options?.maxBytes !== undefined) body.maxBytes = options.maxBytes;
+
         const response = await this.invokeSQL(
           dbName,
           this.actionForSql(sql, SQLAction.READ),
-          { action: "query", sql, params: params ?? [] },
+          body,
           options?.signal
         );
 
@@ -623,6 +631,12 @@ function validateMigrationOptions(options: SqlMigrationApplyOptions): string | n
   }
 
   return null;
+}
+
+function serializeSqlValues(values: SqlValue[]): Array<null | number | string | number[]> {
+  return values.map((value) =>
+    value instanceof Uint8Array ? Array.from(value) : value,
+  );
 }
 
 function migrationKey(namespace: string, id: string): string {
