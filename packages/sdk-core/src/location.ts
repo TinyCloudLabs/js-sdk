@@ -434,8 +434,8 @@ export async function resolveTinyCloudHosts(
  * offline) silently skips to the next candidate, no error, no log above
  * debug level. A candidate that answers healthy is then identity-checked via
  * `GET {url}/info`: if an expected DID is known (explicit or previously
- * pinned), the node's `node_did` must match or the candidate is rejected; if
- * no expectation exists yet, the DID is trusted and pinned (TOFU).
+ * pinned), the node's `nodeId` DID must match or the candidate is rejected;
+ * if no expectation exists yet, the DID is trusted and pinned (TOFU).
  *
  * Returns `null` (never throws) when no local node is found or verified —
  * callers fall through to their normal remote resolution.
@@ -527,7 +527,7 @@ async function probeAndVerifyLocalCandidate(
 
   const info = await fetchLocalNodeInfo(candidate.url, candidate.timeoutMs, fetchFn);
   if (!info?.nodeDid) {
-    debugLog(`local node at ${candidate.url} did not report a node_did; skipping`);
+    debugLog(`local node at ${candidate.url} did not report a nodeId DID; skipping`);
     return null;
   }
 
@@ -647,8 +647,8 @@ async function fetchLocalNodeInfo(
     if (!response.ok) {
       return null;
     }
-    const body = (await response.json()) as { node_did?: string };
-    return { nodeDid: body.node_did };
+    const body = (await response.json()) as { nodeId?: string };
+    return { nodeDid: body.nodeId };
   } catch {
     return null;
   }
