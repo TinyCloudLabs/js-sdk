@@ -85,6 +85,8 @@ export const ErrorCodes = {
   // KV-specific errors
   KV_NOT_FOUND: "KV_NOT_FOUND",
   KV_WRITE_FAILED: "KV_WRITE_FAILED",
+  KV_PRECONDITION_FAILED: "KV_PRECONDITION_FAILED",
+  KV_RESPONSE_TOO_LARGE: "KV_RESPONSE_TOO_LARGE",
 
   // SQL-specific errors
   SQL_ERROR: "SQL_ERROR",

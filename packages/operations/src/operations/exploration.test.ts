@@ -137,8 +137,8 @@ describe("generic KV exploration operations", () => {
         handles.push(space);
         return {
           async list(options: unknown) {
-            expect(options).toBeUndefined();
-            return { ok: true, data: { keys: ["documents/one", "documents/two"] } };
+            expect(options).toEqual({ limit: 100 });
+            return { ok: true, data: { keys: ["documents/one", "documents/two"], truncated: true } };
           },
         };
       },
@@ -158,6 +158,7 @@ describe("generic KV exploration operations", () => {
         prefix: "",
         keys: ["documents/one", "documents/two"],
         count: 2,
+        truncated: true,
       },
     });
     expect(handles).toEqual([OWNER_APPLICATIONS]);
@@ -168,15 +169,20 @@ describe("generic KV exploration operations", () => {
       kvForSpace(space: string) {
         expect(space).toBe(OWNER_APPLICATIONS);
         return {
-          async get(key: string) {
+          async get(key: string, options: unknown) {
             expect(key).toBe("documents/one");
-            return response({ title: "One" });
+            expect(options).toEqual({ binary: true, maxResponseBytes: 1024 * 1024 });
+            return response(new TextEncoder().encode(JSON.stringify({ title: "One" })));
           },
         };
       },
     };
     const operation = definition("tinycloud.kv.get");
-    const input = operation.input.parse({ space: "applications", key: "documents/one" });
+    const input = operation.input.parse({
+      space: "applications",
+      key: "documents/one",
+      representation: "json",
+    });
     expect(await operation.authority(context(node), input)).toEqual([{
       service: "tinycloud.kv",
       space: OWNER_APPLICATIONS,
@@ -190,12 +196,89 @@ describe("generic KV exploration operations", () => {
         key: "documents/one",
         value: { title: "One" },
         encoding: "json",
+        byteLength: 15,
         metadata: { contentType: "application/json", contentLength: 17 },
       },
     });
   });
 
-  test("rejects generic list and get access to every secrets-space spelling", async () => {
+  test("defaults to a byte-exact base64 representation", async () => {
+    const bytes = Uint8Array.from([0, 255, 1, 2]);
+    const operation = definition("tinycloud.kv.get");
+    const input = operation.input.parse({ space: "applications", key: "files/data.bin" });
+    const result = await operation.execute(context({
+      kvForSpace() {
+        return { async get() { return response(bytes); } };
+      },
+    }), input);
+    expect(result).toMatchObject({
+      status: "ok",
+      output: { value: "AP8BAg==", encoding: "base64", byteLength: 4 },
+    });
+  });
+
+  test("plans and executes exact-key head, put, and conditional delete", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const node = {
+      kvForSpace(space: string) {
+        expect(space).toBe(OWNER_APPLICATIONS);
+        return {
+          async head(key: string) {
+            calls.push({ method: "head", key });
+            return response(undefined);
+          },
+          async put(key: string, value: Uint8Array, options: unknown) {
+            calls.push({ method: "put", key, value: [...value], options });
+            return response(undefined);
+          },
+          async delete(key: string, options: unknown) {
+            calls.push({ method: "delete", key, options });
+            return { ok: true, data: undefined };
+          },
+        };
+      },
+    };
+    const runtime = context(node);
+    const cases = [
+      ["tinycloud.kv.head", { space: "applications", key: "documents/one" }, "tinycloud.kv/metadata"],
+      ["tinycloud.kv.put", {
+        space: "applications", key: "documents/one", mode: "create",
+        content: { encoding: "utf8", value: "hello" },
+      }, "tinycloud.kv/put"],
+      ["tinycloud.kv.delete", {
+        space: "applications", key: "documents/one", etag: '"v1"',
+      }, "tinycloud.kv/del"],
+    ] as const;
+    for (const [id, raw, action] of cases) {
+      const operation = definition(id);
+      const input = operation.input.parse(raw);
+      expect(await operation.authority(runtime, input)).toEqual([{
+        service: "tinycloud.kv", space: OWNER_APPLICATIONS, path: "documents/one", actions: [action],
+      }]);
+      expect((await operation.execute(runtime, input)).status).toBe("ok");
+    }
+    expect(calls).toEqual([
+      { method: "head", key: "documents/one" },
+      {
+        method: "put", key: "documents/one", value: [104, 101, 108, 108, 111],
+        options: { contentType: "text/plain;charset=UTF-8", ifNoneMatch: "*" },
+      },
+      { method: "delete", key: "documents/one", options: { ifMatch: '"v1"' } },
+    ]);
+  });
+
+  test("requires canonical bounded content and an ETag for replace mode", () => {
+    const operation = definition("tinycloud.kv.put");
+    for (const input of [
+      { space: "applications", key: "a", mode: "replace", content: { encoding: "utf8", value: "x" } },
+      { space: "applications", key: "a", mode: "create", content: { encoding: "base64", value: "not-base64" } },
+      { space: "applications", key: "a", mode: "create", content: { encoding: "utf8", value: "x".repeat(1024 * 1024 + 1) } },
+    ]) {
+      expect(operation.input.safeParse(input).success).toBe(false);
+    }
+  });
+
+  test("rejects every generic KV operation for account and secrets spaces", async () => {
     let handles = 0;
     const runtime = context({
       kvForSpace() {
@@ -212,6 +295,12 @@ describe("generic KV exploration operations", () => {
           key: "vault/secrets/API_KEY",
         },
       ],
+      ["tinycloud.kv.head", { space: "account", key: "spaces/applications" }],
+      ["tinycloud.kv.put", {
+        space: OWNER_ACCOUNT, key: "spaces/applications", mode: "upsert",
+        content: { encoding: "json", value: {} },
+      }],
+      ["tinycloud.kv.delete", { space: "secrets", key: "vault/secrets/API_KEY" }],
     ] as const) {
       const operation = definition(id);
       const parsed = operation.input.parse(input);

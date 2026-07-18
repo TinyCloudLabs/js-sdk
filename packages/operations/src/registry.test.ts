@@ -15,8 +15,11 @@ const expectedOperationIds = [
   "tinycloud.auth.import",
   "tinycloud.auth.request",
   "tinycloud.auth.status",
+  "tinycloud.kv.delete",
   "tinycloud.kv.get",
+  "tinycloud.kv.head",
   "tinycloud.kv.list",
+  "tinycloud.kv.put",
   "tinycloud.secrets.get",
   "tinycloud.status.get",
 ] as const;
@@ -32,7 +35,7 @@ test("registry contains exactly the reviewed v1 operations", () => {
     ...authOperationDefinitions,
     ...explorationOperationDefinitions,
     ...secretsGetOperationDefinitions,
-  ]).toHaveLength(10);
+  ]).toHaveLength(13);
 });
 
 test("registry resolves each v1 operation and rejects unknown versions", () => {

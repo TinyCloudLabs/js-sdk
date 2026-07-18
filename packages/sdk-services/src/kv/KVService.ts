@@ -234,7 +234,8 @@ export class KVService extends BaseService implements IKVService {
     path: string,
     action: string,
     body?: Blob | string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    extraHeaders?: Readonly<Record<string, string>>
   ): Promise<FetchResponse> {
     const session = this.context.session!;
     const headers = this.context.invoke(
@@ -244,9 +245,13 @@ export class KVService extends BaseService implements IKVService {
       action
     );
 
+    const requestHeaders: ServiceHeaders = Array.isArray(headers)
+      ? [...headers, ...Object.entries(extraHeaders ?? {})]
+      : { ...headers, ...extraHeaders };
+
     return this.context.fetch(`${this.host}/invoke`, {
       method: "POST",
-      headers,
+      headers: requestHeaders,
       body,
       signal: this.combineSignals(signal),
     });
@@ -490,6 +495,17 @@ export class KVService extends BaseService implements IKVService {
         return err(authRequiredError("kv"));
       }
 
+      if (
+        options?.maxResponseBytes !== undefined &&
+        (!Number.isSafeInteger(options.maxResponseBytes) || options.maxResponseBytes <= 0)
+      ) {
+        return err(serviceError(
+          ErrorCodes.INVALID_INPUT,
+          "KV maxResponseBytes must be a positive safe integer",
+          "kv"
+        ));
+      }
+
       const path = this.getFullPath(key, options?.prefix);
 
       try {
@@ -497,7 +513,10 @@ export class KVService extends BaseService implements IKVService {
           path,
           KVAction.GET,
           undefined,
-          options?.signal
+          options?.signal,
+          options?.maxResponseBytes === undefined
+            ? undefined
+            : { "x-tinycloud-max-response-bytes": String(options.maxResponseBytes) }
         );
 
         if (!response.ok) {
@@ -518,6 +537,14 @@ export class KVService extends BaseService implements IKVService {
           }
 
           const errorText = await response.text();
+          if (response.status === 413) {
+            return err(serviceError(
+              ErrorCodes.KV_RESPONSE_TOO_LARGE,
+              `KV value at key "${key}" exceeds the requested response limit`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
@@ -556,6 +583,14 @@ export class KVService extends BaseService implements IKVService {
         return err(authRequiredError("kv"));
       }
 
+      if (options?.ifMatch !== undefined && options.ifNoneMatch !== undefined) {
+        return err(serviceError(
+          ErrorCodes.INVALID_INPUT,
+          "KV put cannot combine ifMatch and ifNoneMatch",
+          "kv"
+        ));
+      }
+
       const path = this.getFullPath(key, options?.prefix);
 
       // Serialize the value. Binary values (Blob/ArrayBuffer/typed-array/Buffer)
@@ -568,7 +603,11 @@ export class KVService extends BaseService implements IKVService {
           path,
           KVAction.PUT,
           body,
-          options?.signal
+          options?.signal,
+          {
+            ...(options?.ifMatch === undefined ? {} : { "if-match": options.ifMatch }),
+            ...(options?.ifNoneMatch === undefined ? {} : { "if-none-match": options.ifNoneMatch }),
+          }
         );
 
         if (!response.ok) {
@@ -583,6 +622,15 @@ export class KVService extends BaseService implements IKVService {
           }
 
           const errorText = await response.text();
+
+          if (response.status === 412) {
+            return err(serviceError(
+              ErrorCodes.KV_PRECONDITION_FAILED,
+              `KV precondition failed for key "${key}"`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
 
           // Check for storage quota errors (402, 413)
           const quotaError = this.handleQuotaErrorResponse(
@@ -740,6 +788,17 @@ export class KVService extends BaseService implements IKVService {
         return err(authRequiredError("kv"));
       }
 
+      if (
+        options?.limit !== undefined &&
+        (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1000)
+      ) {
+        return err(serviceError(
+          ErrorCodes.INVALID_INPUT,
+          "KV list limit must be an integer from 1 through 1000",
+          "kv"
+        ));
+      }
+
       // Build the path from prefix and optional path
       let listPath = options?.prefix ?? this._config.prefix ?? "";
       if (options?.path) {
@@ -751,7 +810,10 @@ export class KVService extends BaseService implements IKVService {
           listPath,
           KVAction.LIST,
           undefined,
-          options?.signal
+          options?.signal,
+          options?.limit === undefined
+            ? undefined
+            : { "x-tinycloud-limit": String(options.limit) }
         );
 
         if (!response.ok) {
@@ -791,7 +853,12 @@ export class KVService extends BaseService implements IKVService {
           );
         }
 
-        return ok({ keys });
+        return ok({
+          keys,
+          ...(response.headers.get("x-tinycloud-truncated") === null
+            ? {}
+            : { truncated: response.headers.get("x-tinycloud-truncated") === "true" }),
+        });
       } catch (error) {
         return err(wrapError("kv", error));
       }
@@ -814,7 +881,10 @@ export class KVService extends BaseService implements IKVService {
           path,
           KVAction.DELETE,
           undefined,
-          options?.signal
+          options?.signal,
+          options?.ifMatch === undefined
+            ? undefined
+            : { "if-match": options.ifMatch }
         );
 
         if (!response.ok) {
@@ -833,6 +903,14 @@ export class KVService extends BaseService implements IKVService {
           }
 
           const errorText = await response.text();
+          if (response.status === 412) {
+            return err(serviceError(
+              ErrorCodes.KV_PRECONDITION_FAILED,
+              `KV precondition failed for key "${key}"`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,

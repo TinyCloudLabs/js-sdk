@@ -17,6 +17,9 @@ export const TOOL_NAMES = [
   "tinycloud_account_applications_list",
   "tinycloud_kv_list",
   "tinycloud_kv_get",
+  "tinycloud_kv_head",
+  "tinycloud_kv_put",
+  "tinycloud_kv_delete",
   "tinycloud_secrets_get",
 ] as const;
 
@@ -75,6 +78,7 @@ interface ToolBinding {
   readonly operationVersion: number;
   readonly readOnlyHint: boolean;
   readonly idempotentHint: boolean;
+  readonly destructiveHint: boolean;
   readonly openWorldHint: boolean;
 }
 
@@ -85,6 +89,7 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: true,
     idempotentHint: true,
+    destructiveHint: false,
     openWorldHint: false,
   },
   {
@@ -93,6 +98,7 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: true,
     idempotentHint: true,
+    destructiveHint: false,
     openWorldHint: false,
   },
   {
@@ -101,6 +107,7 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: true,
     idempotentHint: true,
+    destructiveHint: false,
     openWorldHint: false,
   },
   {
@@ -109,6 +116,7 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: false,
     idempotentHint: true,
+    destructiveHint: false,
     openWorldHint: false,
   },
   {
@@ -117,6 +125,7 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: false,
     idempotentHint: true,
+    destructiveHint: false,
     openWorldHint: false,
   },
   {
@@ -125,6 +134,7 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: true,
     idempotentHint: true,
+    destructiveHint: false,
     openWorldHint: true,
   },
   {
@@ -133,6 +143,7 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: true,
     idempotentHint: true,
+    destructiveHint: false,
     openWorldHint: true,
   },
   {
@@ -141,6 +152,7 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: true,
     idempotentHint: true,
+    destructiveHint: false,
     openWorldHint: true,
   },
   {
@@ -149,6 +161,34 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: true,
     idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: true,
+  },
+  {
+    name: "tinycloud_kv_head",
+    operationId: "tinycloud.kv.head",
+    operationVersion: 1,
+    readOnlyHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: true,
+  },
+  {
+    name: "tinycloud_kv_put",
+    operationId: "tinycloud.kv.put",
+    operationVersion: 1,
+    readOnlyHint: false,
+    idempotentHint: true,
+    destructiveHint: true,
+    openWorldHint: true,
+  },
+  {
+    name: "tinycloud_kv_delete",
+    operationId: "tinycloud.kv.delete",
+    operationVersion: 1,
+    readOnlyHint: false,
+    idempotentHint: true,
+    destructiveHint: true,
     openWorldHint: true,
   },
   {
@@ -157,6 +197,7 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: false,
     idempotentHint: true,
+    destructiveHint: false,
     openWorldHint: true,
   },
 ] as const;
@@ -196,7 +237,7 @@ export function registerTinyCloudTools(
     const annotations: ToolAnnotations = {
       readOnlyHint: binding.readOnlyHint,
       idempotentHint: binding.idempotentHint,
-      destructiveHint: false,
+      destructiveHint: binding.destructiveHint,
       openWorldHint: binding.openWorldHint,
     };
 

@@ -53,6 +53,12 @@ export interface KVGetOptions {
   binary?: boolean;
 
   /**
+   * Ask the node to reject the response when the stored value exceeds this
+   * number of bytes. This bounds downloads before the response body is read.
+   */
+  maxResponseBytes?: number;
+
+  /**
    * Custom timeout for this operation in milliseconds.
    */
   timeout?: number;
@@ -82,6 +88,12 @@ export interface KVPutOptions {
    * Custom metadata headers to store with the value.
    */
   metadata?: Record<string, string>;
+
+  /** Only write when the current object has this strong ETag. */
+  ifMatch?: string;
+
+  /** Only write when the key does not exist. */
+  ifNoneMatch?: "*";
 
   /**
    * Custom timeout for this operation in milliseconds.
@@ -178,6 +190,9 @@ export interface KVListOptions {
    */
   raw?: boolean;
 
+  /** Maximum number of keys the node may return. */
+  limit?: number;
+
   /**
    * Custom timeout for this operation in milliseconds.
    */
@@ -197,6 +212,9 @@ export interface KVDeleteOptions {
    * Override the default prefix for this operation.
    */
   prefix?: string;
+
+  /** Only delete when the current object has this strong ETag. */
+  ifMatch?: string;
 
   /**
    * Custom timeout for this operation in milliseconds.
@@ -335,6 +353,9 @@ export interface KVListResponse {
    * Array of keys matching the list criteria.
    */
   keys: string[];
+
+  /** True when more matching keys exist than the requested limit. */
+  truncated?: boolean;
 }
 
 /**
