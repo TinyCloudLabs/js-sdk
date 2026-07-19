@@ -1,5 +1,11 @@
 # @tinycloud/mcp
 
+## 0.2.2
+
+### Patch Changes
+
+- @tinycloud/operations@0.2.1
+
 ## 0.2.1
 
 ### Patch Changes

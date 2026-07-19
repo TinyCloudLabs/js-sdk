@@ -1,5 +1,13 @@
 # @tinycloud/server
 
+## 2.4.9
+
+### Patch Changes
+
+- Updated dependencies [9afb09c]
+  - @tinycloud/sdk-core@2.9.0
+  - @tinycloud/node-sdk@2.9.0
+
 ## 2.4.8
 
 ### Patch Changes
