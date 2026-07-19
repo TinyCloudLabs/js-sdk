@@ -71,6 +71,25 @@ export interface ProfileConfig {
    * to change.
    */
   openkeyHost?: string;
+  /**
+   * Probe for a locally-running TinyCloud node before using the profile's
+   * stored host. Default: true. Set false to restore the pre-TC-106
+   * resolution order (--host > TC_HOST > profile.host > default).
+   */
+  autoDiscoverLocalNode?: boolean;
+  /** Local loopback node URL to probe. Default: http://127.0.0.1:8000. */
+  localNodeUrl?: string;
+  /** Known `*.local.tinycloud.link` subdomain name, probed directly. */
+  localLinkName?: string;
+  /** Expected local node DID. A locally-discovered node whose DID differs is rejected. */
+  expectedNodeDid?: string;
+  /**
+   * Trust-on-first-use pins for locally-discovered node identities, keyed by
+   * node URL. Written automatically the first time a local node is discovered;
+   * a later DID change for the same URL rejects the node. Delete an entry to
+   * re-pin (e.g. after intentionally re-keying a local node).
+   */
+  pinnedLocalNodeDids?: Record<string, string>;
 }
 
 export interface CLIContext {

@@ -169,7 +169,13 @@ export class ProfileManager {
    * Resolves the full CLI context from flags, env vars, and config.
    *
    * Profile resolution: options.profile > TC_PROFILE env > config.defaultProfile > "default"
-   * Host resolution:    options.host    > TC_HOST env    > profile.host          > DEFAULT_HOST
+   * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
+   *
+   * Local-node discovery (TC-106) only runs when no explicit host was given
+   * (`--host` / `TC_HOST`); it probes for a locally-running TinyCloud node and,
+   * after DID verification against the profile's pinned identity, prefers it
+   * over the stored/default host. Disable per profile with
+   * `autoDiscoverLocalNode: false` in profile.json.
    */
   static async resolveContext(options: {
     profile?: string;
@@ -195,11 +201,15 @@ export class ProfileManager {
       // Profile may not exist yet (e.g., during `tc init`)
     }
 
-    const host =
-      options.host ??
-      process.env.TC_HOST ??
-      profileHost ??
-      DEFAULT_HOST;
+    const explicitHost = options.host ?? process.env.TC_HOST;
+    let host = explicitHost ?? profileHost ?? DEFAULT_HOST;
+    if (explicitHost === undefined) {
+      const { discoverLocalNodeHost } = await import("../lib/host.js");
+      const localHost = await discoverLocalNodeHost(profile);
+      if (localHost) {
+        host = localHost;
+      }
+    }
 
     setActiveProfileName(profile);
 

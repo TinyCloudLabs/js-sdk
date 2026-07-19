@@ -1,5 +1,6 @@
-import { readFile, writeFile, stat, mkdir, rm, readdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
+import { readFile, writeFile, stat, mkdir, rm, readdir, rename } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 /**
  * Read and parse a JSON file. Returns null if the file does not exist.
@@ -19,10 +20,21 @@ export async function readJson<T>(filePath: string): Promise<T | null> {
 
 /**
  * Write data as JSON to a file. Creates parent directories if needed.
+ *
+ * Writes to a temp file in the same directory and renames it into place, so
+ * a crash or concurrent read never observes a partially-written file.
  */
 export async function writeJson(filePath: string, data: unknown): Promise<void> {
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+  const directory = dirname(filePath);
+  const tempPath = join(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  await mkdir(directory, { recursive: true });
+  try {
+    await writeFile(tempPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+    await rename(tempPath, filePath);
+  } catch (err) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw err;
+  }
 }
 
 /**
