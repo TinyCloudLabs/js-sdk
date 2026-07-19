@@ -590,6 +590,7 @@ export {
 // TinyCloud location registry helpers
 export {
   CloudLocationResolutionError,
+  DEFAULT_LOCAL_NODE_PIN_STORAGE_KEY,
   DEFAULT_LOCAL_NODE_URL,
   DEFAULT_TINYCLOUD_FALLBACK_HOST,
   DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
@@ -599,6 +600,7 @@ export {
   LocationRecordValidationError,
   canonicalLocationPayload,
   createInMemoryLocalNodeIdentityStore,
+  createLocalStorageLocalNodeIdentityStore,
   discoverLocalTinyCloudNode,
   fetchLocationRecord,
   httpUrlToMultiaddr,
@@ -625,6 +627,7 @@ export {
   type ResolveTinyCloudHostsOptions,
   type ResolvedCloudLocation,
   type ResolvedTinyCloudHosts,
+  type WebStorageLike,
 } from "./location";
 
 // Capability subset checking and recap parsing

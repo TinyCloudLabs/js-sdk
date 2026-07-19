@@ -52,8 +52,10 @@ import {
   type ResolvedDelegate,
   type PermissionEntry,
   type NetworkDescriptor,
+  type LocalNodeIdentityStore,
   SignInOptions,
   composeManifestRequest,
+  createLocalStorageLocalNodeIdentityStore,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
 import {
@@ -126,6 +128,12 @@ export interface Config extends ClientConfig {
   localLinkName?: string;
   /** Expected local node DID. A locally-discovered node whose DID differs is rejected. */
   expectedNodeDid?: string;
+  /**
+   * Pin store for trust-on-first-use local node identity verification.
+   * Defaults to a `localStorage`-backed store (namespaced, falls back to
+   * in-memory when `localStorage` is unavailable).
+   */
+  localNodeIdentityStore?: LocalNodeIdentityStore;
 
   /** Whether to auto-create space on sign-in (default: true) */
   autoCreateSpace?: boolean;
@@ -366,6 +374,9 @@ export class TinyCloudWeb {
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,
       expectedNodeDid: this.config.expectedNodeDid,
+      localNodeIdentityStore:
+        this.config.localNodeIdentityStore ??
+        createLocalStorageLocalNodeIdentityStore(),
       domain: this.config.domain ?? (typeof window !== 'undefined' ? window.location.hostname : 'app.tinycloud.xyz'),
       prefix: this.config.spacePrefix,
       autoCreateSpace: this.config.autoCreateSpace ?? true,

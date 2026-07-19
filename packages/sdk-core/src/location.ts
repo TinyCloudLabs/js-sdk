@@ -119,6 +119,71 @@ export function createInMemoryLocalNodeIdentityStore(): LocalNodeIdentityStore {
   };
 }
 
+/**
+ * Minimal subset of the DOM `Storage` interface. Declared locally so
+ * sdk-core (no DOM lib) doesn't need to depend on browser types.
+ */
+export interface WebStorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+/** Default namespaced key {@link createLocalStorageLocalNodeIdentityStore} stores its pins under. */
+export const DEFAULT_LOCAL_NODE_PIN_STORAGE_KEY = "tinycloud.localNodePins.v1";
+
+function defaultWebStorage(): WebStorageLike | undefined {
+  try {
+    return (globalThis as unknown as { localStorage?: WebStorageLike }).localStorage;
+  } catch {
+    // Some sandboxed environments (e.g. private-browsing Safari, locked-down
+    // iframes) throw on access instead of leaving it undefined.
+    return undefined;
+  }
+}
+
+/**
+ * `localStorage`-backed {@link LocalNodeIdentityStore}, namespaced under a
+ * single JSON blob (default key {@link DEFAULT_LOCAL_NODE_PIN_STORAGE_KEY}).
+ * Falls back to an in-memory store when `localStorage` is unavailable (SSR,
+ * Node.js, sandboxed contexts that throw on access, etc.), so callers never
+ * have to branch on environment. Corrupt stored JSON is reset rather than
+ * thrown.
+ */
+export function createLocalStorageLocalNodeIdentityStore(
+  storage?: WebStorageLike,
+  storageKey: string = DEFAULT_LOCAL_NODE_PIN_STORAGE_KEY,
+): LocalNodeIdentityStore {
+  const backing = storage ?? defaultWebStorage();
+  if (!backing) {
+    return createInMemoryLocalNodeIdentityStore();
+  }
+
+  const readPins = (): Record<string, string> => {
+    const raw = backing.getItem(storageKey);
+    if (!raw) return {};
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, string>;
+      }
+    } catch {
+      // Corrupt JSON below: reset rather than crash.
+    }
+    backing.removeItem(storageKey);
+    return {};
+  };
+
+  return {
+    get: (url) => readPins()[url],
+    set: (url, nodeDid) => {
+      const pins = readPins();
+      pins[url] = nodeDid;
+      backing.setItem(storageKey, JSON.stringify(pins));
+    },
+  };
+}
+
 export interface DiscoverLocalTinyCloudNodeOptions {
   /**
    * Subject DID used to look up the registry LocationRecord for
@@ -375,6 +440,12 @@ export async function resolveTinyCloudHosts(
   const hasExplicitHosts =
     options.explicitHosts !== undefined && options.explicitHosts.length > 0;
 
+  // Shared for the lifetime of this single resolve call only (no cross-call
+  // caching): local discovery's registry lookup and the centralized
+  // resolution below can both request the same subject's LocationRecord from
+  // the same registry URL, so memoizing here avoids firing that request twice.
+  const fetchFn = memoizeFetch(options.fetch ?? globalThis.fetch);
+
   // Explicit config wins outright — same as before TC-106, no local probe.
   if (!hasExplicitHosts && (options.autoDiscoverLocalNode ?? true)) {
     const local = await discoverLocalTinyCloudNode({
@@ -386,7 +457,7 @@ export async function resolveTinyCloudHosts(
       expectedNodeDid: options.expectedNodeDid,
       identityStore: options.localNodeIdentityStore,
       verifyRecords: options.verifyRecords,
-      fetch: options.fetch,
+      fetch: fetchFn,
     });
     if (local) {
       const multiaddrs = [httpUrlToMultiaddr(local.url)];
@@ -414,7 +485,7 @@ export async function resolveTinyCloudHosts(
         ? undefined
         : (options.fallbackHosts ?? [DEFAULT_TINYCLOUD_FALLBACK_HOST]),
     ),
-    fetch: options.fetch,
+    fetch: fetchFn,
     verifyRecords: options.verifyRecords,
   });
 
@@ -422,6 +493,28 @@ export async function resolveTinyCloudHosts(
     hosts: location.multiaddrs.map((addr) => multiaddrToHttpUrl(addr)),
     location,
   };
+}
+
+/**
+ * Wrap a fetch implementation so identical (same-URL) requests within its
+ * lifetime share one in-flight/completed response instead of firing twice.
+ * Scoped to the caller — a fresh wrapper is created per {@link
+ * resolveTinyCloudHosts} call, so nothing is cached across calls. Each
+ * request's `Response` body is cloned on the way out so every caller gets an
+ * independently readable body regardless of read order.
+ */
+function memoizeFetch(fetchFn: typeof fetch): typeof fetch {
+  const cache = new Map<string, Promise<Response>>();
+  return (async (input, init) => {
+    const key = String(input);
+    let cached = cache.get(key);
+    if (!cached) {
+      cached = fetchFn(input, init);
+      cache.set(key, cached);
+    }
+    const response = await cached;
+    return response.clone();
+  }) as typeof fetch;
 }
 
 /**
@@ -463,11 +556,17 @@ export async function discoverLocalTinyCloudNode(
     },
   ];
   if (options.localLinkName) {
-    staticCandidates.push({
-      source: "local-link",
-      url: `https://${options.localLinkName}${LOCAL_LINK_HOST_SUFFIX}`,
-      timeoutMs: LOCAL_LINK_PROBE_TIMEOUT_MS,
-    });
+    if (isValidDnsLabel(options.localLinkName)) {
+      staticCandidates.push({
+        source: "local-link",
+        url: `https://${options.localLinkName}${LOCAL_LINK_HOST_SUFFIX}`,
+        timeoutMs: LOCAL_LINK_PROBE_TIMEOUT_MS,
+      });
+    } else {
+      debugLog(
+        `localLinkName "${options.localLinkName}" is not a valid DNS label; skipping`,
+      );
+    }
   }
 
   for (const candidate of staticCandidates) {
@@ -531,15 +630,18 @@ async function probeAndVerifyLocalCandidate(
     return null;
   }
 
-  const expected = expectedNodeDid ?? (await identityStore.get(candidate.url));
-  if (expected !== undefined) {
-    if (expected !== info.nodeDid) {
-      debugLog(
-        `local node DID mismatch at ${candidate.url}: expected ${expected}, got ${info.nodeDid}`,
-      );
-      return null;
-    }
-  } else {
+  const pinnedNodeDid = await identityStore.get(candidate.url);
+  const expected = expectedNodeDid ?? pinnedNodeDid;
+  if (expected !== undefined && expected !== info.nodeDid) {
+    debugLog(
+      `local node DID mismatch at ${candidate.url}: expected ${expected}, got ${info.nodeDid}`,
+    );
+    return null;
+  }
+  if (pinnedNodeDid === undefined || expectedNodeDid !== undefined) {
+    // TOFU pin (no prior pin), or an explicit `expectedNodeDid` just
+    // confirmed the match — refresh the stored pin so a later call that
+    // omits `expectedNodeDid` doesn't fall back to a stale pinned DID.
     await identityStore.set(candidate.url, info.nodeDid);
   }
 
@@ -607,6 +709,13 @@ function extractLocalLinkUrls(record: LocationRecord | null): string[] {
     }
   }
   return urls;
+}
+
+/** Single DNS label: lowercase alphanumeric, optional interior hyphens, 2-32 chars. */
+const DNS_LABEL_REGEX = /^[a-z0-9]([a-z0-9-]{1,30}[a-z0-9])?$/;
+
+function isValidDnsLabel(value: string): boolean {
+  return DNS_LABEL_REGEX.test(value);
 }
 
 function isLocalLinkUrl(url: string): boolean {

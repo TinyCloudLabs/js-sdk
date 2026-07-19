@@ -3,11 +3,13 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
 import { privateKeyToAccount } from "viem/accounts";
 import {
+  DEFAULT_LOCAL_NODE_PIN_STORAGE_KEY,
   DEFAULT_LOCAL_NODE_URL,
   DEFAULT_TINYCLOUD_FALLBACK_HOST,
   DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
   canonicalLocationPayload,
   createInMemoryLocalNodeIdentityStore,
+  createLocalStorageLocalNodeIdentityStore,
   discoverLocalTinyCloudNode,
   httpUrlToMultiaddr,
   locationPayloadForRecord,
@@ -18,6 +20,7 @@ import {
   validateLocationRecord,
   verifyLocationRecord,
   type LocationRecordPayload,
+  type WebStorageLike,
 } from "./location";
 
 const TEST_SUBJECT =
@@ -61,6 +64,23 @@ function fakeFetch(
     if (miss instanceof Error) throw miss;
     return miss;
   }) as typeof fetch;
+}
+
+/** In-memory stand-in for the DOM `Storage` interface, for testing the localStorage-backed store. */
+function fakeWebStorage(initial: Record<string, string> = {}): WebStorageLike & {
+  raw: Record<string, string>;
+} {
+  const raw: Record<string, string> = { ...initial };
+  return {
+    raw,
+    getItem: (key) => (key in raw ? raw[key] : null),
+    setItem: (key, value) => {
+      raw[key] = value;
+    },
+    removeItem: (key) => {
+      delete raw[key];
+    },
+  };
 }
 
 describe("location records", () => {
@@ -398,6 +418,60 @@ describe("discoverLocalTinyCloudNode identity pinning", () => {
     });
     expect(discovered?.nodeDid).toBe(NODE_DID);
   });
+
+  it("refreshes the stored pin on a confirmed expectedNodeDid match, so a later call without expectedNodeDid doesn't re-break", async () => {
+    const store = createInMemoryLocalNodeIdentityStore();
+    await store.set(DEFAULT_LOCAL_NODE_URL, OTHER_NODE_DID);
+
+    // First call: expectedNodeDid confirms the node's real DID.
+    const first = await discoverLocalTinyCloudNode({
+      expectedNodeDid: NODE_DID,
+      fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: NODE_DID } }),
+      identityStore: store,
+    });
+    expect(first?.nodeDid).toBe(NODE_DID);
+    // The stale OTHER_NODE_DID pin must have been overwritten, not left in place.
+    expect(await store.get(DEFAULT_LOCAL_NODE_URL)).toBe(NODE_DID);
+
+    // Second call: caller drops expectedNodeDid entirely. It must succeed
+    // against the refreshed pin rather than falling back to the stale one.
+    const second = await discoverLocalTinyCloudNode({
+      fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: NODE_DID } }),
+      identityStore: store,
+    });
+    expect(second?.nodeDid).toBe(NODE_DID);
+  });
+});
+
+describe("discoverLocalTinyCloudNode localLinkName validation", () => {
+  it("rejects a localLinkName that isn't a single DNS label", async () => {
+    const requests: string[] = [];
+    const discovered = await discoverLocalTinyCloudNode({
+      localLinkName: "evil.com/",
+      fetch: fakeFetch({}, requests),
+      identityStore: createInMemoryLocalNodeIdentityStore(),
+    });
+
+    expect(discovered).toBeNull();
+    // Only the loopback candidate was ever probed; the malicious name was
+    // never interpolated into a URL and fetched.
+    expect(requests).toEqual([`${DEFAULT_LOCAL_NODE_URL}/healthz`]);
+  });
+
+  it("accepts a well-formed single-label localLinkName", async () => {
+    const linkUrl = "https://myname.local.tinycloud.link";
+    const discovered = await discoverLocalTinyCloudNode({
+      localLinkName: "myname",
+      fetch: fakeFetch({ [linkUrl]: { nodeDid: NODE_DID } }),
+      identityStore: createInMemoryLocalNodeIdentityStore(),
+    });
+
+    expect(discovered).toEqual({
+      source: "local-link",
+      url: linkUrl,
+      nodeDid: NODE_DID,
+    });
+  });
 });
 
 describe("discoverLocalTinyCloudNode local-link registry extraction", () => {
@@ -505,6 +579,25 @@ describe("resolveTinyCloudHosts local discovery integration", () => {
     expect(requests[0]).toBe(`${DEFAULT_LOCAL_NODE_URL}/healthz`);
   });
 
+  it("fetches the subject's registry LocationRecord only once, even though local discovery and centralized resolution both need it", async () => {
+    const requests: string[] = [];
+    const registryUrl = `${DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL}/v1/locations/${encodeURIComponent(TEST_SUBJECT)}`;
+    const resolved = await resolveTinyCloudHosts(TEST_SUBJECT, {
+      fetch: fakeFetch({}, requests, (url) =>
+        url.startsWith(DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL)
+          ? new Response("{}", { status: 404 })
+          : new TypeError("fetch failed: connection refused"),
+      ),
+      localNodeIdentityStore: createInMemoryLocalNodeIdentityStore(),
+    });
+
+    expect(resolved.location.source).toBe("fallback");
+    // Local discovery's registry lookup (for *.local.tinycloud.link
+    // candidates) and the centralized resolution attempt both want this
+    // exact URL — it must only be fetched once per resolveTinyCloudHosts call.
+    expect(requests.filter((url) => url === registryUrl)).toHaveLength(1);
+  });
+
   it("falls back when the local node fails identity verification", async () => {
     const resolved = await resolveTinyCloudHosts(TEST_SUBJECT, {
       expectedNodeDid: NODE_DID,
@@ -560,5 +653,46 @@ describe("resolveTinyCloudHosts local discovery integration", () => {
     // local candidate is ever probed.
     expect(requests.some((url) => url.includes("/healthz"))).toBe(false);
     expect(requests.some((url) => url.includes("127.0.0.1"))).toBe(false);
+  });
+});
+
+describe("createLocalStorageLocalNodeIdentityStore", () => {
+  it("persists a pin across a fresh store instance backed by the same storage", async () => {
+    const backing = fakeWebStorage();
+    const first = createLocalStorageLocalNodeIdentityStore(backing);
+    await first.set(DEFAULT_LOCAL_NODE_URL, NODE_DID);
+
+    // Simulate re-instantiation (e.g. a new page load / new TinyCloudWeb
+    // instance) by wrapping the SAME underlying storage in a brand new store.
+    const second = createLocalStorageLocalNodeIdentityStore(backing);
+    expect(await second.get(DEFAULT_LOCAL_NODE_URL)).toBe(NODE_DID);
+  });
+
+  it("namespaces pins under a single JSON blob at the storage key", async () => {
+    const backing = fakeWebStorage();
+    const store = createLocalStorageLocalNodeIdentityStore(backing);
+    await store.set(DEFAULT_LOCAL_NODE_URL, NODE_DID);
+
+    const raw = backing.raw[DEFAULT_LOCAL_NODE_PIN_STORAGE_KEY];
+    expect(raw).toBeDefined();
+    expect(JSON.parse(raw!)).toEqual({ [DEFAULT_LOCAL_NODE_URL]: NODE_DID });
+  });
+
+  it("resets rather than crashes on corrupt stored JSON", async () => {
+    const backing = fakeWebStorage({
+      [DEFAULT_LOCAL_NODE_PIN_STORAGE_KEY]: "{not valid json",
+    });
+    const store = createLocalStorageLocalNodeIdentityStore(backing);
+
+    expect(await store.get(DEFAULT_LOCAL_NODE_URL)).toBeUndefined();
+    // A subsequent write still works after the corrupt value is reset.
+    await store.set(DEFAULT_LOCAL_NODE_URL, NODE_DID);
+    expect(await store.get(DEFAULT_LOCAL_NODE_URL)).toBe(NODE_DID);
+  });
+
+  it("falls back to an in-memory store when no storage is available", async () => {
+    const store = createLocalStorageLocalNodeIdentityStore(undefined);
+    await store.set(DEFAULT_LOCAL_NODE_URL, NODE_DID);
+    expect(await store.get(DEFAULT_LOCAL_NODE_URL)).toBe(NODE_DID);
   });
 });

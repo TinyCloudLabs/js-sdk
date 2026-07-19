@@ -29,6 +29,7 @@ import {
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
   resolveTinyCloudHosts,
+  type LocalNodeIdentityStore,
   EXPIRY,
   canonicalizeAddress,
   makePkhSpaceId,
@@ -114,6 +115,8 @@ export interface NodeUserAuthorizationConfig {
   localLinkName?: string;
   /** Expected local node DID. A locally-discovered node whose DID differs is rejected. */
   expectedNodeDid?: string;
+  /** Pin store for trust-on-first-use local node identity verification. Defaults to an in-memory store. */
+  localNodeIdentityStore?: LocalNodeIdentityStore;
   /** Whether to include public space capabilities in the session (default: true) */
   enablePublicSpace?: boolean;
   /** WASM bindings for cryptographic operations. Required. */
@@ -209,6 +212,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly localNodeUrl?: string;
   private readonly localLinkName?: string;
   private readonly expectedNodeDid?: string;
+  private readonly localNodeIdentityStore?: LocalNodeIdentityStore;
   private readonly enablePublicSpace: boolean;
   private readonly nonce?: string;
   private readonly siweConfig?: SiweConfig;
@@ -277,6 +281,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.localNodeUrl = config.localNodeUrl;
     this.localLinkName = config.localLinkName;
     this.expectedNodeDid = config.expectedNodeDid;
+    this.localNodeIdentityStore = config.localNodeIdentityStore;
     this.enablePublicSpace = config.enablePublicSpace ?? true;
     this.nonce = config.nonce;
     this.siweConfig = config.siweConfig;
@@ -451,6 +456,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       localNodeUrl: this.localNodeUrl,
       localLinkName: this.localLinkName,
       expectedNodeDid: this.expectedNodeDid,
+      localNodeIdentityStore: this.localNodeIdentityStore,
     });
     this.tinycloudHosts = resolved.hosts;
   }

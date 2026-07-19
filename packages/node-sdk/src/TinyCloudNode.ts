@@ -128,6 +128,7 @@ import {
   canonicalizeAddress,
   pkhDid,
   resolveTinyCloudHosts,
+  type LocalNodeIdentityStore,
   principalDidEquals,
   parseNetworkId,
   resolveSecretPath,
@@ -534,6 +535,8 @@ export interface TinyCloudNodeConfig {
   localLinkName?: string;
   /** Expected local node DID. A locally-discovered node whose DID differs is rejected. */
   expectedNodeDid?: string;
+  /** Pin store for trust-on-first-use local node identity verification. Defaults to an in-memory store. */
+  localNodeIdentityStore?: LocalNodeIdentityStore;
   /** Space prefix for this user's space. Optional - only needed for signIn() */
   prefix?: string;
   /** Domain for SIWE messages (default: derived from host) */
@@ -1093,6 +1096,7 @@ export class TinyCloudNode {
       localNodeUrl: config.localNodeUrl,
       localLinkName: config.localLinkName,
       expectedNodeDid: config.expectedNodeDid,
+      localNodeIdentityStore: config.localNodeIdentityStore,
       autoCreateSpace: useBootstrapSignInRequest ? false : config.autoCreateSpace,
       enablePublicSpace: config.enablePublicSpace ?? true,
       spaceCreationHandler: useBootstrapSignInRequest
@@ -2759,6 +2763,7 @@ export class TinyCloudNode {
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,
       expectedNodeDid: this.config.expectedNodeDid,
+      localNodeIdentityStore: this.config.localNodeIdentityStore,
     });
     return resolved.hosts[0];
   }
@@ -2832,6 +2837,7 @@ export class TinyCloudNode {
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,
       expectedNodeDid: this.config.expectedNodeDid,
+      localNodeIdentityStore: this.config.localNodeIdentityStore,
       autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: useBootstrapSignInRequest
@@ -2898,6 +2904,7 @@ export class TinyCloudNode {
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,
       expectedNodeDid: this.config.expectedNodeDid,
+      localNodeIdentityStore: this.config.localNodeIdentityStore,
       autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: useBootstrapSignInRequest
