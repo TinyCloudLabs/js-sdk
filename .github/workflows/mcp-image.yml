@@ -31,3 +31,54 @@ jobs:
           tags: |
             ghcr.io/tinycloudlabs/tinycloud-mcp:${{ inputs.package_version }}
             ghcr.io/tinycloudlabs/tinycloud-mcp:latest
+      - name: Make image public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh api --method PATCH
+          /orgs/TinyCloudLabs/packages/container/tinycloud-mcp
+          -f visibility=public
+
+  deploy:
+    needs: image
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Phala CLI
+        run: npm install --global phala
+      - name: Deploy hosted MCP
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TC_MCP_STATE_SECRET: ${{ secrets.TC_MCP_STATE_SECRET }}
+          TINYCLOUD_MCP_IMAGE: ghcr.io/tinycloudlabs/tinycloud-mcp:${{ inputs.package_version }}
+          CERTBOT_EMAIL: ops@tinycloud.xyz
+        run: |
+          test -n "$PHALA_CLOUD_API_KEY"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$TC_MCP_STATE_SECRET"
+          if phala cvms ls --json | jq -e '.items[] | select(.cvmName == "tinycloud-mcp")' >/dev/null; then
+            target=(--cvm-id tinycloud-mcp)
+          else
+            target=(--name tinycloud-mcp --instance-type tdx.small --region us-west)
+          fi
+          phala deploy \
+            --api-token "$PHALA_CLOUD_API_KEY" \
+            "${target[@]}" \
+            --compose packages/mcp/docker-compose.phala.yml \
+            --env "TINYCLOUD_MCP_IMAGE=$TINYCLOUD_MCP_IMAGE" \
+            --env "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN" \
+            --env "TC_MCP_STATE_SECRET=$TC_MCP_STATE_SECRET" \
+            --env "CERTBOT_EMAIL=$CERTBOT_EMAIL" \
+            --no-public-logs \
+            --no-public-sysinfo \
+            --wait
+      - name: Verify public endpoints
+        run: |
+          curl --fail --silent --show-error \
+            --retry 30 --retry-delay 10 --retry-all-errors \
+            https://mcp.tinycloud.xyz/healthz
+          curl --fail --silent --show-error \
+            https://mcp.tinycloud.xyz/.well-known/oauth-protected-resource/mcp \
+            | jq -e '.resource == "https://mcp.tinycloud.xyz/mcp"'

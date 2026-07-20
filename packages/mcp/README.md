@@ -39,6 +39,12 @@ Use one service replica with the filesystem store. Multi-replica deployments
 require a shared transactional state provider, which this release does not
 include.
 
+TinyCloud production uses `docker-compose.phala.yml`. The manual
+`Publish hosted MCP image` workflow publishes an exact package-version image
+and deploys that image to the `tinycloud-mcp` Phala CVM. Its `production`
+environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, and a stable
+32-byte-or-longer `TC_MCP_STATE_SECRET`.
+
 ### Local stdio
 
 ```bash

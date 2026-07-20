@@ -1,0 +1,39 @@
+services:
+  mcp:
+    image: ${TINYCLOUD_MCP_IMAGE}
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - TC_MCP_PUBLIC_URL=https://mcp.tinycloud.xyz/mcp
+      - TC_MCP_STATE_DIR=/var/lib/tinycloud-mcp
+      - TC_MCP_STATE_SECRET=${TC_MCP_STATE_SECRET}
+      - TC_MCP_ALLOWED_ORIGINS=https://claude.ai,https://chatgpt.com
+      - TC_MCP_OAUTH_METADATA_URL=https://api.openkey.so/api/auth/.well-known/oauth-authorization-server
+      - TC_OPENKEY_HOST=https://openkey.so
+      - TC_HOST=https://node.tinycloud.xyz
+    volumes:
+      - mcp-state:/var/lib/tinycloud-mcp
+    restart: unless-stopped
+
+  dstack-ingress:
+    image: dstacktee/dstack-ingress:20250924@sha256:40429d78060ef3066b5f93676bf3ba7c2e9ac47d4648440febfdda558aed4b32
+    ports:
+      - "443:443"
+    depends_on:
+      - mcp
+    environment:
+      - DOMAIN=mcp.tinycloud.xyz
+      - TARGET_ENDPOINT=http://mcp:3000
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - GATEWAY_DOMAIN=_.${DSTACK_GATEWAY_DOMAIN}
+      - CERTBOT_EMAIL=${CERTBOT_EMAIL}
+      - SET_CAA=true
+      - DNS_PROVIDER=cloudflare
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - cert-data:/etc/letsencrypt
+    restart: unless-stopped
+
+volumes:
+  cert-data:
+  mcp-state:
