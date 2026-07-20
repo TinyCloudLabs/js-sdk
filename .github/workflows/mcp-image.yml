@@ -31,14 +31,6 @@ jobs:
           tags: |
             ghcr.io/tinycloudlabs/tinycloud-mcp:${{ inputs.package_version }}
             ghcr.io/tinycloudlabs/tinycloud-mcp:latest
-      - name: Make image public
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh api --method PATCH
-          /orgs/TinyCloudLabs/packages/container/tinycloud-mcp
-          -f visibility=public
-
   deploy:
     needs: image
     runs-on: ubuntu-latest
