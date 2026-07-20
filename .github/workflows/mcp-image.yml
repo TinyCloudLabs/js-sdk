@@ -53,7 +53,7 @@ jobs:
           if phala cvms ls --json | jq -e '.items[] | select(.cvmName == "tinycloud-mcp")' >/dev/null; then
             target=(--cvm-id tinycloud-mcp)
           else
-            target=(--name tinycloud-mcp --instance-type tdx.small --region us-west)
+            target=(--name tinycloud-mcp --instance-type tdx.small)
           fi
           phala deploy \
             --api-token "$PHALA_CLOUD_API_KEY" \
