@@ -15,7 +15,7 @@ export async function main(): Promise<void> {
   const openkeyHost = process.env.TC_OPENKEY_HOST ?? "https://openkey.so";
   const oauthMetadataUrl = new URL(
     process.env.TC_MCP_OAUTH_METADATA_URL ??
-      "https://api.openkey.so/api/auth/.well-known/oauth-authorization-server",
+      "https://api.openkey.so/.well-known/oauth-authorization-server/api/auth",
   );
   const oauthMetadata = await loadOAuthMetadata(oauthMetadataUrl);
   const app = createHostedMcpApp({

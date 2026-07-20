@@ -8,7 +8,7 @@ services:
       - TC_MCP_STATE_DIR=/var/lib/tinycloud-mcp
       - TC_MCP_STATE_SECRET=${TC_MCP_STATE_SECRET}
       - TC_MCP_ALLOWED_ORIGINS=https://claude.ai,https://chatgpt.com
-      - TC_MCP_OAUTH_METADATA_URL=https://api.openkey.so/api/auth/.well-known/oauth-authorization-server
+      - TC_MCP_OAUTH_METADATA_URL=https://api.openkey.so/.well-known/oauth-authorization-server/api/auth
       - TC_OPENKEY_HOST=https://openkey.so
       - TC_HOST=https://node.tinycloud.xyz
     volumes:
