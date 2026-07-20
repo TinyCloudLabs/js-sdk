@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   mkdir,
   readFile,
@@ -8,7 +9,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const DEFAULT_PROFILE = "default";
 const DEFAULT_LOCK_TIMEOUT_MS = 2_000;
@@ -16,6 +17,7 @@ const DEFAULT_LOCK_RETRY_MS = 25;
 const DEFAULT_STALE_LOCK_MS = 30_000;
 const TEST_LOCK_CONTENTION_SIGNAL_PATH = "TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH";
 const TEST_LOCK_RECOVERY_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR";
+const invocationStateRoot = new AsyncLocalStorage<string>();
 
 export type ProfileStoreName =
   | "session"
@@ -51,8 +53,24 @@ export class ProfileLockTimeoutError extends Error {
  * than a direct TinyCloud directory. Keep the shared store on that convention.
  */
 export function tinycloudHomePath(): string {
-  const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+  const home = invocationStateRoot.getStore() ??
+    process.env.TC_HOME ??
+    process.env.HOME ??
+    process.env.USERPROFILE ??
+    homedir();
   return join(home, ".tinycloud");
+}
+
+/** Run one operation against an isolated TinyCloud home directory. */
+export function withTinyCloudStateRoot<T>(
+  stateRoot: string | undefined,
+  action: () => Promise<T>,
+): Promise<T> {
+  if (stateRoot === undefined) return action();
+  if (!isAbsolute(stateRoot) || stateRoot.includes("\0")) {
+    throw new TypeError("The TinyCloud state root must be an absolute path.");
+  }
+  return invocationStateRoot.run(resolve(stateRoot), action);
 }
 
 export function tinycloudConfigPath(): string {

@@ -73,7 +73,7 @@ jobs:
           bun test packages/cli/src/commands/auth.test.ts
           bun test packages/cli/src/commands/secrets.test.ts
           bun test packages/cli/src/commands/secrets-owner-retry.test.ts
-          bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts
+          bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts packages/mcp/src/http.test.ts packages/mcp/src/remote-store.test.ts packages/mcp/src/http.e2e.test.ts
       - name: Run production private-key secrets regression in isolation
         run: bun test packages/cli/src/commands/secrets-private-key-production.test.ts
       - name: Run MCP CLI regression in isolation

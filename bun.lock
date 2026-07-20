@@ -206,8 +206,12 @@
         "tinycloud-mcp": "./bin/tinycloud-mcp",
       },
       "dependencies": {
+        "@modelcontextprotocol/node": "2.0.0-beta.4",
         "@modelcontextprotocol/server": "2.0.0-beta.4",
-        "@tinycloud/operations": "0.1.0-beta.0",
+        "@tinycloud/node-sdk": "2.9.0",
+        "@tinycloud/node-sdk-wasm": "1.7.5",
+        "@tinycloud/operations": "0.2.1",
+        "jose": "6.1.3",
       },
       "devDependencies": {
         "@modelcontextprotocol/client": "2.0.0-beta.4",
@@ -220,9 +224,9 @@
       "name": "@tinycloud/node-sdk",
       "version": "2.9.0",
       "dependencies": {
-        "@tinycloud/node-sdk-wasm": "1.7.4",
-        "@tinycloud/sdk-core": "2.7.0-beta.3",
-        "@tinycloud/sdk-services": "2.7.0-beta.3",
+        "@tinycloud/node-sdk-wasm": "1.7.5",
+        "@tinycloud/sdk-core": "2.9.0",
+        "@tinycloud/sdk-services": "2.8.0",
         "siwe": "^3.0.0",
       },
       "devDependencies": {
@@ -235,8 +239,8 @@
       "name": "@tinycloud/operations",
       "version": "0.2.1",
       "dependencies": {
-        "@tinycloud/node-sdk": "2.7.0-beta.3",
-        "@tinycloud/sdk-core": "2.7.0-beta.3",
+        "@tinycloud/node-sdk": "2.9.0",
+        "@tinycloud/sdk-core": "2.9.0",
         "node-sql-parser": "5.4.0",
         "zod": "^3.22.0",
         "zod-to-json-schema": "^3.22.0",
@@ -256,8 +260,8 @@
         "@multiformats/uri-to-multiaddr": "^10.0.0",
         "@noble/curves": "^1.9.7",
         "@noble/hashes": "1.8.0",
-        "@tinycloud/bootstrap": "2.6.0-beta.0",
-        "@tinycloud/sdk-services": "2.7.0-beta.3",
+        "@tinycloud/bootstrap": "2.6.0",
+        "@tinycloud/sdk-services": "2.8.0",
         "ms": "^2.1.3",
         "multiformats": "^13.4.1",
         "siwe": "^3.0.0",
@@ -1137,6 +1141,8 @@
 
     "@hapi/topo": ["@hapi/topo@5.1.0", "", { "dependencies": { "@hapi/hoek": "^9.0.0" } }, "sha512-foQZKJig7Ob0BMAYBfcJk8d77QtOe7Wo4ox7ff1lQYoNNAb6jwcY1ncdoy2e9wQZzvNy7ODZCYJkK8kzmcAnAg=="],
 
+    "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
+
     "@humanwhocodes/config-array": ["@humanwhocodes/config-array@0.13.0", "", { "dependencies": { "@humanwhocodes/object-schema": "^2.0.3", "debug": "^4.3.1", "minimatch": "^3.0.5" } }, "sha512-DZLEEqFWQFiyK6h5YIeynKx7JlvCYWL0cImfSRXZ9l4Sg2efkFGTuFf6vzXjK1cq6IYkU+Eg/JizXw+TD2vRNw=="],
 
     "@humanwhocodes/module-importer": ["@humanwhocodes/module-importer@1.0.1", "", {}, "sha512-bxveV4V8v5Yb4ncFTT3rPSgZBOpCkjfK0y4oVVVJwIuDVBRMDXrPyXRL988i5ap9m9bnyEEjWfm5WkBmtffLfA=="],
@@ -1286,6 +1292,8 @@
     "@modelcontextprotocol/client": ["@modelcontextprotocol/client@2.0.0-beta.4", "", { "dependencies": { "@modelcontextprotocol/core": "2.0.0-beta.4", "cross-spawn": "^7.0.5", "eventsource": "^3.0.2", "eventsource-parser": "^3.0.0", "jose": "^6.1.3", "pkce-challenge": "^5.0.0", "zod": "^4.2.0" } }, "sha512-VNHA/UXDk7mCpVl+jOg5B4WMRRD2OEl+it360Lhi6HiCbrIB2f6pZ0cqSDKXQVUtZvqnhdQHzZAM9h8EKWhq/A=="],
 
     "@modelcontextprotocol/core": ["@modelcontextprotocol/core@2.0.0-beta.4", "", { "dependencies": { "zod": "^4.2.0" } }, "sha512-nsMXd4wQBKzmph6r+WOhum+mXjDYljTAqwY/XUg3hLtvNOQ8+JVqBSJOVCMJvx9lXhTpTOPrGZ3BuNiaNPjSvg=="],
+
+    "@modelcontextprotocol/node": ["@modelcontextprotocol/node@2.0.0-beta.4", "", { "dependencies": { "@hono/node-server": "^1.19.9" }, "peerDependencies": { "@modelcontextprotocol/server": "^2.0.0-beta.4", "hono": "^4.11.4" }, "optionalPeers": ["hono"] }, "sha512-OqbrRVNYNfLxBB2BRkP5oIHKHa0IPHluMbaLgw7YCRKcj5be9ExzyWFJY3KVMb+1F2AVn+0SRoH0XKcNzh3HYQ=="],
 
     "@modelcontextprotocol/server": ["@modelcontextprotocol/server@2.0.0-beta.4", "", { "dependencies": { "@modelcontextprotocol/core": "2.0.0-beta.4", "zod": "^4.2.0" } }, "sha512-pjMZcNEt1dOq0aJCcY3b7w1Ayh+qmQN2xlfTELcGV9yiAjEGIczBPBLWWW0k0zzo5T8kiv15jtKPsWeHGxLvLg=="],
 

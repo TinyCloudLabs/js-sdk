@@ -1,8 +1,8 @@
 # @tinycloud/mcp
 
-Local stdio MCP server for delegated TinyCloud operations. It pins one
-TinyCloud profile at startup, defaults to `delegate-session` posture, and never
-silently falls back to owner authority.
+TinyCloud MCP server for delegated operations. It supports local stdio and a
+hosted Streamable HTTP resource server. Both transports use exact, revocable
+TinyCloud capabilities and never silently fall back to owner authority.
 
 ## Requirements
 
@@ -12,6 +12,34 @@ silently falls back to owner authority.
 - A TinyCloud node running 1.6.0 or newer
 
 ## Install and configure
+
+### Hosted Streamable HTTP
+
+Remote clients connect to one HTTPS endpoint and authenticate through OpenKey
+OAuth. The hosted server adds `tinycloud_connect` to the 16 canonical tools.
+That tool returns a short-lived browser approval URL on first use. Later
+`authority_required` results include the same one-click approval flow for the
+exact requested operation.
+
+Run the service with an encrypted persistent volume:
+
+```bash
+docker run --rm -p 3000:3000 \
+  -e TC_MCP_PUBLIC_URL=https://mcp.example.com/mcp \
+  -e TC_MCP_STATE_SECRET="$(openssl rand -hex 32)" \
+  -v tinycloud-mcp-state:/var/lib/tinycloud-mcp \
+  ghcr.io/tinycloudlabs/tinycloud-mcp:latest
+```
+
+Set `TC_MCP_OAUTH_METADATA_URL` for a self-hosted OpenKey issuer and
+`TC_MCP_ALLOWED_ORIGINS` when browsers call the MCP endpoint directly. The
+default TinyCloud node is `https://node.tinycloud.xyz`.
+
+Use one service replica with the filesystem store. Multi-replica deployments
+require a shared transactional state provider, which this release does not
+include.
+
+### Local stdio
 
 ```bash
 npm install --global @tinycloud/cli @tinycloud/mcp
@@ -35,7 +63,7 @@ to select another profile.
 
 ## Tools
 
-The server exposes 16 tools:
+The local server exposes 16 tools; hosted mode adds `tinycloud_connect`:
 
 - Local and authorization state: `tinycloud_status`,
   `tinycloud_auth_status`, `tinycloud_auth_capabilities`

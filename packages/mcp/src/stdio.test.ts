@@ -383,12 +383,24 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
   let retry: ConnectedClient | undefined;
   let stage = "create fresh delegate profile";
   try {
+    const ownerProfilePath = join(home, ".tinycloud/profiles", fixture.ownerProfile, "profile.json");
+    const ownerProfileConfig = JSON.parse(await readFile(ownerProfilePath, "utf8")) as Record<string, unknown>;
+    await writeFile(ownerProfilePath, JSON.stringify({
+      ...ownerProfileConfig,
+      autoDiscoverLocalNode: false,
+    }, null, 2));
     await runTinyCloudCli(home, [
       "profile", "create", freshProfile,
       "--host", fixture.hermetic.host,
       "--posture", "delegate-session",
       "--operator", "agent",
     ]);
+    const freshProfilePath = join(home, ".tinycloud/profiles", freshProfile, "profile.json");
+    const freshProfileConfig = JSON.parse(await readFile(freshProfilePath, "utf8")) as Record<string, unknown>;
+    await writeFile(freshProfilePath, JSON.stringify({
+      ...freshProfileConfig,
+      autoDiscoverLocalNode: false,
+    }, null, 2));
     stage = "create bootstrap account request";
     const accountRequest = await runTinyCloudCli(home, [
       "--profile", freshProfile,
