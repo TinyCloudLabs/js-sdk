@@ -1,5 +1,11 @@
 # @tinycloud/operations
 
+## 0.3.0
+
+### Minor Changes
+
+- f0febf1: Add per-invocation state isolation and a hosted OAuth-protected Streamable HTTP MCP server with delegated OpenKey approval flows.
+
 ## 0.3.0-beta.0
 
 ### Minor Changes

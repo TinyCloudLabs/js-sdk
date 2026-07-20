@@ -5,12 +5,12 @@
     "@tinycloud/node-demo": "0.0.28",
     "tinycloud-openkey-example-app": "0.0.26",
     "openkey-vite": "0.0.24",
-    "tinycloud-web-sdk-example-app": "0.0.3",
+    "tinycloud-web-sdk-example-app": "0.0.4",
     "@tinycloud/bootstrap": "2.6.0",
-    "@tinycloud/cli": "0.8.0",
-    "@tinycloud/mcp": "0.2.2",
+    "@tinycloud/cli": "0.8.1",
+    "@tinycloud/mcp": "0.3.0",
     "@tinycloud/node-sdk": "2.9.0",
-    "@tinycloud/operations": "0.2.1",
+    "@tinycloud/operations": "0.3.0",
     "@tinycloud/sdk-core": "2.9.0",
     "@tinycloud/sdk-rs": "1.0.0",
     "@tinycloud/node-sdk-wasm": "1.7.5",
@@ -23,7 +23,5 @@
     "@tinycloud/operations-mcp-conformance": "0.0.0",
     "@tinycloud/sdk-services-test": "13.0.0"
   },
-  "changesets": [
-    "calm-mice-connect"
-  ]
+  "changesets": []
 }

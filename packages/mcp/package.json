@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/mcp",
-  "version": "0.3.0-beta.0",
+  "version": "0.3.0",
   "description": "TinyCloud delegated operations MCP server",
   "keywords": [
     "tinycloud",
@@ -73,7 +73,7 @@
     "@modelcontextprotocol/server": "2.0.0-beta.4",
     "@tinycloud/node-sdk": "2.9.0",
     "@tinycloud/node-sdk-wasm": "1.7.5",
-    "@tinycloud/operations": "0.3.0-beta.0",
+    "@tinycloud/operations": "0.3.0",
     "jose": "6.1.3"
   },
   "devDependencies": {

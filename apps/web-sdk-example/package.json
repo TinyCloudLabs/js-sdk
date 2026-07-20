@@ -1,6 +1,6 @@
 {
   "name": "tinycloud-web-sdk-example-app",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": true,
   "repository": {
     "url": "ssh://git@github.com:TinyCloudLabs/web-sdk.git"

@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/operations",
-  "version": "0.3.0-beta.0",
+  "version": "0.3.0",
   "description": "TinyCloud shared operations contracts and runtime",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
