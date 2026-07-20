@@ -25,6 +25,7 @@ import {
   withProfileLock,
   writeJsonAtomic,
   writeSession,
+  withTinyCloudStateRoot,
 } from "./state.js";
 import { waitForProfileLockProtocol } from "./test-support/profile-lock-protocol.js";
 import { resolveInvocationContext } from "./profile.js";
@@ -98,6 +99,26 @@ test("reads unversioned format-1 stores and writes format metadata without chang
   expect(await readFile(profileStoreMetadataPath(profile, "auth-requests"), "utf8")).toBe(
     '{\n  "formatVersion": 1\n}\n',
   );
+});
+
+test("isolates concurrent operation state roots with the same profile name", async () => {
+  const firstHome = await mkdtemp(join(tmpdir(), "tinycloud-operations-tenant-a-"));
+  const secondHome = await mkdtemp(join(tmpdir(), "tinycloud-operations-tenant-b-"));
+  homes.push(firstHome, secondHome);
+
+  await Promise.all([
+    withTinyCloudStateRoot(firstHome, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await writeSession("agent", { tenant: "a" });
+    }),
+    withTinyCloudStateRoot(secondHome, async () => {
+      await writeSession("agent", { tenant: "b" });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }),
+  ]);
+
+  expect(await withTinyCloudStateRoot(firstHome, () => readSession("agent"))).toEqual({ tenant: "a" });
+  expect(await withTinyCloudStateRoot(secondHome, () => readSession("agent"))).toEqual({ tenant: "b" });
 });
 
 test("rejects an unsupported store format rather than silently downgrading it", async () => {

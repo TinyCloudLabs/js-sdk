@@ -215,6 +215,12 @@ export interface OperationDefinition<I, O> {
 export interface InvocationTarget {
   readonly profile?: string;
   readonly host?: string;
+  /**
+   * Absolute home directory used for this invocation's TinyCloud profile
+   * state. Hosted projections set this per authenticated principal so
+   * concurrent tenants never share process-global TC_HOME state.
+   */
+  readonly stateRoot?: string;
   readonly allowOwnerProfile?: boolean;
   readonly privateKey?: string;
 }

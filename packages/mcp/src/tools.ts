@@ -32,11 +32,16 @@ export interface McpStartupSelection {
   readonly profile: string;
   readonly explicitProfile: boolean;
   readonly allowOwnerProfile: boolean;
+  /** Absolute TinyCloud home used to isolate one hosted OAuth principal. */
+  readonly stateRoot?: string;
+  /** Hosted transports may attach a browser approval URL to canonical results. */
+  readonly transformOperationResult?: (result: unknown) => Promise<unknown>;
 }
 
 export interface McpInvocationTarget {
   readonly profile: string;
   readonly allowOwnerProfile?: true;
+  readonly stateRoot?: string;
 }
 
 /** Project one startup selection into the only owner-sensitive target shape. */
@@ -48,6 +53,7 @@ export function invocationTargetForMcp(
     ...(selection.explicitProfile && selection.allowOwnerProfile
       ? { allowOwnerProfile: true }
       : {}),
+    ...(selection.stateRoot === undefined ? {} : { stateRoot: selection.stateRoot }),
   };
 }
 
@@ -287,7 +293,10 @@ export function registerTinyCloudTools(
           invocationTargetForMcp(selection),
           input,
         );
-        return toMcpToolResult(result);
+        const projected = selection.transformOperationResult === undefined
+          ? result
+          : await selection.transformOperationResult(result);
+        return toMcpToolResult(projected);
       },
     );
   }

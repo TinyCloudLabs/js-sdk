@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isAbsolute } from "node:path";
 
 import {
   makePkhSpaceId,
@@ -39,6 +40,7 @@ import {
 } from "./artifacts.js";
 import { redactOperationError } from "./redaction.js";
 import { safeOriginHost } from "./safe-values.js";
+import { withTinyCloudStateRoot } from "./state.js";
 import type { InvocationRuntimeResolution } from "./runtime.js";
 import {
   operationSpaceResolver,
@@ -52,14 +54,24 @@ export async function invokeOperation(
   invocationTarget: InvocationTarget,
   unknownInput: unknown,
 ): Promise<OperationResult<unknown>> {
-  const prepared = await prepareInvocation(
-    operationId,
-    operationVersion,
-    invocationTarget,
-    unknownInput,
-  );
-  if (isPreparedError(prepared)) return prepared.result;
-  return executePreparedInvocation(prepared);
+  const target = normalizeInvocationTarget(invocationTarget);
+  if (target === undefined) {
+    return errorResult(
+      { operationId, operationVersion },
+      unresolvedContextSummary(),
+      operationError("INPUT_INVALID", "The invocation target is invalid."),
+    );
+  }
+  return withTinyCloudStateRoot(target.stateRoot, async () => {
+    const prepared = await prepareInvocation(
+      operationId,
+      operationVersion,
+      target,
+      unknownInput,
+    );
+    if (isPreparedError(prepared)) return prepared.result;
+    return executePreparedInvocation(prepared);
+  });
 }
 
 /**
@@ -93,6 +105,22 @@ export async function invokeOperationWithLocalAuthorityRetry(
     );
   }
 
+  return withTinyCloudStateRoot(target.stateRoot, () =>
+    invokeLocalAuthorityRetry(
+      operationId,
+      operationVersion,
+      target,
+      unknownInput,
+    )
+  );
+}
+
+async function invokeLocalAuthorityRetry(
+  operationId: string,
+  operationVersion: number,
+  target: InvocationTarget,
+  unknownInput: unknown,
+): Promise<OperationResult<unknown>> {
   const prepared = await prepareInvocation(
     operationId,
     operationVersion,
@@ -630,12 +658,15 @@ function normalizeInvocationTarget(
     const candidate = target as InvocationTarget;
     const profile = candidate.profile;
     const host = candidate.host;
+    const stateRoot = candidate.stateRoot;
     const allowOwnerProfile = candidate.allowOwnerProfile;
     const privateKey = candidate.privateKey;
 
     if (
       (profile !== undefined && typeof profile !== "string") ||
       (host !== undefined && typeof host !== "string") ||
+      (stateRoot !== undefined &&
+        (typeof stateRoot !== "string" || !isAbsolute(stateRoot))) ||
       (allowOwnerProfile !== undefined &&
         typeof allowOwnerProfile !== "boolean") ||
       (privateKey !== undefined && typeof privateKey !== "string")
@@ -646,6 +677,7 @@ function normalizeInvocationTarget(
     return {
       ...(profile === undefined ? {} : { profile }),
       ...(host === undefined ? {} : { host }),
+      ...(stateRoot === undefined ? {} : { stateRoot }),
       ...(allowOwnerProfile === true ? { allowOwnerProfile: true } : {}),
       ...(privateKey === undefined ? {} : { privateKey }),
     };
