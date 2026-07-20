@@ -23,5 +23,7 @@
     "@tinycloud/operations-mcp-conformance": "0.0.0",
     "@tinycloud/sdk-services-test": "13.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "calm-mice-connect"
+  ]
 }
