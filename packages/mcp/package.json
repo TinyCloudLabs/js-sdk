@@ -69,7 +69,7 @@
     "check:generated": "bun scripts/generate.ts --check"
   },
   "dependencies": {
-    "@modelcontextprotocol/node": "2.0.0-beta.4",
+    "@modelcontextprotocol/node": "2.0.0-beta.5",
     "@modelcontextprotocol/server": "2.0.0-beta.4",
     "@tinycloud/node-sdk": "2.9.0",
     "@tinycloud/node-sdk-wasm": "1.7.5",
