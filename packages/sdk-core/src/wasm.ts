@@ -69,6 +69,15 @@ export interface IWasmBindings {
   /** Create a delegation */
   createDelegation: (...args: any[]) => any;
   /**
+   * Create a delegation where every granted (service, path, ability) row
+   * carries the SAME caveat object. Used by the compute service's
+   * deploy-time `D_fn` grant (compute-service.md §5.1/§6.2). Optional so
+   * pre-existing custom bindings remain source-compatible; ComputeService
+   * only calls this when its `IServiceContext.createDelegationWithCaveat`
+   * is wired.
+   */
+  createDelegationWithCaveat?: (...args: any[]) => any;
+  /**
    * Parse the recap resource of a signed SIWE message into structured
    * permission entries. Used by the capability-chain delegation flow to
    * decide whether a requested delegation is derivable from the current

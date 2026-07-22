@@ -10,6 +10,8 @@ import {
   RetryPolicy,
   InvokeFunction,
   InvokeAnyFunction,
+  CreateDelegationWithCaveatFunction,
+  MintPrivilegedSessionFunction,
   FetchFunction,
   defaultRetryPolicy,
   EventHandler,
@@ -27,6 +29,12 @@ export interface ServiceContextConfig {
   invoke: InvokeFunction;
   /** Optional function to mint a single authorization header for multiple capabilities */
   invokeAny?: InvokeAnyFunction;
+  /** Optional function to mint a caveat-bearing delegation (compute service D_fn grant) */
+  createDelegationWithCaveat?: CreateDelegationWithCaveatFunction;
+  /** Optional content-CID computation (compute service function CID) */
+  computeCid?: (data: Uint8Array, codec: bigint) => string;
+  /** Optional privileged-session minting (compute service `deploy` ability) */
+  mintPrivilegedSession?: MintPrivilegedSessionFunction;
   /** Function to make HTTP requests (defaults to globalThis.fetch) */
   fetch?: FetchFunction;
   /** List of TinyCloud host URLs */
@@ -68,6 +76,9 @@ export class ServiceContext implements IServiceContext {
   private _retired = false;
   private readonly _invoke: InvokeFunction;
   private readonly _invokeAny?: InvokeAnyFunction;
+  private readonly _createDelegationWithCaveat?: CreateDelegationWithCaveatFunction;
+  private readonly _computeCid?: (data: Uint8Array, codec: bigint) => string;
+  private readonly _mintPrivilegedSession?: MintPrivilegedSessionFunction;
   private readonly _fetch: FetchFunction;
   private readonly _hosts: string[];
   private readonly _retryPolicy: RetryPolicy;
@@ -79,6 +90,9 @@ export class ServiceContext implements IServiceContext {
     this._invokeAny = config.invokeAny
       ? this.wrapInvokeAny(config.invokeAny)
       : undefined;
+    this._createDelegationWithCaveat = config.createDelegationWithCaveat;
+    this._computeCid = config.computeCid;
+    this._mintPrivilegedSession = config.mintPrivilegedSession;
     this._fetch = this.wrapFetch(config.fetch ?? globalThis.fetch.bind(globalThis));
     this._hosts = config.hosts;
     this._session = config.session ?? null;
@@ -146,6 +160,33 @@ export class ServiceContext implements IServiceContext {
   get invokeAny(): InvokeAnyFunction | undefined {
     this.assertActive();
     return this._invokeAny;
+  }
+
+  /**
+   * Get the caveat-bearing delegation minting function, when the platform
+   * binding supports it (compute service D_fn grant).
+   */
+  get createDelegationWithCaveat(): CreateDelegationWithCaveatFunction | undefined {
+    this.assertActive();
+    return this._createDelegationWithCaveat;
+  }
+
+  /**
+   * Get the content-CID computation function, when the platform binding
+   * supports it (compute service function CID).
+   */
+  get computeCid(): ((data: Uint8Array, codec: bigint) => string) | undefined {
+    this.assertActive();
+    return this._computeCid;
+  }
+
+  /**
+   * Get the privileged-session minting function, when the platform binding
+   * supports it (compute service `deploy` ability).
+   */
+  get mintPrivilegedSession(): MintPrivilegedSessionFunction | undefined {
+    this.assertActive();
+    return this._mintPrivilegedSession;
   }
 
   /**

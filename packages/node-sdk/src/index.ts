@@ -283,6 +283,26 @@ export type {
   ViewInfo,
 } from "@tinycloud/sdk-core";
 
+// Re-export Compute service values
+export {
+  ComputeService,
+  ComputeAction,
+} from "@tinycloud/sdk-core";
+
+// Re-export Compute service types
+export type {
+  IComputeService,
+  ComputeActionType,
+  ComputeServiceConfig,
+  ComputeDataGrant,
+  ComputeDeployOptions,
+  ComputeDeployResult,
+  ComputeExecuteOptions,
+  ComputeExecuteResult,
+  ComputeManifest,
+  ComputeManifestEntry,
+} from "@tinycloud/sdk-core";
+
 // Re-export Vault service values
 export {
   DataVaultService,

@@ -143,6 +143,20 @@ export const SPACE = deriveServiceConstants("space") as {
   INFO: "tinycloud.space/info";
 };
 
+// `list` is registry status "reserved" (no server-side handler yet, §12.1/C9
+// of the compute-service spec) but still present as a URN constant. `ALL`
+// (`tinycloud.compute/*`) implies only the two ACTIVE concretes (deploy,
+// execute) per the registry's wildcard-implication rule — it does NOT imply
+// `list`. Callers must never grant `ALL` in a standard session: it confers
+// `deploy`, which is a privileged, explicit-only capability (compute-service.md
+// §12.1 F9).
+export const COMPUTE = deriveServiceConstants("compute") as {
+  EXECUTE: "tinycloud.compute/execute";
+  DEPLOY: "tinycloud.compute/deploy";
+  LIST: "tinycloud.compute/list";
+  ALL: "tinycloud.compute/*";
+};
+
 /**
  * The full registry with per-URN status/alias/implication metadata. Re-exported
  * verbatim from the vendored node artifact — used by the canonical-set test and

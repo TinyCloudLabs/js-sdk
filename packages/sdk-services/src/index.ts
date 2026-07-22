@@ -48,6 +48,9 @@ export type {
   InvokeFunction,
   InvokeAnyFunction,
   InvokeAnyEntry,
+  CreateDelegationWithCaveatFunction,
+  DelegationWithCaveatResult,
+  MintPrivilegedSessionFunction,
   InvocationFact,
   InvocationFacts,
   FetchFunction,
@@ -233,6 +236,21 @@ export type {
   ColumnInfo,
   ViewInfo,
 } from "./duckdb";
+
+// Compute service
+export { ComputeService, ComputeAction } from "./compute";
+export type { IComputeService } from "./compute";
+export type {
+  ComputeActionType,
+  ComputeServiceConfig,
+  ComputeDataGrant,
+  ComputeDeployOptions,
+  ComputeDeployResult,
+  ComputeExecuteOptions,
+  ComputeExecuteResult,
+  ComputeManifest,
+  ComputeManifestEntry,
+} from "./compute";
 
 // Hooks service
 export { HooksService } from "./hooks";

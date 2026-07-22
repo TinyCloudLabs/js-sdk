@@ -297,6 +297,7 @@ export const SERVICE_SHORT_TO_LONG: Readonly<Record<string, string>> =
     kv: "tinycloud.kv",
     sql: "tinycloud.sql",
     duckdb: "tinycloud.duckdb",
+    compute: "tinycloud.compute",
     capabilities: "tinycloud.capabilities",
     hooks: "tinycloud.hooks",
     encryption: "tinycloud.encryption",

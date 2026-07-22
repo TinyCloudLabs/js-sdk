@@ -112,6 +112,14 @@ export const ErrorCodes = {
   DUCKDB_INVALID_STATEMENT: "DUCKDB_INVALID_STATEMENT",
   DUCKDB_SCHEMA_ERROR: "DUCKDB_SCHEMA_ERROR",
   DUCKDB_READONLY_VIOLATION: "DUCKDB_READONLY_VIOLATION",
+
+  // Compute-specific errors
+  COMPUTE_ERROR: "COMPUTE_ERROR",
+  COMPUTE_PERMISSION_DENIED: "COMPUTE_PERMISSION_DENIED",
+  COMPUTE_FUNCTION_NOT_FOUND: "COMPUTE_FUNCTION_NOT_FOUND",
+  COMPUTE_QUOTA_EXCEEDED: "COMPUTE_QUOTA_EXCEEDED",
+  COMPUTE_GRANT_UNAVAILABLE: "COMPUTE_GRANT_UNAVAILABLE",
+  COMPUTE_BINDING_UNAVAILABLE: "COMPUTE_BINDING_UNAVAILABLE",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
@@ -206,6 +214,67 @@ export type InvokeAnyFunction = (
   entries: InvokeAnyEntry[],
   facts?: InvocationFacts,
 ) => ServiceHeaders;
+
+/**
+ * Result of minting a delegation with a caveat map applied to every granted
+ * (service, path, ability) row. Mirrors the WASM `createDelegationWithCaveat`
+ * return shape (tinycloud-node's `tinycloud-sdk-wasm` crate).
+ */
+export interface DelegationWithCaveatResult {
+  /** Base64url-encoded UCAN JWT string. */
+  delegation: string;
+  /** CID of the delegation. */
+  cid: string;
+  /** The delegate DID (recipient). */
+  delegateDID: string;
+  /** Expiration timestamp, seconds since epoch. */
+  expiry: number;
+  /** The (service, space, path, actions) entries granted. */
+  resources: Array<{ service: string; space: string; path: string; actions: string[] }>;
+}
+
+/**
+ * Mint a delegation where every granted (service, path, ability) row carries
+ * the SAME caveat object. Platform-specific implementation injected via DI,
+ * mirroring {@link InvokeFunction}. Optional: only services that need to mint
+ * caveat-bearing delegations (currently the compute service's deploy-time
+ * `D_fn` grant, compute-service.md §5.1/§6.2) require it.
+ *
+ * @param session - The current session (delegation data + jwk).
+ * @param delegateDid - The recipient DID (audience of the UCAN).
+ * @param spaceId - The TinyCloud user space the delegation targets.
+ * @param abilities - Service -> path -> actions map (same shape as `createDelegation`).
+ * @param expirationSecs - UCAN expiration, seconds since epoch.
+ * @param notBeforeSecs - Optional UCAN not-before, seconds since epoch.
+ * @param caveat - A single JSON object attached identically to every granted row.
+ */
+export type CreateDelegationWithCaveatFunction = (
+  session: ServiceSession,
+  delegateDid: string,
+  spaceId: string,
+  abilities: Record<string, Record<string, string[]>>,
+  expirationSecs: number,
+  notBeforeSecs: number | undefined,
+  caveat: Record<string, unknown>,
+) => DelegationWithCaveatResult;
+
+/**
+ * Mint a short-lived session usable ONLY for a specific, privileged ability
+ * that the ambient session does NOT carry (e.g. the compute service's
+ * `compute/deploy`, which is deliberately excluded from the default session
+ * grant — compute-service.md §12.1 F9). The platform binding is responsible
+ * for actually authorizing this out-of-band (e.g. a fresh wallet-signed
+ * root delegation), submitting it to the node, and returning a
+ * {@link ServiceSession}-shaped object whose `invoke`/`invokeAny` calls will
+ * carry that privileged ability.
+ *
+ * Optional: only services with a privileged, non-ambient operation
+ * (currently compute's `deploy`) require it.
+ */
+export type MintPrivilegedSessionFunction = (
+  grant: { service: string; path: string; ability: string },
+  expirySecs?: number,
+) => Promise<ServiceSession>;
 
 /**
  * Fetch request options - compatible with standard fetch API.
@@ -331,6 +400,12 @@ export interface IServiceContext {
   readonly invoke: InvokeFunction;
   /** Optional multi-resource invoke function */
   readonly invokeAny?: InvokeAnyFunction;
+  /** Optional caveat-bearing delegation minting (compute service D_fn grant) */
+  readonly createDelegationWithCaveat?: CreateDelegationWithCaveatFunction;
+  /** Optional content-CID computation (compute service function CID) */
+  readonly computeCid?: (data: Uint8Array, codec: bigint) => string;
+  /** Optional privileged-session minting (compute service `deploy` ability) */
+  readonly mintPrivilegedSession?: MintPrivilegedSessionFunction;
   /** Fetch function (defaults to globalThis.fetch) */
   readonly fetch: FetchFunction;
   /** Available TinyCloud host URLs */

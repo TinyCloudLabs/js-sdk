@@ -8,6 +8,8 @@ import {
   ISQLService,
   DuckDbService,
   IDuckDbService,
+  ComputeService,
+  IComputeService,
   ServiceSession,
   ServiceContext,
   type TelemetryConfig,
@@ -51,6 +53,7 @@ export class DelegatedAccess {
   private _kv: KVService;
   private _sql: SQLService;
   private _duckdb: DuckDbService;
+  private _compute: ComputeService;
   private _hooks: HooksService;
 
   constructor(
@@ -94,6 +97,16 @@ export class DelegatedAccess {
     this._duckdb = new DuckDbService({});
     this._duckdb.initialize(this._serviceContext);
     this._serviceContext.registerService('duckdb', this._duckdb);
+
+    // Create and initialize Compute service with same delegation context.
+    // NOTE: `deploy()` needs createDelegationWithCaveat/computeCid/
+    // mintPrivilegedSession, none of which are wired here — a delegated
+    // holder (e.g. one with only compute/execute) is never expected to
+    // deploy, and ComputeService.deploy() errors clearly if called without
+    // them rather than silently degrading.
+    this._compute = new ComputeService({});
+    this._compute.initialize(this._serviceContext);
+    this._serviceContext.registerService('compute', this._compute);
 
     // Create and initialize Hooks service with same delegation context
     this._hooks = new HooksService({});
@@ -151,6 +164,16 @@ export class DelegatedAccess {
    */
   get duckdb(): IDuckDbService {
     return this._duckdb;
+  }
+
+  /**
+   * Compute operations on the delegated space (compute-service.md). A
+   * delegation carrying `tinycloud.compute/execute` can run deployed
+   * functions; `deploy` is a privileged capability this access will not
+   * have unless explicitly delegated `tinycloud.compute/deploy`.
+   */
+  get compute(): IComputeService {
+    return this._compute;
   }
 
   /**

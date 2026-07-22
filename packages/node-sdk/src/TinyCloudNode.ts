@@ -41,6 +41,10 @@ import {
   ISQLService,
   DuckDbService,
   IDuckDbService,
+  ComputeService,
+  IComputeService,
+  type ComputeDataGrant,
+  type ComputeDeployResult,
   HooksService,
   DataVaultService,
   IDataVaultService,
@@ -87,6 +91,7 @@ import {
   DelegationResult,
   CreateDelegationWasmParams,
   CreateDelegationWasmResult,
+  type DelegationWithCaveatResult,
   type DelegatedResource,
   UnsupportedFeatureError,
   makePublicSpaceId,
@@ -120,6 +125,7 @@ import {
   KV,
   SQL,
   DUCKDB,
+  COMPUTE,
   ENCRYPTION,
   EXPIRY,
   canonicalHashHex,
@@ -238,6 +244,12 @@ const ROOT_DELEGATION_ACTIONS: string[] = [
   DUCKDB.EXPORT,
   DUCKDB.IMPORT,
   DUCKDB.ALL,
+  // compute/deploy is deliberately EXCLUDED: it is a privileged, explicit-
+  // only capability (compute-service.md §12.1 F9) — a standard session must
+  // never be able to deploy a routine, only execute one that's already
+  // deployed. Never add COMPUTE.ALL here either: the wildcard implies
+  // deploy.
+  COMPUTE.EXECUTE,
 ];
 
 /**
@@ -790,6 +802,7 @@ export class TinyCloudNode {
   private _kv?: KVService;
   private _sql?: SQLService;
   private _duckdb?: DuckDbService;
+  private _compute?: ComputeService;
   private _hooks?: HooksService;
   private _vault?: DataVaultService;
   private _encryption?: EncryptionService;
@@ -1345,6 +1358,7 @@ export class TinyCloudNode {
     this._kv = undefined;
     this._sql = undefined;
     this._duckdb = undefined;
+    this._compute = undefined;
     this._hooks = undefined;
     this._vault = undefined;
     this._encryption = undefined;
@@ -2400,6 +2414,7 @@ export class TinyCloudNode {
     this._kv = stagedGraph.kv;
     this._sql = stagedGraph.sql;
     this._duckdb = stagedGraph.duckdb;
+    this._compute = stagedGraph.compute;
     this._hooks = stagedGraph.hooks;
     this._vault = stagedGraph.vault;
     this._encryption = stagedGraph.encryption;
@@ -2499,6 +2514,7 @@ export class TinyCloudNode {
     kv: KVService;
     sql: SQLService;
     duckdb: DuckDbService;
+    compute: ComputeService;
     hooks: HooksService;
     vault: DataVaultService;
     encryption: EncryptionService;
@@ -2526,6 +2542,14 @@ export class TinyCloudNode {
     const serviceContext = graph.track(new ServiceContext({
       invoke: graph.invoke,
       invokeAny: graph.invokeAny,
+      createDelegationWithCaveat: this.wasmBindings.createDelegationWithCaveat
+        ? (s, delegateDid, spaceId, abilities, expirationSecs, notBeforeSecs, caveat) =>
+            this.createDelegationWithCaveatWrapper(s, delegateDid, spaceId, abilities, expirationSecs, notBeforeSecs, caveat)
+        : undefined,
+      computeCid: this.wasmBindings.computeCid
+        ? (data, codec) => this.wasmBindings.computeCid!(data, codec)
+        : undefined,
+      mintPrivilegedSession: (grant, expirySecs) => this.mintPrivilegedSession(grant, expirySecs),
       fetch: graph.fetch,
       hosts: [input.host],
       telemetry: this.config.telemetry,
@@ -2539,6 +2563,9 @@ export class TinyCloudNode {
     const duckdb = new DuckDbService({});
     duckdb.initialize(serviceContext);
     serviceContext.registerService('duckdb', duckdb);
+    const compute = new ComputeService({});
+    compute.initialize(serviceContext);
+    serviceContext.registerService('compute', compute);
     const hooks = new HooksService({});
     hooks.initialize(serviceContext);
     serviceContext.registerService('hooks', hooks);
@@ -2725,7 +2752,7 @@ export class TinyCloudNode {
       },
     });
     spaceService.updateConfig({ sharingService });
-    return { core, graph, serviceContext, kv, sql, duckdb, hooks, vault, encryption, capabilityRegistry, keyProvider, sharingService, delegationManager, spaceService };
+    return { core, graph, serviceContext, kv, sql, duckdb, compute, hooks, vault, encryption, capabilityRegistry, keyProvider, sharingService, delegationManager, spaceService };
   }
 
   /**
@@ -2950,6 +2977,14 @@ export class TinyCloudNode {
     this._serviceContext = this._serviceGraph.track(new ServiceContext({
       invoke: this._serviceGraph.invoke,
       invokeAny: this._serviceGraph.invokeAny,
+      createDelegationWithCaveat: this.wasmBindings.createDelegationWithCaveat
+        ? (s, delegateDid, spaceId, abilities, expirationSecs, notBeforeSecs, caveat) =>
+            this.createDelegationWithCaveatWrapper(s, delegateDid, spaceId, abilities, expirationSecs, notBeforeSecs, caveat)
+        : undefined,
+      computeCid: this.wasmBindings.computeCid
+        ? (data, codec) => this.wasmBindings.computeCid!(data, codec)
+        : undefined,
+      mintPrivilegedSession: (grant, expirySecs) => this.mintPrivilegedSession(grant, expirySecs),
       fetch: this._serviceGraph.fetch,
       hosts: [this.config.host!],
       telemetry: this.config.telemetry,
@@ -2973,6 +3008,13 @@ export class TinyCloudNode {
       this._duckdb = new DuckDbService({});
       this._duckdb.initialize(this._serviceContext);
       this._serviceContext.registerService('duckdb', this._duckdb);
+    }
+
+    // Create and register Compute service (if supported)
+    if (features.length === 0 || features.includes("compute")) {
+      this._compute = new ComputeService({});
+      this._compute.initialize(this._serviceContext);
+      this._serviceContext.registerService('compute', this._compute);
     }
 
     this._hooks = new HooksService({});
@@ -3631,6 +3673,98 @@ export class TinyCloudNode {
   }
 
   /**
+   * Wrapper for the WASM `createDelegationWithCaveat` function — the
+   * ComputeService D_fn grant's `IServiceContext.createDelegationWithCaveat`
+   * binding. Mirrors {@link createDelegationWrapper} exactly (same
+   * session-shape conversion, same fragment-stripped `verificationMethod`)
+   * except the extra `caveat` argument, applied identically to every
+   * granted (service, path, ability) row.
+   *
+   * @internal
+   */
+  private createDelegationWithCaveatWrapper(
+    session: ServiceSession,
+    delegateDid: string,
+    spaceId: string,
+    abilities: Record<string, Record<string, string[]>>,
+    expirationSecs: number,
+    notBeforeSecs: number | undefined,
+    caveat: Record<string, unknown>,
+  ): DelegationWithCaveatResult {
+    if (!this.wasmBindings.createDelegationWithCaveat) {
+      throw new Error("createDelegationWithCaveat is unavailable on this WASM binding");
+    }
+    const wasmSession = {
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      jwk: session.jwk,
+      spaceId: session.spaceId,
+      // See createDelegationWrapper: the Rust UCAN builder expects the bare
+      // principal DID here, not the DID URL with fragment.
+      verificationMethod: session.verificationMethod.split("#", 1)[0],
+    };
+    const result = this.wasmBindings.createDelegationWithCaveat(
+      wasmSession,
+      delegateDid,
+      spaceId,
+      abilities,
+      expirationSecs,
+      notBeforeSecs,
+      caveat,
+    );
+    return {
+      delegation: result.delegation,
+      cid: result.cid,
+      delegateDID: result.delegateDid ?? result.delegateDID,
+      expiry: result.expiry,
+      resources: result.resources,
+    };
+  }
+
+  /**
+   * Mint a short-lived session carrying ONLY the requested (service, path,
+   * ability) — used for privileged, non-ambient operations that must never
+   * be part of the default session grant (currently: the compute service's
+   * `compute/deploy`, compute-service.md §12.1 F9).
+   *
+   * Reuses {@link createOwnerDelegation} (a fresh wallet-signed root
+   * delegation, submitted to the node, independent of the ambient session's
+   * delegation chain — the same mechanism sharing uses to grant a share key
+   * capabilities the current session doesn't hold) with the SESSION KEY
+   * itself as the delegate: a self-delegation that elevates the caller's own
+   * session key for exactly this one grant, exactly this one path.
+   *
+   * @internal
+   */
+  private async mintPrivilegedSession(
+    grant: { service: string; path: string; ability: string },
+    expirySecs?: number,
+  ): Promise<ServiceSession> {
+    const session = this.currentTinyCloudSession();
+    if (!session) {
+      throw new Error("mintPrivilegedSession requires an active session. Call signIn() first.");
+    }
+    const expiresAt = new Date(Date.now() + (expirySecs ?? 300) * 1000);
+    const receipt = await this.createOwnerDelegation({
+      delegateDid: session.verificationMethod,
+      spaceId: session.spaceId,
+      path: grant.path,
+      actions: [grant.ability],
+      expiresAt,
+    });
+    if (!receipt.delegation.authHeader) {
+      throw new Error("mintPrivilegedSession: createOwnerDelegation did not return an authHeader");
+    }
+    return {
+      delegationHeader: { Authorization: receipt.delegation.authHeader },
+      delegationCid: receipt.delegationCid,
+      spaceId: session.spaceId,
+      verificationMethod: session.verificationMethod,
+      jwk: session.jwk,
+    };
+  }
+
+  /**
    * Create a direct root delegation from the wallet to a share key.
    * This bypasses the session delegation chain, allowing share links
    * with expiry longer than the current session.
@@ -3774,6 +3908,22 @@ export class TinyCloudNode {
       throw new Error("Not signed in. Call signIn() first.");
     }
     return this._sql;
+  }
+
+  /**
+   * Deploy and execute WASM compute routines on this user's space
+   * (compute-service.md). `deploy` is a privileged operation — mint a
+   * fresh, scoped grant per call, never held by the ambient session.
+   */
+  get compute(): IComputeService {
+    if (!this._compute) {
+      const features = this.nodeFeatures;
+      if (features.length > 0 && !features.includes("compute")) {
+        throw new UnsupportedFeatureError("compute", this.config.host!, features);
+      }
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+    return this._compute;
   }
 
   /**
@@ -5969,6 +6119,7 @@ export class TinyCloudNode {
     const kvActions = params.actions.filter(a => a.startsWith("tinycloud.kv/"));
     const sqlActions = params.actions.filter(a => a.startsWith("tinycloud.sql/"));
     const duckdbActions = params.actions.filter(a => a.startsWith("tinycloud.duckdb/"));
+    const computeActions = params.actions.filter(a => a.startsWith("tinycloud.compute/"));
     if (kvActions.length > 0) {
       abilities.kv = { [params.path]: kvActions };
     }
@@ -5977,6 +6128,9 @@ export class TinyCloudNode {
     }
     if (duckdbActions.length > 0) {
       abilities.duckdb = { [params.path]: duckdbActions };
+    }
+    if (computeActions.length > 0) {
+      abilities.compute = { [params.path]: computeActions };
     }
 
     const now = new Date();
@@ -6319,6 +6473,7 @@ export class TinyCloudNode {
     const kvActions = params.actions.filter(a => a.startsWith("tinycloud.kv/"));
     const sqlActions = params.actions.filter(a => a.startsWith("tinycloud.sql/"));
     const duckdbActions = params.actions.filter(a => a.startsWith("tinycloud.duckdb/"));
+    const computeActions = params.actions.filter(a => a.startsWith("tinycloud.compute/"));
     if (kvActions.length > 0) {
       abilities.kv = { [params.path]: kvActions };
     }
@@ -6327,6 +6482,9 @@ export class TinyCloudNode {
     }
     if (duckdbActions.length > 0) {
       abilities.duckdb = { [params.path]: duckdbActions };
+    }
+    if (computeActions.length > 0) {
+      abilities.compute = { [params.path]: computeActions };
     }
 
     // Use parent's host or fall back to config

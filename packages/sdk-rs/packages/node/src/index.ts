@@ -32,6 +32,7 @@ export {
   siweToDelegationHeaders,
   // Delegation creation
   createDelegation,
+  createDelegationWithCaveat,
   // Recap parsing: extract `{ service, space, path, actions }` entries from a
   // signed SIWE string. Used by the capability-chain delegation flow to decide
   // whether a requested delegation is derivable from the current session
