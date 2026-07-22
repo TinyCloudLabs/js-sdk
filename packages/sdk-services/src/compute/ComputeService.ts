@@ -45,9 +45,21 @@ import {
 /** CID multicodec for raw bytes (0x55) — matches the node's content-CID scheme. */
 const RAW_CODEC = 0x55n;
 
-/** Default `D_fn` lifetime: ~10 years. A deploy-time grant is meant to
- * outlive ordinary sessions; re-deploying mints a fresh one. */
-const DEFAULT_DFN_LIFETIME_SECS = 10 * 365 * 24 * 60 * 60;
+/**
+ * Default `D_fn` lifetime: 1 day.
+ *
+ * `D_fn` is minted as a UCAN sub-delegation citing the AMBIENT session as
+ * proof (not a fresh wallet-root delegation), so its expiry is bounded by
+ * that session's own expiry ("child delegation expiry exceeds parent
+ * expiry" is enforced chain-wide, not just one hop up) — it can outlive
+ * neither the session nor, transitively, that session's own root grant.
+ * `@tinycloud/sdk-core`'s default session lifetime is 7 days (`EXPIRY.
+ * SESSION_MS`); 1 day leaves comfortable headroom under that default
+ * without the caller having to know it. Pass `expirationSecs` explicitly
+ * for a longer-lived grant (bounded by the caller's own session/root
+ * expiry) or a shorter one.
+ */
+const DEFAULT_DFN_LIFETIME_SECS = 24 * 60 * 60;
 
 export class ComputeService extends BaseService implements IComputeService {
   static readonly serviceName = "compute";
@@ -107,7 +119,11 @@ export class ComputeService extends BaseService implements IComputeService {
         return err(
           serviceError(
             ErrorCodes.INVALID_INPUT,
-            "compute deploy requires at least one dataGrants entry for the routine's own D_fn",
+            "compute deploy requires at least one dataGrants entry: the node's MVP deploy path " +
+              "(handle_compute_deploy) requires an inline D_fn on every deploy, and a UCAN " +
+              "delegation cannot encode zero capabilities. A genuinely zero-permission function " +
+              "still needs one inert grant its guest never exercises — the manifest's exercised/" +
+              "calls sets being empty (not `granted`) is what proves it never touched data.",
             "compute",
           ),
         );
@@ -118,19 +134,22 @@ export class ComputeService extends BaseService implements IComputeService {
         const functionCid = this.context.computeCid(wasm, RAW_CODEC);
 
         // compute/deploy is deliberately excluded from the ambient session
-        // (compute-service.md §12.1 F9) — mint a short-lived session scoped
-        // to ONLY this privileged ability, on ONLY this function's resource
-        // path, for the two deploy-path invocations below (the RoutineDid
-        // handshake needs no path coverage — §7.1 select_compute_scope — but
-        // the deploy submission's resource IS `<space>/compute/<name>`, so
-        // scoping to `name` covers both with least privilege). The D_fn mint
-        // (step 2) stays on the AMBIENT session: D_fn's proof chain must
+        // (compute-service.md §12.1 F9) — mint short-lived sessions scoped
+        // to ONLY this privileged ability, on ONLY the exact resource path
+        // each invocation below targets. The chain-containment check
+        // (invocation.rs validate(), run by verify_auth BEFORE
+        // select_compute_scope's looser per-variant coverage rule) requires
+        // the invocation's OWN declared resource to be `extends`-covered by
+        // a parent delegation — so a delegation scoped to path=`name` does
+        // NOT cover an invocation on path=`functionCid`, and vice versa.
+        // Two distinct resources need two distinct grants. (The D_fn mint
+        // in step 2 stays on the AMBIENT session: D_fn's proof chain must
         // resolve to a delegation that actually grants the data abilities
-        // being handed to the routine (kv/*, sql/*, ...), which the
-        // compute/deploy-only session does not carry.
-        const deploySession = await this.context.mintPrivilegedSession({
+        // being handed to the routine — kv/*, sql/*, ... — which the
+        // compute/deploy-only sessions here do not carry.)
+        const handshakeSession = await this.context.mintPrivilegedSession({
           service: "compute",
-          path: name,
+          path: functionCid,
           ability: ComputeAction.DEPLOY,
         });
 
@@ -138,7 +157,7 @@ export class ComputeService extends BaseService implements IComputeService {
         // identity the node derives for (space, functionCid). The deployer
         // cannot compute this client-side (it's a TEE/node-derived seed).
         const handshake = await this.invokeCompute(
-          deploySession,
+          handshakeSession,
           functionCid,
           ComputeAction.DEPLOY,
           { action: "routine_did", content_cid: functionCid },
@@ -168,9 +187,17 @@ export class ComputeService extends BaseService implements IComputeService {
         );
 
         // Step 3: submit the deploy (wasm bytes + D_fn), processed atomically
-        // by the node (§5.1/F4). Still the privileged deploySession.
+        // by the node (§5.1/F4). This invocation's resource is
+        // `<space>/compute/<name>` — a fresh privileged session scoped to
+        // that exact path (see the step-1 comment for why one grant can't
+        // cover both paths).
+        const deploySubmitSession = await this.context.mintPrivilegedSession({
+          service: "compute",
+          path: name,
+          ability: ComputeAction.DEPLOY,
+        });
         const deployResponse = await this.invokeCompute(
-          deploySession,
+          deploySubmitSession,
           name,
           ComputeAction.DEPLOY,
           {

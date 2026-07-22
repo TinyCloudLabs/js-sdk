@@ -7,7 +7,8 @@
     "bench": "bun benchmarks/node-sdk.bench.ts",
     "test": "bun test",
     "test:sql": "bun test sql/",
-    "test:duckdb": "bun test duckdb/"
+    "test:duckdb": "bun test duckdb/",
+    "test:compute": "bun test compute/"
   },
   "dependencies": {
     "@tinycloud/node-sdk": "workspace:*",
