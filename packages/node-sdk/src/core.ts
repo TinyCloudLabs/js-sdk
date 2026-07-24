@@ -190,6 +190,7 @@ export type {
   KVServiceConfig,
   KVCreateSignedReadUrlOptions,
   KVResponse,
+  KVBatchReadResponse,
   KVSignedReadUrlResponse,
   IPrefixedKVService,
 } from "@tinycloud/sdk-core";

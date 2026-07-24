@@ -22,6 +22,7 @@ export {
   KVBatchPutItem,
   KVBatchPutOptions,
   KVBatchPutResponse,
+  KVBatchReadResponse,
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,

@@ -14,6 +14,7 @@ import {
   KVBatchPutItem,
   KVBatchPutOptions,
   KVBatchPutResponse,
+  KVBatchReadResponse,
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
@@ -63,6 +64,11 @@ export interface IKVService extends IService {
     key: string,
     options?: KVGetOptions
   ): Promise<Result<KVResponse<T>>>;
+
+  batchGet<T = unknown>(
+    keys: string[],
+    options?: KVGetOptions
+  ): Promise<Result<KVBatchReadResponse<T>>>;
 
   /**
    * Store a value at a key.
@@ -158,6 +164,11 @@ export interface IKVService extends IService {
    * ```
    */
   head(key: string, options?: KVHeadOptions): Promise<Result<KVResponse<void>>>;
+
+  batchHead(
+    keys: string[],
+    options?: KVHeadOptions
+  ): Promise<Result<KVBatchReadResponse<void>>>;
 
   /**
    * Create a short-lived signed URL for reading a KV object.

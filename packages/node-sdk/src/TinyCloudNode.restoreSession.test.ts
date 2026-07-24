@@ -111,6 +111,64 @@ function legacyBindings(): IWasmBindings {
 }
 
 describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
+  test("memoizes encryption descriptors within one session graph and refreshes after restore", async () => {
+    const originalFetch = globalThis.fetch;
+    const networkId = "urn:tinycloud:encryption:did:key:zTest:default";
+    let descriptorFetches = 0;
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (!url.includes("/encryption/networks/")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      descriptorFetches++;
+      return new Response(JSON.stringify({
+        networkId,
+        ownerDid: "did:key:zTest",
+        name: "default",
+        members: [{ nodeId: "did:key:zNode", role: "primary" }],
+        threshold: { n: 1, t: 1 },
+        state: "active",
+        publicEncryptionKey: "AQ==",
+        alg: "x25519-aes256gcm/v1",
+        keyVersion: descriptorFetches,
+        keyBackend: "local-one-of-one",
+        createdAt: "2026-07-24T00:00:00.000Z",
+        updatedAt: "2026-07-24T00:00:00.000Z",
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const proof = await signedRestorableSession();
+      const node = new TinyCloudNode({
+        signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+        wasmBindings: new NodeWasmBindings(),
+      });
+      await node.restoreSession({ ...proof, tinycloudHosts: ["https://one.example"] });
+
+      const firstService = node.encryption;
+      const [first, concurrent] = await Promise.all([
+        (firstService as any).config.node.fetchByNetworkId(networkId),
+        (firstService as any).config.node.fetchByNetworkId(networkId),
+      ]);
+      const cached = await (firstService as any).config.node.fetchByNetworkId(networkId);
+      expect(descriptorFetches).toBe(1);
+      expect(concurrent).toEqual(first);
+      expect(cached).toEqual(first);
+
+      await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
+      const refreshed = await (node.encryption as any).config.node.fetchByNetworkId(
+        networkId,
+      );
+      expect(descriptorFetches).toBe(2);
+      expect(refreshed.keyVersion).toBe(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("exposes cryptographically restored base-session ReCap authority through the public API", async () => {
     const proof = await signedRestorableSession({
       abilities: { kv: { "vault/secrets/API_KEY": ["tinycloud.kv/get"] } },

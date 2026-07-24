@@ -183,6 +183,7 @@ export type {
   KVBatchPutItem,
   KVBatchPutOptions,
   KVBatchPutResponse,
+  KVBatchReadResponse,
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,

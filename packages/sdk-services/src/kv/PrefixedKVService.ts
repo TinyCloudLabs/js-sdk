@@ -29,13 +29,14 @@
  * ```
  */
 
-import { Result } from "../types";
+import { Result, ok } from "../types";
 import {
   KVGetOptions,
   KVPutOptions,
   KVBatchPutItem,
   KVBatchPutOptions,
   KVBatchPutResponse,
+  KVBatchReadResponse,
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
@@ -77,6 +78,11 @@ export interface IPrefixedKVService {
     key: string,
     options?: Omit<KVGetOptions, 'prefix'>
   ): Promise<Result<KVResponse<T>>>;
+
+  batchGet<T = unknown>(
+    keys: string[],
+    options?: Omit<KVGetOptions, 'prefix'>
+  ): Promise<Result<KVBatchReadResponse<T>>>;
 
   /**
    * Store a value at a key.
@@ -167,6 +173,11 @@ export interface IPrefixedKVService {
    */
   head(key: string, options?: Omit<KVHeadOptions, 'prefix'>): Promise<Result<KVResponse<void>>>;
 
+  batchHead(
+    keys: string[],
+    options?: Omit<KVHeadOptions, 'prefix'>
+  ): Promise<Result<KVBatchReadResponse<void>>>;
+
   /**
    * Create a short-lived signed URL for reading a KV object.
    *
@@ -211,6 +222,11 @@ interface IKVServiceLike {
     options?: KVGetOptions
   ): Promise<Result<KVResponse<T>>>;
 
+  batchGet<T = unknown>(
+    keys: string[],
+    options?: KVGetOptions
+  ): Promise<Result<KVBatchReadResponse<T>>>;
+
   put(
     key: string,
     value: unknown,
@@ -227,6 +243,11 @@ interface IKVServiceLike {
   delete(key: string, options?: KVDeleteOptions): Promise<Result<KVResponse<void>>>;
 
   head(key: string, options?: KVHeadOptions): Promise<Result<KVResponse<void>>>;
+
+  batchHead(
+    keys: string[],
+    options?: KVHeadOptions
+  ): Promise<Result<KVBatchReadResponse<void>>>;
 
   createSignedReadUrl(
     key: string,
@@ -320,6 +341,24 @@ export class PrefixedKVService implements IPrefixedKVService {
     return this._kv.get<T>(fullKey, { ...options, prefix: '' });
   }
 
+  async batchGet<T = unknown>(
+    keys: string[],
+    options?: Omit<KVGetOptions, 'prefix'>
+  ): Promise<Result<KVBatchReadResponse<T>>> {
+    const response = await this._kv.batchGet<T>(
+      keys.map((key) => this.getFullKey(key)),
+      { ...options, prefix: '' }
+    );
+    if (!response.ok) return response;
+    return ok({
+      ...response.data,
+      results: response.data.results.map((item, index) => ({
+        ...item,
+        key: keys[index]!,
+      })),
+    });
+  }
+
   /**
    * Store a value at a key.
    */
@@ -381,6 +420,24 @@ export class PrefixedKVService implements IPrefixedKVService {
   ): Promise<Result<KVResponse<void>>> {
     const fullKey = this.getFullKey(key);
     return this._kv.head(fullKey, { ...options, prefix: '' });
+  }
+
+  async batchHead(
+    keys: string[],
+    options?: Omit<KVHeadOptions, 'prefix'>
+  ): Promise<Result<KVBatchReadResponse<void>>> {
+    const response = await this._kv.batchHead(
+      keys.map((key) => this.getFullKey(key)),
+      { ...options, prefix: '' }
+    );
+    if (!response.ok) return response;
+    return ok({
+      ...response.data,
+      results: response.data.results.map((item, index) => ({
+        ...item,
+        key: keys[index]!,
+      })),
+    });
   }
 
   /**
