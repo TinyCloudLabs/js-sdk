@@ -95,6 +95,71 @@ export {
   DelegatedShareAccess,
 } from "./SharingService";
 
+export { ShareRecipientClient } from "./ShareRecipientClient";
+export { MemoryShareCache } from "./ShareCache";
+export type { ShareCache, ShareCacheEntry, ShareCacheKey, ShareCacheMetadata } from "./ShareCache";
+export {
+  createShareArtifact,
+  createShareArtifactAsync,
+  createSharePolicy,
+  computeShareCid,
+  decryptShareBytesAsync,
+  encodeInlineShareUrl,
+  encodeShareArtifact,
+  encodeShareUrl,
+  encryptShareBytes,
+  encryptShareBytesAsync,
+  intersectShareCapabilities,
+  isV2ShareLink,
+  normalizeShareActions,
+  normalizeShareRecipientTarget,
+  normalizeShareResource,
+  parseShareArtifact,
+  parseShareUrl,
+  shareCapabilityAllows,
+  signShareEnvelope,
+  verifyShareCid,
+  verifyShareEnvelope,
+  ShareEnvelopeError,
+} from "./share-envelope";
+export type {
+  ShareAction,
+  ShareArtifactInput,
+  ShareArtifactResult,
+  ShareArtifactV2,
+  ShareCapabilityLike,
+  ShareContentMetadata,
+  ShareEnvelopeV2,
+  ShareLinkLocation,
+  SharePolicy,
+  ShareRecipientTarget,
+  ShareResource,
+  VerifyShareEnvelopeOptions,
+} from "./share-envelope";
+export type {
+  ShareAccessV2,
+  ShareListResult,
+  ShareReadResult,
+  ShareRecipientClientOptions,
+  ShareNativeInvokeInput,
+  ShareNativeInvokeResult,
+  ShareDetachedProof,
+  ShareListEntry,
+  SharePolicyBinding,
+  SharePolicySession,
+  ShareRecipientPolicy,
+  ShareRecipientResult,
+  ShareSaveOptions,
+} from "./recipient-types";
+export { ShareAccessError, ShareConflict } from "./recipient-types";
+export {
+  ShareActionSchema,
+  ShareRecipientClientOptionsSchema,
+  ShareRecipientPolicySchema,
+  ShareRecipientTargetSchema,
+  ShareResourceSchema,
+} from "./recipient-types.schema";
+
 // SharingService Schemas and Validation
 export {
   EncodedShareDataSchema,

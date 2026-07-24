@@ -15,6 +15,7 @@
         "@tinycloud/sdk-services": "workspace:*",
         "@tinycloud/web-sdk": "workspace:*",
         "@tinycloud/web-sdk-wasm": "workspace:*",
+        "tsup": "^8.5.1",
         "turbo": "^2.5.4",
       },
     },
