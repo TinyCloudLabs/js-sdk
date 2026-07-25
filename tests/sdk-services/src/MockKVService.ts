@@ -16,6 +16,7 @@ import type {
   KVBatchPutItem,
   KVBatchPutOptions,
   KVBatchPutResponse,
+  KVBatchReadResponse,
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
@@ -40,11 +41,13 @@ import {
 export interface RecordedOperation {
   type:
     | "get"
+    | "batchGet"
     | "put"
     | "batchPut"
     | "list"
     | "delete"
     | "head"
+    | "batchHead"
     | "createSignedReadUrl";
   key?: string;
   value?: unknown;
@@ -192,6 +195,53 @@ export class MockKVService implements IKVService {
       data: stored.data as T,
       headers: this.createHeaders(stored),
     });
+  }
+
+  async batchGet<T = unknown>(
+    keys: string[],
+    options?: KVGetOptions
+  ): Promise<Result<KVBatchReadResponse<T>>> {
+    this.recordOperation("batchGet", undefined, keys, options);
+
+    const entries = keys.map((key) => ({
+      key,
+      fullKey: this.getFullKey(key, options?.prefix),
+    }));
+
+    for (const { fullKey } of entries) {
+      const injectedError = this.checkErrorInjection(fullKey, "batchGet");
+      if (injectedError) {
+        return err(injectedError);
+      }
+    }
+
+    await this.simulateLatency();
+
+    if (options?.signal?.aborted) {
+      return err(serviceError(ErrorCodes.ABORTED, "Request aborted", "kv"));
+    }
+
+    const results = entries.map(({ key, fullKey }) => {
+      const stored = this._store.get(fullKey);
+      if (!stored) {
+        return {
+          key,
+          result: err(
+            serviceError(ErrorCodes.KV_NOT_FOUND, `Key not found: ${key}`, "kv")
+          ),
+        };
+      }
+
+      return {
+        key,
+        result: ok({
+          data: stored.data as T,
+          headers: this.createHeaders(stored),
+        }),
+      };
+    });
+
+    return ok({ results, count: results.length });
   }
 
   async put(
@@ -387,6 +437,53 @@ export class MockKVService implements IKVService {
       data: undefined as void,
       headers: this.createHeaders(stored),
     });
+  }
+
+  async batchHead(
+    keys: string[],
+    options?: KVHeadOptions
+  ): Promise<Result<KVBatchReadResponse<void>>> {
+    this.recordOperation("batchHead", undefined, keys, options);
+
+    const entries = keys.map((key) => ({
+      key,
+      fullKey: this.getFullKey(key, options?.prefix),
+    }));
+
+    for (const { fullKey } of entries) {
+      const injectedError = this.checkErrorInjection(fullKey, "batchHead");
+      if (injectedError) {
+        return err(injectedError);
+      }
+    }
+
+    await this.simulateLatency();
+
+    if (options?.signal?.aborted) {
+      return err(serviceError(ErrorCodes.ABORTED, "Request aborted", "kv"));
+    }
+
+    const results = entries.map(({ key, fullKey }) => {
+      const stored = this._store.get(fullKey);
+      if (!stored) {
+        return {
+          key,
+          result: err(
+            serviceError(ErrorCodes.KV_NOT_FOUND, `Key not found: ${key}`, "kv")
+          ),
+        };
+      }
+
+      return {
+        key,
+        result: ok({
+          data: undefined as void,
+          headers: this.createHeaders(stored),
+        }),
+      };
+    });
+
+    return ok({ results, count: results.length });
   }
 
   async createSignedReadUrl(
