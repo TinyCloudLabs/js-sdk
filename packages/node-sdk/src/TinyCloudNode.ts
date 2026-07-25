@@ -3205,6 +3205,10 @@ export class TinyCloudNode {
     const address = binding?.address ?? this._address;
     const chainId = binding?.chainId ?? this._chainId;
     const crypto = this.createEncryptionCrypto();
+    // Successful descriptor lookups are immutable for a key version. Cache
+    // and coalesce them for this session graph; replacing the graph replaces
+    // this cache. Misses and failures remain retryable.
+    const descriptorCache = new Map<string, Promise<NetworkDescriptor | null>>();
     const transport: DecryptTransport = {
       postDecrypt: async ({ networkId, authorization, canonicalBody, signal }) => {
         graph.assertActive();
@@ -3270,7 +3274,20 @@ export class TinyCloudNode {
       node: {
         fetchByNetworkId: async (networkId) => {
           graph.assertActive();
-          const descriptor = await this.fetchEncryptionNetworkAt(host, networkId, graph.fetch);
+          let pending = descriptorCache.get(networkId);
+          if (!pending) {
+            pending = this.fetchEncryptionNetworkAt(host, networkId, graph.fetch)
+              .then((descriptor) => {
+                if (descriptor === null) descriptorCache.delete(networkId);
+                return descriptor;
+              })
+              .catch((error) => {
+                descriptorCache.delete(networkId);
+                throw error;
+              });
+            descriptorCache.set(networkId, pending);
+          }
+          const descriptor = await pending;
           graph.assertActive();
           return descriptor;
         },
