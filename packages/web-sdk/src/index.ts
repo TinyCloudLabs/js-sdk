@@ -7,6 +7,12 @@ export {
   SessionRestoreStatus,
 } from "./modules/tcw";
 export type { SecretReadInput, SecretReadResult } from "@tinycloud/node-sdk";
+export type {
+  CreateOwnerDelegationParams,
+  OwnerDelegationReceipt,
+  RegisterOwnerSharePolicyParams,
+  OwnerSharePolicyRegistrationReceipt,
+} from "@tinycloud/sdk-core";
 
 // Browser Adapters
 export {
@@ -84,6 +90,12 @@ export {
   installTinyCloudDebugGlobals,
 } from "@tinycloud/sdk-core";
 export type {
+  OwnerShareAction,
+  OwnerShareMatcher,
+  OwnerSharePolicyV2,
+  DelegatedShareKey,
+  SignedDelegation,
+  OwnerSharePolicyRegistration,
   AccountApplication,
   AccountApplicationListOptions,
   AccountDelegation,
@@ -169,6 +181,12 @@ export {
   ShareLinkData,
   IngestOptions,
   GenerateShareParams,
+  createDelegatedShareKey,
+  createPolicyEnforcementDelegation,
+  canonicalOwnerSharePolicy,
+  computeOwnerShareRegistrationCid,
+  validateOwnerSharePolicyRegistration,
+  MAX_CONTENT_BYTES,
 } from "@tinycloud/sdk-core";
 
 // Re-export CapabilityKeyRegistry from sdk-core

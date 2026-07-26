@@ -139,6 +139,27 @@ export type {
   ShareResource,
   VerifyShareEnvelopeOptions,
 } from "./share-envelope";
+
+export {
+  createDelegatedShareKey,
+  createPolicyEnforcementDelegation,
+  canonicalOwnerSharePolicy,
+  computeOwnerShareRegistrationCid,
+  validateOwnerSharePolicyRegistration,
+  MAX_CONTENT_BYTES,
+} from "./owner-policy";
+export type {
+  OwnerDelegationReceipt,
+  CreateOwnerDelegationParams,
+  OwnerShareAction,
+  OwnerShareMatcher,
+  OwnerSharePolicyV2,
+  DelegatedShareKey,
+  SignedDelegation,
+  RegisterOwnerSharePolicyParams,
+  OwnerSharePolicyRegistration,
+  OwnerSharePolicyRegistrationReceipt,
+} from "./owner-policy";
 export type {
   ShareAccessV2,
   ShareListResult,

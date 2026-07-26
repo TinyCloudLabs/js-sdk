@@ -132,6 +132,12 @@ export {
   ShareAddressedDelegationRequestV2Schema,
   ShareAddressedDelegationEnvelopeV2Schema,
   ShareAddressedDelegationResponseV2Schema,
+  createDelegatedShareKey,
+  createPolicyEnforcementDelegation,
+  canonicalOwnerSharePolicy,
+  computeOwnerShareRegistrationCid,
+  validateOwnerSharePolicyRegistration,
+  MAX_CONTENT_BYTES,
 } from "./delegations";
 export type {
   ShareAccessV2,
@@ -180,6 +186,16 @@ export type {
   ShareResource,
   ShareSaveOptions,
   VerifyShareEnvelopeOptions,
+  OwnerDelegationReceipt,
+  CreateOwnerDelegationParams,
+  OwnerShareAction,
+  OwnerShareMatcher,
+  OwnerSharePolicyV2,
+  DelegatedShareKey,
+  SignedDelegation,
+  RegisterOwnerSharePolicyParams,
+  OwnerSharePolicyRegistration,
+  OwnerSharePolicyRegistrationReceipt,
 } from "./delegations";
 
 // Encryption network identity helpers
