@@ -15658,6 +15658,10 @@ var init_dist2 = __esm({
        * @returns Result with array of key names (vault/ prefix stripped)
        */
       async list(options) {
+        const page = await this.listPage(options);
+        return page.ok ? { ok: true, data: page.data.keys } : page;
+      }
+      async listPage(options) {
         return this.withTelemetry("list", options?.prefix, async () => {
           if (!this.isUnlocked) {
             return vaultError({
@@ -15675,7 +15679,9 @@ var init_dist2 = __esm({
             const listPrefix = options?.prefix ? `vault/${options.prefix}` : "vault/";
             const listResult = await this.tc.kv.list({
               prefix: listPrefix,
-              removePrefix: true
+              removePrefix: true,
+              ...options?.limit === void 0 ? {} : { limit: options.limit },
+              ...options?.cursor === void 0 ? {} : { cursor: options.cursor }
             });
             if (!listResult.ok) {
               return vaultError({
@@ -15692,7 +15698,11 @@ var init_dist2 = __esm({
                 (k) => k.startsWith(userPrefix) ? k.slice(userPrefix.length) : k
               );
             }
-            return ok(keys);
+            return ok({
+              keys,
+              truncated: listResult.data.truncated === true,
+              ...listResult.data.nextCursor === void 0 ? {} : { nextCursor: listResult.data.nextCursor }
+            });
           } catch (error) {
             return vaultError({
               code: "STORAGE_ERROR",
@@ -17881,7 +17891,7 @@ function decodeBase64Url(value) {
   }
   return Uint8Array.from(bytes);
 }
-var import_ms, __defProp2, __typeError, __defNormalProp, __export2, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36_exports, base36, base36upper, base58_exports, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, _a, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base2, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base64, base64pad, base64url, base64urlpad, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode4, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, DEFAULT_MAX_ARTIFACT_BYTES, PUBLISHED_AAD, DEFAULT_MAX_ARTIFACT_BYTES2, DEFAULT_MAX_CONTENT_BYTES, DEFAULT_EXPIRY_MS2, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N12, N22, N32, N42, N52, N62, N72, MSB2, REST2, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, DEFAULT_LOCAL_NODE_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
+var import_ms, __defProp2, __typeError, __defNormalProp, __export2, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36_exports, base36, base36upper, base58_exports, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, _a, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base2, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base64, base64pad, base64url, base64urlpad, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode4, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N12, N22, N32, N42, N52, N62, N72, MSB2, REST2, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, DEFAULT_LOCAL_NODE_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
 var init_dist3 = __esm({
   "../sdk-core/dist/index.js"() {
     "use strict";
@@ -19335,11 +19345,10 @@ var init_dist3 = __esm({
       )
     );
     DEFAULT_MAX_INLINE_BYTES = 256 * 1024;
-    DEFAULT_MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
+    MAX_SHARE_CONTENT_BYTES = 100 * 1024 * 1024;
+    MAX_SEALED_SHARE_CONTENT_BYTES = MAX_SHARE_CONTENT_BYTES + 29;
+    MAX_SHARE_ARTIFACT_BYTES = Math.ceil(MAX_SEALED_SHARE_CONTENT_BYTES * 4 / 3) + 2 * 1024 * 1024;
     PUBLISHED_AAD = new TextEncoder().encode("tinycloud-share-envelope-v1");
-    DEFAULT_MAX_ARTIFACT_BYTES2 = 32 * 1024 * 1024;
-    DEFAULT_MAX_CONTENT_BYTES = 32 * 1024 * 1024;
-    DEFAULT_EXPIRY_MS2 = EXPIRY.SHARE_MS;
     ShareRecipientTargetSchema = external_exports.discriminatedUnion("kind", [
       external_exports.object({ kind: external_exports.literal("exactEmail"), value: external_exports.string().min(1) }).strict(),
       external_exports.object({ kind: external_exports.literal("emailDomain"), value: external_exports.string().min(1) }).strict(),
@@ -19351,7 +19360,7 @@ var init_dist3 = __esm({
     ]);
     ShareActionSchema = external_exports.enum(["read", "list", "edit"]);
     ShareRecipientPolicySchema = external_exports.object({
-      matcher: ShareRecipientTargetSchema,
+      recipientMatcher: ShareRecipientTargetSchema,
       spaceId: external_exports.string().min(1),
       resource: ShareResourceSchema,
       actions: external_exports.array(ShareActionSchema).min(1),
@@ -19361,8 +19370,109 @@ var init_dist3 = __esm({
       trustedOrigins: external_exports.array(external_exports.string().url()).min(1),
       maxInlineBytes: external_exports.number().int().positive().optional(),
       maxArtifactBytes: external_exports.number().int().positive().optional(),
-      maxContentBytes: external_exports.number().int().positive().optional()
-    }).passthrough();
+      maxContentBytes: external_exports.number().int().positive().optional(),
+      maxSealedContentBytes: external_exports.number().int().positive().optional()
+    }).strict();
+    ShareNativeActionSchema = external_exports.enum(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"]);
+    ShareWireActionSchema = external_exports.enum(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.sql/read"]);
+    ShareContentSourceSchema = external_exports.discriminatedUnion("kind", [
+      external_exports.object({
+        kind: external_exports.literal("kv"),
+        action: ShareNativeActionSchema,
+        space: external_exports.string().min(1),
+        path: external_exports.string().min(1)
+      }).strict(),
+      external_exports.object({
+        kind: external_exports.literal("sql"),
+        action: external_exports.literal("tinycloud.sql/read"),
+        space: external_exports.string().min(1),
+        database: external_exports.string().min(1),
+        path: external_exports.string().min(1),
+        statement: external_exports.string().min(1),
+        arguments: external_exports.record(external_exports.number().int().safe()),
+        argumentsDigest: external_exports.string().min(1)
+      }).strict()
+    ]);
+    ShareAddressedRecipientSchema = external_exports.discriminatedUnion("kind", [
+      external_exports.object({ kind: external_exports.literal("exactEmail"), value: external_exports.string().min(1) }).strict(),
+      external_exports.object({ kind: external_exports.literal("emailDomain"), value: external_exports.string().min(1) }).strict()
+    ]);
+    ShareAddressedDelegationRequestV2Schema = external_exports.object({
+      version: external_exports.literal(2),
+      nonce: external_exports.string().min(1),
+      jti: external_exports.string().min(1),
+      senderDid: external_exports.string().min(1),
+      recipientMatcher: ShareAddressedRecipientSchema,
+      targetOrigin: external_exports.string().url(),
+      nodeAudience: external_exports.string().min(1),
+      shareCid: external_exports.string().min(1),
+      shareId: external_exports.string().min(1),
+      delegationCid: external_exports.string().min(1),
+      authorityMaterialHandle: external_exports.string().min(1),
+      authorityMaterialDigest: external_exports.string().min(1),
+      contentSource: ShareContentSourceSchema,
+      contentSourceDigest: external_exports.string().min(1),
+      actions: external_exports.array(ShareWireActionSchema).min(1).refine((actions) => new Set(actions).size === actions.length),
+      resource: external_exports.object({ kind: external_exports.enum(["exact", "prefix"]), value: external_exports.string().min(1) }).strict(),
+      expiresAt: external_exports.string().datetime({ offset: true }),
+      requestBodyDigest: external_exports.string().min(1)
+    }).strict();
+    ShareAddressedDelegationEnvelopeV2Schema = external_exports.object({
+      request: ShareAddressedDelegationRequestV2Schema,
+      proof: external_exports.object({ alg: external_exports.literal("EdDSA"), kid: external_exports.string().min(1), signature: external_exports.string().min(1) }).strict()
+    }).strict();
+    ShareAddressedDelegationResponseV2Schema = external_exports.object({
+      type: external_exports.literal("TinyCloudShareAddressedDelegation"),
+      version: external_exports.literal(2),
+      nonce: external_exports.string().min(1),
+      jti: external_exports.string().min(1),
+      policyCid: external_exports.string().min(1),
+      policyBytes: external_exports.string().min(1),
+      policyDigest: external_exports.string().min(1),
+      delegationCid: external_exports.string().min(1),
+      delegationBytes: external_exports.string().min(1),
+      delegationDigest: external_exports.string().min(1),
+      authorityMaterialHandle: external_exports.string().min(1),
+      authorityMaterialDigest: external_exports.string().min(1),
+      actions: external_exports.array(ShareWireActionSchema).min(1).refine((actions) => new Set(actions).size === actions.length),
+      resource: external_exports.object({ kind: external_exports.enum(["exact", "prefix"]), value: external_exports.string().min(1) }).strict(),
+      expiresAt: external_exports.string().datetime({ offset: true }),
+      proof: external_exports.object({ alg: external_exports.literal("EdDSA"), kid: external_exports.string().min(1), signature: external_exports.string().min(1) }).strict()
+    }).strict();
+    ShareNativeResponseEntrySchema = external_exports.object({
+      path: external_exports.string().min(1),
+      kind: external_exports.enum(["file", "folder"])
+    }).strict();
+    ShareNativeResponseBase = {
+      type: external_exports.literal("TinyCloudShareInvokeResponse"),
+      version: external_exports.literal(2),
+      resource: external_exports.string().min(1)
+    };
+    ShareNativeResponseSchema = external_exports.discriminatedUnion("action", [
+      external_exports.object({
+        ...ShareNativeResponseBase,
+        action: external_exports.literal("tinycloud.kv/get"),
+        mediaType: external_exports.string().min(1),
+        content: external_exports.string(),
+        bodyDigest: external_exports.string().min(1),
+        etag: external_exports.string().min(1).nullable()
+      }).strict(),
+      external_exports.object({
+        ...ShareNativeResponseBase,
+        action: external_exports.literal("tinycloud.kv/list"),
+        entries: external_exports.array(ShareNativeResponseEntrySchema),
+        nextCursor: external_exports.string().min(1).nullable()
+      }).strict(),
+      external_exports.object({
+        ...ShareNativeResponseBase,
+        action: external_exports.literal("tinycloud.kv/put"),
+        etag: external_exports.string().min(1),
+        bodyDigest: external_exports.string().min(1),
+        contentType: external_exports.string().min(1)
+      }).strict()
+    ]);
+    MAX_NATIVE_CURSOR_BYTES = 8 * 1024;
+    DEFAULT_EXPIRY_MS2 = EXPIRY.SHARE_MS;
     ethereumAddressPattern = /^0x[a-fA-F0-9]{40}$/;
     EnsDataSchema2 = external_exports.object({
       /** ENS name/domain. */
