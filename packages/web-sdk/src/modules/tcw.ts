@@ -52,6 +52,10 @@ import {
   type ResolvedDelegate,
   type PermissionEntry,
   type NetworkDescriptor,
+  type CreateOwnerDelegationParams,
+  type OwnerDelegationReceipt,
+  type RegisterOwnerSharePolicyParams,
+  type OwnerSharePolicyRegistrationReceipt,
   type LocalNodeIdentityStore,
   SignInOptions,
   composeManifestRequest,
@@ -734,6 +738,24 @@ export class TinyCloudWeb {
   }): Promise<PortableDelegation> {
     const node = await this.ensureNode();
     return node.createDelegation(params);
+  }
+
+  /** Create and activate a wallet-rooted delegation for an ephemeral share key. */
+  async createOwnerDelegation(
+    params: Omit<CreateOwnerDelegationParams, "spaceId"> & { readonly spaceId?: string },
+  ): Promise<OwnerDelegationReceipt> {
+    const node = await this.ensureNode();
+    const spaceId = params.spaceId ?? this.spaceId;
+    if (spaceId === undefined) throw new Error("Owner share delegation requires an authenticated space.");
+    return node.createOwnerDelegation({ ...params, spaceId });
+  }
+
+  /** Register an owner-bound addressed sharing policy through TinyCloud Node. */
+  async registerOwnerSharePolicy(
+    params: RegisterOwnerSharePolicyParams,
+  ): Promise<OwnerSharePolicyRegistrationReceipt> {
+    const node = await this.ensureNode();
+    return node.registerOwnerSharePolicy(params);
   }
 
   /**

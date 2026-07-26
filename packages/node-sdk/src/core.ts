@@ -116,6 +116,10 @@ export {
   type SecretReadInput,
   type SecretPermissionHint,
   type SecretReadResult,
+  type CreateOwnerDelegationParams,
+  type OwnerDelegationReceipt,
+  type RegisterOwnerSharePolicyParams,
+  type OwnerSharePolicyRegistrationReceipt,
 } from "./TinyCloudNode";
 
 export { AccountService } from "./account/AccountService";

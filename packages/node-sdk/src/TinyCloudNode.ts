@@ -139,6 +139,9 @@ import {
   type DecryptTransport,
   type EncryptionCrypto,
   type NetworkDescriptor,
+  type RegisterOwnerSharePolicyParams,
+  type OwnerSharePolicyRegistrationReceipt,
+  validateOwnerSharePolicyRegistration,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -158,6 +161,11 @@ import {
   extractSiweExpiration,
 } from "./delegateToHelpers";
 import { NodeSecretsService } from "./NodeSecretsService";
+
+export type {
+  RegisterOwnerSharePolicyParams,
+  OwnerSharePolicyRegistrationReceipt,
+} from "@tinycloud/sdk-core";
 
 /** Default TinyCloud host */
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
@@ -3714,6 +3722,26 @@ export class TinyCloudNode {
         skipped: activation.skipped ?? [],
       },
     };
+  }
+
+  /** Register a policy that is already bound to an activated owner delegation. */
+  async registerOwnerSharePolicy(
+    params: RegisterOwnerSharePolicyParams,
+  ): Promise<OwnerSharePolicyRegistrationReceipt> {
+    this._serviceGraph.assertActive();
+    if (params.policy.bytes.byteLength > 2 * 1024 * 1024) throw new Error("Owner share policy is too large");
+    const response = await fetch(`${this.config.host!}/share/v2/policies`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({
+        policy: { bytes: Buffer.from(params.policy.bytes).toString("base64url"), cid: params.policy.cid, proof: params.policy.proof },
+        ownerDelegation: { cid: params.ownerDelegation.delegationCid, dagCbor: Buffer.from(params.ownerDelegation.signedDagCbor).toString("base64url") },
+        enforcementDelegation: params.enforcementDelegation,
+        contentSourceDigest: params.contentSourceDigest,
+      }),
+    });
+    if (!response.ok) throw new Error(`Owner share policy registration failed: ${response.status}`);
+    return validateOwnerSharePolicyRegistration(await response.json(), params);
   }
 
   private async createRootDelegationForSharing(params: {

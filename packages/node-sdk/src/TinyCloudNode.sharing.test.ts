@@ -6,6 +6,10 @@ import {
   type EncodedShareData,
   type ISessionManager,
   type IWasmBindings,
+  canonicalOwnerSharePolicy,
+  computeOwnerShareRegistrationCid,
+  type OwnerDelegationReceipt,
+  type OwnerSharePolicyRegistration,
 } from "@tinycloud/sdk-core";
 import { Wallet } from "ethers";
 
@@ -498,5 +502,51 @@ describe("TinyCloudNode sharing", () => {
       wasmBindings: makeWasmBindings(),
     });
     await expect(withoutSession.createOwnerDelegation(params)).rejects.toThrow("Owner session is required");
+  });
+
+  test("registerOwnerSharePolicy posts only after the caller supplies the activated owner receipt", async () => {
+    const policy = await canonicalOwnerSharePolicy({
+      type: "TinyCloudSharePolicy",
+      version: 2,
+      shareId: "share-1",
+      ownerDid: "did:pkh:eip155:1:0xowner",
+      shareKeyDid: "did:key:z6MkShare",
+      recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+      target: { origin: "https://share.tinycloud.xyz", nodeAudience: "did:web:tee.node.tinycloud.xyz", enforcerDid: "did:key:z6MkEnforcer", spaceId: SPACE },
+      resource: { kind: "exact", path: "shares/share-1/document.md" },
+      actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
+      contentSource: { kind: "kv", space: SPACE, path: "shares/share-1/document.md" },
+      contentSourceDigest: "content-digest",
+      ownerDelegationCid: "bafy-owner",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+    });
+    const ownerDelegation = { delegationCid: "bafy-owner", signedDagCbor: new Uint8Array([1]), delegation: { delegateDID: "did:key:z6MkShare", spaceId: SPACE, path: "shares/share-1/document.md", actions: ["tinycloud.kv/get"], expiry: new Date("2030-01-01T00:00:00.000Z") } } satisfies OwnerDelegationReceipt;
+    const enforcement = { cid: "bafy-enforcement", dagCbor: "bytes", issuerDid: "did:key:z6MkShare", audienceDid: "did:key:z6MkEnforcer", facts: {}, signature: "sig" } as const;
+    const registrationCore = {
+      policyCid: policy.cid,
+      ownerDelegationCid: ownerDelegation.delegationCid,
+      enforcementDelegationCid: enforcement.cid,
+      ownerDid: "did:pkh:eip155:1:0xowner",
+      shareKeyDid: "did:key:z6MkShare",
+      enforcerDid: "did:key:z6MkEnforcer",
+      target: { origin: "https://share.tinycloud.xyz", nodeAudience: "did:web:tee.node.tinycloud.xyz", enforcerDid: "did:key:z6MkEnforcer", spaceId: SPACE },
+      resource: { kind: "exact" as const, path: "shares/share-1/document.md" },
+      actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
+      contentSourceDigest: "content-digest",
+      registeredAt: "2029-01-01T00:00:00.000Z",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+    } satisfies Omit<OwnerSharePolicyRegistration, "registrationCid">;
+    const responseBody = { registration: { registrationCid: computeOwnerShareRegistrationCid(registrationCore), ...registrationCore }, proof: { alg: "EdDSA", kid: "did:web:tee.node.tinycloud.xyz#key", signature: "sig" } };
+    const fetchMock = mock(async (input: string, init?: RequestInit) => {
+      expect(input).toBe("https://node.example/share/v2/policies");
+      expect(init?.method).toBe("POST");
+      expect(typeof init?.body).toBe("string");
+      return new Response(JSON.stringify(responseBody), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const node = new TinyCloudNode({ host: "https://node.example", wasmBindings: makeWasmBindings() });
+    const receipt = await node.registerOwnerSharePolicy({ policy: { ...policy, proof: "policy-proof" }, ownerDelegation, enforcementDelegation: enforcement, contentSourceDigest: "content-digest" });
+    expect(receipt.registration.registrationCid).toBe(responseBody.registration.registrationCid);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

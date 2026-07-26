@@ -142,6 +142,8 @@ export {
   type RuntimePermissionGrantOptions,
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
+  type RegisterOwnerSharePolicyParams,
+  type OwnerSharePolicyRegistrationReceipt,
   type SecretReadInput,
   type SecretPermissionHint,
   type SecretReadResult,
