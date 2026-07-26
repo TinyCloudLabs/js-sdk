@@ -16781,25 +16781,25 @@ function encodeTo(int, target, offset = 0) {
 function encodingLength(int) {
   return varint_default.encodingLength(int);
 }
-function create(code3, digest3) {
-  const size2 = digest3.byteLength;
+function create(code3, digest4) {
+  const size2 = digest4.byteLength;
   const sizeOffset = encodingLength(code3);
   const digestOffset = sizeOffset + encodingLength(size2);
-  const bytes = new Uint8Array(digestOffset + size2);
-  encodeTo(code3, bytes, 0);
-  encodeTo(size2, bytes, sizeOffset);
-  bytes.set(digest3, digestOffset);
-  return new Digest(code3, size2, digest3, bytes);
+  const bytes2 = new Uint8Array(digestOffset + size2);
+  encodeTo(code3, bytes2, 0);
+  encodeTo(size2, bytes2, sizeOffset);
+  bytes2.set(digest4, digestOffset);
+  return new Digest(code3, size2, digest4, bytes2);
 }
 function decode4(multihash) {
-  const bytes = coerce2(multihash);
-  const [code3, sizeOffset] = decode3(bytes);
-  const [size2, digestOffset] = decode3(bytes.subarray(sizeOffset));
-  const digest3 = bytes.subarray(sizeOffset + digestOffset);
-  if (digest3.byteLength !== size2) {
+  const bytes2 = coerce2(multihash);
+  const [code3, sizeOffset] = decode3(bytes2);
+  const [size2, digestOffset] = decode3(bytes2.subarray(sizeOffset));
+  const digest4 = bytes2.subarray(sizeOffset + digestOffset);
+  if (digest4.byteLength !== size2) {
     throw new Error("Incorrect length");
   }
-  return new Digest(code3, size2, digest3, bytes);
+  return new Digest(code3, size2, digest4, bytes2);
 }
 function equals2(a, b) {
   if (a === b) {
@@ -16810,19 +16810,19 @@ function equals2(a, b) {
   }
 }
 function format(link, base3) {
-  const { bytes, version: version3 } = link;
+  const { bytes: bytes2, version: version3 } = link;
   switch (version3) {
     case 0:
-      return toStringV0(bytes, baseCache(link), base3 ?? base58btc.encoder);
+      return toStringV0(bytes2, baseCache(link), base3 ?? base58btc.encoder);
     default:
-      return toStringV1(bytes, baseCache(link), base3 ?? base32.encoder);
+      return toStringV1(bytes2, baseCache(link), base3 ?? base32.encoder);
   }
 }
-function baseCache(cid) {
-  const baseCache2 = cache.get(cid);
+function baseCache(cid2) {
+  const baseCache2 = cache.get(cid2);
   if (baseCache2 == null) {
     const baseCache3 = /* @__PURE__ */ new Map();
-    cache.set(cid, baseCache3);
+    cache.set(cid2, baseCache3);
     return baseCache3;
   }
   return baseCache2;
@@ -16857,39 +16857,39 @@ function parseCIDtoBytes(source, base3) {
     }
   }
 }
-function toStringV0(bytes, cache2, base3) {
+function toStringV0(bytes2, cache2, base3) {
   const { prefix } = base3;
   if (prefix !== base58btc.prefix) {
     throw Error(`Cannot string encode V0 in ${base3.name} encoding`);
   }
-  const cid = cache2.get(prefix);
-  if (cid == null) {
-    const cid2 = base3.encode(bytes).slice(1);
-    cache2.set(prefix, cid2);
-    return cid2;
+  const cid2 = cache2.get(prefix);
+  if (cid2 == null) {
+    const cid3 = base3.encode(bytes2).slice(1);
+    cache2.set(prefix, cid3);
+    return cid3;
   } else {
-    return cid;
+    return cid2;
   }
 }
-function toStringV1(bytes, cache2, base3) {
+function toStringV1(bytes2, cache2, base3) {
   const { prefix } = base3;
-  const cid = cache2.get(prefix);
-  if (cid == null) {
-    const cid2 = base3.encode(bytes);
-    cache2.set(prefix, cid2);
-    return cid2;
+  const cid2 = cache2.get(prefix);
+  if (cid2 == null) {
+    const cid3 = base3.encode(bytes2);
+    cache2.set(prefix, cid3);
+    return cid3;
   } else {
-    return cid;
+    return cid2;
   }
 }
 function encodeCID(version3, code3, multihash) {
   const codeOffset = encodingLength(version3);
   const hashOffset = codeOffset + encodingLength(code3);
-  const bytes = new Uint8Array(hashOffset + multihash.byteLength);
-  encodeTo(version3, bytes, 0);
-  encodeTo(code3, bytes, codeOffset);
-  bytes.set(multihash, hashOffset);
-  return bytes;
+  const bytes2 = new Uint8Array(hashOffset + multihash.byteLength);
+  encodeTo(version3, bytes2, 0);
+  encodeTo(code3, bytes2, codeOffset);
+  bytes2.set(multihash, hashOffset);
+  return bytes2;
 }
 function encode3(data) {
   return data.reduce((p, c) => {
@@ -16924,14 +16924,14 @@ function digest(input, options2) {
 function from2({ name: name2, code: code3, encode: encode5, minDigestLength, maxDigestLength }) {
   return new Hasher(name2, code3, encode5, minDigestLength, maxDigestLength);
 }
-function createDigest(digest3, code3, truncate) {
-  if (truncate != null && truncate !== digest3.byteLength) {
-    if (truncate > digest3.byteLength) {
-      throw new Error(`Invalid truncate option, must be less than or equal to ${digest3.byteLength}`);
+function createDigest(digest4, code3, truncate) {
+  if (truncate != null && truncate !== digest4.byteLength) {
+    if (truncate > digest4.byteLength) {
+      throw new Error(`Invalid truncate option, must be less than or equal to ${digest4.byteLength}`);
     }
-    digest3 = digest3.subarray(0, truncate);
+    digest4 = digest4.subarray(0, truncate);
   }
-  return create(code3, digest3);
+  return create(code3, digest4);
 }
 function parseStrictRfc33392(value) {
   if (!/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(
@@ -17297,14 +17297,14 @@ function validate(...funcs) {
     }
   };
 }
-function bytesToComponents(bytes) {
+function bytesToComponents(bytes2) {
   const components = [];
   let i = 0;
-  while (i < bytes.length) {
-    const code3 = decode6(bytes, i);
+  while (i < bytes2.length) {
+    const code3 = decode6(bytes2, i);
     const codec = registry.getProtocol(code3);
     const codeLength = encodingLength2(code3);
-    const size2 = sizeForAddr(codec, bytes, i + codeLength);
+    const size2 = sizeForAddr(codec, bytes2, i + codeLength);
     let sizeLength = 0;
     if (size2 > 0 && codec.size === V) {
       sizeLength = encodingLength2(size2);
@@ -17313,11 +17313,11 @@ function bytesToComponents(bytes) {
     const component = {
       code: code3,
       name: codec.name,
-      bytes: bytes.subarray(i, i + componentLength)
+      bytes: bytes2.subarray(i, i + componentLength)
     };
     if (size2 > 0) {
       const valueOffset = i + codeLength + sizeLength;
-      const valueBytes = bytes.subarray(valueOffset, valueOffset + size2);
+      const valueBytes = bytes2.subarray(valueOffset, valueOffset + size2);
       component.value = codec.bytesToValue?.(valueBytes) ?? toString2(valueBytes);
     }
     components.push(component);
@@ -17327,7 +17327,7 @@ function bytesToComponents(bytes) {
 }
 function componentsToBytes(components) {
   let length2 = 0;
-  const bytes = [];
+  const bytes2 = [];
   for (const component of components) {
     if (component.bytes == null) {
       const codec = registry.getProtocol(component.code);
@@ -17342,23 +17342,23 @@ function componentsToBytes(components) {
           valueLengthLength = encodingLength2(valueLength);
         }
       }
-      const bytes2 = new Uint8Array(codecLength + valueLengthLength + valueLength);
+      const bytes3 = new Uint8Array(codecLength + valueLengthLength + valueLength);
       let offset = 0;
-      encodeUint8Array(component.code, bytes2, offset);
+      encodeUint8Array(component.code, bytes3, offset);
       offset += codecLength;
       if (valueBytes != null) {
         if (codec.size === V) {
-          encodeUint8Array(valueLength, bytes2, offset);
+          encodeUint8Array(valueLength, bytes3, offset);
           offset += valueLengthLength;
         }
-        bytes2.set(valueBytes, offset);
+        bytes3.set(valueBytes, offset);
       }
-      component.bytes = bytes2;
+      component.bytes = bytes3;
     }
-    bytes.push(component.bytes);
+    bytes2.push(component.bytes);
     length2 += component.bytes.byteLength;
   }
-  return concat2(bytes, length2);
+  return concat2(bytes2, length2);
 }
 function stringToComponents(string2) {
   if (string2.charAt(0) !== "/") {
@@ -17432,14 +17432,14 @@ function componentsToString(components) {
     ];
   }).join("/")}`;
 }
-function sizeForAddr(codec, bytes, offset) {
+function sizeForAddr(codec, bytes2, offset) {
   if (codec.size == null || codec.size === 0) {
     return 0;
   }
   if (codec.size > 0) {
     return codec.size / 8;
   }
-  return decode6(bytes, offset);
+  return decode6(bytes2, offset);
 }
 function toComponents(addr) {
   if (addr == null) {
@@ -17859,12 +17859,12 @@ function ed25519PublicKeyFromDidKey2(did) {
       "did:key must use base58btc multibase"
     );
   }
-  const bytes = bases.base58btc.decode(identifier);
-  if (bytes.length === 34 && bytes[0] === 237 && bytes[1] === 1) {
-    return bytes.slice(2);
+  const bytes2 = bases.base58btc.decode(identifier);
+  if (bytes2.length === 34 && bytes2[0] === 237 && bytes2[1] === 1) {
+    return bytes2.slice(2);
   }
-  if (bytes.length === 33 && bytes[0] === 237) {
-    return bytes.slice(1);
+  if (bytes2.length === 33 && bytes2[0] === 237) {
+    return bytes2.slice(1);
   }
   throw new LocationRecordValidationError(
     "did:key must be an Ed25519 public key"
@@ -17872,7 +17872,7 @@ function ed25519PublicKeyFromDidKey2(did) {
 }
 function decodeBase64Url(value) {
   const alphabet2 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-  const bytes = [];
+  const bytes2 = [];
   let buffer = 0;
   let bits = 0;
   for (const char of value) {
@@ -17886,12 +17886,12 @@ function decodeBase64Url(value) {
     bits += 6;
     if (bits >= 8) {
       bits -= 8;
-      bytes.push(buffer >> bits & 255);
+      bytes2.push(buffer >> bits & 255);
     }
   }
-  return Uint8Array.from(bytes);
+  return Uint8Array.from(bytes2);
 }
-var import_ms, __defProp2, __typeError, __defNormalProp, __export2, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36_exports, base36, base36upper, base58_exports, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, _a, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base2, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base64, base64pad, base64url, base64urlpad, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode4, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N12, N22, N32, N42, N52, N62, N72, MSB2, REST2, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, DEFAULT_LOCAL_NODE_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
+var import_ms, __defProp2, __typeError, __defNormalProp, __export2, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36_exports, base36, base36upper, base58_exports, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, _a, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base2, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base64, base64pad, base64url, base64urlpad, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode4, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N12, N22, N32, N42, N52, N62, N72, MSB2, REST2, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, DEFAULT_LOCAL_NODE_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
 var init_dist3 = __esm({
   "../sdk-core/dist/index.js"() {
     "use strict";
@@ -17979,9 +17979,9 @@ var init_dist3 = __esm({
         this.prefix = prefix;
         this.baseEncode = baseEncode;
       }
-      encode(bytes) {
-        if (bytes instanceof Uint8Array) {
-          return `${this.prefix}${this.baseEncode(bytes)}`;
+      encode(bytes2) {
+        if (bytes2 instanceof Uint8Array) {
+          return `${this.prefix}${this.baseEncode(bytes2)}`;
         } else {
           throw Error("Unknown type, must be binary type");
         }
@@ -18171,15 +18171,15 @@ var init_dist3 = __esm({
       /**
        * Creates a multihash digest.
        */
-      constructor(code3, size2, digest3, bytes) {
+      constructor(code3, size2, digest4, bytes2) {
         __publicField(this, "code");
         __publicField(this, "size");
         __publicField(this, "digest");
         __publicField(this, "bytes");
         this.code = code3;
         this.size = size2;
-        this.digest = digest3;
-        this.bytes = bytes;
+        this.digest = digest4;
+        this.bytes = bytes2;
       }
     };
     cache = /* @__PURE__ */ new WeakMap();
@@ -18189,7 +18189,7 @@ var init_dist3 = __esm({
        * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
        * @param multihash - (Multi)hash of the of the content.
        */
-      constructor(version3, code3, multihash, bytes) {
+      constructor(version3, code3, multihash, bytes2) {
         __publicField(this, "code");
         __publicField(this, "version");
         __publicField(this, "multihash");
@@ -18199,8 +18199,8 @@ var init_dist3 = __esm({
         this.code = code3;
         this.version = version3;
         this.multihash = multihash;
-        this.bytes = bytes;
-        this["/"] = bytes;
+        this.bytes = bytes2;
+        this["/"] = bytes2;
       }
       /**
        * Signalling `cid.asCID === cid` has been replaced with `cid['/'] === cid.bytes`
@@ -18242,8 +18242,8 @@ var init_dist3 = __esm({
       toV1() {
         switch (this.version) {
           case 0: {
-            const { code: code3, digest: digest3 } = this.multihash;
-            const multihash = create(code3, digest3);
+            const { code: code3, digest: digest4 } = this.multihash;
+            const multihash = create(code3, digest4);
             return _CID.createV1(this.code, multihash);
           }
           case 1: {
@@ -18292,12 +18292,12 @@ var init_dist3 = __esm({
         if (value instanceof _CID) {
           return value;
         } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-          const { version: version3, code: code3, multihash, bytes } = value;
-          return new _CID(version3, code3, multihash, bytes ?? encodeCID(version3, code3, multihash.bytes));
+          const { version: version3, code: code3, multihash, bytes: bytes2 } = value;
+          return new _CID(version3, code3, multihash, bytes2 ?? encodeCID(version3, code3, multihash.bytes));
         } else if (value[cidSymbol] === true) {
           const { version: version3, multihash, code: code3 } = value;
-          const digest3 = decode4(multihash);
-          return _CID.create(version3, code3, digest3);
+          const digest4 = decode4(multihash);
+          return _CID.create(version3, code3, digest4);
         } else {
           return null;
         }
@@ -18307,11 +18307,11 @@ var init_dist3 = __esm({
        * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
        * @param digest - (Multi)hash of the of the content.
        */
-      static create(version3, code3, digest3) {
+      static create(version3, code3, digest4) {
         if (typeof code3 !== "number") {
           throw new Error("String codecs are no longer supported");
         }
-        if (!(digest3.bytes instanceof Uint8Array)) {
+        if (!(digest4.bytes instanceof Uint8Array)) {
           throw new Error("Invalid digest");
         }
         switch (version3) {
@@ -18319,12 +18319,12 @@ var init_dist3 = __esm({
             if (code3 !== DAG_PB_CODE) {
               throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE}) block encoding`);
             } else {
-              return new _CID(version3, code3, digest3, digest3.bytes);
+              return new _CID(version3, code3, digest4, digest4.bytes);
             }
           }
           case 1: {
-            const bytes = encodeCID(version3, code3, digest3.bytes);
-            return new _CID(version3, code3, digest3, bytes);
+            const bytes2 = encodeCID(version3, code3, digest4.bytes);
+            return new _CID(version3, code3, digest4, bytes2);
           }
           default: {
             throw new Error("Invalid version");
@@ -18334,8 +18334,8 @@ var init_dist3 = __esm({
       /**
        * Simplified version of `create` for CIDv0.
        */
-      static createV0(digest3) {
-        return _CID.create(0, DAG_PB_CODE, digest3);
+      static createV0(digest4) {
+        return _CID.create(0, DAG_PB_CODE, digest4);
       }
       /**
        * Simplified version of `create` for CIDv1.
@@ -18343,8 +18343,8 @@ var init_dist3 = __esm({
        * @param code - Content encoding format code.
        * @param digest - Multihash of the content.
        */
-      static createV1(code3, digest3) {
-        return _CID.create(1, code3, digest3);
+      static createV1(code3, digest4) {
+        return _CID.create(1, code3, digest4);
       }
       /**
        * Decoded a CID from its binary representation. The byte array must contain
@@ -18353,12 +18353,12 @@ var init_dist3 = __esm({
        * An error will be thrown if the bytes provided do not contain a valid
        * binary representation of a CID.
        */
-      static decode(bytes) {
-        const [cid, remainder] = _CID.decodeFirst(bytes);
+      static decode(bytes2) {
+        const [cid2, remainder] = _CID.decodeFirst(bytes2);
         if (remainder.length !== 0) {
           throw new Error("Incorrect length");
         }
-        return cid;
+        return cid2;
       }
       /**
        * Decoded a CID from its binary representation at the beginning of a byte
@@ -18369,17 +18369,17 @@ var init_dist3 = __esm({
        * will be a zero-length byte array if the provided bytes only contained a
        * binary CID representation.
        */
-      static decodeFirst(bytes) {
-        const specs = _CID.inspectBytes(bytes);
+      static decodeFirst(bytes2) {
+        const specs = _CID.inspectBytes(bytes2);
         const prefixSize = specs.size - specs.multihashSize;
-        const multihashBytes = coerce2(bytes.subarray(prefixSize, prefixSize + specs.multihashSize));
+        const multihashBytes = coerce2(bytes2.subarray(prefixSize, prefixSize + specs.multihashSize));
         if (multihashBytes.byteLength !== specs.multihashSize) {
           throw new Error("Incorrect length");
         }
         const digestBytes = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
-        const digest3 = new Digest(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
-        const cid = specs.version === 0 ? _CID.createV0(digest3) : _CID.createV1(specs.codec, digest3);
-        return [cid, bytes.subarray(specs.size)];
+        const digest4 = new Digest(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
+        const cid2 = specs.version === 0 ? _CID.createV0(digest4) : _CID.createV1(specs.codec, digest4);
+        return [cid2, bytes2.subarray(specs.size)];
       }
       /**
        * Inspect the initial bytes of a CID to determine its properties.
@@ -18422,13 +18422,13 @@ var init_dist3 = __esm({
        * a default decoder).
        */
       static parse(source, base3) {
-        const [prefix, bytes] = parseCIDtoBytes(source, base3);
-        const cid = _CID.decode(bytes);
-        if (cid.version === 0 && source[0] !== "Q") {
+        const [prefix, bytes2] = parseCIDtoBytes(source, base3);
+        const cid2 = _CID.decode(bytes2);
+        if (cid2.version === 0 && source[0] !== "Q") {
           throw Error("Version 0 CID string must not include multibase prefix");
         }
-        baseCache(cid).set(prefix, source);
-        return cid;
+        baseCache(cid2).set(prefix, source);
+        return cid2;
       }
     };
     DAG_PB_CODE = 112;
@@ -18610,7 +18610,7 @@ var init_dist3 = __esm({
           if (result instanceof Uint8Array) {
             return createDigest(result, this.code, options2?.truncate);
           }
-          return result.then((digest3) => createDigest(digest3, this.code, options2?.truncate));
+          return result.then((digest4) => createDigest(digest4, this.code, options2?.truncate));
         } else {
           throw Error("Unknown type, must be binary type");
         }
@@ -19473,6 +19473,7 @@ var init_dist3 = __esm({
     ]);
     MAX_NATIVE_CURSOR_BYTES = 8 * 1024;
     DEFAULT_EXPIRY_MS2 = EXPIRY.SHARE_MS;
+    MAX_CONTENT_BYTES = 100 * 1024 * 1024;
     ethereumAddressPattern = /^0x[a-fA-F0-9]{40}$/;
     EnsDataSchema2 = external_exports.object({
       /** ENS name/domain. */
@@ -19775,15 +19776,15 @@ var init_dist3 = __esm({
     CODE_MEMORY = 777;
     ip4ToBytes = function(ip) {
       ip = ip.toString().trim();
-      const bytes = new Uint8Array(4);
+      const bytes2 = new Uint8Array(4);
       ip.split(/\./g).forEach((byte, index) => {
         const value = parseInt(byte, 10);
         if (isNaN(value) || value < 0 || value > 255) {
           throw new InvalidMultiaddrError("Invalid byte value in IP address");
         }
-        bytes[index] = value;
+        bytes2[index] = value;
       });
-      return bytes;
+      return bytes2;
     };
     ip6ToBytes = function(ip) {
       let offset = 0;
@@ -19818,7 +19819,7 @@ var init_dist3 = __esm({
         }
         sections.splice.apply(sections, argv);
       }
-      const bytes = new Uint8Array(offset + 16);
+      const bytes2 = new Uint8Array(offset + 16);
       for (i = 0; i < sections.length; i++) {
         if (sections[i] === "") {
           sections[i] = "0";
@@ -19827,10 +19828,10 @@ var init_dist3 = __esm({
         if (isNaN(word2) || word2 < 0 || word2 > 65535) {
           throw new InvalidMultiaddrError("Invalid byte value in IP address");
         }
-        bytes[offset++] = word2 >> 8 & 255;
-        bytes[offset++] = word2 & 255;
+        bytes2[offset++] = word2 >> 8 & 255;
+        bytes2[offset++] = word2 & 255;
       }
-      return bytes;
+      return bytes2;
     };
     ip4ToString = function(buf) {
       if (buf.byteLength !== 4) {
