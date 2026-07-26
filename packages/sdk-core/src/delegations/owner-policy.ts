@@ -23,10 +23,10 @@ export interface CreateOwnerDelegationParams {
 }
 
 const MAX_CONTENT_BYTES = 100 * 1024 * 1024;
-const ENFORCEMENT_DOMAIN = "xyz.tinycloud.share/policy-enforcement/v2\\0";
-const POLICY_DOMAIN = "xyz.tinycloud.share/policy/v2\\0";
+const ENFORCEMENT_DOMAIN = "xyz.tinycloud.share/policy-enforcement/v2\0";
+const POLICY_DOMAIN = "xyz.tinycloud.share/policy/v2\0";
 
-export type OwnerShareAction = "tinycloud.kv/get" | "tinycloud.kv/metadata" | "tinycloud.kv/put";
+export type OwnerShareAction = "tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put";
 export type OwnerShareMatcher =
   | { readonly kind: "exactEmail"; readonly value: string }
   | { readonly kind: "emailDomain"; readonly value: string };
@@ -207,6 +207,7 @@ export async function createPolicyEnforcementDelegation(input: {
   readonly policyCid: string;
   readonly shareId: string;
   readonly spaceId: string;
+  readonly nodeAudience: string;
   readonly path: string;
   readonly actions: readonly OwnerShareAction[];
   readonly contentSourceDigest: string;
@@ -219,7 +220,7 @@ export async function createPolicyEnforcementDelegation(input: {
     shareId: input.shareId,
     shareKeyDid: input.shareKey.did,
     enforcerDid: input.enforcerDid,
-    nodeAudience: "did:web:tee.node.tinycloud.xyz",
+    nodeAudience: input.nodeAudience,
     spaceId: input.spaceId,
     path: input.path,
     actions: [...input.actions],

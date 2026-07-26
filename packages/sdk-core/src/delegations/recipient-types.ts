@@ -188,11 +188,15 @@ export interface ShareRecipientClientOptions {
 
 export interface SharePolicySession {
   readonly type?: "TinyCloudSharePolicySession";
-  readonly version?: 1;
+  readonly version?: 1 | 2;
   readonly sessionId: string;
+  readonly envelopeCid?: string;
+  readonly registrationCid?: string;
   readonly shareCid?: string;
   readonly shareId?: string;
   readonly policyCid?: string;
+  readonly enforcementDelegationCid?: string;
+  readonly runtimeDelegation?: unknown;
   readonly holderDid: string;
   readonly expiresAt: string;
   readonly expiryMin?: string;
@@ -232,12 +236,17 @@ export interface ShareDetachedProof {
 
 /** Exact fields Node resolves from its persisted policy authority tuple. */
 export interface SharePolicyBinding {
+  readonly envelopeCid?: string;
   readonly shareCid: string;
   readonly shareId: string;
+  readonly registrationCid?: string;
   readonly delegationCid: string;
   readonly authorityMaterialHandle: string;
   readonly authorityMaterialDigest: string;
   readonly policyCid: string;
+  readonly enforcementDelegationCid?: string;
+  readonly enforcementDelegation?: unknown;
+  readonly outerEnvelope?: unknown;
   readonly contentSource: ShareContentSource;
   readonly contentSourceDigest: string;
   readonly holderDid?: string;

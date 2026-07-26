@@ -39,6 +39,7 @@ describe("owner share policy primitives", () => {
       policyCid: "bafy-policy",
       shareId: "share-1",
       spaceId: ownerDelegation.delegation.spaceId,
+      nodeAudience: "did:web:tee.node.tinycloud.xyz",
       path: ownerDelegation.delegation.path,
       actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
       contentSourceDigest: "digest",
