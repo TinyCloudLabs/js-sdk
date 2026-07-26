@@ -4,6 +4,8 @@
  * Type definitions for the KV (Key-Value) service operations.
  */
 
+import type { Result } from "../types";
+
 /**
  * Configuration for KVService.
  */
@@ -162,6 +164,19 @@ export interface KVBatchPutResponse {
   /**
    * Number of written keys.
    */
+  count: number;
+}
+
+/**
+ * Response from a KV batch read. Transport or authorization failures are
+ * returned by the outer Result; each requested key has its own Result so a
+ * missing key does not discard successful siblings.
+ */
+export interface KVBatchReadResponse<T = unknown> {
+  results: Array<{
+    key: string;
+    result: Result<KVResponse<T>>;
+  }>;
   count: number;
 }
 

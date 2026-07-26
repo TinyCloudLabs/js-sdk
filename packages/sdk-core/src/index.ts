@@ -253,6 +253,7 @@ export {
   type KVHeadOptions,
   type KVCreateSignedReadUrlOptions,
   type KVResponse,
+  type KVBatchReadResponse,
   type KVListResponse,
   type KVSignedReadUrlResponse,
   type KVResponseHeaders,

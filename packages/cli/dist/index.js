@@ -12184,7 +12184,7 @@ function encOk(data) {
 function encErr(error) {
   return { ok: false, error };
 }
-var import_decrypt_transport_response_error, import_decrypt_transport_response_error2, import_decrypt_transport_response_error3, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HooksService, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, HEX, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
+var import_decrypt_transport_response_error, import_decrypt_transport_response_error2, import_decrypt_transport_response_error3, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HooksService, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, HEX, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
 var init_dist2 = __esm({
   "../sdk-services/dist/index.js"() {
     "use strict";
@@ -12704,6 +12704,20 @@ var init_dist2 = __esm({
         const fullKey = this.getFullKey(key);
         return this._kv.get(fullKey, { ...options, prefix: "" });
       }
+      async batchGet(keys, options) {
+        const response = await this._kv.batchGet(
+          keys.map((key) => this.getFullKey(key)),
+          { ...options, prefix: "" }
+        );
+        if (!response.ok) return response;
+        return ok({
+          ...response.data,
+          results: response.data.results.map((item, index) => ({
+            ...item,
+            key: keys[index]
+          }))
+        });
+      }
       /**
        * Store a value at a key.
        */
@@ -12748,6 +12762,20 @@ var init_dist2 = __esm({
         const fullKey = this.getFullKey(key);
         return this._kv.head(fullKey, { ...options, prefix: "" });
       }
+      async batchHead(keys, options) {
+        const response = await this._kv.batchHead(
+          keys.map((key) => this.getFullKey(key)),
+          { ...options, prefix: "" }
+        );
+        if (!response.ok) return response;
+        return ok({
+          ...response.data,
+          results: response.data.results.map((item, index) => ({
+            ...item,
+            key: keys[index]
+          }))
+        });
+      }
       /**
        * Create a short-lived signed URL for reading a KV object.
        */
@@ -12772,6 +12800,7 @@ var init_dist2 = __esm({
       DELETE: "tinycloud.kv/del",
       HEAD: "tinycloud.kv/metadata"
     };
+    MAX_KV_BATCH_READ_ITEMS = 100;
     KVService = class extends BaseService {
       /**
        * Create a new KVService instance.
@@ -13000,6 +13029,173 @@ var init_dist2 = __esm({
           get: (name2) => headers.get(name2)
         };
       }
+      createBatchResponseHeaders(values) {
+        const normalized = new Map(
+          Object.entries(values).map(([name2, value]) => [name2.toLowerCase(), value])
+        );
+        return this.createResponseHeaders({
+          get: (name2) => normalized.get(name2.toLowerCase()) ?? null
+        });
+      }
+      parseBatchValue(dataBase64, headers, raw = false, binary = false) {
+        const encoded = globalThis.atob(dataBase64);
+        const bytes = Uint8Array.from(encoded, (character) => character.charCodeAt(0));
+        if (binary) return bytes;
+        const text = new TextDecoder().decode(bytes);
+        if (raw) return text;
+        const contentType = Object.entries(headers).find(
+          ([name2]) => name2.toLowerCase() === "content-type"
+        )?.[1];
+        return contentType?.includes("application/json") ? JSON.parse(text) : text;
+      }
+      normalizeBatchReadResponse(data, paths, requireData) {
+        if (!data || typeof data !== "object") return void 0;
+        const response = data;
+        if (!Array.isArray(response.results) || response.results.length !== paths.length) {
+          return void 0;
+        }
+        for (let index = 0; index < response.results.length; index++) {
+          const item = response.results[index];
+          if (!item || typeof item !== "object" || item.key !== paths[index] || typeof item.ok !== "boolean") {
+            return void 0;
+          }
+          if (item.ok && (!item.headers || typeof item.headers !== "object" || Object.values(item.headers).some((value) => typeof value !== "string") || requireData && typeof item.dataBase64 !== "string")) {
+            return void 0;
+          }
+          if (!item.ok && (!item.error || typeof item.error.code !== "string" || typeof item.error.message !== "string")) {
+            return void 0;
+          }
+        }
+        return response;
+      }
+      async batchRead(keys, action, options) {
+        if (!this.requireAuth()) return err(authRequiredError("kv"));
+        if (keys.length === 0) return ok({ results: [], count: 0 });
+        if (keys.length > MAX_KV_BATCH_READ_ITEMS) {
+          return err(serviceError(
+            ErrorCodes.INVALID_INPUT,
+            `KV batch reads accept at most ${MAX_KV_BATCH_READ_ITEMS} keys`,
+            "kv"
+          ));
+        }
+        if (keys.length === 1) {
+          const key = keys[0];
+          const result = action === KVAction.GET ? await this.get(key, options) : await this.head(key, options);
+          return ok({
+            results: [{ key, result }],
+            count: 1
+          });
+        }
+        if (!this.context.invokeAny) {
+          return err(serviceError(
+            ErrorCodes.INVALID_INPUT,
+            "KV batch reads require SDK runtime support for multi-resource invocations",
+            "kv"
+          ));
+        }
+        const getOptions = action === KVAction.GET ? options : void 0;
+        if (getOptions?.maxResponseBytes !== void 0 && (!Number.isSafeInteger(getOptions.maxResponseBytes) || getOptions.maxResponseBytes <= 0)) {
+          return err(serviceError(
+            ErrorCodes.INVALID_INPUT,
+            "KV maxResponseBytes must be a positive safe integer",
+            "kv"
+          ));
+        }
+        const paths = keys.map((key) => this.getFullPath(key, options?.prefix));
+        if (new Set(paths).size !== paths.length) {
+          return err(serviceError(
+            ErrorCodes.INVALID_INPUT,
+            "KV batch read received duplicate keys after prefix resolution",
+            "kv"
+          ));
+        }
+        try {
+          const session = this.context.session;
+          const invocationHeaders = this.context.invokeAny(
+            session,
+            paths.map((path) => ({
+              spaceId: session.spaceId,
+              service: "kv",
+              path,
+              action
+            }))
+          );
+          const limitHeaders = {};
+          if (getOptions?.maxResponseBytes !== void 0) {
+            limitHeaders["x-tinycloud-max-response-bytes"] = String(
+              getOptions.maxResponseBytes
+            );
+          }
+          const headers = Array.isArray(invocationHeaders) ? [...invocationHeaders, ...Object.entries(limitHeaders)] : { ...invocationHeaders, ...limitHeaders };
+          const response = await this.context.fetch(`${this.host}/invoke`, {
+            method: "POST",
+            headers,
+            signal: this.combineSignals(options?.signal)
+          });
+          if (!response.ok) {
+            const errorText = await response.text();
+            if (response.status === 401 || response.status === 403) {
+              const { resource, action: requiredAction } = parseAuthError(errorText);
+              return err(authUnauthorizedError("kv", errorText, {
+                status: response.status,
+                ...requiredAction && { requiredAction },
+                ...resource && { resource }
+              }));
+            }
+            if (response.status === 413) {
+              return err(serviceError(
+                ErrorCodes.KV_RESPONSE_TOO_LARGE,
+                "A KV batch value exceeds the requested response limit",
+                "kv",
+                { meta: { status: response.status, statusText: response.statusText } }
+              ));
+            }
+            return err(serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              `Failed to batch read ${keys.length} key(s): ${response.status} - ${errorText}`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
+          const payload = this.normalizeBatchReadResponse(
+            await response.json(),
+            paths,
+            action === KVAction.GET
+          );
+          if (!payload) {
+            return err(serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              "KV batch read response did not match the requested keys",
+              "kv"
+            ));
+          }
+          const results = payload.results.map((item, index) => {
+            if (!item.ok) {
+              return {
+                key: keys[index],
+                result: err(serviceError(item.error.code, item.error.message, "kv"))
+              };
+            }
+            const headers2 = item.headers;
+            const data = action === KVAction.HEAD ? void 0 : this.parseBatchValue(
+              item.dataBase64,
+              headers2,
+              getOptions?.raw,
+              getOptions?.binary
+            );
+            return {
+              key: keys[index],
+              result: ok({
+                data,
+                headers: this.createBatchResponseHeaders(headers2)
+              })
+            };
+          });
+          return ok({ results, count: results.length });
+        } catch (error) {
+          return err(wrapError2("kv", error));
+        }
+      }
       /**
        * Parse response body based on content type.
        *
@@ -13145,6 +13341,13 @@ var init_dist2 = __esm({
             return err(wrapError2("kv", error));
           }
         });
+      }
+      async batchGet(keys, options) {
+        return this.withTelemetry(
+          "batchGet",
+          String(keys.length),
+          () => this.batchRead(keys, KVAction.GET, options)
+        );
       }
       /**
        * Store a value at a key.
@@ -13508,6 +13711,13 @@ var init_dist2 = __esm({
             return err(wrapError2("kv", error));
           }
         });
+      }
+      async batchHead(keys, options) {
+        return this.withTelemetry(
+          "batchHead",
+          String(keys.length),
+          () => this.batchRead(keys, KVAction.HEAD, options)
+        );
       }
       /**
        * Create a short-lived signed URL for reading a KV object.

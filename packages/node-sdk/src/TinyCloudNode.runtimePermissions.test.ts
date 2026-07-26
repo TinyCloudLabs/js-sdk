@@ -1558,10 +1558,10 @@ describe("TinyCloudNode runtime permission delegations", () => {
       expect(new TextDecoder().decode(decryptResult.data)).toBe(
         "hello tinycloud encryption",
       );
-      expect(fetchCalls.map((call) => call.method)).toEqual(["GET", "GET", "POST"]);
+      expect(fetchCalls.map((call) => call.method)).toEqual(["GET", "POST"]);
       expect(signRawNetworkAuthorization).toHaveBeenCalledTimes(1);
 
-      const postCall = fetchCalls[2];
+      const postCall = fetchCalls[1];
       expect(postCall.url).toBe(
         `https://tinycloud.test/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
       );

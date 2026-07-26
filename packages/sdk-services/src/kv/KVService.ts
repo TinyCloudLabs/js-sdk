@@ -34,6 +34,7 @@ import {
   KVBatchPutItem,
   KVBatchPutOptions,
   KVBatchPutResponse,
+  KVBatchReadResponse,
   KVListOptions,
   KVDeleteOptions,
   KVHeadOptions,
@@ -50,6 +51,20 @@ interface SignedKvUrlNodeResponse {
   ticketId: string;
   expiresAt: string;
 }
+
+interface KvBatchNodeItem {
+  key: string;
+  ok: boolean;
+  dataBase64?: string;
+  headers?: Record<string, string>;
+  error?: { code: string; message: string };
+}
+
+interface KvBatchNodeResponse {
+  results: KvBatchNodeItem[];
+}
+
+const MAX_KV_BATCH_READ_ITEMS = 100;
 
 function encodeKvBatchPartName(path: string): string {
   return encodeURIComponent(path).replace(/[!'()*]/g, (char) =>
@@ -381,6 +396,228 @@ export class KVService extends BaseService implements IKVService {
     };
   }
 
+  private createBatchResponseHeaders(
+    values: Record<string, string>
+  ): KVResponseHeaders {
+    const normalized = new Map(
+      Object.entries(values).map(([name, value]) => [name.toLowerCase(), value])
+    );
+    return this.createResponseHeaders({
+      get: (name) => normalized.get(name.toLowerCase()) ?? null,
+    });
+  }
+
+  private parseBatchValue<T>(
+    dataBase64: string,
+    headers: Record<string, string>,
+    raw: boolean = false,
+    binary: boolean = false
+  ): T {
+    const encoded = globalThis.atob(dataBase64);
+    const bytes = Uint8Array.from(encoded, (character) => character.charCodeAt(0));
+    if (binary) return bytes as unknown as T;
+
+    const text = new TextDecoder().decode(bytes);
+    if (raw) return text as unknown as T;
+    const contentType = Object.entries(headers).find(
+      ([name]) => name.toLowerCase() === "content-type"
+    )?.[1];
+    return (contentType?.includes("application/json")
+      ? JSON.parse(text)
+      : text) as T;
+  }
+
+  private normalizeBatchReadResponse(
+    data: unknown,
+    paths: string[],
+    requireData: boolean
+  ): KvBatchNodeResponse | undefined {
+    if (!data || typeof data !== "object") return undefined;
+    const response = data as Partial<KvBatchNodeResponse>;
+    if (!Array.isArray(response.results) || response.results.length !== paths.length) {
+      return undefined;
+    }
+
+    for (let index = 0; index < response.results.length; index++) {
+      const item = response.results[index];
+      if (
+        !item ||
+        typeof item !== "object" ||
+        item.key !== paths[index] ||
+        typeof item.ok !== "boolean"
+      ) {
+        return undefined;
+      }
+      if (
+        item.ok &&
+        (!item.headers ||
+          typeof item.headers !== "object" ||
+          Object.values(item.headers).some((value) => typeof value !== "string") ||
+          (requireData && typeof item.dataBase64 !== "string"))
+      ) {
+        return undefined;
+      }
+      if (
+        !item.ok &&
+        (!item.error ||
+          typeof item.error.code !== "string" ||
+          typeof item.error.message !== "string")
+      ) {
+        return undefined;
+      }
+    }
+    return response as KvBatchNodeResponse;
+  }
+
+  private async batchRead<T>(
+    keys: string[],
+    action: typeof KVAction.GET | typeof KVAction.HEAD,
+    options?: KVGetOptions | KVHeadOptions
+  ): Promise<Result<KVBatchReadResponse<T>>> {
+    if (!this.requireAuth()) return err(authRequiredError("kv"));
+    if (keys.length === 0) return ok({ results: [], count: 0 });
+    if (keys.length > MAX_KV_BATCH_READ_ITEMS) {
+      return err(serviceError(
+        ErrorCodes.INVALID_INPUT,
+        `KV batch reads accept at most ${MAX_KV_BATCH_READ_ITEMS} keys`,
+        "kv"
+      ));
+    }
+    if (keys.length === 1) {
+      const key = keys[0]!;
+      const result = action === KVAction.GET
+        ? await this.get<T>(key, options as KVGetOptions)
+        : await this.head(key, options as KVHeadOptions);
+      return ok({
+        results: [{ key, result: result as Result<KVResponse<T>> }],
+        count: 1,
+      });
+    }
+    if (!this.context.invokeAny) {
+      return err(serviceError(
+        ErrorCodes.INVALID_INPUT,
+        "KV batch reads require SDK runtime support for multi-resource invocations",
+        "kv"
+      ));
+    }
+
+    const getOptions = action === KVAction.GET ? options as KVGetOptions : undefined;
+    if (
+      getOptions?.maxResponseBytes !== undefined &&
+      (!Number.isSafeInteger(getOptions.maxResponseBytes) ||
+        getOptions.maxResponseBytes <= 0)
+    ) {
+      return err(serviceError(
+        ErrorCodes.INVALID_INPUT,
+        "KV maxResponseBytes must be a positive safe integer",
+        "kv"
+      ));
+    }
+
+    const paths = keys.map((key) => this.getFullPath(key, options?.prefix));
+    if (new Set(paths).size !== paths.length) {
+      return err(serviceError(
+        ErrorCodes.INVALID_INPUT,
+        "KV batch read received duplicate keys after prefix resolution",
+        "kv"
+      ));
+    }
+
+    try {
+      const session = this.context.session!;
+      const invocationHeaders = this.context.invokeAny(
+        session,
+        paths.map((path) => ({
+          spaceId: session.spaceId,
+          service: "kv",
+          path,
+          action,
+        }))
+      );
+      const limitHeaders: Record<string, string> = {};
+      if (getOptions?.maxResponseBytes !== undefined) {
+        limitHeaders["x-tinycloud-max-response-bytes"] = String(
+          getOptions.maxResponseBytes
+        );
+      }
+      const headers: ServiceHeaders = Array.isArray(invocationHeaders)
+        ? [...invocationHeaders, ...Object.entries(limitHeaders)]
+        : { ...invocationHeaders, ...limitHeaders };
+      const response = await this.context.fetch(`${this.host}/invoke`, {
+        method: "POST",
+        headers,
+        signal: this.combineSignals(options?.signal),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        if (response.status === 401 || response.status === 403) {
+          const { resource, action: requiredAction } = parseAuthError(errorText);
+          return err(authUnauthorizedError("kv", errorText, {
+            status: response.status,
+            ...(requiredAction && { requiredAction }),
+            ...(resource && { resource }),
+          }));
+        }
+        if (response.status === 413) {
+          return err(serviceError(
+            ErrorCodes.KV_RESPONSE_TOO_LARGE,
+            "A KV batch value exceeds the requested response limit",
+            "kv",
+            { meta: { status: response.status, statusText: response.statusText } }
+          ));
+        }
+        return err(serviceError(
+          ErrorCodes.NETWORK_ERROR,
+          `Failed to batch read ${keys.length} key(s): ${response.status} - ${errorText}`,
+          "kv",
+          { meta: { status: response.status, statusText: response.statusText } }
+        ));
+      }
+
+      const payload = this.normalizeBatchReadResponse(
+        await response.json(),
+        paths,
+        action === KVAction.GET
+      );
+      if (!payload) {
+        return err(serviceError(
+          ErrorCodes.NETWORK_ERROR,
+          "KV batch read response did not match the requested keys",
+          "kv"
+        ));
+      }
+
+      const results = payload.results.map((item, index) => {
+        if (!item.ok) {
+          return {
+            key: keys[index]!,
+            result: err(serviceError(item.error!.code, item.error!.message, "kv")),
+          };
+        }
+        const headers = item.headers!;
+        const data = action === KVAction.HEAD
+          ? undefined
+          : this.parseBatchValue<T>(
+              item.dataBase64!,
+              headers,
+              getOptions?.raw,
+              getOptions?.binary
+            );
+        return {
+          key: keys[index]!,
+          result: ok({
+            data: data as T,
+            headers: this.createBatchResponseHeaders(headers),
+          }),
+        };
+      });
+      return ok({ results, count: results.length });
+    } catch (error) {
+      return err(wrapError("kv", error));
+    }
+  }
+
   /**
    * Parse response body based on content type.
    *
@@ -568,6 +805,15 @@ export class KVService extends BaseService implements IKVService {
         return err(wrapError("kv", error));
       }
     });
+  }
+
+  async batchGet<T = unknown>(
+    keys: string[],
+    options?: KVGetOptions
+  ): Promise<Result<KVBatchReadResponse<T>>> {
+    return this.withTelemetry("batchGet", String(keys.length), () =>
+      this.batchRead<T>(keys, KVAction.GET, options)
+    );
   }
 
   /**
@@ -1016,6 +1262,15 @@ export class KVService extends BaseService implements IKVService {
         return err(wrapError("kv", error));
       }
     });
+  }
+
+  async batchHead(
+    keys: string[],
+    options?: KVHeadOptions
+  ): Promise<Result<KVBatchReadResponse<void>>> {
+    return this.withTelemetry("batchHead", String(keys.length), () =>
+      this.batchRead<void>(keys, KVAction.HEAD, options)
+    );
   }
 
   /**

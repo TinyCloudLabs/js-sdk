@@ -9,6 +9,17 @@
   `ShareRecipientClient`. The legacy `tc1` `SharingService.receive` path is
   unchanged; v2 callers use `receiveV2` and explicit `ShareAccessV2` methods.
 
+## 2.10.0-beta.0
+
+### Minor Changes
+
+- 28cc430: Add batch KV reads and memoize TinyCloud node descriptor lookups to reduce SDK round trips.
+
+### Patch Changes
+
+- Updated dependencies [28cc430]
+  - @tinycloud/sdk-services@2.10.0-beta.0
+
 ## 2.9.0
 
 ### Minor Changes

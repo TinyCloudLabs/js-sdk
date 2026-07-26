@@ -95,6 +95,141 @@ function createContext(
   };
 }
 
+describe("KVService batch reads", () => {
+  test("reduces three gets from three signatures and requests to one", async () => {
+    const individualInvocations: Array<{
+      service: string;
+      path: string;
+      action: string;
+    }> = [];
+    let individualFetches = 0;
+    const individual = new KVService({ prefix: "app" });
+    individual.initialize(
+      createContext(async () => {
+        individualFetches++;
+        return response(true, 200, { value: 1 });
+      }, individualInvocations)
+    );
+    await Promise.all(["a", "b", "c"].map((key) => individual.get(key)));
+
+    const batchInvocations: Array<{ entries: InvokeAnyEntry[] }> = [];
+    let batchFetches = 0;
+    const batch = new KVService({ prefix: "app" });
+    batch.initialize(
+      createContext(async () => {
+        batchFetches++;
+        return response(true, 200, {
+          results: ["a", "b", "c"].map((key) => ({
+            key: `app/${key}`,
+            ok: true,
+            dataBase64: btoa(JSON.stringify({ key })),
+            headers: { "content-type": "application/json" },
+          })),
+        });
+      }, [], batchInvocations)
+    );
+    const result = await batch.batchGet<{ key: string }>(["a", "b", "c"]);
+
+    expect([individualInvocations.length, individualFetches]).toEqual([3, 3]);
+    expect([batchInvocations.length, batchFetches]).toEqual([1, 1]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(
+        result.data.results.map((item) =>
+          item.result.ok ? item.result.data.data.key : "failed"
+        )
+      ).toEqual(["a", "b", "c"]);
+    }
+  });
+
+  test("returns missing keys as explicit per-item failures", async () => {
+    const invokeAnyCalls: Array<{ entries: InvokeAnyEntry[] }> = [];
+    const service = new KVService({ prefix: "app" });
+    service.initialize(
+      createContext(async () =>
+        response(true, 200, {
+          results: [
+            {
+              key: "app/found",
+              ok: true,
+              dataBase64: btoa("hello"),
+              headers: { "content-type": "text/plain" },
+            },
+            {
+              key: "app/missing",
+              ok: false,
+              error: {
+                code: ErrorCodes.KV_NOT_FOUND,
+                message: "Key not found: app/missing",
+              },
+            },
+          ],
+        }), [], invokeAnyCalls)
+    );
+
+    const result = await service.batchGet<string>(["found", "missing"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.results[0]!.result).toMatchObject({
+        ok: true,
+        data: { data: "hello" },
+      });
+      expect(result.data.results[1]!.result).toMatchObject({
+        ok: false,
+        error: { code: ErrorCodes.KV_NOT_FOUND },
+      });
+    }
+  });
+
+  test("batchHead and prefixed batchGet preserve caller keys", async () => {
+    const invokeAnyCalls: Array<{ entries: InvokeAnyEntry[] }> = [];
+    let call = 0;
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        call++;
+        return response(true, 200, {
+          results: ["one", "two"].map((key) => ({
+            key: `/audio/${key}`,
+            ok: true,
+            ...(call === 2 ? { dataBase64: btoa(key) } : {}),
+            headers: {
+              "content-type": "text/plain",
+              "content-length": String(key.length),
+            },
+          })),
+        });
+      }, [], invokeAnyCalls)
+    );
+
+    const prefixed = service.withPrefix("/audio");
+    const head = await prefixed.batchHead(["one", "two"]);
+    const get = await prefixed.batchGet<string>(["one", "two"]);
+    expect(head.ok && head.data.results[0]!.key).toBe("one");
+    expect(get.ok && get.data.results[0]!.key).toBe("one");
+    expect(invokeAnyCalls.map((entry) => entry.entries[0]!.path)).toEqual([
+      "/audio/one",
+      "/audio/one",
+    ]);
+  });
+
+  test("rejects duplicate resolved keys before signing", async () => {
+    const invokeAnyCalls: Array<{ entries: InvokeAnyEntry[] }> = [];
+    let fetches = 0;
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        fetches++;
+        return response(true, 200, {});
+      }, [], invokeAnyCalls)
+    );
+    const result = await service.batchGet(["same", "same"]);
+    expect(result.ok).toBe(false);
+    expect(invokeAnyCalls).toHaveLength(0);
+    expect(fetches).toBe(0);
+  });
+});
+
 describe("KVService.batchPut", () => {
   test("writes multiple keys with one invokeAny multipart request", async () => {
     const invokeAnyCalls: Array<{ entries: InvokeAnyEntry[] }> = [];
