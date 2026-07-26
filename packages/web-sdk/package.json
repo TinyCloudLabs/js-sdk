@@ -89,6 +89,10 @@
     "webpack-cli": "^7.0.0"
   },
   "files": [
-    "dist"
+    "dist/**/*.cjs",
+    "dist/**/*.js",
+    "dist/**/*.mjs",
+    "dist/**/*.d.ts",
+    "dist/**/*.LICENSE.txt"
   ]
 }

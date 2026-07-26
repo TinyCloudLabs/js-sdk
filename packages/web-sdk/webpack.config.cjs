@@ -2,9 +2,6 @@
 const path = require("path");
 const webpack = require("webpack");
 
-const isProduction = process.env.NODE_ENV === "production" ||
-  process.argv.some(arg => arg.includes('--mode') && arg.includes('production'));
-
 const rules = [
   {
     test: /\.tsx?$/,
@@ -86,60 +83,65 @@ const resolveConfig = {
   },
 };
 
-const baseConfig = {
-  mode: isProduction ? "production" : "development",
-  target: "web",
-  entry: "./src/index.ts",
-  devtool: isProduction ? false : 'source-map',
-  module: { rules },
-  resolve: resolveConfig,
-  optimization: {
-    splitChunks: false,
-    runtimeChunk: false,
-    // Disable HMR and development optimizations in production
-    ...(isProduction && {
-      minimize: true,
-      sideEffects: false,
-    }),
-  },
-  plugins: [
-    ...plugins,
-    // Keep the package bundle self-contained for downstream bundlers like CRA.
-    new webpack.optimize.LimitChunkCountPlugin({ maxChunks: 1 }),
-  ],
-  // Prevent webpack from injecting Node.js polyfills for global, __filename, __dirname
-  node: false,
-};
+const createConfigs = (env, argv) => {
+  const isProduction = argv.mode === "production";
 
-const esmConfig = {
-  ...baseConfig,
-  output: {
-    filename: "index.mjs",
-    path: path.resolve(__dirname, "dist"),
-    globalObject: "globalThis",
-    library: {
-      type: "module",
+  const baseConfig = {
+    mode: isProduction ? "production" : "development",
+    target: "web",
+    entry: "./src/index.ts",
+    devtool: isProduction ? false : 'source-map',
+    module: { rules },
+    resolve: resolveConfig,
+    optimization: {
+      splitChunks: false,
+      runtimeChunk: false,
+      // Disable HMR and development optimizations in production
+      ...(isProduction && {
+        minimize: true,
+      }),
     },
-    module: true,
-    environment: {
+    plugins: [
+      ...plugins,
+      // Keep the package bundle self-contained for downstream bundlers like CRA.
+      new webpack.optimize.LimitChunkCountPlugin({ maxChunks: 1 }),
+    ],
+    // Prevent webpack from injecting Node.js polyfills for global, __filename, __dirname
+    node: false,
+  };
+
+  const esmConfig = {
+    ...baseConfig,
+    output: {
+      filename: "index.mjs",
+      path: path.resolve(__dirname, "dist"),
+      globalObject: "globalThis",
+      library: {
+        type: "module",
+      },
       module: true,
+      environment: {
+        module: true,
+      },
     },
-  },
-  experiments: {
-    outputModule: true,
-  },
+    experiments: {
+      outputModule: true,
+    },
+  };
+
+  const cjsConfig = {
+    ...baseConfig,
+    output: {
+      filename: "index.cjs",
+      path: path.resolve(__dirname, "dist"),
+      globalObject: "globalThis",
+      library: {
+        type: "commonjs2",
+      },
+    },
+  };
+
+  return [esmConfig, cjsConfig];
 };
 
-const cjsConfig = {
-  ...baseConfig,
-  output: {
-    filename: "index.cjs",
-    path: path.resolve(__dirname, "dist"),
-    globalObject: "globalThis",
-    library: {
-      type: "commonjs2",
-    },
-  },
-};
-
-module.exports = [esmConfig, cjsConfig];
+module.exports = createConfigs;
