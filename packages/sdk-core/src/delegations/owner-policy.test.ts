@@ -21,7 +21,7 @@ const ownerDelegation: OwnerDelegationReceipt = {
 
 describe("owner share policy primitives", () => {
   test("keeps addressed private key material non-extractable", async () => {
-    const key = createDelegatedShareKey({ extractable: false });
+    const key = await createDelegatedShareKey({ extractable: false });
     expect(key.did).toMatch(/^did:key:z/);
     expect(key.privateJwk).toBeUndefined();
     const signature = await key.sign(new TextEncoder().encode("owner-share-test"));
@@ -31,7 +31,7 @@ describe("owner share policy primitives", () => {
   });
 
   test("binds enforcement facts to the activated owner delegation", async () => {
-    const key = createDelegatedShareKey({ extractable: false });
+    const key = await createDelegatedShareKey({ extractable: false });
     const enforcement = await createPolicyEnforcementDelegation({
       ownerDelegation,
       shareKey: key,

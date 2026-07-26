@@ -127,6 +127,52 @@ function assertCanonical(value: string, label: string): void {
   if (value !== canonicalize(JSON.parse(value))) throw new Error(`${label} is not canonical JSON`);
 }
 
+function dagCborEncode(value: unknown): Uint8Array {
+  const output: number[] = [];
+  const writeHeader = (major: number, length: number): void => {
+    if (!Number.isSafeInteger(length) || length < 0) throw new Error("DAG-CBOR value is too large");
+    if (length < 24) output.push((major << 5) | length);
+    else if (length < 0x100) output.push((major << 5) | 24, length);
+    else if (length < 0x10000) output.push((major << 5) | 25, length >> 8, length & 0xff);
+    else throw new Error("DAG-CBOR value is too large");
+  };
+  const write = (item: unknown): void => {
+    if (item === null) { output.push(0xf6); return; }
+    if (item === false) { output.push(0xf4); return; }
+    if (item === true) { output.push(0xf5); return; }
+    if (typeof item === "string") {
+      const encoded = new TextEncoder().encode(item);
+      writeHeader(3, encoded.length); output.push(...encoded); return;
+    }
+    if (typeof item === "number" && Number.isSafeInteger(item)) {
+      if (item >= 0) writeHeader(0, item);
+      else writeHeader(1, -1 - item);
+      return;
+    }
+    if (Array.isArray(item)) {
+      writeHeader(4, item.length); item.forEach(write); return;
+    }
+    if (typeof item === "object" && item !== null) {
+      const entries = Object.entries(item as Record<string, unknown>).map(([key, value]) => {
+        const keyBytes = dagCborEncode(key);
+        return { key, value, keyBytes };
+      }).sort((left, right) => {
+        if (left.keyBytes.length !== right.keyBytes.length) return left.keyBytes.length - right.keyBytes.length;
+        for (let index = 0; index < left.keyBytes.length; index += 1) {
+          if (left.keyBytes[index] !== right.keyBytes[index]) return left.keyBytes[index] - right.keyBytes[index];
+        }
+        return 0;
+      });
+      writeHeader(5, entries.length);
+      entries.forEach(({ key, value }) => { write(key); write(value); });
+      return;
+    }
+    throw new Error("Unsupported DAG-CBOR value");
+  };
+  write(value);
+  return Uint8Array.from(output);
+}
+
 function assertObject(value: unknown, keys: readonly string[], label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} is invalid`);
   const record = value as Record<string, unknown>;
@@ -134,20 +180,22 @@ function assertObject(value: unknown, keys: readonly string[], label: string): R
   return record;
 }
 
-export function createDelegatedShareKey(options: { readonly extractable: boolean }): DelegatedShareKey {
-  const seed = crypto.getRandomValues(new Uint8Array(32));
-  const publicKey = ed25519.getPublicKey(seed);
+export async function createDelegatedShareKey(options: { readonly extractable: boolean }): Promise<DelegatedShareKey> {
+  if (!globalThis.crypto?.subtle) throw new Error("WebCrypto Ed25519 is required for delegated share keys");
+  const generated = await crypto.subtle.generateKey({ name: "Ed25519" }, options.extractable, ["sign", "verify"]) as CryptoKeyPair;
+  const privateKey = generated.privateKey;
+  const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", generated.publicKey));
   let cleared = false;
   const key: DelegatedShareKey = {
     did: didKeyFromEd25519PublicKey(publicKey),
     publicKey: bytes(publicKey),
     extractable: options.extractable,
-    ...(options.extractable ? { privateJwk: { kty: "OKP", crv: "Ed25519", x: b64(publicKey), d: b64(seed) } } : {}),
+    ...(options.extractable ? { privateJwk: await crypto.subtle.exportKey("jwk", privateKey) as Record<string, string> } : {}),
     async sign(input) {
       if (cleared) throw new Error("share key has been cleared");
-      return bytes(ed25519.sign(input, seed));
+      return new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, privateKey, input));
     },
-    clear() { seed.fill(0); cleared = true; },
+    clear() { cleared = true; },
   };
   return key;
 }
@@ -179,9 +227,9 @@ export async function createPolicyEnforcementDelegation(input: {
     expiresAt: input.expiresAt,
   } satisfies Record<string, string | readonly string[]>;
   const unsigned = { type: "TinyCloudSharePolicyEnforcement", version: 2, issuerDid: input.shareKey.did, audienceDid: input.enforcerDid, facts };
-  const dagCbor = canonicalize({ domain: ENFORCEMENT_DOMAIN, unsigned });
-  const signature = b64(await input.shareKey.sign(new TextEncoder().encode(dagCbor)));
-  return { cid: cid(new TextEncoder().encode(`${dagCbor}.${signature}`)), dagCbor: b64(new TextEncoder().encode(dagCbor)), issuerDid: input.shareKey.did, audienceDid: input.enforcerDid, facts, signature };
+  const dagCborBytes = dagCborEncode({ domain: ENFORCEMENT_DOMAIN, unsigned });
+  const signature = b64(await input.shareKey.sign(dagCborBytes));
+  return { cid: cid(dagCborBytes), dagCbor: b64(dagCborBytes), issuerDid: input.shareKey.did, audienceDid: input.enforcerDid, facts, signature };
 }
 
 export async function canonicalOwnerSharePolicy(policy: OwnerSharePolicyV2): Promise<{ readonly bytes: Uint8Array; readonly cid: string; readonly digest: string }> {
@@ -198,13 +246,17 @@ export function validateOwnerSharePolicyRegistration(value: unknown, expected: R
   const root = assertObject(value, ["registration", "proof"], "owner-share registration response");
   const registration = assertObject(root.registration, ["registrationCid", "policyCid", "ownerDelegationCid", "enforcementDelegationCid", "ownerDid", "shareKeyDid", "enforcerDid", "target", "resource", "actions", "contentSourceDigest", "registeredAt", "expiresAt"], "owner-share registration");
   const proof = assertObject(root.proof, ["alg", "kid", "signature"], "owner-share registration proof");
-  if (proof.alg !== "EdDSA" || typeof proof.kid !== "string" || typeof proof.signature !== "string") throw new Error("owner-share registration proof is invalid");
   if (cid(expected.policy.bytes) !== expected.policy.cid) throw new Error("submitted owner-share policy bytes do not match its CID");
   if (registration.policyCid !== expected.policy.cid || registration.ownerDelegationCid !== expected.ownerDelegation.delegationCid || registration.enforcementDelegationCid !== expected.enforcementDelegation.cid || registration.contentSourceDigest !== expected.contentSourceDigest) throw new Error("owner-share registration is not bound to the submitted chain");
   if (typeof registration.registrationCid !== "string" || typeof registration.expiresAt !== "string" || typeof registration.registeredAt !== "string") throw new Error("owner-share registration timestamps are invalid");
   if (new Date(registration.expiresAt).toISOString() !== registration.expiresAt || Date.parse(registration.expiresAt) <= Date.now()) throw new Error("owner-share registration is expired or non-canonical");
   const { registrationCid: _registrationCid, ...registrationCore } = registration;
   if (computeOwnerShareRegistrationCid(registrationCore as unknown as Omit<OwnerSharePolicyRegistration, "registrationCid">) !== registration.registrationCid) throw new Error("owner-share registration CID does not match its canonical core");
+  if (proof.alg !== "EdDSA" || typeof proof.kid !== "string" || typeof proof.signature !== "string" || !proof.kid.startsWith("did:key:z")) throw new Error("owner-share registration proof is invalid");
+  const encodedKid = base58btc.decode(proof.kid.slice("did:key:z".length));
+  if (encodedKid.length !== 34 || encodedKid[0] !== 0xed || encodedKid[1] !== 0x01) throw new Error("owner-share registration proof key is invalid");
+  const signatureBytes = fromB64(proof.signature);
+  if (signatureBytes.length !== 64 || !ed25519.verify(signatureBytes, new TextEncoder().encode(canonicalize(registrationCore)), encodedKid.slice(2))) throw new Error("owner-share registration proof signature is invalid");
   return { registration: registration as unknown as OwnerSharePolicyRegistration, proof: proof as unknown as OwnerSharePolicyRegistrationReceipt["proof"] };
 }
 
