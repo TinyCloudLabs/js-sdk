@@ -13,6 +13,8 @@ import type {
   VaultGetOptions,
   VaultListOptions,
   VaultGrantOptions,
+  VaultListPage,
+  VaultNetworkReadResult,
 } from "./types";
 
 /**
@@ -90,6 +92,12 @@ export interface IDataVaultService extends IService {
     options?: VaultGetOptions<T>
   ): Promise<Result<VaultEntry<T>, VaultError>>;
 
+  /** Read a network-encrypted value with safe, phase-classified failures. */
+  readNetworkEncrypted<T = unknown>(
+    key: string,
+    options?: VaultGetOptions<T>,
+  ): Promise<VaultNetworkReadResult<T>>;
+
   /**
    * Delete an encrypted key.
    *
@@ -104,6 +112,9 @@ export interface IDataVaultService extends IService {
    * @returns Result with array of key names
    */
   list(options?: VaultListOptions): Promise<Result<string[], VaultError>>;
+
+  /** List one bounded, cursor-aware page of vault keys. */
+  listPage(options?: VaultListOptions): Promise<Result<VaultListPage, VaultError>>;
 
   /**
    * Get envelope metadata for a key without decrypting the value.

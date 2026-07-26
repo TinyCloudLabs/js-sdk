@@ -16,6 +16,7 @@ import {
 } from "./share-envelope";
 import { ShareRecipientClient } from "./ShareRecipientClient";
 import { MemoryShareCache } from "./ShareCache";
+import nodeVectors from "./fixtures/share-email-v2-vectors.json";
 
 const ORIGIN = "https://node.example.test";
 const SPACE = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
@@ -57,6 +58,12 @@ function artifact(): { artifact: ShareArtifactV2; bytes: Uint8Array; cid: string
 }
 
 describe("ShareRecipientClient", () => {
+  test("matches the serialized Node v2 JCS request vector", () => {
+    const vector = nodeVectors.vectors.addressedDelegationRequest;
+    expect(canonical(vector.body)).toBe(vector.canonicalJson);
+    expect(encoded(sha256(new TextEncoder().encode(vector.canonicalJson)))).toBe(vector.requestBodyDigest);
+  });
+
   test("normalizes only the DNS side of exact email matchers and uses segment-safe resource containment", () => {
     expect(normalizeShareRecipientTarget({ kind: "exactEmail", value: "Alice+Notes@MAILINATOR.COM" })).toEqual({ kind: "exactEmail", value: "Alice+Notes@mailinator.com" });
     expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read"] }, "read", "docs/readme.md")).toBe(true);
@@ -201,7 +208,7 @@ describe("ShareRecipientClient", () => {
       encryptionKey: Uint8Array.from({ length: 32 }, (_, index) => index + 4),
     });
     const calls: string[] = [];
-    const session = { sessionId: "session-1", holderDid: "did:key:holder", expiresAt: "2098-01-01T00:00:00.000Z" };
+    const session = { sessionId: "session-1", holderDid: "did:key:holder", expiresAt: "2098-01-01T00:00:00.000Z", actions: ["read", "list", "edit"], resource: { kind: "prefix", path: "docs/" } };
     const access = await new ShareRecipientClient({
       trustedOrigins: [ORIGIN],
       fetch: mock(async () => new Response(created.bytes)) as never,
@@ -209,9 +216,9 @@ describe("ShareRecipientClient", () => {
       establishPolicySession: async () => session,
       nativeInvoke: async (input) => {
         calls.push(`${input.action}:${input.mediaType}:${input.resource}`);
-        if (input.action === "get") return { status: 200, bytes: Uint8Array.from([7]), headers: { etag: '"etag-1"', "content-type": "application/octet-stream" } };
-        if (input.action === "list") return { status: 200, keys: ["docs/a.md"], truncated: false, nextCursor: "cursor-1" };
-        return { status: 200, headers: { etag: '"etag-2"' } };
+        if (input.action === "get") return { status: 200, type: "TinyCloudShareInvokeResponse", version: 2, action: "tinycloud.kv/get", resource: input.resource, bytes: Uint8Array.from([7]), bodyDigest: encoded(sha256(Uint8Array.from([7]))), headers: { etag: '"etag-1"', "content-type": "application/octet-stream" } };
+        if (input.action === "list") return { status: 200, type: "TinyCloudShareInvokeResponse", version: 2, action: "tinycloud.kv/list", resource: input.resource, keys: ["docs/a.md"], entries: [{ path: "docs/a.md", kind: "file" }], truncated: false, nextCursor: "cursor-1" };
+        return { status: 200, type: "TinyCloudShareInvokeResponse", version: 2, action: "tinycloud.kv/put", resource: input.resource, bodyDigest: input.bodyDigest, headers: { etag: '"etag-2"' } };
       },
       now: () => new Date("2080-01-01T00:00:00.000Z"),
     }).open(encodeShareUrl({ origin: ORIGIN, cid: created.cid, key: created.key }));
@@ -277,7 +284,7 @@ describe("ShareRecipientClient", () => {
       if (url.endsWith("/invoke")) {
         expect(init?.headers).toMatchObject({ "content-type": "application/vnd.tinycloud.share+json", accept: "application/vnd.tinycloud.share+json" });
         invokeBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        return new Response(JSON.stringify({ type: "TinyCloudShareInvokeResponse", version: 1, action: "tinycloud.kv/get", mediaType: "application/octet-stream", content: encoded(returned), bodyDigest: encoded(sha256(returned)), etag: '"etag-1"' }), { status: 200, headers: { "content-type": "application/json", etag: '"etag-1"' } });
+        return new Response(JSON.stringify({ type: "TinyCloudShareInvokeResponse", version: 2, action: "tinycloud.kv/get", resource: "docs/readme.md", mediaType: "application/octet-stream", content: encoded(returned), bodyDigest: encoded(sha256(returned)), etag: '"etag-1"' }), { status: 200, headers: { "content-type": "application/json", etag: '"etag-1"' } });
       }
       return new Response(created.bytes, { status: 200 });
     });
@@ -294,7 +301,7 @@ describe("ShareRecipientClient", () => {
     const request = invokeBody?.request as Record<string, unknown>;
     const invocation = request?.invocation as Record<string, unknown>;
     expect(invokeBody?.request).toMatchObject({ sessionId: "session-1", delegationCid: "bafy-delegation", resource: "docs/readme.md" });
-    expect(invocation).toMatchObject({ type: "TinyCloudShareReadInvocation", version: 1, action: "tinycloud.kv/get", requestBodyDigest: expect.any(String), jti: expect.any(String) });
+    expect(invocation).toMatchObject({ type: "TinyCloudShareReadInvocation", version: 2, actions: ["tinycloud.kv/get"], action: "tinycloud.kv/get", requestBodyDigest: expect.any(String), jti: expect.any(String) });
     expect(request?.proof).toMatchObject({ alg: "EdDSA", kid: "did:key:holder#holder" });
     expect(invokeBody).not.toHaveProperty("schema");
   });
@@ -385,7 +392,7 @@ describe("ShareRecipientClient", () => {
         fetch: fetch as never,
         presentation: { challengeRequest: { policyId: "policy-1", audience: ORIGIN } },
         buildPolicySessionRequest: async ({ challenge: current }) => ({ presentation: { holderDid: "did:key:holder", nonce: current.nonce, audience: ORIGIN, expiresAt: "2080-01-01T00:20:00.000Z" } }),
-        nativeInvoke: async (input) => { calls.push(input as unknown as Record<string, unknown>); return { status: 200, bytes: Uint8Array.from([7]), headers: { "x-tinycloud-content-digest": encoded(sha256(Uint8Array.from([7]))) } }; },
+        nativeInvoke: async (input) => { calls.push(input as unknown as Record<string, unknown>); return { status: 200, type: "TinyCloudShareInvokeResponse", version: 2, action: input.action === "get" ? "tinycloud.kv/get" : input.action === "list" ? "tinycloud.kv/list" : "tinycloud.kv/put", resource: input.resource, bytes: input.action === "put" ? undefined : Uint8Array.from([7]), bodyDigest: input.action === "put" ? input.bodyDigest : encoded(sha256(Uint8Array.from([7]))), keys: input.action === "list" && input.cursor === undefined ? ["docs/a.md"] : undefined, entries: input.action === "list" && input.cursor === undefined ? [{ path: "docs/a.md", kind: "file" }] : undefined, headers: { etag: '"etag-2"', "x-tinycloud-content-digest": input.action === "put" ? input.bodyDigest : encoded(sha256(Uint8Array.from([7]))) } }; },
         now: () => new Date("2080-01-01T00:00:00.000Z"),
       }).open(encodeShareUrl({ origin: ORIGIN, cid: created.cid, key: created.key }));
       await expect(access.get("docs/a.md")).resolves.toMatchObject({ bytes: Uint8Array.from([7]) });
@@ -419,5 +426,39 @@ describe("ShareRecipientClient", () => {
     }).open(encodeShareUrl({ origin: ORIGIN, cid: created.cid }));
     await expect(access.get()).rejects.toMatchObject({ code: "SHARE_NOT_FOUND" });
     await expect(access.get()).rejects.not.toHaveProperty("cause");
+  });
+
+  test("accepts exactly 100 MiB plaintext with encryption overhead and rejects one byte before encryption", async () => {
+    const { createShareArtifactAsync, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES } = await import("./share-envelope");
+    const key = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
+    const exact = new Uint8Array(MAX_SHARE_CONTENT_BYTES);
+    const created = await createShareArtifactAsync({
+      origin: ORIGIN,
+      spaceId: SPACE,
+      recipient: { kind: "emailDomain", value: "example.com" },
+      resource: { kind: "exact", path: "docs/large.bin" },
+      actions: ["read"],
+      mimeType: "application/octet-stream",
+      bytes: exact,
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      signerDid: "did:key:z6MkSigner",
+      signerPrivateKey: PRIVATE_KEY,
+      encryptionKey: key,
+    });
+    expect(created.artifact.envelope.content.size).toBe(MAX_SHARE_CONTENT_BYTES + 28);
+    expect(created.artifact.envelope.content.size).toBeLessThanOrEqual(MAX_SEALED_SHARE_CONTENT_BYTES);
+    await expect(createShareArtifactAsync({
+      origin: ORIGIN,
+      spaceId: SPACE,
+      recipient: { kind: "emailDomain", value: "example.com" },
+      resource: { kind: "exact", path: "docs/too-large.bin" },
+      actions: ["read"],
+      mimeType: "application/octet-stream",
+      bytes: new Uint8Array(MAX_SHARE_CONTENT_BYTES + 1),
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      signerDid: "did:key:z6MkSigner",
+      signerPrivateKey: PRIVATE_KEY,
+      encryptionKey: key,
+    })).rejects.toMatchObject({ code: "content-too-large" });
   });
 });

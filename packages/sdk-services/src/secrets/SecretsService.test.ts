@@ -60,6 +60,8 @@ class MockVault implements IDataVaultService {
       data: ["ANTHROPIC_API_KEY", "invalid-name"],
     }),
   );
+  listPage = mock(async () => ({ ok: true as const, data: { keys: [], truncated: false } }));
+  readNetworkEncrypted = mock(async () => ({ status: "not_found" as const }));
   head = mock(async (): Promise<Result<Record<string, string>, VaultError>> => ({
     ok: true,
     data: {},

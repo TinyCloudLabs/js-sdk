@@ -3,6 +3,112 @@ import type { ShareAction, ShareCapabilityLike, ShareEnvelopeV2, ShareLinkLocati
 
 export type { ShareAction, ShareEnvelopeV2, ShareLinkLocation, ShareResource, ShareRecipientTarget };
 
+/** Native action names used by the addressed Node data plane. */
+export type ShareNativeAction = "tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/put";
+export type ShareWireAction = ShareNativeAction | "tinycloud.sql/read";
+export type ShareAddressedRecipientMatcher = Exclude<ShareRecipientTarget, { readonly kind: "bearer" }>;
+
+/** The closed v2 content-source union emitted by Node. */
+export interface ShareKvContentSource {
+  readonly kind: "kv";
+  readonly action: ShareNativeAction;
+  readonly space: string;
+  readonly path: string;
+}
+
+export interface ShareSqlContentSource {
+  readonly kind: "sql";
+  readonly action: "tinycloud.sql/read";
+  readonly space: string;
+  readonly database: string;
+  readonly path: string;
+  readonly statement: string;
+  readonly arguments: Readonly<Record<string, number>>;
+  readonly argumentsDigest: string;
+}
+
+export type ShareContentSource = ShareKvContentSource | ShareSqlContentSource;
+
+/** Inclusive expiry interval resolved by Node for an addressed policy. */
+export interface ShareExpiryBounds {
+  readonly expiryMin?: string;
+  readonly expiryMax?: string;
+}
+
+/** Node's closed addressed-authoring v2 request. */
+export interface ShareAddressedDelegationRequestV2 {
+  readonly version: 2;
+  readonly nonce: string;
+  readonly jti: string;
+  readonly senderDid: string;
+  readonly recipientMatcher: ShareAddressedRecipientMatcher;
+  readonly targetOrigin: string;
+  readonly nodeAudience: string;
+  readonly shareCid: string;
+  readonly shareId: string;
+  readonly delegationCid: string;
+  readonly authorityMaterialHandle: string;
+  readonly authorityMaterialDigest: string;
+  readonly contentSource: ShareContentSource;
+  readonly contentSourceDigest: string;
+  readonly actions: readonly ShareWireAction[];
+  readonly resource: { readonly kind: "exact" | "prefix"; readonly value: string };
+  readonly expiresAt: string;
+  readonly requestBodyDigest: string;
+}
+
+export interface ShareAddressedDelegationEnvelopeV2 {
+  readonly request: ShareAddressedDelegationRequestV2;
+  readonly proof: ShareDetachedProof;
+}
+
+export interface ShareAddressedDelegationResponseV2 {
+  readonly type: "TinyCloudShareAddressedDelegation";
+  readonly version: 2;
+  readonly nonce: string;
+  readonly jti: string;
+  readonly policyCid: string;
+  readonly policyBytes: string;
+  readonly policyDigest: string;
+  readonly delegationCid: string;
+  readonly delegationBytes: string;
+  readonly delegationDigest: string;
+  readonly authorityMaterialHandle: string;
+  readonly authorityMaterialDigest: string;
+  readonly actions: readonly ShareWireAction[];
+  readonly resource: { readonly kind: "exact" | "prefix"; readonly value: string };
+  readonly expiresAt: string;
+  readonly proof: ShareDetachedProof;
+}
+
+/** Closed v1 policy-session response emitted by Node's compatibility route. */
+export interface SharePolicySessionWireV1 {
+  readonly type: "TinyCloudSharePolicySession";
+  readonly version: 1;
+  readonly sessionId: string;
+  readonly shareCid: string;
+  readonly shareId: string;
+  readonly delegationCid: string;
+  readonly authorityMaterialHandle: string;
+  readonly authorityMaterialDigest: string;
+  readonly policyCid: string;
+  readonly contentSource: ShareContentSource;
+  readonly contentSourceDigest: string;
+  readonly holderDid: string;
+  readonly targetOrigin: string;
+  readonly nodeAudience: string;
+  readonly action: ShareWireAction;
+  readonly actions?: readonly ShareWireAction[];
+  readonly resource: string;
+  readonly credentialDigest: string;
+  readonly issuedAt: string;
+  readonly expiresAt: string;
+}
+
+/** Explicit v1 wire names retained for callers using the legacy read path. */
+export type SharePolicySessionV1 = SharePolicySession;
+export type ShareReadInvocationV1 = ShareNativeInvokeInput;
+
 export interface ShareRecipientPolicy {
   readonly recipientMatcher: ShareRecipientTarget;
   readonly spaceId: string;
@@ -77,32 +183,45 @@ export interface ShareRecipientClientOptions {
   readonly maxInlineBytes?: number;
   readonly maxArtifactBytes?: number;
   readonly maxContentBytes?: number;
+  readonly maxSealedContentBytes?: number;
 }
 
 export interface SharePolicySession {
+  readonly type?: "TinyCloudSharePolicySession";
+  readonly version?: 1;
   readonly sessionId: string;
   readonly shareCid?: string;
   readonly shareId?: string;
   readonly policyCid?: string;
   readonly holderDid: string;
   readonly expiresAt: string;
+  readonly expiryMin?: string;
+  readonly expiryMax?: string;
   readonly capability?: ShareCapabilityLike;
   readonly delegationCid?: string;
   readonly authorityMaterialHandle?: string;
   readonly authorityMaterialDigest?: string;
-  readonly contentSource?: Record<string, unknown>;
+  readonly contentSource?: ShareContentSource;
   readonly contentSourceDigest?: string;
   readonly targetOrigin?: string;
   readonly nodeAudience?: string;
-  readonly action?: string;
-  readonly actions?: readonly string[];
-  readonly resource?: string;
+  readonly action?: ShareWireAction | ShareAction;
+  readonly actions?: readonly (ShareWireAction | ShareAction)[];
+  readonly resource?: ShareResource | string;
   readonly credentialDigest?: string;
   readonly credential?: string;
   readonly holderBinding?: unknown;
   readonly readSignerDid?: string;
   readonly holderSigner?: ShareRecipientClientOptions["holderSigner"];
-  readonly [key: string]: unknown;
+  /** Legacy v1 transport fields retained for compatibility with Node sessions. */
+  readonly authorization?: string;
+  readonly delegationHeader?: { readonly Authorization?: string };
+  readonly spaceId?: string;
+  readonly origin?: string;
+  readonly audience?: string;
+  readonly sourceDigest?: string;
+  readonly verificationMethod?: string;
+  readonly jwk?: Readonly<Record<string, unknown>>;
 }
 
 export interface ShareDetachedProof {
@@ -119,14 +238,16 @@ export interface SharePolicyBinding {
   readonly authorityMaterialHandle: string;
   readonly authorityMaterialDigest: string;
   readonly policyCid: string;
-  readonly contentSource: Record<string, unknown>;
+  readonly contentSource: ShareContentSource;
   readonly contentSourceDigest: string;
   readonly holderDid?: string;
   readonly targetOrigin: string;
   readonly nodeAudience: string;
-  readonly action?: string;
-  readonly actions?: readonly string[];
-  readonly resource: string;
+  readonly action?: ShareWireAction | ShareAction;
+  readonly actions?: readonly (ShareWireAction | ShareAction)[];
+  readonly resource: ShareResource | string;
+  readonly expiryMin?: string;
+  readonly expiryMax?: string;
   readonly expiresAt?: string;
 }
 
@@ -146,15 +267,42 @@ export interface ShareNativeInvokeInput {
   readonly mediaType: "application/vnd.tinycloud.share+json";
 }
 
-export interface ShareNativeInvokeResult {
+/** The legacy v1 /invoke wrapper remains named and closed for adapters. */
+export interface ShareNativeInvokeEnvelopeV1 {
+  readonly request: Readonly<Record<string, unknown>>;
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly body?: string;
+  readonly bodyDigest?: string;
+  readonly ifMatch?: string;
+  readonly contentType?: string;
+}
+
+export interface ShareNativeInvokeErrorResult {
   readonly status: number;
+  readonly headers?: Readonly<Record<string, string | undefined>>;
+}
+
+export interface ShareNativeInvokeSuccessResult {
+  readonly status: number;
+  readonly type: "TinyCloudShareInvokeResponse";
+  readonly version: 2;
+  readonly action: ShareNativeAction;
+  readonly resource: string;
   readonly bytes?: Uint8Array;
   readonly headers?: Readonly<Record<string, string | undefined>>;
   readonly keys?: readonly string[];
   readonly truncated?: boolean;
   readonly nextCursor?: string;
   readonly entries?: readonly ShareListEntry[];
+  /** Normalized header aliases accepted by native adapters. */
+  readonly etag?: string;
+  readonly contentType?: string;
+  readonly content?: string;
+  readonly bodyDigest?: string;
 }
+
+export type ShareNativeInvokeResult = ShareNativeInvokeErrorResult | ShareNativeInvokeSuccessResult;
 
 export interface ShareListEntry {
   readonly path: string;

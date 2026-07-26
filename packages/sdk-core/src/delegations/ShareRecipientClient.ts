@@ -24,6 +24,9 @@ import {
   verifyShareCid,
   verifyPublishedShareCid,
   verifyShareEnvelope,
+  MAX_SEALED_SHARE_CONTENT_BYTES,
+  MAX_SHARE_ARTIFACT_BYTES,
+  MAX_SHARE_CONTENT_BYTES,
   type ShareAction,
   type ShareEnvelopeV2,
   type ShareLinkLocation,
@@ -31,20 +34,39 @@ import {
   type ShareCapabilityLike,
 } from "./share-envelope";
 import { MemoryShareCache, type ShareCache, type ShareCacheEntry } from "./ShareCache";
-import { ShareAccessError, ShareConflict, type ShareAccessV2, type ShareDetachedProof, type ShareNativeInvokeResult, type SharePolicyBinding, type SharePolicySession, type ShareRecipientClientOptions, type ShareReadResult, type ShareListEntry, type ShareListResult } from "./recipient-types";
+import { ShareAccessError, ShareConflict, type ShareAccessV2, type ShareDetachedProof, type ShareNativeAction, type ShareNativeInvokeResult, type ShareNativeInvokeSuccessResult, type SharePolicyBinding, type SharePolicySession, type ShareRecipientClientOptions, type ShareReadResult, type ShareListEntry, type ShareListResult } from "./recipient-types";
+import { ShareNativeResponseSchema } from "./recipient-types.schema";
 
-const DEFAULT_MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
-const DEFAULT_MAX_CONTENT_BYTES = 32 * 1024 * 1024;
+const DEFAULT_MAX_ARTIFACT_BYTES = MAX_SHARE_ARTIFACT_BYTES;
+const DEFAULT_MAX_CONTENT_BYTES = MAX_SHARE_CONTENT_BYTES;
+const DEFAULT_MAX_SEALED_CONTENT_BYTES = MAX_SEALED_SHARE_CONTENT_BYTES;
 const NATIVE_MEDIA_TYPE = "application/vnd.tinycloud.share+json" as const;
 const READ_INVOCATION_DOMAIN = "xyz.tinycloud.share/read-invocation/v1\0";
 const POLICY_PRESENTATION_DOMAIN = "xyz.tinycloud.share/policy-presentation/v1\0";
 const READ_TTL_MS = 60_000;
+const MAX_NATIVE_CURSOR_BYTES = 8 * 1024;
+const MAX_NATIVE_LIMIT = 1_000;
+const MAX_NATIVE_ENTRIES = 10_000;
 
 interface ResolvedArtifact {
   readonly location: ShareLinkLocation;
   readonly artifact: ReturnType<typeof parseShareArtifact>;
   readonly bytes: Uint8Array;
   readonly plaintext: Uint8Array;
+}
+
+interface NativeResponseRecord {
+  readonly type: "TinyCloudShareInvokeResponse";
+  readonly version: 2;
+  readonly action: ShareNativeAction;
+  readonly resource: string;
+  readonly mediaType?: string;
+  readonly content?: string;
+  readonly bodyDigest?: string;
+  readonly etag?: string | null;
+  readonly entries?: readonly ShareListEntry[];
+  readonly nextCursor?: string | null;
+  readonly contentType?: string;
 }
 
 function redactedCode(error: unknown): string {
@@ -120,8 +142,36 @@ function digestCanonical(value: unknown): string {
   return bytesToBase64Url(sha256(new TextEncoder().encode(canonicalJsonForProof(value))));
 }
 
-function actionWire(action: "get" | "list" | "put"): string {
+function actionWire(action: "get" | "list" | "put"): ShareNativeAction {
   return action === "get" ? "tinycloud.kv/get" : action === "list" ? "tinycloud.kv/list" : "tinycloud.kv/put";
+}
+
+function nativeActionFor(value: unknown): ShareNativeAction | undefined {
+  if (value === "tinycloud.kv/get" || value === "get" || value === "read") return "tinycloud.kv/get";
+  if (value === "tinycloud.kv/list" || value === "list") return "tinycloud.kv/list";
+  if (value === "tinycloud.kv/put" || value === "tinycloud.kv/edit" || value === "put" || value === "edit") return "tinycloud.kv/put";
+  return undefined;
+}
+
+function policyActionFor(value: unknown): ShareAction | undefined {
+  const native = nativeActionFor(value);
+  return native === "tinycloud.kv/get" ? "read" : native === "tinycloud.kv/list" ? "list" : native === "tinycloud.kv/put" ? "edit" : undefined;
+}
+
+function canonicalNativeActions(values: readonly unknown[]): ShareNativeAction[] {
+  const actions = values.map(nativeActionFor);
+  if (actions.some((action) => action === undefined)) throw new ShareAccessError("SHARE_SESSION_ACTION_MISMATCH");
+  return [...new Set(actions as ShareNativeAction[])].sort();
+}
+
+function resourceValue(value: unknown, stringKind: ShareResource["kind"] = "exact"): ShareResource | undefined {
+  if (typeof value === "string") {
+    const kind = value.endsWith("/") ? "prefix" : stringKind;
+    return { kind, path: kind === "prefix" && !value.endsWith("/") ? `${value}/` : value };
+  }
+  if (!isRecord(value) || (value.kind !== "exact" && value.kind !== "prefix")) return undefined;
+  const path = typeof value.path === "string" ? value.path : typeof value.value === "string" ? value.value : undefined;
+  return path === undefined ? undefined : { kind: value.kind, path: value.kind === "prefix" && !path.endsWith("/") ? `${path}/` : path };
 }
 
 function headersRecord(headers: ServiceHeaders | undefined): Record<string, string> {
@@ -132,6 +182,10 @@ function headersRecord(headers: ServiceHeaders | undefined): Record<string, stri
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNativeSuccess(result: ShareNativeInvokeResult): result is ShareNativeInvokeSuccessResult {
+  return "type" in result;
 }
 
 function unwrapProofResponse(value: Record<string, unknown>, key: "challenge" | "session"): { readonly message: Record<string, unknown>; readonly proof: unknown } {
@@ -293,33 +347,51 @@ export class ShareRecipientClient {
   }
 
   private async nativeGet(envelope: ShareEnvelopeV2, session: SharePolicySession, path: string): Promise<ShareReadResult> {
+    this.assertNativeRequestBounds(envelope, session, "get", path);
     const result = await this.invokeNative({ envelope, session, action: "get", resource: path, mediaType: "application/vnd.tinycloud.share+json" });
     if (result.status === 404) throw new ShareAccessError("SHARE_NOT_FOUND");
     if (result.status === 401 || result.status === 403) throw new ShareAccessError("SHARE_DENIED");
+    if (!isNativeSuccess(result)) throw new ShareAccessError("SHARE_READ_FAILED");
     if (result.status < 200 || result.status >= 300 || result.bytes === undefined) throw new ShareAccessError("SHARE_READ_FAILED");
-    this.verifyNativeResponse(result.bytes, result.headers);
-    return { bytes: result.bytes, etag: result.headers?.etag, contentType: result.headers?.["content-type"] ?? envelope.content.mimeType, size: result.bytes.byteLength };
+    this.verifyNativeResponse(result.bytes, result.headers, result.bodyDigest);
+    if (result.bytes.byteLength > (this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
+    return { bytes: result.bytes, etag: result.headers?.etag ?? result.etag, contentType: result.headers?.["content-type"] ?? result.contentType ?? envelope.content.mimeType, size: result.bytes.byteLength };
   }
 
   private async nativeList(envelope: ShareEnvelopeV2, session: SharePolicySession, path: string, limit?: number, cursor?: string): Promise<ShareListResult> {
+    this.assertNativeRequestBounds(envelope, session, "list", path, limit, cursor);
     const result = await this.invokeNative({ envelope, session, action: "list", resource: path, limit, cursor, mediaType: "application/vnd.tinycloud.share+json" });
     if (result.status === 401 || result.status === 403) throw new ShareAccessError("SHARE_DENIED");
-    if (result.status < 200 || result.status >= 300 || result.keys === undefined) throw new ShareAccessError("SHARE_LIST_FAILED");
-    return { keys: result.keys, entries: result.entries, truncated: result.truncated, nextCursor: result.nextCursor };
+    if (result.status < 200 || result.status >= 300) throw new ShareAccessError("SHARE_LIST_FAILED");
+    if (!isNativeSuccess(result)) throw new ShareAccessError("SHARE_LIST_FAILED");
+    const keys = result.keys ?? result.entries?.map((entry) => entry.path);
+    if (keys === undefined) throw new ShareAccessError("SHARE_LIST_FAILED");
+    const headerCursor = result.headers?.["x-tinycloud-next-cursor"];
+    if (headerCursor !== undefined && result.nextCursor !== undefined && headerCursor !== result.nextCursor) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
+    this.assertNativeListResult(path, { ...result, keys });
+    return { keys, entries: result.entries, truncated: result.truncated, nextCursor: result.nextCursor };
   }
 
   private async nativeSave(envelope: ShareEnvelopeV2, session: SharePolicySession, path: string, bytes: Uint8Array, input: { readonly etag: string; readonly contentType?: string }): Promise<{ readonly etag?: string }> {
+    this.assertNativeRequestBounds(envelope, session, "put", path);
+    if (bytes.byteLength > (this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
     const contentType = input.contentType ?? envelope.content.mimeType;
     if (contentType !== envelope.content.mimeType && !/^text\/(?:plain|markdown)(?:;|$)/i.test(contentType)) throw new ShareAccessError("SHARE_CONTENT_TYPE_INVALID");
     const result = await this.invokeNative({ envelope, session, action: "put", resource: path, body: bytes, bodyDigest: bytesToBase64Url(sha256(bytes)), contentType, ifMatch: input.etag, mediaType: "application/vnd.tinycloud.share+json" });
     if (result.status === 412 || result.status === 409) throw new ShareConflict(path, result.headers?.etag);
     if (result.status === 401 || result.status === 403) throw new ShareAccessError("SHARE_DENIED");
     if (result.status < 200 || result.status >= 300) throw new ShareAccessError("SHARE_WRITE_FAILED");
-    return { etag: result.headers?.etag };
+    if (!isNativeSuccess(result)) throw new ShareAccessError("SHARE_WRITE_FAILED");
+    return { etag: result.headers?.etag ?? result.etag };
   }
 
   private async invokeNative(input: Parameters<NonNullable<ShareRecipientClientOptions["nativeInvoke"]>>[0]): Promise<ShareNativeInvokeResult> {
-    if (this.options.nativeInvoke !== undefined) return this.options.nativeInvoke(input);
+    if (this.options.nativeInvoke !== undefined) {
+      const result = await this.options.nativeInvoke(input);
+      if (!Number.isSafeInteger(result.status) || result.status < 100 || result.status > 599) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
+      if (result.status >= 200 && result.status < 300) this.validateNativeResult(input, result);
+      return result;
+    }
     const base = input.envelope.origin.replace(/\/$/, "");
     if (input.mediaType !== NATIVE_MEDIA_TYPE) throw new ShareAccessError("SHARE_NATIVE_MEDIA_TYPE_INVALID");
     const session = input.session;
@@ -338,12 +410,24 @@ export class ShareRecipientClient {
     );
     if (!Number.isFinite(expiry) || expiry <= now) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node read expiry is invalid");
     const selectedAction = actionWire(input.action);
-    if (typeof session.action === "string" && session.action !== selectedAction && !(session.actions ?? []).includes(selectedAction)) {
-      throw new ShareAccessError("SHARE_SESSION_ACTION_MISMATCH");
+    const actionClaims = session.actions !== undefined
+      ? session.actions
+      : binding?.actions !== undefined
+        ? binding.actions
+        : session.action !== undefined
+          ? [session.action]
+          : binding?.action !== undefined
+            ? [binding.action]
+            : [];
+    const authorizedActions = canonicalNativeActions(actionClaims);
+    if (!authorizedActions.includes(selectedAction)) throw new ShareAccessError("SHARE_SESSION_ACTION_MISMATCH");
+    const signedResource = resourceValue(session.resource ?? binding?.resource ?? input.envelope.resource, input.envelope.resource.kind);
+    if (signedResource === undefined || !shareCapabilityAllows({ spaceId: input.envelope.spaceId, resource: signedResource, actions: [policyActionFor(selectedAction)!] }, policyActionFor(selectedAction)!, input.resource)) {
+      throw new ShareAccessError("SHARE_OUT_OF_SCOPE");
     }
     const invocationBase: Record<string, unknown> = {
       type: "TinyCloudShareReadInvocation",
-      version: 1,
+      version: 2,
       sessionId: required(session.sessionId, "sessionId"),
       shareCid: required(session.shareCid ?? binding?.shareCid, "shareCid"),
       shareId: required(session.shareId ?? binding?.shareId, "shareId"),
@@ -356,8 +440,8 @@ export class ShareRecipientClient {
       holderDid: required(session.holderDid, "holderDid"),
       targetOrigin: required(session.targetOrigin ?? binding?.targetOrigin ?? input.envelope.origin, "targetOrigin"),
       nodeAudience: required(session.nodeAudience ?? binding?.nodeAudience, "nodeAudience"),
-      action: session.action ?? binding?.action ?? selectedAction,
-      ...(session.actions === undefined && binding?.actions === undefined ? {} : { actions: [...(session.actions ?? binding?.actions ?? [])] }),
+      action: selectedAction,
+      actions: authorizedActions,
       resource: input.resource,
       issuedAt: new Date(now).toISOString(),
       expiresAt: new Date(expiry).toISOString(),
@@ -367,6 +451,8 @@ export class ShareRecipientClient {
       ...(input.bodyDigest === undefined ? {} : { bodyDigest: input.bodyDigest }),
       ...(input.ifMatch === undefined ? {} : { ifMatch: input.ifMatch }),
       ...(input.contentType === undefined ? {} : { contentType: input.contentType }),
+      ...(session.expiryMin ?? binding?.expiryMin) === undefined ? {} : { expiryMin: session.expiryMin ?? binding?.expiryMin },
+      ...(session.expiryMax ?? binding?.expiryMax) === undefined ? {} : { expiryMax: session.expiryMax ?? binding?.expiryMax },
     };
     const readPreimage: Record<string, unknown> = {
       sessionId: invocationBase.sessionId,
@@ -394,7 +480,7 @@ export class ShareRecipientClient {
       contentSource,
       contentSourceDigest: invocation.contentSourceDigest,
       action: invocation.action,
-      ...(invocation.actions === undefined ? {} : { actions: invocation.actions }),
+      actions: invocation.actions,
       resource: invocation.resource,
       requestBodyDigest,
       invocation,
@@ -412,52 +498,91 @@ export class ShareRecipientClient {
     const signed = this.options.signNativeInvoke === undefined
       ? undefined
       : await this.options.signNativeInvoke({ envelope: input.envelope, session: input.session, request: body });
+    const transport = this.options.invoke !== undefined || session.authorization !== undefined || session.delegationHeader !== undefined
+      ? this.defaultNativeHeaders(session, input.action, input.resource, body)
+      : undefined;
     const response = await this.fetchFn(`${base}/invoke`, {
       method: "POST",
-      headers: { ...headersRecord(signed), "content-type": input.mediaType, accept: input.mediaType },
+      headers: { ...headersRecord(transport), ...headersRecord(signed), "content-type": input.mediaType, accept: input.mediaType },
       body: JSON.stringify(body),
       redirect: "error",
     });
+    if ((response as unknown as { readonly redirected?: boolean }).redirected === true || response.status >= 300 && response.status < 400) throw new ShareAccessError("SHARE_REDIRECT_REJECTED");
     const headers: Record<string, string> = {};
     for (const name of ["etag", "content-type", "content-digest", "x-tinycloud-content-digest", "x-tinycloud-cid", "x-tinycloud-content-cid", "x-tinycloud-next-cursor"]) {
       const value = response.headers.get(name);
       if (value !== null) headers[name] = value;
     }
+    if (response.status < 200 || response.status >= 300) return { status: response.status, headers };
     const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.toLowerCase().includes("json")) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
     let value: unknown;
-    if (contentType.includes("json")) {
-      try { value = await response.json(); } catch { value = undefined; }
+    let responseBytes: Uint8Array;
+    try { responseBytes = new Uint8Array(await response.arrayBuffer()); } catch { throw new ShareAccessError("SHARE_RESPONSE_INVALID"); }
+    if (responseBytes.byteLength > (this.options.maxArtifactBytes ?? DEFAULT_MAX_ARTIFACT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
+    try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(responseBytes)); } catch { throw new ShareAccessError("SHARE_RESPONSE_INVALID"); }
+    const parsed = ShareNativeResponseSchema.safeParse(value);
+    if (!parsed.success) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
+    const record = parsed.data as NativeResponseRecord;
+    const expectedAction = actionWire(input.action) as ShareNativeAction;
+    if (record.action !== expectedAction || record.version !== 2 || record.resource !== input.resource) {
+      throw new ShareAccessError("SHARE_RESPONSE_MISMATCH");
     }
-    const record = isRecord(value) ? value : {};
-    const etag = typeof record.etag === "string" ? record.etag : headers.etag;
-    if (etag !== undefined) headers.etag = etag;
+    if (record.etag !== undefined && record.etag !== null && headers.etag !== undefined && record.etag !== headers.etag) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
+    if (record.etag !== undefined && record.etag !== null) headers.etag = record.etag;
     if (input.action === "list") {
-      const rawEntries = Array.isArray(record.entries) ? record.entries : Array.isArray(record.paths) ? record.paths : [];
-      const entries: ShareListEntry[] = rawEntries.flatMap((entry): ShareListEntry[] => {
-        if (typeof entry === "string") return [{ path: entry, kind: entry.endsWith("/") ? "folder" : "file" }];
-        if (isRecord(entry) && typeof entry.path === "string" && (entry.kind === "file" || entry.kind === "folder")) return [{ path: entry.path, kind: entry.kind }];
-        return [];
-      });
-      return {
-        status: response.status,
-        headers,
-        keys: entries.map((entry) => entry.path),
-        entries,
-        truncated: typeof record.truncated === "boolean" ? record.truncated : record.nextCursor !== undefined,
-        nextCursor: typeof record.nextCursor === "string" ? record.nextCursor : response.headers.get("x-tinycloud-next-cursor") ?? undefined,
-      };
+      if (record.entries === undefined) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
+      const rawEntries = record.entries;
+      if (rawEntries.length > MAX_NATIVE_ENTRIES) throw new ShareAccessError("SHARE_TOO_LARGE");
+      const entries: ShareListEntry[] = [...rawEntries];
+      const headerCursor = response.headers.get("x-tinycloud-next-cursor");
+      if (record.nextCursor !== undefined && record.nextCursor !== null && headerCursor !== null && record.nextCursor !== headerCursor) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
+      const nextCursor = (record.nextCursor ?? headerCursor) ?? undefined;
+      if (nextCursor !== undefined && new TextEncoder().encode(nextCursor).byteLength > MAX_NATIVE_CURSOR_BYTES) throw new ShareAccessError("SHARE_TOO_LARGE");
+      return { status: response.status, headers, keys: entries.map((entry) => entry.path), entries, truncated: nextCursor !== undefined, nextCursor };
     }
-    if (input.action === "get" && typeof record.content === "string") {
-      try {
-        const bytes = base64UrlToBytes(record.content);
-        if (typeof record.bodyDigest === "string" && record.bodyDigest !== bytesToBase64Url(sha256(bytes))) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
-        return { status: response.status, headers, bytes };
-      } catch (error) {
-        if (error instanceof ShareAccessError) throw error;
-        throw new ShareAccessError("SHARE_RESPONSE_INVALID");
-      }
+    if (input.action === "get") {
+      if (record.content === undefined || record.bodyDigest === undefined) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
+      let bytes: Uint8Array;
+      try { bytes = base64UrlToBytes(record.content); } catch { throw new ShareAccessError("SHARE_RESPONSE_INVALID"); }
+      if (bytes.byteLength > (this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES) || !this.digestMatches(record.bodyDigest, bytes)) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
+      return { status: response.status, headers, bytes, bodyDigest: record.bodyDigest, type: record.type, version: record.version, action: record.action, resource: record.resource };
     }
-    return { status: response.status, headers };
+    const responseEtag = record.etag;
+    const responseBodyDigest = record.bodyDigest;
+    if (responseEtag === undefined || responseEtag === null || responseEtag.length === 0 || headers.etag !== undefined && responseEtag !== headers.etag) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
+    if (input.bodyDigest === undefined || responseBodyDigest === undefined || responseBodyDigest !== input.bodyDigest || !this.digestMatches(responseBodyDigest, input.body ?? new Uint8Array())) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
+    return { status: response.status, headers, bodyDigest: responseBodyDigest, type: record.type, version: record.version, action: record.action, resource: record.resource };
+  }
+
+  private validateNativeResult(input: Parameters<NonNullable<ShareRecipientClientOptions["nativeInvoke"]>>[0], result: ShareNativeInvokeResult): void {
+    if (!isNativeSuccess(result)) throw new ShareAccessError("SHARE_RESPONSE_MISMATCH");
+    if (result.type !== "TinyCloudShareInvokeResponse" || result.version !== 2 || result.action !== actionWire(input.action) || result.resource !== input.resource) throw new ShareAccessError("SHARE_RESPONSE_MISMATCH");
+    if (input.action === "get") {
+      if (result.bytes === undefined || result.bodyDigest === undefined || !this.digestMatches(result.bodyDigest, result.bytes)) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
+      if (result.bytes.byteLength > (this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
+    }
+    if (input.action === "list") this.assertNativeListResult(input.resource, result);
+    if (input.action === "put") {
+      const etag = result.headers?.etag ?? result.etag;
+      const bodyDigest = result.bodyDigest;
+      if (etag === undefined || etag.length === 0 || bodyDigest === undefined || bodyDigest !== input.bodyDigest || input.body === undefined || !this.digestMatches(bodyDigest, input.body)) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
+    }
+  }
+
+  private assertNativeListResult(scope: string, result: ShareNativeInvokeResult): void {
+    if (!isNativeSuccess(result)) throw new ShareAccessError("SHARE_LIST_FAILED");
+    if (result.keys === undefined || result.entries === undefined || result.keys.length > MAX_NATIVE_ENTRIES || result.entries.length !== result.keys.length || result.nextCursor !== undefined && new TextEncoder().encode(result.nextCursor).byteLength > MAX_NATIVE_CURSOR_BYTES) throw new ShareAccessError("SHARE_LIST_FAILED");
+    if (result.entries.some((entry, index) => !isRecord(entry) || typeof entry.path !== "string" || (entry.kind !== "file" && entry.kind !== "folder") || entry.path !== result.keys![index])) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
+    const seen = new Set<string>();
+    for (const entry of result.entries) {
+      normalizePath(entry.path);
+      if (seen.has(entry.path)) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
+      seen.add(entry.path);
+      const prefix = scope.replace(/\/$/, "");
+      const relative = entry.path === prefix ? "" : entry.path.startsWith(`${prefix}/`) ? entry.path.slice(prefix.length + 1) : undefined;
+      if (relative === undefined || relative.length === 0 || relative.includes("/")) throw new ShareAccessError("SHARE_RESPONSE_MISMATCH");
+    }
   }
 
   private assertDetachedProof(value: unknown): asserts value is ShareDetachedProof {
@@ -491,9 +616,27 @@ export class ShareRecipientClient {
     }]);
   }
 
-  private verifyNativeResponse(bytes: Uint8Array, headers: Readonly<Record<string, string | undefined>> | undefined): void {
+  private digestMatches(value: string, bytes: Uint8Array): boolean {
+    const digest = bytesToBase64Url(sha256(bytes));
+    return value === digest || value === `sha-256=:${digest}:`;
+  }
+
+  private assertNativeRequestBounds(envelope: ShareEnvelopeV2, session: SharePolicySession, operation: "get" | "list" | "put", path: string, limit?: number, cursor?: string): void {
+    const binding = this.options.policyBinding;
+    const signedResource = resourceValue(session.resource ?? binding?.resource ?? envelope.resource, envelope.resource.kind);
+    const nativeAction = actionWire(operation);
+    const policyAction = policyActionFor(nativeAction);
+    if (signedResource === undefined || policyAction === undefined || !shareCapabilityAllows({ spaceId: envelope.spaceId, resource: signedResource, actions: [policyAction] }, policyAction, path)) throw new ShareAccessError("SHARE_OUT_OF_SCOPE");
+    const claims = session.actions ?? binding?.actions ?? (session.action !== undefined ? [session.action] : binding?.action !== undefined ? [binding.action] : []);
+    if (claims.length === 0 || !canonicalNativeActions(claims).includes(nativeAction)) throw new ShareAccessError("SHARE_SESSION_ACTION_MISMATCH");
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_NATIVE_LIMIT)) throw new ShareAccessError("SHARE_INVALID_LIMIT");
+    if (cursor !== undefined && (cursor.length === 0 || new TextEncoder().encode(cursor).byteLength > MAX_NATIVE_CURSOR_BYTES)) throw new ShareAccessError("SHARE_INVALID_CURSOR");
+  }
+
+  private verifyNativeResponse(bytes: Uint8Array, headers: Readonly<Record<string, string | undefined>> | undefined, bodyDigest?: string): void {
+    if (bodyDigest !== undefined && !this.digestMatches(bodyDigest, bytes)) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
     const digest = headers?.["x-tinycloud-content-digest"] ?? headers?.["content-digest"];
-    if (digest !== undefined && digest !== bytesToBase64Url(sha256(bytes)) && digest !== `sha-256=:${bytesToBase64Url(sha256(bytes))}:`) {
+    if (digest !== undefined && !this.digestMatches(digest, bytes)) {
       throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
     }
     const cid = headers?.["x-tinycloud-content-cid"] ?? headers?.["x-tinycloud-cid"];
@@ -532,6 +675,7 @@ export class ShareRecipientClient {
     this.verifyNodeProof(session, sessionEnvelope.proof, "xyz.tinycloud.share/policy-session/v1\0");
     this.assertSessionBinding(session, envelope, request, challenge, sessionRequest);
     return {
+      ...(this.options.policyBinding ?? {}),
       ...session,
       sessionId: this.requiredString(session, "sessionId"),
       ...(typeof session.shareCid === "string" ? { shareCid: session.shareCid } : {}),
@@ -569,17 +713,20 @@ export class ShareRecipientClient {
       action,
       ...(binding.actions === undefined ? {} : { actions: [...binding.actions] }),
       resource: binding.resource,
+      ...(binding.expiryMin === undefined ? {} : { expiryMin: binding.expiryMin }),
+      ...(binding.expiryMax === undefined ? {} : { expiryMax: binding.expiryMax }),
     };
     return { ...body, requestBodyDigest: digestCanonical(body) };
   }
 
   private assertStrictChallengeRequest(request: Record<string, unknown>): void {
-    assertObjectKeys(request, ["shareCid", "shareId", "delegationCid", "authorityMaterialHandle", "authorityMaterialDigest", "policyCid", "contentSource", "contentSourceDigest", "holderDid", "targetOrigin", "nodeAudience", "action", "actions", "resource", "requestBodyDigest"], "Node challenge request");
+    assertObjectKeys(request, ["shareCid", "shareId", "delegationCid", "authorityMaterialHandle", "authorityMaterialDigest", "policyCid", "contentSource", "contentSourceDigest", "holderDid", "targetOrigin", "nodeAudience", "action", "actions", "resource", "expiryMin", "expiryMax", "requestBodyDigest"], "Node challenge request");
     for (const key of ["shareCid", "shareId", "delegationCid", "authorityMaterialHandle", "authorityMaterialDigest", "policyCid", "contentSourceDigest", "holderDid", "targetOrigin", "nodeAudience", "resource", "requestBodyDigest"] as const) {
       if (typeof request[key] !== "string" || request[key].length === 0) throw new ShareAccessError("SHARE_SESSION_INVALID", `Node challenge ${key} is invalid`);
     }
     if (!isRecord(request.contentSource) || typeof request.action !== "string") throw new ShareAccessError("SHARE_SESSION_INVALID", "Node challenge source is invalid");
     if (request.actions !== undefined && (!Array.isArray(request.actions) || request.actions.some((action) => typeof action !== "string"))) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node challenge actions are invalid");
+    if (request.expiryMin !== undefined && dateValue(request.expiryMin) === undefined || request.expiryMax !== undefined && dateValue(request.expiryMax) === undefined || dateValue(request.expiryMin) !== undefined && dateValue(request.expiryMax) !== undefined && dateValue(request.expiryMin)! > dateValue(request.expiryMax)!) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node challenge expiry bounds are invalid");
     const { requestBodyDigest: _digest, ...body } = request;
     if (request.requestBodyDigest !== digestCanonical(body)) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node challenge digest is invalid");
   }
@@ -600,12 +747,31 @@ export class ShareRecipientClient {
   }
 
   private assertProvidedPolicySession(session: SharePolicySession, envelope: ShareEnvelopeV2): void {
-    if (typeof session.sessionId !== "string" || typeof session.holderDid !== "string" || dateValue(session.expiresAt) === undefined || dateValue(session.expiresAt)! <= this.now().getTime() || dateValue(session.expiresAt)! > (dateValue(envelope.expiresAt) ?? 0)) {
+    const sessionExpiry = dateValue(session.expiresAt);
+    if (typeof session.sessionId !== "string" || typeof session.holderDid !== "string" || session.resource === undefined || session.actions === undefined && session.action === undefined || sessionExpiry === undefined || sessionExpiry <= this.now().getTime() || sessionExpiry > (dateValue(envelope.expiresAt) ?? 0)) {
       throw new ShareAccessError("SHARE_SESSION_INVALID");
     }
+    this.assertExpiryBounds(session, envelope, sessionExpiry);
+    if (isRecord(this.options.presentation)) {
+      const presentation = isRecord(this.options.presentation.presentation) ? this.options.presentation.presentation : this.options.presentation;
+      const presentedHolder = typeof presentation.holderDid === "string" ? presentation.holderDid : isRecord(presentation.holder) && typeof presentation.holder.did === "string" ? presentation.holder.did : undefined;
+      if (presentedHolder !== undefined && presentedHolder !== session.holderDid) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session holder is not bound to the presentation");
+    }
+    const sessionOrigin = session.targetOrigin ?? session.origin;
+    if (sessionOrigin !== undefined && sessionOrigin !== envelope.origin) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session origin is not bound to the share");
+    if (session.resource !== undefined) {
+      const sessionResource = resourceValue(session.resource, envelope.resource.kind);
+      if (sessionResource === undefined || canonicalValue(sessionResource) !== canonicalValue(envelope.resource)) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session resource is not bound to the share");
+    }
     const binding = this.options.policyBinding;
-    if (binding === undefined) return;
-    if (binding.targetOrigin !== envelope.origin || binding.resource !== envelope.resource.path || binding.expiresAt !== undefined && binding.expiresAt !== envelope.expiresAt) {
+    if (binding === undefined) {
+      this.assertServerActions(session.actions ?? (session.action === undefined ? [] : [session.action]), envelope.actions);
+      return;
+    }
+    compareBoundValue(session.expiryMin, binding.expiryMin, "Node session expiryMin is not bound to the policy");
+    compareBoundValue(session.expiryMax, binding.expiryMax, "Node session expiryMax is not bound to the policy");
+    const boundResource = resourceValue(binding.resource, envelope.resource.kind);
+    if (binding.targetOrigin !== envelope.origin || boundResource === undefined || canonicalValue(boundResource) !== canonicalValue(envelope.resource) || binding.expiresAt !== undefined && binding.expiresAt !== envelope.expiresAt) {
       throw new ShareAccessError("SHARE_SESSION_INVALID");
     }
     for (const [key, expected] of Object.entries({
@@ -618,9 +784,30 @@ export class ShareRecipientClient {
       contentSourceDigest: binding.contentSourceDigest,
       targetOrigin: binding.targetOrigin,
       nodeAudience: binding.nodeAudience,
-      resource: binding.resource,
-    })) compareBoundValue((session as Record<string, unknown>)[key], expected, `Node session ${key} is not bound to the policy`);
+      resource: boundResource,
+    })) {
+      const actual = key === "resource"
+        ? resourceValue((session as unknown as Record<string, unknown>)[key], envelope.resource.kind)
+        : (session as unknown as Record<string, unknown>)[key];
+      compareBoundValue(actual, expected, `Node session ${key} is not bound to the policy`);
+    }
     if (session.contentSource !== undefined) compareBoundValue(session.contentSource, binding.contentSource, "Node session content source is not bound to the policy");
+    this.assertServerActions(session.actions ?? binding.actions ?? (session.action === undefined ? binding.action === undefined ? [] : [binding.action] : [session.action]), envelope.actions);
+  }
+
+  private assertExpiryBounds(session: SharePolicySession, envelope: ShareEnvelopeV2, expiry: number): void {
+    const min = dateValue(session.expiryMin ?? this.options.policyBinding?.expiryMin);
+    const max = dateValue(session.expiryMax ?? this.options.policyBinding?.expiryMax);
+    if ((session.expiryMin !== undefined || this.options.policyBinding?.expiryMin !== undefined) && min === undefined || (session.expiryMax !== undefined || this.options.policyBinding?.expiryMax !== undefined) && max === undefined || min !== undefined && max !== undefined && min > max || min !== undefined && expiry < min || max !== undefined && expiry > max) {
+      throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session expiry is outside the inclusive policy bounds");
+    }
+  }
+
+  private assertServerActions(values: readonly unknown[], envelopeActions: readonly ShareAction[]): void {
+    if (values.length === 0) return;
+    const nativeActions = canonicalNativeActions(values);
+    const allowed = new Set(envelopeActions);
+    if (nativeActions.length === 0 || nativeActions.some((action) => !allowed.has(policyActionFor(action)!))) throw new ShareAccessError("SHARE_SESSION_ACTION_MISMATCH");
   }
 
   private async buildDefaultPolicySessionRequest(presentation: unknown, challenge: Record<string, unknown>): Promise<unknown> {
@@ -660,6 +847,8 @@ export class ShareRecipientClient {
         requestBodyDigest: challenge.requestBodyDigest,
         issuedAt: new Date(this.now()).toISOString(),
         expiresAt: challenge.expiresAt,
+        ...(binding.expiryMin === undefined ? {} : { expiryMin: binding.expiryMin }),
+        ...(binding.expiryMax === undefined ? {} : { expiryMax: binding.expiryMax }),
         jti: randomJti(),
       };
       const proof = await signer({ domain: POLICY_PRESENTATION_DOMAIN, message: policyPresentation });
@@ -677,6 +866,7 @@ export class ShareRecipientClient {
 
   private async postJson(url: string, body: unknown): Promise<Record<string, unknown>> {
     const response = await this.fetchFn(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), redirect: "error" });
+    if ((response as unknown as { readonly redirected?: boolean }).redirected === true || response.status >= 300 && response.status < 400) throw new ShareAccessError("SHARE_REDIRECT_REJECTED");
     if (!response.ok) throw new ShareAccessError(response.status === 401 || response.status === 403 ? "SHARE_DENIED" : "SHARE_SESSION_FAILED");
     const value = await response.json();
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new ShareAccessError("SHARE_SESSION_INVALID");
@@ -724,7 +914,7 @@ export class ShareRecipientClient {
 
   private assertChallengeRequestBinding(request: Readonly<Record<string, unknown>>, challenge: Record<string, unknown>): void {
     const source = isRecord(request.body) ? request.body : request;
-    for (const key of ["policyId", "shareId", "shareCid", "delegationCid", "authorityMaterialHandle", "authorityMaterialDigest", "policyCid", "contentSource", "contentSourceDigest", "holderDid", "targetOrigin", "nodeAudience", "audience", "resource", "action", "actions"] as const) {
+    for (const key of ["policyId", "shareId", "shareCid", "delegationCid", "authorityMaterialHandle", "authorityMaterialDigest", "policyCid", "contentSource", "contentSourceDigest", "holderDid", "targetOrigin", "nodeAudience", "audience", "resource", "action", "actions", "expiryMin", "expiryMax"] as const) {
       compareBoundValue(source[key], challenge[key], `Node challenge ${key} is not bound to the request`);
     }
     if (typeof challenge.challengeId !== "string" || challenge.challengeId.length === 0 || typeof challenge.nonce !== "string" || challenge.nonce.length < 16) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node challenge identity is invalid");
@@ -750,34 +940,37 @@ export class ShareRecipientClient {
     const holderDid = typeof presentation.holderDid === "string"
       ? presentation.holderDid
       : isRecord(presentation.holder) && typeof presentation.holder.did === "string" ? presentation.holder.did : undefined;
-    if (holderDid !== undefined) compareBoundValue(holderDid, session.holderDid, "Node session holder is not bound to the presentation");
+    if (holderDid === undefined) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node presentation holder is missing");
+    compareBoundValue(holderDid, session.holderDid, "Node session holder is not bound to the presentation");
     if (isRecord(presentation.holderBinding) && typeof presentation.holderBinding.holderDid === "string") compareBoundValue(presentation.holderBinding.holderDid, session.holderDid, "Node holder binding is not bound to the session");
     compareBoundValue(presentation.nonce, challenge.nonce, "Node presentation nonce is not bound to the challenge");
     compareBoundValue(presentation.challengeId, challenge.challengeId, "Node presentation challenge is not bound");
     compareBoundValue(presentation.audience, challenge.audience, "Node presentation audience is not bound to the challenge");
+    const allowedAudiences = new Set([envelope.origin, this.options.policyBinding?.nodeAudience].filter((value): value is string => value !== undefined));
+    if (typeof challenge.audience === "string" && !allowedAudiences.has(challenge.audience) || typeof presentation.audience === "string" && !allowedAudiences.has(presentation.audience)) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node audience is not bound to the share origin");
     const sessionOrigin = session.targetOrigin ?? session.origin;
     if (sessionOrigin !== undefined && sessionOrigin !== envelope.origin) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session origin is not bound to the share");
     if (session.spaceId !== undefined && session.spaceId !== envelope.spaceId) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session space is not bound to the share");
-    for (const key of ["shareCid", "shareId", "policyCid", "delegationCid", "authorityMaterialDigest", "sourceDigest", "targetOrigin", "nodeAudience", "resource", "action"] as const) {
-      compareBoundValue(requestBinding[key], (session as Record<string, unknown>)[key], `Node session ${key} is not bound to the request`);
+    for (const key of ["shareCid", "shareId", "policyCid", "delegationCid", "authorityMaterialDigest", "sourceDigest", "targetOrigin", "nodeAudience", "resource", "action", "expiryMin", "expiryMax"] as const) {
+      const requestValue = key === "resource" ? resourceValue(requestBinding[key], envelope.resource.kind) : requestBinding[key];
+      const sessionValue = key === "resource" ? resourceValue((session as Record<string, unknown>)[key], envelope.resource.kind) : (session as Record<string, unknown>)[key];
+      compareBoundValue(requestValue, sessionValue, `Node session ${key} is not bound to the request`);
     }
     if (session.resource !== undefined) {
-      if (typeof session.resource === "string") compareBoundValue(session.resource, envelope.resource.path, "Node session resource is not bound to the share");
-      else {
-        const value = this.requireObject(session.resource, "session resource");
-        const path = typeof value.path === "string" ? value.path : value.value;
-        compareBoundValue({ kind: value.kind, path }, envelope.resource, "Node session resource is not bound to the share");
-      }
+      const sessionResource = resourceValue(session.resource, envelope.resource.kind);
+      if (sessionResource === undefined || canonicalValue(sessionResource) !== canonicalValue(envelope.resource)) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session resource is not bound to the share");
     }
     if (session.actions !== undefined) {
       if (!Array.isArray(session.actions)) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session actions are invalid");
-      const actions = session.actions.map((action) => action === "tinycloud.kv/get" || action === "get" ? "read" : action === "tinycloud.kv/list" || action === "list" ? "list" : action === "tinycloud.kv/put" || action === "tinycloud.kv/edit" || action === "put" || action === "edit" ? "edit" : action).sort();
-      compareBoundValue(actions, envelope.actions, "Node session actions are not bound to the share");
+      this.assertServerActions(session.actions, envelope.actions);
     }
     const sessionExpiry = dateValue(session.expiresAt);
     const envelopeExpiry = dateValue(envelope.expiresAt);
     const presentationExpiry = dateValue(presentation.expiresAt);
     if (sessionExpiry === undefined || sessionExpiry <= this.now().getTime() || envelopeExpiry === undefined || sessionExpiry > envelopeExpiry || (presentationExpiry !== undefined && sessionExpiry > presentationExpiry)) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session expiry is invalid");
+    this.assertExpiryBounds({ ...session, sessionId: typeof session.sessionId === "string" ? session.sessionId : "", holderDid: typeof session.holderDid === "string" ? session.holderDid : "", expiresAt: session.expiresAt as string }, envelope, sessionExpiry);
+    compareBoundValue(session.expiryMin, requestBinding.expiryMin, "Node session expiryMin is not bound to the request");
+    compareBoundValue(session.expiryMax, requestBinding.expiryMax, "Node session expiryMax is not bound to the request");
   }
 
   private assertAllowed(capability: { readonly spaceId: string; readonly resource: ShareResource; readonly actions: readonly ShareAction[] }, operation: "get" | "list" | "save", path: string): void {
@@ -788,26 +981,32 @@ export class ShareRecipientClient {
     const location = parseShareUrl(link, { trustedOrigins: this.options.trustedOrigins, maxInlineBytes: this.options.maxInlineBytes });
     if (location.protocol === "share-envelope-v2") return this.resolvePublished(link);
     let bytes: Uint8Array;
+    let cachedEntry: ShareCacheEntry | undefined;
     if (location.kind === "inline") {
       bytes = new TextEncoder().encode(JSON.stringify(location.artifact));
     } else {
       if (location.cid === undefined) throw new ShareAccessError("SHARE_INVALID");
-      const cached = this.cache.getByCid === undefined ? undefined : await this.cache.getByCid(location.cid, this.now());
-      if (cached !== undefined) {
-        if (!verifyShareCid(location.cid, cached.bytes)) {
-          await this.cache.delete(cached.key);
+      cachedEntry = this.cache.getByCid === undefined ? undefined : await this.cache.getByCid(location.cid, this.now());
+      if (cachedEntry !== undefined) {
+        if (!verifyShareCid(location.cid, cachedEntry.bytes) || !this.digestMatches(bytesToBase64Url(cachedEntry.digest), cachedEntry.bytes)) {
+          await this.cache.delete(cachedEntry.key);
           // A cache is an optimization, never an authority. Re-fetch the
           // canonical object once after evicting a corrupt entry.
           bytes = await this.fetchArtifact(location.origin, location.cid);
         } else {
-          bytes = cached.bytes;
+          bytes = cachedEntry.bytes;
         }
       } else {
         bytes = await this.fetchArtifact(location.origin, location.cid);
       }
     }
-    const artifact = location.artifact ?? parseShareArtifact(bytes, { expectedOrigin: location.origin, maxArtifactBytes: this.options.maxArtifactBytes, maxContentBytes: this.options.maxContentBytes });
-    verifyShareEnvelope(artifact.envelope, { expectedOrigin: location.origin, maxContentBytes: this.options.maxContentBytes, now: this.now(), trustedSignerDids: this.options.trustedSignerDids });
+    let artifact = location.artifact ?? parseShareArtifact(bytes, { expectedOrigin: location.origin, maxArtifactBytes: this.options.maxArtifactBytes ?? DEFAULT_MAX_ARTIFACT_BYTES, maxContentBytes: this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES, maxSealedContentBytes: this.options.maxSealedContentBytes ?? DEFAULT_MAX_SEALED_CONTENT_BYTES });
+    if (cachedEntry !== undefined && cachedEntry.key.expiresAt !== artifact.envelope.expiresAt) {
+      await this.cache.delete(cachedEntry.key);
+      bytes = await this.fetchArtifact(location.origin, location.cid!);
+      artifact = parseShareArtifact(bytes, { expectedOrigin: location.origin, maxArtifactBytes: this.options.maxArtifactBytes ?? DEFAULT_MAX_ARTIFACT_BYTES, maxContentBytes: this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES, maxSealedContentBytes: this.options.maxSealedContentBytes ?? DEFAULT_MAX_SEALED_CONTENT_BYTES });
+    }
+    verifyShareEnvelope(artifact.envelope, { expectedOrigin: location.origin, maxContentBytes: this.options.maxContentBytes, maxSealedContentBytes: this.options.maxSealedContentBytes ?? DEFAULT_MAX_SEALED_CONTENT_BYTES, now: this.now(), trustedSignerDids: this.options.trustedSignerDids });
     if (!artifact.envelope.encrypted && location.key !== undefined) throw new ShareAccessError("unsafe-plaintext");
     if (location.cid !== undefined && !verifyShareCid(location.cid, bytes)) {
       await this.cache.delete({ cid: location.cid, expiresAt: artifact.envelope.expiresAt });
@@ -825,6 +1024,7 @@ export class ShareRecipientClient {
   private async fetchArtifact(origin: string, cid: string): Promise<Uint8Array> {
     const url = this.options.artifactUrl?.({ origin, cid }) ?? `${origin}/s/${cid}/raw`;
     const response = await this.fetchFn(url, { method: "GET", headers: { accept: "application/vnd.tinycloud.share-artifact+json, application/json" }, redirect: "error" });
+    if ((response as unknown as { readonly redirected?: boolean }).redirected === true || response.status >= 300 && response.status < 400) throw new ShareAccessError("SHARE_REDIRECT_REJECTED");
     if (!response.ok) throw new ShareAccessError("SHARE_FETCH_FAILED");
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.byteLength > (this.options.maxArtifactBytes ?? DEFAULT_MAX_ARTIFACT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
@@ -838,16 +1038,17 @@ export class ShareRecipientClient {
     let cached: ShareCacheEntry | undefined;
     if (sealed === undefined && this.cache.getByCid !== undefined) {
       cached = await this.cache.getByCid(published.cid, this.now());
-      if (cached !== undefined && verifyPublishedShareCid(published.cid, cached.bytes)) sealed = cached.bytes;
+      if (cached !== undefined && verifyPublishedShareCid(published.cid, cached.bytes) && this.digestMatches(bytesToBase64Url(cached.digest), cached.bytes)) sealed = cached.bytes;
       else if (cached !== undefined) await this.cache.delete(cached.key);
     }
     if (sealed === undefined) {
       const url = this.options.artifactUrl?.({ origin: published.origin, cid: published.cid }) ?? `${published.origin}/s/${published.cid}/raw`;
       const response = await this.fetchFn(url, { method: "GET", headers: { accept: "application/vnd.tinycloud.share-envelope+json, application/json" }, redirect: "error" });
+      if ((response as unknown as { readonly redirected?: boolean }).redirected === true || response.status >= 300 && response.status < 400) throw new ShareAccessError("SHARE_REDIRECT_REJECTED");
       if (!response.ok) throw new ShareAccessError("SHARE_FETCH_FAILED");
       sealed = new Uint8Array(await response.arrayBuffer());
     }
-    if (sealed.byteLength > (this.options.maxArtifactBytes ?? DEFAULT_MAX_ARTIFACT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
+    if (sealed.byteLength > (this.options.maxSealedContentBytes ?? DEFAULT_MAX_SEALED_CONTENT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
     if (!verifyPublishedShareCid(published.cid, sealed)) throw new ShareAccessError("SHARE_CID_MISMATCH");
     const envelopeBytes = published.key === undefined ? sealed : await openPublishedShareBlob(sealed, published.key);
     let plaintext = new Uint8Array();
@@ -868,9 +1069,10 @@ export class ShareRecipientClient {
     if (pointer !== undefined) {
       const contentUrl = this.options.artifactUrl?.({ origin: published.origin, cid: pointer.cid }) ?? `${published.origin}/s/${pointer.cid}/raw`;
       const contentResponse = await this.fetchFn(contentUrl, { method: "GET", headers: { accept: "application/octet-stream" }, redirect: "error" });
+      if ((contentResponse as unknown as { readonly redirected?: boolean }).redirected === true || contentResponse.status >= 300 && contentResponse.status < 400) throw new ShareAccessError("SHARE_REDIRECT_REJECTED");
       if (!contentResponse.ok) throw new ShareAccessError("SHARE_FETCH_FAILED");
       const contentSealed = new Uint8Array(await contentResponse.arrayBuffer());
-      if (contentSealed.byteLength > (this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
+      if (contentSealed.byteLength > (this.options.maxSealedContentBytes ?? DEFAULT_MAX_SEALED_CONTENT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
       if (!verifyPublishedShareCid(pointer.cid, contentSealed)) throw new ShareAccessError("SHARE_CID_MISMATCH");
       plaintext = new Uint8Array(await openPublishedShareBlob(contentSealed, this.base64ToBytes(pointer.key)));
     }

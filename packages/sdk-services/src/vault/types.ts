@@ -65,6 +65,16 @@ export interface VaultListOptions {
   prefix?: string;
   /** Remove prefix from returned keys */
   removePrefix?: boolean;
+  /** Maximum number of keys to return. */
+  limit?: number;
+  /** Opaque cursor returned by a prior bounded page. */
+  cursor?: string;
+}
+
+export interface VaultListPage {
+  keys: string[];
+  truncated: boolean;
+  nextCursor?: string;
 }
 
 /**

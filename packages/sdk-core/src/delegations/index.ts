@@ -121,6 +121,9 @@ export {
   verifyShareCid,
   verifyShareEnvelope,
   ShareEnvelopeError,
+  MAX_SHARE_CONTENT_BYTES,
+  MAX_SEALED_SHARE_CONTENT_BYTES,
+  MAX_SHARE_ARTIFACT_BYTES,
 } from "./share-envelope";
 export type {
   ShareAction,
@@ -143,6 +146,22 @@ export type {
   ShareRecipientClientOptions,
   ShareNativeInvokeInput,
   ShareNativeInvokeResult,
+  ShareNativeInvokeSuccessResult,
+  ShareNativeInvokeErrorResult,
+  ShareNativeAction,
+  ShareWireAction,
+  ShareAddressedRecipientMatcher,
+  ShareContentSource,
+  ShareKvContentSource,
+  ShareSqlContentSource,
+  ShareExpiryBounds,
+  ShareAddressedDelegationRequestV2,
+  ShareAddressedDelegationEnvelopeV2,
+  ShareAddressedDelegationResponseV2,
+  SharePolicySessionWireV1,
+  SharePolicySessionV1,
+  ShareReadInvocationV1,
+  ShareNativeInvokeEnvelopeV1,
   ShareDetachedProof,
   ShareListEntry,
   SharePolicyBinding,
@@ -151,6 +170,7 @@ export type {
   ShareRecipientResult,
   ShareSaveOptions,
 } from "./recipient-types";
+export type { ShareNativeResponse } from "./recipient-types.schema";
 export { ShareAccessError, ShareConflict } from "./recipient-types";
 export {
   ShareActionSchema,
@@ -158,6 +178,10 @@ export {
   ShareRecipientPolicySchema,
   ShareRecipientTargetSchema,
   ShareResourceSchema,
+  ShareNativeResponseSchema,
+  ShareAddressedDelegationRequestV2Schema,
+  ShareAddressedDelegationEnvelopeV2Schema,
+  ShareAddressedDelegationResponseV2Schema,
 } from "./recipient-types.schema";
 
 // SharingService Schemas and Validation

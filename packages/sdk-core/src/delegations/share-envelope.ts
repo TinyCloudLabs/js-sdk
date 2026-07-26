@@ -12,7 +12,13 @@ const INLINE_PREFIX = "tc2:";
 const RAW_CID_CODEC = 0x55;
 const BLAKE3_256_CODE = 0x1e;
 const DEFAULT_MAX_INLINE_BYTES = 256 * 1024;
-const DEFAULT_MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
+export const MAX_SHARE_CONTENT_BYTES = 100 * 1024 * 1024;
+/** AES-GCM plus the published version byte, IV, and authentication tag. */
+export const MAX_SEALED_SHARE_CONTENT_BYTES = MAX_SHARE_CONTENT_BYTES + 29;
+/** Canonical JSON is independently bounded from plaintext and sealed bytes. */
+export const MAX_SHARE_ARTIFACT_BYTES =
+  Math.ceil((MAX_SEALED_SHARE_CONTENT_BYTES * 4) / 3) + 2 * 1024 * 1024;
+const DEFAULT_MAX_ARTIFACT_BYTES = MAX_SHARE_ARTIFACT_BYTES;
 
 export type ShareRecipientTarget =
   | { readonly kind: "exactEmail"; readonly value: string }
@@ -82,6 +88,7 @@ export interface VerifyShareEnvelopeOptions {
   readonly expectedCid?: string;
   readonly maxArtifactBytes?: number;
   readonly maxContentBytes?: number;
+  readonly maxSealedContentBytes?: number;
   /** Trusted signer DIDs for addressed policy artifacts. */
   readonly trustedSignerDids?: readonly string[];
 }
@@ -396,7 +403,10 @@ export function verifyShareEnvelope(envelope: ShareEnvelopeV2, options: VerifySh
     if (envelope.recipientKind === "bearer" && recipient?.kind !== undefined && recipient.kind !== "bearer") throw new ShareEnvelopeError("invalid-envelope", "recipient mode does not match recipient");
     if ((envelope.recipientKind === "exactEmail" || envelope.recipientKind === "emailDomain") && !envelope.encrypted) throw new ShareEnvelopeError("unsafe-plaintext", "policy shares require encryption");
     if (typeof envelope.spaceId !== "string" || envelope.spaceId.length === 0 || typeof envelope.content.mimeType !== "string" || envelope.content.mimeType.length === 0 || typeof envelope.content.digest !== "string" || !/^[A-Za-z0-9_-]+$/.test(envelope.content.digest)) throw new ShareEnvelopeError("invalid-envelope", "content metadata is invalid");
-    if (!Number.isInteger(envelope.content.size) || envelope.content.size < 0 || envelope.content.size > (options.maxContentBytes ?? DEFAULT_MAX_ARTIFACT_BYTES)) throw new ShareEnvelopeError("content-too-large", "share content exceeds the configured limit");
+    const maxContentBytes = envelope.encrypted
+      ? options.maxSealedContentBytes ?? MAX_SEALED_SHARE_CONTENT_BYTES
+      : options.maxContentBytes ?? MAX_SHARE_CONTENT_BYTES;
+    if (!Number.isInteger(envelope.content.size) || envelope.content.size < 0 || envelope.content.size > maxContentBytes) throw new ShareEnvelopeError("content-too-large", "share content exceeds the configured limit");
     const publicKey = base64UrlToBytes(envelope.signer.publicKey);
     const signature = base64UrlToBytes(envelope.signature);
     const unsigned = { ...envelope } as Omit<ShareEnvelopeV2, "signature">;
@@ -985,7 +995,9 @@ export async function createShareArtifactAsync(input: ShareArtifactInput): Promi
   const recipient = input.recipient === undefined ? undefined : normalizeShareRecipientTarget(input.recipient);
   if (recipient !== undefined && input.encryptionKey === undefined) throw new ShareEnvelopeError("encryption-required", "recipient shares require encryption");
   if (input.plaintextPolicyOnly && (!input.plaintextWarningAcknowledged || input.bytes.byteLength !== 0 || recipient !== undefined || input.encryptionKey !== undefined)) throw new ShareEnvelopeError("unsafe-plaintext", "plaintext policy artifacts require explicit acknowledgement and contain no content");
+  if (input.bytes.byteLength > (input.maxContentBytes ?? MAX_SHARE_CONTENT_BYTES)) throw new ShareEnvelopeError("content-too-large", "share plaintext exceeds the configured limit");
   const encryptedBytes = input.encryptionKey === undefined ? input.bytes : await encryptShareBytesAsync(input.bytes, input.encryptionKey);
+  if (encryptedBytes.byteLength > MAX_SEALED_SHARE_CONTENT_BYTES) throw new ShareEnvelopeError("content-too-large", "sealed share content exceeds the configured limit");
   const envelope = signShareEnvelope({
     schema: ENVELOPE_SCHEMA,
     version: 2,
