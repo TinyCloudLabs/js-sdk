@@ -95,6 +95,95 @@ export {
   DelegatedShareAccess,
 } from "./SharingService";
 
+export { ShareRecipientClient } from "./ShareRecipientClient";
+export { MemoryShareCache } from "./ShareCache";
+export type { ShareCache, ShareCacheEntry, ShareCacheKey, ShareCacheMetadata } from "./ShareCache";
+export {
+  createShareArtifact,
+  createShareArtifactAsync,
+  createSharePolicy,
+  computeShareCid,
+  decryptShareBytesAsync,
+  encodeInlineShareUrl,
+  encodeShareArtifact,
+  encodeShareUrl,
+  encryptShareBytes,
+  encryptShareBytesAsync,
+  intersectShareCapabilities,
+  isV2ShareLink,
+  normalizeShareActions,
+  normalizeShareRecipientTarget,
+  normalizeShareResource,
+  parseShareArtifact,
+  parseShareUrl,
+  shareCapabilityAllows,
+  signShareEnvelope,
+  verifyShareCid,
+  verifyShareEnvelope,
+  ShareEnvelopeError,
+  MAX_SHARE_CONTENT_BYTES,
+  MAX_SEALED_SHARE_CONTENT_BYTES,
+  MAX_SHARE_ARTIFACT_BYTES,
+} from "./share-envelope";
+export type {
+  ShareAction,
+  ShareArtifactInput,
+  ShareArtifactResult,
+  ShareArtifactV2,
+  ShareCapabilityLike,
+  ShareContentMetadata,
+  ShareEnvelopeV2,
+  ShareLinkLocation,
+  SharePolicy,
+  ShareRecipientTarget,
+  ShareResource,
+  VerifyShareEnvelopeOptions,
+} from "./share-envelope";
+export type {
+  ShareAccessV2,
+  ShareListResult,
+  ShareReadResult,
+  ShareRecipientClientOptions,
+  ShareNativeInvokeInput,
+  ShareNativeInvokeResult,
+  ShareNativeInvokeSuccessResult,
+  ShareNativeInvokeErrorResult,
+  ShareNativeAction,
+  ShareWireAction,
+  ShareAddressedRecipientMatcher,
+  ShareContentSource,
+  ShareKvContentSource,
+  ShareSqlContentSource,
+  ShareExpiryBounds,
+  ShareAddressedDelegationRequestV2,
+  ShareAddressedDelegationEnvelopeV2,
+  ShareAddressedDelegationResponseV2,
+  SharePolicySessionWireV1,
+  SharePolicySessionV1,
+  ShareReadInvocationV1,
+  ShareNativeInvokeEnvelopeV1,
+  ShareDetachedProof,
+  ShareListEntry,
+  SharePolicyBinding,
+  SharePolicySession,
+  ShareRecipientPolicy,
+  ShareRecipientResult,
+  ShareSaveOptions,
+} from "./recipient-types";
+export type { ShareNativeResponse } from "./recipient-types.schema";
+export { ShareAccessError, ShareConflict } from "./recipient-types";
+export {
+  ShareActionSchema,
+  ShareRecipientClientOptionsSchema,
+  ShareRecipientPolicySchema,
+  ShareRecipientTargetSchema,
+  ShareResourceSchema,
+  ShareNativeResponseSchema,
+  ShareAddressedDelegationRequestV2Schema,
+  ShareAddressedDelegationEnvelopeV2Schema,
+  ShareAddressedDelegationResponseV2Schema,
+} from "./recipient-types.schema";
+
 // SharingService Schemas and Validation
 export {
   EncodedShareDataSchema,

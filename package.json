@@ -80,6 +80,7 @@
     "@tinycloud/web-sdk-wasm": "workspace:*",
     "@tinycloud/node-sdk-wasm": "workspace:*",
     "@tinycloud/node-sdk": "workspace:*",
+    "tsup": "^8.5.1",
     "turbo": "^2.5.4"
   },
   "overrides": {

@@ -1069,9 +1069,12 @@ export class KVService extends BaseService implements IKVService {
           KVAction.LIST,
           undefined,
           options?.signal,
-          options?.limit === undefined
+          options?.limit === undefined && options?.cursor === undefined
             ? undefined
-            : { "x-tinycloud-limit": String(options.limit) }
+            : {
+                ...(options?.limit === undefined ? {} : { "x-tinycloud-limit": String(options.limit) }),
+                ...(options?.cursor === undefined ? {} : { "x-tinycloud-cursor": options.cursor }),
+              }
         );
 
         if (!response.ok) {
@@ -1116,6 +1119,9 @@ export class KVService extends BaseService implements IKVService {
           ...(response.headers.get("x-tinycloud-truncated") === null
             ? {}
             : { truncated: response.headers.get("x-tinycloud-truncated") === "true" }),
+          ...(response.headers.get("x-tinycloud-next-cursor") === null
+            ? {}
+            : { nextCursor: response.headers.get("x-tinycloud-next-cursor") ?? undefined }),
         });
       } catch (error) {
         return err(wrapError("kv", error));

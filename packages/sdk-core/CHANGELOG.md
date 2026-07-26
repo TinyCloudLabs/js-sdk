@@ -1,5 +1,14 @@
 # @tinycloudlabs/sdk-core
 
+## Unreleased
+
+### Minor Changes
+
+- Add the signed v2 share-envelope/link codec, compact CID and bounded inline
+  resolution, verified ciphertext cache, local capability intersection, and
+  `ShareRecipientClient`. The legacy `tc1` `SharingService.receive` path is
+  unchanged; v2 callers use `receiveV2` and explicit `ShareAccessV2` methods.
+
 ## 2.10.0-beta.0
 
 ### Minor Changes

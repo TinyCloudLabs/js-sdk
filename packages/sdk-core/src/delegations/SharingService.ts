@@ -48,6 +48,8 @@ import {
 } from "../capabilities";
 import { bases } from "multiformats/basics";
 import { ed25519 } from "@noble/curves/ed25519";
+import { ShareRecipientClient } from "./ShareRecipientClient";
+import type { ShareAccessV2, ShareRecipientClientOptions } from "./recipient-types";
 
 // ---------------------------------------------------------------------------
 // Local helpers
@@ -382,6 +384,12 @@ export interface ISharingService {
    * creates a sub-delegation to the current session key.
    */
   receive(link: string, options?: ReceiveOptions): Promise<Result<ShareAccess, DelegationError>>;
+
+  /** Receive a signed v2 envelope/link without changing the legacy tc1 API. */
+  receiveV2(
+    link: string,
+    options?: Omit<ShareRecipientClientOptions, "trustedOrigins" | "fetch" | "invoke" | "createKVService">,
+  ): Promise<ShareAccessV2>;
 
   /**
    * Consume a sharing link locally and create an attenuated child delegation.
@@ -1154,6 +1162,20 @@ export class SharingService implements ISharingService {
     };
 
     return { ok: true, data: shareAccess };
+  }
+
+  async receiveV2(
+    link: string,
+    options: Omit<ShareRecipientClientOptions, "trustedOrigins" | "fetch" | "invoke" | "createKVService"> = {},
+  ): Promise<ShareAccessV2> {
+    const client = new ShareRecipientClient({
+      ...options,
+      trustedOrigins: this.hosts,
+      fetch: this.fetchFn,
+      invoke: this.invoke,
+      createKVService: this.createKVService,
+    });
+    return client.open(link);
   }
 
   /**

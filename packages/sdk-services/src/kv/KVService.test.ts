@@ -653,16 +653,17 @@ describe("KVService bounded and conditional requests", () => {
       const result = response(true, 200, listed ? ["a"] : "value");
       if (listed) {
         result.headers.get = (name: string) =>
-          name.toLowerCase() === "x-tinycloud-truncated" ? "true" : null;
+          name.toLowerCase() === "x-tinycloud-truncated" ? "true" : name.toLowerCase() === "x-tinycloud-next-cursor" ? "cursor-2" : null;
       }
       return result;
     }));
 
     expect((await service.get("a", { binary: true, maxResponseBytes: 1024 })).ok).toBe(true);
-    const listed = await service.list({ limit: 10 });
-    expect(listed).toEqual({ ok: true, data: { keys: ["a"], truncated: true } });
+    const listed = await service.list({ limit: 10, cursor: "cursor-1" });
+    expect(listed).toEqual({ ok: true, data: { keys: ["a"], truncated: true, nextCursor: "cursor-2" } });
     expect(headerValue(requests[0]?.headers, "x-tinycloud-max-response-bytes")).toBe("1024");
     expect(headerValue(requests[1]?.headers, "x-tinycloud-limit")).toBe("10");
+    expect(headerValue(requests[1]?.headers, "x-tinycloud-cursor")).toBe("cursor-1");
   });
 
   test("forwards create, replace, and conditional delete headers", async () => {

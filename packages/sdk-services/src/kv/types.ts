@@ -208,6 +208,9 @@ export interface KVListOptions {
   /** Maximum number of keys the node may return. */
   limit?: number;
 
+  /** Opaque scope-bound cursor returned by a previous bounded list. */
+  cursor?: string;
+
   /**
    * Custom timeout for this operation in milliseconds.
    */
@@ -371,6 +374,9 @@ export interface KVListResponse {
 
   /** True when more matching keys exist than the requested limit. */
   truncated?: boolean;
+
+  /** Opaque cursor for the next page, when the node returned one. */
+  nextCursor?: string;
 }
 
 /**

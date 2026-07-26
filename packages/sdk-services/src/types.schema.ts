@@ -145,6 +145,8 @@ export type GenericKVResponseType = z.infer<typeof GenericKVResponseSchema>;
 export const KVListResponseSchema = z.object({
   /** Array of keys matching the list criteria */
   keys: z.array(z.string()),
+  truncated: z.boolean().optional(),
+  nextCursor: z.string().optional(),
 });
 
 export type KVListResponseType = z.infer<typeof KVListResponseSchema>;

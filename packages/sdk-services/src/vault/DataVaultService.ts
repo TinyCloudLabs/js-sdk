@@ -41,6 +41,7 @@ import {
   VaultHeaders,
   VaultVersionConfig,
   CURRENT_VAULT_VERSION,
+  VaultListPage,
 } from "./types";
 import {
   loadCachedSignature,
@@ -1076,6 +1077,13 @@ export class DataVaultService extends BaseService implements IDataVaultService {
   async list(
     options?: VaultListOptions
   ): Promise<Result<string[], VaultError>> {
+    const page = await this.listPage(options);
+    return page.ok ? { ok: true, data: page.data.keys } : page;
+  }
+
+  async listPage(
+    options?: VaultListOptions
+  ): Promise<Result<VaultListPage, VaultError>> {
     return this.withTelemetry("list", options?.prefix, async () => {
       if (!this.isUnlocked) {
         return vaultError({
@@ -1099,6 +1107,8 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         const listResult = await this.tc.kv.list({
           prefix: listPrefix,
           removePrefix: true,
+          ...(options?.limit === undefined ? {} : { limit: options.limit }),
+          ...(options?.cursor === undefined ? {} : { cursor: options.cursor }),
         });
 
         if (!listResult.ok) {
@@ -1123,7 +1133,11 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           );
         }
 
-        return ok(keys);
+        return ok({
+          keys,
+          truncated: listResult.data.truncated === true,
+          ...(listResult.data.nextCursor === undefined ? {} : { nextCursor: listResult.data.nextCursor }),
+        });
       } catch (error) {
         return vaultError({
           code: "STORAGE_ERROR",
@@ -1131,7 +1145,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
             toError(error),
         });
       }
-    }) as Promise<Result<string[], VaultError>>;
+    }) as Promise<Result<VaultListPage, VaultError>>;
   }
 
   /**

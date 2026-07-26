@@ -99,10 +99,10 @@ import ora from "ora";
 function outputJson(data) {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
 }
-function outputError(code2, message, hint) {
+function outputError(code, message, hint) {
   if (isInteractive()) {
     process.stderr.write(
-      `${theme.error("\u2717")} ${theme.label(code2)}: ${message}
+      `${theme.error("\u2717")} ${theme.label(code)}: ${message}
 `
     );
     if (hint) {
@@ -113,7 +113,7 @@ function outputError(code2, message, hint) {
     }
   } else {
     const payload = {
-      error: { code: code2, message }
+      error: { code, message }
     };
     if (hint) payload.error.hint = hint;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
@@ -300,9 +300,9 @@ var init_errors = __esm({
     init_constants();
     init_formatter();
     CLIError = class extends Error {
-      constructor(code2, message, exitCode = ExitCode.ERROR, metadata) {
+      constructor(code, message, exitCode = ExitCode.ERROR, metadata) {
         super(message);
-        this.code = code2;
+        this.code = code;
         this.exitCode = exitCode;
         this.metadata = metadata;
         this.name = "CLIError";
@@ -10372,6 +10372,123 @@ var init_ed25519 = __esm({
   }
 });
 
+// ../../node_modules/ms/index.js
+var require_ms = __commonJS({
+  "../../node_modules/ms/index.js"(exports, module) {
+    "use strict";
+    var s = 1e3;
+    var m = s * 60;
+    var h = m * 60;
+    var d = h * 24;
+    var w = d * 7;
+    var y = d * 365.25;
+    module.exports = function(val, options) {
+      options = options || {};
+      var type = typeof val;
+      if (type === "string" && val.length > 0) {
+        return parse(val);
+      } else if (type === "number" && isFinite(val)) {
+        return options.long ? fmtLong(val) : fmtShort(val);
+      }
+      throw new Error(
+        "val is not a non-empty string or a valid number. val=" + JSON.stringify(val)
+      );
+    };
+    function parse(str) {
+      str = String(str);
+      if (str.length > 100) {
+        return;
+      }
+      var match = /^(-?(?:\d+)?\.?\d+) *(milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|years?|yrs?|y)?$/i.exec(
+        str
+      );
+      if (!match) {
+        return;
+      }
+      var n = parseFloat(match[1]);
+      var type = (match[2] || "ms").toLowerCase();
+      switch (type) {
+        case "years":
+        case "year":
+        case "yrs":
+        case "yr":
+        case "y":
+          return n * y;
+        case "weeks":
+        case "week":
+        case "w":
+          return n * w;
+        case "days":
+        case "day":
+        case "d":
+          return n * d;
+        case "hours":
+        case "hour":
+        case "hrs":
+        case "hr":
+        case "h":
+          return n * h;
+        case "minutes":
+        case "minute":
+        case "mins":
+        case "min":
+        case "m":
+          return n * m;
+        case "seconds":
+        case "second":
+        case "secs":
+        case "sec":
+        case "s":
+          return n * s;
+        case "milliseconds":
+        case "millisecond":
+        case "msecs":
+        case "msec":
+        case "ms":
+          return n;
+        default:
+          return void 0;
+      }
+    }
+    function fmtShort(ms3) {
+      var msAbs = Math.abs(ms3);
+      if (msAbs >= d) {
+        return Math.round(ms3 / d) + "d";
+      }
+      if (msAbs >= h) {
+        return Math.round(ms3 / h) + "h";
+      }
+      if (msAbs >= m) {
+        return Math.round(ms3 / m) + "m";
+      }
+      if (msAbs >= s) {
+        return Math.round(ms3 / s) + "s";
+      }
+      return ms3 + "ms";
+    }
+    function fmtLong(ms3) {
+      var msAbs = Math.abs(ms3);
+      if (msAbs >= d) {
+        return plural2(ms3, msAbs, d, "day");
+      }
+      if (msAbs >= h) {
+        return plural2(ms3, msAbs, h, "hour");
+      }
+      if (msAbs >= m) {
+        return plural2(ms3, msAbs, m, "minute");
+      }
+      if (msAbs >= s) {
+        return plural2(ms3, msAbs, s, "second");
+      }
+      return ms3 + " ms";
+    }
+    function plural2(ms3, msAbs, n, name2) {
+      var isPlural = msAbs >= n * 1.5;
+      return Math.round(ms3 / n) + " " + name2 + (isPlural ? "s" : "");
+    }
+  }
+});
+
 // ../sdk-services/dist/internal/decrypt-transport-response-error.cjs
 var require_decrypt_transport_response_error = __commonJS({
   "../sdk-services/dist/internal/decrypt-transport-response-error.cjs"(exports, module) {
@@ -10416,9 +10533,9 @@ function ok(data) {
 function err(error) {
   return { ok: false, error };
 }
-function serviceError(code2, message, service, options) {
+function serviceError(code, message, service, options) {
   return {
-    code: code2,
+    code,
     message,
     service,
     cause: options?.cause,
@@ -11647,16 +11764,16 @@ function ensureNetworkUsableForDecrypt(descriptor) {
     })
   };
 }
-function encryptToNetwork(crypto22, input) {
+function encryptToNetwork(crypto23, input) {
   parseNetworkId(input.networkId);
   const alg = input.alg ?? DEFAULT_ENCRYPTION_ALG;
   const keyVersion = input.keyVersion ?? DEFAULT_KEY_VERSION;
-  const symmetricKey = crypto22.randomBytes(32);
-  const ciphertext = crypto22.authEncrypt(symmetricKey, input.plaintext, input.aad);
-  const wrapped = crypto22.sealToNetworkKey(input.networkPublicKey, symmetricKey);
+  const symmetricKey = crypto23.randomBytes(32);
+  const ciphertext = crypto23.authEncrypt(symmetricKey, input.plaintext, input.aad);
+  const wrapped = crypto23.sealToNetworkKey(input.networkPublicKey, symmetricKey);
   const encryptedSymmetricKey = base64Encode2(wrapped);
   const encryptedSymmetricKeyHash = canonicalHashHex(
-    crypto22.sha256,
+    crypto23.sha256,
     encryptedSymmetricKey
   );
   const envelope = {
@@ -11672,7 +11789,7 @@ function encryptToNetwork(crypto22, input) {
   };
   return { envelope, symmetricKey };
 }
-function validateEnvelope(crypto22, envelope) {
+function validateEnvelope(crypto23, envelope) {
   if (envelope === null || typeof envelope !== "object") {
     return {
       ok: false,
@@ -11728,7 +11845,7 @@ function validateEnvelope(crypto22, envelope) {
       })
     };
   }
-  const expectedHash = canonicalHashHex(crypto22.sha256, e.encryptedSymmetricKey);
+  const expectedHash = canonicalHashHex(crypto23.sha256, e.encryptedSymmetricKey);
   if (expectedHash !== e.encryptedSymmetricKeyHash) {
     return {
       ok: false,
@@ -11740,10 +11857,10 @@ function validateEnvelope(crypto22, envelope) {
   }
   return { ok: true, data: e };
 }
-function decryptEnvelopeWithKey(crypto22, envelope, symmetricKey) {
+function decryptEnvelopeWithKey(crypto23, envelope, symmetricKey) {
   const ciphertext = base64Decode2(envelope.ciphertext);
   const aad = envelope.aad !== void 0 ? base64Decode2(envelope.aad) : void 0;
-  return crypto22.authDecrypt(symmetricKey, ciphertext, aad);
+  return crypto23.authDecrypt(symmetricKey, ciphertext, aad);
 }
 function buildCanonicalDecryptRequest(input) {
   const canonicalBody = canonicalize(input.body);
@@ -11777,7 +11894,7 @@ function buildDecryptFacts(input) {
     keyVersion: input.body.keyVersion
   };
 }
-function checkDecryptInvocationInput(crypto22, input) {
+function checkDecryptInvocationInput(crypto23, input) {
   if (input.body.type !== DECRYPT_FACT_TYPE) {
     return {
       ok: false,
@@ -11882,7 +11999,7 @@ function checkDecryptInvocationInput(crypto22, input) {
   const canonicalBody = canonicalize(
     input.body
   );
-  const expectedBodyHash = canonicalHashHex(crypto22.sha256, input.body);
+  const expectedBodyHash = canonicalHashHex(crypto23.sha256, input.body);
   if (expectedBodyHash !== input.facts.bodyHash) {
     return {
       ok: false,
@@ -11894,8 +12011,8 @@ function checkDecryptInvocationInput(crypto22, input) {
   }
   return { ok: true, data: input, canonicalBody };
 }
-async function buildDecryptInvocation(crypto22, signer, input) {
-  const checked = checkDecryptInvocationInput(crypto22, input);
+async function buildDecryptInvocation(crypto23, signer, input) {
+  const checked = checkDecryptInvocationInput(crypto23, input);
   if (!checked.ok) {
     return checked;
   }
@@ -11940,7 +12057,7 @@ function canonicalSignedResponse(response) {
   return canonicalize(rest);
 }
 function verifyDecryptResponse(input) {
-  const { crypto: crypto22, request, facts, invocationCid, requestBodyHash, response } = input;
+  const { crypto: crypto23, request, facts, invocationCid, requestBodyHash, response } = input;
   if (response.type !== DECRYPT_RESULT_TYPE) {
     return {
       ok: false,
@@ -12023,7 +12140,7 @@ function verifyDecryptResponse(input) {
     };
   }
   const expectedRequestHash = hexEncode2(
-    crypto22.sha256(utf8Encode(`${invocationCid}${requestBodyHash}`))
+    crypto23.sha256(utf8Encode(`${invocationCid}${requestBodyHash}`))
   );
   if (response.requestHash !== expectedRequestHash) {
     return {
@@ -12047,7 +12164,7 @@ function verifyDecryptResponse(input) {
     canonicalSignedResponse(response)
   );
   const signatureBytes = base64Decode2(response.nodeSignature);
-  if (!crypto22.verifyNodeSignature(response.nodeId, signedBytes, signatureBytes)) {
+  if (!crypto23.verifyNodeSignature(response.nodeId, signedBytes, signatureBytes)) {
     return {
       ok: false,
       error: encryptionError({
@@ -12057,9 +12174,9 @@ function verifyDecryptResponse(input) {
   }
   return { ok: true, data: response };
 }
-function openWrappedKey(crypto22, receiverPrivateKey, response) {
+function openWrappedKey(crypto23, receiverPrivateKey, response) {
   const wrapped = base64Decode2(response.wrappedKey);
-  return crypto22.openWithReceiverKey(receiverPrivateKey, wrapped);
+  return crypto23.openWithReceiverKey(receiverPrivateKey, wrapped);
 }
 function encOk(data) {
   return { ok: true, data };
@@ -12285,7 +12402,9 @@ var init_dist2 = __esm({
     GenericKVResponseSchema = createKVResponseSchema(external_exports.unknown());
     KVListResponseSchema = external_exports.object({
       /** Array of keys matching the list criteria */
-      keys: external_exports.array(external_exports.string())
+      keys: external_exports.array(external_exports.string()),
+      truncated: external_exports.boolean().optional(),
+      nextCursor: external_exports.string().optional()
     });
     KVListResultSchema = createResultSchema(KVListResponseSchema);
     ServiceRequestEventSchema = external_exports.object({
@@ -13127,10 +13246,10 @@ var init_dist2 = __esm({
             ...resource && { resource }
           }));
         }
-        const code2 = response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR;
+        const code = response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR;
         return err(
           serviceError(
-            code2,
+            code,
             `Failed to create signed read URL for key "${key}": ${response.status} - ${errorText}`,
             "kv",
             { meta: { status: response.status, statusText: response.statusText } }
@@ -13437,7 +13556,10 @@ var init_dist2 = __esm({
               KVAction.LIST,
               void 0,
               options?.signal,
-              options?.limit === void 0 ? void 0 : { "x-tinycloud-limit": String(options.limit) }
+              options?.limit === void 0 && options?.cursor === void 0 ? void 0 : {
+                ...options?.limit === void 0 ? {} : { "x-tinycloud-limit": String(options.limit) },
+                ...options?.cursor === void 0 ? {} : { "x-tinycloud-cursor": options.cursor }
+              }
             );
             if (!response.ok) {
               if (response.status === 401) {
@@ -13469,7 +13591,8 @@ var init_dist2 = __esm({
             }
             return ok({
               keys,
-              ...response.headers.get("x-tinycloud-truncated") === null ? {} : { truncated: response.headers.get("x-tinycloud-truncated") === "true" }
+              ...response.headers.get("x-tinycloud-truncated") === null ? {} : { truncated: response.headers.get("x-tinycloud-truncated") === "true" },
+              ...response.headers.get("x-tinycloud-next-cursor") === null ? {} : { nextCursor: response.headers.get("x-tinycloud-next-cursor") ?? void 0 }
             });
           } catch (error) {
             return err(wrapError2("kv", error));
@@ -16348,126 +16471,9 @@ var init_dist2 = __esm({
   }
 });
 
-// ../../node_modules/ms/index.js
-var require_ms = __commonJS({
-  "../../node_modules/ms/index.js"(exports, module) {
-    "use strict";
-    var s = 1e3;
-    var m = s * 60;
-    var h = m * 60;
-    var d = h * 24;
-    var w = d * 7;
-    var y = d * 365.25;
-    module.exports = function(val, options) {
-      options = options || {};
-      var type = typeof val;
-      if (type === "string" && val.length > 0) {
-        return parse(val);
-      } else if (type === "number" && isFinite(val)) {
-        return options.long ? fmtLong(val) : fmtShort(val);
-      }
-      throw new Error(
-        "val is not a non-empty string or a valid number. val=" + JSON.stringify(val)
-      );
-    };
-    function parse(str) {
-      str = String(str);
-      if (str.length > 100) {
-        return;
-      }
-      var match = /^(-?(?:\d+)?\.?\d+) *(milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|years?|yrs?|y)?$/i.exec(
-        str
-      );
-      if (!match) {
-        return;
-      }
-      var n = parseFloat(match[1]);
-      var type = (match[2] || "ms").toLowerCase();
-      switch (type) {
-        case "years":
-        case "year":
-        case "yrs":
-        case "yr":
-        case "y":
-          return n * y;
-        case "weeks":
-        case "week":
-        case "w":
-          return n * w;
-        case "days":
-        case "day":
-        case "d":
-          return n * d;
-        case "hours":
-        case "hour":
-        case "hrs":
-        case "hr":
-        case "h":
-          return n * h;
-        case "minutes":
-        case "minute":
-        case "mins":
-        case "min":
-        case "m":
-          return n * m;
-        case "seconds":
-        case "second":
-        case "secs":
-        case "sec":
-        case "s":
-          return n * s;
-        case "milliseconds":
-        case "millisecond":
-        case "msecs":
-        case "msec":
-        case "ms":
-          return n;
-        default:
-          return void 0;
-      }
-    }
-    function fmtShort(ms3) {
-      var msAbs = Math.abs(ms3);
-      if (msAbs >= d) {
-        return Math.round(ms3 / d) + "d";
-      }
-      if (msAbs >= h) {
-        return Math.round(ms3 / h) + "h";
-      }
-      if (msAbs >= m) {
-        return Math.round(ms3 / m) + "m";
-      }
-      if (msAbs >= s) {
-        return Math.round(ms3 / s) + "s";
-      }
-      return ms3 + "ms";
-    }
-    function fmtLong(ms3) {
-      var msAbs = Math.abs(ms3);
-      if (msAbs >= d) {
-        return plural2(ms3, msAbs, d, "day");
-      }
-      if (msAbs >= h) {
-        return plural2(ms3, msAbs, h, "hour");
-      }
-      if (msAbs >= m) {
-        return plural2(ms3, msAbs, m, "minute");
-      }
-      if (msAbs >= s) {
-        return plural2(ms3, msAbs, s, "second");
-      }
-      return ms3 + " ms";
-    }
-    function plural2(ms3, msAbs, n, name2) {
-      var isPlural = msAbs >= n * 1.5;
-      return Math.round(ms3 / n) + " " + name2 + (isPlural ? "s" : "");
-    }
-  }
-});
-
 // ../sdk-core/dist/index.js
 import { SiweMessage } from "siwe";
-import crypto3 from "crypto";
+import crypto22 from "crypto";
 import { Buffer as Buffer2 } from "buffer";
 import { Buffer as Buffer3 } from "buffer";
 import { Buffer as Buffer4 } from "buffer";
@@ -16755,8 +16761,8 @@ function read2(buf, offset) {
   return res;
 }
 function decode3(data, offset = 0) {
-  const code2 = varint_default.decode(data, offset);
-  return [code2, varint_default.decode.bytes];
+  const code3 = varint_default.decode(data, offset);
+  return [code3, varint_default.decode.bytes];
 }
 function encodeTo(int, target, offset = 0) {
   varint_default.encode(int, target, offset);
@@ -16765,25 +16771,25 @@ function encodeTo(int, target, offset = 0) {
 function encodingLength(int) {
   return varint_default.encodingLength(int);
 }
-function create(code2, digest2) {
-  const size2 = digest2.byteLength;
-  const sizeOffset = encodingLength(code2);
+function create(code3, digest3) {
+  const size2 = digest3.byteLength;
+  const sizeOffset = encodingLength(code3);
   const digestOffset = sizeOffset + encodingLength(size2);
   const bytes = new Uint8Array(digestOffset + size2);
-  encodeTo(code2, bytes, 0);
+  encodeTo(code3, bytes, 0);
   encodeTo(size2, bytes, sizeOffset);
-  bytes.set(digest2, digestOffset);
-  return new Digest(code2, size2, digest2, bytes);
+  bytes.set(digest3, digestOffset);
+  return new Digest(code3, size2, digest3, bytes);
 }
 function decode4(multihash) {
   const bytes = coerce2(multihash);
-  const [code2, sizeOffset] = decode3(bytes);
+  const [code3, sizeOffset] = decode3(bytes);
   const [size2, digestOffset] = decode3(bytes.subarray(sizeOffset));
-  const digest2 = bytes.subarray(sizeOffset + digestOffset);
-  if (digest2.byteLength !== size2) {
+  const digest3 = bytes.subarray(sizeOffset + digestOffset);
+  if (digest3.byteLength !== size2) {
     throw new Error("Incorrect length");
   }
-  return new Digest(code2, size2, digest2, bytes);
+  return new Digest(code3, size2, digest3, bytes);
 }
 function equals2(a, b) {
   if (a === b) {
@@ -16866,12 +16872,12 @@ function toStringV1(bytes, cache2, base3) {
     return cid;
   }
 }
-function encodeCID(version3, code2, multihash) {
+function encodeCID(version3, code3, multihash) {
   const codeOffset = encodingLength(version3);
-  const hashOffset = codeOffset + encodingLength(code2);
+  const hashOffset = codeOffset + encodingLength(code3);
   const bytes = new Uint8Array(hashOffset + multihash.byteLength);
   encodeTo(version3, bytes, 0);
-  encodeTo(code2, bytes, codeOffset);
+  encodeTo(code3, bytes, codeOffset);
   bytes.set(multihash, hashOffset);
   return bytes;
 }
@@ -16903,19 +16909,19 @@ function digest(input, options2) {
     }
     input = input.subarray(0, options2.truncate);
   }
-  return create(code, encode4(input));
+  return create(code2, encode4(input));
 }
-function from2({ name: name2, code: code2, encode: encode5, minDigestLength, maxDigestLength }) {
-  return new Hasher(name2, code2, encode5, minDigestLength, maxDigestLength);
+function from2({ name: name2, code: code3, encode: encode5, minDigestLength, maxDigestLength }) {
+  return new Hasher(name2, code3, encode5, minDigestLength, maxDigestLength);
 }
-function createDigest(digest2, code2, truncate) {
-  if (truncate != null && truncate !== digest2.byteLength) {
-    if (truncate > digest2.byteLength) {
-      throw new Error(`Invalid truncate option, must be less than or equal to ${digest2.byteLength}`);
+function createDigest(digest3, code3, truncate) {
+  if (truncate != null && truncate !== digest3.byteLength) {
+    if (truncate > digest3.byteLength) {
+      throw new Error(`Invalid truncate option, must be less than or equal to ${digest3.byteLength}`);
     }
-    digest2 = digest2.subarray(0, truncate);
+    digest3 = digest3.subarray(0, truncate);
   }
-  return create(code2, digest2);
+  return create(code3, digest3);
 }
 function parseStrictRfc33392(value) {
   if (!/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(
@@ -17285,9 +17291,9 @@ function bytesToComponents(bytes) {
   const components = [];
   let i = 0;
   while (i < bytes.length) {
-    const code2 = decode6(bytes, i);
-    const codec = registry.getProtocol(code2);
-    const codeLength = encodingLength2(code2);
+    const code3 = decode6(bytes, i);
+    const codec = registry.getProtocol(code3);
+    const codeLength = encodingLength2(code3);
     const size2 = sizeForAddr(codec, bytes, i + codeLength);
     let sizeLength = 0;
     if (size2 > 0 && codec.size === V) {
@@ -17295,7 +17301,7 @@ function bytesToComponents(bytes) {
     }
     const componentLength = codeLength + sizeLength + size2;
     const component = {
-      code: code2,
+      code: code3,
       name: codec.name,
       bytes: bytes.subarray(i, i + componentLength)
     };
@@ -17476,7 +17482,7 @@ function extractTuple(name2, ma) {
   return ma.find((component) => component.name === name2);
 }
 function hasTLS(ma) {
-  return ma.some(({ code: code2 }) => code2 === CODE_TLS);
+  return ma.some(({ code: code3 }) => code3 === CODE_TLS);
 }
 function interpretNext(head, rest) {
   const interpreter = interpreters[head.name];
@@ -17875,25 +17881,27 @@ function decodeBase64Url(value) {
   }
   return Uint8Array.from(bytes);
 }
-var import_ms, __defProp2, __typeError, __defNormalProp, __export2, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36_exports, base36, base36upper, base58_exports, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, _a, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base2, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base64, base64pad, base64url, base64urlpad, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code, name, encode4, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_EXPIRY_MS2, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N12, N22, N32, N42, N52, N62, N72, MSB2, REST2, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, DEFAULT_LOCAL_NODE_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
+var import_ms, __defProp2, __typeError, __defNormalProp, __export2, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36_exports, base36, base36upper, base58_exports, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, _a, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base2, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base64, base64pad, base64url, base64urlpad, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode4, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, DEFAULT_MAX_ARTIFACT_BYTES, PUBLISHED_AAD, DEFAULT_MAX_ARTIFACT_BYTES2, DEFAULT_MAX_CONTENT_BYTES, DEFAULT_EXPIRY_MS2, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N12, N22, N32, N42, N52, N62, N72, MSB2, REST2, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, DEFAULT_LOCAL_NODE_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
 var init_dist3 = __esm({
   "../sdk-core/dist/index.js"() {
     "use strict";
     init_zod();
     init_zod();
     init_dist();
-    init_dist2();
-    init_zod();
-    init_dist2();
-    init_dist2();
     init_zod();
     init_zod();
-    init_dist2();
     import_ms = __toESM(require_ms(), 1);
+    init_dist2();
+    init_dist2();
+    init_zod();
+    init_dist2();
+    init_zod();
+    init_dist2();
+    init_dist2();
+    init_zod();
     init_dist2();
     init_dist();
     init_dist2();
-    init_zod();
     init_dist2();
     init_dist();
     init_ed25519();
@@ -18153,14 +18161,14 @@ var init_dist3 = __esm({
       /**
        * Creates a multihash digest.
        */
-      constructor(code2, size2, digest2, bytes) {
+      constructor(code3, size2, digest3, bytes) {
         __publicField(this, "code");
         __publicField(this, "size");
         __publicField(this, "digest");
         __publicField(this, "bytes");
-        this.code = code2;
+        this.code = code3;
         this.size = size2;
-        this.digest = digest2;
+        this.digest = digest3;
         this.bytes = bytes;
       }
     };
@@ -18171,14 +18179,14 @@ var init_dist3 = __esm({
        * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
        * @param multihash - (Multi)hash of the of the content.
        */
-      constructor(version3, code2, multihash, bytes) {
+      constructor(version3, code3, multihash, bytes) {
         __publicField(this, "code");
         __publicField(this, "version");
         __publicField(this, "multihash");
         __publicField(this, "bytes");
         __publicField(this, "/");
         __publicField(this, _a, "CID");
-        this.code = code2;
+        this.code = code3;
         this.version = version3;
         this.multihash = multihash;
         this.bytes = bytes;
@@ -18207,8 +18215,8 @@ var init_dist3 = __esm({
             return this;
           }
           case 1: {
-            const { code: code2, multihash } = this;
-            if (code2 !== DAG_PB_CODE) {
+            const { code: code3, multihash } = this;
+            if (code3 !== DAG_PB_CODE) {
               throw new Error("Cannot convert a non dag-pb CID to CIDv0");
             }
             if (multihash.code !== SHA_256_CODE) {
@@ -18224,8 +18232,8 @@ var init_dist3 = __esm({
       toV1() {
         switch (this.version) {
           case 0: {
-            const { code: code2, digest: digest2 } = this.multihash;
-            const multihash = create(code2, digest2);
+            const { code: code3, digest: digest3 } = this.multihash;
+            const multihash = create(code3, digest3);
             return _CID.createV1(this.code, multihash);
           }
           case 1: {
@@ -18274,12 +18282,12 @@ var init_dist3 = __esm({
         if (value instanceof _CID) {
           return value;
         } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-          const { version: version3, code: code2, multihash, bytes } = value;
-          return new _CID(version3, code2, multihash, bytes ?? encodeCID(version3, code2, multihash.bytes));
+          const { version: version3, code: code3, multihash, bytes } = value;
+          return new _CID(version3, code3, multihash, bytes ?? encodeCID(version3, code3, multihash.bytes));
         } else if (value[cidSymbol] === true) {
-          const { version: version3, multihash, code: code2 } = value;
-          const digest2 = decode4(multihash);
-          return _CID.create(version3, code2, digest2);
+          const { version: version3, multihash, code: code3 } = value;
+          const digest3 = decode4(multihash);
+          return _CID.create(version3, code3, digest3);
         } else {
           return null;
         }
@@ -18289,24 +18297,24 @@ var init_dist3 = __esm({
        * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
        * @param digest - (Multi)hash of the of the content.
        */
-      static create(version3, code2, digest2) {
-        if (typeof code2 !== "number") {
+      static create(version3, code3, digest3) {
+        if (typeof code3 !== "number") {
           throw new Error("String codecs are no longer supported");
         }
-        if (!(digest2.bytes instanceof Uint8Array)) {
+        if (!(digest3.bytes instanceof Uint8Array)) {
           throw new Error("Invalid digest");
         }
         switch (version3) {
           case 0: {
-            if (code2 !== DAG_PB_CODE) {
+            if (code3 !== DAG_PB_CODE) {
               throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE}) block encoding`);
             } else {
-              return new _CID(version3, code2, digest2, digest2.bytes);
+              return new _CID(version3, code3, digest3, digest3.bytes);
             }
           }
           case 1: {
-            const bytes = encodeCID(version3, code2, digest2.bytes);
-            return new _CID(version3, code2, digest2, bytes);
+            const bytes = encodeCID(version3, code3, digest3.bytes);
+            return new _CID(version3, code3, digest3, bytes);
           }
           default: {
             throw new Error("Invalid version");
@@ -18316,8 +18324,8 @@ var init_dist3 = __esm({
       /**
        * Simplified version of `create` for CIDv0.
        */
-      static createV0(digest2) {
-        return _CID.create(0, DAG_PB_CODE, digest2);
+      static createV0(digest3) {
+        return _CID.create(0, DAG_PB_CODE, digest3);
       }
       /**
        * Simplified version of `create` for CIDv1.
@@ -18325,8 +18333,8 @@ var init_dist3 = __esm({
        * @param code - Content encoding format code.
        * @param digest - Multihash of the content.
        */
-      static createV1(code2, digest2) {
-        return _CID.create(1, code2, digest2);
+      static createV1(code3, digest3) {
+        return _CID.create(1, code3, digest3);
       }
       /**
        * Decoded a CID from its binary representation. The byte array must contain
@@ -18359,8 +18367,8 @@ var init_dist3 = __esm({
           throw new Error("Incorrect length");
         }
         const digestBytes = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
-        const digest2 = new Digest(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
-        const cid = specs.version === 0 ? _CID.createV0(digest2) : _CID.createV1(specs.codec, digest2);
+        const digest3 = new Digest(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
+        const cid = specs.version === 0 ? _CID.createV0(digest3) : _CID.createV1(specs.codec, digest3);
         return [cid, bytes.subarray(specs.size)];
       }
       /**
@@ -18555,10 +18563,10 @@ var init_dist3 = __esm({
     __export2(identity_exports2, {
       identity: () => identity2
     });
-    code = 0;
+    code2 = 0;
     name = "identity";
     encode4 = coerce2;
-    identity2 = { code, name, encode: encode4, digest };
+    identity2 = { code: code2, name, encode: encode4, digest };
     sha2_exports = {};
     __export2(sha2_exports, {
       sha256: () => sha2562,
@@ -18566,14 +18574,14 @@ var init_dist3 = __esm({
     });
     DEFAULT_MIN_DIGEST_LENGTH = 20;
     Hasher = class {
-      constructor(name2, code2, encode5, minDigestLength, maxDigestLength) {
+      constructor(name2, code3, encode5, minDigestLength, maxDigestLength) {
         __publicField(this, "name");
         __publicField(this, "code");
         __publicField(this, "encode");
         __publicField(this, "minDigestLength");
         __publicField(this, "maxDigestLength");
         this.name = name2;
-        this.code = code2;
+        this.code = code3;
         this.encode = encode5;
         this.minDigestLength = minDigestLength ?? DEFAULT_MIN_DIGEST_LENGTH;
         this.maxDigestLength = maxDigestLength;
@@ -18592,7 +18600,7 @@ var init_dist3 = __esm({
           if (result instanceof Uint8Array) {
             return createDigest(result, this.code, options2?.truncate);
           }
-          return result.then((digest2) => createDigest(digest2, this.code, options2?.truncate));
+          return result.then((digest3) => createDigest(digest3, this.code, options2?.truncate));
         } else {
           throw Error("Unknown type, must be binary type");
         }
@@ -18601,12 +18609,12 @@ var init_dist3 = __esm({
     sha2562 = from2({
       name: "sha2-256",
       code: 18,
-      encode: (input) => coerce2(crypto3.createHash("sha256").update(input).digest())
+      encode: (input) => coerce2(crypto22.createHash("sha256").update(input).digest())
     });
     sha5122 = from2({
       name: "sha2-512",
       code: 19,
-      encode: (input) => coerce2(crypto3.createHash("sha512").update(input).digest())
+      encode: (input) => coerce2(crypto22.createHash("sha512").update(input).digest())
     });
     bases = { ...identity_exports, ...base2_exports, ...base8_exports, ...base10_exports, ...base16_exports, ...base32_exports, ...base36_exports, ...base58_exports, ...base64_exports, ...base256emoji_exports };
     hashes = { ...sha2_exports, ...identity_exports2 };
@@ -18799,83 +18807,6 @@ var init_dist3 = __esm({
         statement
       ])
     );
-    ethereumAddressPattern = /^0x[a-fA-F0-9]{40}$/;
-    EnsDataSchema2 = external_exports.object({
-      /** ENS name/domain. */
-      domain: external_exports.string().nullable().optional(),
-      /** ENS avatar URL. */
-      avatarUrl: external_exports.string().nullable().optional()
-    });
-    PersistedTinyCloudSessionSchema = external_exports.object({
-      /** The delegation header containing the UCAN */
-      delegationHeader: external_exports.object({
-        Authorization: external_exports.string()
-      }),
-      /** The delegation CID */
-      delegationCid: external_exports.string(),
-      /** The space ID for this session */
-      spaceId: external_exports.string(),
-      /** Additional spaces included in this session's capabilities. Key is logical name, value is full spaceId URI */
-      spaces: external_exports.record(external_exports.string(), external_exports.string()).optional(),
-      /** The verification method DID */
-      verificationMethod: external_exports.string()
-    });
-    PersistedSessionDataSchema = external_exports.object({
-      /** User's Ethereum address */
-      address: external_exports.string().regex(ethereumAddressPattern, "Invalid Ethereum address"),
-      /** EIP-155 Chain ID */
-      chainId: external_exports.number().int().positive(),
-      /** Session key in JWK format (stringified) */
-      sessionKey: external_exports.string(),
-      /** The signed SIWE message */
-      siwe: external_exports.string(),
-      /** User's signature of the SIWE message */
-      signature: external_exports.string(),
-      /** TinyCloud delegation data if available */
-      tinycloudSession: PersistedTinyCloudSessionSchema.optional(),
-      /** Session expiration timestamp (ISO 8601 with timezone offset) */
-      expiresAt: external_exports.string().datetime({ offset: true }),
-      /** Session creation timestamp (ISO 8601 with timezone offset) */
-      createdAt: external_exports.string().datetime({ offset: true }),
-      /** Schema version for migrations */
-      version: external_exports.string(),
-      /** Optional ENS data */
-      ens: EnsDataSchema2.optional(),
-      /**
-       * TinyCloud hosts this session was created against. Persisted so a
-       * restored session resolves to the same node without re-running the
-       * registry/fallback resolution (or the wallet sign-in flow). Optional
-       * for backward compatibility with sessions persisted before this field
-       * existed — those restore and lazily re-resolve their hosts.
-       */
-      tinycloudHosts: external_exports.array(external_exports.string()).optional()
-    });
-    TinyCloudSessionSchema = external_exports.object({
-      /** User's Ethereum address */
-      address: external_exports.string().regex(ethereumAddressPattern, "Invalid Ethereum address"),
-      /** EIP-155 Chain ID */
-      chainId: external_exports.number().int().positive(),
-      /** Session key ID */
-      sessionKey: external_exports.string(),
-      /** The space ID for this session */
-      spaceId: external_exports.string(),
-      /** Additional spaces included in this session's capabilities. Key is logical name, value is full spaceId URI */
-      spaces: external_exports.record(external_exports.string(), external_exports.string()).optional(),
-      /** The delegation CID */
-      delegationCid: external_exports.string(),
-      /** The delegation header for API calls */
-      delegationHeader: external_exports.object({
-        Authorization: external_exports.string()
-      }),
-      /** The verification method DID */
-      verificationMethod: external_exports.string(),
-      /** The session key JWK (required for invoke operations) */
-      jwk: external_exports.object({}).passthrough(),
-      /** The signed SIWE message */
-      siwe: external_exports.string(),
-      /** User's signature of the SIWE message */
-      signature: external_exports.string()
-    });
     JWKSchema = external_exports.object({
       /** Key type (e.g., "EC", "RSA", "OKP") */
       kty: external_exports.string(),
@@ -19257,112 +19188,6 @@ var init_dist3 = __esm({
        */
       resources: external_exports.array(DelegatedResourceSchema)
     });
-    SpaceConfigSchema = external_exports.object({
-      /** The space identifier (full URI) */
-      id: external_exports.string(),
-      /** The short name of the space */
-      name: external_exports.string(),
-      /** Factory function to create a space-scoped KV service */
-      createKV: external_exports.function(),
-      /** Factory function to create a space-scoped Data Vault service */
-      createVault: external_exports.function(),
-      /** Optional factory function to create a space-scoped secrets service */
-      createSecrets: external_exports.function().optional(),
-      /** Factory function to create space-scoped delegations */
-      createDelegations: external_exports.function(),
-      /** Factory function to create space-scoped sharing */
-      createSharing: external_exports.function(),
-      /** Function to get space info */
-      getInfo: external_exports.function()
-    });
-    SpaceServiceConfigSchema = external_exports.object({
-      /** TinyCloud host URLs */
-      hosts: external_exports.array(external_exports.string()),
-      /** Active session for authentication */
-      session: external_exports.unknown(),
-      /** Platform-specific invoke function */
-      invoke: external_exports.function(),
-      /** Optional custom fetch implementation */
-      fetch: external_exports.function().optional(),
-      /** Optional capability key registry for delegated space discovery */
-      capabilityRegistry: external_exports.unknown().optional(),
-      /** Factory function to create a space-scoped KV service */
-      createKVService: external_exports.function().optional(),
-      /** Factory function to create a space-scoped Data Vault service */
-      createVaultService: external_exports.function().optional(),
-      /** Factory function to create a space-scoped secrets service */
-      createSecretsService: external_exports.function().optional(),
-      /** User's PKH DID (derived from address or provided explicitly) */
-      userDid: external_exports.string().optional(),
-      /** Optional SharingService for v2 sharing links (client-side) */
-      sharingService: external_exports.unknown().optional(),
-      /** Factory function to create delegations using SIWE-based flow */
-      createDelegation: external_exports.function().optional()
-    });
-    SpaceDelegationParamsSchema = CreateDelegationParamsSchema.extend({
-      /** The space ID to create the delegation for */
-      spaceId: external_exports.string()
-    });
-    ServerDelegationInfoSchema = external_exports.object({
-      /** DID of the delegator */
-      delegator: external_exports.string(),
-      /** DID of the delegate */
-      delegate: external_exports.string(),
-      /** Parent delegation CIDs - accepts string or byte array format from server */
-      parents: external_exports.array(external_exports.union([external_exports.string(), external_exports.array(external_exports.number())])),
-      /** Expiration time (ISO8601 string) */
-      expiry: external_exports.string().optional(),
-      /** Not-before time (ISO8601 string) */
-      not_before: external_exports.string().optional(),
-      /** Issued-at time (ISO8601 string) */
-      issued_at: external_exports.string().optional(),
-      /** Capabilities granted by this delegation */
-      capabilities: external_exports.array(
-        external_exports.object({
-          resource: external_exports.string(),
-          ability: external_exports.string()
-        })
-      )
-    });
-    ServerDelegationsResponseSchema = external_exports.record(
-      external_exports.string(),
-      ServerDelegationInfoSchema
-    );
-    ServerOwnedSpaceSchema = external_exports.object({
-      /** Space identifier */
-      id: external_exports.string(),
-      /** Space name (optional, can be derived from id) */
-      name: external_exports.string().optional(),
-      /** Owner DID */
-      owner: external_exports.string(),
-      /** Creation timestamp */
-      createdAt: external_exports.string().optional()
-    });
-    ServerOwnedSpacesResponseSchema = external_exports.array(ServerOwnedSpaceSchema);
-    ServerCreateSpaceResponseSchema = external_exports.object({
-      /** Space identifier */
-      id: external_exports.string(),
-      /** Space name */
-      name: external_exports.string(),
-      /** Owner DID */
-      owner: external_exports.string(),
-      /** Creation timestamp */
-      createdAt: external_exports.string().optional()
-    });
-    ServerSpaceInfoResponseSchema = external_exports.object({
-      /** Space identifier */
-      id: external_exports.string(),
-      /** Space name (optional) */
-      name: external_exports.string().optional(),
-      /** Owner DID */
-      owner: external_exports.string(),
-      /** Ownership type */
-      type: external_exports.enum(["owned", "delegated"]).optional(),
-      /** Permissions the user has in this space */
-      permissions: external_exports.array(external_exports.string()).optional(),
-      /** Expiration for delegated access */
-      expiresAt: external_exports.string().optional()
-    });
     EPHEMERAL_MS = 60 * 60 * 1e3;
     SIGNED_READ_URL_MS = 5 * 60 * 1e3;
     SESSION_MS = 7 * 24 * 60 * 60 * 1e3;
@@ -19378,27 +19203,6 @@ var init_dist3 = __esm({
       MAX_MS
     };
     DEFAULT_SIGNED_READ_URL_EXPIRY_MS2 = EXPIRY.SIGNED_READ_URL_MS;
-    DEFAULT_KNOWLEDGE_ROOT = "knowledge/index.md";
-    ManifestValidationError = class extends Error {
-      constructor(message) {
-        super(`Manifest validation failed: ${message}`);
-        this.name = "ManifestValidationError";
-      }
-    };
-    SERVICE_SHORT_TO_LONG = Object.freeze({
-      kv: "tinycloud.kv",
-      sql: "tinycloud.sql",
-      duckdb: "tinycloud.duckdb",
-      capabilities: "tinycloud.capabilities",
-      hooks: "tinycloud.hooks",
-      encryption: "tinycloud.encryption",
-      delegation: "tinycloud.delegation"
-    });
-    SERVICE_LONG_TO_SHORT = Object.freeze(
-      Object.fromEntries(
-        Object.entries(SERVICE_SHORT_TO_LONG).map(([s, l]) => [l, s])
-      )
-    );
     EncodedShareDataSchema = external_exports.object({
       /** Private key in JWK format (must include d parameter) */
       key: JWKSchema.refine(
@@ -19509,7 +19313,239 @@ var init_dist3 = __esm({
         message: "Expected an onRootDelegationNeeded function or undefined"
       }).optional()
     });
+    DEFAULT_KNOWLEDGE_ROOT = "knowledge/index.md";
+    ManifestValidationError = class extends Error {
+      constructor(message) {
+        super(`Manifest validation failed: ${message}`);
+        this.name = "ManifestValidationError";
+      }
+    };
+    SERVICE_SHORT_TO_LONG = Object.freeze({
+      kv: "tinycloud.kv",
+      sql: "tinycloud.sql",
+      duckdb: "tinycloud.duckdb",
+      capabilities: "tinycloud.capabilities",
+      hooks: "tinycloud.hooks",
+      encryption: "tinycloud.encryption",
+      delegation: "tinycloud.delegation"
+    });
+    SERVICE_LONG_TO_SHORT = Object.freeze(
+      Object.fromEntries(
+        Object.entries(SERVICE_SHORT_TO_LONG).map(([s, l]) => [l, s])
+      )
+    );
+    DEFAULT_MAX_INLINE_BYTES = 256 * 1024;
+    DEFAULT_MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
+    PUBLISHED_AAD = new TextEncoder().encode("tinycloud-share-envelope-v1");
+    DEFAULT_MAX_ARTIFACT_BYTES2 = 32 * 1024 * 1024;
+    DEFAULT_MAX_CONTENT_BYTES = 32 * 1024 * 1024;
     DEFAULT_EXPIRY_MS2 = EXPIRY.SHARE_MS;
+    ShareRecipientTargetSchema = external_exports.discriminatedUnion("kind", [
+      external_exports.object({ kind: external_exports.literal("exactEmail"), value: external_exports.string().min(1) }).strict(),
+      external_exports.object({ kind: external_exports.literal("emailDomain"), value: external_exports.string().min(1) }).strict(),
+      external_exports.object({ kind: external_exports.literal("bearer") }).strict()
+    ]);
+    ShareResourceSchema = external_exports.discriminatedUnion("kind", [
+      external_exports.object({ kind: external_exports.literal("exact"), path: external_exports.string().min(1) }).strict(),
+      external_exports.object({ kind: external_exports.literal("prefix"), path: external_exports.string().min(1) }).strict()
+    ]);
+    ShareActionSchema = external_exports.enum(["read", "list", "edit"]);
+    ShareRecipientPolicySchema = external_exports.object({
+      matcher: ShareRecipientTargetSchema,
+      spaceId: external_exports.string().min(1),
+      resource: ShareResourceSchema,
+      actions: external_exports.array(ShareActionSchema).min(1),
+      expiresAt: external_exports.date()
+    }).strict();
+    ShareRecipientClientOptionsSchema = external_exports.object({
+      trustedOrigins: external_exports.array(external_exports.string().url()).min(1),
+      maxInlineBytes: external_exports.number().int().positive().optional(),
+      maxArtifactBytes: external_exports.number().int().positive().optional(),
+      maxContentBytes: external_exports.number().int().positive().optional()
+    }).passthrough();
+    ethereumAddressPattern = /^0x[a-fA-F0-9]{40}$/;
+    EnsDataSchema2 = external_exports.object({
+      /** ENS name/domain. */
+      domain: external_exports.string().nullable().optional(),
+      /** ENS avatar URL. */
+      avatarUrl: external_exports.string().nullable().optional()
+    });
+    PersistedTinyCloudSessionSchema = external_exports.object({
+      /** The delegation header containing the UCAN */
+      delegationHeader: external_exports.object({
+        Authorization: external_exports.string()
+      }),
+      /** The delegation CID */
+      delegationCid: external_exports.string(),
+      /** The space ID for this session */
+      spaceId: external_exports.string(),
+      /** Additional spaces included in this session's capabilities. Key is logical name, value is full spaceId URI */
+      spaces: external_exports.record(external_exports.string(), external_exports.string()).optional(),
+      /** The verification method DID */
+      verificationMethod: external_exports.string()
+    });
+    PersistedSessionDataSchema = external_exports.object({
+      /** User's Ethereum address */
+      address: external_exports.string().regex(ethereumAddressPattern, "Invalid Ethereum address"),
+      /** EIP-155 Chain ID */
+      chainId: external_exports.number().int().positive(),
+      /** Session key in JWK format (stringified) */
+      sessionKey: external_exports.string(),
+      /** The signed SIWE message */
+      siwe: external_exports.string(),
+      /** User's signature of the SIWE message */
+      signature: external_exports.string(),
+      /** TinyCloud delegation data if available */
+      tinycloudSession: PersistedTinyCloudSessionSchema.optional(),
+      /** Session expiration timestamp (ISO 8601 with timezone offset) */
+      expiresAt: external_exports.string().datetime({ offset: true }),
+      /** Session creation timestamp (ISO 8601 with timezone offset) */
+      createdAt: external_exports.string().datetime({ offset: true }),
+      /** Schema version for migrations */
+      version: external_exports.string(),
+      /** Optional ENS data */
+      ens: EnsDataSchema2.optional(),
+      /**
+       * TinyCloud hosts this session was created against. Persisted so a
+       * restored session resolves to the same node without re-running the
+       * registry/fallback resolution (or the wallet sign-in flow). Optional
+       * for backward compatibility with sessions persisted before this field
+       * existed — those restore and lazily re-resolve their hosts.
+       */
+      tinycloudHosts: external_exports.array(external_exports.string()).optional()
+    });
+    TinyCloudSessionSchema = external_exports.object({
+      /** User's Ethereum address */
+      address: external_exports.string().regex(ethereumAddressPattern, "Invalid Ethereum address"),
+      /** EIP-155 Chain ID */
+      chainId: external_exports.number().int().positive(),
+      /** Session key ID */
+      sessionKey: external_exports.string(),
+      /** The space ID for this session */
+      spaceId: external_exports.string(),
+      /** Additional spaces included in this session's capabilities. Key is logical name, value is full spaceId URI */
+      spaces: external_exports.record(external_exports.string(), external_exports.string()).optional(),
+      /** The delegation CID */
+      delegationCid: external_exports.string(),
+      /** The delegation header for API calls */
+      delegationHeader: external_exports.object({
+        Authorization: external_exports.string()
+      }),
+      /** The verification method DID */
+      verificationMethod: external_exports.string(),
+      /** The session key JWK (required for invoke operations) */
+      jwk: external_exports.object({}).passthrough(),
+      /** The signed SIWE message */
+      siwe: external_exports.string(),
+      /** User's signature of the SIWE message */
+      signature: external_exports.string()
+    });
+    SpaceConfigSchema = external_exports.object({
+      /** The space identifier (full URI) */
+      id: external_exports.string(),
+      /** The short name of the space */
+      name: external_exports.string(),
+      /** Factory function to create a space-scoped KV service */
+      createKV: external_exports.function(),
+      /** Factory function to create a space-scoped Data Vault service */
+      createVault: external_exports.function(),
+      /** Optional factory function to create a space-scoped secrets service */
+      createSecrets: external_exports.function().optional(),
+      /** Factory function to create space-scoped delegations */
+      createDelegations: external_exports.function(),
+      /** Factory function to create space-scoped sharing */
+      createSharing: external_exports.function(),
+      /** Function to get space info */
+      getInfo: external_exports.function()
+    });
+    SpaceServiceConfigSchema = external_exports.object({
+      /** TinyCloud host URLs */
+      hosts: external_exports.array(external_exports.string()),
+      /** Active session for authentication */
+      session: external_exports.unknown(),
+      /** Platform-specific invoke function */
+      invoke: external_exports.function(),
+      /** Optional custom fetch implementation */
+      fetch: external_exports.function().optional(),
+      /** Optional capability key registry for delegated space discovery */
+      capabilityRegistry: external_exports.unknown().optional(),
+      /** Factory function to create a space-scoped KV service */
+      createKVService: external_exports.function().optional(),
+      /** Factory function to create a space-scoped Data Vault service */
+      createVaultService: external_exports.function().optional(),
+      /** Factory function to create a space-scoped secrets service */
+      createSecretsService: external_exports.function().optional(),
+      /** User's PKH DID (derived from address or provided explicitly) */
+      userDid: external_exports.string().optional(),
+      /** Optional SharingService for v2 sharing links (client-side) */
+      sharingService: external_exports.unknown().optional(),
+      /** Factory function to create delegations using SIWE-based flow */
+      createDelegation: external_exports.function().optional()
+    });
+    SpaceDelegationParamsSchema = CreateDelegationParamsSchema.extend({
+      /** The space ID to create the delegation for */
+      spaceId: external_exports.string()
+    });
+    ServerDelegationInfoSchema = external_exports.object({
+      /** DID of the delegator */
+      delegator: external_exports.string(),
+      /** DID of the delegate */
+      delegate: external_exports.string(),
+      /** Parent delegation CIDs - accepts string or byte array format from server */
+      parents: external_exports.array(external_exports.union([external_exports.string(), external_exports.array(external_exports.number())])),
+      /** Expiration time (ISO8601 string) */
+      expiry: external_exports.string().optional(),
+      /** Not-before time (ISO8601 string) */
+      not_before: external_exports.string().optional(),
+      /** Issued-at time (ISO8601 string) */
+      issued_at: external_exports.string().optional(),
+      /** Capabilities granted by this delegation */
+      capabilities: external_exports.array(
+        external_exports.object({
+          resource: external_exports.string(),
+          ability: external_exports.string()
+        })
+      )
+    });
+    ServerDelegationsResponseSchema = external_exports.record(
+      external_exports.string(),
+      ServerDelegationInfoSchema
+    );
+    ServerOwnedSpaceSchema = external_exports.object({
+      /** Space identifier */
+      id: external_exports.string(),
+      /** Space name (optional, can be derived from id) */
+      name: external_exports.string().optional(),
+      /** Owner DID */
+      owner: external_exports.string(),
+      /** Creation timestamp */
+      createdAt: external_exports.string().optional()
+    });
+    ServerOwnedSpacesResponseSchema = external_exports.array(ServerOwnedSpaceSchema);
+    ServerCreateSpaceResponseSchema = external_exports.object({
+      /** Space identifier */
+      id: external_exports.string(),
+      /** Space name */
+      name: external_exports.string(),
+      /** Owner DID */
+      owner: external_exports.string(),
+      /** Creation timestamp */
+      createdAt: external_exports.string().optional()
+    });
+    ServerSpaceInfoResponseSchema = external_exports.object({
+      /** Space identifier */
+      id: external_exports.string(),
+      /** Space name (optional) */
+      name: external_exports.string().optional(),
+      /** Owner DID */
+      owner: external_exports.string(),
+      /** Ownership type */
+      type: external_exports.enum(["owned", "delegated"]).optional(),
+      /** Permissions the user has in this space */
+      permissions: external_exports.array(external_exports.string()).optional(),
+      /** Expiration for delegated access */
+      expiresAt: external_exports.string().optional()
+    });
     AutoApproveSpaceCreationHandler = class {
       /**
        * Always returns true to auto-approve space creation.
@@ -19747,8 +19783,8 @@ var init_dist3 = __esm({
           this.protocolsByName.set(alias, codec);
         });
       }
-      removeProtocol(code2) {
-        const codec = this.protocolsByCode.get(code2);
+      removeProtocol(code3) {
+        const codec = this.protocolsByCode.get(code3);
         if (codec == null) {
           return;
         }
@@ -20006,10 +20042,10 @@ var init_dist3 = __esm({
           validate: false
         });
       }
-      decapsulateCode(code2) {
+      decapsulateCode(code3) {
         let index;
         for (let i = __privateGet(this, _components).length - 1; i > -1; i--) {
-          if (__privateGet(this, _components)[i].code === code2) {
+          if (__privateGet(this, _components)[i].code === code3) {
             index = i;
             break;
           }
@@ -23235,7 +23271,7 @@ function execCapturedCommand(command) {
       stdio: "inherit"
     });
     child.on("error", reject);
-    child.on("exit", (code2, signal) => {
+    child.on("exit", (code, signal) => {
       if (signal) {
         reject(new CLIError(
           "COMMAND_SIGNAL",
@@ -23244,8 +23280,8 @@ function execCapturedCommand(command) {
         ));
         return;
       }
-      if (code2 && code2 !== 0) {
-        process.exitCode = code2;
+      if (code && code !== 0) {
+        process.exitCode = code;
       }
       resolve3();
     });
@@ -25145,8 +25181,8 @@ function shouldRequestSecretPermissions(error) {
 function thrownPermissionError(error) {
   const record = error;
   const message = typeof record?.message === "string" ? record.message : String(error);
-  const code2 = typeof record?.code === "string" ? record.code : "PERMISSION_DENIED";
-  if (code2 !== "PERMISSION_DENIED" && !/permission|session expired|autosign|capabilit/i.test(message)) {
+  const code = typeof record?.code === "string" ? record.code : "PERMISSION_DENIED";
+  if (code !== "PERMISSION_DENIED" && !/permission|session expired|autosign|capabilit/i.test(message)) {
     return null;
   }
   return {
@@ -25354,9 +25390,9 @@ async function resolveDelegatedSecretSource(source, secretPath, space = SECRETS_
   return { ...selected, source };
 }
 function mapEncryptionResultError(error) {
-  const code2 = error.code || "DECRYPTION_FAILED";
-  const exitCode = code2 === "PERMISSION_DENIED" ? ExitCode.PERMISSION_DENIED : code2 === "NOT_FOUND" ? ExitCode.NOT_FOUND : code2 === "NETWORK_ERROR" || code2 === "TRANSPORT_ERROR" ? ExitCode.NETWORK_ERROR : ExitCode.ERROR;
-  return new CLIError(code2, error.message, exitCode);
+  const code = error.code || "DECRYPTION_FAILED";
+  const exitCode = code === "PERMISSION_DENIED" ? ExitCode.PERMISSION_DENIED : code === "NOT_FOUND" ? ExitCode.NOT_FOUND : code === "NETWORK_ERROR" || code === "TRANSPORT_ERROR" ? ExitCode.NETWORK_ERROR : ExitCode.ERROR;
+  return new CLIError(code, error.message, exitCode);
 }
 function parseDecryptedSecretPayload(data, secretPath) {
   const text = new TextDecoder().decode(data);
