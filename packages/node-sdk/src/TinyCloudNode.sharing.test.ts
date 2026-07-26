@@ -12,6 +12,9 @@ import {
   type OwnerSharePolicyRegistration,
 } from "@tinycloud/sdk-core";
 import { Wallet } from "ethers";
+import { ed25519 } from "@noble/curves/ed25519";
+import { base58btc } from "multiformats/bases/base58";
+import { canonicalizeSignedObjectUnsigned as canonicalize } from "../../sdk-core/src/policy/signed-object";
 
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
@@ -536,7 +539,11 @@ describe("TinyCloudNode sharing", () => {
       registeredAt: "2029-01-01T00:00:00.000Z",
       expiresAt: "2030-01-01T00:00:00.000Z",
     } satisfies Omit<OwnerSharePolicyRegistration, "registrationCid">;
-    const responseBody = { registration: { registrationCid: computeOwnerShareRegistrationCid(registrationCore), ...registrationCore }, proof: { alg: "EdDSA", kid: "did:web:tee.node.tinycloud.xyz#key", signature: "sig" } };
+    const proofSeed = ed25519.utils.randomSecretKey();
+    const proofPublicKey = ed25519.getPublicKey(proofSeed);
+    const proofKid = `did:key:z${base58btc.encode(Uint8Array.from([0xed, 0x01, ...proofPublicKey]))}`;
+    const proofSignature = Buffer.from(ed25519.sign(new TextEncoder().encode(canonicalize(registrationCore)), proofSeed)).toString("base64url");
+    const responseBody = { registration: { registrationCid: computeOwnerShareRegistrationCid(registrationCore), ...registrationCore }, proof: { alg: "EdDSA", kid: proofKid, signature: proofSignature } };
     const fetchMock = mock(async (input: string, init?: RequestInit) => {
       expect(input).toBe("https://node.example/share/v2/policies");
       expect(init?.method).toBe("POST");
