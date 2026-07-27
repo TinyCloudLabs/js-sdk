@@ -97,17 +97,23 @@ export interface OwnerSharePolicyRegistrationReceipt {
 function bytes(value: Uint8Array): Uint8Array { return new Uint8Array(value); }
 
 function b64(value: Uint8Array): string {
+  if (typeof btoa === "function") {
+    let binary = "";
+    for (const byte of value) binary += String.fromCharCode(byte);
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
   if (typeof Buffer !== "undefined") return Buffer.from(value).toString("base64url");
-  let binary = "";
-  for (const byte of value) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  throw new Error("base64url encoding is unavailable");
 }
 
 function fromB64(value: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("owner-share value is not canonical base64url");
+  if (typeof atob === "function") {
+    const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4);
+    return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
+  }
   if (typeof Buffer !== "undefined") return new Uint8Array(Buffer.from(value, "base64url"));
-  const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4);
-  return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
+  throw new Error("base64url decoding is unavailable");
 }
 
 function cid(bytesValue: Uint8Array): string {

@@ -278,8 +278,8 @@ export function decodeAuthorizationBytes(authorization: string): Uint8Array {
   ) {
     throw new Error("Delegation Authorization is not canonical base64url DAG-CBOR");
   }
-  const decoded = Uint8Array.from(Buffer.from(unpadded, "base64url"));
-  if (Buffer.from(decoded).toString("base64url") !== unpadded) {
+  const decoded = base64UrlDecode(unpadded);
+  if (base64UrlEncode(decoded) !== unpadded) {
     throw new Error("Delegation Authorization is not canonical base64url DAG-CBOR");
   }
   return decoded;
@@ -3734,8 +3734,8 @@ export class TinyCloudNode {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({
-        policy: { bytes: Buffer.from(params.policy.bytes).toString("base64url"), cid: params.policy.cid, proof: params.policy.proof },
-        ownerDelegation: { cid: params.ownerDelegation.delegationCid, dagCbor: Buffer.from(params.ownerDelegation.signedDagCbor).toString("base64url") },
+        policy: { bytes: base64UrlEncode(params.policy.bytes), cid: params.policy.cid, proof: params.policy.proof },
+        ownerDelegation: { cid: params.ownerDelegation.delegationCid, dagCbor: base64UrlEncode(params.ownerDelegation.signedDagCbor) },
         enforcementDelegation: params.enforcementDelegation,
         contentSourceDigest: params.contentSourceDigest,
       }),

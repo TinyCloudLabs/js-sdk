@@ -524,7 +524,26 @@ describe("TinyCloudNode sharing", () => {
       expiresAt: "2030-01-01T00:00:00.000Z",
     });
     const ownerDelegation = { delegationCid: "bafy-owner", signedDagCbor: new Uint8Array([1]), delegation: { delegateDID: "did:key:z6MkShare", spaceId: SPACE, path: "shares/share-1/document.md", actions: ["tinycloud.kv/get"], expiry: new Date("2030-01-01T00:00:00.000Z") } } satisfies OwnerDelegationReceipt;
-    const enforcement = { cid: "bafy-enforcement", dagCbor: "bytes", issuerDid: "did:key:z6MkShare", audienceDid: "did:key:z6MkEnforcer", facts: {}, signature: "sig" } as const;
+    const enforcement = {
+      cid: "bafy-enforcement",
+      dagCbor: "bytes",
+      issuerDid: "did:key:z6MkShare",
+      audienceDid: "did:key:z6MkEnforcer",
+      facts: {
+        ownerDelegationCid: "bafy-owner",
+        policyCid: policy.cid,
+        shareId: "share-1",
+        shareKeyDid: "did:key:z6MkShare",
+        enforcerDid: "did:key:z6MkEnforcer",
+        nodeAudience: "did:web:tee.node.tinycloud.xyz",
+        spaceId: SPACE,
+        path: "shares/share-1/document.md",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
+        contentSourceDigest: "content-digest",
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      },
+      signature: "sig",
+    } as const;
     const registrationCore = {
       policyCid: policy.cid,
       ownerDelegationCid: ownerDelegation.delegationCid,
