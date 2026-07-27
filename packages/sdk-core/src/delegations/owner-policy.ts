@@ -53,6 +53,12 @@ export interface DelegatedShareKey {
   readonly publicKey: Uint8Array;
   readonly extractable: boolean;
   readonly privateJwk?: Record<string, string>;
+  /**
+   * The underlying WebCrypto private key. Non-extractable keys are still
+   * structured-clonable, so this handle (not `privateJwk`) is what callers
+   * must persist (e.g. in IndexedDB) to recover signing across a reload.
+   */
+  readonly cryptoKey: CryptoKey;
   sign(bytes: Uint8Array): Promise<Uint8Array>;
   clear(): void;
 }
@@ -202,6 +208,7 @@ export async function createDelegatedShareKey(options: { readonly extractable: b
     did: didKeyFromEd25519PublicKey(publicKey),
     publicKey: bytes(publicKey),
     extractable: options.extractable,
+    cryptoKey: privateKey,
     ...(options.extractable ? { privateJwk: await crypto.subtle.exportKey("jwk", privateKey) as Record<string, string> } : {}),
     async sign(input) {
       if (cleared) throw new Error("share key has been cleared");
@@ -210,6 +217,29 @@ export async function createDelegatedShareKey(options: { readonly extractable: b
     clear() { cleared = true; },
   };
   return key;
+}
+
+/**
+ * Rehydrate a signer wrapper around a `DelegatedShareKey`'s private
+ * `CryptoKey` handle that was persisted (e.g. via IndexedDB structured
+ * clone) and recovered after a reload. `privateKey` must be the same
+ * non-extractable Ed25519 `CryptoKey` originally produced by
+ * {@link createDelegatedShareKey}.
+ */
+export function restoreDelegatedShareKey(input: { readonly privateKey: CryptoKey; readonly publicKey: Uint8Array; readonly extractable: boolean }): DelegatedShareKey {
+  let cleared = false;
+  return {
+    did: didKeyFromEd25519PublicKey(input.publicKey),
+    publicKey: bytes(input.publicKey),
+    extractable: input.extractable,
+    cryptoKey: input.privateKey,
+    async sign(signBytes) {
+      if (cleared) throw new Error("share key has been cleared");
+      if (!globalThis.crypto?.subtle) throw new Error("WebCrypto Ed25519 is required for delegated share keys");
+      return new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, input.privateKey, signBytes));
+    },
+    clear() { cleared = true; },
+  };
 }
 
 export async function createPolicyEnforcementDelegation(input: {

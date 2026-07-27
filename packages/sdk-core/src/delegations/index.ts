@@ -142,6 +142,7 @@ export type {
 
 export {
   createDelegatedShareKey,
+  restoreDelegatedShareKey,
   createPolicyEnforcementDelegation,
   canonicalOwnerSharePolicy,
   computeOwnerShareRegistrationCid,
@@ -161,6 +162,30 @@ export type {
   OwnerSharePolicyRegistration,
   OwnerSharePolicyRegistrationReceipt,
 } from "./owner-policy";
+
+export {
+  SHARE_DELIVERY_AUTHORIZATION_DOMAIN,
+  validateShareDeliveryAuthorizationBytes,
+  shareDeliveryTrustedKid,
+} from "./share-delivery";
+export type {
+  ShareDeliveryAuthorizationRequest,
+  ShareDeliveryAuthorization,
+  ShareDeliveryAuthorizationReceipt,
+  ValidateShareDeliveryAuthorizationExpected,
+} from "./share-delivery";
+
+export {
+  MemorySenderShareRecordStorage,
+  MemorySenderShareKeyStorage,
+  SenderShareStore,
+} from "./sender-share-store";
+export type {
+  SenderShareRecord,
+  SenderShareRecordStorage,
+  SenderShareKeyStorage,
+  SenderShareRevocationScope,
+} from "./sender-share-store";
 export type {
   ShareAccessV2,
   ShareListResult,

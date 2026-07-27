@@ -142,6 +142,8 @@ import {
   type RegisterOwnerSharePolicyParams,
   type OwnerSharePolicyRegistrationReceipt,
   validateOwnerSharePolicyRegistrationBytes,
+  type ShareDeliveryAuthorizationReceipt,
+  validateShareDeliveryAuthorizationBytes,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -165,6 +167,7 @@ import { NodeSecretsService } from "./NodeSecretsService";
 export type {
   RegisterOwnerSharePolicyParams,
   OwnerSharePolicyRegistrationReceipt,
+  ShareDeliveryAuthorizationReceipt,
 } from "@tinycloud/sdk-core";
 
 /** Default TinyCloud host */
@@ -3768,7 +3771,9 @@ export class TinyCloudNode {
     readonly shareUrl: string;
     readonly documentName: string;
     readonly expiresAt: string;
-  }): Promise<Record<string, unknown>> {
+    /** The enrolled receipt key from the node trust bundle. */
+    readonly nodeProof: { readonly kid: string; readonly publicKey: Uint8Array };
+  }): Promise<ShareDeliveryAuthorizationReceipt> {
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
     if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
@@ -3795,7 +3800,8 @@ export class TinyCloudNode {
       body: canonicalizeEncryptionJson(request),
     });
     if (!response.ok) throw new Error(`Share delivery authorization failed: ${response.status}`);
-    return await response.json() as Record<string, unknown>;
+    const responseBytes = new Uint8Array(await response.arrayBuffer());
+    return validateShareDeliveryAuthorizationBytes(responseBytes, { request, nodeProof: input.nodeProof });
   }
 
   private async createRootDelegationForSharing(params: {
