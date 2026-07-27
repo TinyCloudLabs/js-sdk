@@ -19373,8 +19373,8 @@ var init_dist3 = __esm({
       maxContentBytes: external_exports.number().int().positive().optional(),
       maxSealedContentBytes: external_exports.number().int().positive().optional()
     }).strict();
-    ShareNativeActionSchema = external_exports.enum(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"]);
-    ShareWireActionSchema = external_exports.enum(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.sql/read"]);
+    ShareNativeActionSchema = external_exports.enum(["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/list", "tinycloud.kv/put"]);
+    ShareWireActionSchema = external_exports.enum(["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.sql/read"]);
     ShareContentSourceSchema = external_exports.discriminatedUnion("kind", [
       external_exports.object({
         kind: external_exports.literal("kv"),
@@ -19449,6 +19449,12 @@ var init_dist3 = __esm({
       resource: external_exports.string().min(1)
     };
     ShareNativeResponseSchema = external_exports.discriminatedUnion("action", [
+      external_exports.object({
+        ...ShareNativeResponseBase,
+        action: external_exports.literal("tinycloud.kv/metadata"),
+        metadata: external_exports.record(external_exports.string()),
+        etag: external_exports.string().min(1).nullable()
+      }).strict(),
       external_exports.object({
         ...ShareNativeResponseBase,
         action: external_exports.literal("tinycloud.kv/get"),

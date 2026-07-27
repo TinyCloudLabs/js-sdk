@@ -25,6 +25,7 @@ export interface CreateOwnerDelegationParams {
 const MAX_CONTENT_BYTES = 100 * 1024 * 1024;
 const ENFORCEMENT_DOMAIN = "xyz.tinycloud.share/policy-enforcement/v2\0";
 const POLICY_DOMAIN = "xyz.tinycloud.share/policy/v2\0";
+export const OWNER_SHARE_REGISTRATION_DOMAIN = "xyz.tinycloud.share/policy-registration/v2\0";
 
 export type OwnerShareAction = "tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put";
 export type OwnerShareMatcher =
@@ -276,13 +277,16 @@ export function validateOwnerSharePolicyRegistration(value: unknown, expected: R
   if (proof.alg !== "EdDSA" || typeof proof.kid !== "string" || typeof proof.signature !== "string") throw new Error("owner-share registration proof is invalid");
   const proofKey = expected.nodeProof;
   if ((proofKey !== undefined && proof.kid !== proofKey.kid) || (proofKey === undefined && !proof.kid.startsWith("did:key:z"))) throw new Error("owner-share registration proof key is not trusted");
-  const encodedKid = proofKey === undefined ? base58btc.decode(proof.kid.slice("did:key:".length)) : proofKey.publicKey;
+  const encodedKid = proofKey === undefined
+    ? base58btc.decode(proof.kid.slice("did:key:".length).split("#", 1)[0])
+    : proofKey.publicKey;
   if (encodedKid.length === 34 && encodedKid[0] === 0xed && encodedKid[1] === 0x01) {
     // did:key multicodec prefix is removed below.
   } else if (encodedKid.length !== 32) throw new Error("owner-share registration proof key is invalid");
   const publicKey = encodedKid.length === 34 ? encodedKid.slice(2) : encodedKid;
   const signatureBytes = fromB64(proof.signature);
-  if (signatureBytes.length !== 64 || !ed25519.verify(signatureBytes, new TextEncoder().encode(canonicalize(registrationCore)), publicKey)) throw new Error("owner-share registration proof signature is invalid");
+  const signedBytes = new TextEncoder().encode(`${OWNER_SHARE_REGISTRATION_DOMAIN}${canonicalize(registrationCore)}`);
+  if (signatureBytes.length !== 64 || !ed25519.verify(signatureBytes, signedBytes, publicKey)) throw new Error("owner-share registration proof signature is invalid");
   return { registration: registration as unknown as OwnerSharePolicyRegistration, proof: proof as unknown as OwnerSharePolicyRegistrationReceipt["proof"] };
 }
 

@@ -564,7 +564,7 @@ describe("TinyCloudNode sharing", () => {
     const proofSeed = ed25519.utils.randomSecretKey();
     const proofPublicKey = ed25519.getPublicKey(proofSeed);
     const proofKid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...proofPublicKey]))}`;
-    const proofSignature = Buffer.from(ed25519.sign(new TextEncoder().encode(canonicalize(registrationCore)), proofSeed)).toString("base64url");
+    const proofSignature = Buffer.from(ed25519.sign(new TextEncoder().encode(`xyz.tinycloud.share/policy-registration/v2\0${canonicalize(registrationCore)}`), proofSeed)).toString("base64url");
     const responseBody = { registration: { registrationCid: computeOwnerShareRegistrationCid(registrationCore), ...registrationCore }, proof: { alg: "EdDSA", kid: proofKid, signature: proofSignature } };
     const fetchMock = mock(async (input: string, init?: RequestInit) => {
       expect(input).toBe("https://node.example/share/v2/policies");
