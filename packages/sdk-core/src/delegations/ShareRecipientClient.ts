@@ -575,7 +575,7 @@ export class ShareRecipientClient {
       if (record.nextCursor !== undefined && record.nextCursor !== null && headerCursor !== null && record.nextCursor !== headerCursor) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
       const nextCursor = (record.nextCursor ?? headerCursor) ?? undefined;
       if (nextCursor !== undefined && new TextEncoder().encode(nextCursor).byteLength > MAX_NATIVE_CURSOR_BYTES) throw new ShareAccessError("SHARE_TOO_LARGE");
-      return { status: response.status, headers, keys: entries.map((entry) => entry.path), entries, truncated: nextCursor !== undefined, nextCursor };
+      return { status: response.status, headers, type: record.type, version: record.version, action: record.action, resource: record.resource, keys: entries.map((entry) => entry.path), entries, truncated: nextCursor !== undefined, nextCursor };
     }
     if (input.action === "get") {
       if (record.content === undefined || record.bodyDigest === undefined) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
