@@ -335,7 +335,7 @@ export class ShareRecipientClient {
 
       const metadata = async (path = envelope.resource.kind === "exact" ? envelope.resource.path : ""): Promise<ShareMetadataResult> => {
         const resolvedPath = normalizePath(path);
-        this.assertAllowed(capability, "get", resolvedPath);
+        this.assertAllowed(capability, "metadata", resolvedPath);
         if (policySession !== undefined) return this.nativeMetadata(envelope, policySession, resolvedPath);
         if (kv === undefined) throw new ShareAccessError("SHARE_SESSION_REQUIRED");
         const result = await kv.head(resolvedPath);
@@ -1040,7 +1040,7 @@ export class ShareRecipientClient {
     compareBoundValue(session.expiryMax, requestBinding.expiryMax, "Node session expiryMax is not bound to the request");
   }
 
-  private assertAllowed(capability: { readonly spaceId: string; readonly resource: ShareResource; readonly actions: readonly ShareAction[] }, operation: "get" | "list" | "save", path: string): void {
+  private assertAllowed(capability: { readonly spaceId: string; readonly resource: ShareResource; readonly actions: readonly ShareAction[] }, operation: "get" | "metadata" | "list" | "save", path: string): void {
     if (!shareCapabilityAllows(capability, operationAction(operation), path)) throw new ShareAccessError("SHARE_OUT_OF_SCOPE");
   }
 

@@ -146,6 +146,7 @@ export {
   canonicalOwnerSharePolicy,
   computeOwnerShareRegistrationCid,
   validateOwnerSharePolicyRegistration,
+  validateOwnerSharePolicyRegistrationBytes,
   MAX_CONTENT_BYTES,
 } from "./owner-policy";
 export type {

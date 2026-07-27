@@ -141,7 +141,7 @@ import {
   type NetworkDescriptor,
   type RegisterOwnerSharePolicyParams,
   type OwnerSharePolicyRegistrationReceipt,
-  validateOwnerSharePolicyRegistration,
+  validateOwnerSharePolicyRegistrationBytes,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -3750,7 +3750,8 @@ export class TinyCloudNode {
       }
       throw new Error(`Owner share policy registration failed: ${response.status}${code}`);
     }
-    return validateOwnerSharePolicyRegistration(await response.json(), params);
+    const responseBytes = new Uint8Array(await response.arrayBuffer());
+    return validateOwnerSharePolicyRegistrationBytes(responseBytes, params);
   }
 
   /** Authorize a short-lived, one-use v2 delivery using the authenticated invocation chain. */
@@ -3763,6 +3764,9 @@ export class TinyCloudNode {
     readonly delegationCid: string;
     readonly enforcementDelegationCid: string;
     readonly resourcePath: string;
+    readonly recipientEmail: string;
+    readonly shareUrl: string;
+    readonly documentName: string;
     readonly expiresAt: string;
   }): Promise<Record<string, unknown>> {
     const session = this.currentTinyCloudSession();
@@ -3776,6 +3780,9 @@ export class TinyCloudNode {
       policyCid: input.policyCid,
       delegationCid: input.delegationCid,
       enforcementDelegationCid: input.enforcementDelegationCid,
+      recipientEmail: input.recipientEmail,
+      shareUrl: input.shareUrl,
+      documentName: input.documentName,
       jti: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
       expiresAt: input.expiresAt,
     };

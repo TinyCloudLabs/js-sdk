@@ -1040,7 +1040,7 @@ function intersectSharePaths(left: ShareResource, right: ShareResource): ShareRe
 
 export function shareCapabilityAllows(capability: ShareCapabilityLike, action: ShareAction, path: string): boolean {
   if (!capability.actions.includes(action)) return false;
-  if (capability.resource.kind === "exact") return capability.resource.path === path;
+  if (capability.resource.kind === "exact") return action !== "list" && capability.resource.path === path;
   const prefix = capability.resource.path.replace(/\/$/, "");
   if (action === "list") return path.replace(/\/$/, "") === prefix;
   const remainder = path.startsWith(`${prefix}/`) ? path.slice(prefix.length + 1) : "";

@@ -137,6 +137,7 @@ export {
   canonicalOwnerSharePolicy,
   computeOwnerShareRegistrationCid,
   validateOwnerSharePolicyRegistration,
+  validateOwnerSharePolicyRegistrationBytes,
   MAX_CONTENT_BYTES,
 } from "./delegations";
 export type {

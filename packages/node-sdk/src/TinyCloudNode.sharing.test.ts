@@ -574,7 +574,7 @@ describe("TinyCloudNode sharing", () => {
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     const node = new TinyCloudNode({ host: "https://node.example", wasmBindings: makeWasmBindings() });
-    const receipt = await node.registerOwnerSharePolicy({ policy: { ...policy, proof: "policy-proof" }, ownerDelegation, enforcementDelegation: enforcement, contentSourceDigest: "content-digest" });
+    const receipt = await node.registerOwnerSharePolicy({ policy: { ...policy, proof: "policy-proof" }, ownerDelegation, enforcementDelegation: enforcement, contentSourceDigest: "content-digest", nodeProof: { kid: proofKid, publicKey: proofPublicKey } });
     expect(receipt.registration.registrationCid).toBe(responseBody.registration.registrationCid);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

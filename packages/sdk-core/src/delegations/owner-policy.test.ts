@@ -69,7 +69,7 @@ describe("owner share policy primitives", () => {
       target: { origin: "https://share.tinycloud.xyz", nodeAudience: "did:web:tee.node.tinycloud.xyz", enforcerDid: "did:key:z6MkEnforcer", spaceId: ownerDelegation.delegation.spaceId },
       resource: { kind: "exact", path: ownerDelegation.delegation.path },
       actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
-      contentSource: { kind: "kv", space: ownerDelegation.delegation.spaceId, path: ownerDelegation.delegation.path },
+      contentSource: { kind: "kv", space: ownerDelegation.delegation.spaceId, path: ownerDelegation.delegation.path, action: "tinycloud.kv/get" },
       contentSourceDigest: "digest",
       ownerDelegationCid: ownerDelegation.delegationCid,
       expiresAt: "2030-01-01T00:00:00.000Z",
@@ -147,6 +147,7 @@ describe("owner share policy primitives", () => {
       ownerDelegation,
       enforcementDelegation: { cid: "bafy-enforcement", dagCbor: "bytes", issuerDid: shareKey.did, audienceDid: "did:key:z6MkEnforcer", facts: { ownerDelegationCid: ownerDelegation.delegationCid, policyCid: policy.cid, shareId: "share-1", shareKeyDid: shareKey.did, enforcerDid: "did:key:z6MkEnforcer", nodeAudience: "did:web:tee.node.tinycloud.xyz", spaceId: ownerDelegation.delegation.spaceId, path: ownerDelegation.delegation.path, actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"], contentSourceDigest: "digest", expiresAt: "2099-01-01T00:00:00.000Z" }, signature: "sig" },
       contentSourceDigest: "digest",
+      nodeProof: { kid: `${shareKey.did}#${shareKey.did.slice("did:key:".length)}`, publicKey: shareKey.publicKey },
     });
     expect(result.registration.registrationCid).toBe(registration.registrationCid);
   });

@@ -68,6 +68,8 @@ describe("ShareRecipientClient", () => {
     expect(normalizeShareRecipientTarget({ kind: "exactEmail", value: "Alice+Notes@MAILINATOR.COM" })).toEqual({ kind: "exactEmail", value: "Alice+Notes@mailinator.com" });
     expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read"] }, "read", "docs/readme.md")).toBe(true);
     expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read"] }, "read", "docs2/readme.md")).toBe(false);
+    expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "exact", path: "docs/readme.md" }, actions: ["list"] }, "list", "docs/readme.md")).toBe(false);
+    expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read"] }, "read", "docs/nested/readme.md")).toBe(false);
     expect(intersectShareCapabilities(
       { spaceId: SPACE, resource: { kind: "exact", path: "docs2/readme.md" }, actions: ["read"] },
       { spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read"] },

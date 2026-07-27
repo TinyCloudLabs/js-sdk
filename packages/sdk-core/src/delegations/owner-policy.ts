@@ -71,6 +71,7 @@ export interface RegisterOwnerSharePolicyParams {
   readonly ownerDelegation: OwnerDelegationReceipt;
   readonly enforcementDelegation: SignedDelegation;
   readonly contentSourceDigest: string;
+  /** The enrolled receipt key from the node trust bundle. */
   readonly nodeProof?: { readonly kid: string; readonly publicKey: Uint8Array };
 }
 
@@ -276,10 +277,9 @@ export function validateOwnerSharePolicyRegistration(value: unknown, expected: R
   if (computeOwnerShareRegistrationCid(registrationCore as unknown as Omit<OwnerSharePolicyRegistration, "registrationCid">) !== registration.registrationCid) throw new Error("owner-share registration CID does not match its canonical core");
   if (proof.alg !== "EdDSA" || typeof proof.kid !== "string" || typeof proof.signature !== "string") throw new Error("owner-share registration proof is invalid");
   const proofKey = expected.nodeProof;
-  if ((proofKey !== undefined && proof.kid !== proofKey.kid) || (proofKey === undefined && !proof.kid.startsWith("did:key:z"))) throw new Error("owner-share registration proof key is not trusted");
-  const encodedKid = proofKey === undefined
-    ? base58btc.decode(proof.kid.slice("did:key:".length).split("#", 1)[0])
-    : proofKey.publicKey;
+  if (proofKey === undefined) throw new Error("owner-share registration proof trust material is required");
+  if (proof.kid !== proofKey.kid) throw new Error("owner-share registration proof key is not trusted");
+  const encodedKid = proofKey.publicKey;
   if (encodedKid.length === 34 && encodedKid[0] === 0xed && encodedKid[1] === 0x01) {
     // did:key multicodec prefix is removed below.
   } else if (encodedKid.length !== 32) throw new Error("owner-share registration proof key is invalid");
@@ -288,6 +288,17 @@ export function validateOwnerSharePolicyRegistration(value: unknown, expected: R
   const signedBytes = new TextEncoder().encode(`${OWNER_SHARE_REGISTRATION_DOMAIN}${canonicalize(registrationCore)}`);
   if (signatureBytes.length !== 64 || !ed25519.verify(signatureBytes, signedBytes, publicKey)) throw new Error("owner-share registration proof signature is invalid");
   return { registration: registration as unknown as OwnerSharePolicyRegistration, proof: proof as unknown as OwnerSharePolicyRegistrationReceipt["proof"] };
+}
+
+/** Validate the exact UTF-8 response bytes emitted by the registration route. */
+export function validateOwnerSharePolicyRegistrationBytes(bytesValue: Uint8Array, expected: RegisterOwnerSharePolicyParams): OwnerSharePolicyRegistrationReceipt {
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytesValue));
+  } catch {
+    throw new Error("owner-share registration response is not valid UTF-8 JSON");
+  }
+  return validateOwnerSharePolicyRegistration(value, expected);
 }
 
 export { MAX_CONTENT_BYTES };
