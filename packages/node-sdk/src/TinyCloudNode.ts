@@ -3740,7 +3740,16 @@ export class TinyCloudNode {
         contentSourceDigest: params.contentSourceDigest,
       }),
     });
-    if (!response.ok) throw new Error(`Owner share policy registration failed: ${response.status}`);
+    if (!response.ok) {
+      let code = "";
+      try {
+        const body = await response.clone().json() as { readonly error?: { readonly code?: unknown } };
+        if (typeof body.error?.code === "string") code = ` ${body.error.code}`;
+      } catch {
+        // Keep the stable HTTP failure when the server did not return JSON.
+      }
+      throw new Error(`Owner share policy registration failed: ${response.status}${code}`);
+    }
     return validateOwnerSharePolicyRegistration(await response.json(), params);
   }
 
