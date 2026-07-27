@@ -41,7 +41,7 @@ export interface OwnerSharePolicyV2 {
   readonly target: { readonly origin: string; readonly nodeAudience: string; readonly enforcerDid: string; readonly spaceId: string };
   readonly resource: { readonly kind: "exact"; readonly path: string };
   readonly actions: readonly OwnerShareAction[];
-  readonly contentSource: { readonly kind: "kv"; readonly space: string; readonly path: string };
+  readonly contentSource: { readonly kind: "kv"; readonly space: string; readonly path: string; readonly action: "tinycloud.kv/get" };
   readonly contentSourceDigest: string;
   readonly ownerDelegationCid: string;
   readonly expiresAt: string;
@@ -70,6 +70,7 @@ export interface RegisterOwnerSharePolicyParams {
   readonly ownerDelegation: OwnerDelegationReceipt;
   readonly enforcementDelegation: SignedDelegation;
   readonly contentSourceDigest: string;
+  readonly nodeProof?: { readonly kid: string; readonly publicKey: Uint8Array };
 }
 
 export interface OwnerSharePolicyRegistration {
@@ -249,15 +250,30 @@ export function validateOwnerSharePolicyRegistration(value: unknown, expected: R
   const proof = assertObject(root.proof, ["alg", "kid", "signature"], "owner-share registration proof");
   if (cid(expected.policy.bytes) !== expected.policy.cid) throw new Error("submitted owner-share policy bytes do not match its CID");
   if (registration.policyCid !== expected.policy.cid || registration.ownerDelegationCid !== expected.ownerDelegation.delegationCid || registration.enforcementDelegationCid !== expected.enforcementDelegation.cid || registration.contentSourceDigest !== expected.contentSourceDigest) throw new Error("owner-share registration is not bound to the submitted chain");
+  let policyValue: Record<string, unknown>;
+  try { policyValue = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(expected.policy.bytes)) as Record<string, unknown>; } catch { throw new Error("owner-share policy is not valid JSON"); }
+  const policy = policyValue.policy as Record<string, unknown> | undefined;
+  if (policyValue.domain !== "xyz.tinycloud.share/policy/v2\0" || policy === undefined || Array.isArray(policy)) throw new Error("owner-share policy envelope is invalid");
+  const target = policy.target as Record<string, unknown> | undefined;
+  const resource = policy.resource as Record<string, unknown> | undefined;
+  const registrationTarget = registration.target as Record<string, unknown>;
+  const registrationResource = registration.resource as Record<string, unknown>;
+  const enforcementFacts = expected.enforcementDelegation.facts;
+  if (typeof target?.origin !== "string" || typeof target.nodeAudience !== "string" || typeof target.enforcerDid !== "string" || typeof target.spaceId !== "string" || typeof resource?.path !== "string" || !Array.isArray(policy.actions) || policy.ownerDid !== registration.ownerDid || policy.shareKeyDid !== registration.shareKeyDid || target.origin !== registrationTarget.origin || target.nodeAudience !== registrationTarget.nodeAudience || target.enforcerDid !== registration.enforcerDid || target.spaceId !== registrationTarget.spaceId || resource.kind !== registrationResource.kind || resource.path !== registrationResource.path || canonicalize(policy.actions) !== canonicalize(registration.actions) || policy.expiresAt !== registration.expiresAt || policy.contentSourceDigest !== registration.contentSourceDigest || enforcementFacts.ownerDelegationCid !== registration.ownerDelegationCid || enforcementFacts.policyCid !== registration.policyCid || enforcementFacts.shareKeyDid !== registration.shareKeyDid || enforcementFacts.enforcerDid !== registration.enforcerDid || enforcementFacts.nodeAudience !== registrationTarget.nodeAudience || enforcementFacts.spaceId !== registrationTarget.spaceId || enforcementFacts.path !== registrationResource.path || canonicalize(enforcementFacts.actions) !== canonicalize(registration.actions) || enforcementFacts.expiresAt !== registration.expiresAt) throw new Error("owner-share registration is not bound to the canonical policy");
   if (typeof registration.registrationCid !== "string" || typeof registration.expiresAt !== "string" || typeof registration.registeredAt !== "string") throw new Error("owner-share registration timestamps are invalid");
   if (new Date(registration.expiresAt).toISOString() !== registration.expiresAt || Date.parse(registration.expiresAt) <= Date.now()) throw new Error("owner-share registration is expired or non-canonical");
   const { registrationCid: _registrationCid, ...registrationCore } = registration;
   if (computeOwnerShareRegistrationCid(registrationCore as unknown as Omit<OwnerSharePolicyRegistration, "registrationCid">) !== registration.registrationCid) throw new Error("owner-share registration CID does not match its canonical core");
-  if (proof.alg !== "EdDSA" || typeof proof.kid !== "string" || typeof proof.signature !== "string" || !proof.kid.startsWith("did:key:z")) throw new Error("owner-share registration proof is invalid");
-  const encodedKid = base58btc.decode(proof.kid.slice("did:key:z".length));
-  if (encodedKid.length !== 34 || encodedKid[0] !== 0xed || encodedKid[1] !== 0x01) throw new Error("owner-share registration proof key is invalid");
+  if (proof.alg !== "EdDSA" || typeof proof.kid !== "string" || typeof proof.signature !== "string") throw new Error("owner-share registration proof is invalid");
+  const proofKey = expected.nodeProof;
+  if ((proofKey !== undefined && proof.kid !== proofKey.kid) || (proofKey === undefined && !proof.kid.startsWith("did:key:z"))) throw new Error("owner-share registration proof key is not trusted");
+  const encodedKid = proofKey === undefined ? base58btc.decode(proof.kid.slice("did:key:z".length)) : proofKey.publicKey;
+  if (encodedKid.length === 34 && encodedKid[0] === 0xed && encodedKid[1] === 0x01) {
+    // did:key multicodec prefix is removed below.
+  } else if (encodedKid.length !== 32) throw new Error("owner-share registration proof key is invalid");
+  const publicKey = encodedKid.length === 34 ? encodedKid.slice(2) : encodedKid;
   const signatureBytes = fromB64(proof.signature);
-  if (signatureBytes.length !== 64 || !ed25519.verify(signatureBytes, new TextEncoder().encode(canonicalize(registrationCore)), encodedKid.slice(2))) throw new Error("owner-share registration proof signature is invalid");
+  if (signatureBytes.length !== 64 || !ed25519.verify(signatureBytes, new TextEncoder().encode(canonicalize(registrationCore)), publicKey)) throw new Error("owner-share registration proof signature is invalid");
   return { registration: registration as unknown as OwnerSharePolicyRegistration, proof: proof as unknown as OwnerSharePolicyRegistrationReceipt["proof"] };
 }
 
