@@ -54,6 +54,7 @@ export const GENERATOR_VERSION = "1.0.0";
 export const GENERATOR_PATH = "packages/sdk-core/src/delegations/fixtures/generate-share-v2-corpus.ts";
 
 const ORIGIN = "https://node.example.corpus";
+const CREDENTIALS_AUDIENCE = "https://witness.credentials.org";
 const SPACE = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
 const OWNER_DID = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
 const DOC_PATH = "documents/plan.md";
@@ -353,6 +354,7 @@ async function buildDelivery(input: {
     policyCid: request.policyCid,
     nodeAudience: "did:web:node.example.corpus",
     targetOrigin: ORIGIN,
+    openCredentialsAudience: CREDENTIALS_AUDIENCE,
     holder: "did:key:z6MkCorpusHolder",
     recipientMatcher: { kind: "emailDomain", value: "example.com" },
     deliveryEmail: request.recipientEmail,
@@ -383,6 +385,7 @@ async function buildDelivery(input: {
   validateShareDeliveryAuthorizationBytes(responseBytes, {
     request,
     nodeProof: { kid: input.nodeKid, publicKey: ed25519.getPublicKey(input.nodeSeed) },
+    credentialsAudience: CREDENTIALS_AUDIENCE,
   });
 
   const vectors: Record<string, CorpusVector> = {
@@ -401,12 +404,27 @@ async function buildDelivery(input: {
   const tamperedDigestBytes = jsonBytes({ authorization: { ...authorization, requestBodyDigest: `${authorization.requestBodyDigest}x` }, proof: receipt.proof });
   let tamperMessage = "";
   try {
-    validateShareDeliveryAuthorizationBytes(tamperedDigestBytes, { request, nodeProof: { kid: input.nodeKid, publicKey: ed25519.getPublicKey(input.nodeSeed) } });
+    validateShareDeliveryAuthorizationBytes(tamperedDigestBytes, { request, nodeProof: { kid: input.nodeKid, publicKey: ed25519.getPublicKey(input.nodeSeed) }, credentialsAudience: CREDENTIALS_AUDIENCE });
   } catch (error) {
     tamperMessage = error instanceof Error ? error.message : String(error);
   }
   if (!tamperMessage.includes("not bound to the submitted request")) {
     throw new Error(`delivery tamper vector did not fail as expected: ${tamperMessage}`);
+  }
+
+  const wrongAudienceAuthorization = { ...authorization, openCredentialsAudience: authorization.nodeAudience };
+  const wrongAudienceBytes = jsonBytes({
+    authorization: wrongAudienceAuthorization,
+    proof: { alg: "EdDSA" as const, kid: input.nodeKid, signature: nodeSign(SHARE_DELIVERY_AUTHORIZATION_DOMAIN, wrongAudienceAuthorization, input.nodeSeed) },
+  });
+  let audienceMessage = "";
+  try {
+    validateShareDeliveryAuthorizationBytes(wrongAudienceBytes, { request, nodeProof: { kid: input.nodeKid, publicKey: ed25519.getPublicKey(input.nodeSeed) }, credentialsAudience: CREDENTIALS_AUDIENCE });
+  } catch (error) {
+    audienceMessage = error instanceof Error ? error.message : String(error);
+  }
+  if (!audienceMessage.includes("openCredentialsAudience is missing or untrusted")) {
+    throw new Error(`delivery wrong-audience vector did not fail as expected: ${audienceMessage}`);
   }
 
   const errors: Record<string, CorpusErrorVector> = {
@@ -415,6 +433,12 @@ async function buildDelivery(input: {
       producedBy: ["share-delivery.ts:validateShareDeliveryAuthorizationBytes"],
       expectedCode: "Error",
       expectedMessageIncludes: "not bound to the submitted request",
+    },
+    deliveryWrongOpenCredentialsAudience: {
+      description: "A delivery authorization whose openCredentialsAudience collapses into nodeAudience must be rejected fail-closed, even with a valid signature over the mutated object.",
+      producedBy: ["share-delivery.ts:validateShareDeliveryAuthorizationBytes"],
+      expectedCode: "Error",
+      expectedMessageIncludes: "openCredentialsAudience is missing or untrusted",
     },
   };
 

@@ -3773,6 +3773,8 @@ export class TinyCloudNode {
     readonly expiresAt: string;
     /** The enrolled receipt key from the node trust bundle. */
     readonly nodeProof: { readonly kid: string; readonly publicKey: Uint8Array };
+    /** The trusted OpenCredentials witness origin from the same trust bundle as `nodeProof`. */
+    readonly credentialsAudience: string;
   }): Promise<ShareDeliveryAuthorizationReceipt> {
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
@@ -3801,7 +3803,7 @@ export class TinyCloudNode {
     });
     if (!response.ok) throw new Error(`Share delivery authorization failed: ${response.status}`);
     const responseBytes = new Uint8Array(await response.arrayBuffer());
-    return validateShareDeliveryAuthorizationBytes(responseBytes, { request, nodeProof: input.nodeProof });
+    return validateShareDeliveryAuthorizationBytes(responseBytes, { request, nodeProof: input.nodeProof, credentialsAudience: input.credentialsAudience });
   }
 
   private async createRootDelegationForSharing(params: {

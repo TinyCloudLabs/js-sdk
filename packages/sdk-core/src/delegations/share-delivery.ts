@@ -36,6 +36,14 @@ export interface ShareDeliveryAuthorization {
   readonly policyCid: string;
   readonly nodeAudience: string;
   readonly targetOrigin: string;
+  /**
+   * The OpenCredentials witness this delivery is scoped to, sourced from
+   * Node's own trusted credentials origin. Deliberately distinct from
+   * `nodeAudience` (the node's own DID) and `returnOrigin` (Share's page
+   * origin) — conflating any of these three would let a party impersonate
+   * another's audience.
+   */
+  readonly openCredentialsAudience: string;
   readonly holder: string;
   readonly recipientMatcher: unknown;
   readonly deliveryEmail: string;
@@ -68,11 +76,37 @@ export interface ValidateShareDeliveryAuthorizationExpected {
   readonly request: ShareDeliveryAuthorizationRequest;
   /** The enrolled receipt key from the node trust bundle. */
   readonly nodeProof: { readonly kid: string; readonly publicKey: Uint8Array };
+  /**
+   * The OpenCredentials witness origin the caller trusts, from the same
+   * trust bundle as `nodeProof`. Validated independently of the
+   * authorization's own `nodeAudience`/`returnOrigin` fields so a Node that
+   * mislabels or omits its credentials origin fails closed here rather than
+   * silently inheriting one of those unrelated identities.
+   */
+  readonly credentialsAudience: string;
+}
+
+/** Matches `canonical_https_origin` in tinycloud-node-server/src/config.rs. */
+function isCanonicalHttpsOrigin(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return url.protocol === "https:"
+    && url.origin === value
+    && url.pathname === "/"
+    && url.search === ""
+    && url.hash === ""
+    && url.username === ""
+    && url.password === "";
 }
 
 const AUTHORIZATION_KEYS = [
   "type", "version", "jti", "shareCid", "shareId", "registrationCid", "delegationCid",
   "enforcementDelegationCid", "envelopeCid", "policyCid", "nodeAudience", "targetOrigin",
+  "openCredentialsAudience",
   "holder", "recipientMatcher", "deliveryEmail", "shareUrl", "returnOrigin", "documentName",
   "senderDid", "senderTrust", "contentSource", "contentSourceDigest", "shareExpiresAt",
   "issuedAt", "reportAbuseToken", "actions", "resource", "authorityMaterialHandle",
@@ -138,6 +172,20 @@ export function validateShareDeliveryAuthorizationBytes(bytesValue: Uint8Array, 
   }
   if (typeof authorization.issuedAt !== "string" || Date.parse(authorization.issuedAt) > Date.now() + 60_000) throw new Error("share delivery authorization issuedAt is invalid");
   if (new Date(authorization.expiresAt as string).toISOString() !== authorization.expiresAt) throw new Error("share delivery authorization expiresAt is non-canonical");
+
+  // Independent audience check: the OpenCredentials witness field must be a
+  // canonical https origin, must equal the caller's own trusted value (never
+  // derived from the response), and must not collapse into the node's own
+  // audience or Share's return origin.
+  if (
+    typeof authorization.openCredentialsAudience !== "string"
+    || !isCanonicalHttpsOrigin(authorization.openCredentialsAudience)
+    || authorization.openCredentialsAudience !== expected.credentialsAudience
+    || authorization.openCredentialsAudience === authorization.nodeAudience
+    || authorization.openCredentialsAudience === authorization.returnOrigin
+  ) {
+    throw new Error("share delivery authorization openCredentialsAudience is missing or untrusted");
+  }
 
   if (proof.alg !== "EdDSA" || typeof proof.kid !== "string" || typeof proof.signature !== "string") throw new Error("share delivery authorization proof is invalid");
   if (proof.kid !== expected.nodeProof.kid) throw new Error("share delivery authorization proof key is not trusted");
