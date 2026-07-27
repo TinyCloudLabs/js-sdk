@@ -34,7 +34,7 @@ import {
   type ShareCapabilityLike,
 } from "./share-envelope";
 import { MemoryShareCache, type ShareCache, type ShareCacheEntry } from "./ShareCache";
-import { ShareAccessError, ShareConflict, type ShareAccessV2, type ShareDetachedProof, type ShareNativeAction, type ShareNativeInvokeResult, type ShareNativeInvokeSuccessResult, type SharePolicyBinding, type SharePolicySession, type ShareRecipientClientOptions, type ShareReadResult, type ShareListEntry, type ShareListResult } from "./recipient-types";
+import { ShareAccessError, ShareConflict, type ShareAccessV2, type ShareDetachedProof, type ShareNativeAction, type ShareNativeInvokeResult, type ShareNativeInvokeSuccessResult, type SharePolicyBinding, type SharePolicySession, type ShareRecipientClientOptions, type ShareReadResult, type ShareMetadataResult, type ShareListEntry, type ShareListResult } from "./recipient-types";
 import { ShareNativeResponseSchema } from "./recipient-types.schema";
 
 const DEFAULT_MAX_ARTIFACT_BYTES = MAX_SHARE_ARTIFACT_BYTES;
@@ -69,6 +69,7 @@ interface NativeResponseRecord {
   readonly entries?: readonly ShareListEntry[];
   readonly nextCursor?: string | null;
   readonly contentType?: string;
+  readonly metadata?: Readonly<Record<string, string>>;
 }
 
 function redactedCode(error: unknown): string {
@@ -91,8 +92,8 @@ function asError(error: unknown): ShareAccessError {
   return new ShareAccessError(redactedCode(error));
 }
 
-function operationAction(action: "get" | "list" | "save"): ShareAction {
-  return action === "get" ? "read" : action === "list" ? "list" : "edit";
+function operationAction(action: "get" | "metadata" | "list" | "save"): ShareAction {
+  return action === "get" || action === "metadata" ? "read" : action === "list" ? "list" : "edit";
 }
 
 function normalizePath(value: string): string {
@@ -144,12 +145,13 @@ function digestCanonical(value: unknown): string {
   return bytesToBase64Url(sha256(new TextEncoder().encode(canonicalJsonForProof(value))));
 }
 
-function actionWire(action: "get" | "list" | "put"): ShareNativeAction {
-  return action === "get" ? "tinycloud.kv/get" : action === "list" ? "tinycloud.kv/list" : "tinycloud.kv/put";
+function actionWire(action: "get" | "metadata" | "list" | "put"): ShareNativeAction {
+  return action === "get" ? "tinycloud.kv/get" : action === "metadata" ? "tinycloud.kv/metadata" : action === "list" ? "tinycloud.kv/list" : "tinycloud.kv/put";
 }
 
 function nativeActionFor(value: unknown): ShareNativeAction | undefined {
   if (value === "tinycloud.kv/get" || value === "get" || value === "read") return "tinycloud.kv/get";
+  if (value === "tinycloud.kv/metadata" || value === "metadata") return "tinycloud.kv/metadata";
   if (value === "tinycloud.kv/list" || value === "list") return "tinycloud.kv/list";
   if (value === "tinycloud.kv/put" || value === "tinycloud.kv/edit" || value === "put" || value === "edit") return "tinycloud.kv/put";
   return undefined;
@@ -157,7 +159,7 @@ function nativeActionFor(value: unknown): ShareNativeAction | undefined {
 
 function policyActionFor(value: unknown): ShareAction | undefined {
   const native = nativeActionFor(value);
-  return native === "tinycloud.kv/get" ? "read" : native === "tinycloud.kv/list" ? "list" : native === "tinycloud.kv/put" ? "edit" : undefined;
+  return native === "tinycloud.kv/get" || native === "tinycloud.kv/metadata" ? "read" : native === "tinycloud.kv/list" ? "list" : native === "tinycloud.kv/put" ? "edit" : undefined;
 }
 
 function canonicalNativeActions(values: readonly unknown[]): ShareNativeAction[] {
@@ -331,7 +333,17 @@ export class ShareRecipientClient {
         }
       };
 
-      return { kind: "share-v2", envelope, location: { ...location, key: undefined }, resource: envelope.resource, actions: envelope.actions, expiresAt: new Date(envelope.expiresAt), kv, get, listChildren, save };
+      const metadata = async (path = envelope.resource.kind === "exact" ? envelope.resource.path : ""): Promise<ShareMetadataResult> => {
+        const resolvedPath = normalizePath(path);
+        this.assertAllowed(capability, "get", resolvedPath);
+        if (policySession !== undefined) return this.nativeMetadata(envelope, policySession, resolvedPath);
+        if (kv === undefined) throw new ShareAccessError("SHARE_SESSION_REQUIRED");
+        const result = await kv.head(resolvedPath);
+        if (!result.ok) throw result.error;
+        return { metadata: { "content-type": result.data.headers.contentType ?? "application/octet-stream", "content-length": String(result.data.headers.contentLength ?? ""), ...(result.data.headers.lastModified === undefined ? {} : { "last-modified": result.data.headers.lastModified }) }, etag: result.data.headers.etag, contentType: result.data.headers.contentType, size: result.data.headers.contentLength };
+      };
+
+      return { kind: "share-v2", envelope, location: { ...location, key: undefined }, resource: envelope.resource, actions: envelope.actions, expiresAt: new Date(envelope.expiresAt), kv, get, listChildren, save, metadata };
     } catch (error) {
       throw asError(error);
     }
@@ -358,6 +370,15 @@ export class ShareRecipientClient {
     this.verifyNativeResponse(result.bytes, result.headers, result.bodyDigest);
     if (result.bytes.byteLength > (this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
     return { bytes: result.bytes, etag: result.headers?.etag ?? result.etag, contentType: result.headers?.["content-type"] ?? result.contentType ?? envelope.content.mimeType, size: result.bytes.byteLength };
+  }
+
+  private async nativeMetadata(envelope: ShareEnvelopeV2, session: SharePolicySession, path: string): Promise<ShareMetadataResult> {
+    this.assertNativeRequestBounds(envelope, session, "metadata", path);
+    const result = await this.invokeNative({ envelope, session, action: "metadata", resource: path, mediaType: "application/vnd.tinycloud.share+json" });
+    if (result.status === 404) throw new ShareAccessError("SHARE_NOT_FOUND");
+    if (result.status === 401 || result.status === 403) throw new ShareAccessError("SHARE_DENIED");
+    if (!isNativeSuccess(result) || result.metadata === undefined) throw new ShareAccessError("SHARE_READ_FAILED");
+    return { metadata: result.metadata, etag: result.headers?.etag ?? result.etag, contentType: result.headers?.["content-type"] ?? result.contentType };
   }
 
   private async nativeList(envelope: ShareEnvelopeV2, session: SharePolicySession, path: string, limit?: number, cursor?: string): Promise<ShareListResult> {
@@ -563,6 +584,10 @@ export class ShareRecipientClient {
       if (bytes.byteLength > (this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES) || !this.digestMatches(record.bodyDigest, bytes)) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
       return { status: response.status, headers, bytes, bodyDigest: record.bodyDigest, type: record.type, version: record.version, action: record.action, resource: record.resource };
     }
+    if (input.action === "metadata") {
+      if (record.metadata === undefined) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
+      return { status: response.status, headers, metadata: record.metadata, etag: record.etag ?? undefined, type: record.type, version: record.version, action: record.action, resource: record.resource };
+    }
     const responseEtag = record.etag;
     const responseBodyDigest = record.bodyDigest;
     if (responseEtag === undefined || responseEtag === null || responseEtag.length === 0 || headers.etag !== undefined && responseEtag !== headers.etag) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
@@ -577,6 +602,7 @@ export class ShareRecipientClient {
       if (result.bytes === undefined || result.bodyDigest === undefined || !this.digestMatches(result.bodyDigest, result.bytes)) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
       if (result.bytes.byteLength > (this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
     }
+    if (input.action === "metadata" && result.metadata === undefined) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
     if (input.action === "list") this.assertNativeListResult(input.resource, result);
     if (input.action === "put") {
       const etag = result.headers?.etag ?? result.etag;
@@ -608,7 +634,7 @@ export class ShareRecipientClient {
     }
   }
 
-  private defaultNativeHeaders(session: SharePolicySession, action: "get" | "list" | "put", resource: string, request: Record<string, unknown>): ServiceHeaders {
+  private defaultNativeHeaders(session: SharePolicySession, action: "get" | "metadata" | "list" | "put", resource: string, request: Record<string, unknown>): ServiceHeaders {
     const authorization = typeof session.authorization === "string"
       ? session.authorization
       : isRecord(session.delegationHeader) && typeof session.delegationHeader.Authorization === "string"
@@ -636,7 +662,7 @@ export class ShareRecipientClient {
     return value === digest || value === `sha-256=:${digest}:`;
   }
 
-  private assertNativeRequestBounds(envelope: ShareEnvelopeV2, session: SharePolicySession, operation: "get" | "list" | "put", path: string, limit?: number, cursor?: string): void {
+  private assertNativeRequestBounds(envelope: ShareEnvelopeV2, session: SharePolicySession, operation: "get" | "metadata" | "list" | "put", path: string, limit?: number, cursor?: string): void {
     const binding = this.options.policyBinding;
     const signedResource = resourceValue(session.resource ?? binding?.resource ?? envelope.resource, envelope.resource.kind);
     const nativeAction = actionWire(operation);

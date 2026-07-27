@@ -1040,7 +1040,11 @@ function intersectSharePaths(left: ShareResource, right: ShareResource): ShareRe
 
 export function shareCapabilityAllows(capability: ShareCapabilityLike, action: ShareAction, path: string): boolean {
   if (!capability.actions.includes(action)) return false;
-  return resourceContains(capability.resource, { kind: "exact", path });
+  if (capability.resource.kind === "exact") return capability.resource.path === path;
+  const prefix = capability.resource.path.replace(/\/$/, "");
+  if (action === "list") return path.replace(/\/$/, "") === prefix;
+  const remainder = path.startsWith(`${prefix}/`) ? path.slice(prefix.length + 1) : "";
+  return remainder.length > 0 && !remainder.includes("/");
 }
 
 export { ENVELOPE_SCHEMA, INLINE_PREFIX, DEFAULT_MAX_INLINE_BYTES };
