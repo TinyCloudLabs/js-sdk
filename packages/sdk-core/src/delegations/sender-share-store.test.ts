@@ -99,4 +99,32 @@ describe("SenderShareStore", () => {
     const store = new SenderShareStore({ records: new MemorySenderShareRecordStorage(), keys: new MemorySenderShareKeyStorage() });
     await expect(store.revocationTarget("unknown", "direct")).rejects.toThrow("Unknown share");
   });
+
+  test("revoking or removing one share leaves an unrelated share untouched", async () => {
+    const keyA = await createDelegatedShareKey({ extractable: false });
+    const keyB = await createDelegatedShareKey({ extractable: false });
+    const records = new MemorySenderShareRecordStorage();
+    const keys = new MemorySenderShareKeyStorage();
+    const store = new SenderShareStore({ records, keys });
+
+    await store.save(receiptFor(keyA.did, { shareId: "share-a", registrationCid: "bafy-registration-a", enforcementDelegationCid: "bafy-enforcement-a", ownerDelegationCid: "bafy-owner-a" }), keyA);
+    await store.save(receiptFor(keyB.did, { shareId: "share-b", registrationCid: "bafy-registration-b", enforcementDelegationCid: "bafy-enforcement-b", ownerDelegationCid: "bafy-owner-b" }), keyB);
+
+    await store.markRevoked("share-a");
+    const remaining = await store.list();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]?.shareId).toBe("share-b");
+    expect(remaining[0]?.revokedAt).toBeUndefined();
+    expect(await store.revocationTarget("share-b", "direct")).toBe("bafy-enforcement-b");
+    expect(await store.revocationTarget("share-b", "ancestor")).toBe("bafy-owner-b");
+
+    const survivingKey = await store.loadKey("share-b");
+    expect(survivingKey?.did).toBe(keyB.did);
+
+    await store.remove("share-a");
+    expect(await store.get("share-a")).toBeUndefined();
+    expect(await store.loadKey("share-a")).toBeUndefined();
+    expect(await store.get("share-b")).toBeDefined();
+    expect(await store.loadKey("share-b")).toBeDefined();
+  });
 });

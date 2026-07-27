@@ -2,7 +2,7 @@
   "provenance": {
     "generator": "packages/sdk-core/src/delegations/fixtures/generate-share-v2-corpus.ts",
     "generatorVersion": "1.0.0",
-    "sdkCommit": "7f955edfd634247c0246e7fabe1203de2debba6d",
+    "sdkCommit": "2495853a3cafb0d96a1f515f7de528d18ef15b50",
     "algorithm": "sha256",
     "encoding": "base64url-unpadded",
     "canonicalization": "jcs-utf8-sorted-keys",

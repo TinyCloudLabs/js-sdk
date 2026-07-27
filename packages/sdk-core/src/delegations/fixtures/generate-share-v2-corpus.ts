@@ -449,7 +449,6 @@ async function buildChallengeSessionAndInvoke(input: {
     signerPrivateKey,
     encryptionKey,
   }));
-  void signerCryptoKey;
 
   const contentSource = { kind: "kv" as const, action: "tinycloud.kv/get" as const, space: SPACE, path: DOC_PATH.replace(/\/[^/]*$/, "") || "documents" };
   const contentSourceDigest = digestOf(jsonBytes(contentSource));
