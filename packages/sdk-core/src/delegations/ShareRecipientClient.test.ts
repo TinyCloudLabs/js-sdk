@@ -68,6 +68,8 @@ describe("ShareRecipientClient", () => {
     expect(normalizeShareRecipientTarget({ kind: "exactEmail", value: "Alice+Notes@MAILINATOR.COM" })).toEqual({ kind: "exactEmail", value: "Alice+Notes@mailinator.com" });
     expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read"] }, "read", "docs/readme.md")).toBe(true);
     expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read"] }, "read", "docs2/readme.md")).toBe(false);
+    expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "exact", path: "docs/readme.md" }, actions: ["list"] }, "list", "docs/readme.md")).toBe(false);
+    expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read"] }, "read", "docs/nested/readme.md")).toBe(false);
     expect(intersectShareCapabilities(
       { spaceId: SPACE, resource: { kind: "exact", path: "docs2/readme.md" }, actions: ["read"] },
       { spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read"] },
@@ -172,7 +174,7 @@ describe("ShareRecipientClient", () => {
     let putCalls = 0;
     const kv = {
       get: async () => ({ ok: true, data: { data: Uint8Array.from([1]), headers: { etag: "etag-1", get: () => null } } }),
-      list: async () => ({ ok: true, data: { keys: ["docs/a.md", "docs/folder/b.md"], truncated: false } }),
+        list: async () => ({ ok: true, data: { keys: ["docs/a.md"], truncated: false } }),
       put: async () => {
         putCalls += 1;
         return { ok: false, error: { code: "KV_PRECONDITION_FAILED", message: "stale", service: "kv" } };
@@ -185,7 +187,7 @@ describe("ShareRecipientClient", () => {
       bearerSession: { delegationHeader: { Authorization: "Bearer test" }, delegationCid: "cid", spaceId: SPACE, verificationMethod: "did:key:z6Mk", jwk: {} },
       createKVService: (() => kv) as never,
     }).open(encodeShareUrl({ origin: ORIGIN, cid: created.cid }));
-    await expect(access.listChildren()).resolves.toMatchObject({ keys: ["docs/a.md", "docs/folder/b.md"] });
+    await expect(access.listChildren()).resolves.toMatchObject({ keys: ["docs/a.md"] });
     await expect(access.get("outside.md")).rejects.toMatchObject({ code: "SHARE_OUT_OF_SCOPE" });
     await expect(access.save("docs/a.md", Uint8Array.from([2]), { etag: "etag-1" })).rejects.toBeInstanceOf(Error);
     expect(putCalls).toBe(1);

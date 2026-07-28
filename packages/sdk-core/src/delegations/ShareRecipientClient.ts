@@ -34,15 +34,17 @@ import {
   type ShareCapabilityLike,
 } from "./share-envelope";
 import { MemoryShareCache, type ShareCache, type ShareCacheEntry } from "./ShareCache";
-import { ShareAccessError, ShareConflict, type ShareAccessV2, type ShareDetachedProof, type ShareNativeAction, type ShareNativeInvokeResult, type ShareNativeInvokeSuccessResult, type SharePolicyBinding, type SharePolicySession, type ShareRecipientClientOptions, type ShareReadResult, type ShareListEntry, type ShareListResult } from "./recipient-types";
+import { ShareAccessError, ShareConflict, type ShareAccessV2, type ShareDetachedProof, type ShareNativeAction, type ShareNativeInvokeResult, type ShareNativeInvokeSuccessResult, type SharePolicyBinding, type SharePolicySession, type ShareRecipientClientOptions, type ShareReadResult, type ShareMetadataResult, type ShareListEntry, type ShareListResult } from "./recipient-types";
 import { ShareNativeResponseSchema } from "./recipient-types.schema";
 
 const DEFAULT_MAX_ARTIFACT_BYTES = MAX_SHARE_ARTIFACT_BYTES;
 const DEFAULT_MAX_CONTENT_BYTES = MAX_SHARE_CONTENT_BYTES;
 const DEFAULT_MAX_SEALED_CONTENT_BYTES = MAX_SEALED_SHARE_CONTENT_BYTES;
 const NATIVE_MEDIA_TYPE = "application/vnd.tinycloud.share+json" as const;
-const READ_INVOCATION_DOMAIN = "xyz.tinycloud.share/read-invocation/v1\0";
-const POLICY_PRESENTATION_DOMAIN = "xyz.tinycloud.share/policy-presentation/v1\0";
+const READ_INVOCATION_DOMAIN_V1 = "xyz.tinycloud.share/read-invocation/v1\0";
+const READ_INVOCATION_DOMAIN_V2 = "xyz.tinycloud.share/invocation/v2\0";
+const POLICY_PRESENTATION_DOMAIN_V1 = "xyz.tinycloud.share/policy-presentation/v1\0";
+const POLICY_PRESENTATION_DOMAIN_V2 = "xyz.tinycloud.share/policy-session/v2\0";
 const READ_TTL_MS = 60_000;
 const MAX_NATIVE_CURSOR_BYTES = 8 * 1024;
 const MAX_NATIVE_LIMIT = 1_000;
@@ -67,6 +69,7 @@ interface NativeResponseRecord {
   readonly entries?: readonly ShareListEntry[];
   readonly nextCursor?: string | null;
   readonly contentType?: string;
+  readonly metadata?: Readonly<Record<string, string>>;
 }
 
 function redactedCode(error: unknown): string {
@@ -89,8 +92,8 @@ function asError(error: unknown): ShareAccessError {
   return new ShareAccessError(redactedCode(error));
 }
 
-function operationAction(action: "get" | "list" | "save"): ShareAction {
-  return action === "get" ? "read" : action === "list" ? "list" : "edit";
+function operationAction(action: "get" | "metadata" | "list" | "save"): ShareAction {
+  return action === "get" || action === "metadata" ? "read" : action === "list" ? "list" : "edit";
 }
 
 function normalizePath(value: string): string {
@@ -142,12 +145,13 @@ function digestCanonical(value: unknown): string {
   return bytesToBase64Url(sha256(new TextEncoder().encode(canonicalJsonForProof(value))));
 }
 
-function actionWire(action: "get" | "list" | "put"): ShareNativeAction {
-  return action === "get" ? "tinycloud.kv/get" : action === "list" ? "tinycloud.kv/list" : "tinycloud.kv/put";
+function actionWire(action: "get" | "metadata" | "list" | "put"): ShareNativeAction {
+  return action === "get" ? "tinycloud.kv/get" : action === "metadata" ? "tinycloud.kv/metadata" : action === "list" ? "tinycloud.kv/list" : "tinycloud.kv/put";
 }
 
 function nativeActionFor(value: unknown): ShareNativeAction | undefined {
   if (value === "tinycloud.kv/get" || value === "get" || value === "read") return "tinycloud.kv/get";
+  if (value === "tinycloud.kv/metadata" || value === "metadata") return "tinycloud.kv/metadata";
   if (value === "tinycloud.kv/list" || value === "list") return "tinycloud.kv/list";
   if (value === "tinycloud.kv/put" || value === "tinycloud.kv/edit" || value === "put" || value === "edit") return "tinycloud.kv/put";
   return undefined;
@@ -155,7 +159,7 @@ function nativeActionFor(value: unknown): ShareNativeAction | undefined {
 
 function policyActionFor(value: unknown): ShareAction | undefined {
   const native = nativeActionFor(value);
-  return native === "tinycloud.kv/get" ? "read" : native === "tinycloud.kv/list" ? "list" : native === "tinycloud.kv/put" ? "edit" : undefined;
+  return native === "tinycloud.kv/get" || native === "tinycloud.kv/metadata" ? "read" : native === "tinycloud.kv/list" ? "list" : native === "tinycloud.kv/put" ? "edit" : undefined;
 }
 
 function canonicalNativeActions(values: readonly unknown[]): ShareNativeAction[] {
@@ -329,7 +333,17 @@ export class ShareRecipientClient {
         }
       };
 
-      return { kind: "share-v2", envelope, location: { ...location, key: undefined }, resource: envelope.resource, actions: envelope.actions, expiresAt: new Date(envelope.expiresAt), kv, get, listChildren, save };
+      const metadata = async (path = envelope.resource.kind === "exact" ? envelope.resource.path : ""): Promise<ShareMetadataResult> => {
+        const resolvedPath = normalizePath(path);
+        this.assertAllowed(capability, "metadata", resolvedPath);
+        if (policySession !== undefined) return this.nativeMetadata(envelope, policySession, resolvedPath);
+        if (kv === undefined) throw new ShareAccessError("SHARE_SESSION_REQUIRED");
+        const result = await kv.head(resolvedPath);
+        if (!result.ok) throw result.error;
+        return { metadata: { "content-type": result.data.headers.contentType ?? "application/octet-stream", "content-length": String(result.data.headers.contentLength ?? ""), ...(result.data.headers.lastModified === undefined ? {} : { "last-modified": result.data.headers.lastModified }) }, etag: result.data.headers.etag, contentType: result.data.headers.contentType, size: result.data.headers.contentLength };
+      };
+
+      return { kind: "share-v2", envelope, location: { ...location, key: undefined }, resource: envelope.resource, actions: envelope.actions, expiresAt: new Date(envelope.expiresAt), kv, get, listChildren, save, metadata };
     } catch (error) {
       throw asError(error);
     }
@@ -356,6 +370,15 @@ export class ShareRecipientClient {
     this.verifyNativeResponse(result.bytes, result.headers, result.bodyDigest);
     if (result.bytes.byteLength > (this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
     return { bytes: result.bytes, etag: result.headers?.etag ?? result.etag, contentType: result.headers?.["content-type"] ?? result.contentType ?? envelope.content.mimeType, size: result.bytes.byteLength };
+  }
+
+  private async nativeMetadata(envelope: ShareEnvelopeV2, session: SharePolicySession, path: string): Promise<ShareMetadataResult> {
+    this.assertNativeRequestBounds(envelope, session, "metadata", path);
+    const result = await this.invokeNative({ envelope, session, action: "metadata", resource: path, mediaType: "application/vnd.tinycloud.share+json" });
+    if (result.status === 404) throw new ShareAccessError("SHARE_NOT_FOUND");
+    if (result.status === 401 || result.status === 403) throw new ShareAccessError("SHARE_DENIED");
+    if (!isNativeSuccess(result) || result.metadata === undefined) throw new ShareAccessError("SHARE_READ_FAILED");
+    return { metadata: result.metadata, etag: result.headers?.etag ?? result.etag, contentType: result.headers?.["content-type"] ?? result.contentType };
   }
 
   private async nativeList(envelope: ShareEnvelopeV2, session: SharePolicySession, path: string, limit?: number, cursor?: string): Promise<ShareListResult> {
@@ -396,6 +419,7 @@ export class ShareRecipientClient {
     if (input.mediaType !== NATIVE_MEDIA_TYPE) throw new ShareAccessError("SHARE_NATIVE_MEDIA_TYPE_INVALID");
     const session = input.session;
     const binding = this.options.policyBinding;
+    const v2 = session.version === 2 || binding?.registrationCid !== undefined;
     const required = (value: unknown, name: string): string => {
       if (typeof value !== "string" || value.length === 0) throw new ShareAccessError("SHARE_SESSION_INVALID", `Node session ${name} is missing`);
       return value;
@@ -433,12 +457,18 @@ export class ShareRecipientClient {
       shareId: required(session.shareId ?? binding?.shareId, "shareId"),
       delegationCid: required(session.delegationCid ?? binding?.delegationCid, "delegationCid"),
       policyCid: required(session.policyCid ?? binding?.policyCid, "policyCid"),
-      authorityMaterialHandle: required(session.authorityMaterialHandle ?? binding?.authorityMaterialHandle, "authorityMaterialHandle"),
-      authorityMaterialDigest: required(session.authorityMaterialDigest ?? binding?.authorityMaterialDigest, "authorityMaterialDigest"),
+      ...(v2 ? {
+        envelopeCid: required(session.envelopeCid ?? binding?.envelopeCid, "envelopeCid"),
+        registrationCid: required(session.registrationCid ?? binding?.registrationCid, "registrationCid"),
+        enforcementDelegationCid: required(session.enforcementDelegationCid ?? binding?.enforcementDelegationCid, "enforcementDelegationCid"),
+      } : {
+        authorityMaterialHandle: required(session.authorityMaterialHandle ?? binding?.authorityMaterialHandle, "authorityMaterialHandle"),
+        authorityMaterialDigest: required(session.authorityMaterialDigest ?? binding?.authorityMaterialDigest, "authorityMaterialDigest"),
+      }),
       contentSource,
       contentSourceDigest: required(session.contentSourceDigest ?? binding?.contentSourceDigest, "contentSourceDigest"),
       holderDid: required(session.holderDid, "holderDid"),
-      targetOrigin: required(session.targetOrigin ?? binding?.targetOrigin ?? input.envelope.origin, "targetOrigin"),
+      ...(v2 ? {} : { targetOrigin: required(session.targetOrigin ?? binding?.targetOrigin ?? input.envelope.origin, "targetOrigin") }),
       nodeAudience: required(session.nodeAudience ?? binding?.nodeAudience, "nodeAudience"),
       action: selectedAction,
       actions: authorizedActions,
@@ -446,46 +476,52 @@ export class ShareRecipientClient {
       issuedAt: new Date(now).toISOString(),
       expiresAt: new Date(expiry).toISOString(),
       jti: randomJti(),
-      ...(input.limit === undefined ? {} : { limit: input.limit }),
-      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
       ...(input.bodyDigest === undefined ? {} : { bodyDigest: input.bodyDigest }),
       ...(input.ifMatch === undefined ? {} : { ifMatch: input.ifMatch }),
       ...(input.contentType === undefined ? {} : { contentType: input.contentType }),
-      ...(session.expiryMin ?? binding?.expiryMin) === undefined ? {} : { expiryMin: session.expiryMin ?? binding?.expiryMin },
-      ...(session.expiryMax ?? binding?.expiryMax) === undefined ? {} : { expiryMax: session.expiryMax ?? binding?.expiryMax },
+      ...(v2 ? {} : { ...(input.limit === undefined ? {} : { limit: input.limit }), ...(input.cursor === undefined ? {} : { cursor: input.cursor }), ...(session.expiryMin ?? binding?.expiryMin) === undefined ? {} : { expiryMin: session.expiryMin ?? binding?.expiryMin }, ...(session.expiryMax ?? binding?.expiryMax) === undefined ? {} : { expiryMax: session.expiryMax ?? binding?.expiryMax } }),
     };
-    const readPreimage: Record<string, unknown> = {
-      sessionId: invocationBase.sessionId,
-      delegationCid: invocationBase.delegationCid,
-      authorityMaterialHandle: invocationBase.authorityMaterialHandle,
-      authorityMaterialDigest: invocationBase.authorityMaterialDigest,
-      contentSource,
-      contentSourceDigest: invocationBase.contentSourceDigest,
-      action: invocationBase.action,
-      ...(invocationBase.actions === undefined ? {} : { actions: invocationBase.actions }),
-      resource: invocationBase.resource,
-      invocation: invocationBase,
-    };
-    const requestBodyDigest = digestCanonical(readPreimage);
+    const requestBodyDigest = digestCanonical(invocationBase);
     const invocation: Record<string, unknown> = { ...invocationBase, requestBodyDigest };
     const signer = this.options.holderSigner ?? session.holderSigner;
     if (signer === undefined) throw new ShareAccessError("SHARE_NATIVE_SIGNER_REQUIRED");
-    const proof = await signer({ domain: READ_INVOCATION_DOMAIN, message: invocation });
+    const proof = await signer({ domain: v2 ? READ_INVOCATION_DOMAIN_V2 : READ_INVOCATION_DOMAIN_V1, message: invocation });
     this.assertDetachedProof(proof);
-    const request: Record<string, unknown> = {
-      sessionId: invocation.sessionId,
-      delegationCid: invocation.delegationCid,
-      authorityMaterialHandle: invocation.authorityMaterialHandle,
-      authorityMaterialDigest: invocation.authorityMaterialDigest,
-      contentSource,
-      contentSourceDigest: invocation.contentSourceDigest,
-      action: invocation.action,
-      actions: invocation.actions,
-      resource: invocation.resource,
-      requestBodyDigest,
-      invocation,
-      proof,
-    };
+    const request: Record<string, unknown> = v2
+      ? {
+        sessionId: invocation.sessionId,
+        envelopeCid: invocation.envelopeCid,
+        shareCid: invocation.shareCid,
+        shareId: invocation.shareId,
+        registrationCid: invocation.registrationCid,
+        delegationCid: invocation.delegationCid,
+        policyCid: invocation.policyCid,
+        enforcementDelegationCid: invocation.enforcementDelegationCid,
+        contentSource,
+        contentSourceDigest: invocation.contentSourceDigest,
+        holderDid: invocation.holderDid,
+        nodeAudience: invocation.nodeAudience,
+        action: invocation.action,
+        actions: invocation.actions,
+        resource: invocation.resource,
+        requestBodyDigest,
+        invocation,
+        proof,
+      }
+      : {
+        sessionId: invocation.sessionId,
+        delegationCid: invocation.delegationCid,
+        authorityMaterialHandle: invocation.authorityMaterialHandle,
+        authorityMaterialDigest: invocation.authorityMaterialDigest,
+        contentSource,
+        contentSourceDigest: invocation.contentSourceDigest,
+        action: invocation.action,
+        actions: invocation.actions,
+        resource: invocation.resource,
+        requestBodyDigest,
+        invocation,
+        proof,
+      };
     const body = {
       request,
       ...(input.limit === undefined ? {} : { limit: input.limit }),
@@ -501,7 +537,7 @@ export class ShareRecipientClient {
     const transport = this.options.invoke !== undefined || session.authorization !== undefined || session.delegationHeader !== undefined
       ? this.defaultNativeHeaders(session, input.action, input.resource, body)
       : undefined;
-    const response = await this.fetchFn(`${base}/invoke`, {
+    const response = await this.fetchFn(v2 ? `${base}/share/v2/invoke` : `${base}/invoke`, {
       method: "POST",
       headers: { ...headersRecord(transport), ...headersRecord(signed), "content-type": input.mediaType, accept: input.mediaType },
       body: JSON.stringify(body),
@@ -539,7 +575,7 @@ export class ShareRecipientClient {
       if (record.nextCursor !== undefined && record.nextCursor !== null && headerCursor !== null && record.nextCursor !== headerCursor) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
       const nextCursor = (record.nextCursor ?? headerCursor) ?? undefined;
       if (nextCursor !== undefined && new TextEncoder().encode(nextCursor).byteLength > MAX_NATIVE_CURSOR_BYTES) throw new ShareAccessError("SHARE_TOO_LARGE");
-      return { status: response.status, headers, keys: entries.map((entry) => entry.path), entries, truncated: nextCursor !== undefined, nextCursor };
+      return { status: response.status, headers, type: record.type, version: record.version, action: record.action, resource: record.resource, keys: entries.map((entry) => entry.path), entries, truncated: nextCursor !== undefined, nextCursor };
     }
     if (input.action === "get") {
       if (record.content === undefined || record.bodyDigest === undefined) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
@@ -547,6 +583,10 @@ export class ShareRecipientClient {
       try { bytes = base64UrlToBytes(record.content); } catch { throw new ShareAccessError("SHARE_RESPONSE_INVALID"); }
       if (bytes.byteLength > (this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES) || !this.digestMatches(record.bodyDigest, bytes)) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
       return { status: response.status, headers, bytes, bodyDigest: record.bodyDigest, type: record.type, version: record.version, action: record.action, resource: record.resource };
+    }
+    if (input.action === "metadata") {
+      if (record.metadata === undefined) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
+      return { status: response.status, headers, metadata: record.metadata, etag: record.etag ?? undefined, type: record.type, version: record.version, action: record.action, resource: record.resource };
     }
     const responseEtag = record.etag;
     const responseBodyDigest = record.bodyDigest;
@@ -562,6 +602,7 @@ export class ShareRecipientClient {
       if (result.bytes === undefined || result.bodyDigest === undefined || !this.digestMatches(result.bodyDigest, result.bytes)) throw new ShareAccessError("SHARE_RESPONSE_INTEGRITY");
       if (result.bytes.byteLength > (this.options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES)) throw new ShareAccessError("SHARE_TOO_LARGE");
     }
+    if (input.action === "metadata" && result.metadata === undefined) throw new ShareAccessError("SHARE_RESPONSE_INVALID");
     if (input.action === "list") this.assertNativeListResult(input.resource, result);
     if (input.action === "put") {
       const etag = result.headers?.etag ?? result.etag;
@@ -593,7 +634,7 @@ export class ShareRecipientClient {
     }
   }
 
-  private defaultNativeHeaders(session: SharePolicySession, action: "get" | "list" | "put", resource: string, request: Record<string, unknown>): ServiceHeaders {
+  private defaultNativeHeaders(session: SharePolicySession, action: "get" | "metadata" | "list" | "put", resource: string, request: Record<string, unknown>): ServiceHeaders {
     const authorization = typeof session.authorization === "string"
       ? session.authorization
       : isRecord(session.delegationHeader) && typeof session.delegationHeader.Authorization === "string"
@@ -621,7 +662,7 @@ export class ShareRecipientClient {
     return value === digest || value === `sha-256=:${digest}:`;
   }
 
-  private assertNativeRequestBounds(envelope: ShareEnvelopeV2, session: SharePolicySession, operation: "get" | "list" | "put", path: string, limit?: number, cursor?: string): void {
+  private assertNativeRequestBounds(envelope: ShareEnvelopeV2, session: SharePolicySession, operation: "get" | "metadata" | "list" | "put", path: string, limit?: number, cursor?: string): void {
     const binding = this.options.policyBinding;
     const signedResource = resourceValue(session.resource ?? binding?.resource ?? envelope.resource, envelope.resource.kind);
     const nativeAction = actionWire(operation);
@@ -646,20 +687,21 @@ export class ShareRecipientClient {
   private async establishPolicySession(envelope: ShareEnvelopeV2): Promise<SharePolicySession> {
     if (this.options.presentation === undefined) throw new ShareAccessError("SHARE_PRESENTATION_REQUIRED");
     const base = envelope.origin.replace(/\/$/, "");
-    const challengeUrl = this.options.policyRoutes?.challenge ?? `${base}/share/v1/policy/challenges`;
-    const sessionUrl = this.options.policyRoutes?.session ?? `${base}/share/v1/policy/session`;
     const presentation = this.options.presentation;
     if (presentation === undefined || typeof presentation !== "object" || presentation === null) {
       throw new ShareAccessError("SHARE_PRESENTATION_REQUIRED");
     }
     const input = presentation as Record<string, unknown>;
+    const v2 = this.options.policyBinding?.registrationCid !== undefined || isRecord(input.challengeRequest) && input.challengeRequest.envelopeCid !== undefined;
+    const challengeUrl = this.options.policyRoutes?.challenge ?? `${base}/${v2 ? "share/v2" : "share/v1"}/policy/challenges`;
+    const sessionUrl = this.options.policyRoutes?.session ?? `${base}/${v2 ? "share/v2" : "share/v1"}/policy/session`;
     const request = input.challengeRequest ?? this.buildChallengeRequest(envelope, input);
     if (request === undefined || typeof request !== "object" || request === null || Array.isArray(request)) throw new ShareAccessError("SHARE_SESSION_INVALID", "a Node policy challenge request is required");
     if (this.options.policyBinding !== undefined) this.assertStrictChallengeRequest(request as Record<string, unknown>);
     const challengeResponse = await this.postJson(challengeUrl, request);
     const challengeEnvelope = unwrapProofResponse(challengeResponse, "challenge");
     const challenge = challengeEnvelope.message;
-    this.verifyNodeProof(challenge, challengeEnvelope.proof, "xyz.tinycloud.share/policy-challenge/v1\0");
+    this.verifyNodeProof(challenge, challengeEnvelope.proof, `xyz.tinycloud.share/policy-challenge/${v2 ? "v2" : "v1"}\0`);
     this.assertChallengeRequestBinding(request as Readonly<Record<string, unknown>>, challenge);
     this.assertChallengeFresh(challenge);
 
@@ -668,11 +710,11 @@ export class ShareRecipientClient {
       ? await this.buildDefaultPolicySessionRequest(presentation, challenge)
       : await builder({ envelope, challenge, challengeRequest: request as Readonly<Record<string, unknown>> });
     if (sessionRequest === undefined || typeof sessionRequest !== "object" || sessionRequest === null || Array.isArray(sessionRequest)) throw new ShareAccessError("SHARE_SESSION_INVALID", "the policy session builder returned an invalid request");
-    if (this.options.policyBinding !== undefined) this.assertStrictSessionRequest(sessionRequest as Record<string, unknown>);
+    if (this.options.policyBinding !== undefined) this.assertStrictSessionRequest(sessionRequest as Record<string, unknown>, v2, challenge);
     const sessionResponse = await this.postJson(sessionUrl, sessionRequest);
     const sessionEnvelope = unwrapProofResponse(sessionResponse, "session");
     const session = sessionEnvelope.message;
-    this.verifyNodeProof(session, sessionEnvelope.proof, "xyz.tinycloud.share/policy-session/v1\0");
+    this.verifyNodeProof(session, sessionEnvelope.proof, `xyz.tinycloud.share/policy-session/${v2 ? "v2" : "v1"}\0`);
     this.assertSessionBinding(session, envelope, request, challenge, sessionRequest);
     return {
       ...(this.options.policyBinding ?? {}),
@@ -695,16 +737,24 @@ export class ShareRecipientClient {
   private buildChallengeRequest(envelope: ShareEnvelopeV2, presentation: Record<string, unknown>): Record<string, unknown> {
     const binding = this.options.policyBinding;
     if (binding === undefined) throw new ShareAccessError("SHARE_SESSION_INVALID", "a Node policy challenge request is required");
+    const required = (value: unknown, name: string): string => {
+      if (typeof value !== "string" || value.length === 0) throw new ShareAccessError("SHARE_SESSION_INVALID", `Node challenge ${name} is missing`);
+      return value;
+    };
+    if (!isRecord(binding.enforcementDelegation) || !isRecord(binding.outerEnvelope)) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node challenge authority material is missing");
     const holderDid = typeof presentation.holderDid === "string" ? presentation.holderDid : binding.holderDid;
     if (holderDid === undefined) throw new ShareAccessError("SHARE_SESSION_INVALID", "the holder DID is required");
     const action = binding.action ?? binding.actions?.[0] ?? "tinycloud.kv/get";
     const body: Record<string, unknown> = {
+      envelopeCid: required(binding.envelopeCid, "envelopeCid"),
       shareCid: binding.shareCid,
       shareId: binding.shareId,
+      registrationCid: required(binding.registrationCid, "registrationCid"),
       delegationCid: binding.delegationCid,
-      authorityMaterialHandle: binding.authorityMaterialHandle,
-      authorityMaterialDigest: binding.authorityMaterialDigest,
       policyCid: binding.policyCid,
+      enforcementDelegationCid: required(binding.enforcementDelegationCid, "enforcementDelegationCid"),
+      enforcementDelegation: binding.enforcementDelegation,
+      outerEnvelope: binding.outerEnvelope,
       contentSource: binding.contentSource,
       contentSourceDigest: binding.contentSourceDigest,
       holderDid,
@@ -713,15 +763,17 @@ export class ShareRecipientClient {
       action,
       ...(binding.actions === undefined ? {} : { actions: [...binding.actions] }),
       resource: binding.resource,
-      ...(binding.expiryMin === undefined ? {} : { expiryMin: binding.expiryMin }),
-      ...(binding.expiryMax === undefined ? {} : { expiryMax: binding.expiryMax }),
     };
     return { ...body, requestBodyDigest: digestCanonical(body) };
   }
 
   private assertStrictChallengeRequest(request: Record<string, unknown>): void {
-    assertObjectKeys(request, ["shareCid", "shareId", "delegationCid", "authorityMaterialHandle", "authorityMaterialDigest", "policyCid", "contentSource", "contentSourceDigest", "holderDid", "targetOrigin", "nodeAudience", "action", "actions", "resource", "expiryMin", "expiryMax", "requestBodyDigest"], "Node challenge request");
-    for (const key of ["shareCid", "shareId", "delegationCid", "authorityMaterialHandle", "authorityMaterialDigest", "policyCid", "contentSourceDigest", "holderDid", "targetOrigin", "nodeAudience", "resource", "requestBodyDigest"] as const) {
+    const v2 = request.envelopeCid !== undefined || this.options.policyBinding?.registrationCid !== undefined;
+    const keys = v2
+      ? ["envelopeCid", "shareCid", "shareId", "registrationCid", "delegationCid", "policyCid", "enforcementDelegationCid", "enforcementDelegation", "outerEnvelope", "contentSource", "contentSourceDigest", "holderDid", "targetOrigin", "nodeAudience", "action", "actions", "resource", "requestBodyDigest"]
+      : ["shareCid", "shareId", "delegationCid", "authorityMaterialHandle", "authorityMaterialDigest", "policyCid", "contentSource", "contentSourceDigest", "holderDid", "targetOrigin", "nodeAudience", "action", "actions", "resource", "expiryMin", "expiryMax", "requestBodyDigest"];
+    assertObjectKeys(request, keys, "Node challenge request");
+    for (const key of v2 ? ["envelopeCid", "shareCid", "shareId", "registrationCid", "delegationCid", "policyCid", "enforcementDelegationCid", "contentSourceDigest", "holderDid", "targetOrigin", "nodeAudience", "resource", "requestBodyDigest"] : ["shareCid", "shareId", "delegationCid", "authorityMaterialHandle", "authorityMaterialDigest", "policyCid", "contentSourceDigest", "holderDid", "targetOrigin", "nodeAudience", "resource", "requestBodyDigest"]) {
       if (typeof request[key] !== "string" || request[key].length === 0) throw new ShareAccessError("SHARE_SESSION_INVALID", `Node challenge ${key} is invalid`);
     }
     if (!isRecord(request.contentSource) || typeof request.action !== "string") throw new ShareAccessError("SHARE_SESSION_INVALID", "Node challenge source is invalid");
@@ -731,8 +783,12 @@ export class ShareRecipientClient {
     if (request.requestBodyDigest !== digestCanonical(body)) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node challenge digest is invalid");
   }
 
-  private assertStrictSessionRequest(request: Record<string, unknown>): void {
-    assertObjectKeys(request, ["presentation", "credential", "proof", "holderBinding", "readSignerDid"], "Node session request");
+  private assertStrictSessionRequest(request: Record<string, unknown>, v2: boolean, challenge: Record<string, unknown>): void {
+    const keys = v2
+      ? ["challengeId", "nonce", "presentation", "credential", "proof", "holderBinding", "readSignerDid"]
+      : ["presentation", "credential", "proof", "holderBinding", "readSignerDid"];
+    assertObjectKeys(request, keys, "Node session request");
+    if (v2 && (request.challengeId !== challenge.challengeId || request.nonce !== challenge.nonce)) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session challenge is not bound");
     if (!isRecord(request.presentation) || typeof request.credential !== "string" || request.credential.length === 0 || !isRecord(request.proof) || request.holderBinding === undefined || typeof request.readSignerDid !== "string") throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session request is incomplete");
     this.assertDetachedProof(request.proof);
   }
@@ -823,37 +879,38 @@ export class ShareRecipientClient {
         throw new ShareAccessError("SHARE_SESSION_INVALID", "a nonce-bound policy session builder is required");
       }
       const action = binding.action ?? binding.actions?.[0] ?? "tinycloud.kv/get";
+      const isV2 = challenge.version === 2;
       const policyPresentation: Record<string, unknown> = {
         type: "TinyCloudSharePolicyPresentation",
-        version: 1,
+        version: isV2 ? 2 : 1,
         challengeId: challenge.challengeId,
         nonce: challenge.nonce,
         shareCid: binding.shareCid,
         shareId: binding.shareId,
         delegationCid: binding.delegationCid,
-        authorityMaterialHandle: binding.authorityMaterialHandle,
-        authorityMaterialDigest: binding.authorityMaterialDigest,
         policyCid: binding.policyCid,
         contentSource: binding.contentSource,
         contentSourceDigest: binding.contentSourceDigest,
         holderDid,
         targetOrigin: binding.targetOrigin,
         nodeAudience: binding.nodeAudience,
-        enforcerDid: challenge.enforcerDid,
-        credentialDigest: typeof presentation.credentialDigest === "string" ? presentation.credentialDigest : bytesToBase64Url(sha256(new TextEncoder().encode(credential))),
+        ...(isV2 ? {
+          enforcerDid: challenge.enforcerDid,
+          credentialDigest: typeof presentation.credentialDigest === "string" ? presentation.credentialDigest : bytesToBase64Url(sha256(new TextEncoder().encode(credential))),
+        } : {}),
         action,
         ...(binding.actions === undefined ? {} : { actions: [...binding.actions] }),
         resource: binding.resource,
         requestBodyDigest: challenge.requestBodyDigest,
         issuedAt: new Date(this.now()).toISOString(),
         expiresAt: challenge.expiresAt,
-        ...(binding.expiryMin === undefined ? {} : { expiryMin: binding.expiryMin }),
-        ...(binding.expiryMax === undefined ? {} : { expiryMax: binding.expiryMax }),
         jti: randomJti(),
       };
-      const proof = await signer({ domain: POLICY_PRESENTATION_DOMAIN, message: policyPresentation });
+      const proof = await signer({ domain: isV2 ? POLICY_PRESENTATION_DOMAIN_V2 : POLICY_PRESENTATION_DOMAIN_V1, message: policyPresentation });
       this.assertDetachedProof(proof);
-      return { presentation: policyPresentation, credential, proof, holderBinding, readSignerDid };
+      return challenge.version === 2
+        ? { challengeId: challenge.challengeId, nonce: challenge.nonce, presentation: policyPresentation, credential, proof, holderBinding, readSignerDid }
+        : { presentation: policyPresentation, credential, proof, holderBinding, readSignerDid };
     }
     const request = structuredClone(presentation.sessionRequest) as Record<string, unknown>;
     const candidate = isRecord(request.presentation) ? request.presentation : request;
@@ -861,6 +918,10 @@ export class ShareRecipientClient {
     candidate.nonce = challenge.nonce;
     if (typeof challenge.challengeId === "string") candidate.challengeId = challenge.challengeId;
     if (candidate.audience === undefined && typeof challenge.audience === "string") candidate.audience = challenge.audience;
+    if (challenge.version === 2) {
+      request.challengeId = challenge.challengeId;
+      request.nonce = challenge.nonce;
+    }
     return request;
   }
 
@@ -941,6 +1002,12 @@ export class ShareRecipientClient {
       ? presentation.holderDid
       : isRecord(presentation.holder) && typeof presentation.holder.did === "string" ? presentation.holder.did : undefined;
     if (holderDid === undefined) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node presentation holder is missing");
+    if (challenge.version === 2) {
+      if (session.version !== 2) throw new ShareAccessError("SHARE_SESSION_INVALID", "Node session version is invalid");
+      for (const key of ["envelopeCid", "shareCid", "shareId", "registrationCid", "delegationCid", "policyCid", "enforcementDelegationCid", "holderDid", "nodeAudience", "action", "actions", "resource"] as const) {
+        compareBoundValue(session[key], requestBinding[key] ?? challenge[key], `Node v2 session ${key} is not bound`);
+      }
+    }
     compareBoundValue(holderDid, session.holderDid, "Node session holder is not bound to the presentation");
     if (isRecord(presentation.holderBinding) && typeof presentation.holderBinding.holderDid === "string") compareBoundValue(presentation.holderBinding.holderDid, session.holderDid, "Node holder binding is not bound to the session");
     compareBoundValue(presentation.nonce, challenge.nonce, "Node presentation nonce is not bound to the challenge");
@@ -973,7 +1040,7 @@ export class ShareRecipientClient {
     compareBoundValue(session.expiryMax, requestBinding.expiryMax, "Node session expiryMax is not bound to the request");
   }
 
-  private assertAllowed(capability: { readonly spaceId: string; readonly resource: ShareResource; readonly actions: readonly ShareAction[] }, operation: "get" | "list" | "save", path: string): void {
+  private assertAllowed(capability: { readonly spaceId: string; readonly resource: ShareResource; readonly actions: readonly ShareAction[] }, operation: "get" | "metadata" | "list" | "save", path: string): void {
     if (!shareCapabilityAllows(capability, operationAction(operation), path)) throw new ShareAccessError("SHARE_OUT_OF_SCOPE");
   }
 

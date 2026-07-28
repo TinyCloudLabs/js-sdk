@@ -4,7 +4,7 @@ import type { ShareAction, ShareCapabilityLike, ShareEnvelopeV2, ShareLinkLocati
 export type { ShareAction, ShareEnvelopeV2, ShareLinkLocation, ShareResource, ShareRecipientTarget };
 
 /** Native action names used by the addressed Node data plane. */
-export type ShareNativeAction = "tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/put";
+export type ShareNativeAction = "tinycloud.kv/get" | "tinycloud.kv/metadata" | "tinycloud.kv/list" | "tinycloud.kv/put";
 export type ShareWireAction = ShareNativeAction | "tinycloud.sql/read";
 export type ShareAddressedRecipientMatcher = Exclude<ShareRecipientTarget, { readonly kind: "bearer" }>;
 
@@ -188,11 +188,15 @@ export interface ShareRecipientClientOptions {
 
 export interface SharePolicySession {
   readonly type?: "TinyCloudSharePolicySession";
-  readonly version?: 1;
+  readonly version?: 1 | 2;
   readonly sessionId: string;
+  readonly envelopeCid?: string;
+  readonly registrationCid?: string;
   readonly shareCid?: string;
   readonly shareId?: string;
   readonly policyCid?: string;
+  readonly enforcementDelegationCid?: string;
+  readonly runtimeDelegation?: unknown;
   readonly holderDid: string;
   readonly expiresAt: string;
   readonly expiryMin?: string;
@@ -232,12 +236,17 @@ export interface ShareDetachedProof {
 
 /** Exact fields Node resolves from its persisted policy authority tuple. */
 export interface SharePolicyBinding {
+  readonly envelopeCid?: string;
   readonly shareCid: string;
   readonly shareId: string;
+  readonly registrationCid?: string;
   readonly delegationCid: string;
   readonly authorityMaterialHandle: string;
   readonly authorityMaterialDigest: string;
   readonly policyCid: string;
+  readonly enforcementDelegationCid?: string;
+  readonly enforcementDelegation?: unknown;
+  readonly outerEnvelope?: unknown;
   readonly contentSource: ShareContentSource;
   readonly contentSourceDigest: string;
   readonly holderDid?: string;
@@ -255,7 +264,7 @@ export interface ShareNativeInvokeInput {
   readonly envelope: ShareEnvelopeV2;
   readonly session: SharePolicySession;
   /** Native Node data-plane verb, kept distinct from public envelope actions. */
-  readonly action: "get" | "list" | "put";
+  readonly action: "get" | "metadata" | "list" | "put";
   readonly resource: string;
   readonly body?: Uint8Array;
   /** Digest of the exact decoded body; holder signing must cover this value. */
@@ -298,6 +307,7 @@ export interface ShareNativeInvokeSuccessResult {
   /** Normalized header aliases accepted by native adapters. */
   readonly etag?: string;
   readonly contentType?: string;
+  readonly metadata?: Readonly<Record<string, string>>;
   readonly content?: string;
   readonly bodyDigest?: string;
 }
@@ -314,6 +324,13 @@ export interface ShareReadResult {
   readonly etag?: string;
   readonly contentType?: string;
   readonly size: number;
+}
+
+export interface ShareMetadataResult {
+  readonly metadata: Readonly<Record<string, string>>;
+  readonly etag?: string;
+  readonly contentType?: string;
+  readonly size?: number;
 }
 
 export interface ShareListResult {
@@ -362,6 +379,7 @@ export interface ShareAccessV2 {
   readonly get: (path?: string) => Promise<ShareReadResult>;
   readonly listChildren: (options?: { readonly path?: string; readonly limit?: number; readonly cursor?: string }) => Promise<ShareListResult>;
   readonly save: (path: string, bytes: Uint8Array, options: ShareSaveOptions) => Promise<{ readonly etag?: string }>;
+  readonly metadata: (path?: string) => Promise<ShareMetadataResult>;
 }
 
 export type ShareRecipientResult<T> = Result<T, ServiceError | ShareAccessError | ShareConflict>;

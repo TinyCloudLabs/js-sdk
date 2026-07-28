@@ -29,8 +29,8 @@ export const ShareRecipientClientOptionsSchema = z.object({
   maxSealedContentBytes: z.number().int().positive().optional(),
 }).strict();
 
-const ShareNativeActionSchema = z.enum(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"]);
-const ShareWireActionSchema = z.enum(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.sql/read"]);
+const ShareNativeActionSchema = z.enum(["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/list", "tinycloud.kv/put"]);
+const ShareWireActionSchema = z.enum(["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.sql/read"]);
 const ShareContentSourceSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("kv"),
@@ -116,6 +116,12 @@ const ShareNativeResponseBase = {
 };
 
 export const ShareNativeResponseSchema = z.discriminatedUnion("action", [
+  z.object({
+    ...ShareNativeResponseBase,
+    action: z.literal("tinycloud.kv/metadata"),
+    metadata: z.record(z.string()),
+    etag: z.string().min(1).nullable(),
+  }).strict(),
   z.object({
     ...ShareNativeResponseBase,
     action: z.literal("tinycloud.kv/get"),

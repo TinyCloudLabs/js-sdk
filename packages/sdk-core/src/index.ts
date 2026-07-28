@@ -133,11 +133,19 @@ export {
   ShareAddressedDelegationEnvelopeV2Schema,
   ShareAddressedDelegationResponseV2Schema,
   createDelegatedShareKey,
+  restoreDelegatedShareKey,
   createPolicyEnforcementDelegation,
   canonicalOwnerSharePolicy,
   computeOwnerShareRegistrationCid,
   validateOwnerSharePolicyRegistration,
+  validateOwnerSharePolicyRegistrationBytes,
   MAX_CONTENT_BYTES,
+  SHARE_DELIVERY_AUTHORIZATION_DOMAIN,
+  validateShareDeliveryAuthorizationBytes,
+  shareDeliveryTrustedKid,
+  MemorySenderShareRecordStorage,
+  MemorySenderShareKeyStorage,
+  SenderShareStore,
 } from "./delegations";
 export type {
   ShareAccessV2,
@@ -196,6 +204,14 @@ export type {
   RegisterOwnerSharePolicyParams,
   OwnerSharePolicyRegistration,
   OwnerSharePolicyRegistrationReceipt,
+  ShareDeliveryAuthorizationRequest,
+  ShareDeliveryAuthorization,
+  ShareDeliveryAuthorizationReceipt,
+  ValidateShareDeliveryAuthorizationExpected,
+  SenderShareRecord,
+  SenderShareRecordStorage,
+  SenderShareKeyStorage,
+  SenderShareRevocationScope,
 } from "./delegations";
 
 // Encryption network identity helpers

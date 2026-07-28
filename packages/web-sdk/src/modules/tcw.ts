@@ -758,6 +758,12 @@ export class TinyCloudWeb {
     return node.registerOwnerSharePolicy(params);
   }
 
+  /** Authorize a short-lived, one-use v2 delivery using the authenticated invocation chain. */
+  async authorizeShareDelivery(input: Parameters<TinyCloudNode["authorizeShareDelivery"]>[0]): ReturnType<TinyCloudNode["authorizeShareDelivery"]> {
+    const node = await this.ensureNode();
+    return node.authorizeShareDelivery(input);
+  }
+
   /**
    * Issue a delegation using the capability-chain flow (spec:
    * `.claude/specs/capability-chain.md`). When the requested permissions
