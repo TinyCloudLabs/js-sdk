@@ -1,0 +1,68 @@
+# The repo's unconditional gate (TC-380).
+#
+# EVERY other workflow in this repo used to be `paths:`-filtered, so a pull
+# request that touched an unlisted path executed ZERO checks and still rendered
+# an all-green checks page. Three of those filters had also drifted out of sync
+# with the files their own jobs build and import.
+#
+# The lesson from that drift is the reason this file has NO `paths:` key and
+# never should: enumerating a dependency set is exactly what broke. This job
+# runs on every pull request, unconditionally, and covers the workspace by
+# DEFINITION rather than by list — `turbo build` and `turbo lint` walk the
+# workspace graph declared in package.json, so a newly added package is picked
+# up automatically with no workflow edit.
+#
+# Do not add a `paths:` filter here. If this gate is too slow, make the tasks
+# faster or cache them; do not narrow what it looks at.
+name: Workspace
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workspace:
+    name: Build and lint the whole workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      # `turbo build` is the whole-workspace build. The targeted gates hand-build
+      # a subset; this is the only job that compiles `packages/vfs`,
+      # `packages/server`, and `apps/**` — all of which are published or shipped
+      # and none of which any other workflow builds.
+      - name: Build every workspace package
+        env:
+          BUILD_SETUP_ENABLED: "true"
+        run: bun run build
+
+      - name: Lint every workspace package
+        run: bun run lint

@@ -2,38 +2,8 @@ name: TC-192 I1 TypeScript gate
 
 on:
   pull_request:
-    paths:
-      - "packages/operations/**"
-      - "packages/sdk-rs/**"
-      - "packages/bootstrap/**"
-      - "packages/sdk-services/**"
-      - "packages/sdk-core/**"
-      - "packages/node-sdk/**"
-      - "packages/cli/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "scripts/setup.sh"
-      - "docs/tc-192-i1-types-gate.md"
-      - "package.json"
-      - "bun.lock"
-      - ".github/workflows/tc-192-i1-types-gate.yml"
   push:
     branches: [master]
-    paths:
-      - "packages/operations/**"
-      - "packages/sdk-rs/**"
-      - "packages/bootstrap/**"
-      - "packages/sdk-services/**"
-      - "packages/sdk-core/**"
-      - "packages/node-sdk/**"
-      - "packages/cli/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "scripts/setup.sh"
-      - "docs/tc-192-i1-types-gate.md"
-      - "package.json"
-      - "bun.lock"
-      - ".github/workflows/tc-192-i1-types-gate.yml"
   workflow_dispatch:
 
 permissions:
