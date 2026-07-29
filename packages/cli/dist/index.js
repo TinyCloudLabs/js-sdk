@@ -16382,6 +16382,23 @@ var init_dist2 = __esm({
 import { SiweMessage } from "siwe";
 import crypto22 from "crypto";
 import {
+  authorizeShare,
+  authorizationMethodForTarget,
+  notifyShare,
+  revokeShare,
+  listShares,
+  showShare,
+  publishTargetShare,
+  publishPolicyShare,
+  claimShare,
+  resumeShareAuthorization,
+  isLegacyShareLink,
+  receiveLegacyShare,
+  migrateShare,
+  MemoryEncryptedShareHistoryStorage,
+  EncryptedSenderShareHistory
+} from "@tinycloud/share-sdk";
+import {
   inspectShare,
   receiveShare,
   ShareReceiveError,
@@ -19235,6 +19252,7 @@ var init_dist3 = __esm({
     ShareRecipientTargetSchema = external_exports.discriminatedUnion("kind", [
       external_exports.object({ kind: external_exports.literal("exactEmail"), value: external_exports.string().min(1) }).strict(),
       external_exports.object({ kind: external_exports.literal("emailDomain"), value: external_exports.string().min(1) }).strict(),
+      external_exports.object({ kind: external_exports.literal("recipientDid"), value: external_exports.string().regex(/^did:[a-z0-9]+:.+$/) }).strict(),
       external_exports.object({ kind: external_exports.literal("bearer") }).strict()
     ]);
     ShareResourceSchema = external_exports.discriminatedUnion("kind", [
@@ -19278,7 +19296,8 @@ var init_dist3 = __esm({
     ]);
     ShareAddressedRecipientSchema = external_exports.discriminatedUnion("kind", [
       external_exports.object({ kind: external_exports.literal("exactEmail"), value: external_exports.string().min(1) }).strict(),
-      external_exports.object({ kind: external_exports.literal("emailDomain"), value: external_exports.string().min(1) }).strict()
+      external_exports.object({ kind: external_exports.literal("emailDomain"), value: external_exports.string().min(1) }).strict(),
+      external_exports.object({ kind: external_exports.literal("recipientDid"), value: external_exports.string().regex(/^did:[a-z0-9]+:.+$/) }).strict()
     ]);
     ShareAddressedDelegationRequestV2Schema = external_exports.object({
       version: external_exports.literal(2),
@@ -20761,14 +20780,14 @@ import {
   receiveShare as receiveShare2,
   SharePublishError,
   ShareReceiveError as ShareReceiveError2,
-  publishTargetShare,
-  isLegacyShareLink,
-  receiveLegacyShare,
-  migrateShare,
-  listShares,
-  showShare,
-  notifyShare,
-  revokeShare,
+  publishTargetShare as publishTargetShare2,
+  isLegacyShareLink as isLegacyShareLink2,
+  receiveLegacyShare as receiveLegacyShare2,
+  migrateShare as migrateShare2,
+  listShares as listShares2,
+  showShare as showShare2,
+  notifyShare as notifyShare2,
+  revokeShare as revokeShare2,
   redactPublishedShare
 } from "@tinycloud/share-sdk";
 
@@ -20992,7 +21011,7 @@ function registerShareCommand(program2) {
       if (options.inline && options.compact) throw new CLIError("INVALID_ARGUMENT", "--inline and --compact are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
       const input = await readShareInput(file, options.name, maxBytes);
-      const result = await publishTargetShare({
+      const result = await publishTargetShare2({
         source: input.bytes,
         filename: input.filename,
         mediaType: "text/markdown",
@@ -21037,8 +21056,8 @@ function registerShareCommand(program2) {
       const maxBytes = byteLimit(options.maxBytes);
       const link = await inputUrl(url, options.stdin === true);
       if (options.legacy) {
-        if (!isLegacyShareLink(link) || shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy receive requires an installed read-only tc1 adapter", 2);
-        const bytes = await receiveLegacyShare(link, shareServices.legacyReader);
+        if (!isLegacyShareLink2(link) || shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy receive requires an installed read-only tc1 adapter", 2);
+        const bytes = await receiveLegacyShare2(link, shareServices.legacyReader);
         if (options.stdout) {
           process.stdout.write(Buffer.from(bytes));
           return;
@@ -21078,14 +21097,14 @@ function registerShareCommand(program2) {
     try {
       if (shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy migration requires an installed read-only tc1 adapter", 2);
       const link = await inputUrl(url, options.stdin === true);
-      if (!isLegacyShareLink(link)) throw new CLIError("UNSUPPORTED_LINK", "only tc1: links can be migrated", 2);
+      if (!isLegacyShareLink2(link)) throw new CLIError("UNSUPPORTED_LINK", "only tc1: links can be migrated", 2);
       const maxBytes = byteLimit(options.maxBytes) ?? MAX_SHARE_STDIN_BYTES;
-      const migrated = await migrateShare({
+      const migrated = await migrateShare2({
         link,
         reader: shareServices.legacyReader,
         publish: async (bytes) => {
           if (bytes.byteLength > maxBytes) throw new SharePublishError("max-bytes-exceeded", "legacy content exceeds the configured byte limit");
-          const result = await publishTargetShare({
+          const result = await publishTargetShare2({
             source: bytes,
             filename: options.name,
             mediaType: "text/markdown",
@@ -21112,7 +21131,7 @@ function registerShareCommand(program2) {
   share.command("list").description("List encrypted sender history without complete bearer URLs").option("--json", "Print versioned redacted JSON").action(async (options) => {
     try {
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const result = await listShares(shareServices.records);
+      const result = await listShares2(shareServices.records);
       if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, shares: result });
       else process.stdout.write(result.map((item) => `${item.shareId}	${item.target}	${item.expiresAt}`).join("\n") + (result.length ? "\n" : ""));
     } catch (error) {
@@ -21123,7 +21142,7 @@ function registerShareCommand(program2) {
     try {
       if (options.revealLink && options.json) throw new CLIError("INVALID_ARGUMENT", "--reveal-link cannot be combined with --json", 2);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const result = await showShare({ storage: shareServices.records, shareId: id, revealLink: options.revealLink === true, link: options.revealLink ? await shareServices.linkFor?.(id) : void 0 });
+      const result = await showShare2({ storage: shareServices.records, shareId: id, revealLink: options.revealLink === true, link: options.revealLink ? await shareServices.linkFor?.(id) : void 0 });
       if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, share: result });
       else writeJson2(result);
     } catch (error) {
@@ -21133,7 +21152,7 @@ function registerShareCommand(program2) {
   share.command("notify <id>").description("Retry idempotent delivery without recreating the share").requiredOption("--to <address>", "Recipient email").option("--json", "Print versioned JSON").action(async (id, options) => {
     try {
       if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-      const result = await notifyShare({ shareId: id, recipient: options.to, adapter: shareServices.delivery });
+      const result = await notifyShare2({ shareId: id, recipient: options.to, adapter: shareServices.delivery });
       if (options.json) writeJson2(result);
       else process.stdout.write(`${result.state}
 `);
@@ -21147,7 +21166,7 @@ function registerShareCommand(program2) {
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
       const record = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
       if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      const result = await revokeShare({ record, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
+      const result = await revokeShare2({ record, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
       if (result.state === "unsupported") {
         throw new CLIError("AUTH_REQUIRED", result.reason, 3);
       }
