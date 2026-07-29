@@ -19,6 +19,7 @@
   },
   "scripts": {
     "build": "tsup",
+    "test": "bun test",
     "clean": "rm -rf dist",
     "dev": "tsup --watch",
     "generate:reference": "bun scripts/generate-reference.ts",
@@ -27,6 +28,7 @@
     "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts"
   },
   "dependencies": {
+    "@tinycloud/share-sdk": "workspace:*",
     "@tinycloud/node-sdk": "2.11.0-beta.4",
     "@tinycloud/node-sdk-wasm": "1.7.5",
     "@tinycloud/operations": "0.3.2-beta.3",
