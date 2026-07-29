@@ -1,3 +1,6 @@
+// TC-380 PROOF: deliberate type error planted in a package no old filter covered.
+export const tc380PlantedFailure: number = "this is not a number";
+
 export {
   TinyCloudVfsProvider,
   createTinyCloudVfs,
