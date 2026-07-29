@@ -1,8 +1,122 @@
 import { beforeEach, expect, mock, test } from "bun:test";
+import type { PersistedSessionData } from "@tinycloud/sdk-core";
 import type {
   EstablishOpenKeySessionOptions,
   EstablishOpenKeySessionResult,
 } from "../src/openkey-session";
+
+const { TextEncoder: TE, TextDecoder: TD } = require("util");
+
+global.TextEncoder = TE;
+global.TextDecoder = TD;
+(globalThis as any).HTMLElement = class {
+  shadowRoot: any;
+  attachShadow() {
+    this.shadowRoot = { innerHTML: "", querySelector: () => null };
+    return this.shadowRoot;
+  }
+  remove() {}
+};
+(globalThis as any).customElements = {
+  define: () => undefined,
+  get: () => undefined,
+};
+(globalThis as any).window = {
+  addEventListener: () => undefined,
+  removeEventListener: () => undefined,
+  location: { hostname: "test.local" },
+};
+(globalThis as any).document = {
+  createElement: () => ({
+    setAttribute: () => undefined,
+    appendChild: () => undefined,
+    remove: () => undefined,
+    style: {},
+  }),
+  body: {
+    appendChild: () => undefined,
+    style: {},
+  },
+};
+
+mock.module("@tinycloud/web-sdk-wasm", () => ({
+  initialized: Promise.resolve(),
+  tinycloud: {
+    computeCid: () => "bafk-test",
+    ensureEip55: (address: string) => address,
+    makeSpaceId: (address: string, chainId: number, prefix: string) =>
+      `tinycloud:pkh:eip155:${chainId}:${address}:${prefix}`,
+    prepareSession: () => ({}),
+    completeSessionSetup: () => ({}),
+    invoke: async () => ({}),
+    invokeAny: async () => ({}),
+    createDelegation: () => ({}),
+    parseRecapFromSiwe: () => [],
+    parseVerifiedRecapFromSiwe: () => [
+      {
+        service: "kv",
+        space: `tinycloud:pkh:eip155:1:${ADDRESS}:applications`,
+        path: CANARY_PATH,
+        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+        caveats: [],
+      },
+      {
+        service: "capabilities",
+        space: `tinycloud:pkh:eip155:1:${ADDRESS}:applications`,
+        path: "",
+        actions: ["tinycloud.capabilities/read"],
+        caveats: [],
+      },
+    ],
+    validatePersistedSession: () => ({
+      verifiedRecap: [
+        {
+          service: "kv",
+          space: `tinycloud:pkh:eip155:1:${ADDRESS}:applications`,
+          path: CANARY_PATH,
+          actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+          caveats: [],
+        },
+        {
+          service: "capabilities",
+          space: `tinycloud:pkh:eip155:1:${ADDRESS}:applications`,
+          path: "",
+          actions: ["tinycloud.capabilities/read"],
+          caveats: [],
+        },
+      ],
+    }),
+    generateHostSIWEMessage: () => "",
+    siweToDelegationHeaders: () => ({}),
+    protocolVersion: () => 1,
+    vault_encrypt: () => new Uint8Array(),
+    vault_decrypt: () => new Uint8Array(),
+    vault_derive_key: () => new Uint8Array(),
+    vault_x25519_from_seed: () => new Uint8Array(),
+    vault_x25519_dh: () => new Uint8Array(),
+    vault_random_bytes: (length: number) => new Uint8Array(length),
+    vault_sha256: () => new Uint8Array(),
+  },
+  tcwSession: {
+    TCWSessionManager: class {
+      createSessionKey(id: string) { return id; }
+      replaceSessionKey(_jwk: object, keyId: string) { return keyId; }
+      listSessionKeys() { return ["default", "share-recipient"]; }
+      renameSessionKeyId() {}
+      getDID(keyId: string) { return `did:key:${keyId}`; }
+      jwk() {
+        return JSON.stringify({
+          kty: "OKP",
+          crv: "Ed25519",
+          x: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        });
+      }
+    },
+  },
+}));
+
+const { TinyCloudWeb: RealTinyCloudWeb } = require("../src/modules/tcw");
+const { BrowserSessionStorage } = require("../src/adapters/BrowserSessionStorage");
 
 const ADDRESS = "0x31d40B62C395B9418C4198363619B11c65cD406F";
 const KEY_ID = "key_personal_1";
@@ -67,6 +181,69 @@ let scenario: Scenario = {
 let constructedConfigs: any[];
 let constructorCount: number;
 let kvOperationCount: number;
+let useRealTinyCloudWeb: boolean;
+let realSignerCallbackCount: number;
+let realRestoreCount: number;
+
+class MemoryStorage implements Storage {
+  private readonly items = new Map<string, string>();
+
+  get length(): number {
+    return this.items.size;
+  }
+
+  clear(): void {
+    this.items.clear();
+  }
+
+  getItem(key: string): string | null {
+    return this.items.get(key) ?? null;
+  }
+
+  key(index: number): string | null {
+    return [...this.items.keys()][index] ?? null;
+  }
+
+  removeItem(key: string): void {
+    this.items.delete(key);
+  }
+
+  setItem(key: string, value: string): void {
+    this.items.set(key, value);
+  }
+}
+
+function persistedSession(
+  overrides: Partial<PersistedSessionData> = {},
+): PersistedSessionData {
+  const now = new Date();
+  return {
+    address: ADDRESS,
+    chainId: 1,
+    sessionKey: JSON.stringify({
+      kty: "OKP",
+      crv: "Ed25519",
+      x: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      d: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    }),
+    siwe: "persisted CoordinationOS SIWE",
+    signature: "0xpersisted-signature",
+    tinycloudSession: {
+      delegationHeader: { Authorization: "Bearer persisted-delegation" },
+      delegationCid: "bafy-persisted-coordinationos",
+      spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:applications`,
+      spaces: {
+        applications: `tinycloud:pkh:eip155:1:${ADDRESS}:applications`,
+      },
+      verificationMethod: "did:key:default",
+    },
+    expiresAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
+    createdAt: now.toISOString(),
+    tinycloudHosts: ["https://tinycloud.example.test"],
+    version: "1.0",
+    ...overrides,
+  };
+}
 
 class FakeTinyCloudWeb {
   config: any;
@@ -107,8 +284,34 @@ class FakeTinyCloudWeb {
   }
 }
 
+function TinyCloudWebTestSeam(config: any): any {
+  if (!useRealTinyCloudWeb) {
+    return new FakeTinyCloudWeb(config);
+  }
+
+  constructorCount += 1;
+  constructedConfigs.push(config);
+  const strategy = config.signStrategy;
+  const client = new RealTinyCloudWeb({
+    ...config,
+    signStrategy: {
+      ...strategy,
+      handler: async (request: unknown) => {
+        realSignerCallbackCount += 1;
+        return strategy.handler(request);
+      },
+    },
+  });
+  const restoreSession = client.restoreSession.bind(client);
+  client.restoreSession = async (...args: unknown[]) => {
+    realRestoreCount += 1;
+    return restoreSession(...args);
+  };
+  return client;
+}
+
 mock.module("../src/modules/tcw", () => ({
-  TinyCloudWeb: FakeTinyCloudWeb,
+  TinyCloudWeb: TinyCloudWebTestSeam,
 }));
 
 const { establishOpenKeySession } = require("../src/openkey-session") as {
@@ -156,6 +359,9 @@ beforeEach(() => {
   constructedConfigs = [];
   constructorCount = 0;
   kvOperationCount = 0;
+  useRealTinyCloudWeb = false;
+  realSignerCallbackCount = 0;
+  realRestoreCount = 0;
 });
 
 test("fresh sign-in sends one unchanged SIWE sign-in body with one Bearer token", async () => {
@@ -318,8 +524,41 @@ test.each(failureCases)(
   },
 );
 
-test("reload restores without a provider token and ten KV operations make zero signer calls", async () => {
-  scenario = { restoreStatus: "restored", requests: [] };
+async function seedRealBrowserPersistence(
+  state: "valid" | "missing" | "corrupt" | "expired",
+): Promise<MemoryStorage> {
+  useRealTinyCloudWeb = true;
+  const backend = new MemoryStorage();
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: backend,
+    writable: true,
+  });
+  const storage = new BrowserSessionStorage({
+    storage: backend,
+    keyPrefix: SESSION_PREFIX,
+  });
+  const storageKey = `${SESSION_PREFIX}${ADDRESS.toLowerCase()}`;
+
+  if (state === "valid") {
+    await storage.save(ADDRESS, persistedSession());
+  } else if (state === "corrupt") {
+    backend.setItem(storageKey, "{not-json");
+  } else if (state === "expired") {
+    backend.setItem(
+      storageKey,
+      JSON.stringify(
+        persistedSession({
+          expiresAt: new Date(Date.now() - 1_000).toISOString(),
+        }),
+      ),
+    );
+  }
+  return backend;
+}
+
+test("real persisted reload restores through BrowserSessionStorage and ten KV operations make zero signer callbacks", async () => {
+  await seedRealBrowserPersistence("valid");
   const signerFetch = mock(async () => {
     throw new Error("signer must not be called");
   });
@@ -327,16 +566,59 @@ test("reload restores without a provider token and ten KV operations make zero s
   const result = await establishOpenKeySession(
     options(undefined, signerFetch),
   );
+  (result.client as any)._node._kv = {
+    get: mock(async () => {
+      kvOperationCount += 1;
+      return { ok: true, data: { data: { status: "ok" } } };
+    }),
+    put: mock(async () => {
+      kvOperationCount += 1;
+      return { ok: true, data: { data: undefined } };
+    }),
+  };
   for (let index = 0; index < 5; index += 1) {
     await (result.client as any).kv.get(CANARY_PATH);
     await (result.client as any).kv.put(CANARY_PATH, { status: "ok" });
   }
 
   expect(result.status).toBe("restored");
-  expect(result.session).toEqual(SESSION);
+  expect(result.session).toEqual(
+    expect.objectContaining({ address: ADDRESS, chainId: 1 }),
+  );
+  expect(result.client).toBeInstanceOf(RealTinyCloudWeb);
+  expect((result.client as any).sessionStorage).toBeInstanceOf(
+    BrowserSessionStorage,
+  );
+  expect(realRestoreCount).toBe(2);
   expect(kvOperationCount).toBe(10);
   expect(signerFetch).not.toHaveBeenCalled();
+  expect(realSignerCallbackCount).toBe(0);
 });
+
+test.each(["missing", "corrupt", "expired"] as const)(
+  "real BrowserSessionStorage reports tokenless %s persistence without OpenKey or signer callbacks",
+  async (restoreStatus) => {
+    const backend = await seedRealBrowserPersistence(restoreStatus);
+    const signerFetch = mock(async () => {
+      throw new Error("OpenKey must not be called");
+    });
+
+    const result = await establishOpenKeySession(
+      options(undefined, signerFetch),
+    );
+
+    expect(result.status).toBe(restoreStatus);
+    expect(result.client).toBeInstanceOf(RealTinyCloudWeb);
+    expect((result.client as any).sessionStorage).toBeInstanceOf(
+      BrowserSessionStorage,
+    );
+    expect(signerFetch).not.toHaveBeenCalled();
+    expect(realSignerCallbackCount).toBe(0);
+    if (restoreStatus !== "missing") {
+      expect(backend.length).toBe(0);
+    }
+  },
+);
 
 test.each([
   "missing",
