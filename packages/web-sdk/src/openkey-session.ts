@@ -1,4 +1,8 @@
-import type { ClientSession, Manifest } from "@tinycloud/sdk-core";
+import type {
+  ClientSession,
+  ComposedManifestRequest,
+  Manifest,
+} from "@tinycloud/sdk-core";
 import { utils } from "ethers";
 import {
   createOpenKeyCallbackSigningStrategy,
@@ -204,7 +208,7 @@ async function coordinationOsUserNamespace(keyId: string): Promise<string> {
 async function validateCanaryManifest(
   manifest: Manifest,
   keyId: string,
-): Promise<void> {
+): Promise<string> {
   if (
     manifest === null ||
     typeof manifest !== "object" ||
@@ -254,6 +258,28 @@ async function validateCanaryManifest(
   if (!valid) {
     throw new Error("Manifest must grant only the CoordinationOS KV canary");
   }
+  return permission.path;
+}
+
+function coordinationOsCapabilityRequest(
+  manifest: Manifest,
+  canaryPath: string,
+): ComposedManifestRequest {
+  return {
+    manifests: [manifest],
+    resources: [
+      {
+        service: "tinycloud.kv",
+        space: "applications",
+        path: canaryPath,
+        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+    ],
+    delegationTargets: [],
+    registryRecords: [],
+    expiryMs: SESSION_EXPIRATION_MS,
+    includePublicSpace: false,
+  };
 }
 
 function createReadOnlyProvider(address: string) {
@@ -276,11 +302,35 @@ function createReadOnlyProvider(address: string) {
   };
 }
 
+function sanitizeSdkCause(
+  cause: unknown,
+  seen: Set<object> = new Set(),
+): Error {
+  const sanitized = new Error("Underlying TinyCloud SDK operation failed");
+  if (cause === null || typeof cause !== "object" || seen.has(cause)) {
+    return sanitized;
+  }
+
+  seen.add(cause);
+  const causeDescriptor = Object.getOwnPropertyDescriptor(cause, "cause");
+  if (
+    causeDescriptor &&
+    "value" in causeDescriptor &&
+    causeDescriptor.value !== undefined
+  ) {
+    Object.defineProperty(sanitized, "cause", {
+      configurable: true,
+      value: sanitizeSdkCause(causeDescriptor.value, seen),
+    });
+  }
+  return sanitized;
+}
+
 function wrapSdkError(cause: unknown): Error {
   const error = new Error("OpenKey session establishment failed");
   Object.defineProperty(error, "cause", {
     configurable: true,
-    value: cause,
+    value: sanitizeSdkCause(cause),
   });
   return error;
 }
@@ -318,7 +368,10 @@ export async function establishOpenKeySession(
   if (options.sessionStorageKeyPrefix !== SESSION_STORAGE_KEY_PREFIX) {
     throw new Error("OpenKey session storage prefix is invalid");
   }
-  await validateCanaryManifest(options.manifest, options.key.keyId);
+  const canaryPath = await validateCanaryManifest(
+    options.manifest,
+    options.key.keyId,
+  );
 
   const fetchImpl = options.fetch ?? globalThis.fetch;
   if (!fetchImpl) {
@@ -367,6 +420,10 @@ export async function establishOpenKeySession(
     provider: createReadOnlyProvider(options.key.address),
     signStrategy,
     manifest: options.manifest,
+    capabilityRequest: coordinationOsCapabilityRequest(
+      options.manifest,
+      canaryPath,
+    ),
     includeAccountRegistryPermissions: false,
     autoCreateSpace: false,
     persistSession: true,

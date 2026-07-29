@@ -6,6 +6,29 @@ import type {
   EstablishOpenKeySessionResult,
 } from "../src/index";
 
+(globalThis as any).HTMLElement = class {};
+(globalThis as any).customElements = {
+  define: () => undefined,
+  get: () => undefined,
+};
+(globalThis as any).window = {
+  addEventListener: () => undefined,
+  removeEventListener: () => undefined,
+  location: { hostname: "test.local" },
+};
+(globalThis as any).document = {
+  createElement: () => ({
+    setAttribute: () => undefined,
+    appendChild: () => undefined,
+    remove: () => undefined,
+    style: {},
+  }),
+  body: {
+    appendChild: () => undefined,
+    style: {},
+  },
+};
+
 type Assert<T extends true> = T;
 type SamePublicError = WebError extends SdkCoreError
   ? SdkCoreError extends WebError
@@ -26,7 +49,7 @@ test("exports CaveatedDelegationUnsupportedError from the web facade", () => {
 });
 
 test("exports establishOpenKeySession and its public types from the web facade", async () => {
-  const helperModule = await import("../src/openkey-session");
-  expect(typeof helperModule.establishOpenKeySession).toBe("function");
+  const webSdk = await import("../src/index");
+  expect(typeof webSdk.establishOpenKeySession).toBe("function");
   expect(hasHelperTypes).toBe(true);
 });

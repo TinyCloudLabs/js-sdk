@@ -60,13 +60,6 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
         actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
         caveats: [],
       },
-      {
-        service: "capabilities",
-        space: `tinycloud:pkh:eip155:1:${ADDRESS}:applications`,
-        path: "",
-        actions: ["tinycloud.capabilities/read"],
-        caveats: [],
-      },
     ],
     validatePersistedSession: () => ({
       verifiedRecap: [
@@ -75,13 +68,6 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
           space: `tinycloud:pkh:eip155:1:${ADDRESS}:applications`,
           path: CANARY_PATH,
           actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
-          caveats: [],
-        },
-        {
-          service: "capabilities",
-          space: `tinycloud:pkh:eip155:1:${ADDRESS}:applications`,
-          path: "",
-          actions: ["tinycloud.capabilities/read"],
           caveats: [],
         },
       ],
@@ -277,7 +263,12 @@ class FakeTinyCloudWeb {
     for (const request of this.scenario.requests ?? []) {
       const response = await this.config.signStrategy.handler(request);
       if (!response.approved) {
-        throw new Error(response.reason ?? "callback rejected");
+        const denial = new Error(response.reason ?? "callback rejected");
+        Object.defineProperty(denial, "denial", {
+          enumerable: true,
+          value: response,
+        });
+        throw denial;
       }
     }
     return SESSION;
@@ -485,9 +476,14 @@ const failureCases = [
   [
     "HTTP denial",
     mock(async () =>
-      new Response(JSON.stringify({ approved: false, reason: "denied" }), {
-        status: 403,
-      })),
+      new Response(
+        JSON.stringify({
+          approved: false,
+          reason: `denied ${TOKEN}`,
+          error: `denial payload ${TOKEN}`,
+        }),
+        { status: 403 },
+      )),
     undefined,
   ],
   [
@@ -498,19 +494,58 @@ const failureCases = [
   [
     "thrown fetch",
     mock(async () => {
-      throw new Error(`transport failed ${TOKEN}`);
+      const nested = new Error(`nested transport failed ${TOKEN}`);
+      const error = new Error(`transport failed ${TOKEN}`, { cause: nested });
+      Object.defineProperty(error, "denial", {
+        enumerable: true,
+        value: { reason: `transport denial ${TOKEN}` },
+      });
+      throw error;
     }),
     undefined,
   ],
   [
     "SDK failure",
     mock(async () => new Response()),
-    new Error(`SDK failed ${TOKEN}`),
+    new Error(`SDK failed ${TOKEN}`, {
+      cause: new Error(`nested SDK failure ${TOKEN}`),
+    }),
   ],
 ] as const;
 
+function observableErrorGraph(value: unknown): string {
+  const text: string[] = [];
+  const seen = new Set<object>();
+  const visit = (current: unknown): void => {
+    if (
+      current === null ||
+      current === undefined ||
+      typeof current === "number" ||
+      typeof current === "boolean" ||
+      typeof current === "bigint"
+    ) {
+      text.push(String(current));
+      return;
+    }
+    if (typeof current === "string") {
+      text.push(current);
+      return;
+    }
+    if (typeof current !== "object" || seen.has(current)) return;
+    seen.add(current);
+    text.push(String(current));
+    for (const key of Reflect.ownKeys(current)) {
+      text.push(String(key));
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (descriptor && "value" in descriptor) visit(descriptor.value);
+    }
+  };
+  visit(value);
+  return text.join("\n");
+}
+
 test.each(failureCases)(
-  "%s clears the helper token source and redacts the top-level error",
+  "%s clears the helper token source and redacts the complete observable error graph",
   async (_name, signerFetch, sdkFailure) => {
     scenario.sdkFailure = sdkFailure;
     const error = await establishOpenKeySession(
@@ -518,7 +553,8 @@ test.each(failureCases)(
     ).catch((caught) => caught as Error);
 
     expect(error.message).toBe("OpenKey session establishment failed");
-    expect(error.message).not.toContain(TOKEN);
+    expect(error.cause).toBeInstanceOf(Error);
+    expect(observableErrorGraph(error)).not.toContain(TOKEN);
     (signerFetch as ReturnType<typeof mock>).mockClear();
     await expectStrategyTokenEmpty(signerFetch as ReturnType<typeof mock>);
   },
@@ -593,6 +629,17 @@ test("real persisted reload restores through BrowserSessionStorage and ten KV op
   expect(kvOperationCount).toBe(10);
   expect(signerFetch).not.toHaveBeenCalled();
   expect(realSignerCallbackCount).toBe(0);
+  expect(
+    (result.client as any)._node.getVerifiedSessionCapabilities(),
+  ).toEqual([
+    {
+      service: "tinycloud.kv",
+      space: "applications",
+      path: CANARY_PATH,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+      caveats: [],
+    },
+  ]);
 });
 
 test.each(["missing", "corrupt", "expired"] as const)(
