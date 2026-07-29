@@ -20955,7 +20955,7 @@ function shareCliError(error) {
   if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
   if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   const mapped = known[message];
-  return new CLIError(mapped?.code ?? "ERROR", mapped ? mapped.code : message, mapped?.exit ?? ExitCode.ERROR);
+  return new CLIError(mapped?.code ?? "ERROR", mapped ? mapped.code : "share operation failed", mapped?.exit ?? ExitCode.ERROR);
 }
 function inputUrl(value, stdin) {
   if (stdin || value === "-") return readBoundedUrlStdin();
