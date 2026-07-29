@@ -24,6 +24,7 @@
     "@tinycloud/sdk-services-test": "13.0.0"
   },
   "changesets": [
-    "fast-batch-reads"
+    "fast-batch-reads",
+    "single-flight-session-activation"
   ]
 }
