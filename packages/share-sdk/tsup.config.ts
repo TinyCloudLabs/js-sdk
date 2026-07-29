@@ -8,5 +8,5 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   splitting: false,
-  noExternal: ["multiformats"],
+  noExternal: ["multiformats", "@tinycloud/share-envelope"],
 });
