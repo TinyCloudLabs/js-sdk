@@ -26040,6 +26040,7 @@ import {
   publishTargetShare,
   isLegacyShareLink,
   receiveLegacyShare,
+  migrateShare,
   listShares,
   showShare,
   notifyShare,
@@ -26157,7 +26158,7 @@ var SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var DEFAULT_REGISTRY = `${SHARE_ORIGIN}/api/share/link-only/registry`;
 var DEFAULT_READ_REGISTRY = "https://registry.tinycloud.xyz";
 var shareServices = {};
-function parseTarget(value) {
+function parseShareTarget(value) {
   if (value === "anyone" || value === "bearer") return { kind: "bearer" };
   if (value.startsWith("did:")) return { kind: "recipientDid", did: value };
   if (value.startsWith("domain:")) return { kind: "emailDomain", domain: value.slice("domain:".length) };
@@ -26165,11 +26166,19 @@ function parseTarget(value) {
   if (value.includes("@")) return { kind: "email", address: value };
   throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
 }
+function publishServices() {
+  return {
+    ...shareServices.uploadBlob === void 0 ? {} : { uploadBlob: shareServices.uploadBlob },
+    ...shareServices.authorizeUpload === void 0 ? {} : { authorizeUpload: shareServices.authorizeUpload },
+    ...shareServices.credentials === void 0 ? {} : { credentials: shareServices.credentials },
+    ...shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn }
+  };
+}
 function shareCliError(error) {
   if (error instanceof CLIError) return error;
   if (error instanceof SharePublishError) {
-    const exit = error.code === "upload-auth-required" ? 3 : error.code === "upload-failed" ? 6 : error.code === "max-bytes-exceeded" || error.code === "inline-too-large" ? 7 : error.code === "unsupported-target" || error.code === "invalid-argument" ? 2 : 1;
-    const code = error.code === "upload-auth-required" ? "UPLOAD_AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : error.code === "inline-too-large" ? "INLINE_TOO_LARGE" : error.code === "unsupported-target" ? "UNSUPPORTED_LINK" : error.code === "invalid-argument" ? "INVALID_ARGUMENT" : "NETWORK_ERROR";
+    const exit = error.code === "upload-auth-required" ? 3 : error.code === "upload-failed" ? 4 : error.code === "max-bytes-exceeded" || error.code === "inline-too-large" ? 7 : error.code === "unsupported-target" || error.code === "invalid-argument" ? 2 : 1;
+    const code = error.code === "upload-auth-required" ? "UPLOAD_AUTH_REQUIRED" : error.code === "upload-failed" ? "UNAVAILABLE" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : error.code === "inline-too-large" ? "INLINE_TOO_LARGE" : error.code === "unsupported-target" ? "UNSUPPORTED_LINK" : error.code === "invalid-argument" ? "INVALID_ARGUMENT" : "ERROR";
     return new CLIError(code, error.message, exit);
   }
   if (error instanceof ShareReceiveError2) {
@@ -26179,12 +26188,17 @@ function shareCliError(error) {
     return new CLIError(code, error.message, exit);
   }
   const message = error instanceof Error ? error.message : String(error);
+  const nodeCode = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
   const known = {
     MAX_BYTES_EXCEEDED: { code: "MAX_BYTES_EXCEEDED", exit: 7 },
     UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 8 },
     OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 8 },
-    INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 }
+    INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 },
+    "share not found": { code: "NOT_FOUND", exit: 4 }
   };
+  if (nodeCode === "ENOENT") return new CLIError("INVALID_ARGUMENT", "share input was not found", 2);
+  if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
+  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   const mapped = known[message];
   return new CLIError(mapped?.code ?? "ERROR", mapped ? mapped.code : message, mapped?.exit ?? ExitCode.ERROR);
 }
@@ -26217,7 +26231,7 @@ function registerShareCommand(program2) {
         source: input.bytes,
         filename: input.filename,
         mediaType: "text/markdown",
-        target: parseTarget(options.to),
+        target: parseShareTarget(options.to),
         expiresAt: expires(options.expires),
         origin: options.viewerOrigin,
         inline: options.inline === true,
@@ -26225,7 +26239,8 @@ function registerShareCommand(program2) {
         registryBaseUrl: options.registry,
         allowInsecureRegistry: options.insecureRegistry === true,
         notify: options.notify === true,
-        targetAdapter: shareServices.targetAdapter
+        targetAdapter: shareServices.targetAdapter,
+        ...publishServices()
       });
       if ("state" in result) {
         if (options.json) {
@@ -26276,6 +26291,41 @@ function registerShareCommand(program2) {
       const output = await writeShareOutput(options.output ?? ".", result.metadata.display.filename ?? "share.md", result.bytes, options.force === true);
       if (options.json) receiveJson(result, output);
       else receiveHuman(output);
+    } catch (error) {
+      handleError(shareCliError(error));
+    }
+  });
+  share.command("migrate [url]").description("Read a legacy tc1 link and re-mint a modern Share link").option("--stdin", "Read the complete legacy link from stdin").option("--name <filename>", "Filename for the migrated content", "migrated.md").option("--to <target>", "Modern Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Modern share lifetime", "7d").option("--max-bytes <bytes>", "Bound migrated content bytes").option("--inline", "Embed the sealed envelope in the URL fragment").option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY).option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests").option("--json", "Print versioned redacted JSON").action(async (url, options) => {
+    try {
+      if (shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy migration requires an installed read-only tc1 adapter", 2);
+      const link = await inputUrl(url, options.stdin === true);
+      if (!isLegacyShareLink(link)) throw new CLIError("UNSUPPORTED_LINK", "only tc1: links can be migrated", 2);
+      const maxBytes = byteLimit(options.maxBytes) ?? MAX_SHARE_STDIN_BYTES;
+      const migrated = await migrateShare({
+        link,
+        reader: shareServices.legacyReader,
+        publish: async (bytes) => {
+          if (bytes.byteLength > maxBytes) throw new SharePublishError("max-bytes-exceeded", "legacy content exceeds the configured byte limit");
+          const result = await publishTargetShare({
+            source: bytes,
+            filename: options.name,
+            mediaType: "text/markdown",
+            target: parseShareTarget(options.to),
+            expiresAt: expires(options.expires),
+            origin: options.viewerOrigin,
+            inline: options.inline === true,
+            registryBaseUrl: options.registry,
+            allowInsecureRegistry: options.insecureRegistry === true,
+            notify: options.notify === true,
+            targetAdapter: shareServices.targetAdapter,
+            ...publishServices()
+          });
+          if ("state" in result) throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
+          return result;
+        }
+      });
+      if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, legacy: true, migrated: migrated.migrated });
+      else publishHuman(migrated.migrated);
     } catch (error) {
       handleError(shareCliError(error));
     }
