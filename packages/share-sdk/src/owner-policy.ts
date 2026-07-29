@@ -30,7 +30,9 @@ export const OWNER_SHARE_REGISTRATION_DOMAIN = "xyz.tinycloud.share/policy-regis
 export type OwnerShareAction = "tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put";
 export type OwnerShareMatcher =
   | { readonly kind: "exactEmail"; readonly value: string }
-  | { readonly kind: "emailDomain"; readonly value: string };
+  | { readonly kind: "emailDomain"; readonly value: string }
+  | { readonly kind: "recipientDid"; readonly value: string }
+  | { readonly kind: "bearer" };
 
 export interface OwnerSharePolicyV2 {
   readonly type: "TinyCloudSharePolicy";

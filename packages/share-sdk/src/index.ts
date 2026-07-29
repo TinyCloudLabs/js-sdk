@@ -9,4 +9,17 @@ export type { OwnerDelegationReceipt, CreateOwnerDelegationParams, OwnerShareAct
 export { SHARE_DELIVERY_AUTHORIZATION_DOMAIN, validateShareDeliveryAuthorizationBytes, shareDeliveryTrustedKid } from "./delivery.js";
 export type { ShareDeliveryAuthorizationRequest, ShareDeliveryAuthorization, ShareDeliveryAuthorizationReceipt, ValidateShareDeliveryAuthorizationExpected } from "./delivery.js";
 export { MemorySenderShareRecordStorage, MemorySenderShareKeyStorage, SenderShareStore } from "./history.js";
-export type { SenderShareRecord, SenderShareRecordStorage, SenderShareKeyStorage, SenderShareRevocationScope } from "./history.js";
+export { MemoryEncryptedShareHistoryStorage, EncryptedSenderShareHistory } from "./history.js";
+export type { SenderShareRecord, SenderShareRecordStorage, SenderShareKeyStorage, SenderShareRevocationScope, EncryptedShareHistoryStorage } from "./history.js";
+export { authorizeShare, authorizationMethodForTarget } from "./authorization.js";
+export type { ShareAuthorizationMethod, ShareAuthorizationRequired, ShareAuthorizationDenied, ShareAuthorizationReady, ShareAuthorizationResult, ShareAuthorizationAdapter } from "./authorization.js";
+export { notifyShare, ShareNotifyError } from "./notify.js";
+export type { ShareNotifyState, ShareNotifyResult, ShareNotifyInput, ShareDeliveryAdapter } from "./notify.js";
+export { listShares, showShare, revokeShare } from "./lifecycle.js";
+export type { ShareHistoryView, ShareRevocationResult, ShareRevocationAdapter } from "./lifecycle.js";
+export { isLegacyShareLink, receiveLegacyShare, migrateShare } from "./legacy.js";
+export type { LegacyShareReader, LegacyMigrationResult } from "./legacy.js";
+export { normalizeShareTarget, publishTargetShare, targetAuthorizationMethod } from "./targets.js";
+export type { ShareTarget, TargetPublishInput, TargetPublishOutcome, TargetPublishAdapter } from "./targets.js";
+export { publishPolicyShare, claimShare, resumeShareAuthorization } from "./policy.js";
+export type { SharePolicyPublishAdapter } from "./policy.js";

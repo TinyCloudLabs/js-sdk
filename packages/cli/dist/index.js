@@ -11193,7 +11193,7 @@ function isBrowser() {
   }
 }
 function openDB() {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -11201,43 +11201,43 @@ function openDB() {
         db.createObjectStore(STORE_NAME);
       }
     };
-    request.onsuccess = () => resolve3(request.result);
+    request.onsuccess = () => resolve4(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 function idbGet(db, key) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
     const req = store.get(key);
-    req.onsuccess = () => resolve3(req.result);
+    req.onsuccess = () => resolve4(req.result);
     req.onerror = () => reject(req.error);
   });
 }
 function idbPut(db, key, value) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     const req = store.put(value, key);
-    req.onsuccess = () => resolve3();
+    req.onsuccess = () => resolve4();
     req.onerror = () => reject(req.error);
   });
 }
 function idbDelete(db, key) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     const req = store.delete(key);
-    req.onsuccess = () => resolve3();
+    req.onsuccess = () => resolve4();
     req.onerror = () => reject(req.error);
   });
 }
 function idbKeys(db) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
     const req = store.getAllKeys();
-    req.onsuccess = () => resolve3(req.result.filter((k) => typeof k === "string"));
+    req.onsuccess = () => resolve4(req.result.filter((k) => typeof k === "string"));
     req.onerror = () => reject(req.error);
   });
 }
@@ -14617,8 +14617,8 @@ var init_dist2 = __esm({
         if (this.closed) {
           return Promise.resolve({ value: void 0, done: true });
         }
-        return new Promise((resolve3) => {
-          this.waiters.push(resolve3);
+        return new Promise((resolve4) => {
+          this.waiters.push(resolve4);
         });
       }
     };
@@ -16484,6 +16484,13 @@ var init_dist2 = __esm({
 // ../sdk-core/dist/index.js
 import { SiweMessage } from "siwe";
 import crypto22 from "crypto";
+import {
+  inspectShare,
+  receiveShare,
+  ShareReceiveError,
+  toShareErrorInfo,
+  verifyBearerEnvelope
+} from "@tinycloud/share-sdk";
 import { Buffer as Buffer2 } from "buffer";
 import { Buffer as Buffer3 } from "buffer";
 import { Buffer as Buffer4 } from "buffer";
@@ -22413,7 +22420,7 @@ function shouldOpenBrowser(options) {
   return env !== "1" && env !== "true";
 }
 async function callbackFlow(did, options = {}) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     let timeout;
     let settled = false;
     let rl;
@@ -22426,7 +22433,7 @@ async function callbackFlow(did, options = {}) {
         rl.close();
       }
       if (result.data) {
-        resolve3(result.data);
+        resolve4(result.data);
       } else {
         reject(result.error);
       }
@@ -22491,8 +22498,8 @@ async function callbackFlow(did, options = {}) {
       }
       if (openBrowser) {
         try {
-          const open2 = (await import("open")).default;
-          await open2(authUrl);
+          const open3 = (await import("open")).default;
+          await open3(authUrl);
         } catch {
           server.close();
           throw new Error("Failed to open browser");
@@ -22532,17 +22539,17 @@ Open this URL in a browser to authenticate:
     input: process.stdin,
     output: process.stderr
   });
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     rl.question("Paste delegation code: ", (input) => {
       rl.close();
       try {
         const data = JSON.parse(input.trim());
-        resolve3(data);
+        resolve4(data);
       } catch {
         try {
           const decoded = Buffer.from(input.trim(), "base64").toString("utf-8");
           const data = JSON.parse(decoded);
-          resolve3(data);
+          resolve4(data);
         } catch {
           reject(new Error("Invalid delegation code. Expected JSON or base64-encoded JSON."));
         }
@@ -22634,7 +22641,7 @@ async function promptAuthMethod() {
     input: process.stdin,
     output: process.stderr
   });
-  return new Promise((resolve3) => {
+  return new Promise((resolve4) => {
     process.stderr.write("\n" + theme.heading("Choose authentication method:") + "\n");
     process.stderr.write(`  ${theme.accent("1)")} OpenKey ${theme.muted("(browser-based, for interactive use)")}
 `);
@@ -22645,9 +22652,9 @@ async function promptAuthMethod() {
       rl.close();
       const trimmed = answer.trim();
       if (trimmed === "2" || trimmed.toLowerCase() === "local") {
-        resolve3("local");
+        resolve4("local");
       } else {
-        resolve3("openkey");
+        resolve4("openkey");
       }
     });
   });
@@ -23159,13 +23166,13 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 function readUrl(source) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const getter = source.startsWith("https://") ? httpsGet : httpGet;
     const request = getter(source, (response) => {
       const status = response.statusCode ?? 0;
       if (status >= 300 && status < 400 && response.headers.location) {
         response.resume();
-        readUrl(new URL(response.headers.location, source).toString()).then(resolve3, reject);
+        readUrl(new URL(response.headers.location, source).toString()).then(resolve4, reject);
         return;
       }
       if (status < 200 || status >= 300) {
@@ -23181,7 +23188,7 @@ function readUrl(source) {
       response.on("data", (chunk) => {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       });
-      response.on("end", () => resolve3(Buffer.concat(chunks).toString("utf8")));
+      response.on("end", () => resolve4(Buffer.concat(chunks).toString("utf8")));
     });
     request.on("error", reject);
   });
@@ -23382,7 +23389,7 @@ function permissionGrantReason(context, permissions) {
   return `${context} Requested: ${summary}${more}.`;
 }
 function execCapturedCommand(command) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const child = spawn(process.execPath, [process.argv[1], ...command.argv], {
       cwd: command.cwd,
       env: process.env,
@@ -23401,7 +23408,7 @@ function execCapturedCommand(command) {
       if (code && code !== 0) {
         process.exitCode = code;
       }
-      resolve3();
+      resolve4();
     });
   });
 }
@@ -23430,8 +23437,8 @@ async function confirmPermissionRequest(permissions) {
     input: process.stdin,
     output: process.stderr
   });
-  const answer = await new Promise((resolve3) => {
-    rl.question("Approve local-key delegation? [y/N] ", resolve3);
+  const answer = await new Promise((resolve4) => {
+    rl.question("Approve local-key delegation? [y/N] ", resolve4);
   });
   rl.close();
   if (!/^y(es)?$/i.test(answer.trim())) {
@@ -24993,8 +25000,8 @@ Examples:
     try {
       if (isInteractive()) {
         const rl = createInterface3({ input: process.stdin, output: process.stderr });
-        const answer = await new Promise((resolve3) => {
-          rl.question(`Delete profile "${name2}"? This cannot be undone. [y/N] `, resolve3);
+        const answer = await new Promise((resolve4) => {
+          rl.question(`Delete profile "${name2}"? This cannot be undone. [y/N] `, resolve4);
         });
         rl.close();
         if (answer.toLowerCase() !== "y") {
@@ -26015,8 +26022,8 @@ function registerSecretsCommand(program2, openKeyAcquisition) {
   });
   secrets.command("manage").description("Open the TinyCloud Secrets Manager in your browser").action(async () => {
     try {
-      const open2 = (await import("open")).default;
-      await open2("https://secrets.tinycloud.xyz");
+      const open3 = (await import("open")).default;
+      await open3("https://secrets.tinycloud.xyz");
       outputJson({ opened: "https://secrets.tinycloud.xyz" });
     } catch (error) {
       handleError(error);
@@ -26025,103 +26032,288 @@ function registerSecretsCommand(program2, openKeyAcquisition) {
 }
 
 // src/commands/share.ts
-init_profiles();
-init_formatter();
+import {
+  inspectShare as inspectShare2,
+  receiveShare as receiveShare2,
+  SharePublishError,
+  ShareReceiveError as ShareReceiveError2,
+  publishTargetShare,
+  isLegacyShareLink,
+  receiveLegacyShare,
+  listShares,
+  showShare,
+  notifyShare,
+  revokeShare
+} from "@tinycloud/share-sdk";
 init_errors();
 init_constants();
+
+// src/share/output.ts
+function writeJson2(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}
+`);
+}
+function publishHuman(result) {
+  process.stdout.write(`${result.url}
+`);
+}
+function inspectHuman(result) {
+  const metadata = result.metadata;
+  process.stdout.write([
+    `Share ${metadata.shareId}`,
+    `File: ${metadata.display.filename ?? "unnamed"}`,
+    `Target: bearer (anyone with the complete link can read)`,
+    `Expires: ${metadata.expiresAt}`,
+    `Resource: ${metadata.resource.path}`,
+    `Link format: ${result.link.kind}`
+  ].join("\n") + "\n");
+}
+function receiveHuman(path) {
+  process.stdout.write(`${path}
+`);
+}
+function receiveJson(result, path) {
+  writeJson2({ protocol: "tinycloud-share", version: 1, path, metadata: result.metadata });
+}
+
+// src/share/io.ts
+import { constants } from "fs";
+import { lstat, mkdir as mkdir3, open as open2, readFile as readFile9, stat as stat2 } from "fs/promises";
+import { basename as basename2, join as join6, resolve as resolve2 } from "path";
+var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
+var MAX_SHARE_URL_BYTES = 64 * 1024;
+async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
+  if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error("MAX_BYTES_EXCEEDED");
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of process.stdin) {
+    const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    total += bytes.byteLength;
+    if (total > limit) throw new Error("MAX_BYTES_EXCEEDED");
+    chunks.push(bytes);
+  }
+  return new Uint8Array(Buffer.concat(chunks, total));
+}
+async function readBoundedUrlStdin() {
+  const bytes = await readBoundedStdin(MAX_SHARE_URL_BYTES);
+  const value = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+  if (value.length === 0 || /\s/.test(value)) throw new Error("INVALID_ARGUMENT");
+  return value;
+}
+function safeFilename(value) {
+  if (value.length === 0 || value === "." || value === ".." || /[/\\\u0000-\u001f\u007f]/.test(value)) throw new Error("UNSAFE_FILENAME");
+  return value;
+}
+function markdownFilename(value) {
+  const filename = safeFilename(value);
+  if (!/\.(?:md|markdown|txt)$/i.test(filename)) throw new Error("INVALID_ARGUMENT");
+  return filename;
+}
+async function readShareInput(input, name2, limit = MAX_SHARE_STDIN_BYTES) {
+  if (input === "-") {
+    const bytes = await readBoundedStdin(limit);
+    return { bytes, filename: markdownFilename(name2 ?? "stdin.md") };
+  }
+  const path = resolve2(input);
+  const info = await stat2(path);
+  if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
+  const filename = markdownFilename(name2 ?? basename2(path));
+  return { bytes: new Uint8Array(await readFile9(path)), filename };
+}
+async function assertDirectory(path) {
+  try {
+    const info = await lstat(path);
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("OUTPUT_EXISTS");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    await mkdir3(path, { recursive: true, mode: 448 });
+    const created = await lstat(path);
+    if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
+  }
+}
+async function writeShareOutput(directory, filename, bytes, force) {
+  const outputDirectory = resolve2(directory);
+  await assertDirectory(outputDirectory);
+  const outputPath = join6(outputDirectory, safeFilename(filename));
+  const flags = force ? constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0) : constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0);
+  let handle;
+  try {
+    handle = await open2(outputPath, flags, 384);
+    await handle.write(bytes);
+  } catch (error) {
+    if (error.code === "EEXIST") throw new Error("OUTPUT_EXISTS");
+    if (error.code === "ELOOP") throw new Error("UNSAFE_FILENAME");
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+  return outputPath;
+}
+
+// src/commands/share.ts
+var SHARE_ORIGIN = "https://share.tinycloud.xyz";
+var DEFAULT_REGISTRY = `${SHARE_ORIGIN}/api/share/link-only/registry`;
+var DEFAULT_READ_REGISTRY = "https://registry.tinycloud.xyz";
+var shareServices = {};
+function parseTarget(value) {
+  if (value === "anyone" || value === "bearer") return { kind: "bearer" };
+  if (value.startsWith("did:")) return { kind: "recipientDid", did: value };
+  if (value.startsWith("domain:")) return { kind: "emailDomain", domain: value.slice("domain:".length) };
+  if (value.startsWith("email:")) return { kind: "email", address: value.slice("email:".length) };
+  if (value.includes("@")) return { kind: "email", address: value };
+  throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
+}
+function shareCliError(error) {
+  if (error instanceof CLIError) return error;
+  if (error instanceof SharePublishError) {
+    const exit = error.code === "upload-auth-required" ? 3 : error.code === "upload-failed" ? 6 : error.code === "max-bytes-exceeded" || error.code === "inline-too-large" ? 7 : error.code === "unsupported-target" || error.code === "invalid-argument" ? 2 : 1;
+    const code = error.code === "upload-auth-required" ? "UPLOAD_AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : error.code === "inline-too-large" ? "INLINE_TOO_LARGE" : error.code === "unsupported-target" ? "UNSUPPORTED_LINK" : error.code === "invalid-argument" ? "INVALID_ARGUMENT" : "NETWORK_ERROR";
+    return new CLIError(code, error.message, exit);
+  }
+  if (error instanceof ShareReceiveError2) {
+    const verification = /* @__PURE__ */ new Set(["cid-mismatch", "decrypt-failed", "envelope-invalid", "origin-mismatch", "signature-invalid", "capability-invalid", "content-integrity-failed"]);
+    const exit = verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 1;
+    const code = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
+    return new CLIError(code, error.message, exit);
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  const known = {
+    MAX_BYTES_EXCEEDED: { code: "MAX_BYTES_EXCEEDED", exit: 7 },
+    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 8 },
+    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 8 },
+    INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 }
+  };
+  const mapped = known[message];
+  return new CLIError(mapped?.code ?? "ERROR", mapped ? mapped.code : message, mapped?.exit ?? ExitCode.ERROR);
+}
+function inputUrl(value, stdin) {
+  if (stdin || value === "-") return readBoundedUrlStdin();
+  if (value === void 0 || value.length === 0) throw new CLIError("INVALID_ARGUMENT", "a share URL or - is required", 2);
+  return Promise.resolve(value);
+}
+function expires(value) {
+  try {
+    return new Date(Date.now() + parseDuration(value));
+  } catch {
+    throw new CLIError("INVALID_ARGUMENT", "invalid expiry duration", 2);
+  }
+}
+function byteLimit(value) {
+  if (value === void 0) return void 0;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 100 MiB", 7);
+  return parsed;
+}
 function registerShareCommand(program2) {
-  const share = program2.command("share").description("Share data with others");
-  share.command("create").description("Create a share link").requiredOption("--path <path>", "KV path scope").option("--actions <actions>", "Comma-separated actions", "kv/get").option("--expiry <duration>", "Expiry duration", "7d").option("--web-link", "Generate a web UI link for non-technical recipients").action(async (options, cmd) => {
+  const share = program2.command("share").description("Publish and consume TinyCloud Share links");
+  share.command("publish <file>").description("Publish a Markdown file or bounded stdin as a bearer share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime", "7d").option("--max-bytes <bytes>", "Bound input bytes").option("--inline", "Embed the sealed envelope in the URL fragment").option("--compact", "Use a CID-addressed compact link (default)").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY).option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests").action(async (file, options) => {
     try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const actions = options.actions.split(",").map((a) => {
-        const trimmed = a.trim();
-        return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
+      if (options.inline && options.compact) throw new CLIError("INVALID_ARGUMENT", "--inline and --compact are mutually exclusive", 2);
+      const maxBytes = byteLimit(options.maxBytes);
+      const input = await readShareInput(file, options.name, maxBytes);
+      const result = await publishTargetShare({
+        source: input.bytes,
+        filename: input.filename,
+        mediaType: "text/markdown",
+        target: parseTarget(options.to),
+        expiresAt: expires(options.expires),
+        origin: options.viewerOrigin,
+        inline: options.inline === true,
+        ...maxBytes === void 0 ? {} : { maxBytes },
+        registryBaseUrl: options.registry,
+        allowInsecureRegistry: options.insecureRegistry === true,
+        notify: options.notify === true,
+        targetAdapter: shareServices.targetAdapter
       });
-      const expiry = parseExpiry2(options.expiry);
-      const result = await node.sharing.generate({
-        path: options.path,
-        actions,
-        expiry
-      });
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      const output = {
-        token: result.data.token ?? result.data.cid,
-        shareData: result.data.encodedData ?? result.data.url,
-        path: options.path,
-        actions,
-        expiry: expiry.toISOString()
-      };
-      if (options.webLink) {
-        const shareData = result.data.encodedData ?? result.data.url ?? "";
-        output.webLink = `https://openkey.cloud/share?data=${encodeURIComponent(shareData)}`;
-      }
-      outputJson(output);
+      if ("state" in result) throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
+      if (options.json) writeJson2(result);
+      else publishHuman(result);
     } catch (error) {
-      handleError(error);
+      handleError(shareCliError(error));
     }
   });
-  share.command("receive [data]").description("Receive a share").option("--stdin", "Read share data from stdin").action(async (data, options, cmd) => {
+  share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).action(async (url, options) => {
     try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      let shareData;
-      if (options.stdin) {
-        const chunks = [];
-        for await (const chunk of process.stdin) {
-          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      const link = await inputUrl(url, options.stdin === true);
+      const result = await inspectShare2(link, { registryBaseUrl: options.registry });
+      if (options.json) writeJson2(result);
+      else inspectHuman(result);
+    } catch (error) {
+      handleError(shareCliError(error));
+    }
+  });
+  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--legacy", "Read a legacy tc1: link (read-only)").action(async (url, options) => {
+    try {
+      if (options.stdout && options.json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
+      const maxBytes = byteLimit(options.maxBytes);
+      const link = await inputUrl(url, options.stdin === true);
+      if (options.legacy) {
+        if (!isLegacyShareLink(link) || shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy receive requires an installed read-only tc1 adapter", 2);
+        const bytes = await receiveLegacyShare(link, shareServices.legacyReader);
+        if (options.stdout) {
+          process.stdout.write(Buffer.from(bytes));
+          return;
         }
-        shareData = Buffer.concat(chunks).toString("utf-8").trim();
-      } else if (data) {
-        shareData = data;
-      } else {
-        throw new CLIError("USAGE_ERROR", "Must provide share data or use --stdin", ExitCode.USAGE_ERROR);
+        const output2 = await writeShareOutput(options.output ?? ".", "share.md", bytes, options.force === true);
+        if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, legacy: true, path: output2 });
+        else receiveHuman(output2);
+        return;
       }
-      const result = await node.sharing.receive(shareData);
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      const result = await receiveShare2(link, { registryBaseUrl: options.registry, ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes, maxSealedBlobBytes: maxBytes } });
+      if (options.stdout) {
+        process.stdout.write(Buffer.from(result.bytes));
+        return;
       }
-      outputJson({
-        received: true,
-        spaceId: result.data.spaceId,
-        path: result.data.path,
-        actions: result.data.actions
-      });
+      const output = await writeShareOutput(options.output ?? ".", result.metadata.display.filename ?? "share.md", result.bytes, options.force === true);
+      if (options.json) receiveJson(result, output);
+      else receiveHuman(output);
     } catch (error) {
-      handleError(error);
+      handleError(shareCliError(error));
     }
   });
-  share.command("list").description("List active shares").action(async (_options, cmd) => {
+  share.command("list").description("List encrypted sender history without complete bearer URLs").option("--json", "Print versioned redacted JSON").action(async (options) => {
     try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const result = await node.sharing.list();
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({ shares: result.data, count: result.data.length });
+      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
+      const result = await listShares(shareServices.records);
+      if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, shares: result });
+      else process.stdout.write(result.map((item) => `${item.shareId}	${item.target}	${item.expiresAt}`).join("\n") + (result.length ? "\n" : ""));
     } catch (error) {
-      handleError(error);
+      handleError(shareCliError(error));
     }
   });
-  share.command("revoke <token>").description("Revoke a share").action(async (token, _options, cmd) => {
+  share.command("show <id>").description("Show one redacted sender-history record").option("--reveal-link", "Explicitly include the complete link").option("--json", "Print versioned redacted JSON").action(async (id, options) => {
     try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const result = await node.sharing.revoke(token);
-      if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
-      }
-      outputJson({ token, revoked: true });
+      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
+      const result = await showShare({ storage: shareServices.records, shareId: id, revealLink: options.revealLink === true, link: options.revealLink ? await shareServices.linkFor?.(id) : void 0 });
+      if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, share: result });
+      else writeJson2(result);
     } catch (error) {
-      handleError(error);
+      handleError(shareCliError(error));
+    }
+  });
+  share.command("notify <id>").description("Retry idempotent delivery without recreating the share").requiredOption("--to <address>", "Recipient email").option("--json", "Print versioned JSON").action(async (id, options) => {
+    try {
+      if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
+      const result = await notifyShare({ shareId: id, recipient: options.to, adapter: shareServices.delivery });
+      if (options.json) writeJson2(result);
+      else process.stdout.write(`${result.state}
+`);
+      if (result.state === "partial-failure") process.exitCode = 9;
+    } catch (error) {
+      handleError(shareCliError(error));
+    }
+  });
+  share.command("revoke <id>").description("Revoke addressed shares; report bearer retention honestly").option("--ancestor", "Revoke the owner delegation ancestry").option("--json", "Print versioned JSON").action(async (id, options) => {
+    try {
+      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
+      const record = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
+      if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      const result = await revokeShare({ record, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
+      if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, result });
+      else process.stdout.write(`${result.state}
+`);
+    } catch (error) {
+      handleError(shareCliError(error));
     }
   });
 }
@@ -26132,7 +26324,7 @@ init_formatter();
 init_errors();
 init_constants();
 import { randomBytes as randomBytes3 } from "crypto";
-import { mkdir as mkdir3, writeFile as writeFile6 } from "fs/promises";
+import { mkdir as mkdir4, writeFile as writeFile6 } from "fs/promises";
 import { dirname as dirname3 } from "path";
 init_host();
 init_theme();
@@ -26261,7 +26453,7 @@ it directly with \`tc space host <name>\` (no request needed).
 }
 async function emitHostRequestArtifact(artifact, emitOption) {
   if (typeof emitOption === "string" && emitOption.length > 0) {
-    await mkdir3(dirname3(emitOption), { recursive: true });
+    await mkdir4(dirname3(emitOption), { recursive: true });
     await writeFile6(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
     outputJson({
       emitted: true,
@@ -26282,7 +26474,7 @@ init_formatter();
 init_errors();
 init_constants();
 import { writeFile as writeFile7 } from "fs/promises";
-import { resolve as resolve2 } from "path";
+import { resolve as resolve3 } from "path";
 init_space();
 init_host();
 init_theme();
@@ -26425,7 +26617,7 @@ Output:
       }
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
-      const outputPath = resolve2(options.output);
+      const outputPath = resolve3(options.output);
       await writeFile7(outputPath, buffer);
       outputJson({
         file: outputPath,
@@ -26976,7 +27168,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { readFile as readFile9 } from "fs/promises";
+import { readFile as readFile10 } from "fs/promises";
 import { writeFile as writeFile8 } from "fs/promises";
 import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
 async function readStdin4() {
@@ -27034,7 +27226,7 @@ function registerVaultCommand(program2) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile9(options.file));
+        putValue = new Uint8Array(await readFile10(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin4());
       } else {
@@ -27153,7 +27345,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { readFile as readFile10 } from "fs/promises";
+import { readFile as readFile11 } from "fs/promises";
 import { writeFile as writeFile9 } from "fs/promises";
 var VARIABLES_PREFIX = "variables/";
 async function readStdin5() {
@@ -27254,7 +27446,7 @@ function registerVarsCommand(program2) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile10(options.file, "utf-8");
+        varValue = await readFile11(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin5()).toString("utf-8");
       } else {

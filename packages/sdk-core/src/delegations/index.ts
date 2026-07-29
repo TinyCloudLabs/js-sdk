@@ -182,6 +182,48 @@ export {
   MemorySenderShareKeyStorage,
   SenderShareStore,
 } from "./sender-share-store";
+
+/** Lifecycle and authorization operations are delegated to the canonical
+ * headless package so sdk-core cannot grow a second Share verifier. */
+export {
+  authorizeShare,
+  authorizationMethodForTarget,
+  notifyShare,
+  revokeShare,
+  listShares,
+  showShare,
+  publishTargetShare,
+  publishPolicyShare,
+  claimShare,
+  resumeShareAuthorization,
+  isLegacyShareLink,
+  receiveLegacyShare,
+  migrateShare,
+  MemoryEncryptedShareHistoryStorage,
+  EncryptedSenderShareHistory,
+} from "@tinycloud/share-sdk";
+export type {
+  ShareAuthorizationMethod,
+  ShareAuthorizationRequired,
+  ShareAuthorizationDenied,
+  ShareAuthorizationReady,
+  ShareAuthorizationResult,
+  ShareAuthorizationAdapter,
+  ShareNotifyState,
+  ShareNotifyResult,
+  ShareDeliveryAdapter,
+  ShareRevocationResult,
+  ShareRevocationAdapter,
+  ShareHistoryView,
+  ShareTarget,
+  TargetPublishInput,
+  TargetPublishOutcome,
+  TargetPublishAdapter,
+  SharePolicyPublishAdapter,
+  LegacyShareReader,
+  LegacyMigrationResult,
+  EncryptedShareHistoryStorage,
+} from "@tinycloud/share-sdk";
 export type {
   SenderShareRecord,
   SenderShareRecordStorage,

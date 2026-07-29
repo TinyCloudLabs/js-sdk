@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "isolatedModules": true
   },
-  "include": ["src/index.ts", "src/receive.ts", "src/publish.ts", "src/addressed.ts", "src/cache.ts", "src/owner-policy.ts", "src/delivery.ts", "src/history.ts"]
+  "include": ["src/index.ts", "src/receive.ts", "src/publish.ts", "src/addressed.ts", "src/cache.ts", "src/owner-policy.ts", "src/delivery.ts", "src/history.ts", "src/authorization.ts", "src/notify.ts", "src/lifecycle.ts", "src/legacy.ts", "src/targets.ts", "src/policy.ts"]
 }

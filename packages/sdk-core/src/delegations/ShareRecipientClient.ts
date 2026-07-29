@@ -261,14 +261,25 @@ export class ShareRecipientClient {
       const { envelope } = resolved.artifact;
       const { location } = resolved;
       const bearer = isBearerEnvelope(envelope);
-      const policy = envelope.recipientKind === "exactEmail" || envelope.recipientKind === "emailDomain";
+      const policy = envelope.recipientKind === "exactEmail" || envelope.recipientKind === "emailDomain" || envelope.authorizationTargetKind === "recipientDid";
       const legacyBearer = !policy && envelope.recipientKind === undefined;
-      if (envelope.authorizationTargetKind === "recipientDid") throw new ShareAccessError("SHARE_RECIPIENT_DID_UNSUPPORTED");
+      let recipientDidSession: SharePolicySession | undefined;
+      if (envelope.authorizationTargetKind === "recipientDid") {
+        if (this.options.establishRecipientDidSession === undefined) throw new ShareAccessError("SHARE_DEVICE_AUTH_REQUIRED", "an OpenKey device authorization is required");
+        const authorization = await this.options.establishRecipientDidSession({ envelope, recipientDid: envelope.recipient?.kind === "recipientDid" ? envelope.recipient.value : "" });
+        if ("state" in authorization) {
+          if (authorization.state === "authorization-required") throw new ShareAccessError("SHARE_DEVICE_AUTH_REQUIRED", "an OpenKey device authorization is required", authorization);
+          throw new ShareAccessError("SHARE_DENIED", "recipient DID authorization was denied", authorization);
+        }
+        recipientDidSession = authorization;
+      }
       if (policy && this.options.bearerSession !== undefined) throw new ShareAccessError("SHARE_POLICY_BEARER_MISMATCH");
       if (bearer && this.options.presentation !== undefined) throw new ShareAccessError("SHARE_BEARER_PRESENTATION_MISMATCH");
 
       const session = bearer || legacyBearer
         ? this.options.bearerSession
+        : recipientDidSession
+          ? recipientDidSession
         : policy && this.options.establishPolicySession !== undefined
           ? await this.options.establishPolicySession({ envelope, presentation: this.options.presentation })
           : policy ? await this.establishPolicySession(envelope) : undefined;

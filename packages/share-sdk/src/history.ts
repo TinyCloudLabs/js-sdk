@@ -1,6 +1,19 @@
 import type { DelegatedShareKey, OwnerShareAction, OwnerShareMatcher, OwnerSharePolicyRegistrationReceipt } from "./owner-policy";
 import { restoreDelegatedShareKey } from "./owner-policy";
 
+export interface EncryptedShareHistoryStorage {
+  put(value: Uint8Array): Promise<void>;
+  list(): Promise<readonly Uint8Array[]>;
+  clear(): Promise<void>;
+}
+
+export class MemoryEncryptedShareHistoryStorage implements EncryptedShareHistoryStorage {
+  private readonly values: Uint8Array[] = [];
+  async put(value: Uint8Array): Promise<void> { this.values.push(value.slice()); }
+  async list(): Promise<readonly Uint8Array[]> { return this.values.map((value) => value.slice()); }
+  async clear(): Promise<void> { this.values.length = 0; }
+}
+
 /**
  * The durable record a sender needs, after a reload, to display and manage
  * a share it created. Every identity/CID here comes verbatim from the
@@ -20,6 +33,8 @@ export interface SenderShareRecord {
   readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
   readonly actions: readonly OwnerShareAction[];
   readonly recipientMatcher: OwnerShareMatcher;
+  /** The signed target discriminator, retained separately from the email matcher. */
+  readonly targetKind?: "bearer" | "recipientDid" | "email" | "emailDomain";
   readonly registeredAt: string;
   readonly expiresAt: string;
   readonly revokedAt?: string;
@@ -134,6 +149,7 @@ export class SenderShareStore {
       resource: registration.resource,
       actions: registration.actions,
       recipientMatcher: registration.recipientMatcher,
+      targetKind: registration.recipientMatcher.kind === "recipientDid" ? "recipientDid" : registration.recipientMatcher.kind === "exactEmail" ? "email" : registration.recipientMatcher.kind === "emailDomain" ? "emailDomain" : "bearer",
       registeredAt: registration.registeredAt,
       expiresAt: registration.expiresAt,
     };
@@ -194,4 +210,39 @@ export class SenderShareStore {
     await this.records.delete(shareId);
     await this.keys.delete(shareId);
   }
+}
+
+/** WebCrypto-backed persistence adapter; links and private material are absent. */
+export class EncryptedSenderShareHistory {
+  constructor(
+    private readonly storage: EncryptedShareHistoryStorage,
+    private readonly key: CryptoKey,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  async put(record: SenderShareRecord): Promise<void> {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const payload = new TextEncoder().encode(JSON.stringify(record));
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, this.key, payload));
+    const encoded = new Uint8Array(iv.length + ciphertext.length);
+    encoded.set(iv); encoded.set(ciphertext, iv.length);
+    await this.storage.put(encoded);
+  }
+
+  async list(): Promise<readonly SenderShareRecord[]> {
+    const records: SenderShareRecord[] = [];
+    for (const encoded of await this.storage.list()) {
+      if (encoded.length <= 12) continue;
+      try {
+        const value = await crypto.subtle.decrypt({ name: "AES-GCM", iv: encoded.slice(0, 12) }, this.key, encoded.slice(12));
+        const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(value)) as SenderShareRecord;
+        if (typeof parsed.shareId === "string" && typeof parsed.expiresAt === "string") records.push(parsed);
+      } catch {
+        // Ignore corrupt/foreign records rather than returning unauthenticated data.
+      }
+    }
+    return records;
+  }
+
+  async clear(): Promise<void> { await this.storage.clear(); }
 }

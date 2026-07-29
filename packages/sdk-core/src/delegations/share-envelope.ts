@@ -23,6 +23,7 @@ const DEFAULT_MAX_ARTIFACT_BYTES = MAX_SHARE_ARTIFACT_BYTES;
 export type ShareRecipientTarget =
   | { readonly kind: "exactEmail"; readonly value: string }
   | { readonly kind: "emailDomain"; readonly value: string }
+  | { readonly kind: "recipientDid"; readonly value: string }
   | { readonly kind: "bearer" };
 
 export type ShareResource =
@@ -290,6 +291,10 @@ function normalizeRecipient(recipient: ShareRecipientTarget | undefined): ShareR
     }
     return { kind: recipient.kind, value: domain };
   }
+  if (recipient.kind === "recipientDid") {
+    if (!/^did:[a-z0-9]+:.+$/.test(recipient.value)) throw new ShareEnvelopeError("invalid-envelope", "recipient DID is invalid");
+    return { kind: recipient.kind, value: recipient.value };
+  }
   // Mailbox matching is case-sensitive in the local part.  Only the DNS
   // portion is normalized, which is the same contract used by the auth and
   // node layers.  Trimming is limited to transport framing; it must never
@@ -399,9 +404,9 @@ export function verifyShareEnvelope(envelope: ShareEnvelopeV2, options: VerifySh
     const recipient = normalizeRecipient(envelope.recipient);
     if (recipient !== undefined && JSON.stringify(recipient) !== JSON.stringify(envelope.recipient)) throw new ShareEnvelopeError("invalid-envelope", "recipient is not canonical");
     if (recipient?.kind === "exactEmail" || recipient?.kind === "emailDomain") throw new ShareEnvelopeError("unsafe-plaintext", "recipient matchers are not public envelope fields");
-    if (envelope.recipientKind !== undefined && !["exactEmail", "emailDomain", "bearer"].includes(envelope.recipientKind)) throw new ShareEnvelopeError("invalid-envelope", "recipient mode is invalid");
+    if (envelope.recipientKind !== undefined && !["exactEmail", "emailDomain", "recipientDid", "bearer"].includes(envelope.recipientKind)) throw new ShareEnvelopeError("invalid-envelope", "recipient mode is invalid");
     if (envelope.recipientKind === "bearer" && recipient?.kind !== undefined && recipient.kind !== "bearer") throw new ShareEnvelopeError("invalid-envelope", "recipient mode does not match recipient");
-    if ((envelope.recipientKind === "exactEmail" || envelope.recipientKind === "emailDomain") && !envelope.encrypted) throw new ShareEnvelopeError("unsafe-plaintext", "policy shares require encryption");
+    if ((envelope.recipientKind === "exactEmail" || envelope.recipientKind === "emailDomain" || envelope.recipientKind === "recipientDid") && !envelope.encrypted) throw new ShareEnvelopeError("unsafe-plaintext", "addressed shares require encryption");
     if (typeof envelope.spaceId !== "string" || envelope.spaceId.length === 0 || typeof envelope.content.mimeType !== "string" || envelope.content.mimeType.length === 0 || typeof envelope.content.digest !== "string" || !/^[A-Za-z0-9_-]+$/.test(envelope.content.digest)) throw new ShareEnvelopeError("invalid-envelope", "content metadata is invalid");
     const maxContentBytes = envelope.encrypted
       ? options.maxSealedContentBytes ?? MAX_SEALED_SHARE_CONTENT_BYTES
@@ -596,6 +601,7 @@ function parsePolicyMetadata(policyBytes: string, target: PublishedShareEnvelope
     if (source.kind !== "kv" && source.kind !== "sql") throw new ShareEnvelopeError("invalid-envelope", "policy content source kind is invalid");
     if (typeof source.space !== "string" || typeof source.path !== "string" || typeof source.action !== "string") throw new ShareEnvelopeError("invalid-envelope", "policy content source is invalid");
     if (source.kind === "sql" && (typeof source.database !== "string" || typeof source.statement !== "string" || !isPlainObject(source.arguments) || typeof source.argumentsDigest !== "string")) throw new ShareEnvelopeError("invalid-envelope", "policy SQL content source is invalid");
+    if (matcher.kind !== "exactEmail" && matcher.kind !== "emailDomain") throw new ShareEnvelopeError("invalid-envelope", "policy matcher is invalid");
     return { recipientKind: matcher.kind, actions, resource };
   }
   const allowed = version === 1
