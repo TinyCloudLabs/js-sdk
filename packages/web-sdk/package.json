@@ -30,7 +30,8 @@
     "doc": "bun run doc:extractor && bun run doc:documenter",
     "doc:extractor": "api-extractor run --local --diagnostics",
     "doc:documenter": "api-documenter markdown -i temp -o ../../documentation/docs/web-sdk/api",
-    "lint": "eslint --ext .ts src/ --fix",
+    "lint": "eslint --ext .ts src/",
+    "lint:fix": "eslint --ext .ts src/ --fix",
     "clean": "rimraf dist && rimraf temp",
     "test": "jest"
   },

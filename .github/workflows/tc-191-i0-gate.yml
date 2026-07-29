@@ -2,46 +2,8 @@ name: TC-191 I0 gate
 
 on:
   pull_request:
-    paths:
-      - "packages/bootstrap/**"
-      - "packages/cli/**"
-      - "packages/operations/**"
-      - "packages/sdk-rs/**"
-      - "packages/sdk-core/**"
-      - "packages/sdk-services/**"
-      - "packages/node-sdk/**"
-      - "packages/web-sdk/**"
-      - "packages/sdk-rs/packages/web/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "scripts/setup.sh"
-      - "tests/node-sdk/setup.ts"
-      - "tests/mcp-sdk-contract/**"
-      - "docs/tc-191-i0-gate.md"
-      - "package.json"
-      - "bun.lock"
-      - ".github/workflows/tc-191-i0-gate.yml"
   push:
     branches: [master]
-    paths:
-      - "packages/bootstrap/**"
-      - "packages/cli/**"
-      - "packages/operations/**"
-      - "packages/sdk-rs/**"
-      - "packages/sdk-core/**"
-      - "packages/sdk-services/**"
-      - "packages/node-sdk/**"
-      - "packages/web-sdk/**"
-      - "packages/sdk-rs/packages/web/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "scripts/setup.sh"
-      - "tests/node-sdk/setup.ts"
-      - "tests/mcp-sdk-contract/**"
-      - "docs/tc-191-i0-gate.md"
-      - "package.json"
-      - "bun.lock"
-      - ".github/workflows/tc-191-i0-gate.yml"
   workflow_dispatch:
 
 permissions:
