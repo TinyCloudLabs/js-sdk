@@ -131,6 +131,59 @@ function createError(
 }
 
 /**
+ * Classify a failure thrown by the root-delegation signing callback.
+ *
+ * The callback drives a wallet / OpenKey signing surface. "The signer never
+ * answered" and "the server said you may not do this" both used to collapse
+ * into a single `PERMISSION_DENIED` with an authorization-flavoured message,
+ * which is wrong for the user (retrying the signature would have worked) and
+ * useless for whoever is debugging it.
+ */
+function rootDelegationSigningError(err: unknown): DelegationError {
+  const cause = err instanceof Error ? err : undefined;
+  const code =
+    err && typeof err === "object" && "code" in err
+      ? String((err as { code?: unknown }).code ?? "")
+      : "";
+  const name = err instanceof Error ? err.name : "";
+  const message = err instanceof Error ? err.message : String(err ?? "");
+
+  const aborted =
+    code === DelegationErrorCodes.ABORTED ||
+    name === "AbortError" ||
+    /\bcancell?ed\b|\brejected\b|user denied/i.test(message);
+  if (aborted) {
+    return createError(
+      DelegationErrorCodes.ABORTED,
+      "The signature that authorizes this sharing link was cancelled. " +
+        "Approve the signing prompt to finish creating the link.",
+      cause,
+    );
+  }
+
+  const timedOut =
+    code === DelegationErrorCodes.TIMEOUT ||
+    name === "TimeoutError" ||
+    /timed out|timeout/i.test(message);
+  if (timedOut) {
+    return createError(
+      DelegationErrorCodes.TIMEOUT,
+      "Timed out waiting for the signature that authorizes this sharing link. " +
+        "Creating a long-lived link re-opens the signing prompt after sign-in; " +
+        "if you did not see one, check for a blocked popup or a hidden signing " +
+        "frame, then try again.",
+      cause,
+    );
+  }
+
+  return createError(
+    DelegationErrorCodes.PERMISSION_DENIED,
+    "The active session ReCap does not authorize this sharing delegation.",
+    cause,
+  );
+}
+
+/**
  * Base64 encode for URLs (URL-safe base64).
  */
 function base64UrlEncode(data: string): string {
@@ -708,14 +761,11 @@ export class SharingService implements ISharingService {
           };
         }
       } catch (err) {
-        return {
-          ok: false,
-          error: createError(
-            DelegationErrorCodes.PERMISSION_DENIED,
-            "The active session ReCap does not authorize this sharing delegation.",
-            err instanceof Error ? err : undefined,
-          ),
-        };
+        // `onRootDelegationNeeded` re-opens the wallet/OpenKey signing surface
+        // mid-compose, long after sign-in. An unanswered or cancelled signature
+        // is a completely different problem from "you are not authorized", and
+        // must not be reported as the same thing.
+        return { ok: false, error: rootDelegationSigningError(err) };
       }
     } else {
       return {

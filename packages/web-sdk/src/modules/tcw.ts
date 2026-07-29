@@ -86,10 +86,7 @@ import {
   type BrowserSessionLoadResult,
 } from "../adapters/BrowserSessionStorage";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
-import {
-  ModalSpaceCreationHandler,
-  defaultWebSpaceCreationHandler,
-} from "../authorization/WebSpaceCreationHandler";
+import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
 import type { NotificationConfig } from "../notifications/types";
 import { WasmInitializer } from "./WasmInitializer";
 import { invoke } from "./Storage/tinycloud/module";
@@ -139,11 +136,28 @@ export interface Config extends ClientConfig {
    */
   localNodeIdentityStore?: LocalNodeIdentityStore;
 
-  /** Whether to auto-create space on sign-in (default: true) */
+  /**
+   * How the user's space is created on sign-in when it does not exist yet.
+   *
+   * - unset (default): confirm in a `<tinycloud-space-modal>` dialog first.
+   * - `true`: create it without asking. No dialog is shown, so sign-in cannot
+   *   block on one.
+   * - `false`: never create it. Sign-in continues without a primary space,
+   *   which is what you want when the app only ever uses delegated spaces.
+   *
+   * Ignored when {@link Config.spaceCreationHandler} is set.
+   */
   autoCreateSpace?: boolean;
 
   /** Space creation handler (default: ModalSpaceCreationHandler) */
   spaceCreationHandler?: ISpaceCreationHandler;
+
+  /**
+   * How long the default space-creation dialog waits for the user before
+   * failing sign-in, in milliseconds (default: 120000). Only applies when the
+   * modal handler is in use.
+   */
+  spaceCreationTimeoutMs?: number;
 
   /** Session expiration time in milliseconds (default: 1 hour) */
   sessionExpirationMs?: number;
@@ -409,9 +423,13 @@ export class TinyCloudWeb {
       nodeConfig.ensResolver = new BrowserENSResolver(this.provider);
     }
 
-    // Space creation handler
-    nodeConfig.spaceCreationHandler =
-      this.config.spaceCreationHandler ?? new ModalSpaceCreationHandler();
+    // Space creation handler.
+    //
+    // Do NOT unconditionally install the modal handler here: node-sdk gives an
+    // explicit handler precedence over `autoCreateSpace`, so always setting one
+    // made `autoCreateSpace` dead config in the browser and forced every app
+    // through a dialog it may have opted out of.
+    nodeConfig.spaceCreationHandler = resolveSpaceCreationHandler(this.config);
 
     this._node = new TinyCloudNode(nodeConfig);
   }

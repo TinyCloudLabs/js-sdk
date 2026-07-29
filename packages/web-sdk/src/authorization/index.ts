@@ -8,7 +8,12 @@
 
 export {
   ModalSpaceCreationHandler,
+  ModalSpaceCreationHandlerOptions,
+  SpaceCreationHandlerConfig,
+  SpaceCreationTimeoutError,
+  DEFAULT_SPACE_CREATION_TIMEOUT_MS,
   defaultWebSpaceCreationHandler,
+  resolveSpaceCreationHandler,
 } from "./WebSpaceCreationHandler";
 
 // Re-export sdk-core authorization types for convenience
