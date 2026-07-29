@@ -39,7 +39,12 @@ export class TinyCloudSpaceModal extends HTMLElement {
   }
 
   disconnectedCallback() {
+    // The modal can now be torn down programmatically (e.g. when the
+    // confirmation times out), not just via hide(), so all document-level
+    // state has to be released here too.
+    this.isVisible = false;
     document.body.style.overflow = '';
+    document.removeEventListener('keydown', this.handleKeyDown);
   }
 
   private render() {
@@ -354,8 +359,10 @@ export class TinyCloudSpaceModal extends HTMLElement {
       }
     });
 
-    // Handle escape key
-    document.addEventListener('keydown', this.handleKeyDown.bind(this));
+    // Handle escape key. `handleKeyDown` is already an instance-bound arrow
+    // function — binding again here would create a new reference that
+    // removeEventListener could never match, leaking the listener.
+    document.addEventListener('keydown', this.handleKeyDown);
   }
 
   private handleKeyDown = (e: KeyboardEvent) => {

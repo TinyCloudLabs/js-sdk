@@ -454,3 +454,46 @@ test("createBootstrapSession mints a signed single-space bootstrap session", asy
     ],
   });
 });
+
+// TC-362: the browser's modal handler now gives up on an unanswered dialog and
+// rejects. That is only useful if the rejection actually reaches the caller of
+// signIn() instead of being swallowed inside ensureSpaceExists.
+test("ensureSpaceExists surfaces a space-creation handler rejection", async () => {
+  const primarySpaceId = restoredTinyCloudSession().spaceId;
+  const captured: Array<Record<string, unknown>> = [];
+  const signedMessages: string[] = [];
+  const originalFetch = globalThis.fetch;
+  (globalThis as any).__originalFetch = originalFetch;
+  globalThis.fetch = async (input: any, init?: any) => {
+    const url = String(input);
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      // The primary space does not exist yet, so the handler is consulted.
+      return new Response(
+        JSON.stringify({ activated: [], skipped: [primarySpaceId] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const auth = new NodeUserAuthorization({
+    signer: createSigner(signedMessages),
+    wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    spaceCreationHandler: {
+      confirmSpaceCreation: async () => {
+        throw new Error("TinyCloud waited 120s for you to confirm");
+      },
+    },
+  });
+  auth.setRestoredTinyCloudSession(restoredTinyCloudSession());
+
+  await expect(auth.ensureSpaceExists()).rejects.toThrow(
+    "TinyCloud waited 120s for you to confirm",
+  );
+  // The space was never hosted, so no wallet signature was requested.
+  expect(signedMessages.length).toBe(0);
+});

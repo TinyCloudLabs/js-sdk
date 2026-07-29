@@ -31,8 +31,24 @@ export type {
 // Auth module (browser-specific strategies)
 export {
   ModalSpaceCreationHandler,
+  ModalSpaceCreationHandlerOptions,
+  SpaceCreationHandlerConfig,
+  SpaceCreationTimeoutError,
+  DEFAULT_SPACE_CREATION_TIMEOUT_MS,
   defaultWebSpaceCreationHandler,
+  resolveSpaceCreationHandler,
 } from "./authorization";
+
+// Observability for prompts the SDK is blocked on
+export {
+  AWAITING_USER_INPUT_ATTRIBUTE,
+  AWAITING_USER_INPUT_EVENT,
+  AWAITING_USER_INPUT_RESOLVED_EVENT,
+  AwaitingUserInputDetail,
+  AwaitingUserInputOutcome,
+  AwaitingUserInputResolvedDetail,
+  pendingUserInputKind,
+} from "./notifications/awaitingUserInput";
 
 // Re-export sdk-core authorization types used by the new auth module
 export {
