@@ -22,10 +22,12 @@ export const DEFAULT_MAX_SEALED_BLOB_BYTES = 100 * 1024 * 1024 + 29;
 /** Content metadata permits at most 100 MiB of plaintext plus sealed overhead. */
 export const DEFAULT_MAX_CONTENT_BLOB_BYTES = DEFAULT_MAX_SEALED_BLOB_BYTES;
 
+const CONTENT_SEALED_OVERHEAD = 1 + 12 + 16;
+
 export class ShareReceiveError extends Error {
   readonly code: ShareErrorCode;
-  readonly details: { readonly expiresAt?: string } | undefined;
-  constructor(code: ShareErrorCode, message: string, details?: { readonly expiresAt?: string }) {
+  readonly details: { readonly expiresAt?: string; readonly stage?: "envelope" | "content" } | undefined;
+  constructor(code: ShareErrorCode, message: string, details?: { readonly expiresAt?: string; readonly stage?: "envelope" | "content" }) {
     super(message); this.name = "ShareReceiveError"; this.code = code; this.details = details;
   }
   /** Machine output is deliberately code-only; diagnostics belong on stderr. */
@@ -52,6 +54,8 @@ export interface ShareFetchOptions {
   readonly now?: () => number;
   readonly maxSealedBlobBytes?: number;
   readonly maxContentBlobBytes?: number;
+  /** Observability-only hook; the SDK zeroes this authority-bearing buffer. */
+  readonly onKeyParsed?: (key32: Uint8Array) => void;
 }
 
 export interface VerifyBearerEnvelopeOptions {
@@ -125,13 +129,13 @@ async function readResponseBytes(response: Response, limit: number, tooLargeCode
   return bytes;
 }
 
-function registryFetcher(options: ShareFetchOptions, limit: number, tooLargeCode: ShareErrorCode = "max-bytes-exceeded"): (input: { readonly origin: string; readonly cid: string }) => Promise<Uint8Array> {
+function registryFetcher(options: ShareFetchOptions, limit: number, tooLargeCode: ShareErrorCode = "max-bytes-exceeded", stage: "envelope" | "content" = "envelope"): (input: { readonly origin: string; readonly cid: string }) => Promise<Uint8Array> {
   if (options.fetchBlob !== undefined) return async (input) => {
     try {
       return boundedBytes(await options.fetchBlob!(input), limit, tooLargeCode);
     } catch (error) {
       if (error instanceof ShareReceiveError) throw error;
-      throw new ShareReceiveError("fetch-failed", "registry unavailable");
+      throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
     }
   };
   if (options.registryBaseUrl === undefined) throw new ShareReceiveError("fetch-failed", "a registry fetch adapter is required");
@@ -140,11 +144,11 @@ function registryFetcher(options: ShareFetchOptions, limit: number, tooLargeCode
   return async ({ cid }) => {
     try {
       const response = await fetchFn(`${base}/ipfs/${cid}?format=raw`, { headers: { accept: "application/vnd.ipld.raw" }, redirect: "error" });
-      if (!response.ok) throw new ShareReceiveError("fetch-failed", `registry returned ${response.status}`);
+      if (!response.ok) throw new ShareReceiveError("fetch-failed", `registry returned ${response.status}`, { stage });
       return await readResponseBytes(response, limit, tooLargeCode);
     } catch (error) {
       if (error instanceof ShareReceiveError) throw error;
-      throw new ShareReceiveError("fetch-failed", "registry unavailable");
+      throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
     }
   };
 }
@@ -187,9 +191,10 @@ async function resolveShareEnvelope(link: string, options: ShareFetchOptions = {
   try { parsed = parseCompactOrInlineShareUrl(link, { ...(options.expectedOrigin === undefined ? {} : { expectedOrigin: options.expectedOrigin }) }); }
   catch { throw new ShareReceiveError("invalid-link", "share link format is invalid"); }
   try {
+    if (parsed.key32 !== undefined) options.onKeyParsed?.(parsed.key32);
     const url = new URL(link);
     const sealed = parsed.kind === "inline"
-      ? parsed.ciphertext
+      ? boundedBytes(parsed.ciphertext, options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES, "max-bytes-exceeded")
       : await registryFetcher(options, options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES)({ origin: url.origin, cid: parsed.ciphertextCid });
     if (await computeCid(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "registry bytes do not match the link CID");
     let plaintext: Uint8Array;
@@ -247,12 +252,16 @@ export async function receiveShare(link: string, options: ShareFetchOptions = {}
   if (resolved.envelope.content !== undefined) {
     bytes = await registryFetcher(
       options,
-      options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES,
-      "content-integrity-failed",
+      (options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES) + CONTENT_SEALED_OVERHEAD,
+      "max-bytes-exceeded",
+      "content",
     )({ origin: resolved.origin, cid: resolved.envelope.content.cid });
     if (await computeCid(bytes) !== resolved.envelope.content.cid) throw new ShareReceiveError("content-integrity-failed", "shared content CID does not match");
     const key = fromBase64Url(resolved.envelope.content.key);
     try { bytes = await open(bytes, key); } catch { throw new ShareReceiveError("content-integrity-failed", "shared content could not be opened"); } finally { key.fill(0); }
+    if (bytes.byteLength > (options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES)) {
+      throw new ShareReceiveError("max-bytes-exceeded", "shared content exceeds the configured byte limit");
+    }
   }
   let text: string | undefined;
   if (bytes.byteLength !== 0) {

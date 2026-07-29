@@ -211,7 +211,11 @@ export function registerShareCommand(program: Command): void {
           if (options.json) writeJson({ protocol: "tinycloud-share", version: 1, legacy: true, path: output }); else receiveHuman(output);
           return;
         }
-        const result = await receiveShare(link, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin, ...(maxBytes === undefined ? {} : { maxContentBlobBytes: maxBytes, maxSealedBlobBytes: maxBytes }) });
+        const result = await receiveShare(link, {
+          registryBaseUrl: options.registry,
+          expectedOrigin: options.viewerOrigin,
+          ...(maxBytes === undefined ? {} : { maxContentBlobBytes: maxBytes }),
+        });
         if (options.stdout) {
           process.stdout.write(Buffer.from(result.bytes));
           return;

@@ -10,6 +10,7 @@ import { theme } from "./output/theme.js";
 import { isInteractive } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
 import { registerTinyCloudCommands } from "./command-registry.js";
+import { configureShareCommandServices } from "./commands/share.js";
 
 const program = new Command();
 
@@ -57,6 +58,16 @@ program.hook("preAction", async (thisCommand) => {
 });
 
 registerTinyCloudCommands(program);
+
+// Share publishing is deliberately wired to the authenticated browser-shaped
+// transport at the executable boundary. The SDK still rejects every request
+// that lacks HTTPS or an explicit upload authority; this default makes the
+// production cookie/session contract explicit while tests can replace it via
+// configureShareCommandServices before registering a command.
+configureShareCommandServices({
+  credentials: "include",
+  fetchFn: globalThis.fetch,
+});
 
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}\n`);
 

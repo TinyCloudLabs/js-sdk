@@ -26159,6 +26159,9 @@ var SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var DEFAULT_REGISTRY = `${SHARE_ORIGIN}/api/share/link-only/registry`;
 var DEFAULT_READ_REGISTRY = "https://registry.tinycloud.xyz";
 var shareServices = {};
+function configureShareCommandServices(services) {
+  shareServices = services;
+}
 function parseShareTarget(value) {
   if (value === "anyone" || value === "bearer") return { kind: "bearer" };
   if (value.startsWith("did:")) return { kind: "recipientDid", did: value };
@@ -26284,7 +26287,11 @@ function registerShareCommand(program2) {
         else receiveHuman(output2);
         return;
       }
-      const result = await receiveShare2(link, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin, ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes, maxSealedBlobBytes: maxBytes } });
+      const result = await receiveShare2(link, {
+        registryBaseUrl: options.registry,
+        expectedOrigin: options.viewerOrigin,
+        ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes }
+      });
       if (options.stdout) {
         process.stdout.write(Buffer.from(result.bytes));
         return;
@@ -27604,6 +27611,10 @@ program.hook("preAction", async (thisCommand) => {
   }
 });
 registerTinyCloudCommands(program);
+configureShareCommandServices({
+  credentials: "include",
+  fetchFn: globalThis.fetch
+});
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version2)}
 `);
 program.addHelpText("afterAll", () => {

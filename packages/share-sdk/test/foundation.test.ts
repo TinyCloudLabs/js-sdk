@@ -78,6 +78,23 @@ describe("@tinycloud/share-sdk foundation", () => {
     expect(received.text).toBe("hello from the headless SDK");
   });
 
+  it("applies maxContentBlobBytes after decrypting sealed content", async () => {
+    const share = await makeShare();
+    const blobs = new Map([[share.sealedEnvelope.cid, share.sealedEnvelope.blob], [share.sealedContent.cid, share.sealedContent.blob]]);
+    const fetchBlob = async ({ cid }: { readonly cid: string }) => blobs.get(cid)!;
+    const contentBytes = new TextEncoder().encode("hello from the headless SDK");
+    await expect(receiveShare(share.url, {
+      fetchBlob,
+      maxContentBlobBytes: contentBytes.byteLength,
+      now: () => Date.parse("2029-01-01T00:00:00.000Z"),
+    })).resolves.toMatchObject({ text: "hello from the headless SDK" });
+    await expect(receiveShare(share.url, {
+      fetchBlob,
+      maxContentBlobBytes: contentBytes.byteLength - 1,
+      now: () => Date.parse("2029-01-01T00:00:00.000Z"),
+    })).rejects.toMatchObject({ code: "max-bytes-exceeded" });
+  });
+
 
   it("rejects an oversized fetched envelope before decryption", async () => {
     const share = await makeShare();
