@@ -25,6 +25,7 @@
   "license": "EGPL",
   "scripts": {
     "build": "rimraf dist && webpack --mode production --config webpack.config.cjs",
+    "build:coordinationos-vendor": "rimraf dist/vendor && cross-env NODE_ENV=production webpack --mode production --config webpack.coordinationos-vendor.config.cjs && bun scripts/build-coordinationos-vendor.ts",
     "dev": "webpack --watch --config webpack.config.cjs",
     "watch": "webpack --watch --config webpack.config.cjs",
     "doc": "bun run doc:extractor && bun run doc:documenter",
