@@ -1,5 +1,18 @@
 # @tinycloudlabs/node-sdk
 
+## 2.10.0
+
+### Minor Changes
+
+- 28cc430: Add batch KV reads and memoize TinyCloud node descriptor lookups to reduce SDK round trips.
+
+### Patch Changes
+
+- Updated dependencies [28cc430]
+- Updated dependencies [48a5408]
+  - @tinycloud/sdk-core@2.10.0
+  - @tinycloud/sdk-services@2.10.0
+
 ## 2.10.0-beta.1
 
 ### Patch Changes
