@@ -1,0 +1,34 @@
+{
+  "name": "@tinycloud/share-sdk",
+  "version": "0.1.0",
+  "description": "Canonical headless TinyCloud Share operations for browser and Node.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.9.2",
+    "@noble/hashes": "^1.8.0",
+    "@tinycloud/share-envelope": "workspace:*",
+    "multiformats": "^13.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

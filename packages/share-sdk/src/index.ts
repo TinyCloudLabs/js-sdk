@@ -1,0 +1,11 @@
+export { DEFAULT_MAX_CONTENT_BLOB_BYTES, DEFAULT_MAX_SEALED_BLOB_BYTES, SHARE_RESULT_VERSION, inspectShare, receiveShare, ShareReceiveError, toShareErrorInfo, verifyBearerEnvelope, type ShareErrorCode, type ShareErrorInfo, type ShareFetchOptions, type ShareInspection, type ShareMetadata, type ShareReceiveResult, type VerifyBearerEnvelopeOptions } from "./receive.js";
+export { parseAddressedEnvelope, type ParsedAddressedEnvelope } from "./addressed.js";
+export { checkBearerDelegation, resourceUriCovers, requiredResourceUri, type CheckBearerDelegationOptions, type DelegationCheckResult } from "@tinycloud/share-envelope";
+export { MemoryShareCache } from "./cache.js";
+export type { ShareCache, ShareCacheEntry, ShareCacheKey, ShareCacheMetadata } from "./cache.js";
+export { createDelegatedShareKey, restoreDelegatedShareKey, createPolicyEnforcementDelegation, canonicalOwnerSharePolicy, computeOwnerShareRegistrationCid, validateOwnerSharePolicyRegistration, validateOwnerSharePolicyRegistrationBytes, MAX_CONTENT_BYTES } from "./owner-policy.js";
+export type { OwnerDelegationReceipt, CreateOwnerDelegationParams, OwnerShareAction, OwnerShareMatcher, OwnerSharePolicyV2, DelegatedShareKey, SignedDelegation, RegisterOwnerSharePolicyParams, OwnerSharePolicyRegistration, OwnerSharePolicyRegistrationReceipt } from "./owner-policy.js";
+export { SHARE_DELIVERY_AUTHORIZATION_DOMAIN, validateShareDeliveryAuthorizationBytes, shareDeliveryTrustedKid } from "./delivery.js";
+export type { ShareDeliveryAuthorizationRequest, ShareDeliveryAuthorization, ShareDeliveryAuthorizationReceipt, ValidateShareDeliveryAuthorizationExpected } from "./delivery.js";
+export { MemorySenderShareRecordStorage, MemorySenderShareKeyStorage, SenderShareStore } from "./history.js";
+export type { SenderShareRecord, SenderShareRecordStorage, SenderShareKeyStorage, SenderShareRevocationScope } from "./history.js";
