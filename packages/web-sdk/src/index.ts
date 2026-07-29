@@ -6,6 +6,12 @@ export {
   SessionRestoreResult,
   SessionRestoreStatus,
 } from "./modules/tcw";
+export {
+  establishOpenKeySession,
+  type EstablishOpenKeySessionOptions,
+  type EstablishOpenKeySessionResult,
+  type EstablishOpenKeySessionStatus,
+} from "./openkey-session";
 export type { SecretReadInput, SecretReadResult } from "@tinycloud/node-sdk";
 export type {
   CreateOwnerDelegationParams,
