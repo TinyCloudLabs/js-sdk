@@ -57,11 +57,13 @@ export async function verifyPackedCliRuntime(): Promise<void> {
       expect(selectedNodeMajor).toBe(process.env.EXPECTED_NODE_MAJOR ?? "20");
       const entrypoint = join(cliDirectory, "dist/index.js");
       const built = await readFile(entrypoint, "utf8");
+      const legacyBuilt = await readFile(join(cliDirectory, "dist/legacy-entry.js"), "utf8");
 
       await assertNoDanglingRelativeImports(cliDirectory, built);
+      await assertNoDanglingRelativeImports(cliDirectory, legacyBuilt);
       expect(built).not.toContain("Dynamic require");
       expect(built).not.toContain("__require2");
-      expect(built).toContain("tinycloud.secrets.get");
+      expect(legacyBuilt).toContain("tinycloud.secrets.get");
 
       const home = join(smokeDirectory, "home");
       const profileDirectory = join(home, ".tinycloud/profiles/default");
@@ -206,7 +208,8 @@ export async function verifyMissingTrackedCliArtifactCannotBeMasked(): Promise<v
       join(import.meta.dir, "../../packages/cli"),
     );
     const trackedBuild = await readFile(entrypoint, "utf8");
-    expect(trackedBuild).toContain("tinycloud.secrets.get");
+    const trackedLegacyBuild = await readFile(join(packageDirectory, "dist/legacy-entry.js"), "utf8");
+    expect(trackedLegacyBuild).toContain("tinycloud.secrets.get");
     await rm(entrypoint);
 
     const smokeDirectory = await mkdtemp(
