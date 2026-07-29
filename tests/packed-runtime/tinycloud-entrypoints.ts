@@ -28,6 +28,8 @@ const publishedPackageNames = {
 } as const;
 
 export function tinycloudPackages(root = repositoryDirectory) {
+  // TC-380 PROOF: deliberate break in the harness tc-191 tests import.
+  throw new Error("TC-380 planted failure in the packed-runtime harness");
   return [
     ["bootstrap", join(root, "packages/bootstrap")],
     ["sdk-services", join(root, "packages/sdk-services")],
