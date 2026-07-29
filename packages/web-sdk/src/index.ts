@@ -1,11 +1,17 @@
 // Main class and config
 export {
   TinyCloudWeb,
-  Config,
-  ShareReceiveResult,
-  SessionRestoreResult,
-  SessionRestoreStatus,
+  type Config,
+  type ShareReceiveResult,
+  type SessionRestoreResult,
+  type SessionRestoreStatus,
 } from "./modules/tcw";
+export {
+  establishOpenKeySession,
+  type EstablishOpenKeySessionOptions,
+  type EstablishOpenKeySessionResult,
+  type EstablishOpenKeySessionStatus,
+} from "./openkey-session";
 export type { SecretReadInput, SecretReadResult } from "@tinycloud/node-sdk";
 export type {
   CreateOwnerDelegationParams,
@@ -31,43 +37,43 @@ export type {
 // Auth module (browser-specific strategies)
 export {
   ModalSpaceCreationHandler,
-  ModalSpaceCreationHandlerOptions,
-  SpaceCreationHandlerConfig,
+  type ModalSpaceCreationHandlerOptions,
+  type SpaceCreationHandlerConfig,
   SpaceCreationTimeoutError,
   DEFAULT_SPACE_CREATION_TIMEOUT_MS,
   defaultWebSpaceCreationHandler,
   resolveSpaceCreationHandler,
-} from "./authorization";
+} from "./authorization/WebSpaceCreationHandler";
 
 // Observability for prompts the SDK is blocked on
 export {
   AWAITING_USER_INPUT_ATTRIBUTE,
   AWAITING_USER_INPUT_EVENT,
   AWAITING_USER_INPUT_RESOLVED_EVENT,
-  AwaitingUserInputDetail,
-  AwaitingUserInputOutcome,
-  AwaitingUserInputResolvedDetail,
+  type AwaitingUserInputDetail,
+  type AwaitingUserInputOutcome,
+  type AwaitingUserInputResolvedDetail,
   pendingUserInputKind,
 } from "./notifications/awaitingUserInput";
 
 // Re-export sdk-core authorization types used by the new auth module
 export {
-  SignStrategy,
-  SignRequest,
-  SignResponse,
-  SignCallback,
-  AutoSignStrategy,
-  AutoRejectStrategy,
-  CallbackStrategy,
-  EventEmitterStrategy,
-  OpenKeySigningStrategyOptions,
-  OpenKeySigningRequestBody,
-  OpenKeySigningResponseBody,
-  OpenKeyCallbackStrategy,
+  type SignStrategy,
+  type SignRequest,
+  type SignResponse,
+  type SignCallback,
+  type AutoSignStrategy,
+  type AutoRejectStrategy,
+  type CallbackStrategy,
+  type EventEmitterStrategy,
+  type OpenKeySigningStrategyOptions,
+  type OpenKeySigningRequestBody,
+  type OpenKeySigningResponseBody,
+  type OpenKeyCallbackStrategy,
   defaultSignStrategy,
   createOpenKeyCallbackSigningStrategy,
-  ISpaceCreationHandler,
-  SpaceCreationContext,
+  type ISpaceCreationHandler,
+  type SpaceCreationContext,
   AutoApproveSpaceCreationHandler,
   defaultSpaceCreationHandler,
 } from "@tinycloud/sdk-core";
@@ -78,12 +84,12 @@ export * from "./providers";
 // Re-exports from sdk-core (platform-agnostic types)
 export {
   // Session and auth types
-  ClientSession,
-  SiweConfig,
-  EnsData,
+  type ClientSession,
+  type SiweConfig,
+  type EnsData,
   SiweMessage,
-  ServerHost,
-  Extension,
+  type ServerHost,
+  type Extension,
   // Schemas and validation
   ClientSessionSchema,
   EnsDataSchema,
@@ -91,11 +97,11 @@ export {
   validateClientSession,
   // Core interfaces
   TinyCloud,
-  ISigner,
-  ISessionStorage,
-  IUserAuthorization as ICoreUserAuthorization,
-  PersistedSessionData,
-  PartialSiweMessage,
+  type ISigner,
+  type ISessionStorage,
+  type IUserAuthorization as ICoreUserAuthorization,
+  type PersistedSessionData,
+  type PartialSiweMessage,
   AccountService,
   TinyCloudDebugLogger,
   tinyCloudDebugLogger,
@@ -134,11 +140,11 @@ export type {
 
 // Re-export KV service types for direct usage
 export {
-  IKVService,
   KVService,
-  KVResponse,
   PrefixedKVService,
-  IPrefixedKVService,
+  type IKVService,
+  type KVResponse,
+  type IPrefixedKVService,
 } from "@tinycloud/sdk-core";
 
 // Hooks service
@@ -156,47 +162,47 @@ export type {
 export {
   // DelegationManager
   DelegationManager,
-  DelegationManagerConfig,
+  type DelegationManagerConfig,
   // Delegation types
-  Delegation,
-  DelegationRevocationReceipt,
-  AccountDelegationResource,
-  AccountDelegationRecord,
-  AccountDelegationPage,
-  AccountDelegationQueryOptions,
-  CreateDelegationParams,
-  DelegationChain,
-  DelegationApiResponse,
-  DelegationResult,
-  DelegationError,
+  type Delegation,
+  type DelegationRevocationReceipt,
+  type AccountDelegationResource,
+  type AccountDelegationRecord,
+  type AccountDelegationPage,
+  type AccountDelegationQueryOptions,
+  type CreateDelegationParams,
+  type DelegationChain,
+  type DelegationApiResponse,
+  type DelegationResult,
+  type DelegationError,
   DelegationErrorCodes,
-  DelegationErrorCode,
+  type DelegationErrorCode,
   // SharingService
   SharingService,
   createSharingService,
-  ISharingService,
-  SharingServiceConfig,
-  EncodedShareData,
-  ReceiveOptions,
-  ShareAccess,
-  DelegateReceivedShareParams,
-  DelegatedShareAccess,
+  type ISharingService,
+  type SharingServiceConfig,
+  type EncodedShareData,
+  type ReceiveOptions,
+  type ShareAccess,
+  type DelegateReceivedShareParams,
+  type DelegatedShareAccess,
   // Key and delegation record types
-  JWK,
-  KeyType,
-  KeyInfo,
-  CapabilityEntry,
-  DelegationRecord,
-  DelegationChainV2,
-  DelegationDirection,
-  DelegationFilters,
-  SpaceOwnership,
-  SpaceInfo,
-  ShareSchema,
-  ShareLink,
-  ShareLinkData,
-  IngestOptions,
-  GenerateShareParams,
+  type JWK,
+  type KeyType,
+  type KeyInfo,
+  type CapabilityEntry,
+  type DelegationRecord,
+  type DelegationChainV2,
+  type DelegationDirection,
+  type DelegationFilters,
+  type SpaceOwnership,
+  type SpaceInfo,
+  type ShareSchema,
+  type ShareLink,
+  type ShareLinkData,
+  type IngestOptions,
+  type GenerateShareParams,
   createDelegatedShareKey,
   createPolicyEnforcementDelegation,
   canonicalOwnerSharePolicy,
@@ -208,30 +214,30 @@ export {
 // Re-export CapabilityKeyRegistry from sdk-core
 export {
   CapabilityKeyRegistry,
-  ICapabilityKeyRegistry,
+  type ICapabilityKeyRegistry,
   createCapabilityKeyRegistry,
-  StoredDelegationChain,
+  type StoredDelegationChain,
   CapabilityKeyRegistryErrorCodes,
-  CapabilityKeyRegistryErrorCode,
+  type CapabilityKeyRegistryErrorCode,
 } from "@tinycloud/sdk-core";
 
 // Re-export SpaceService from sdk-core
 export {
   SpaceService,
-  ISpaceService,
-  SpaceServiceConfig,
+  type ISpaceService,
+  type SpaceServiceConfig,
   SpaceErrorCodes,
-  SpaceErrorCode,
+  type SpaceErrorCode,
   createSpaceService,
   parseSpaceUri,
   buildSpaceUri,
   makePublicSpaceId,
   // Space object
   Space,
-  ISpace,
-  SpaceConfig,
-  ISpaceScopedDelegations,
-  ISpaceScopedSharing,
+  type ISpace,
+  type SpaceConfig,
+  type ISpaceScopedDelegations,
+  type ISpaceScopedSharing,
 } from "@tinycloud/sdk-core";
 
 // Protocol version checking
