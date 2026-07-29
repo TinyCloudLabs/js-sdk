@@ -1698,20 +1698,22 @@ export class TinyCloudNode {
       }
 
       if (step.kind === "seed-spaces") {
-        for (const space of step.spaces) {
-          const registered = await this.account.spaces.register({
+        // One batched KV write + one multi-row index write instead of 5
+        // sequential register() calls (TC-373).
+        const registered = await this.account.spaces.registerBatch(
+          step.spaces.map((space) => ({
             spaceId: space.spaceId,
             name: space.name,
             ownerDid: this.did,
             type: "owned",
             permissions: ["*"],
             status: "active",
-          });
-          if (!registered.ok) {
-            throw new Error(
-              `Failed to seed account space ${space.spaceId}: ${registered.error.message}`,
-            );
-          }
+          })),
+        );
+        if (!registered.ok) {
+          throw new Error(
+            `Failed to seed account spaces: ${registered.error.message}`,
+          );
         }
       }
 
@@ -3150,6 +3152,7 @@ export class TinyCloudNode {
     if (this._serviceContext) {
       const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
         invoke: this._serviceContext.invoke,
+        invokeAny: this._serviceContext.invokeAny,
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,

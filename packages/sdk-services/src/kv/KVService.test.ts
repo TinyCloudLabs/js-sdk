@@ -374,6 +374,129 @@ describe("KVService.batchPut", () => {
     }
     expect(fetchCalls).toBe(0);
   });
+
+  // TC-373 point 6: validate against the EXACT requested path set and count,
+  // not just internal self-consistency (count === written.length would
+  // accept a malformed response reporting the right count for wrong keys).
+  const FIVE_KEYS = ["default", "applications", "account", "secrets", "public"].map(
+    (name) => `spaces/tinycloud:pkh:eip155:1:0xabc:${name}`
+  );
+  function fiveItems() {
+    return FIVE_KEYS.map((key, i) => ({ key, value: { spaceId: key, index: i } }));
+  }
+
+  test("accepts a response confirming all 5 requested keys were written", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        response(true, 200, { written: [...FIVE_KEYS], count: 5 }), [], []
+      )
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(true);
+  });
+
+  test("rejects a response reporting the right count but the wrong keys", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        // Internally consistent (count === written.length === 5) but one
+        // requested key was swapped for an unrelated one.
+        response(true, 200, {
+          written: [...FIVE_KEYS.slice(0, 4), "spaces/not-what-was-requested"],
+          count: 5,
+        }), [], []
+      )
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.message).toContain("5 requested key(s)");
+    }
+  });
+
+  test("rejects a response with fewer written keys than requested, even if internally consistent", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        // count === written.length (4 === 4), but only 4 of the 5 requested
+        // keys are reported written — a partial write must not look like success.
+        response(true, 200, { written: FIVE_KEYS.slice(0, 4), count: 4 }), [], []
+      )
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+    }
+  });
+
+  test("rejects a response with duplicate written keys padding the count to look complete", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        // count (5) === written.length (5), and every written key IS one of
+        // the requested keys — but one key is duplicated and another is
+        // missing entirely. The exact-SET check catches this; a naive
+        // count-only check would not.
+        response(true, 200, {
+          written: [...FIVE_KEYS.slice(0, 4), FIVE_KEYS[0]],
+          count: 5,
+        }), [], []
+      )
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+  });
+
+  test("JSON values written via batchPut round-trip through get() as parsed objects (canonical read)", async () => {
+    let batchPartType: string | undefined;
+    const service = new KVService({ prefix: "app" });
+    let calls = 0;
+    service.initialize(
+      createContext(async (_url, init) => {
+        calls++;
+        if (calls === 1) {
+          // The batchPut call: capture the content-type actually assigned to
+          // a plain JS object value.
+          const form = init!.body as FormData;
+          const part = form.get("app%2Fsettings.json") as Blob;
+          batchPartType = part.type;
+          return response(true, 200, { written: ["app/settings.json"], count: 1 });
+        }
+        // The subsequent get() call: the node echoes back the content-type it
+        // stored for that blob — application/json for a JSON value, per
+        // serializeBatchPutValue. Ordinary put() does not set this
+        // explicitly, so this is the divergence TC-373 flagged as worth
+        // testing explicitly rather than assuming byte-for-byte equivalence.
+        const result = response(true, 200, { theme: "dark", version: 2 });
+        result.headers = {
+          get: (name: string) =>
+            name.toLowerCase() === "content-type" ? "application/json" : null,
+        };
+        return result;
+      }, [], [])
+    );
+
+    const written = await service.batchPut([
+      { key: "settings.json", value: { theme: "dark", version: 2 } },
+    ]);
+    expect(written.ok).toBe(true);
+    expect(batchPartType).toStartWith("application/json");
+
+    const read = await service.get<{ theme: string; version: number }>("settings.json");
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      // Canonical read: a parsed object, not the raw JSON text.
+      expect(read.data.data).toEqual({ theme: "dark", version: 2 });
+      expect(typeof read.data.data).toBe("object");
+    }
+  });
 });
 
 describe("KVService.createSignedReadUrl", () => {

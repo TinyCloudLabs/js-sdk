@@ -1020,11 +1020,33 @@ export class KVService extends BaseService implements IKVService {
         }
 
         const batchResponse = this.normalizeBatchPutResponse(await response.json());
-        if (!batchResponse || batchResponse.count !== batchResponse.written.length) {
+        if (!batchResponse) {
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
               "KV batchPut response did not include matching written keys and count",
+              "kv"
+            )
+          );
+        }
+
+        // Validate against the exact requested path set, not just internal
+        // self-consistency (count === written.length would accept a
+        // malformed response that reports the right count for the wrong
+        // keys, e.g. a partial write padded to look complete).
+        const requestedPaths = new Set(paths);
+        const writtenPaths = new Set(batchResponse.written);
+        const matchesRequest =
+          batchResponse.count === paths.length &&
+          batchResponse.written.length === paths.length &&
+          writtenPaths.size === paths.length &&
+          batchResponse.written.every((key) => requestedPaths.has(key));
+
+        if (!matchesRequest) {
+          return err(
+            serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              `KV batchPut response did not confirm all ${paths.length} requested key(s) were written`,
               "kv"
             )
           );

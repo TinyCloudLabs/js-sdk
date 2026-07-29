@@ -2,8 +2,10 @@ import {
   err,
   ok,
   serviceError,
+  ErrorCodes,
   type IDatabaseHandle,
   type IKVService,
+  type KVBatchPutItem,
   type QueryResponse,
   type Result,
   type ServiceError,
@@ -335,6 +337,84 @@ export class AccountService {
 
       const registered = spaceFromRecord(spaceKey(stored.space_id), stored);
       await this.upsertSpaceIndexQuietly(registered);
+      return ok(registered);
+    },
+
+    /**
+     * Register multiple spaces in one KV batch write + one multi-row index
+     * write, instead of one `register()` round trip per space (TC-373).
+     *
+     * The stored records are computed exactly once and reused for both the
+     * batch attempt and any reconciliation below, so a fallback never mints a
+     * fresh timestamp for a space that already has a written record — a
+     * second `spaceRecordFromInput` call would produce a new content hash and
+     * leave the first attempt's blocks orphaned.
+     */
+    registerBatch: async (
+      spaces: readonly (SpaceInfo | AccountSpace)[],
+    ): Promise<Result<AccountSpace[]>> => {
+      if (spaces.length === 0) return ok([]);
+
+      await this.config.ensureAccountSpaceHosted?.();
+
+      const kvResult = this.accountKV();
+      if (!kvResult.ok) return kvResult;
+
+      const stored = spaces.map((space) => spaceRecordFromInput(space));
+      const registered = stored.map((record) =>
+        spaceFromRecord(spaceKey(record.space_id), record),
+      );
+      const items: KVBatchPutItem[] = stored.map((record) => ({
+        key: spaceKey(record.space_id),
+        value: record,
+      }));
+
+      const batchResult = await kvResult.data.batchPut(items);
+
+      if (batchResult.ok) {
+        // Index write is derived/best-effort: its failure must never cause a
+        // KV rewrite, so it stays on the existing "quietly" path.
+        await this.upsertSpacesIndexQuietly(registered);
+        return ok(registered);
+      }
+
+      if (!isAmbiguousBatchFailure(batchResult.error)) {
+        return accountErr(batchResult.error);
+      }
+
+      // Ambiguous transport failure: the node's content-addressed block store
+      // can persist writes before (or independently of) the response that
+      // reports success, so "the batch errored" does not mean "nothing was
+      // written". Reconcile with per-space puts using the SAME precomputed
+      // bytes: anything that already landed is an idempotent overwrite, not a
+      // new differently-timestamped blob.
+      const reconcileFailures: string[] = [];
+      for (const record of stored) {
+        const written = await kvResult.data.put(spaceKey(record.space_id), record);
+        if (!written.ok) {
+          reconcileFailures.push(`${record.space_id}: ${written.error.message}`);
+        }
+      }
+
+      if (reconcileFailures.length > 0) {
+        return err(
+          serviceError(
+            "KV_BATCH_RECONCILE_FAILED",
+            `KV batch write for ${items.length} space(s) failed ambiguously (${batchResult.error.message}) and per-space reconciliation also failed for: ${reconcileFailures.join("; ")}`,
+            SERVICE_NAME,
+            { cause: batchResult.error.cause, meta: { originalError: batchResult.error } },
+          ),
+        );
+      }
+
+      // Reconciliation succeeded, but the batch's own error must not vanish
+      // silently — that exact swallow is what turns an ambiguous transport
+      // failure into an undiagnosable half-provisioned account later.
+      console.warn(
+        `[AccountService] KV batch write for ${items.length} space(s) returned an ambiguous error and was reconciled via per-space fallback. Original error: ${batchResult.error.message}`,
+      );
+
+      await this.upsertSpacesIndexQuietly(registered);
       return ok(registered);
     },
 
@@ -783,6 +863,53 @@ export class AccountService {
     return ok(undefined);
   }
 
+  private async upsertSpacesIndexQuietly(spaces: AccountSpace[]): Promise<void> {
+    await ignoreIndexFailure(() => this.upsertSpacesIndex(spaces));
+  }
+
+  /**
+   * Upsert multiple space index rows in ONE multi-row `INSERT OR REPLACE`
+   * statement (TC-373), rather than one statement per space. This matters
+   * because `IDatabaseHandle.batch()` executes its statement list as a plain
+   * loop, not a single database transaction — an N-statement batch is not
+   * atomic. A single multi-row INSERT is one SQLite statement, so it applies
+   * atomically: all rows or none.
+   */
+  private async upsertSpacesIndex(spaces: AccountSpace[]): Promise<Result<void>> {
+    if (spaces.length === 0) return ok(undefined);
+
+    const dbResult = this.accountDb();
+    if (!dbResult.ok) return ok(undefined);
+    const schema = await this.ensureAccountIndex(dbResult.data);
+    if (!schema.ok) return schema;
+
+    const placeholders = spaces.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+    const params = spaces.flatMap((space) => {
+      const updatedAt = space.updatedAt ?? new Date().toISOString();
+      return [
+        space.spaceId,
+        space.name,
+        space.ownerDid,
+        space.type,
+        JSON.stringify(space.permissions),
+        space.status,
+        space.registeredAt ?? updatedAt,
+        updatedAt,
+        space.expiresAt?.toISOString() ?? null,
+      ];
+    });
+
+    const written = await dbResult.data.batch([
+      {
+        sql:
+          `INSERT OR REPLACE INTO spaces (space_id, name, owner_did, type, permissions_json, status, registered_at, updated_at, expires_at) VALUES ${placeholders}`,
+        params,
+      },
+    ]);
+    if (!written.ok) return accountErr(written.error);
+    return ok(undefined);
+  }
+
   private async deleteSpaceIndexQuietly(spaceId: string): Promise<void> {
     await ignoreIndexFailure(() => this.deleteSpaceIndex(spaceId));
   }
@@ -1224,6 +1351,28 @@ function accountErr(error: ServiceError): Result<never> {
 
 function isMissingIndexError(error: ServiceError): boolean {
   return /no such table:/i.test(error.message);
+}
+
+/**
+ * Classify a KV batch write failure for the seed-spaces reconciliation
+ * fallback (TC-373).
+ *
+ * Only AMBIGUOUS transport failures are safe to retry: the node's
+ * content-addressed block store can persist a write before (or independently
+ * of) the response that would report success, so an errored batch does not
+ * imply nothing was written. Failures the node reports unambiguously must
+ * never be retried — retrying would either repeat a definite rejection for
+ * no benefit (auth, quota, a space that doesn't exist) or ignore an explicit
+ * caller cancellation.
+ */
+function isAmbiguousBatchFailure(error: ServiceError): boolean {
+  if (error.code === ErrorCodes.AUTH_UNAUTHORIZED) return false; // 401/403
+  if (error.code === ErrorCodes.STORAGE_QUOTA_EXCEEDED) return false; // 402
+  if (error.code === ErrorCodes.STORAGE_LIMIT_REACHED) return false; // 413
+  if (error.code === ErrorCodes.ABORTED) return false; // caller abort
+  if (error.meta?.status === 404) return false; // space not hosted
+
+  return true;
 }
 
 async function ignoreIndexFailure(task: () => Promise<unknown>): Promise<void> {
