@@ -26225,7 +26225,14 @@ function registerShareCommand(program2) {
         notify: options.notify === true,
         targetAdapter: shareServices.targetAdapter
       });
-      if ("state" in result) throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
+      if ("state" in result) {
+        if (options.json) {
+          writeJson2({ protocol: "tinycloud-share", version: 1, authorization: result });
+          process.exitCode = 6;
+          return;
+        }
+        throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
+      }
       if (options.json) writeJson2(result);
       else publishHuman(result);
     } catch (error) {
