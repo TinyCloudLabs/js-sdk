@@ -96,6 +96,21 @@ export interface AccountIndexedReadOptions {
 
 export type AccountApplicationListOptions = AccountIndexedReadOptions;
 
+export interface AccountApplicationRegisterOptions {
+  /**
+   * Skip the `application_state` manifest-hash pre-read that normally
+   * short-circuits a redundant write.
+   *
+   * The pre-read is a saving only when the application is already registered
+   * with the same manifest hash. On a freshly bootstrapped account it is
+   * definitionally a miss, so it costs a round trip and buys nothing — and the
+   * write it guards is an `INSERT OR REPLACE`, so performing it unconditionally
+   * is idempotent. Set this only when the caller knows the record cannot
+   * already be current (i.e. the account bootstrap path).
+   */
+  assumeUnregistered?: boolean;
+}
+
 export type AccountSpaceListOptions = AccountIndexedReadOptions;
 
 export interface AccountDelegationListOptions {
@@ -122,6 +137,23 @@ export interface AccountServiceConfig {
 }
 
 export class AccountService {
+  /**
+   * Per-account-space memo for {@link ensureAccountIndex}.
+   *
+   * Applying the index migration is a no-op once the schema exists, but the
+   * SQL service still spends two round trips discovering that (create the
+   * migrations table, then read the applied-migration rows). Account bootstrap
+   * touches the index eight times, so without a memo that is ~14 wasted
+   * requests on the cold sign-in path. The in-flight dedupe inside SQLService
+   * never helps here: the node SDK builds a fresh SQLService per
+   * `getAccountDb()` call, so its lock map is always empty.
+   *
+   * Keyed by account space id, so a different account never reuses this entry.
+   * Failures are evicted so a later call retries instead of inheriting a
+   * permanently poisoned result.
+   */
+  private readonly accountIndexReady = new Map<string, Promise<Result<void>>>();
+
   constructor(private readonly config: AccountServiceConfig) {}
 
   async status(): Promise<Result<AccountStatus>> {
@@ -187,7 +219,10 @@ export class AccountService {
       return ok(applicationFromRecord(key, loaded.data.data));
     },
 
-    register: async (manifest: Manifest | Manifest[]): Promise<Result<AccountApplication>> => {
+    register: async (
+      manifest: Manifest | Manifest[],
+      options: AccountApplicationRegisterOptions = {},
+    ): Promise<Result<AccountApplication>> => {
       const manifests = Array.isArray(manifest) ? manifest : [manifest];
       const request = composeManifestRequest(manifests);
       if (request.registryRecords.length === 0) {
@@ -208,7 +243,10 @@ export class AccountService {
       let registered: AccountApplication | undefined;
       for (const record of request.registryRecords) {
         const manifestHash = hashJson(record.manifests);
-        if (await this.indexHasApplicationHash(record.app_id, manifestHash)) {
+        if (
+          !options.assumeUnregistered &&
+          (await this.indexHasApplicationHash(record.app_id, manifestHash))
+        ) {
           registered = {
             appId: record.app_id,
             manifests: record.manifests,
@@ -437,6 +475,9 @@ export class AccountService {
       if (!delegations.ok) return delegations;
 
       const syncedAt = new Date().toISOString();
+      // `rebuild` is the explicit repair entry point: re-verify the schema
+      // server-side instead of trusting the per-space memo.
+      this.invalidateAccountIndexMemo();
       const schema = await this.ensureAccountIndex(dbResult.data);
       if (!schema.ok) return schema;
 
@@ -877,7 +918,48 @@ export class AccountService {
     });
   }
 
+  /**
+   * Apply the account index schema at most once per account space.
+   *
+   * The index is a cache over canonical KV state, and every caller already
+   * tolerates it being absent (`ignoreIndexFailure` / `isMissingIndexError`),
+   * so a memo that is wrong in the "already applied" direction degrades to a
+   * `no such table` read that the caller handles. A memo that is wrong in the
+   * other direction would be a real bug, so failures are never cached.
+   */
   private async ensureAccountIndex(db: IDatabaseHandle): Promise<Result<void>> {
+    const key = this.config.getAccountSpaceId() ?? "";
+    const cached = this.accountIndexReady.get(key);
+    if (cached) return cached;
+
+    const pending = this.applyAccountIndex(db);
+    this.accountIndexReady.set(key, pending);
+
+    // Only evict our own entry: a concurrent caller may already have installed
+    // a fresh attempt by the time this one settles.
+    const evict = () => {
+      if (this.accountIndexReady.get(key) === pending) {
+        this.accountIndexReady.delete(key);
+      }
+    };
+
+    let settled: Result<void>;
+    try {
+      settled = await pending;
+    } catch (error) {
+      evict();
+      throw error;
+    }
+    if (!settled.ok) evict();
+    return settled;
+  }
+
+  /** Drop the memo so the next {@link ensureAccountIndex} re-applies the schema. */
+  private invalidateAccountIndexMemo(): void {
+    this.accountIndexReady.delete(this.config.getAccountSpaceId() ?? "");
+  }
+
+  private async applyAccountIndex(db: IDatabaseHandle): Promise<Result<void>> {
     const migrated = await db.migrations.apply({
       namespace: ACCOUNT_INDEX_NAMESPACE,
       migrations: [

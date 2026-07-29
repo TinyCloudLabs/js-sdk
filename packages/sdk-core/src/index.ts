@@ -251,6 +251,7 @@ export { AccountService } from "./account/AccountService";
 export type {
   AccountApplication,
   AccountApplicationListOptions,
+  AccountApplicationRegisterOptions,
   AccountDelegation,
   AccountDelegationListOptions,
   AccountDelegationRevokeOptions,

@@ -140,6 +140,7 @@ export {
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
+  type EnsureEncryptionNetworkOptions,
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
   type RegisterOwnerSharePolicyParams,
@@ -153,6 +154,7 @@ export { AccountService } from "./account/AccountService";
 export type {
   AccountApplication,
   AccountApplicationListOptions,
+  AccountApplicationRegisterOptions,
   AccountDelegation,
   AccountDelegationListOptions,
   AccountDelegationRevokeOptions,

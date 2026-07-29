@@ -113,6 +113,7 @@ export {
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
+  type EnsureEncryptionNetworkOptions,
   type SecretReadInput,
   type SecretPermissionHint,
   type SecretReadResult,
@@ -126,6 +127,7 @@ export { AccountService } from "./account/AccountService";
 export type {
   AccountApplication,
   AccountApplicationListOptions,
+  AccountApplicationRegisterOptions,
   AccountDelegation,
   AccountDelegationListOptions,
   AccountDelegationRevokeOptions,
