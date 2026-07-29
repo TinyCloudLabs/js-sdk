@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
-import { bearerResourceUri, canonicalize, computeCid, didKeyFromEd25519PublicKey, encodeInlineShareUrl, encodeShareUrl, fromBase64Url, generateKey, mintBearerDelegation, open, parseInlineShareUrl, seal, signEnvelope, toBase64Url } from "@tinycloud/share-envelope";
+import { bearerResourceUri, canonicalize, computeCid, didKeyFromEd25519PublicKey, encodeInlineShareUrl, encodeShareUrl, fromBase64Url, generateKey, mintBearerDelegation, open, parseInlineShareUrl, seal, signEnvelope, signEnvelopeV2, toBase64Url } from "@tinycloud/share-envelope";
 import { MemoryShareCache } from "../src/cache.js";
 import { DEFAULT_MAX_SEALED_BLOB_BYTES, ShareReceiveError, inspectShare, receiveShare, toShareErrorInfo } from "../src/receive.js";
 
@@ -39,6 +39,35 @@ async function makeShare() {
   const envelopeKey = generateKey();
   const sealedEnvelope = await seal(new TextEncoder().encode(canonicalize(envelope)), envelopeKey);
   return { url: encodeShareUrl({ origin, ciphertextCid: sealedEnvelope.cid, key32: envelopeKey }), sealedEnvelope, sealedContent };
+}
+
+async function makeAddressedShare() {
+  const policy = { issuerDid: didKeyFromEd25519PublicKey(ed25519.getPublicKey(issuerPrivateKey)), recipientMatcher: { kind: "exactEmail", value: "person@example.com" }, version: 2 };
+  const policyBytes = new TextEncoder().encode(canonicalize(policy));
+  const digest = toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", policyBytes)));
+  const source = { kind: "kv" as const, space: "space", path: "docs/readme.md", action: "tinycloud.kv/get" as const };
+  const envelope = signEnvelopeV2({
+    version: 2,
+    shareId: "addressed-test",
+    recipientMatcher: policy.recipientMatcher,
+    deliveryEmail: "person@example.com",
+    actions: ["read"],
+    resource: { kind: "exact", path: "docs/readme.md" },
+    target: { origin, nodeAudience: "did:web:node.example", spaceId: "space" },
+    delegationCid: "bafy-delegation",
+    authorityMaterialHandle: "bafy-authority",
+    authorityMaterialDigest: digest,
+    contentSource: source,
+    contentSourceDigest: digest,
+    authorizationTarget: { kind: "policy", policyCid: await computeCid(policyBytes), policyBytes: toBase64Url(policyBytes) },
+    display: { filename: "readme.md" },
+    expiry,
+    encrypted: true,
+    metadata: { mediaType: "text/markdown", byteLength: 5, filename: "readme.md" },
+  }, issuerPrivateKey);
+  const envelopeKey = generateKey();
+  const sealedEnvelope = await seal(new TextEncoder().encode(canonicalize(envelope)), envelopeKey);
+  return { url: encodeShareUrl({ origin, ciphertextCid: sealedEnvelope.cid, key32: envelopeKey }), sealedEnvelope };
 }
 
 describe("@tinycloud/share-sdk foundation", () => {
@@ -204,5 +233,26 @@ describe("@tinycloud/share-sdk foundation", () => {
     } finally {
       envelopeKey.fill(0);
     }
+  });
+
+  it("verifies addressed v2 envelopes once and returns a typed authorization step", async () => {
+    const share = await makeAddressedShare();
+    const inspection = await inspectShare(share.url, {
+      fetchBlob: async () => share.sealedEnvelope.blob,
+      now: () => Date.parse("2029-01-01T00:00:00.000Z"),
+    });
+    expect(inspection.metadata.shareId).toBe("addressed-test");
+    expect(JSON.stringify(inspection)).not.toContain("policyBytes");
+    const pending = await receiveShare(share.url, {
+      fetchBlob: async () => share.sealedEnvelope.blob,
+      now: () => Date.parse("2029-01-01T00:00:00.000Z"),
+    });
+    expect(pending).toEqual({ state: "authorization-required", method: "email-claim" });
+    const received = await receiveShare(share.url, {
+      fetchBlob: async () => share.sealedEnvelope.blob,
+      now: () => Date.parse("2029-01-01T00:00:00.000Z"),
+      authorization: { async begin() { return { state: "ready", value: new TextEncoder().encode("hello") }; }, async resume() { return { state: "denied", reason: "unsupported" }; } },
+    });
+    expect("state" in received ? received : received.text).toBe("hello");
   });
 });

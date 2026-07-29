@@ -188,7 +188,11 @@ async function defaultUpload(options: SharePublishOptions, input: ShareUploadInp
   if (options.registryBaseUrl === undefined) throw new SharePublishError("upload-auth-required", "an authenticated share registry is required");
   const base = assertRegistryUrl(options.registryBaseUrl, options.allowInsecureRegistry === true).toString().replace(/\/$/, "");
   const localInsecure = options.allowInsecureRegistry === true && (new URL(base).hostname === "127.0.0.1" || new URL(base).hostname === "localhost");
-  if (options.authorizeUpload === undefined && options.credentials !== "include" && !localInsecure) {
+  // A Node fetch implementation does not carry the browser's Share session
+  // cookie. `credentials: include` is therefore never upload authority by
+  // itself; callers must inject the nonce/signature-bound authorizer or an
+  // explicit hermetic uploader.
+  if (options.authorizeUpload === undefined && !localInsecure) {
     throw new SharePublishError("upload-auth-required", "share upload authorization is required");
   }
   let authorization: ShareUploadAuthorization | undefined;

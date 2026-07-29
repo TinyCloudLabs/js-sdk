@@ -18,6 +18,7 @@ import {
   type LegacyShareReader,
   type PublishedShare,
   type SharePublishOptions,
+  type ShareFetchOptions,
   type ShareUpload,
   type ShareDeliveryAdapter,
   type ShareRevocationAdapter,
@@ -41,6 +42,7 @@ export interface ShareCommandServices {
   /** Production callers inject the existing authenticated Share upload path. */
   readonly uploadBlob?: ShareUpload;
   readonly authorizeUpload?: NonNullable<SharePublishOptions["authorizeUpload"]>;
+  readonly authorization?: NonNullable<ShareFetchOptions["authorization"]>;
   readonly credentials?: "omit" | "same-origin" | "include";
   readonly fetchFn?: typeof globalThis.fetch;
   readonly records?: SenderShareRecordStorage;
@@ -102,7 +104,10 @@ function shareCliError(error: unknown): CLIError {
   if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
   if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   const mapped = known[message];
-  return new CLIError(mapped?.code ?? "ERROR", mapped ? mapped.code : message, mapped?.exit ?? ExitCode.ERROR);
+  // Share adapters are external authority seams. Never echo an adapter's
+  // arbitrary exception text to contract stdout/stderr; it may contain a
+  // bearer URL, claim, session identifier, or provider response.
+  return new CLIError(mapped?.code ?? "ERROR", mapped ? mapped.code : "share operation failed", mapped?.exit ?? ExitCode.ERROR);
 }
 
 function inputUrl(value: string | undefined, stdin: boolean): Promise<string> {
@@ -194,6 +199,7 @@ export function registerShareCommand(program: Command): void {
     .option("--stdout", "Write verified plaintext bytes to stdout")
     .option("--force", "Allow replacing an existing non-symlink output")
     .option("--max-bytes <bytes>", "Bound received content bytes")
+    .option("--resume-token <token>", "Resume a previously returned recipient authorization step")
     .option("--json", "Print versioned redacted JSON")
     .option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY)
     .option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN)
@@ -215,7 +221,12 @@ export function registerShareCommand(program: Command): void {
           registryBaseUrl: options.registry,
           expectedOrigin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxContentBlobBytes: maxBytes }),
+          ...(shareServices.authorization === undefined ? {} : { authorization: shareServices.authorization }),
+          ...(options.resumeToken === undefined ? {} : { authorizationResumeToken: options.resumeToken }),
         });
+        if ("state" in result) {
+          throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; resume through the configured authority adapter", 6);
+        }
         if (options.stdout) {
           process.stdout.write(Buffer.from(result.bytes));
           return;
@@ -291,6 +302,7 @@ export function registerShareCommand(program: Command): void {
     .option("--json", "Print versioned redacted JSON")
     .action(async (id: string, options) => {
       try {
+        if (options.revealLink && options.json) throw new CLIError("INVALID_ARGUMENT", "--reveal-link cannot be combined with --json", 2);
         if (shareServices.records === undefined) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
         const result = await showShare({ storage: shareServices.records, shareId: id, revealLink: options.revealLink === true, link: options.revealLink ? await shareServices.linkFor?.(id) : undefined });
         if (options.json) writeJson({ protocol: "tinycloud-share", version: 1, share: result }); else writeJson(result);

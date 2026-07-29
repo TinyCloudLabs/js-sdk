@@ -9,8 +9,7 @@ const { version } = JSON.parse(
 import { theme } from "./output/theme.js";
 import { isInteractive } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
-import { registerTinyCloudCommands } from "./command-registry.js";
-import { configureShareCommandServices } from "./commands/share.js";
+import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 
 const program = new Command();
 
@@ -57,17 +56,28 @@ program.hook("preAction", async (thisCommand) => {
   }
 });
 
-registerTinyCloudCommands(program);
-
-// Share publishing is deliberately wired to the authenticated browser-shaped
-// transport at the executable boundary. The SDK still rejects every request
-// that lacks HTTPS or an explicit upload authority; this default makes the
-// production cookie/session contract explicit while tests can replace it via
-// configureShareCommandServices before registering a command.
+// Node does not have a browser Share session cookie. Leave upload authority
+// unset by default so publish fails closed with UPLOAD_AUTH_REQUIRED; an
+// authenticated host/service adapter can inject the existing nonce- and
+// signature-bound uploader through configureShareCommandServices.
 configureShareCommandServices({
-  credentials: "include",
   fetchFn: globalThis.fetch,
 });
+
+const argv = process.argv.slice(2);
+const isShareInvocation = argv.some((value) => value === "share");
+const isHelpInvocation = argv.length === 0 || argv.some((value) => value === "--help" || value === "-h");
+if (isShareInvocation || isHelpInvocation) {
+  // Keep the agent-critical surface independent from the legacy command
+  // graph. The latter imports optional Node/WASM authentication packages;
+  // inspecting or receiving a public Share link must not load them.
+  registerShareCommand(program);
+} else {
+  type LegacyEntry = typeof import("./legacy-entry.js");
+  const loadLegacy = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<LegacyEntry>;
+  const { registerTinyCloudCommands } = await loadLegacy(new URL("./legacy-entry.js", import.meta.url).href);
+  registerTinyCloudCommands(program);
+}
 
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}\n`);
 

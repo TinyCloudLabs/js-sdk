@@ -7,12 +7,14 @@ import {
   parseCompactOrInlineShareUrl,
   shareEnvelopeSchema,
   shareEnvelopeV2Schema,
+  verifyEnvelopeV2,
   verifyEnvelope,
   type ShareEnvelope,
   type ShareEnvelopeV2,
 } from "@tinycloud/share-envelope";
+import type { ShareAuthorizationAdapter, ShareAuthorizationMethod } from "./authorization.js";
 
-export type ShareErrorCode = "invalid-link" | "fetch-failed" | "max-bytes-exceeded" | "cid-mismatch" | "decrypt-failed" | "envelope-invalid" | "origin-mismatch" | "signature-invalid" | "capability-invalid" | "expired" | "unsupported-target" | "content-integrity-failed";
+export type ShareErrorCode = "invalid-link" | "fetch-failed" | "max-bytes-exceeded" | "cid-mismatch" | "decrypt-failed" | "envelope-invalid" | "origin-mismatch" | "signature-invalid" | "capability-invalid" | "expired" | "unsupported-target" | "authorization-denied" | "content-integrity-failed";
 
 export const SHARE_RESULT_VERSION = 1 as const;
 
@@ -26,8 +28,8 @@ const CONTENT_SEALED_OVERHEAD = 1 + 12 + 16;
 
 export class ShareReceiveError extends Error {
   readonly code: ShareErrorCode;
-  readonly details: { readonly expiresAt?: string; readonly stage?: "envelope" | "content" } | undefined;
-  constructor(code: ShareErrorCode, message: string, details?: { readonly expiresAt?: string; readonly stage?: "envelope" | "content" }) {
+  readonly details: { readonly expiresAt?: string; readonly stage?: "envelope" | "content"; readonly reason?: "policy-target" | "recipient-did-target" | "prefix-resource" } | undefined;
+  constructor(code: ShareErrorCode, message: string, details?: { readonly expiresAt?: string; readonly stage?: "envelope" | "content"; readonly reason?: "policy-target" | "recipient-did-target" | "prefix-resource" }) {
     super(message); this.name = "ShareReceiveError"; this.code = code; this.details = details;
   }
   /** Machine output is deliberately code-only; diagnostics belong on stderr. */
@@ -56,6 +58,12 @@ export interface ShareFetchOptions {
   readonly maxContentBlobBytes?: number;
   /** Observability-only hook; the SDK zeroes this authority-bearing buffer. */
   readonly onKeyParsed?: (key32: Uint8Array) => void;
+  /** Optional node/OpenKey/email adapter for addressed v2 shares. */
+  readonly authorization?: ShareAuthorizationAdapter<Uint8Array>;
+  readonly authorizationResumeToken?: string;
+  readonly authorizationProof?: unknown;
+  /** Internal adapter hook; never included in serializable inspection output. */
+  readonly onResolvedEnvelope?: (envelope: ShareEnvelope | ShareEnvelopeV2, cid: string) => void;
 }
 
 export interface VerifyBearerEnvelopeOptions {
@@ -79,7 +87,14 @@ export interface ShareMetadata {
 }
 
 export interface ShareInspection { readonly metadata: ShareMetadata; readonly link: { readonly origin: string; readonly cid: string; readonly kind: "compact" | "inline" } }
+export interface ShareReceiveAuthorizationRequired {
+  readonly state: "authorization-required";
+  readonly method: ShareAuthorizationMethod;
+  readonly continueUrl?: string;
+  readonly resumeToken?: string;
+}
 export interface ShareReceiveResult extends ShareInspection { readonly bytes: Uint8Array; readonly text?: string }
+export type ShareReceiveOutcome = ShareReceiveResult | ShareReceiveAuthorizationRequired;
 
 interface ResolvedShareEnvelope {
   readonly envelope: ShareEnvelope | ShareEnvelopeV2;
@@ -153,7 +168,19 @@ function registryFetcher(options: ShareFetchOptions, limit: number, tooLargeCode
   };
 }
 
-function metadataFor(envelope: ShareEnvelope, origin: string): ShareMetadata {
+function metadataFor(envelope: ShareEnvelope | ShareEnvelopeV2, origin: string): ShareMetadata {
+  if (envelope.version === 2) {
+    return {
+      protocol: "tinycloud-share", version: 1, shareId: envelope.shareId, origin,
+      target: envelope.target, resource: envelope.resource, actions: envelope.actions, expiresAt: envelope.expiry,
+      display: {
+        ...(envelope.display.senderName === undefined ? {} : { senderName: envelope.display.senderName }),
+        ...(envelope.display.filename === undefined ? {} : { filename: envelope.display.filename }),
+        ...(envelope.display.mode === undefined ? {} : { mode: envelope.display.mode }),
+      },
+      ...(envelope.content === undefined ? {} : { content: { cid: envelope.content.cid } }),
+    };
+  }
   return {
     protocol: "tinycloud-share", version: 1, shareId: envelope.shareId, origin,
     target: envelope.target, resource: envelope.target.resource, actions: ["read"], expiresAt: envelope.expiry,
@@ -208,10 +235,28 @@ async function resolveShareEnvelope(link: string, options: ShareFetchOptions = {
   }
 }
 
-async function resolveEnvelope(link: string, options: ShareFetchOptions): Promise<ResolvedShareEnvelope & { readonly envelope: ShareEnvelope }> {
-  const resolved = await resolveShareEnvelope(link, options);
-  if (resolved.envelope.version !== 1) throw new ShareReceiveError("unsupported-target", "this receive path only handles v1 bearer shares");
-  return resolved as ResolvedShareEnvelope & { readonly envelope: ShareEnvelope };
+async function verifyV2Envelope(envelope: ShareEnvelopeV2, linkOrigin: string, options: ShareFetchOptions): Promise<void> {
+  if (envelope.target.origin !== linkOrigin || (options.expectedOrigin !== undefined && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin))) {
+    throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
+  }
+  if (Date.parse(envelope.expiry) <= (options.now?.() ?? Date.now())) {
+    throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
+  }
+  let expectedSigner = envelope.signature.signerDid;
+  if (envelope.authorizationTarget.kind === "policy") {
+    try {
+      const policy = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(envelope.authorizationTarget.policyBytes))) as Record<string, unknown>;
+      if (typeof policy.issuerDid !== "string") throw new Error("policy issuer");
+      expectedSigner = policy.issuerDid;
+    } catch {
+      throw new ShareReceiveError("envelope-invalid", "share policy is invalid");
+    }
+  }
+  try {
+    if (!await verifyEnvelopeV2(envelope, { expectedSignerDid: expectedSigner })) throw new Error("signature");
+  } catch {
+    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
+  }
 }
 
 /** Verify a decrypted bearer envelope for browser adapters that own transport. */
@@ -226,8 +271,8 @@ export async function verifyBearerEnvelope(
   if (envelope.target.origin !== linkOrigin || (options.expectedOrigin !== undefined && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin))) {
     throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
   }
-  if (envelope.authorizationTarget.kind !== "bearerKey") throw new ShareReceiveError("unsupported-target", "this receive path only handles bearer shares");
-  if (envelope.target.resource.kind !== "exact") throw new ShareReceiveError("unsupported-target", "this receive path only handles exact resources");
+  if (envelope.authorizationTarget.kind !== "bearerKey") throw new ShareReceiveError("unsupported-target", "this receive path only handles bearer shares", { reason: envelope.authorizationTarget.kind === "policy" ? "policy-target" : "recipient-did-target" });
+  if (envelope.target.resource.kind !== "exact") throw new ShareReceiveError("unsupported-target", "this receive path only handles exact resources", { reason: "prefix-resource" });
   const expiry = Date.parse(envelope.expiry);
   if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
   try { if (!await verifyEnvelope(envelope, { expectedSignerDid: envelope.signature.signerDid })) throw new Error("signature"); }
@@ -242,12 +287,35 @@ async function verifyResolved(envelope: ShareEnvelope, linkOrigin: string, optio
 }
 
 export async function inspectShare(link: string, options: ShareFetchOptions = {}): Promise<ShareInspection> {
-  const resolved = await resolveEnvelope(link, options); await verifyResolved(resolved.envelope, resolved.origin, options);
+  const resolved = await resolveShareEnvelope(link, options);
+  if (resolved.envelope.version === 1) await verifyResolved(resolved.envelope, resolved.origin, options);
+  else await verifyV2Envelope(resolved.envelope, resolved.origin, options);
+  options.onResolvedEnvelope?.(resolved.envelope, resolved.cid);
   return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind } };
 }
 
-export async function receiveShare(link: string, options: ShareFetchOptions = {}): Promise<ShareReceiveResult> {
-  const resolved = await resolveEnvelope(link, options); await verifyResolved(resolved.envelope, resolved.origin, options);
+export async function receiveShare(link: string, options: ShareFetchOptions = {}): Promise<ShareReceiveOutcome> {
+  const resolved = await resolveShareEnvelope(link, options);
+  if (resolved.envelope.version === 2) {
+    await verifyV2Envelope(resolved.envelope, resolved.origin, options);
+    options.onResolvedEnvelope?.(resolved.envelope, resolved.cid);
+    const method: ShareAuthorizationMethod = resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim";
+    if (options.authorization === undefined) return { state: "authorization-required", method };
+    const result = options.authorizationResumeToken === undefined
+      ? await options.authorization.begin({ envelope: resolved.envelope, method })
+      : await options.authorization.resume({ envelope: resolved.envelope, method, resumeToken: options.authorizationResumeToken, ...(options.authorizationProof === undefined ? {} : { proof: options.authorizationProof }) });
+    if (result.state === "authorization-required") return result;
+    if (result.state === "denied") throw new ShareReceiveError("authorization-denied", "share authorization was denied");
+    if (!(result.value instanceof Uint8Array)) throw new ShareReceiveError("content-integrity-failed", "share authorization returned invalid bytes");
+    const bytes = result.value.slice();
+    const maxBytes = options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES;
+    if (bytes.byteLength > maxBytes) throw new ShareReceiveError("max-bytes-exceeded", "shared content exceeds the configured byte limit");
+    let text: string | undefined;
+    try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { /* binary result */ }
+    return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind }, bytes, ...(text === undefined ? {} : { text }) };
+  }
+  await verifyResolved(resolved.envelope, resolved.origin, options);
+  options.onResolvedEnvelope?.(resolved.envelope, resolved.cid);
   let bytes: Uint8Array<ArrayBufferLike> = new Uint8Array();
   if (resolved.envelope.content !== undefined) {
     bytes = await registryFetcher(
