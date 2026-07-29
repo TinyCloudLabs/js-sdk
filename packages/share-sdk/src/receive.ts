@@ -9,10 +9,11 @@ import {
   shareEnvelopeV2Schema,
   verifyEnvelopeV2,
   verifyEnvelope,
+  toBase64Url,
   type ShareEnvelope,
   type ShareEnvelopeV2,
 } from "@tinycloud/share-envelope";
-import type { ShareAuthorizationAdapter, ShareAuthorizationMethod } from "./authorization.js";
+import type { ShareAuthorizedContent, ShareAuthorizationAdapter, ShareAuthorizationMethod } from "./authorization.js";
 
 export type ShareErrorCode = "invalid-link" | "fetch-failed" | "max-bytes-exceeded" | "cid-mismatch" | "decrypt-failed" | "envelope-invalid" | "origin-mismatch" | "signature-invalid" | "capability-invalid" | "expired" | "unsupported-target" | "authorization-denied" | "content-integrity-failed";
 
@@ -59,7 +60,7 @@ export interface ShareFetchOptions {
   /** Observability-only hook; the SDK zeroes this authority-bearing buffer. */
   readonly onKeyParsed?: (key32: Uint8Array) => void;
   /** Optional node/OpenKey/email adapter for addressed v2 shares. */
-  readonly authorization?: ShareAuthorizationAdapter<Uint8Array>;
+  readonly authorization?: ShareAuthorizationAdapter<ShareAuthorizedContent>;
   readonly authorizationResumeToken?: string;
   readonly authorizationProof?: unknown;
   /** Internal adapter hook; never included in serializable inspection output. */
@@ -78,7 +79,7 @@ export interface ShareMetadata {
   readonly version: 1;
   readonly shareId: string;
   readonly origin: string;
-  readonly target: { readonly origin: string; readonly nodeAudience: string; readonly spaceId: string };
+  readonly target: { readonly kind: "bearer" | "recipientDid" | "email" | "emailDomain"; readonly origin: string; readonly nodeAudience: string; readonly spaceId: string };
   readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
   readonly actions: readonly string[];
   readonly expiresAt: string;
@@ -170,9 +171,10 @@ function registryFetcher(options: ShareFetchOptions, limit: number, tooLargeCode
 
 function metadataFor(envelope: ShareEnvelope | ShareEnvelopeV2, origin: string): ShareMetadata {
   if (envelope.version === 2) {
+    const targetKind = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : envelope.recipientMatcher.kind === "emailDomain" ? "emailDomain" : "bearer";
     return {
       protocol: "tinycloud-share", version: 1, shareId: envelope.shareId, origin,
-      target: envelope.target, resource: envelope.resource, actions: envelope.actions, expiresAt: envelope.expiry,
+      target: { ...envelope.target, kind: targetKind }, resource: envelope.resource, actions: envelope.actions, expiresAt: envelope.expiry,
       display: {
         ...(envelope.display.senderName === undefined ? {} : { senderName: envelope.display.senderName }),
         ...(envelope.display.filename === undefined ? {} : { filename: envelope.display.filename }),
@@ -183,7 +185,7 @@ function metadataFor(envelope: ShareEnvelope | ShareEnvelopeV2, origin: string):
   }
   return {
     protocol: "tinycloud-share", version: 1, shareId: envelope.shareId, origin,
-    target: envelope.target, resource: envelope.target.resource, actions: ["read"], expiresAt: envelope.expiry,
+    target: { ...envelope.target, kind: "bearer" }, resource: envelope.target.resource, actions: ["read"], expiresAt: envelope.expiry,
     display: {
       ...(envelope.display.senderName === undefined ? {} : { senderName: envelope.display.senderName }),
       ...(envelope.display.filename === undefined ? {} : { filename: envelope.display.filename }),
@@ -306,10 +308,30 @@ export async function receiveShare(link: string, options: ShareFetchOptions = {}
       : await options.authorization.resume({ envelope: resolved.envelope, method, resumeToken: options.authorizationResumeToken, ...(options.authorizationProof === undefined ? {} : { proof: options.authorizationProof }) });
     if (result.state === "authorization-required") return result;
     if (result.state === "denied") throw new ShareReceiveError("authorization-denied", "share authorization was denied");
-    if (!(result.value instanceof Uint8Array)) throw new ShareReceiveError("content-integrity-failed", "share authorization returned invalid bytes");
-    const bytes = result.value.slice();
+    if (result.value === null || typeof result.value !== "object" || !(result.value.bytes instanceof Uint8Array)) {
+      throw new ShareReceiveError("content-integrity-failed", "share authorization returned an unsigned content result");
+    }
+    const authorized = result.value;
+    const bytes = authorized.bytes.slice();
     const maxBytes = options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES;
     if (bytes.byteLength > maxBytes) throw new ShareReceiveError("max-bytes-exceeded", "shared content exceeds the configured byte limit");
+    const digestBytes = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    const bodyDigest = toBase64Url(digestBytes);
+    if (authorized.bodyDigest !== bodyDigest) throw new ShareReceiveError("content-integrity-failed", "authorized content digest does not match");
+    if (authorized.contentSourceDigest !== resolved.envelope.contentSourceDigest) throw new ShareReceiveError("content-integrity-failed", "authorized content source does not match");
+    const binding = authorized.binding;
+    if (
+      binding.shareId !== resolved.envelope.shareId ||
+      binding.delegationCid !== resolved.envelope.delegationCid ||
+      binding.authorityMaterialHandle !== resolved.envelope.authorityMaterialHandle ||
+      binding.authorityMaterialDigest !== resolved.envelope.authorityMaterialDigest ||
+      binding.resource.kind !== resolved.envelope.resource.kind ||
+      binding.resource.path !== resolved.envelope.resource.path ||
+      (binding.action !== undefined && !resolved.envelope.actions.some((action) => action === binding.action || `tinycloud.kv/${action}` === binding.action))
+    ) throw new ShareReceiveError("content-integrity-failed", "authorized content binding does not match");
+    if (resolved.envelope.metadata.byteLength !== undefined && resolved.envelope.metadata.byteLength !== bytes.byteLength) {
+      throw new ShareReceiveError("content-integrity-failed", "authorized content length does not match");
+    }
     let text: string | undefined;
     try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { /* binary result */ }
     return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind }, bytes, ...(text === undefined ? {} : { text }) };

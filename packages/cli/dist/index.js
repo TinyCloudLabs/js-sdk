@@ -20815,7 +20815,7 @@ function inspectHuman(result) {
   process.stdout.write([
     `Share ${metadata.shareId}`,
     `File: ${metadata.display.filename ?? "unnamed"}`,
-    `Target: bearer (anyone with the complete link can read)`,
+    `Target: ${metadata.target.kind === "bearer" ? "bearer (anyone with the complete link can read)" : metadata.target.kind}`,
     `Expires: ${metadata.expiresAt}`,
     `Resource: ${metadata.resource.path}`,
     `Link format: ${result.link.kind}`
@@ -20831,8 +20831,8 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat, mkdir as mkdir2, open, readFile as readFile2, stat as stat2 } from "fs/promises";
-import { basename as basename2, join as join4, resolve } from "path";
+import { lstat, mkdir as mkdir2, open, readFile as readFile2, realpath, stat as stat2 } from "fs/promises";
+import { basename as basename2, join as join4, resolve, sep } from "path";
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
 async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
@@ -20876,14 +20876,24 @@ async function readShareInput(input, name2, limit = MAX_SHARE_STDIN_BYTES) {
   return { bytes, filename };
 }
 async function assertDirectory(path) {
-  try {
-    const info = await lstat(path);
-    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("OUTPUT_EXISTS");
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-    await mkdir2(path, { recursive: true, mode: 448 });
-    const created = await lstat(path);
-    if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
+  const absolute = resolve(path);
+  const segments = absolute.split(sep).filter(Boolean);
+  let current = absolute.startsWith(sep) ? sep : "";
+  for (const segment of segments) {
+    current = current === sep ? join4(current, segment) : join4(current, segment);
+    try {
+      const info = await lstat(current);
+      if (info.isSymbolicLink()) {
+        const canonical = await realpath(current);
+        if (current !== "/tmp" && current !== "/var") throw new Error("OUTPUT_EXISTS");
+        if (canonical !== `/private${current}`) throw new Error("OUTPUT_EXISTS");
+      } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      await mkdir2(current, { mode: 448 });
+      const created = await lstat(current);
+      if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
+    }
   }
 }
 async function writeShareOutput(directory, filename, bytes, force) {
@@ -21046,6 +21056,11 @@ function registerShareCommand(program2) {
         ...options.resumeToken === void 0 ? {} : { authorizationResumeToken: options.resumeToken }
       });
       if ("state" in result) {
+        if (options.json) {
+          writeJson2({ protocol: "tinycloud-share", version: 1, authorization: result });
+          process.exitCode = 6;
+          return;
+        }
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; resume through the configured authority adapter", 6);
       }
       if (options.stdout) {
@@ -21145,6 +21160,73 @@ function registerShareCommand(program2) {
   });
 }
 
+// src/share/adapters.ts
+init_profiles();
+import { PrivateKeySigner } from "@tinycloud/node-sdk";
+var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
+function authenticationMessage(origin, address, nonce, issuedAt) {
+  return [
+    `${new URL(origin).host} wants you to sign in with your Ethereum account:`,
+    address,
+    "",
+    "Sign in to TinyCloud Share.",
+    "",
+    `URI: ${origin}`,
+    "Version: 1",
+    `Nonce: ${nonce}`,
+    `Issued At: ${issuedAt}`
+  ].join("\n");
+}
+function cookieFromResponse(response) {
+  const headers = response.headers;
+  const values = headers.getSetCookie?.() ?? [];
+  const raw = values[0] ?? response.headers.get("set-cookie") ?? void 0;
+  return raw?.split(";", 1)[0];
+}
+async function profilePrivateKey() {
+  const config = await ProfileManager.getConfig();
+  const profile = await ProfileManager.getProfile(process.env.TC_PROFILE ?? config.defaultProfile);
+  if (typeof profile.privateKey !== "string" || profile.privateKey.length === 0) {
+    throw new Error("share upload requires a local wallet profile");
+  }
+  return profile.privateKey;
+}
+function createProductionUploadAuthorizer(input = {}) {
+  const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
+  const fetchFn = input.fetchFn ?? globalThis.fetch;
+  let sessionCookie;
+  let sessionExpiresAt = 0;
+  return async (_upload) => {
+    if (sessionCookie !== void 0 && sessionExpiresAt > Date.now() + 3e4) return { cookie: sessionCookie };
+    const key = await (input.privateKey?.() ?? profilePrivateKey());
+    const signer = new PrivateKeySigner(key);
+    const address = await signer.getAddress();
+    const nonceResponse = await fetchFn(`${origin}/api/share/auth/openkey/nonce`, {
+      headers: { accept: "application/json", origin },
+      redirect: "error",
+      referrerPolicy: "no-referrer"
+    });
+    if (!nonceResponse.ok) throw new Error("share sign-in nonce was rejected");
+    const nonceBody = await nonceResponse.json();
+    if (typeof nonceBody.nonce !== "string" || typeof nonceBody.expiresAt !== "string") throw new Error("share sign-in challenge is invalid");
+    const issuedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const message = authenticationMessage(origin, address, nonceBody.nonce, issuedAt);
+    const signature = await signer.signMessage(message);
+    const authenticated = await fetchFn(`${origin}/api/share/auth/openkey`, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json", origin },
+      body: JSON.stringify({ address, signature, message, nonce: nonceBody.nonce, issuedAt }),
+      redirect: "error",
+      referrerPolicy: "no-referrer"
+    });
+    const cookie = cookieFromResponse(authenticated);
+    if (!authenticated.ok || cookie === void 0) throw new Error("share sign-in was rejected");
+    sessionCookie = cookie;
+    sessionExpiresAt = Date.now() + 15 * 6e4;
+    return { cookie };
+  };
+}
+
 // src/index.ts
 var { version: version2 } = JSON.parse(
   readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
@@ -21179,12 +21261,31 @@ program.hook("preAction", async (thisCommand) => {
   }
 });
 configureShareCommandServices({
-  fetchFn: globalThis.fetch
+  fetchFn: globalThis.fetch,
+  // The CLI uses the same nonce-bound OpenKey session ceremony as the Share
+  // browser. The authorizer is lazy: public inspect/receive never touches
+  // profile state, and no secret is serialized into a publish result.
+  authorizeUpload: createProductionUploadAuthorizer({ fetchFn: globalThis.fetch })
 });
 var argv = process.argv.slice(2);
-var isShareInvocation = argv.some((value) => value === "share");
-var isHelpInvocation = argv.length === 0 || argv.some((value) => value === "--help" || value === "-h");
-if (isShareInvocation || isHelpInvocation) {
+var globalOptionsWithValues = /* @__PURE__ */ new Set(["--profile", "-p", "--host", "-H"]);
+function firstCommandToken(values) {
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    if (value === "--") return values[index + 1];
+    if (globalOptionsWithValues.has(value)) {
+      index += 1;
+      continue;
+    }
+    if (value.startsWith("--profile=") || value.startsWith("--host=")) continue;
+    if (value === "--verbose" || value === "--no-cache" || value === "-q" || value === "--quiet" || value === "--json") continue;
+    if (value.startsWith("-")) continue;
+    return value;
+  }
+  return void 0;
+}
+var isShareInvocation = firstCommandToken(argv) === "share";
+if (isShareInvocation) {
   registerShareCommand(program);
 } else {
   const loadLegacy = new Function("specifier", "return import(specifier)");

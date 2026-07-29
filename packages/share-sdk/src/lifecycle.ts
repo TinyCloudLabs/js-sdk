@@ -24,8 +24,10 @@ export async function revokeShare(input: {
   const target = targetKind(input.record);
   if (target === "bearer") return { state: "retention-only", target, reason: "bearer-capability-cannot-be-revoked" };
   if (input.adapter === undefined) return { state: "unsupported", target, reason: "node revocation authority is required" };
-  await input.adapter.revokeDelegation({ delegationCid: input.record.enforcementDelegationCid, scope: input.scope ?? "direct" });
-  return { state: "revoked", target: target as "recipientDid" | "email" | "emailDomain", delegationCid: input.record.enforcementDelegationCid, revokedAt: (input.now?.() ?? new Date()).toISOString() };
+  const scope = input.scope ?? "direct";
+  const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
+  await input.adapter.revokeDelegation({ delegationCid, scope });
+  return { state: "revoked", target: target as "recipientDid" | "email" | "emailDomain", delegationCid, revokedAt: (input.now?.() ?? new Date()).toISOString() };
 }
 
 export interface ShareHistoryView {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Command } from "commander";
-import { mkdtemp, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerShareCommand, parseShareTarget } from "./share.js";
@@ -39,6 +39,14 @@ describe("safe Share output", () => {
     const link = join(directory, "report.md");
     await symlink(target, link);
     await expect(writeShareOutput(directory, "report.md", new TextEncoder().encode("secret"), true)).rejects.toThrow();
+  });
+
+  test("rejects a symlink in an output-directory ancestor", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-ancestor-"));
+    const outside = await mkdtemp(join(tmpdir(), "tc-share-outside-"));
+    await mkdir(join(root, "real"));
+    await symlink(outside, join(root, "real", "alias"));
+    await expect(writeShareOutput(join(root, "real", "alias", "nested"), "report.md", new TextEncoder().encode("secret"), false)).rejects.toThrow("OUTPUT_EXISTS");
   });
 
   test("allows only one safe Markdown filename segment", () => {

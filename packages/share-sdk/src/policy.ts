@@ -2,8 +2,8 @@ import type { ShareEnvelopeV2 } from "@tinycloud/share-envelope";
 import { authorizeShare, type ShareAuthorizationAdapter, type ShareAuthorizationResult } from "./authorization.js";
 import { normalizeShareTarget, type TargetPublishInput, type TargetPublishOutcome, type ShareTarget } from "./targets.js";
 
-export interface SharePolicyPublishAdapter {
-  publishPolicy(input: TargetPublishInput & { readonly notify: boolean }): Promise<TargetPublishOutcome>;
+export interface SharePolicyPublishAdapter<TPublishOutcome = TargetPublishOutcome> {
+  publishPolicy(input: TargetPublishInput & { readonly notify: boolean }): Promise<TPublishOutcome>;
   claim(input: {
     readonly envelope: ShareEnvelopeV2;
     readonly method: "email-claim" | "email-otp";
@@ -13,15 +13,15 @@ export interface SharePolicyPublishAdapter {
 }
 
 /** Canonical exact-email/domain publication seam shared by web and CLI. */
-export async function publishPolicyShare(input: {
+export async function publishPolicyShare<TPublishOutcome = TargetPublishOutcome>(input: {
   readonly source: Uint8Array;
   readonly filename: string;
   readonly target: Extract<ShareTarget, { readonly kind: "email" | "emailDomain" }>;
   readonly expiresAt: Date;
   readonly origin: string;
   readonly notify?: boolean;
-  readonly adapter: SharePolicyPublishAdapter;
-}): Promise<TargetPublishOutcome> {
+  readonly adapter: SharePolicyPublishAdapter<TPublishOutcome>;
+}): Promise<TPublishOutcome> {
   const target = normalizeShareTarget(input.target);
   if (target.kind !== "email" && target.kind !== "emailDomain") throw new TypeError("policy publication requires an email target");
   return input.adapter.publishPolicy({

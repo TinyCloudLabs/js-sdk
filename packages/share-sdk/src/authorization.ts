@@ -38,6 +38,27 @@ export interface ShareAuthorizationAdapter<T> {
 }
 
 /**
+ * A node-authorized addressed read.  Returning plaintext alone is not an
+ * authorization result: the caller must also return the signed response
+ * binding and digest that the node produced for that exact share.
+ */
+export interface ShareAuthorizedContent {
+  readonly bytes: Uint8Array;
+  readonly bodyDigest: string;
+  readonly contentSourceDigest: string;
+  readonly binding: {
+    readonly shareId: string;
+    readonly delegationCid: string;
+    readonly authorityMaterialHandle: string;
+    readonly authorityMaterialDigest: string;
+    readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
+    readonly action?: string;
+  };
+  /** Optional detached proof or AEAD receipt, retained inside the adapter boundary. */
+  readonly proof?: unknown;
+}
+
+/**
  * Start or continue a target authorization without ever guessing a device,
  * claim, or delegation secret. Adapters own their protocol and are expected
  * to bind their resume token to a server challenge and expiry.

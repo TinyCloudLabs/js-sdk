@@ -14,7 +14,7 @@ export function inspectHuman(result: ShareInspection): void {
   process.stdout.write([
     `Share ${metadata.shareId}`,
     `File: ${metadata.display.filename ?? "unnamed"}`,
-    `Target: bearer (anyone with the complete link can read)`,
+    `Target: ${metadata.target.kind === "bearer" ? "bearer (anyone with the complete link can read)" : metadata.target.kind}`,
     `Expires: ${metadata.expiresAt}`,
     `Resource: ${metadata.resource.path}`,
     `Link format: ${result.link.kind}`,

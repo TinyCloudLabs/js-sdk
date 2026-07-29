@@ -59,6 +59,13 @@ describe("Share lifecycle and authorization parity", () => {
     await expect(revokeShare({ record })).resolves.toEqual({ state: "retention-only", target: "bearer", reason: "bearer-capability-cannot-be-revoked" });
   });
 
+  it("revokes the owner delegation for ancestor scope", async () => {
+    const calls: string[] = [];
+    const addressed = { ...record, targetKind: "recipientDid" as const, recipientMatcher: { kind: "recipientDid" as const, value: "did:key:z6Mkrecipient" } };
+    await expect(revokeShare({ record: addressed, scope: "ancestor", adapter: { async revokeDelegation(input) { calls.push(`${input.delegationCid}:${input.scope}`); } } })).resolves.toMatchObject({ state: "revoked", delegationCid: "bafy-owner" });
+    expect(calls).toEqual(["bafy-owner:ancestor"]);
+  });
+
   it("normalizes exact-email and domain policy targets and keeps claim resumable", async () => {
     expect(normalizeShareTarget({ kind: "email", address: "Alice@Example.COM" })).toEqual({ kind: "email", address: "Alice@example.com" });
     expect(normalizeShareTarget({ kind: "emailDomain", domain: "Example.COM" })).toEqual({ kind: "emailDomain", domain: "example.com" });

@@ -48,7 +48,9 @@ export type ShareUploadAuthorization =
 export interface SharePublishOptions {
   readonly source: Uint8Array | AsyncIterable<Uint8Array>;
   readonly filename: string;
-  readonly mediaType?: "text/markdown";
+  readonly mediaType?: string;
+  /** Browser Share also publishes binary files; the CLI leaves this false. */
+  readonly allowBinary?: boolean;
   readonly target?: SharePublishTarget;
   readonly expiresAt?: Date;
   readonly origin: string;
@@ -239,13 +241,15 @@ export async function publishShare(options: SharePublishOptions): Promise<Publis
   assertTarget(target);
   assertSafeFilename(options.filename);
   assertOrigin(options.origin, "share origin");
-  if (options.mediaType !== undefined && options.mediaType !== "text/markdown") throw new SharePublishError("invalid-argument", "only text/markdown is supported by this command");
+  if (options.mediaType !== undefined && options.mediaType.length === 0) throw new SharePublishError("invalid-argument", "mediaType must not be empty");
   const maxBytes = options.maxBytes ?? SHARE_CONTENT_LIMIT;
   if (maxBytes > SHARE_CONTENT_LIMIT) throw new SharePublishError("max-bytes-exceeded", "share content exceeds the maximum 100 MiB limit");
   const content = await snapshotSource(options.source, maxBytes);
   if (content.byteLength === 0) throw new SharePublishError("invalid-argument", "share content is empty");
-  try { new TextDecoder("utf-8", { fatal: true }).decode(content); }
-  catch { throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8"); }
+  if (options.allowBinary !== true) {
+    try { new TextDecoder("utf-8", { fatal: true }).decode(content); }
+    catch { throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8"); }
+  }
   const nowMs = options.now?.() ?? Date.now();
   const expiresAt = options.expiresAt ?? new Date(nowMs + DEFAULT_SHARE_LIFETIME_MS);
   if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= nowMs) throw new SharePublishError("invalid-argument", "expiresAt must be a valid future time");

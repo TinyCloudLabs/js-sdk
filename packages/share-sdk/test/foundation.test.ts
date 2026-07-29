@@ -248,10 +248,12 @@ describe("@tinycloud/share-sdk foundation", () => {
       now: () => Date.parse("2029-01-01T00:00:00.000Z"),
     });
     expect(pending).toEqual({ state: "authorization-required", method: "email-claim" });
+    const addressedBytes = new TextEncoder().encode("hello");
+    const addressedBodyDigest = toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", addressedBytes)));
     const received = await receiveShare(share.url, {
       fetchBlob: async () => share.sealedEnvelope.blob,
       now: () => Date.parse("2029-01-01T00:00:00.000Z"),
-      authorization: { async begin() { return { state: "ready", value: new TextEncoder().encode("hello") }; }, async resume() { return { state: "denied", reason: "unsupported" }; } },
+      authorization: { async begin(input) { return { state: "ready", value: { bytes: addressedBytes, bodyDigest: addressedBodyDigest, contentSourceDigest: input.envelope.contentSourceDigest, binding: { shareId: input.envelope.shareId, delegationCid: input.envelope.delegationCid, authorityMaterialHandle: input.envelope.authorityMaterialHandle, authorityMaterialDigest: input.envelope.authorityMaterialDigest, resource: input.envelope.resource } } }; }, async resume() { return { state: "denied", reason: "unsupported" }; } },
     });
     expect("state" in received ? received : received.text).toBe("hello");
   });

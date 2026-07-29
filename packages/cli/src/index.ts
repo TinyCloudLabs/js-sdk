@@ -10,6 +10,7 @@ import { theme } from "./output/theme.js";
 import { isInteractive } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
+import { createProductionUploadAuthorizer } from "./share/adapters.js";
 
 const program = new Command();
 
@@ -56,18 +57,30 @@ program.hook("preAction", async (thisCommand) => {
   }
 });
 
-// Node does not have a browser Share session cookie. Leave upload authority
-// unset by default so publish fails closed with UPLOAD_AUTH_REQUIRED; an
-// authenticated host/service adapter can inject the existing nonce- and
-// signature-bound uploader through configureShareCommandServices.
 configureShareCommandServices({
   fetchFn: globalThis.fetch,
+  // The CLI uses the same nonce-bound OpenKey session ceremony as the Share
+  // browser. The authorizer is lazy: public inspect/receive never touches
+  // profile state, and no secret is serialized into a publish result.
+  authorizeUpload: createProductionUploadAuthorizer({ fetchFn: globalThis.fetch }),
 });
 
 const argv = process.argv.slice(2);
-const isShareInvocation = argv.some((value) => value === "share");
-const isHelpInvocation = argv.length === 0 || argv.some((value) => value === "--help" || value === "-h");
-if (isShareInvocation || isHelpInvocation) {
+const globalOptionsWithValues = new Set(["--profile", "-p", "--host", "-H"]);
+function firstCommandToken(values: readonly string[]): string | undefined {
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index]!;
+    if (value === "--") return values[index + 1];
+    if (globalOptionsWithValues.has(value)) { index += 1; continue; }
+    if (value.startsWith("--profile=") || value.startsWith("--host=")) continue;
+    if (value === "--verbose" || value === "--no-cache" || value === "-q" || value === "--quiet" || value === "--json") continue;
+    if (value.startsWith("-")) continue;
+    return value;
+  }
+  return undefined;
+}
+const isShareInvocation = firstCommandToken(argv) === "share";
+if (isShareInvocation) {
   // Keep the agent-critical surface independent from the legacy command
   // graph. The latter imports optional Node/WASM authentication packages;
   // inspecting or receiving a public Share link must not load them.

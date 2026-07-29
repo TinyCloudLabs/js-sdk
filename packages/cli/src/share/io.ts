@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, stat } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { lstat, mkdir, open, readFile, realpath, stat } from "node:fs/promises";
+import { basename, join, resolve, sep } from "node:path";
 
 export const MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 export const MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -53,14 +53,27 @@ export async function readShareInput(input: string, name?: string, limit = MAX_S
 }
 
 async function assertDirectory(path: string): Promise<void> {
-  try {
-    const info = await lstat(path);
-    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("OUTPUT_EXISTS");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    await mkdir(path, { recursive: true, mode: 0o700 });
-    const created = await lstat(path);
-    if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
+  const absolute = resolve(path);
+  const segments = absolute.split(sep).filter(Boolean);
+  let current = absolute.startsWith(sep) ? sep : "";
+  for (const segment of segments) {
+    current = current === sep ? join(current, segment) : join(current, segment);
+    try {
+      const info = await lstat(current);
+      if (info.isSymbolicLink()) {
+        // macOS exposes /tmp and /var as stable system aliases. They are not
+        // user-controlled output-directory components; canonicalize them and
+        // continue checking every component below the alias.
+        const canonical = await realpath(current);
+        if (current !== "/tmp" && current !== "/var") throw new Error("OUTPUT_EXISTS");
+        if (canonical !== `/private${current}`) throw new Error("OUTPUT_EXISTS");
+      } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await mkdir(current, { mode: 0o700 });
+      const created = await lstat(current);
+      if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
+    }
   }
 }
 

@@ -225,6 +225,11 @@ export function registerShareCommand(program: Command): void {
           ...(options.resumeToken === undefined ? {} : { authorizationResumeToken: options.resumeToken }),
         });
         if ("state" in result) {
+          if (options.json) {
+            writeJson({ protocol: "tinycloud-share", version: 1, authorization: result });
+            process.exitCode = 6;
+            return;
+          }
           throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; resume through the configured authority adapter", 6);
         }
         if (options.stdout) {
