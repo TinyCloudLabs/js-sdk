@@ -27,7 +27,7 @@
   "dependencies": {
     "@noble/curves": "^1.9.2",
     "@noble/hashes": "^1.8.0",
-    "@tinycloud/share-envelope": "workspace:*",
+    "@tinycloud/share-envelope": "0.1.0",
     "multiformats": "^13.3.6"
   },
   "devDependencies": {
