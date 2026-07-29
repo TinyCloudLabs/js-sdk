@@ -23,5 +23,8 @@
     "@tinycloud/operations-mcp-conformance": "0.0.0",
     "@tinycloud/sdk-services-test": "14.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "coordinationos-openkey-session",
+    "tc-362-space-modal-timeout"
+  ]
 }
