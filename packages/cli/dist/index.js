@@ -26044,7 +26044,8 @@ import {
   listShares,
   showShare,
   notifyShare,
-  revokeShare
+  revokeShare,
+  redactPublishedShare
 } from "@tinycloud/share-sdk";
 init_errors();
 init_constants();
@@ -26250,7 +26251,7 @@ function registerShareCommand(program2) {
         }
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
       }
-      if (options.json) writeJson2(result);
+      if (options.json) writeJson2(redactPublishedShare(result));
       else publishHuman(result);
     } catch (error) {
       handleError(shareCliError(error));
@@ -26324,7 +26325,7 @@ function registerShareCommand(program2) {
           return result;
         }
       });
-      if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, legacy: true, migrated: migrated.migrated });
+      if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, legacy: true, migrated: redactPublishedShare(migrated.migrated) });
       else publishHuman(migrated.migrated);
     } catch (error) {
       handleError(shareCliError(error));
@@ -26368,6 +26369,10 @@ function registerShareCommand(program2) {
       const record = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
       if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
       const result = await revokeShare({ record, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
+      if (result.state === "unsupported") {
+        if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, result });
+        throw new CLIError("AUTH_REQUIRED", result.reason, 3);
+      }
       if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, result });
       else process.stdout.write(`${result.state}
 `);
@@ -27574,11 +27579,12 @@ var program = new Command();
 program.name("tc").description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version2).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output");
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
-  if (!opts.quiet) {
+  const parentName = thisCommand.parent?.name();
+  const isShareCommand = parentName === "share" || thisCommand.name() === "share";
+  if (!opts.quiet && !isShareCommand) {
     emitBanner(version2);
   }
   const commandName = thisCommand.name();
-  const parentName = thisCommand.parent?.name();
   const fullCommand = parentName && parentName !== "tc" ? `${parentName} ${commandName}` : commandName;
   const skipGuard = ["tc", "init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) || fullCommand === "profile create";
   if (!skipGuard && !opts.quiet && isInteractive()) {

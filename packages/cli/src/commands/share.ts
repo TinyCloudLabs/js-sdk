@@ -12,6 +12,7 @@ import {
   showShare,
   notifyShare,
   revokeShare,
+  redactPublishedShare,
   type ShareTarget,
   type TargetPublishAdapter,
   type LegacyShareReader,
@@ -166,7 +167,7 @@ export function registerShareCommand(program: Command): void {
           }
           throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
         }
-        if (options.json) writeJson(result);
+        if (options.json) writeJson(redactPublishedShare(result));
         else publishHuman(result);
       } catch (error) { handleError(shareCliError(error)); }
     });
@@ -263,7 +264,7 @@ export function registerShareCommand(program: Command): void {
             return result;
           },
         });
-        if (options.json) writeJson({ protocol: "tinycloud-share", version: 1, legacy: true, migrated: migrated.migrated });
+        if (options.json) writeJson({ protocol: "tinycloud-share", version: 1, legacy: true, migrated: redactPublishedShare(migrated.migrated) });
         else publishHuman(migrated.migrated);
       } catch (error) { handleError(shareCliError(error)); }
     });
@@ -315,6 +316,10 @@ export function registerShareCommand(program: Command): void {
         const record = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
         if (record === undefined) throw new CLIError("NOT_FOUND", "share not found", 4);
         const result = await revokeShare({ record, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
+        if (result.state === "unsupported") {
+          if (options.json) writeJson({ protocol: "tinycloud-share", version: 1, result });
+          throw new CLIError("AUTH_REQUIRED", result.reason, 3);
+        }
         if (options.json) writeJson({ protocol: "tinycloud-share", version: 1, result }); else process.stdout.write(`${result.state}\n`);
       } catch (error) { handleError(shareCliError(error)); }
     });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { inspectShare, publishShare, receiveShare, SharePublishError } from "../src/index.js";
+import { inspectShare, publishShare, receiveShare, redactPublishedShare, SharePublishError } from "../src/index.js";
 
 describe("publishShare", () => {
   it("round-trips compact and inline bearer links through the shared verifier", async () => {
@@ -22,6 +22,9 @@ describe("publishShare", () => {
     expect((await receiveShare(compact.url, options)).text).toBe("# decision\n\nbounded markdown\n");
     expect(JSON.stringify(compact.metadata)).not.toContain("sessionJwk");
     expect(JSON.stringify(compact.metadata)).not.toContain("content.key");
+    expect(JSON.stringify(redactPublishedShare(compact))).not.toContain(compact.url);
+    expect(JSON.stringify(compact)).not.toContain(compact.url);
+    expect(redactPublishedShare(compact)).not.toHaveProperty("url");
 
     const inline = await publishShare({ ...options, inline: true });
     expect((await receiveShare(inline.url, options)).text).toBe("# decision\n\nbounded markdown\n");

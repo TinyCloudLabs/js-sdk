@@ -24,7 +24,10 @@ export const DEFAULT_MAX_CONTENT_BLOB_BYTES = DEFAULT_MAX_SEALED_BLOB_BYTES;
 
 export class ShareReceiveError extends Error {
   readonly code: ShareErrorCode;
-  constructor(code: ShareErrorCode, message: string) { super(message); this.name = "ShareReceiveError"; this.code = code; }
+  readonly details: { readonly expiresAt?: string } | undefined;
+  constructor(code: ShareErrorCode, message: string, details?: { readonly expiresAt?: string }) {
+    super(message); this.name = "ShareReceiveError"; this.code = code; this.details = details;
+  }
   /** Machine output is deliberately code-only; diagnostics belong on stderr. */
   toJSON(): ShareErrorInfo { return { protocol: "tinycloud-share", version: SHARE_RESULT_VERSION, error: { code: this.code } }; }
 }
@@ -224,7 +227,7 @@ export async function verifyBearerEnvelope(
   if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
   try { if (!await verifyEnvelope(envelope, { expectedSignerDid: envelope.signature.signerDid })) throw new Error("signature"); }
   catch { throw new ShareReceiveError("signature-invalid", "share signature is invalid"); }
-  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired");
+  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
   const capability = checkBearerDelegation(envelope, options.now === undefined ? {} : { now: options.now });
   if (!capability.ok) throw new ShareReceiveError("capability-invalid", "share delegation does not authorize the target");
 }
@@ -251,6 +254,9 @@ export async function receiveShare(link: string, options: ShareFetchOptions = {}
     const key = fromBase64Url(resolved.envelope.content.key);
     try { bytes = await open(bytes, key); } catch { throw new ShareReceiveError("content-integrity-failed", "shared content could not be opened"); } finally { key.fill(0); }
   }
-  let text: string | undefined; try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { /* binary result */ }
+  let text: string | undefined;
+  if (bytes.byteLength !== 0) {
+    try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { /* binary result */ }
+  }
   return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind }, bytes, ...(text === undefined ? {} : { text }) };
 }

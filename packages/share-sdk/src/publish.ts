@@ -96,6 +96,12 @@ export interface PublishedShare {
   readonly registryDeleteAfter: string;
 }
 
+/** Machine-readable output omits the complete bearer capability. */
+export function redactPublishedShare(result: PublishedShare): Omit<PublishedShare, "url"> {
+  const { url: _url, ...redacted } = result;
+  return redacted;
+}
+
 export type SharePublishErrorCode =
   | "invalid-argument"
   | "unsupported-target"
@@ -300,7 +306,13 @@ export async function publishShare(options: SharePublishOptions): Promise<Publis
       resource: { kind: "exact", path }, actions: ["read"], expiresAt: expiry,
       display: { filename: options.filename }, content: { cid: sealedContent.cid },
     };
-    return { protocol: "tinycloud-share", version: SHARE_PUBLISH_RESULT_VERSION, url, link: { kind, cid: kind === "compact" ? sealedEnvelope.cid : sealedEnvelope.cid }, metadata, registryDeleteAfter: retention };
+    const result = { protocol: "tinycloud-share", version: SHARE_PUBLISH_RESULT_VERSION, link: { kind, cid: sealedEnvelope.cid }, metadata, registryDeleteAfter: retention } as PublishedShare;
+    Object.defineProperty(result, "toJSON", {
+      enumerable: false,
+      value: () => redactPublishedShare(result),
+    });
+    Object.defineProperty(result, "url", { enumerable: false, value: url });
+    return result;
   } finally {
     sessionPrivateKey.fill(0);
     senderPrivateKey.fill(0);

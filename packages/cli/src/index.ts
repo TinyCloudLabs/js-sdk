@@ -26,13 +26,14 @@ program
 
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
-  if (!opts.quiet) {
+  const parentName = thisCommand.parent?.name();
+  const isShareCommand = parentName === "share" || thisCommand.name() === "share";
+  if (!opts.quiet && !isShareCommand) {
     emitBanner(version);
   }
 
   // Config guard — warn if not configured for auth-required commands
   const commandName = thisCommand.name();
-  const parentName = thisCommand.parent?.name();
   const fullCommand = parentName && parentName !== "tc" ? `${parentName} ${commandName}` : commandName;
   const skipGuard = ["tc", "init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
                     fullCommand === "profile create";
