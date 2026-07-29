@@ -44,4 +44,4 @@ jobs:
         run: |
           bun run --cwd packages/sdk-core test
           bun run --cwd packages/sdk-services test
-          bun run --cwd packages/node-sdk test
+          bun test --max-concurrency=1 packages/node-sdk/src
