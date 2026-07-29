@@ -71,9 +71,13 @@ describe("@tinycloud/share-sdk foundation", () => {
     const inspection = await inspectShare(share.url, { fetchBlob, now: () => Date.parse("2029-01-01T00:00:00.000Z") });
     expect(inspection.metadata.shareId).toBe("share-test");
     expect(inspection.metadata).not.toHaveProperty("authorizationTarget");
+    expect(JSON.stringify(inspection)).not.toContain("sessionJwk");
+    expect(JSON.stringify(inspection)).not.toContain("delegation");
+    expect(JSON.stringify(inspection)).not.toContain("content.key");
     const received = await receiveShare(share.url, { fetchBlob, now: () => Date.parse("2029-01-01T00:00:00.000Z") });
     expect(received.text).toBe("hello from the headless SDK");
   });
+
 
   it("rejects an oversized fetched envelope before decryption", async () => {
     const share = await makeShare();

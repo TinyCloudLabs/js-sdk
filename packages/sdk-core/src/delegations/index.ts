@@ -221,6 +221,29 @@ export type {
 } from "./recipient-types";
 export type { ShareNativeResponse } from "./recipient-types.schema";
 export { ShareAccessError, ShareConflict } from "./recipient-types";
+
+/**
+ * Canonical headless Share foundation. The older SharingService and v2
+ * artifact exports above remain compatibility adapters; new consumers should
+ * use these package-owned codecs and redacted receive operations so browser
+ * and Node callers share one verifier and one result taxonomy.
+ */
+export {
+  inspectShare,
+  receiveShare,
+  ShareReceiveError,
+  toShareErrorInfo,
+  verifyBearerEnvelope,
+} from "@tinycloud/share-sdk";
+export type {
+  ShareErrorCode,
+  ShareErrorInfo,
+  ShareFetchOptions,
+  ShareInspection,
+  ShareMetadata,
+  ShareReceiveResult,
+  VerifyBearerEnvelopeOptions,
+} from "@tinycloud/share-sdk";
 export {
   ShareActionSchema,
   ShareRecipientClientOptionsSchema,

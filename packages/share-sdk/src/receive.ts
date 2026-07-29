@@ -6,8 +6,10 @@ import {
   open,
   parseCompactOrInlineShareUrl,
   shareEnvelopeSchema,
+  shareEnvelopeV2Schema,
   verifyEnvelope,
   type ShareEnvelope,
+  type ShareEnvelopeV2,
 } from "@tinycloud/share-envelope";
 
 export type ShareErrorCode = "invalid-link" | "fetch-failed" | "cid-mismatch" | "decrypt-failed" | "envelope-invalid" | "origin-mismatch" | "signature-invalid" | "capability-invalid" | "expired" | "unsupported-target" | "content-integrity-failed";
@@ -71,6 +73,13 @@ export interface ShareMetadata {
 
 export interface ShareInspection { readonly metadata: ShareMetadata; readonly link: { readonly origin: string; readonly cid: string; readonly kind: "compact" | "inline" } }
 export interface ShareReceiveResult extends ShareInspection { readonly bytes: Uint8Array; readonly text?: string }
+
+interface ResolvedShareEnvelope {
+  readonly envelope: ShareEnvelope | ShareEnvelopeV2;
+  readonly origin: string;
+  readonly cid: string;
+  readonly kind: "compact" | "inline";
+}
 
 function boundedBytes(value: Uint8Array, limit: number, code: ShareErrorCode): Uint8Array {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new ShareReceiveError("fetch-failed", "share byte limit is invalid");
@@ -150,17 +159,27 @@ function metadataFor(envelope: ShareEnvelope, origin: string): ShareMetadata {
   };
 }
 
-function parseEnvelope(bytes: Uint8Array): ShareEnvelope {
+function parseEnvelope(bytes: Uint8Array): ShareEnvelope | ShareEnvelopeV2 {
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     const value = JSON.parse(text) as unknown;
     if (canonicalize(value) !== text) throw new Error("share envelope is not canonical JSON");
+    if (typeof value === "object" && value !== null && !Array.isArray(value) && (value as { readonly version?: unknown }).version === 2) {
+      return shareEnvelopeV2Schema.parse(value);
+    }
     return shareEnvelopeSchema.parse(value);
   }
   catch { throw new ShareReceiveError("envelope-invalid", "share envelope is invalid"); }
 }
 
-async function resolveEnvelope(link: string, options: ShareFetchOptions): Promise<{ readonly envelope: ShareEnvelope; readonly origin: string; readonly cid: string; readonly kind: "compact" | "inline" }> {
+/**
+ * Resolve a compact or inline link through the canonical ordered pipeline:
+ * origin/path parsing, bounded transport, CID verification, AEAD opening,
+ * canonical JSON, and strict envelope schema validation. Cryptographic target
+ * verification is intentionally separate so policy and recipient-DID callers
+ * can apply their own trusted-authority checks before network effects.
+ */
+async function resolveShareEnvelope(link: string, options: ShareFetchOptions = {}): Promise<ResolvedShareEnvelope> {
   let parsed: ReturnType<typeof parseCompactOrInlineShareUrl>;
   try { parsed = parseCompactOrInlineShareUrl(link, { ...(options.expectedOrigin === undefined ? {} : { expectedOrigin: options.expectedOrigin }) }); }
   catch { throw new ShareReceiveError("invalid-link", "share link format is invalid"); }
@@ -179,6 +198,12 @@ async function resolveEnvelope(link: string, options: ShareFetchOptions): Promis
     // path, including registry errors and CID mismatches before AEAD.
     parsed.key32?.fill(0);
   }
+}
+
+async function resolveEnvelope(link: string, options: ShareFetchOptions): Promise<ResolvedShareEnvelope & { readonly envelope: ShareEnvelope }> {
+  const resolved = await resolveShareEnvelope(link, options);
+  if (resolved.envelope.version !== 1) throw new ShareReceiveError("unsupported-target", "this receive path only handles v1 bearer shares");
+  return resolved as ResolvedShareEnvelope & { readonly envelope: ShareEnvelope };
 }
 
 /** Verify a decrypted bearer envelope for browser adapters that own transport. */

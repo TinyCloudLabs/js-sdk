@@ -264,6 +264,8 @@
         "@noble/curves": "^1.9.7",
         "@noble/hashes": "1.8.0",
         "@tinycloud/bootstrap": "2.6.0",
+        "@tinycloud/share-envelope": "workspace:*",
+        "@tinycloud/share-sdk": "workspace:*",
         "@tinycloud/sdk-services": "2.8.0",
         "ms": "^2.1.3",
         "multiformats": "^13.4.1",
