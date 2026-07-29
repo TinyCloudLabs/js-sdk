@@ -12,15 +12,43 @@ export interface OwnerDelegationReceipt {
   readonly delegationCid: string;
   readonly signedDagCbor: Uint8Array;
   readonly delegation: { readonly delegateDID: string; readonly spaceId: string; readonly path: string; readonly actions: readonly string[]; readonly expiry: Date };
+  /** Exact service-scoped capabilities encoded in the signed owner delegation. */
+  readonly permissions: readonly OwnerDelegationPermission[];
 }
 
-export interface CreateOwnerDelegationParams {
+export interface OwnerDelegationPermission {
+  /** Canonical long-form service name, for example `tinycloud.kv`. */
+  readonly service: string;
+  /** Exact service resource path. Encryption permissions use a network URN. */
+  readonly path: string;
+  /** Canonical full action URNs belonging to `service`. */
+  readonly actions: readonly string[];
+}
+
+interface CreateOwnerDelegationBase {
   readonly delegateDid: string;
   readonly spaceId: string;
-  readonly path: string;
-  readonly actions: readonly string[];
   readonly expiresAt: Date;
 }
+
+/**
+ * A wallet-rooted owner delegation accepts either the historical single-path
+ * shape or an exact list of service-scoped permissions. The two forms are
+ * mutually exclusive so callers cannot sign authority from one field while
+ * displaying or persisting a contradictory second field.
+ */
+export type CreateOwnerDelegationParams = CreateOwnerDelegationBase & (
+  | {
+      readonly path: string;
+      readonly actions: readonly string[];
+      readonly permissions?: never;
+    }
+  | {
+      readonly permissions: readonly OwnerDelegationPermission[];
+      readonly path?: never;
+      readonly actions?: never;
+    }
+);
 
 const MAX_CONTENT_BYTES = 100 * 1024 * 1024;
 const ENFORCEMENT_DOMAIN = "xyz.tinycloud.share/policy-enforcement/v2\0";
@@ -28,6 +56,10 @@ const POLICY_DOMAIN = "xyz.tinycloud.share/policy/v2\0";
 export const OWNER_SHARE_REGISTRATION_DOMAIN = "xyz.tinycloud.share/policy-registration/v2\0";
 
 export type OwnerShareAction = "tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put";
+export interface OwnerShareDecryption {
+  readonly networkId: string;
+  readonly action: "tinycloud.encryption/decrypt";
+}
 export type OwnerShareMatcher =
   | { readonly kind: "exactEmail"; readonly value: string }
   | { readonly kind: "emailDomain"; readonly value: string };
@@ -42,6 +74,7 @@ export interface OwnerSharePolicyV2 {
   readonly target: { readonly origin: string; readonly nodeAudience: string; readonly enforcerDid: string; readonly spaceId: string };
   readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
   readonly actions: readonly OwnerShareAction[];
+  readonly decryption?: OwnerShareDecryption;
   readonly contentSource: { readonly kind: "kv"; readonly space: string; readonly path: string; readonly action: "tinycloud.kv/get" };
   readonly contentSourceDigest: string;
   readonly ownerDelegationCid: string;
@@ -94,6 +127,7 @@ export interface OwnerSharePolicyRegistration {
   readonly target: { readonly origin: string; readonly nodeAudience: string; readonly spaceId: string };
   readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
   readonly actions: readonly OwnerShareAction[];
+  readonly decryption?: OwnerShareDecryption;
   readonly contentSource: { readonly kind: "kv"; readonly space: string; readonly path: string; readonly action: "tinycloud.kv/get" };
   readonly contentSourceDigest: string;
   readonly registeredAt: string;
@@ -252,6 +286,7 @@ export async function createPolicyEnforcementDelegation(input: {
   readonly nodeAudience: string;
   readonly path: string;
   readonly actions: readonly OwnerShareAction[];
+  readonly decryption?: OwnerShareDecryption;
   readonly contentSourceDigest: string;
   readonly expiresAt: string;
 }): Promise<SignedDelegation> {
@@ -266,6 +301,10 @@ export async function createPolicyEnforcementDelegation(input: {
     spaceId: input.spaceId,
     path: input.path,
     actions: [...input.actions],
+    ...(input.decryption === undefined ? {} : {
+      decryptionNetworkId: input.decryption.networkId,
+      decryptionAction: input.decryption.action,
+    }),
     contentSourceDigest: input.contentSourceDigest,
     expiresAt: input.expiresAt,
   } satisfies Record<string, string | readonly string[]>;
@@ -288,7 +327,9 @@ export function computeOwnerShareRegistrationCid(registration: Omit<OwnerSharePo
 export function validateOwnerSharePolicyRegistration(value: unknown, expected: RegisterOwnerSharePolicyParams): OwnerSharePolicyRegistrationReceipt {
   if (cid(expected.policy.bytes) !== expected.policy.cid) throw new Error("submitted owner-share policy bytes do not match its CID");
   const root = assertObject(value, ["registration", "proof"], "owner-share registration response");
-  const registration = assertObject(root.registration, ["registrationCid", "policyCid", "ownerDelegationCid", "enforcementDelegationCid", "ownerDid", "shareKeyDid", "enforcerDid", "shareId", "recipientMatcher", "target", "resource", "actions", "contentSource", "contentSourceDigest", "registeredAt", "expiresAt"], "owner-share registration");
+  const rawRegistration = root.registration as Record<string, unknown> | undefined;
+  const hasDecryption = typeof rawRegistration === "object" && rawRegistration !== null && Object.prototype.hasOwnProperty.call(rawRegistration, "decryption");
+  const registration = assertObject(root.registration, ["registrationCid", "policyCid", "ownerDelegationCid", "enforcementDelegationCid", "ownerDid", "shareKeyDid", "enforcerDid", "shareId", "recipientMatcher", "target", "resource", "actions", ...(hasDecryption ? ["decryption"] : []), "contentSource", "contentSourceDigest", "registeredAt", "expiresAt"], "owner-share registration");
   const proof = assertObject(root.proof, ["alg", "kid", "signature"], "owner-share registration proof");
   if (registration.policyCid !== expected.policy.cid || registration.ownerDelegationCid !== expected.ownerDelegation.delegationCid || registration.enforcementDelegationCid !== expected.enforcementDelegation.cid || registration.contentSourceDigest !== expected.contentSourceDigest) throw new Error("owner-share registration is not bound to the submitted chain");
   let policyValue: Record<string, unknown>;
@@ -300,7 +341,11 @@ export function validateOwnerSharePolicyRegistration(value: unknown, expected: R
   const registrationTarget = registration.target as Record<string, unknown>;
   const registrationResource = registration.resource as Record<string, unknown>;
   const enforcementFacts = expected.enforcementDelegation.facts;
-  if (typeof target?.origin !== "string" || typeof target.nodeAudience !== "string" || typeof target.enforcerDid !== "string" || typeof target.spaceId !== "string" || typeof resource?.kind !== "string" || !["exact", "prefix"].includes(resource.kind) || typeof resource?.path !== "string" || !Array.isArray(policy.actions) || policy.ownerDid !== registration.ownerDid || policy.shareKeyDid !== registration.shareKeyDid || policy.shareId !== registration.shareId || canonicalize(policy.recipientMatcher) !== canonicalize(registration.recipientMatcher) || target.origin !== registrationTarget.origin || target.nodeAudience !== registrationTarget.nodeAudience || target.enforcerDid !== registration.enforcerDid || target.spaceId !== registrationTarget.spaceId || resource.kind !== registrationResource.kind || resource.path !== registrationResource.path || canonicalize(policy.actions) !== canonicalize(registration.actions) || canonicalize(policy.contentSource) !== canonicalize(registration.contentSource) || policy.expiresAt !== registration.expiresAt || policy.contentSourceDigest !== registration.contentSourceDigest || enforcementFacts.ownerDelegationCid !== registration.ownerDelegationCid || enforcementFacts.policyCid !== registration.policyCid || enforcementFacts.shareKeyDid !== registration.shareKeyDid || enforcementFacts.enforcerDid !== registration.enforcerDid || enforcementFacts.nodeAudience !== registrationTarget.nodeAudience || enforcementFacts.spaceId !== registrationTarget.spaceId || enforcementFacts.path !== registrationResource.path || canonicalize(enforcementFacts.actions) !== canonicalize(registration.actions) || enforcementFacts.expiresAt !== registration.expiresAt) throw new Error("owner-share registration is not bound to the canonical policy");
+  const decryption = policy.decryption as Record<string, unknown> | undefined;
+  const decryptionMatches = decryption === undefined
+    ? registration.decryption === undefined
+    : registration.decryption !== undefined && canonicalize(decryption) === canonicalize(registration.decryption);
+  if (typeof target?.origin !== "string" || typeof target.nodeAudience !== "string" || typeof target.enforcerDid !== "string" || typeof target.spaceId !== "string" || typeof resource?.kind !== "string" || !["exact", "prefix"].includes(resource.kind) || typeof resource?.path !== "string" || !Array.isArray(policy.actions) || policy.ownerDid !== registration.ownerDid || policy.shareKeyDid !== registration.shareKeyDid || policy.shareId !== registration.shareId || canonicalize(policy.recipientMatcher) !== canonicalize(registration.recipientMatcher) || target.origin !== registrationTarget.origin || target.nodeAudience !== registrationTarget.nodeAudience || target.enforcerDid !== registration.enforcerDid || target.spaceId !== registrationTarget.spaceId || resource.kind !== registrationResource.kind || resource.path !== registrationResource.path || canonicalize(policy.actions) !== canonicalize(registration.actions) || !decryptionMatches || canonicalize(policy.contentSource) !== canonicalize(registration.contentSource) || policy.expiresAt !== registration.expiresAt || policy.contentSourceDigest !== registration.contentSourceDigest || enforcementFacts.ownerDelegationCid !== registration.ownerDelegationCid || enforcementFacts.policyCid !== registration.policyCid || enforcementFacts.shareKeyDid !== registration.shareKeyDid || enforcementFacts.enforcerDid !== registration.enforcerDid || enforcementFacts.nodeAudience !== registrationTarget.nodeAudience || enforcementFacts.spaceId !== registrationTarget.spaceId || enforcementFacts.path !== registrationResource.path || canonicalize(enforcementFacts.actions) !== canonicalize(registration.actions) || enforcementFacts.decryptionNetworkId !== decryption?.networkId || enforcementFacts.decryptionAction !== decryption?.action || enforcementFacts.expiresAt !== registration.expiresAt) throw new Error("owner-share registration is not bound to the canonical policy");
   if (typeof registration.registrationCid !== "string" || typeof registration.expiresAt !== "string" || typeof registration.registeredAt !== "string") throw new Error("owner-share registration timestamps are invalid");
   if (new Date(registration.expiresAt).toISOString() !== registration.expiresAt || Date.parse(registration.expiresAt) <= Date.now()) throw new Error("owner-share registration is expired or non-canonical");
   const { registrationCid: _registrationCid, ...registrationCore } = registration;

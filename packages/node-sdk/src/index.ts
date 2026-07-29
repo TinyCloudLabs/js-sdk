@@ -148,6 +148,7 @@ export {
   type SecretPermissionHint,
   type SecretReadResult,
 } from "./TinyCloudNode";
+export type { OwnerDelegationPermission } from "@tinycloud/sdk-core";
 
 export { AccountService } from "./account/AccountService";
 export type {

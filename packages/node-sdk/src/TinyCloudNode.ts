@@ -140,6 +140,9 @@ import {
   type EncryptionCrypto,
   type NetworkDescriptor,
   type RegisterOwnerSharePolicyParams,
+  type CreateOwnerDelegationParams as CoreCreateOwnerDelegationParams,
+  type OwnerDelegationPermission,
+  type OwnerDelegationReceipt as CoreOwnerDelegationReceipt,
   type OwnerSharePolicyRegistrationReceipt,
   validateOwnerSharePolicyRegistrationBytes,
   type ShareDeliveryAuthorizationReceipt,
@@ -259,13 +262,7 @@ const ROOT_DELEGATION_ACTIONS: string[] = [
  */
 const DEFAULT_SESSION_EXPIRATION_MS = EXPIRY.SESSION_MS;
 
-export interface CreateOwnerDelegationParams {
-  readonly delegateDid: string;
-  readonly spaceId: string;
-  readonly path: string;
-  readonly actions: readonly string[];
-  readonly expiresAt: Date;
-}
+export type CreateOwnerDelegationParams = CoreCreateOwnerDelegationParams;
 
 export function decodeAuthorizationBytes(authorization: string): Uint8Array {
   const encoded = authorization.replace(/^Bearer /i, "");
@@ -288,12 +285,8 @@ export function decodeAuthorizationBytes(authorization: string): Uint8Array {
   return decoded;
 }
 
-export interface OwnerDelegationReceipt {
+export interface OwnerDelegationReceipt extends CoreOwnerDelegationReceipt {
   readonly delegation: Delegation;
-  /** Exact signed DAG-CBOR bytes submitted in the Authorization header. */
-  readonly signedDagCbor: Uint8Array;
-  /** Locally derived by the node WASM implementation; this is delegation identity. */
-  readonly delegationCid: string;
   readonly nodeReceipt: {
     /** Raw /delegate response CID: a commit-event id, not delegation identity. */
     readonly commitEventCid?: string;
@@ -503,22 +496,110 @@ function sameInstant(left: Date, right: Date): boolean {
   return left.getTime() === right.getTime();
 }
 
-function sharingActionsToAbilities(path: string, actions: string[]): AbilitiesMap | undefined {
-  const abilities: AbilitiesMap = {};
-
-  for (const action of actions) {
-    const slash = action.indexOf("/");
-    if (slash === -1) return undefined;
-
-    const shortService = SERVICE_LONG_TO_SHORT[action.slice(0, slash)];
-    if (shortService === undefined) return undefined;
-
-    abilities[shortService] ??= {};
-    abilities[shortService][path] ??= [];
-    abilities[shortService][path].push(action);
+function ownerDelegationPermissions(
+  params: CreateOwnerDelegationParams,
+): OwnerDelegationPermission[] {
+  const hasPermissions = Object.prototype.hasOwnProperty.call(params, "permissions");
+  const hasLegacy = Object.prototype.hasOwnProperty.call(params, "path")
+    || Object.prototype.hasOwnProperty.call(params, "actions");
+  if (hasPermissions === hasLegacy) {
+    throw new Error("Owner delegation requires exactly one authority shape: path/actions or permissions");
   }
 
-  return Object.keys(abilities).length > 0 ? abilities : undefined;
+  const permissions: OwnerDelegationPermission[] = [];
+  if (hasPermissions) {
+    if (!Array.isArray(params.permissions)) {
+      throw new Error("Owner delegation permissions are invalid");
+    }
+    permissions.push(...params.permissions.map((permission) => ({
+      service: permission.service,
+      path: permission.path,
+      actions: [...permission.actions],
+    })));
+  } else {
+    if (typeof params.path !== "string" || !Array.isArray(params.actions)) {
+      throw new Error("Owner delegation requires bounded capabilities");
+    }
+    const byService = new Map<string, string[]>();
+    for (const action of params.actions) {
+      if (typeof action !== "string") {
+        throw new Error("Owner delegation capabilities are unsupported");
+      }
+      const slash = action.indexOf("/");
+      const service = slash === -1 ? "" : action.slice(0, slash);
+      if (SERVICE_LONG_TO_SHORT[service] === undefined) {
+        throw new Error("Owner delegation capabilities are unsupported");
+      }
+      const actions = byService.get(service) ?? [];
+      actions.push(action);
+      byService.set(service, actions);
+    }
+    for (const [service, actions] of byService) {
+      permissions.push({ service, path: params.path, actions });
+    }
+  }
+
+  if (permissions.length === 0 || permissions.length > 16) {
+    throw new Error("Owner delegation requires bounded capabilities");
+  }
+  const resources = new Set<string>();
+  for (const permission of permissions) {
+    if (
+      typeof permission.service !== "string"
+      || SERVICE_LONG_TO_SHORT[permission.service] === undefined
+      || typeof permission.path !== "string"
+      || permission.path.length === 0
+      || permission.path.trim() !== permission.path
+      || /[\u0000-\u001f\u007f\\*]/.test(permission.path)
+      || !Array.isArray(permission.actions)
+      || permission.actions.length === 0
+      || permission.actions.length > 32
+    ) {
+      throw new Error("Owner delegation requires bounded capabilities");
+    }
+    const resourceKey = `${permission.service}\0${permission.path}`;
+    if (resources.has(resourceKey)) {
+      throw new Error("Owner delegation permissions contain duplicate resources");
+    }
+    resources.add(resourceKey);
+    const actions = new Set<string>();
+    for (const action of permission.actions) {
+      if (
+        typeof action !== "string"
+        || !action.startsWith(`${permission.service}/`)
+        || action.length === permission.service.length + 1
+        || actions.has(action)
+      ) {
+        throw new Error("Owner delegation capabilities are unsupported");
+      }
+      actions.add(action);
+    }
+    if (permission.service === ENCRYPTION_PERMISSION_SERVICE) {
+      try {
+        parseNetworkId(permission.path);
+      } catch {
+        throw new Error("Owner delegation encryption permission requires a canonical network URN");
+      }
+    }
+  }
+  return permissions;
+}
+
+function ownerPermissionsToAbilities(
+  permissions: readonly OwnerDelegationPermission[],
+): { readonly abilities: AbilitiesMap; readonly rawAbilities: Record<string, string[]> } {
+  const abilities: AbilitiesMap = {};
+  const rawAbilities: Record<string, string[]> = {};
+  for (const permission of permissions) {
+    if (permission.service === ENCRYPTION_PERMISSION_SERVICE) {
+      rawAbilities[permission.path] = [...permission.actions];
+      continue;
+    }
+    const shortService = SERVICE_LONG_TO_SHORT[permission.service]!;
+    abilities[shortService] ??= {};
+    abilities[shortService][permission.path] = [...permission.actions];
+  }
+  return { abilities, rawAbilities };
 }
 
 /**
@@ -3670,22 +3751,33 @@ export class TinyCloudNode {
   ): Promise<OwnerDelegationReceipt> {
     const assertOwnerGraphActive = assertActive ?? this._serviceGraph.assertActive.bind(this._serviceGraph);
     assertOwnerGraphActive();
-    if (!params.delegateDid.startsWith("did:key:") || params.actions.length === 0 || params.path.length === 0) {
+    if (!params.delegateDid.startsWith("did:key:")) {
       throw new Error("Owner delegation requires an external did:key audience and bounded capabilities");
     }
+    const permissions = ownerDelegationPermissions(params);
     const now = new Date();
-    if (params.expiresAt.getTime() <= now.getTime() || params.expiresAt.getTime() - now.getTime() > EXPIRY.MAX_MS) {
+    if (!(params.expiresAt instanceof Date) || params.expiresAt.getTime() <= now.getTime() || params.expiresAt.getTime() - now.getTime() > EXPIRY.MAX_MS) {
       throw new Error("Owner delegation expiry must be explicit, future, and within EXPIRY.MAX_MS");
     }
     if (!this.signer) throw new Error("Owner wallet signer is required");
     const session = this.currentTinyCloudSession();
     if (!session) throw new Error("Owner session is required");
-    const abilities = sharingActionsToAbilities(params.path, [...params.actions]);
-    if (!abilities) throw new Error("Owner delegation capabilities are unsupported");
+    const ownerDid = pkhDid(session.address, session.chainId);
+    for (const permission of permissions) {
+      if (
+        permission.service === ENCRYPTION_PERMISSION_SERVICE
+        && !principalDidEquals(parseNetworkId(permission.path).ownerDid, ownerDid)
+      ) {
+        throw new Error("Owner delegation cannot grant a foreign encryption network");
+      }
+    }
+    const { abilities, rawAbilities } = ownerPermissionsToAbilities(permissions);
+    const primary = permissions[0]!;
 
     const host = this.config.host!;
     const prepared = this.wasmBindings.prepareSession({
       abilities,
+      ...(Object.keys(rawAbilities).length === 0 ? {} : { rawAbilities }),
       address: this.wasmBindings.ensureEip55(session.address),
       chainId: session.chainId,
       domain: this.siweDomain,
@@ -3705,10 +3797,10 @@ export class TinyCloudNode {
     const delegation: Delegation = {
       cid: delegationSession.delegationCid,
       delegateDID: params.delegateDid,
-      delegatorDID: pkhDid(session.address, session.chainId),
+      delegatorDID: ownerDid,
       spaceId: params.spaceId,
-      path: params.path,
-      actions: [...params.actions],
+      path: primary.path,
+      actions: [...primary.actions],
       expiry: params.expiresAt,
       isRevoked: false,
       allowSubDelegation: true,
@@ -3719,6 +3811,7 @@ export class TinyCloudNode {
       delegation,
       signedDagCbor: decodeAuthorizationBytes(delegationSession.delegationHeader.Authorization),
       delegationCid: delegationSession.delegationCid,
+      permissions,
       nodeReceipt: {
         commitEventCid: (activation as typeof activation & { commitEventCid?: string }).commitEventCid,
         activated: activation.activated ?? [],

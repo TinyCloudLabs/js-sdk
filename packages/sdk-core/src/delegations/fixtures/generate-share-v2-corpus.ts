@@ -190,6 +190,11 @@ async function buildRegistration(): Promise<{
       actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/put"],
       expiry: new Date("2099-01-01T00:00:00.000Z"),
     },
+    permissions: [{
+      service: "tinycloud.kv",
+      path: DOC_PATH,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/put"],
+    }],
   };
 
   const contentSource = { kind: "kv", space: SPACE, path: DOC_PATH, action: "tinycloud.kv/get" } as const;
