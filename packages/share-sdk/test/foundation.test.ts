@@ -81,7 +81,7 @@ describe("@tinycloud/share-sdk foundation", () => {
 
   it("rejects an oversized fetched envelope before decryption", async () => {
     const share = await makeShare();
-    await expect(inspectShare(share.url, { fetchBlob: async () => new Uint8Array(DEFAULT_MAX_SEALED_BLOB_BYTES + 1) })).rejects.toMatchObject({ code: "fetch-failed" });
+    await expect(inspectShare(share.url, { fetchBlob: async () => new Uint8Array(DEFAULT_MAX_SEALED_BLOB_BYTES + 1) })).rejects.toMatchObject({ code: "max-bytes-exceeded" });
   });
 
   it("normalizes transport failures to the redacted fetch error", async () => {
@@ -131,7 +131,7 @@ describe("@tinycloud/share-sdk foundation", () => {
     await expect(inspectShare(share.url, {
       registryBaseUrl: "https://registry.example",
       fetchFn: async () => response,
-    })).rejects.toMatchObject({ code: "fetch-failed" });
+    })).rejects.toMatchObject({ code: "max-bytes-exceeded" });
   });
 
   it("rejects prefix resources before any content fetch", async () => {

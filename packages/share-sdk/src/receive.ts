@@ -12,7 +12,7 @@ import {
   type ShareEnvelopeV2,
 } from "@tinycloud/share-envelope";
 
-export type ShareErrorCode = "invalid-link" | "fetch-failed" | "cid-mismatch" | "decrypt-failed" | "envelope-invalid" | "origin-mismatch" | "signature-invalid" | "capability-invalid" | "expired" | "unsupported-target" | "content-integrity-failed";
+export type ShareErrorCode = "invalid-link" | "fetch-failed" | "max-bytes-exceeded" | "cid-mismatch" | "decrypt-failed" | "envelope-invalid" | "origin-mismatch" | "signature-invalid" | "capability-invalid" | "expired" | "unsupported-target" | "content-integrity-failed";
 
 export const SHARE_RESULT_VERSION = 1 as const;
 
@@ -122,7 +122,7 @@ async function readResponseBytes(response: Response, limit: number, tooLargeCode
   return bytes;
 }
 
-function registryFetcher(options: ShareFetchOptions, limit: number, tooLargeCode: ShareErrorCode = "fetch-failed"): (input: { readonly origin: string; readonly cid: string }) => Promise<Uint8Array> {
+function registryFetcher(options: ShareFetchOptions, limit: number, tooLargeCode: ShareErrorCode = "max-bytes-exceeded"): (input: { readonly origin: string; readonly cid: string }) => Promise<Uint8Array> {
   if (options.fetchBlob !== undefined) return async (input) => {
     try {
       return boundedBytes(await options.fetchBlob!(input), limit, tooLargeCode);

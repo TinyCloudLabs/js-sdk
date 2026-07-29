@@ -26111,14 +26111,16 @@ function markdownFilename(value) {
 }
 async function readShareInput(input, name2, limit = MAX_SHARE_STDIN_BYTES) {
   if (input === "-") {
-    const bytes = await readBoundedStdin(limit);
-    return { bytes, filename: markdownFilename(name2 ?? "stdin.md") };
+    const bytes2 = await readBoundedStdin(limit);
+    return { bytes: bytes2, filename: markdownFilename(name2 ?? "stdin.md") };
   }
   const path = resolve2(input);
   const info = await stat2(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
   const filename = markdownFilename(name2 ?? basename2(path));
-  return { bytes: new Uint8Array(await readFile9(path)), filename };
+  const bytes = new Uint8Array(await readFile9(path));
+  if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
+  return { bytes, filename };
 }
 async function assertDirectory(path) {
   try {
@@ -26172,7 +26174,7 @@ function shareCliError(error) {
   }
   if (error instanceof ShareReceiveError2) {
     const verification = /* @__PURE__ */ new Set(["cid-mismatch", "decrypt-failed", "envelope-invalid", "origin-mismatch", "signature-invalid", "capability-invalid", "content-integrity-failed"]);
-    const exit = verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 1;
+    const exit = error.code === "max-bytes-exceeded" ? 7 : verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 1;
     const code = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
     return new CLIError(code, error.message, exit);
   }
@@ -26239,17 +26241,17 @@ function registerShareCommand(program2) {
       handleError(shareCliError(error));
     }
   });
-  share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).action(async (url, options) => {
+  share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options) => {
     try {
       const link = await inputUrl(url, options.stdin === true);
-      const result = await inspectShare2(link, { registryBaseUrl: options.registry });
+      const result = await inspectShare2(link, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin });
       if (options.json) writeJson2(result);
       else inspectHuman(result);
     } catch (error) {
       handleError(shareCliError(error));
     }
   });
-  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--legacy", "Read a legacy tc1: link (read-only)").action(async (url, options) => {
+  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).option("--legacy", "Read a legacy tc1: link (read-only)").action(async (url, options) => {
     try {
       if (options.stdout && options.json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
@@ -26266,7 +26268,7 @@ function registerShareCommand(program2) {
         else receiveHuman(output2);
         return;
       }
-      const result = await receiveShare2(link, { registryBaseUrl: options.registry, ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes, maxSealedBlobBytes: maxBytes } });
+      const result = await receiveShare2(link, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin, ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes, maxSealedBlobBytes: maxBytes } });
       if (options.stdout) {
         process.stdout.write(Buffer.from(result.bytes));
         return;

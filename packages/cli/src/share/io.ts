@@ -45,7 +45,11 @@ export async function readShareInput(input: string, name?: string, limit = MAX_S
   const info = await stat(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
   const filename = markdownFilename(name ?? basename(path));
-  return { bytes: new Uint8Array(await readFile(path)), filename };
+  const bytes = new Uint8Array(await readFile(path));
+  // The pre-read stat is only an optimization. A file can grow between stat
+  // and readFile, so enforce the same bound on the bytes actually published.
+  if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
+  return { bytes, filename };
 }
 
 async function assertDirectory(path: string): Promise<void> {

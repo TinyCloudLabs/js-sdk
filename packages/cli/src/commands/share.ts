@@ -64,7 +64,7 @@ function shareCliError(error: unknown): CLIError {
   }
   if (error instanceof ShareReceiveError) {
     const verification = new Set<ShareErrorCode>(["cid-mismatch", "decrypt-failed", "envelope-invalid", "origin-mismatch", "signature-invalid", "capability-invalid", "content-integrity-failed"]);
-    const exit = verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 1;
+    const exit = error.code === "max-bytes-exceeded" ? 7 : verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 1;
     const code = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
     return new CLIError(code, error.message, exit);
   }
@@ -150,10 +150,11 @@ export function registerShareCommand(program: Command): void {
     .option("--stdin", "Read the complete URL from stdin")
     .option("--json", "Print versioned redacted JSON")
     .option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY)
+    .option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN)
     .action(async (url: string | undefined, options) => {
       try {
         const link = await inputUrl(url, options.stdin === true);
-        const result = await inspectShare(link, { registryBaseUrl: options.registry });
+        const result = await inspectShare(link, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin });
         if (options.json) writeJson(result);
         else inspectHuman(result);
       } catch (error) { handleError(shareCliError(error)); }
@@ -168,6 +169,7 @@ export function registerShareCommand(program: Command): void {
     .option("--max-bytes <bytes>", "Bound received content bytes")
     .option("--json", "Print versioned redacted JSON")
     .option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY)
+    .option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN)
     .option("--legacy", "Read a legacy tc1: link (read-only)")
     .action(async (url: string | undefined, options) => {
       try {
@@ -182,7 +184,7 @@ export function registerShareCommand(program: Command): void {
           if (options.json) writeJson({ protocol: "tinycloud-share", version: 1, legacy: true, path: output }); else receiveHuman(output);
           return;
         }
-        const result = await receiveShare(link, { registryBaseUrl: options.registry, ...(maxBytes === undefined ? {} : { maxContentBlobBytes: maxBytes, maxSealedBlobBytes: maxBytes }) });
+        const result = await receiveShare(link, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin, ...(maxBytes === undefined ? {} : { maxContentBlobBytes: maxBytes, maxSealedBlobBytes: maxBytes }) });
         if (options.stdout) {
           process.stdout.write(Buffer.from(result.bytes));
           return;
