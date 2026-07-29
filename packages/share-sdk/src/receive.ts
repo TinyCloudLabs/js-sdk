@@ -261,6 +261,27 @@ async function verifyV2Envelope(envelope: ShareEnvelopeV2, linkOrigin: string, o
   }
 }
 
+async function verifyV1PolicyEnvelope(envelope: ShareEnvelope, linkOrigin: string, options: ShareFetchOptions): Promise<void> {
+  if (envelope.authorizationTarget.kind !== "policy") throw new ShareReceiveError("unsupported-target", "share target is not an addressed policy", { reason: "policy-target" });
+  if (envelope.target.origin !== linkOrigin || (options.expectedOrigin !== undefined && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin))) {
+    throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
+  }
+  let issuerDid: string;
+  try {
+    const policy = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(envelope.authorizationTarget.policyBytes))) as Record<string, unknown>;
+    if (typeof policy.issuerDid !== "string") throw new Error("policy issuer");
+    issuerDid = policy.issuerDid;
+  } catch {
+    throw new ShareReceiveError("envelope-invalid", "share policy is invalid");
+  }
+  if (Date.parse(envelope.expiry) <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
+  try {
+    if (!await verifyEnvelope(envelope, { expectedSignerDid: issuerDid })) throw new Error("signature");
+  } catch {
+    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
+  }
+}
+
 /** Verify a decrypted bearer envelope for browser adapters that own transport. */
 export async function verifyBearerEnvelope(
   envelope: ShareEnvelope,
@@ -290,7 +311,8 @@ async function verifyResolved(envelope: ShareEnvelope, linkOrigin: string, optio
 
 export async function inspectShare(link: string, options: ShareFetchOptions = {}): Promise<ShareInspection> {
   const resolved = await resolveShareEnvelope(link, options);
-  if (resolved.envelope.version === 1) await verifyResolved(resolved.envelope, resolved.origin, options);
+  if (resolved.envelope.version === 1 && resolved.envelope.authorizationTarget.kind === "policy") await verifyV1PolicyEnvelope(resolved.envelope, resolved.origin, options);
+  else if (resolved.envelope.version === 1) await verifyResolved(resolved.envelope, resolved.origin, options);
   else await verifyV2Envelope(resolved.envelope, resolved.origin, options);
   options.onResolvedEnvelope?.(resolved.envelope, resolved.cid);
   return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind } };
@@ -335,6 +357,11 @@ export async function receiveShare(link: string, options: ShareFetchOptions = {}
     let text: string | undefined;
     try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { /* binary result */ }
     return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind }, bytes, ...(text === undefined ? {} : { text }) };
+  }
+  if (resolved.envelope.authorizationTarget.kind === "policy") {
+    await verifyV1PolicyEnvelope(resolved.envelope, resolved.origin, options);
+    options.onResolvedEnvelope?.(resolved.envelope, resolved.cid);
+    return { state: "authorization-required", method: "email-claim" };
   }
   await verifyResolved(resolved.envelope, resolved.origin, options);
   options.onResolvedEnvelope?.(resolved.envelope, resolved.cid);
