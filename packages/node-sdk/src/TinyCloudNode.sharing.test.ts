@@ -413,6 +413,104 @@ describe("TinyCloudNode sharing", () => {
     expect(receipt.delegationCid).toBe("share-delegation-cid");
     expect(receipt.nodeReceipt.commitEventCid).toBe("commit-event-cid");
     expect(new TextDecoder().decode(receipt.signedDagCbor)).toBe("share-auth-header");
+    expect(receipt.permissions).toEqual([{
+      service: "tinycloud.sql",
+      path: "xyz.tinycloud.listen/conversations",
+      actions: ["tinycloud.sql/read"],
+    }]);
+  });
+
+  test("public owner delegation signs exact KV and owner-network decrypt resources in one wallet-rooted grant", async () => {
+    const wasmBindings = makeWasmBindings();
+    globalThis.fetch = mock(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ cid: "commit-event-cid", activated: ["share-delegation-cid"], skipped: [] }),
+      text: async () => "",
+    })) as unknown as typeof fetch;
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer: { signMessage: mock(async () => "signature") } as any,
+      wasmBindings,
+    });
+    (node as any)._restoredTcSession = {
+      address: OWNER,
+      chainId: 1,
+      spaceId: SPACE,
+    };
+    const path = "shares/share-1/document.md";
+    const network = `urn:tinycloud:encryption:did:pkh:eip155:1:${OWNER.toLowerCase()}:default`;
+    const permissions = [
+      {
+        service: "tinycloud.kv",
+        path,
+        actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
+      },
+      {
+        service: "tinycloud.encryption",
+        path: network,
+        actions: ["tinycloud.encryption/decrypt"],
+      },
+    ] as const;
+
+    const receipt = await node.createOwnerDelegation({
+      delegateDid: "did:key:z6MkExternalCaller",
+      spaceId: SPACE,
+      permissions,
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+    });
+
+    const prepared = (wasmBindings.prepareSession as any).mock.calls[0][0];
+    expect(prepared.abilities).toEqual({
+      kv: { [path]: ["tinycloud.kv/get", "tinycloud.kv/metadata"] },
+    });
+    expect(prepared.rawAbilities).toEqual({
+      [network]: ["tinycloud.encryption/decrypt"],
+    });
+    expect(receipt.delegation.path).toBe(path);
+    expect(receipt.delegation.actions).toEqual(["tinycloud.kv/get", "tinycloud.kv/metadata"]);
+    expect(receipt.permissions).toEqual(permissions);
+  });
+
+  test("public owner delegation rejects ambiguous, malformed, duplicate, and overbroad scoped grants before signing", async () => {
+    const signMessage = mock(async () => "signature");
+    const wasmBindings = makeWasmBindings();
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer: { signMessage } as any,
+      wasmBindings,
+    });
+    (node as any)._restoredTcSession = {
+      address: OWNER,
+      chainId: 1,
+      spaceId: SPACE,
+    };
+    const path = "shares/share-1/document.md";
+    const network = `urn:tinycloud:encryption:did:pkh:eip155:1:${OWNER.toLowerCase()}:default`;
+    const foreignNetwork = "urn:tinycloud:encryption:did:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
+    const base = {
+      delegateDid: "did:key:z6MkExternalCaller",
+      spaceId: SPACE,
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+    };
+    const kv = { service: "tinycloud.kv", path, actions: ["tinycloud.kv/get"] };
+    const cases: Array<readonly [Record<string, unknown>, RegExp]> = [
+      [{ ...base, path, actions: ["tinycloud.kv/get"], permissions: [kv] }, /exactly one authority shape/i],
+      [{ ...base, permissions: [] }, /bounded capabilities/i],
+      [{ ...base, permissions: [kv, kv] }, /duplicate resources/i],
+      [{ ...base, permissions: [{ ...kv, actions: ["tinycloud.kv/get", "tinycloud.kv/get"] }] }, /unsupported/i],
+      [{ ...base, permissions: [{ ...kv, service: "tinycloud.sql" }] }, /unsupported/i],
+      [{ ...base, permissions: [{ ...kv, path: "*" }] }, /bounded capabilities/i],
+      [{ ...base, permissions: [{ service: "tinycloud.encryption", path: "not-a-network", actions: ["tinycloud.encryption/decrypt"] }] }, /network URN/i],
+      [{ ...base, permissions: [{ service: "tinycloud.encryption", path: network, actions: ["tinycloud.kv/get"] }] }, /unsupported/i],
+      [{ ...base, permissions: [{ service: "tinycloud.encryption", path: foreignNetwork, actions: ["tinycloud.encryption/decrypt"] }] }, /foreign encryption network/i],
+    ];
+
+    for (const [input, message] of cases) {
+      await expect(node.createOwnerDelegation(input as any)).rejects.toThrow(message);
+    }
+    expect(signMessage).not.toHaveBeenCalled();
+    expect(wasmBindings.prepareSession).not.toHaveBeenCalled();
   });
 
   test.each([
@@ -523,7 +621,12 @@ describe("TinyCloudNode sharing", () => {
       ownerDelegationCid: "bafy-owner",
       expiresAt: "2030-01-01T00:00:00.000Z",
     });
-    const ownerDelegation = { delegationCid: "bafy-owner", signedDagCbor: new Uint8Array([1]), delegation: { delegateDID: "did:key:z6MkShare", spaceId: SPACE, path: "shares/share-1/document.md", actions: ["tinycloud.kv/get"], expiry: new Date("2030-01-01T00:00:00.000Z") } } satisfies OwnerDelegationReceipt;
+    const ownerDelegation = {
+      delegationCid: "bafy-owner",
+      signedDagCbor: new Uint8Array([1]),
+      delegation: { delegateDID: "did:key:z6MkShare", spaceId: SPACE, path: "shares/share-1/document.md", actions: ["tinycloud.kv/get"], expiry: new Date("2030-01-01T00:00:00.000Z") },
+      permissions: [{ service: "tinycloud.kv", path: "shares/share-1/document.md", actions: ["tinycloud.kv/get"] }],
+    } satisfies OwnerDelegationReceipt;
     const enforcement = {
       cid: "bafy-enforcement",
       dagCbor: "bytes",

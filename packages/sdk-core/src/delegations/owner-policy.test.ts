@@ -20,6 +20,11 @@ const ownerDelegation: OwnerDelegationReceipt = {
     actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
     expiry: new Date("2030-01-01T00:00:00.000Z"),
   },
+  permissions: [{
+    service: "tinycloud.kv",
+    path: "shares/share-1/document.md",
+    actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
+  }],
 };
 
 function b64(value: Uint8Array): string {

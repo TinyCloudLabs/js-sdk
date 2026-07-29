@@ -15,6 +15,7 @@ export {
 export type { SecretReadInput, SecretReadResult } from "@tinycloud/node-sdk";
 export type {
   CreateOwnerDelegationParams,
+  OwnerDelegationPermission,
   OwnerDelegationReceipt,
   RegisterOwnerSharePolicyParams,
   OwnerSharePolicyRegistrationReceipt,

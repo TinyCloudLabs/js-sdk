@@ -152,8 +152,10 @@ export {
 } from "./owner-policy";
 export type {
   OwnerDelegationReceipt,
+  OwnerDelegationPermission,
   CreateOwnerDelegationParams,
   OwnerShareAction,
+  OwnerShareDecryption,
   OwnerShareMatcher,
   OwnerSharePolicyV2,
   DelegatedShareKey,
