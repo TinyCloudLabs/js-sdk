@@ -214,7 +214,16 @@ export function checkBearerDelegation(
         detail: `unsupported bearer session key family ${jwk.kty}/${jwk.crv}; this build binds Ed25519 keys only`,
       };
     }
-    sessionDid = didKeyFromEd25519PublicKey(fromBase64Url(jwk.x));
+    const publicKey = fromBase64Url(jwk.x);
+    const privateKey = fromBase64Url(jwk.d);
+    if (publicKey.length !== 32 || privateKey.length !== 32) {
+      return { ok: false, detail: "bearer session key must contain 32-byte Ed25519 coordinates" };
+    }
+    const derivedPublicKey = ed25519.getPublicKey(privateKey);
+    if (!derivedPublicKey.every((byte, index) => byte === publicKey[index])) {
+      return { ok: false, detail: "bearer session private and public keys do not match" };
+    }
+    sessionDid = didKeyFromEd25519PublicKey(publicKey);
   } catch (error) {
     return {
       ok: false,

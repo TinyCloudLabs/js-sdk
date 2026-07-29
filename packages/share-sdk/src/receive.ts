@@ -164,16 +164,21 @@ async function resolveEnvelope(link: string, options: ShareFetchOptions): Promis
   let parsed: ReturnType<typeof parseCompactOrInlineShareUrl>;
   try { parsed = parseCompactOrInlineShareUrl(link, { ...(options.expectedOrigin === undefined ? {} : { expectedOrigin: options.expectedOrigin }) }); }
   catch { throw new ShareReceiveError("invalid-link", "share link format is invalid"); }
-  const url = new URL(link);
-  const sealed = parsed.kind === "inline"
-    ? parsed.ciphertext
-    : await registryFetcher(options, options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES)({ origin: url.origin, cid: parsed.ciphertextCid });
-  if (await computeCid(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "registry bytes do not match the link CID");
-  let plaintext: Uint8Array;
-  try { plaintext = parsed.key32 === undefined ? sealed : await open(sealed, parsed.key32); }
-  catch { throw new ShareReceiveError("decrypt-failed", "share envelope could not be opened"); }
-  finally { parsed.key32?.fill(0); }
-  return { envelope: parseEnvelope(plaintext), origin: url.origin, cid: parsed.ciphertextCid, kind: parsed.kind };
+  try {
+    const url = new URL(link);
+    const sealed = parsed.kind === "inline"
+      ? parsed.ciphertext
+      : await registryFetcher(options, options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES)({ origin: url.origin, cid: parsed.ciphertextCid });
+    if (await computeCid(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "registry bytes do not match the link CID");
+    let plaintext: Uint8Array;
+    try { plaintext = parsed.key32 === undefined ? sealed : await open(sealed, parsed.key32); }
+    catch { throw new ShareReceiveError("decrypt-failed", "share envelope could not be opened"); }
+    return { envelope: parseEnvelope(plaintext), origin: url.origin, cid: parsed.ciphertextCid, kind: parsed.kind };
+  } finally {
+    // Fragment material is authority-bearing and must be cleared on every
+    // path, including registry errors and CID mismatches before AEAD.
+    parsed.key32?.fill(0);
+  }
 }
 
 /** Verify a decrypted bearer envelope for browser adapters that own transport. */

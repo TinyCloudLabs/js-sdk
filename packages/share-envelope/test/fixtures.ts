@@ -18,7 +18,7 @@ export const BEARER_TARGET: AuthorizationTarget = {
   sessionJwk: {
     kty: "OKP",
     crv: "Ed25519",
-    x: "O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik",
+    x: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
     d: "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
   },
 };

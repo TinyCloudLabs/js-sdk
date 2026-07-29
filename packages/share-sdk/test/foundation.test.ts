@@ -167,4 +167,21 @@ describe("@tinycloud/share-sdk foundation", () => {
     const reorderedUrl = `${origin}/s/inline#v=2&p=${toBase64Url(new TextEncoder().encode(reordered))}`;
     expect(() => parseInlineShareUrl(reorderedUrl)).toThrow(/canonical JSON/);
   });
+
+  it("inspects and receives an inline share through the same verifier", async () => {
+    const share = await makeShare();
+    const envelopeKey = fromBase64Url(share.url.slice(share.url.indexOf("#k=") + 3));
+    try {
+      const inline = await encodeInlineShareUrl({ origin, ciphertext: share.sealedEnvelope.blob, key32: envelopeKey });
+      const blobs = new Map([[share.sealedContent.cid, share.sealedContent.blob]]);
+      const options = {
+        fetchBlob: async ({ cid }: { readonly cid: string }) => blobs.get(cid)!,
+        now: () => Date.parse("2029-01-01T00:00:00.000Z"),
+      };
+      expect((await inspectShare(inline, options)).link.kind).toBe("inline");
+      expect((await receiveShare(inline, options)).text).toBe("hello from the headless SDK");
+    } finally {
+      envelopeKey.fill(0);
+    }
+  });
 });

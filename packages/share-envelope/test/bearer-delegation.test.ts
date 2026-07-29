@@ -170,6 +170,21 @@ describe("checkBearerDelegation cryptographic verification (signature, exp, nbf)
     });
   });
 
+  it("rejects a bearer JWK whose private seed does not derive its public key", () => {
+    if (BEARER_TARGET.kind !== "bearerKey") throw new Error("fixture target must be bearerKey");
+    const target = {
+      ...BEARER_TARGET,
+      sessionJwk: { ...BEARER_TARGET.sessionJwk, d: toBase64Url(new Uint8Array(32).fill(99)) },
+    };
+    const envelope = signEnvelope(
+      makeUnsignedEnvelope({ authorizationTarget: target, delegation: signToken(HEADER, boundPayload()) }),
+      TEST_PRIV_KEY,
+    );
+    const result = checkBearerDelegation(envelope);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.detail).toMatch(/private and public/);
+  });
+
   it("stub (non-EdDSA-valid) signature bytes → rejected", () => {
     const encode = (value: unknown): string =>
       toBase64Url(utf8Bytes(JSON.stringify(value)));
