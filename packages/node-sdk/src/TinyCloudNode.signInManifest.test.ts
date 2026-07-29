@@ -34,16 +34,6 @@ import { TinyCloudNode } from "./TinyCloudNode";
 // keep this file self-contained and easy to read in isolation)
 // ---------------------------------------------------------------------------
 
-async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
-  const started = Date.now();
-  while (!predicate()) {
-    if (Date.now() - started > timeoutMs) {
-      throw new Error("Timed out waiting for predicate");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
 function makeFakeSessionManager(): ISessionManager {
   // Pre-seed with "default" since that's the key name the
   // TinyCloudNode constructor uses on the WASM side; the real
@@ -77,9 +67,39 @@ function makeFakeSessionManager(): ISessionManager {
   };
 }
 
+// Each fake WASM-bindings instance gets a unique, file-scoped activation
+// delegation header (`Bearer signInManifest-<n>`) instead of a constant
+// "Bearer fake". The prefix is file-specific — not just "fake-N" — so it
+// can't collide with another test file's own counter if bun ever runs
+// multiple files in one process. Per-instance uniqueness makes cross-test
+// single-flight joins in `activateSessionWithHost`
+// (sdk-core/src/space.ts, keyed on host + the full delegation header)
+// impossible for this file's sessions: two different headers can never
+// coalesce into the same in-flight request. See TC-372.
+let signInManifestAuthorizationSeq = 0;
+
+// Tracks the activation Authorization header each fake bindings instance
+// will present, so `withFetchResponses` can confirm an incoming
+// `POST .../delegate` actually belongs to the test that installed the
+// current fetch mock — not a same-shaped request leaked from an earlier
+// test's detached account-registry-sync retry.
+const expectedActivationAuthorizationByBindings = new WeakMap<IWasmBindings, string>();
+
+function expectedActivationAuthorizationFor(wasm: IWasmBindings): string {
+  const authorization = expectedActivationAuthorizationByBindings.get(wasm);
+  if (authorization === undefined) {
+    throw new Error(
+      "expectedActivationAuthorizationFor: these wasm bindings were not created by " +
+        "makeFakeWasmBindings, so withFetchResponses has no expected header to match",
+    );
+  }
+  return authorization;
+}
+
 function makeFakeWasmBindings(
   overrides: Partial<IWasmBindings> = {},
 ): IWasmBindings {
+  const authorization = `Bearer signInManifest-${++signInManifestAuthorizationSeq}`;
   const base: IWasmBindings = {
     invoke: mock(() => Promise.resolve({} as any)) as any,
     invokeAny: mock(() => Promise.resolve({} as any)) as any,
@@ -90,7 +110,7 @@ function makeFakeWasmBindings(
       verificationMethod: "did:key:z6MkTestSession",
     })),
     completeSessionSetup: mock(() => ({
-      delegationHeader: { Authorization: "Bearer fake" },
+      delegationHeader: { Authorization: authorization },
       delegationCid: "bafyfake",
       jwk: { kty: "OKP" },
       spaceId: "space://test",
@@ -115,7 +135,9 @@ function makeFakeWasmBindings(
     vault_sha256: mock(() => new Uint8Array()),
     createSessionManager: makeFakeSessionManager,
   };
-  return { ...base, ...overrides };
+  const bindings = { ...base, ...overrides };
+  expectedActivationAuthorizationByBindings.set(bindings, authorization);
+  return bindings;
 }
 
 /**
@@ -125,33 +147,99 @@ function makeFakeWasmBindings(
  * needs: getAddress, getChainId, signMessage. We don't reach the network
  * calls (checkNodeInfo, ensureSpaceExists) because we override those via
  * monkey-patching the auth instance after construction.
+ *
+ * `scheduleAccountRegistrySync` is stubbed to a no-op by default — the same
+ * idiom the `bootstrapGate`/`accountRegistrySync` test fixtures already use.
+ * A full `signIn()` in this file otherwise ends with a *detached* background
+ * registry sync (retries at 250ms/1s/3s) that easily outlives the calling
+ * test's own `withFetchResponses` window and leaks into whichever test runs
+ * next (TC-372). Pass `{ realRegistrySync: true }` for the one test that
+ * asserts on the sync's own effects.
  */
 function makeNodeWithSigner(
   wasm: IWasmBindings,
   config: Partial<ConstructorParameters<typeof TinyCloudNode>[0]> = {},
+  opts: { realRegistrySync?: boolean } = {},
 ): TinyCloudNode {
   const fakeSigner = {
     signMessage: async () => "0x" + "ff".repeat(65),
     getAddress: async () => "0x0000000000000000000000000000000000000001",
     getChainId: async () => 1,
   };
-  return new TinyCloudNode({
+  const node = new TinyCloudNode({
     wasmBindings: wasm,
     signer: fakeSigner as any,
     host: "https://tinycloud.test",
     ...config,
   });
+  if (!opts.realRegistrySync) {
+    (node as any).scheduleAccountRegistrySync = () => {};
+  }
+  return node;
 }
 
+/**
+ * Serve fixed `Response`s to fetch calls made during `fn`, but only to the
+ * calls this test actually expects.
+ *
+ * Every signIn / ensureOwnedSpaceHostedById flow in this file makes at most
+ * two kinds of request, always in this order: an unauthenticated
+ * `GET .../info` (checkNodeInfo) and an authenticated `POST .../delegate`
+ * (activateSessionWithHost). Two queued responses means [info, activate];
+ * one means [activate] alone — every call site below uses one of those two
+ * shapes, so the expected sequence can be derived from `responses.length`.
+ *
+ * Matching is deliberately strict and *positional* rather than "shift the
+ * queue for anything that shows up": a leaked fetch from an earlier test's
+ * detached account-registry-sync retry (TC-372) must never silently consume
+ * this test's queued response — whether it's a differently-shaped request
+ * (e.g. a SQL `/invoke` from `indexHasApplicationHash`) or a same-shaped
+ * `POST /delegate` whose Authorization header proves it belongs to a
+ * *different* session. `expectedAuthorization` is normally
+ * `expectedActivationAuthorizationFor(wasm)` for the wasm bindings this
+ * test's node was built with (unique per instance — see
+ * `makeFakeWasmBindings`); tests that install a delegation header directly
+ * (bypassing `completeSessionSetup`) pass the literal string instead.
+ *
+ * An unmatched request throws synchronously with the URL/method/position it
+ * failed to match, rather than falling through to the real network — a leak
+ * fails loudly at its source instead of silently hitting the network or
+ * stealing a neighboring test's response.
+ */
 async function withFetchResponses(
   responses: Response[],
   fn: (fetchMock: any) => Promise<void>,
+  expectedAuthorization: string,
 ): Promise<void> {
   const originalFetch = globalThis.fetch;
-  const fetchMock = mock(async () => {
+  const expectedSequence: Array<"info" | "delegate"> =
+    responses.length >= 2 ? ["info", "delegate"] : ["delegate"];
+  let position = 0;
+
+  const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = (init?.method ?? "GET").toUpperCase();
+    const expectedKind = expectedSequence[position];
+    const authorization = new Headers(init?.headers).get("authorization");
+
+    const matches =
+      expectedKind === "info"
+        ? method === "GET" && url.endsWith("/info")
+        : method === "POST" && url.endsWith("/delegate") && authorization === expectedAuthorization;
+
+    if (!matches) {
+      throw new Error(
+        `unexpected fetch: ${method} ${url} (expected this test's ${expectedKind} ` +
+          `request at position ${position}${
+            expectedKind === "delegate" ? `, authorization "${authorization}"` : ""
+          })`,
+      );
+    }
+
+    position += 1;
     const response = responses.shift();
     if (!response) {
-      throw new Error("unexpected fetch");
+      throw new Error(`unexpected fetch: ${method} ${url} (response queue already empty)`);
     }
     return response;
   });
@@ -225,7 +313,8 @@ function stubAuthNetworkCalls(node: TinyCloudNode): void {
 
 describe("TinyCloudNode.signIn — manifest-driven recap", () => {
   test("sessionDid follows the active key across repeated signIn calls", async () => {
-    const node = makeNodeWithSigner(makeFakeWasmBindings(), {
+    const wasm = makeFakeWasmBindings();
+    const node = makeNodeWithSigner(wasm, {
       autoBootstrapAccount: false,
       includeAccountRegistryPermissions: false,
       manifest: {
@@ -255,6 +344,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       async () => {
         await node.signIn();
       },
+      expectedActivationAuthorizationFor(wasm),
     );
 
     const firstKeyId = node.session?.sessionKey;
@@ -282,6 +372,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       async () => {
         await node.signIn();
       },
+      expectedActivationAuthorizationFor(wasm),
     );
 
     const secondKeyId = node.session?.sessionKey;
@@ -639,6 +730,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       async () => {
         await node.signIn();
       },
+      expectedActivationAuthorizationFor(wasm),
     );
 
     expect(ensureEncryptionNetwork).toHaveBeenCalledTimes(1);
@@ -651,6 +743,22 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     });
   });
 
+  /**
+   * Narrow property: signIn's *implicit* create-grant synthesis (the
+   * `didPrincipalMatches` owner check in
+   * NodeUserAuthorization.resolveSignInCapabilities, guarded again by the
+   * same check in TinyCloudNode.ensureRequestedEncryptionNetworks before
+   * ensureEncryptionNetwork runs) does not auto-add
+   * `tinycloud.encryption/network.create` for a network owned by someone
+   * else.
+   *
+   * This does NOT prove the broader "signIn never composes a foreign
+   * network.create" invariant. An explicitly-requested foreign
+   * `network.create` permission is copied into `rawAbilities` before either
+   * owner guard runs (both guards only gate the *implicit* add), and
+   * manifests can request `network.create` explicitly — that path is
+   * untested here and tracked separately as TC-391.
+   */
   test("signIn does not add a create grant for another owner's encryption network", async () => {
     const networkId =
       "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000002:default";
@@ -694,6 +802,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       async () => {
         await node.signIn();
       },
+      expectedActivationAuthorizationFor(wasm),
     );
 
     expect(ensureEncryptionNetwork).not.toHaveBeenCalled();
@@ -722,6 +831,10 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
           "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account",
         );
       },
+      // This test bypasses completeSessionSetup and installs the delegation
+      // header directly, so the expected header is this literal rather than
+      // expectedActivationAuthorizationFor(wasm).
+      "Bearer fake",
     );
 
     expect(auth.hostOwnedSpace).not.toHaveBeenCalled();
@@ -772,11 +885,16 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
         },
       ],
     };
-    const node = makeNodeWithSigner(makeFakeWasmBindings(), { manifest });
+    const wasm = makeFakeWasmBindings();
+    // This is the one test in the file that asserts on the account-registry
+    // sync's own effects, so it opts back into the real (non-stubbed)
+    // scheduleAccountRegistrySync — see makeNodeWithSigner.
+    const node = makeNodeWithSigner(wasm, { manifest }, { realRegistrySync: true });
     const accountSpaceId =
       "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account";
     const ensureOwnedSpaceHostedById = mock(async () => {});
     const put = mock(async () => ({ ok: true, data: undefined, headers: {} }));
+    const spacesList = mock(async () => ({ ok: true, data: [] }));
 
     (node as any).ensureOwnedSpaceHostedById = ensureOwnedSpaceHostedById;
     Object.defineProperty(node, "spaces", {
@@ -786,8 +904,40 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
           expect(spaceId).toBe(accountSpaceId);
           return { kv: { put } };
         },
+        // syncAccessible() (part of the real registry sync this test opts
+        // into) reads this via `config.getSpaces().list()`.
+        list: spacesList,
       },
     });
+
+    // The real registry sync also runs `index.ensure()` (fire-and-forget)
+    // and, via `applications.register()`, an `indexHasApplicationHash()`
+    // SQL pre-read before every write. None of that has a real server to
+    // answer it here — stub it away so no `/invoke` escapes this test's
+    // fetch mock and forces the retry backoff in withAccountRegistryRetry
+    // (250ms/1s/3s), which would otherwise make this test slow and still
+    // timing-dependent.
+    (node.account as any).indexHasApplicationHash = async () => false;
+    (node.account as any).index.ensure = async () => ({
+      ok: true,
+      data: { database: "account" },
+    });
+    (node.account as any).upsertApplicationIndexQuietly = async () => {};
+
+    // scheduleAccountRegistrySync fires `withAccountRegistryRetry(...)`
+    // detached (`void`) so signIn() can return without waiting on it.
+    // Capture the promise it returns so this test can await the *entire*
+    // retry-wrapped chain settling before its own withFetchResponses window
+    // closes — waiting only for `put` to have been called proves the write
+    // happened, but not that the scheduler is done, and any part of it that
+    // runs after this test's fetch mock is torn down is exactly the leak
+    // this fix (TC-372) exists to prevent.
+    let registrySync: Promise<void> | undefined;
+    const originalWithAccountRegistryRetry = (node as any).withAccountRegistryRetry.bind(node);
+    (node as any).withAccountRegistryRetry = (task: () => Promise<void>) => {
+      registrySync = originalWithAccountRegistryRetry(task);
+      return registrySync;
+    };
 
     await withFetchResponses(
       [
@@ -807,10 +957,11 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       ],
       async () => {
         await node.signIn();
+        await registrySync;
       },
+      expectedActivationAuthorizationFor(wasm),
     );
 
-    await waitFor(() => put.mock.calls.length > 0);
     expect(ensureOwnedSpaceHostedById).toHaveBeenCalledWith(accountSpaceId);
     expect(put).toHaveBeenCalledTimes(1);
     expect(put).toHaveBeenCalledWith("applications/com.listen.app", {
