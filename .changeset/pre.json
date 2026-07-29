@@ -25,6 +25,7 @@
   },
   "changesets": [
     "coordinationos-openkey-session",
+    "fair-clouds-delegate",
     "tc-362-space-modal-timeout"
   ]
 }

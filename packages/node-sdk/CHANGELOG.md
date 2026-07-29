@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 2.11.0-beta.1
+
+### Patch Changes
+
+- d1d675b: Allow owner delegations to sign exact permissions across TinyCloud services, including the owner encryption network's decrypt capability, while preserving the legacy single-resource API.
+- Updated dependencies [d1d675b]
+  - @tinycloud/sdk-core@2.11.0-beta.1
+
 ## 2.11.0-beta.0
 
 ### Patch Changes
