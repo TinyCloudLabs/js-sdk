@@ -392,13 +392,60 @@ test.each([
   "http://openkey.example.test/api/delegate/sign",
   "http://sub.localhost/api/delegate/sign",
   "http://127.0.0.2/api/delegate/sign",
+  "http://2130706433/api/delegate/sign",
+  "http://127.1/api/delegate/sign",
+  "http://0177.0.0.1/api/delegate/sign",
+  "http://0x7f000001/api/delegate/sign",
+  "http://127.000.000.001/api/delegate/sign",
   "https://openkey.example.test/api/delegate/sign?retry=1",
+  "https://openkey.example.test/api/delegate/sign?",
   "https://openkey.example.test/api/delegate/sign#fragment",
+  "https://openkey.example.test/api/delegate/sign#",
   "https://user@openkey.example.test/api/delegate/sign",
   "https://openkey.example.test/api/delegate/sign/",
 ])("rejects unsafe signing endpoint %s", async (signingEndpoint) => {
-  await expect(
-    establishOpenKeySession({ ...options(TOKEN), signingEndpoint }),
-  ).rejects.toThrow("OpenKey signing endpoint");
+  let tokenReads = 0;
+  const signerFetch = mock(async () => new Response());
+  const input = {
+    ...options(undefined, signerFetch),
+    signingEndpoint,
+  } as EstablishOpenKeySessionOptions;
+  Object.defineProperty(input, "providerToken", {
+    get() {
+      tokenReads += 1;
+      return TOKEN;
+    },
+  });
+
+  await expect(establishOpenKeySession(input)).rejects.toThrow(
+    "OpenKey signing endpoint",
+  );
+  expect(tokenReads).toBe(0);
   expect(constructorCount).toBe(0);
+  expect(signerFetch).not.toHaveBeenCalled();
+});
+
+test.each([
+  "https://coordination.example.test/?",
+  "https://coordination.example.test/#",
+])("rejects non-canonical origin %s", async (origin) => {
+  let tokenReads = 0;
+  const signerFetch = mock(async () => new Response());
+  const input = {
+    ...options(undefined, signerFetch),
+    origin,
+  } as EstablishOpenKeySessionOptions;
+  Object.defineProperty(input, "providerToken", {
+    get() {
+      tokenReads += 1;
+      return TOKEN;
+    },
+  });
+
+  await expect(establishOpenKeySession(input)).rejects.toThrow(
+    "CoordinationOS origin",
+  );
+  expect(tokenReads).toBe(0);
+  expect(constructorCount).toBe(0);
+  expect(signerFetch).not.toHaveBeenCalled();
 });

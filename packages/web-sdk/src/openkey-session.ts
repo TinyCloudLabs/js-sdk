@@ -98,6 +98,10 @@ function ownKeysEqual(value: object, expected: readonly string[]): boolean {
 }
 
 function normalizeEndpoint(value: string): string {
+  if (value.includes("?") || value.includes("#")) {
+    throw new Error("OpenKey signing endpoint is not CoordinationOS-compatible");
+  }
+
   let endpoint: URL;
   try {
     endpoint = new URL(value);
@@ -105,13 +109,15 @@ function normalizeEndpoint(value: string): string {
     throw new Error("OpenKey signing endpoint must be an absolute URL");
   }
 
-  const isLoopback =
-    endpoint.hostname === "localhost" ||
-    endpoint.hostname === "127.0.0.1" ||
-    endpoint.hostname === "[::1]";
+  const rawHttpAuthority = value.match(/^http:\/\/([^/?#]*)/i)?.[1];
+  const isExactLoopback =
+    rawHttpAuthority !== undefined &&
+    /^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?$/.test(
+      rawHttpAuthority,
+    );
   const allowedProtocol =
     endpoint.protocol === "https:" ||
-    (endpoint.protocol === "http:" && isLoopback);
+    (endpoint.protocol === "http:" && isExactLoopback);
   if (
     !allowedProtocol ||
     endpoint.username !== "" ||
@@ -126,6 +132,10 @@ function normalizeEndpoint(value: string): string {
 }
 
 function normalizeOrigin(value: string): { origin: string; domain: string } {
+  if (value.includes("?") || value.includes("#")) {
+    throw new Error("CoordinationOS origin is not canonical");
+  }
+
   let origin: URL;
   try {
     origin = new URL(value);
