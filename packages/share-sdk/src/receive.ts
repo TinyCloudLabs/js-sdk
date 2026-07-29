@@ -272,7 +272,10 @@ async function verifyV1PolicyEnvelope(envelope: ShareEnvelope, linkOrigin: strin
     if (typeof policy.issuerDid !== "string") throw new Error("policy issuer");
     issuerDid = policy.issuerDid;
   } catch {
-    throw new ShareReceiveError("envelope-invalid", "share policy is invalid");
+    // A structurally valid policy target that this headless bearer path
+    // cannot interpret is an honest addressed/unsupported result. Do not
+    // project it as a verified bearer envelope in browser adapters.
+    throw new ShareReceiveError("unsupported-target", "share policy target is not supported", { reason: "policy-target" });
   }
   if (Date.parse(envelope.expiry) <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
   try {
