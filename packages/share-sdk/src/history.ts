@@ -39,24 +39,50 @@ export interface SenderShareRecord {
   readonly registeredAt: string;
   readonly expiresAt: string;
   readonly revokedAt?: string;
+  readonly envelopeCid?: string;
+  readonly shareCid?: string;
   /** Complete bearer links are encrypted at rest and only revealed explicitly. */
   readonly link?: string;
   readonly filename?: string;
 }
 
-/** Create the durable redacted-history shape for a published bearer link. */
+/** Create the durable encrypted-history shape from canonical publication receipts. */
 export function historyRecordForPublishedShare(result: PublishedShare, now: Date = new Date()): SenderShareRecord {
+  const target = result.metadata.target.kind;
+  const supplied = result.metadata.recipientMatcher;
+  let matcher: OwnerShareMatcher;
+  if (supplied?.kind === "recipientDid" && typeof supplied.value === "string") matcher = { kind: "recipientDid", value: supplied.value };
+  else if (supplied?.kind === "exactEmail" && typeof supplied.value === "string") matcher = { kind: "exactEmail", value: supplied.value };
+  else if (supplied?.kind === "emailDomain" && typeof supplied.value === "string") matcher = { kind: "emailDomain", value: supplied.value };
+  else if (target === "recipientDid") matcher = { kind: "recipientDid", value: "" };
+  else if (target === "email") matcher = { kind: "exactEmail", value: "" };
+  else if (target === "emailDomain") matcher = { kind: "emailDomain", value: "" };
+  else matcher = { kind: "bearer" };
   return {
     shareId: result.metadata.shareId,
     target: result.metadata.target,
     resource: result.metadata.resource,
-    actions: ["tinycloud.kv/get"],
-    recipientMatcher: { kind: "bearer" },
-    targetKind: "bearer",
+    actions: result.metadata.actions.map((action) =>
+      action === "read" ? "tinycloud.kv/get"
+        : action === "list" ? "tinycloud.kv/list"
+          : action === "edit" ? "tinycloud.kv/put"
+            : action,
+    ) as OwnerShareAction[],
+    recipientMatcher: matcher,
+    targetKind: target,
+    ...(result.metadata.registrationCid === undefined ? {} : { registrationCid: result.metadata.registrationCid }),
+    ...(result.metadata.policyCid === undefined ? {} : { policyCid: result.metadata.policyCid }),
+    ...(result.metadata.ownerDelegationCid === undefined ? {} : { ownerDelegationCid: result.metadata.ownerDelegationCid }),
+    ...(result.metadata.enforcementDelegationCid === undefined ? {} : { enforcementDelegationCid: result.metadata.enforcementDelegationCid }),
+    ...(result.metadata.ownerDid === undefined ? {} : { ownerDid: result.metadata.ownerDid }),
+    ...(result.metadata.shareKeyDid === undefined ? {} : { shareKeyDid: result.metadata.shareKeyDid }),
+    ...(result.metadata.enforcerDid === undefined ? {} : { enforcerDid: result.metadata.enforcerDid }),
+    ...(result.metadata.envelopeCid === undefined ? {} : { envelopeCid: result.metadata.envelopeCid }),
+    ...(result.metadata.shareCid === undefined ? {} : { shareCid: result.metadata.shareCid }),
     registeredAt: now.toISOString(),
     expiresAt: result.metadata.expiresAt,
     link: result.url,
-    filename: result.metadata.display.filename,
+    ...(result.metadata.display.filename === undefined ? {} : { filename: result.metadata.display.filename }),
   };
 }
 

@@ -312,6 +312,11 @@ const ownerAuthoritySchema = z.object({
   envelopeCid: z.string().min(1),
   enforcementDelegation: z.record(z.string(), z.unknown()),
   outerEnvelope: z.record(z.string(), z.unknown()),
+  /** Node-signed registration evidence; required by trusted policy adapters. */
+  registrationReceipt: z.object({
+    registration: z.record(z.string(), z.unknown()),
+    proof: z.record(z.string(), z.unknown()),
+  }).strict().optional(),
 }).strict();
 
 export const contentMetadataSchema = z.object({
@@ -319,6 +324,8 @@ export const contentMetadataSchema = z.object({
   byteLength: z.number().int().nonnegative().max(100 * 1024 * 1024).optional(),
   filename: z.string().min(1).max(255).optional(),
   encoding: z.literal("utf-8").optional(),
+  /** Encrypted presentation discriminator. The fixed entry point is index.html. */
+  artifact: z.literal("html").optional(),
 }).strict();
 
 const unsignedShareEnvelopeV2BaseSchema = z.object({
@@ -353,6 +360,7 @@ function validateV2Invariants(value: z.infer<typeof unsignedShareEnvelopeV2BaseS
   if (value.encrypted && (value.metadata.mediaType === undefined || value.metadata.filename === undefined || value.metadata.byteLength === undefined)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["metadata"], message: "encrypted shares must describe their content" });
   if (!value.encrypted && Object.keys(value.metadata).length !== 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["metadata"], message: "policy-only plaintext cannot describe content" });
   if (!value.encrypted && value.metadata.encoding !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["metadata", "encoding"], message: "policy-only plaintext cannot carry content encoding" });
+  if (value.metadata.artifact === "html" && (!value.encrypted || value.resource.kind !== "prefix" || !value.actions.includes("read") || !value.actions.includes("list"))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["metadata", "artifact"], message: "html artifacts require an encrypted readable prefix" });
   if (!value.encrypted && (value.display.senderName !== undefined || value.display.filename !== undefined || value.display.recipientHint !== undefined)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["display"], message: "policy-only plaintext cannot carry display metadata" });
   if (!value.encrypted && value.deliveryEmail !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["deliveryEmail"], message: "policy-only plaintext cannot carry delivery metadata" });
   if (value.recipientMatcher.kind === "exactEmail" && value.deliveryEmail !== undefined && value.deliveryEmail !== value.recipientMatcher.value) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must match the exact matcher" });

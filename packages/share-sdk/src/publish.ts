@@ -82,12 +82,23 @@ export interface PublishedShareMetadata {
   readonly version: 1;
   readonly shareId: string;
   readonly origin: string;
-  readonly target: { readonly kind: "bearer"; readonly origin: string; readonly nodeAudience: string; readonly spaceId: string };
-  readonly resource: { readonly kind: "exact"; readonly path: string };
-  readonly actions: readonly ["read"];
+  readonly target: { readonly kind: "bearer" | "recipientDid" | "email" | "emailDomain"; readonly origin: string; readonly nodeAudience: string; readonly spaceId: string };
+  readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
+  readonly actions: readonly string[];
   readonly expiresAt: string;
-  readonly display: { readonly filename: string; readonly senderName?: string };
-  readonly content: { readonly cid: string };
+  readonly display: { readonly filename?: string; readonly senderName?: string };
+  readonly content?: { readonly cid: string };
+  /** Addressed publication receipts are copied into encrypted history only. */
+  readonly recipientMatcher?: { readonly kind: "bearer" | "recipientDid" | "exactEmail" | "emailDomain"; readonly value?: string };
+  readonly registrationCid?: string;
+  readonly policyCid?: string;
+  readonly ownerDelegationCid?: string;
+  readonly enforcementDelegationCid?: string;
+  readonly ownerDid?: string;
+  readonly shareKeyDid?: string;
+  readonly enforcerDid?: string;
+  readonly envelopeCid?: string;
+  readonly shareCid?: string;
 }
 
 export interface PublishedShare {
@@ -102,8 +113,24 @@ export interface PublishedShare {
 
 /** Machine-readable output omits the complete bearer capability. */
 export function redactPublishedShare(result: PublishedShare): Omit<PublishedShare, "url"> {
-  const { url: _url, ...redacted } = result;
-  return redacted;
+  return {
+    protocol: "tinycloud-share",
+    version: SHARE_PUBLISH_RESULT_VERSION,
+    link: { kind: result.link.kind, cid: result.link.cid },
+    metadata: {
+      protocol: "tinycloud-share",
+      version: 1,
+      shareId: result.metadata.shareId,
+      origin: result.metadata.origin,
+      target: { ...result.metadata.target },
+      resource: { ...result.metadata.resource },
+      actions: [...result.metadata.actions],
+      expiresAt: result.metadata.expiresAt,
+      display: { ...result.metadata.display },
+      ...(result.metadata.content === undefined ? {} : { content: { cid: result.metadata.content.cid } }),
+    },
+    registryDeleteAfter: result.registryDeleteAfter,
+  };
 }
 
 export type SharePublishErrorCode =
@@ -236,7 +263,8 @@ async function defaultUpload(options: SharePublishOptions, input: ShareUploadInp
   return { cid: input.cid, deleteAfter: record.deleteAfter };
 }
 
-async function upload(options: SharePublishOptions, input: ShareUploadInput): Promise<ShareUploadResult> {
+/** Internal transport seam shared by bearer and addressed publishers. */
+export async function uploadShareBlob(options: SharePublishOptions, input: ShareUploadInput): Promise<ShareUploadResult> {
   const result = await (options.uploadBlob ?? ((value: ShareUploadInput) => defaultUpload(options, value)))(input);
   if (result.cid !== input.cid || typeof result.deleteAfter !== "string") throw new SharePublishError("upload-failed", "share uploader returned an invalid result");
   return result;
@@ -301,7 +329,7 @@ export async function publishShare(options: SharePublishOptions): Promise<Publis
       try { inlineUrl = await encodeInlineShareUrl({ origin: options.origin, ciphertext: sealedEnvelope.blob, key32: envelopeKey }); }
       catch (error) { throw new SharePublishError("inline-too-large", error instanceof Error ? error.message : "inline share is too large"); }
     }
-    const contentUpload = await upload(options, { blob: sealedContent.blob, cid: sealedContent.cid, deleteAfter: expiry, contentLength: sealedContent.blob.byteLength });
+    const contentUpload = await uploadShareBlob(options, { blob: sealedContent.blob, cid: sealedContent.cid, deleteAfter: expiry, contentLength: sealedContent.blob.byteLength });
     let url: string;
     let kind: "compact" | "inline";
     let retention = contentUpload.deleteAfter;
@@ -310,7 +338,7 @@ export async function publishShare(options: SharePublishOptions): Promise<Publis
       url = inlineUrl;
       kind = "inline";
     } else {
-      const envelopeUpload = await upload(options, { blob: sealedEnvelope.blob, cid: sealedEnvelope.cid, deleteAfter: expiry, contentLength: sealedEnvelope.blob.byteLength });
+      const envelopeUpload = await uploadShareBlob(options, { blob: sealedEnvelope.blob, cid: sealedEnvelope.cid, deleteAfter: expiry, contentLength: sealedEnvelope.blob.byteLength });
       url = encodeShareUrl({ origin: options.origin, ciphertextCid: envelopeUpload.cid, key32: envelopeKey });
       kind = "compact";
       retention = envelopeUpload.deleteAfter;

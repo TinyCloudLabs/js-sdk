@@ -299,11 +299,26 @@ async function verifyV2Envelope(envelope: ShareEnvelopeV2, linkOrigin: string, o
   if (envelope.target.origin !== linkOrigin || (options.expectedOrigin !== undefined && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin))) {
     throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
   }
-  const expectedSigner = options.trustedSignerDid;
+  // A policy CID is trusted only after the external authority resolves it
+  // below. Until then, the embedded did:key is used solely to establish byte
+  // integrity before that authority effect. Direct recipient-DID envelopes
+  // still require an explicit signer trust root.
+  const expectedSigner = options.trustedSignerDid ?? (
+    envelope.authorizationTarget.kind === "policy" ? envelope.signature.signerDid : undefined
+  );
   if (expectedSigner === undefined) throw new ShareReceiveError("signature-invalid", "an addressed signer trust root is required");
   const expiry = Date.parse(envelope.expiry);
   if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
+
+  // Establish authenticity before consulting any external authority. The
+  // envelope is attacker-controlled until its complete canonical bytes verify.
+  try {
+    if (!await verifyEnvelopeV2(envelope, { expectedSignerDid: expectedSigner })) throw new Error("signature");
+  } catch {
+    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
+  }
   if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
+
   if (envelope.authorizationTarget.kind === "policy") {
     if (options.trustedPolicyAuthority === undefined) throw new ShareReceiveError("envelope-invalid", "an external policy authority is required");
     let evidence: SharePolicyEvidence | undefined;
@@ -312,11 +327,6 @@ async function verifyV2Envelope(envelope: ShareEnvelopeV2, linkOrigin: string, o
   } else if (envelope.authorizationTarget.kind === "recipientDid" && envelope.recipientMatcher.kind === "recipientDid" && envelope.authorizationTarget.did !== envelope.recipientMatcher.value) {
     throw new ShareReceiveError("capability-invalid", "recipient authorization does not match the signed recipient");
   }
-  try {
-    if (!await verifyEnvelopeV2(envelope, { expectedSignerDid: expectedSigner })) throw new Error("signature");
-  } catch {
-    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
-  }
 }
 
 async function verifyV1PolicyEnvelope(envelope: ShareEnvelope, linkOrigin: string, options: ShareFetchOptions): Promise<void> {
@@ -324,23 +334,10 @@ async function verifyV1PolicyEnvelope(envelope: ShareEnvelope, linkOrigin: strin
   if (envelope.target.origin !== linkOrigin || (options.expectedOrigin !== undefined && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin))) {
     throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
   }
-  let issuerDid: string;
-  try {
-    const policy = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(envelope.authorizationTarget.policyBytes))) as Record<string, unknown>;
-    if (typeof policy.issuerDid !== "string") throw new Error("policy issuer");
-    issuerDid = policy.issuerDid;
-  } catch {
-    // A structurally valid policy target that this headless bearer path
-    // cannot interpret is an honest addressed/unsupported result. Do not
-    // project it as a verified bearer envelope in browser adapters.
-    throw new ShareReceiveError("unsupported-target", "share policy target is not supported", { reason: "policy-target" });
-  }
-  try {
-    if (!await verifyEnvelope(envelope, { expectedSignerDid: issuerDid })) throw new Error("signature");
-  } catch {
-    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
-  }
-  if (Date.parse(envelope.expiry) <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
+  // v1 policy bytes are an integrity witness, never a trust root. This
+  // compatibility verifier has no external v1 authority contract, so it must
+  // not accept an addressed envelope as signature-valid.
+  throw new ShareReceiveError("unsupported-target", "share policy target is not supported", { reason: "policy-target" });
 }
 
 /** Verify a decrypted bearer envelope for browser adapters that own transport. */

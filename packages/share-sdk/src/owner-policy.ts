@@ -12,15 +12,34 @@ export interface OwnerDelegationReceipt {
   readonly delegationCid: string;
   readonly signedDagCbor: Uint8Array;
   readonly delegation: { readonly delegateDID: string; readonly spaceId: string; readonly path: string; readonly actions: readonly string[]; readonly expiry: Date };
+  /** Exact service-scoped capabilities encoded in the signed owner delegation. */
+  readonly permissions?: readonly OwnerDelegationPermission[];
 }
 
-export interface CreateOwnerDelegationParams {
-  readonly delegateDid: string;
-  readonly spaceId: string;
+export interface OwnerDelegationPermission {
+  readonly service: string;
   readonly path: string;
   readonly actions: readonly string[];
+}
+
+interface CreateOwnerDelegationBase {
+  readonly delegateDid: string;
+  readonly spaceId: string;
   readonly expiresAt: Date;
 }
+
+export type CreateOwnerDelegationParams = CreateOwnerDelegationBase & (
+  | {
+      readonly path: string;
+      readonly actions: readonly string[];
+      readonly permissions?: never;
+    }
+  | {
+      readonly permissions: readonly OwnerDelegationPermission[];
+      readonly path?: never;
+      readonly actions?: never;
+    }
+);
 
 const MAX_CONTENT_BYTES = 100 * 1024 * 1024;
 const ENFORCEMENT_DOMAIN = "xyz.tinycloud.share/policy-enforcement/v2\0";
@@ -28,6 +47,10 @@ const POLICY_DOMAIN = "xyz.tinycloud.share/policy/v2\0";
 export const OWNER_SHARE_REGISTRATION_DOMAIN = "xyz.tinycloud.share/policy-registration/v2\0";
 
 export type OwnerShareAction = "tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put";
+export interface OwnerShareDecryption {
+  readonly networkId: string;
+  readonly action: "tinycloud.encryption/decrypt";
+}
 export type OwnerShareMatcher =
   | { readonly kind: "exactEmail"; readonly value: string }
   | { readonly kind: "emailDomain"; readonly value: string }
@@ -44,6 +67,7 @@ export interface OwnerSharePolicyV2 {
   readonly target: { readonly origin: string; readonly nodeAudience: string; readonly enforcerDid: string; readonly spaceId: string };
   readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
   readonly actions: readonly OwnerShareAction[];
+  readonly decryption?: OwnerShareDecryption;
   readonly contentSource: { readonly kind: "kv"; readonly space: string; readonly path: string; readonly action: "tinycloud.kv/get" };
   readonly contentSourceDigest: string;
   readonly ownerDelegationCid: string;
