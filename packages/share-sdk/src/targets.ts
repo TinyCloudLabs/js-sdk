@@ -8,10 +8,14 @@ export type ShareTarget = SharePublishTarget;
 export interface TargetPublishInput {
   readonly source: Uint8Array;
   readonly filename: string;
+  /** Additional files for a prefix resource; source remains the first file for compatibility. */
+  readonly files?: readonly { readonly bytes: Uint8Array; readonly filename: string; readonly mediaType?: string }[];
   readonly target: Exclude<ShareTarget, { readonly kind: "bearer" }>;
   readonly expiresAt: Date;
   readonly origin: string;
   readonly mediaType?: string;
+  readonly resourceKind?: "exact" | "prefix";
+  readonly actions?: readonly ("read" | "list" | "edit")[];
   readonly inline?: boolean;
   readonly upload?: AddressedSharePublishOptions["upload"];
   readonly notify?: boolean;
@@ -55,6 +59,9 @@ export async function publishTargetShare(input: SharePublishOptions & {
   readonly target: ShareTarget;
   readonly notify?: boolean;
   readonly targetAdapter?: TargetPublishAdapter;
+  readonly files?: readonly { readonly bytes: Uint8Array; readonly filename: string; readonly mediaType?: string }[];
+  readonly resourceKind?: "exact" | "prefix";
+  readonly actions?: readonly ("read" | "list" | "edit")[];
 }): Promise<TargetPublishOutcome> {
   const target = normalizeShareTarget(input.target);
   if (target.kind === "bearer") return publishShare(input);
@@ -81,7 +88,10 @@ export async function publishTargetShare(input: SharePublishOptions & {
   return input.targetAdapter.publish({
     source,
     filename: input.filename,
+    ...(input.files === undefined ? {} : { files: input.files }),
     ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
+    ...(input.resourceKind === undefined ? {} : { resourceKind: input.resourceKind }),
+    ...(input.actions === undefined ? {} : { actions: input.actions }),
     target,
     expiresAt: input.expiresAt ?? new Date((input.now?.() ?? Date.now()) + 7 * 24 * 60 * 60 * 1000),
     origin: input.origin,

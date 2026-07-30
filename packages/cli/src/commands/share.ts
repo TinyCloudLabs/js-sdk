@@ -143,6 +143,23 @@ function byteLimit(value: string | undefined): number | undefined {
   return parsed;
 }
 
+function mediaTypeFor(filename: string): string {
+  const extension = filename.toLowerCase().split(".").at(-1);
+  return extension === "md" || extension === "markdown" ? "text/markdown"
+    : extension === "txt" ? "text/plain"
+      : extension === "html" || extension === "htm" ? "text/html"
+        : extension === "json" ? "application/json"
+          : extension === "css" ? "text/css"
+            : extension === "js" ? "text/javascript"
+              : "application/octet-stream";
+}
+
+function requestedActions(values: readonly string[] | undefined): readonly ("read" | "list" | "edit")[] {
+  const actions = values === undefined || values.length === 0 ? ["read"] : values;
+  if (actions.some((value) => value !== "read" && value !== "list" && value !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
+  return [...new Set(actions)] as ("read" | "list" | "edit")[];
+}
+
 function parseAuthorizationProof(value: string): unknown {
   let parsed: unknown;
   try { parsed = JSON.parse(value); } catch { throw new CLIError("INVALID_ARGUMENT", "authorization proof must be valid JSON", 2); }
@@ -153,31 +170,44 @@ function parseAuthorizationProof(value: string): unknown {
 export function registerShareCommand(program: Command): void {
   const share = program.command("share").description("Publish and consume TinyCloud Share links");
 
-  share.command("publish <file>")
-    .description("Publish a Markdown file or bounded stdin as a bearer share")
+  share.command("publish <files...>")
+    .description("Publish one or more bounded files as a Share")
     .option("--name <filename>", "Filename for stdin input")
     .option("--to <target>", "Share target", "anyone")
     .option("--notify", "Request idempotent email delivery for addressed targets")
     .option("--expires <duration>", "Share lifetime", "7d")
     .option("--max-bytes <bytes>", "Bound input bytes")
+    .option("--media-type <type>", "Media type for a single input")
+    .option("--action <actions...>", "Addressed permission: read, list, or edit")
+    .option("--prefix", "Publish multiple inputs beneath one addressed prefix")
+    .option("--binary", "Allow non-UTF-8 bearer content")
     .option("--inline", "Embed the sealed envelope in the URL fragment")
     .option("--compact", "Use a CID-addressed compact link (default)")
     .option("--json", "Print versioned redacted JSON")
     .option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY)
     .option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN)
     .option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests")
-    .action(async (file: string, options) => {
+    .action(async (files: string[], options) => {
       try {
         if (options.inline && options.compact) throw new CLIError("INVALID_ARGUMENT", "--inline and --compact are mutually exclusive", 2);
         const maxBytes = byteLimit(options.maxBytes);
-        const input = await readShareInput(file, options.name, maxBytes);
+        if (files.length === 0 || (files.includes("-") && files.length > 1)) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
+        const inputs = await Promise.all(files.map((file) => readShareInput(file, files.length === 1 ? options.name : undefined, maxBytes)));
         const target = parseShareTarget(options.to);
+        const actions = requestedActions(options.action);
+        if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
+        if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
+        if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
         if (options.notify === true && target.kind !== "email") throw new CLIError("INVALID_ARGUMENT", "--notify requires an exact email target", 2);
         const result = await publishTargetShare({
-          source: input.bytes,
-          filename: input.filename,
-          mediaType: "text/markdown",
+          source: inputs[0]!.bytes,
+          filename: inputs[0]!.filename,
+          files: inputs.map((input) => ({ bytes: input.bytes, filename: input.filename, mediaType: mediaTypeFor(input.filename) })),
+          mediaType: options.mediaType ?? mediaTypeFor(inputs[0]!.filename),
+          allowBinary: options.binary === true,
           target,
+          resourceKind: options.prefix || inputs.length > 1 ? "prefix" : "exact",
+          actions,
           expiresAt: expires(options.expires),
           origin: options.viewerOrigin,
           inline: options.inline === true,

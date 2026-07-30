@@ -324,10 +324,19 @@ export function createShareAuthorityAdapters(input: {
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
     if (targetInput.origin !== config.shareOrigin || node.spaceId === undefined) throw new Error("addressed publication is not bound to the configured Share service");
     const shareId = crypto.randomUUID().replaceAll("-", "");
-    const resourcePath = `shares/${shareId}/${targetInput.filename}`;
-    const mediaType = targetInput.mediaType ?? "application/octet-stream";
-    const stored = await node.kvForSpace(node.spaceId).put(resourcePath, targetInput.source, { contentType: mediaType });
-    if (!stored.ok) throw new Error("addressed source upload was rejected");
+    const files = targetInput.files === undefined || targetInput.files.length === 0
+      ? [{ bytes: targetInput.source, filename: targetInput.filename, mediaType: targetInput.mediaType }]
+      : targetInput.files;
+    const resourceKind = targetInput.resourceKind ?? (files.length > 1 ? "prefix" : "exact");
+    const resourcePath = `shares/${shareId}${resourceKind === "exact" ? `/${targetInput.filename}` : ""}`;
+    const kv = node.kvForSpace(node.spaceId);
+    for (const file of files) {
+      const path = resourceKind === "prefix" ? `${resourcePath}/${file.filename}` : resourcePath;
+      const stored = await kv.put(path, file.bytes, { contentType: file.mediaType ?? "application/octet-stream" });
+      if (!stored.ok) throw new Error("addressed source upload was rejected");
+    }
+    const actions = targetInput.actions === undefined || targetInput.actions.length === 0 ? ["read"] as const : targetInput.actions;
+    const policyActions = [...new Set(actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]))];
     return publishAddressedShare({
       shareId,
       shareOrigin: config.shareOrigin,
@@ -336,13 +345,13 @@ export function createShareAuthorityAdapters(input: {
       enforcerDid: config.enforcerDid,
       spaceId: node.spaceId,
       target: targetInput.target,
-      resource: { kind: "exact", path: resourcePath },
-      actions: ["read"],
-      policyActions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
+      resource: { kind: resourceKind, path: resourcePath },
+      actions,
+      policyActions,
       contentSource: { kind: "kv", space: node.spaceId, path: resourcePath, action: "tinycloud.kv/get" },
       filename: targetInput.filename,
       mediaType,
-      byteLength: targetInput.source.byteLength,
+      byteLength: files.reduce((total, file) => total + file.bytes.byteLength, 0),
       expiresAt: targetInput.expiresAt,
       inline: targetInput.inline,
       authority: {
@@ -496,6 +505,26 @@ async function profileShareSessionAuthorization(profileName: string): Promise<Sh
   return { cookie };
 }
 
+async function establishOpenKeyShareSession(profileName: string, origin: string, fetchFn: typeof globalThis.fetch): Promise<ShareUploadAuthorization> {
+  const profile = await ProfileManager.getProfile(profileName);
+  if (profile.authMethod !== "openkey") throw new Error("share upload requires an authorized profile");
+  const { OpenKey } = await import("@openkey/sdk");
+  const openkey = new OpenKey({ host: profile.openkeyHost ?? "https://openkey.so", appName: "TinyCloud CLI", mode: "popup" });
+  const auth = await openkey.connect();
+  const nonceResponse = await fetchFn(`${origin}/api/share/auth/openkey/nonce`, { headers: { accept: "application/json", origin }, credentials: "include", redirect: "error", referrerPolicy: "no-referrer" });
+  if (!nonceResponse.ok) throw new Error("share sign-in nonce was rejected");
+  const nonceBody = await nonceResponse.json() as { readonly nonce?: unknown; readonly expiresAt?: unknown };
+  if (typeof nonceBody.nonce !== "string" || typeof nonceBody.expiresAt !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(nonceBody.nonce)) throw new Error("share sign-in challenge is invalid");
+  const issuedAt = new Date().toISOString();
+  const message = authenticationMessage(origin, auth.address, nonceBody.nonce, issuedAt);
+  const signed = await openkey.signMessage({ message, keyId: auth.keyId });
+  if (signed.address.toLowerCase() !== auth.address.toLowerCase()) throw new Error("share sign-in address mismatch");
+  const authenticated = await fetchFn(`${origin}/api/share/auth/openkey`, { method: "POST", headers: { accept: "application/json", "content-type": "application/json", origin }, credentials: "include", body: JSON.stringify({ address: auth.address, signature: signed.signature, message, nonce: nonceBody.nonce, issuedAt }), redirect: "error", referrerPolicy: "no-referrer" });
+  const cookie = cookieFromResponse(authenticated);
+  if (!authenticated.ok || cookie === undefined) throw new Error("share sign-in was rejected");
+  return { cookie };
+}
+
 /**
  * Establishes the same nonce-bound Share session used by the browser and
  * returns only the upload request headers. Private wallet material and the
@@ -517,7 +546,8 @@ export function createProductionUploadAuthorizer(input: {
   return async (_upload) => {
     if (sessionCookie !== undefined && sessionExpiresAt > Date.now() + 30_000) return { cookie: sessionCookie };
     const profileName = await (input.profileName?.() ?? selectedProfileName());
-    const sessionAuthorization = await (input.sessionAuthorization?.() ?? profileShareSessionAuthorization(profileName));
+    const profile = await ProfileManager.getProfile(profileName);
+    const sessionAuthorization = await (input.sessionAuthorization?.() ?? profileShareSessionAuthorization(profileName) ?? (profile.authMethod === "openkey" ? establishOpenKeyShareSession(profileName, origin, fetchFn) : undefined));
     if (sessionAuthorization !== undefined) return sessionAuthorization;
     const key = await (input.privateKey?.() ?? profilePrivateKeyFor(profileName));
     // Keep public inspect/receive independent from the legacy Node SDK graph.

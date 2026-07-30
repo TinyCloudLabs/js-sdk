@@ -37,15 +37,19 @@ export function markdownFilename(value: string): string {
   return filename;
 }
 
+export function shareFilename(value: string): string {
+  return safeFilename(value);
+}
+
 export async function readShareInput(input: string, name?: string, limit = MAX_SHARE_STDIN_BYTES): Promise<{ bytes: Uint8Array; filename: string }> {
   if (input === "-") {
     const bytes = await readBoundedStdin(limit);
-    return { bytes, filename: markdownFilename(name ?? "stdin.md") };
+    return { bytes, filename: shareFilename(name ?? "stdin.md") };
   }
   const path = resolve(input);
   const info = await stat(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const filename = markdownFilename(name ?? basename(path));
+  const filename = shareFilename(name ?? basename(path));
   const bytes = new Uint8Array(await readFile(path));
   // The pre-read stat is only an optimization. A file can grow between stat
   // and readFile, so enforce the same bound on the bytes actually published.

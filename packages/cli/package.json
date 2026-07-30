@@ -36,6 +36,7 @@
     "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts"
   },
   "dependencies": {
+    "@openkey/sdk": "0.8.7",
     "@tinycloud/share-sdk": "workspace:*",
     "@tinycloud/share-envelope": "workspace:*",
     "@tinycloud/node-sdk": "2.11.0-beta.4",

@@ -302,6 +302,16 @@ async function verifyV2Envelope(envelope: ShareEnvelopeV2, linkOrigin: string, o
   if (options.expectedOrigin !== undefined && linkOrigin !== options.expectedOrigin) {
     throw new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted origin");
   }
+  // Verify the signed envelope before consulting any policy or registration
+  // authority. This first check establishes integrity only: the signer named
+  // by an untrusted envelope is not a trust root. The external authority below
+  // must still bind that signer to an enrolled registration, and an explicit
+  // trustedSignerDid remains an additional trust constraint when supplied.
+  try {
+    if (!await verifyEnvelopeV2(envelope, { expectedSignerDid: envelope.signature.signerDid })) throw new Error("signature");
+  } catch {
+    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
+  }
   const expiry = Date.parse(envelope.expiry);
   if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
   if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
@@ -314,21 +324,13 @@ async function verifyV2Envelope(envelope: ShareEnvelopeV2, linkOrigin: string, o
     // The signer is a trust root only when the separately configured policy
     // authority has vouched for it. Never promote the signer or policy bytes
     // supplied by the untrusted envelope into authority.
-    const expectedSigner = options.trustedSignerDid ?? evidence.signerDid;
-    try {
-      if (!await verifyEnvelopeV2(envelope, { expectedSignerDid: expectedSigner })) throw new Error("signature");
-    } catch {
-      throw new ShareReceiveError("signature-invalid", "share signature is invalid");
+    if (options.trustedSignerDid !== undefined && (evidence.signerDid !== options.trustedSignerDid || envelope.signature.signerDid !== options.trustedSignerDid)) {
+      throw new ShareReceiveError("signature-invalid", "share signer is not trusted");
     }
   } else if (envelope.authorizationTarget.kind === "recipientDid" && envelope.recipientMatcher.kind === "recipientDid" && envelope.authorizationTarget.did !== envelope.recipientMatcher.value) {
     throw new ShareReceiveError("capability-invalid", "recipient authorization does not match the signed recipient");
   } else {
-    if (options.trustedSignerDid === undefined) throw new ShareReceiveError("signature-invalid", "an addressed signer trust root is required");
-    try {
-      if (!await verifyEnvelopeV2(envelope, { expectedSignerDid: options.trustedSignerDid })) throw new Error("signature");
-    } catch {
-      throw new ShareReceiveError("signature-invalid", "share signature is invalid");
-    }
+    if (options.trustedSignerDid === undefined || envelope.signature.signerDid !== options.trustedSignerDid) throw new ShareReceiveError("signature-invalid", "an addressed signer trust root is required");
   }
 }
 
