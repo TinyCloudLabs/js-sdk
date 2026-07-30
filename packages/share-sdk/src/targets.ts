@@ -1,7 +1,7 @@
 import type { ShareAuthorizationRequired, ShareAuthorizationMethod } from "./authorization.js";
 import { authorizationMethodForTarget } from "./authorization.js";
 import type { AddressedSharePublishOptions } from "./addressed-publish.js";
-import { publishShare, type PublishedShare, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
+import { publishShare, SharePublishError, SHARE_CONTENT_LIMIT, type PublishedShare, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
 
 export type ShareTarget = SharePublishTarget;
 
@@ -85,6 +85,17 @@ export async function publishTargetShare(input: SharePublishOptions & {
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
     return bytes;
   })();
+  const files = input.files === undefined || input.files.length === 0
+    ? [{ bytes: source }]
+    : input.files;
+  const limit = input.maxBytes ?? SHARE_CONTENT_LIMIT;
+  let totalBytes = 0;
+  for (const file of files) {
+    totalBytes += file.bytes.byteLength;
+    if (!Number.isSafeInteger(totalBytes) || totalBytes > limit) {
+      throw new SharePublishError("max-bytes-exceeded", "addressed publication exceeds the combined byte limit");
+    }
+  }
   return input.targetAdapter.publish({
     source,
     filename: input.filename,

@@ -26,5 +26,7 @@ export { isLegacyShareLink, receiveLegacyShare, migrateShare } from "./legacy.js
 export type { LegacyShareReader, LegacyMigrationResult } from "./legacy.js";
 export { normalizeShareTarget, publishTargetShare, targetAuthorizationMethod } from "./targets.js";
 export type { ShareTarget, TargetPublishInput, TargetPublishOutcome, TargetPublishAdapter } from "./targets.js";
+export { ShareRecipientClient, createAddressedAuthorization } from "./recipient.js";
+export type { ShareNodeTrust, SharePolicyChallenge, SharePresentationMaterial, ShareRecipientClientOptions, SharePolicySession } from "./recipient.js";
 export { publishPolicyShare, claimShare, resumeShareAuthorization } from "./policy.js";
 export type { SharePolicyPublishAdapter } from "./policy.js";

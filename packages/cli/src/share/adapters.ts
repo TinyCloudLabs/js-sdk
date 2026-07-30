@@ -387,6 +387,8 @@ export function createShareAuthorityAdapters(input: {
       : targetInput.files;
     const resourceKind = targetInput.resourceKind ?? (files.length > 1 ? "prefix" : "exact");
     const resourcePath = `shares/${shareId}${resourceKind === "exact" ? `/${targetInput.filename}` : ""}`;
+    const totalBytes = files.reduce((total, file) => total + file.bytes.byteLength, 0);
+    if (!Number.isSafeInteger(totalBytes) || totalBytes > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
     const kv = node.kvForSpace(node.spaceId);
     for (const file of files) {
       const path = resourceKind === "prefix" ? `${resourcePath}/${file.filename}` : resourcePath;

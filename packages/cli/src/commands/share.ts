@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { readFile } from "node:fs/promises";
 import {
   inspectShare,
   receiveShare,
@@ -160,6 +161,32 @@ function requestedActions(values: readonly string[] | undefined): readonly ("rea
   return [...new Set(actions)] as ("read" | "list" | "edit")[];
 }
 
+async function authorizationProof(options: { readonly authorizationProof?: string; readonly authorizationProofFile?: string }): Promise<unknown> {
+  if (options.authorizationProof !== undefined && options.authorizationProofFile !== undefined) {
+    throw new CLIError("INVALID_ARGUMENT", "--authorization-proof and --authorization-proof-file are mutually exclusive", 2);
+  }
+  const encoded = options.authorizationProofFile === undefined
+    ? options.authorizationProof
+    : await readFile(options.authorizationProofFile, "utf8").catch(() => { throw new CLIError("INVALID_ARGUMENT", "authorization proof file could not be read", 2); });
+  if (encoded === undefined) return undefined;
+  try {
+    const value = JSON.parse(encoded) as unknown;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("object");
+    return value;
+  } catch {
+    throw new CLIError("INVALID_ARGUMENT", "authorization proof must be a JSON object", 2);
+  }
+}
+
+function assertAggregateInputLimit(inputs: readonly { readonly bytes: Uint8Array }[], maxBytes: number | undefined): void {
+  const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
+  let total = 0;
+  for (const input of inputs) {
+    total += input.bytes.byteLength;
+    if (!Number.isSafeInteger(total) || total > limit) throw new CLIError("MAX_BYTES_EXCEEDED", "combined share input exceeds the configured byte limit", 7);
+  }
+}
+
 export function registerShareCommand(program: Command): void {
   const share = program.command("share").description("Publish and consume TinyCloud Share links");
 
@@ -186,6 +213,7 @@ export function registerShareCommand(program: Command): void {
         const maxBytes = byteLimit(options.maxBytes);
         if (files.length === 0 || (files.includes("-") && files.length > 1)) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
         const inputs = await Promise.all(files.map((file) => readShareInput(file, files.length === 1 ? options.name : undefined, maxBytes)));
+        assertAggregateInputLimit(inputs, maxBytes);
         const target = parseShareTarget(options.to);
         const actions = requestedActions(options.action);
         if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
@@ -253,6 +281,8 @@ export function registerShareCommand(program: Command): void {
     .option("--force", "Allow replacing an existing non-symlink output")
     .option("--max-bytes <bytes>", "Bound received content bytes")
     .option("--resume-token <token>", "Resume a previously returned recipient authorization step")
+    .option("--authorization-proof <json>", "JSON authorization proof for a resume step")
+    .option("--authorization-proof-file <path>", "Read the JSON authorization proof from a file")
     .option("--json", "Print versioned redacted JSON")
     .option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY)
     .option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN)
@@ -262,6 +292,7 @@ export function registerShareCommand(program: Command): void {
         if (options.stdout && options.json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
         const maxBytes = byteLimit(options.maxBytes);
         const link = await inputUrl(url, options.stdin === true);
+        const proof = await authorizationProof(options);
         if (options.legacy) {
           if (!isLegacyShareLink(link) || shareServices.legacyReader === undefined) throw new CLIError("UNSUPPORTED_LINK", "legacy receive requires an installed read-only tc1 adapter", 2);
           const bytes = await receiveLegacyShare(link, shareServices.legacyReader);
@@ -277,6 +308,7 @@ export function registerShareCommand(program: Command): void {
           ...(maxBytes === undefined ? {} : { maxContentBlobBytes: maxBytes }),
           ...(shareServices.authorization === undefined ? {} : { authorization: shareServices.authorization }),
           ...(options.resumeToken === undefined ? {} : { authorizationResumeToken: options.resumeToken }),
+          ...(proof === undefined ? {} : { authorizationProof: proof }),
         });
         if ("state" in result) {
           if (options.json) {
