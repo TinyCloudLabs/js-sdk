@@ -95,7 +95,13 @@ export async function writeShareOutput(directory: string, filename: string, byte
   const outputPath = childPath(safeName);
   let temporaryPath: string | undefined;
   let handle: Awaited<ReturnType<typeof open>> | undefined;
+  const directoryIdentity = await directoryHandle.stat();
+  const assertStableDirectory = async (): Promise<void> => {
+    const current = await stat(stableDirectory);
+    if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
+  };
   try {
+    await assertStableDirectory();
     try {
       const existing = await lstat(outputPath);
       if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
@@ -107,6 +113,7 @@ export async function writeShareOutput(directory: string, filename: string, byte
     await handle.writeFile(bytes);
     await handle.close();
     handle = undefined;
+    await assertStableDirectory();
     if (force) {
       // rename replaces the directory entry itself and never follows an
       // existing output symlink.  The content was written only to the fresh
@@ -118,6 +125,7 @@ export async function writeShareOutput(directory: string, filename: string, byte
       await link(temporaryPath, outputPath);
       await unlink(temporaryPath);
     }
+    await assertStableDirectory();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("OUTPUT_EXISTS");
     if ((error as NodeJS.ErrnoException).code === "ELOOP") throw new Error("UNSAFE_FILENAME");

@@ -20926,7 +20926,13 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputPath = childPath(safeName);
   let temporaryPath;
   let handle;
+  const directoryIdentity = await directoryHandle.stat();
+  const assertStableDirectory = async () => {
+    const current = await stat2(stableDirectory);
+    if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
+  };
   try {
+    await assertStableDirectory();
     try {
       const existing = await lstat(outputPath);
       if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
@@ -20938,12 +20944,14 @@ async function writeShareOutput(directory, filename, bytes, force) {
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
+    await assertStableDirectory();
     if (force) {
       await rename2(temporaryPath, outputPath);
     } else {
       await link(temporaryPath, outputPath);
       await unlink(temporaryPath);
     }
+    await assertStableDirectory();
   } catch (error) {
     if (error.code === "EEXIST") throw new Error("OUTPUT_EXISTS");
     if (error.code === "ELOOP") throw new Error("UNSAFE_FILENAME");
