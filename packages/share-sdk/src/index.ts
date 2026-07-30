@@ -3,6 +3,8 @@ export { DEFAULT_SHARE_LIFETIME_MS, SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VE
 export { parseAddressedEnvelope, type ParsedAddressedEnvelope } from "./addressed.js";
 export { publishAddressedShare } from "./addressed-publish.js";
 export type { AddressedPublishAuthority, AddressedSharePublishOptions } from "./addressed-publish.js";
+export { createRegisteredPolicyAuthority } from "./policy-authority.js";
+export type { RegisteredPolicyAuthorityOptions } from "./policy-authority.js";
 export { checkBearerDelegation, resourceUriCovers, requiredResourceUri, type CheckBearerDelegationOptions, type DelegationCheckResult } from "@tinycloud/share-envelope";
 export { MemoryShareCache } from "./cache.js";
 export type { ShareCache, ShareCacheEntry, ShareCacheKey, ShareCacheMetadata } from "./cache.js";
