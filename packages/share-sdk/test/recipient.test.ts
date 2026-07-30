@@ -29,31 +29,41 @@ function envelope(resource = "documents/plan.md"): ShareEnvelopeV2 {
   } as unknown as ShareEnvelopeV2;
 }
 
-function signedProof(value: Record<string, unknown>): Record<string, unknown> {
-  const unsigned = { ...value };
-  delete unsigned.proof;
-  const signature = ed25519.sign(
-    new TextEncoder().encode(`xyz.tinycloud.share/read-response/v2\0${canonicalize(unsigned)}`),
-    nodePrivateKey,
-  );
-  return { detached: { alg: "EdDSA", kid: nodeKid, signature: toBase64Url(signature) }, response: value };
+async function digestText(value: string): Promise<string> {
+  return toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))));
 }
 
-function responseFor(target: ShareEnvelopeV2, content = "right"): Record<string, unknown> {
+async function digestCanonical(value: unknown): Promise<string> {
+  return digestText(canonicalize(value));
+}
+
+function signedArtifact(key: "challenge" | "session", domain: string, artifact: Record<string, unknown>): Record<string, unknown> {
+  const signature = ed25519.sign(new TextEncoder().encode(`${domain}${canonicalize(artifact)}`), nodePrivateKey);
+  return { [key]: artifact, proof: { alg: "EdDSA", kid: nodeKid, signature: toBase64Url(signature) } };
+}
+
+async function responseFor(target: ShareEnvelopeV2, content = "right"): Promise<Record<string, unknown>> {
   return {
     type: "TinyCloudShareInvokeResponse",
     version: 2,
     action: "tinycloud.kv/get",
     resource: target.resource.path,
-    shareId: target.shareId,
-    delegationCid: target.delegationCid,
-    authorityMaterialHandle: target.authorityMaterialHandle,
-    authorityMaterialDigest: target.authorityMaterialDigest,
-    contentSourceDigest: target.contentSourceDigest,
     content: toBase64Url(new TextEncoder().encode(content)),
-    bodyDigest: "C".repeat(43),
-    proof: { alg: "EdDSA", kid: nodeKid, signature: "placeholder" },
+    bodyDigest: await digestText(content),
   };
+}
+
+function addressedTarget(): ShareEnvelopeV2 {
+  return {
+    ...envelope(),
+    ownerAuthority: {
+      registrationCid: "registration",
+      shareCid: "share-cid",
+      envelopeCid: "envelope-cid",
+      enforcementDelegation: { cid: "enforcement-cid" },
+      outerEnvelope: {},
+    },
+  } as ShareEnvelopeV2;
 }
 
 describe("addressed recipient response binding", () => {
@@ -64,16 +74,16 @@ describe("addressed recipient response binding", () => {
       trustedNode: { invitationKid: nodeKid, invitationPublicKey: nodePublicKey },
       holderDid: "did:key:z6Mkholder",
     });
-    const response = { ...responseFor(target, "wrong"), resource: "documents/other.md" };
-    const proof = signedProof(response);
+    const response = await responseFor(target, "wrong");
+    response.resource = "documents/other.md";
     const value = {
       bytes: new TextEncoder().encode("wrong"),
       bodyDigest: response.bodyDigest,
       contentSourceDigest: target.contentSourceDigest,
       binding: { shareId: target.shareId, delegationCid: target.delegationCid, authorityMaterialHandle: target.authorityMaterialHandle, authorityMaterialDigest: target.authorityMaterialDigest, resource: target.resource },
-      proof,
+      proof: { response },
     };
-    await expect(adapter.verifyResult?.({ envelope: target, value, proof })).resolves.toBe(false);
+    await expect(adapter.verifyResult?.({ envelope: target, value, proof: value.proof })).resolves.toBe(false);
   });
 
   it("accepts a response whose signed resource matches the requested share", async () => {
@@ -83,110 +93,61 @@ describe("addressed recipient response binding", () => {
       trustedNode: { invitationKid: nodeKid, invitationPublicKey: nodePublicKey },
       holderDid: "did:key:z6Mkholder",
     });
-    const response = responseFor(target);
-    const proof = signedProof(response);
+    const response = await responseFor(target);
     const value = {
       bytes: new TextEncoder().encode("right"),
-      bodyDigest: response.bodyDigest,
+      bodyDigest: response.bodyDigest as string,
       contentSourceDigest: target.contentSourceDigest,
       binding: { shareId: target.shareId, delegationCid: target.delegationCid, authorityMaterialHandle: target.authorityMaterialHandle, authorityMaterialDigest: target.authorityMaterialDigest, resource: target.resource },
-      proof,
+      proof: { response },
     };
-    await expect(adapter.verifyResult?.({ envelope: target, value, proof })).resolves.toBe(true);
+    await expect(adapter.verifyResult?.({ envelope: target, value, proof: value.proof })).resolves.toBe(true);
   });
 
-  it("rejects a signed response that omits any authority binding", async () => {
-    const target = envelope();
-    const adapter = createAddressedAuthorization({
-      nodeOrigin: "https://node.example",
-      trustedNode: { invitationKid: nodeKid, invitationPublicKey: nodePublicKey },
-      holderDid: "did:key:z6Mkholder",
-    });
-    const response = responseFor(target);
-    delete response.authorityMaterialDigest;
-    const proof = signedProof(response);
-    const value = {
-      bytes: new TextEncoder().encode("right"),
-      bodyDigest: response.bodyDigest,
-      contentSourceDigest: target.contentSourceDigest,
-      binding: { shareId: target.shareId, delegationCid: target.delegationCid, authorityMaterialHandle: target.authorityMaterialHandle, authorityMaterialDigest: target.authorityMaterialDigest, resource: target.resource },
-      proof,
+  it("uses only fields emitted by the production v1 policy routes", async () => {
+    const target = addressedTarget();
+    const body = {
+      shareCid: "share-cid", shareId: target.shareId, policyCid: "", delegationCid: target.delegationCid,
+      authorityMaterialHandle: target.authorityMaterialHandle, authorityMaterialDigest: target.authorityMaterialDigest,
+      contentSource: target.contentSource, contentSourceDigest: target.contentSourceDigest, holderDid: "did:key:z6Mkholder",
+      targetOrigin: target.target.origin, nodeAudience: target.target.nodeAudience, action: "tinycloud.kv/get",
+      actions: ["tinycloud.kv/get"], resource: target.resource.path,
     };
-    await expect(adapter.verifyResult?.({ envelope: target, value, proof })).resolves.toBe(false);
+    const challenge = { type: "TinyCloudSharePolicyChallenge", version: 1, challengeId: "challenge-0123456789", nonce: "nonce-0123456789", ...body, issuedAt: "2026-07-30T12:00:00.000Z", expiresAt: "2030-01-01T00:00:00.000Z", requestBodyDigest: await digestCanonical(body) };
+    const calls: string[] = [];
+    const fetchFn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      calls.push(String(input));
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(request).not.toHaveProperty("envelopeCid");
+      expect(request).not.toHaveProperty("registrationCid");
+      expect(request).not.toHaveProperty("enforcementDelegation");
+      return new Response(JSON.stringify(signedArtifact("challenge", "xyz.tinycloud.share/policy-challenge/v1\0", challenge)), { status: 200 });
+    };
+    const client = new ShareRecipientClient({ nodeOrigin: "https://node.example", trustedNode: { invitationKid: nodeKid, invitationPublicKey: nodePublicKey }, holderDid: "did:key:z6Mkholder", envelope: target, fetchFn });
+    await expect(client.beginChallenge(target)).resolves.toMatchObject({ version: 1, challengeId: challenge.challengeId });
+    expect(calls).toEqual(["https://node.example/share/v1/policy/challenges"]);
   });
 
   it("restores the presented holder proof before resuming the addressed read", async () => {
-    const target = {
-      ...envelope(),
-      ownerAuthority: {
-        registrationCid: "registration",
-        shareCid: "share-cid",
-        envelopeCid: "envelope-cid",
-        enforcementDelegation: { cid: "enforcement-cid" },
-        outerEnvelope: {
-          resource: { kind: "exact", path: "documents/plan.md" },
-          target: { origin: "https://node.example", nodeAudience: "did:web:node.example" },
-          contentSource: { kind: "kv", space: "space", path: "documents/plan.md", action: "tinycloud.kv/get" },
-          contentSourceDigest: envelope().contentSourceDigest,
-        },
-      },
-    } as ShareEnvelopeV2;
+    const target = addressedTarget();
     const holderPrivateKey = new Uint8Array(32).fill(73);
     const holderDid = "did:key:z6Mkholder";
     const session = {
-      type: "TinyCloudSharePolicySession",
-      version: 2,
-      sessionId: "session-resumed",
-      shareCid: "share-cid",
-      shareId: target.shareId,
-      registrationCid: "registration",
-      envelopeCid: "envelope-cid",
-      policyCid: "",
-      delegationCid: target.delegationCid,
-      holderDid,
-      targetOrigin: "https://node.example",
-      nodeAudience: "did:web:node.example",
-      action: "tinycloud.kv/get",
-      actions: ["tinycloud.kv/get"],
-      contentSource: target.contentSource,
-      contentSourceDigest: target.contentSourceDigest,
-      resource: target.resource.path,
-      expiresAt: "2030-01-01T00:00:00.000Z",
+      type: "TinyCloudSharePolicySession", version: 1, sessionId: "session-resumed", shareCid: "share-cid", shareId: target.shareId,
+      policyCid: "", delegationCid: target.delegationCid, authorityMaterialHandle: target.authorityMaterialHandle, authorityMaterialDigest: target.authorityMaterialDigest,
+      holderDid, targetOrigin: "https://node.example", nodeAudience: "did:web:node.example", action: "tinycloud.kv/get", actions: ["tinycloud.kv/get"],
+      contentSource: target.contentSource, contentSourceDigest: target.contentSourceDigest, resource: target.resource.path, expiresAt: "2030-01-01T00:00:00.000Z",
     };
     const content = new TextEncoder().encode("right");
-    const bodyDigest = toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", content)));
-    const response = responseFor(target);
-    response.bodyDigest = bodyDigest;
-    const fetchFn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const response = await responseFor(target);
+    const fetchFn = async (input: RequestInfo | URL): Promise<Response> => {
       const url = String(input);
-      if (url.endsWith("/share/v2/policy/session")) {
-        const proof = { alg: "EdDSA", kid: nodeKid, signature: toBase64Url(ed25519.sign(new TextEncoder().encode(`xyz.tinycloud.share/policy-session/v2\0${canonicalize(session)}`), nodePrivateKey)) };
-        return new Response(JSON.stringify({ session, proof }), { status: 200 });
-      }
-      if (url.endsWith("/share/v2/invoke")) {
-        const unsigned = { ...response };
-        delete unsigned.proof;
-        const proof = ed25519.sign(new TextEncoder().encode(`xyz.tinycloud.share/read-response/v2\0${canonicalize(unsigned)}`), nodePrivateKey);
-        return new Response(JSON.stringify({ ...response, proof: { alg: "EdDSA", kid: nodeKid, signature: toBase64Url(proof) } }), { status: 200 });
-      }
+      if (url.endsWith("/share/v1/policy/session")) return new Response(JSON.stringify(signedArtifact("session", "xyz.tinycloud.share/policy-session/v1\0", session)), { status: 200 });
+      if (url.endsWith("/invoke")) return new Response(JSON.stringify(response), { status: 200 });
       throw new Error(`unexpected ${url}`);
     };
-    const client = new ShareRecipientClient({
-      nodeOrigin: "https://node.example",
-      trustedNode: { invitationKid: nodeKid, invitationPublicKey: nodePublicKey },
-      holderDid,
-      envelope: target,
-      fetchFn,
-      sign: async (bytes) => ed25519.sign(bytes, holderPrivateKey),
-    });
-    const result = await client.resumeWithProof(target, "resume-token", {
-      nonce: "nonce-resumed",
-      credential: "credential",
-      holderDid,
-      holderBinding: { holderDid },
-      presentation: { type: "TinyCloudSharePolicyPresentation", version: 2 },
-      presentationProof: { alg: "EdDSA", kid: "holder-key", signature: "presented" },
-    });
+    const client = new ShareRecipientClient({ nodeOrigin: "https://node.example", trustedNode: { invitationKid: nodeKid, invitationPublicKey: nodePublicKey }, holderDid, envelope: target, fetchFn, sign: async (bytes) => ed25519.sign(bytes, holderPrivateKey) });
+    const result = await client.resumeWithProof(target, "resume-token", { nonce: "nonce-resumed", credential: "credential", holderDid, holderBinding: { holderDid }, presentation: { type: "TinyCloudSharePolicyPresentation", version: 1 }, presentationProof: { alg: "EdDSA", kid: "holder-key", signature: "presented" } });
     expect(result.bytes).toEqual(content);
   });
 });
