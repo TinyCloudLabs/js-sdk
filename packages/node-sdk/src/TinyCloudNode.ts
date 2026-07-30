@@ -723,6 +723,22 @@ export interface RuntimePermissionGrantOptions {
   expiry?: string | number;
 }
 
+export interface EnsureEncryptionNetworkOptions {
+  /**
+   * Skip the `GET /encryption/networks/{id}` existence probe and go straight
+   * to the create.
+   *
+   * The probe pays for itself only when the network already exists. On a
+   * freshly bootstrapped account it is a guaranteed 404, so it costs a round
+   * trip on the cold sign-in path and saves nothing. Creating without it is
+   * safe: the server answers `409 Conflict` if the network is already there,
+   * which {@link TinyCloudNode.createEncryptionNetwork} resolves by reading the
+   * existing descriptor. Set this only when the caller knows the account was
+   * just provisioned.
+   */
+  assumeMissing?: boolean;
+}
+
 interface RuntimePermissionOperation {
   spaceId?: string;
   resource?: string;
@@ -914,6 +930,13 @@ export class TinyCloudNode {
    * so this avoids re-parsing the recap on every registration.
    */
   private _recapOperationsCache?: { siwe: string; operations: RuntimePermissionOperation[] };
+
+  /**
+   * Owned space ids this sign-in has already confirmed are hosted. Consulted by
+   * {@link ensureOwnedSpaceHostedById}; cleared on every {@link signIn} because
+   * hosting is confirmed against the session that was active at the time.
+   */
+  private readonly confirmedHostedSpaceIds = new Set<string>();
 
   /**
    * TinyCloudSession captured by {@link restoreSession} when there's no
@@ -1446,6 +1469,7 @@ export class TinyCloudNode {
     this._spaceService = undefined;
     this._serviceContext = undefined;
     this.runtimePermissionGrants = [];
+    this.confirmedHostedSpaceIds.clear();
 
     await this.tc.signIn(options);
     this.syncResolvedHostFromAuth();
@@ -1696,6 +1720,10 @@ export class TinyCloudNode {
           step.manifests.length > 0
             ? [...step.manifests]
             : TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
+          // Bootstrap only runs on an account with no registry records, so the
+          // manifest-hash pre-read is definitionally a miss. Skip it; the write
+          // it guards is an INSERT OR REPLACE and is safe to repeat.
+          { assumeUnregistered: true },
         );
         if (!registered.ok) {
           throw new Error(`Failed to seed bootstrap applications: ${registered.error.message}`);
@@ -1703,7 +1731,10 @@ export class TinyCloudNode {
       }
 
       if (step.kind === "encryption-network-create") {
-        await this.ensureEncryptionNetwork(step.networkId);
+        // Bootstrap only runs on a fresh account, so the existence probe is a
+        // guaranteed 404. Create directly; a 409 is resolved to the existing
+        // descriptor.
+        await this.ensureEncryptionNetwork(step.networkId, { assumeMissing: true });
       }
 
       if (step.kind === "secret-records-schema") {
@@ -2038,6 +2069,22 @@ export class TinyCloudNode {
     }
   }
 
+  /**
+   * Ensure one of this user's owned spaces is hosted, at most once per space
+   * per sign-in.
+   *
+   * Account bootstrap funnels six calls through here (via
+   * `AccountService.ensureAccountSpaceHosted`), and each one re-submits
+   * `activateSessionWithHost` with the *primary* session. That session's recap
+   * covers only `default` and `secrets`, so the account space appears in
+   * neither `activated` nor `skipped` and the guard below returns immediately
+   * — the repeat calls cannot change the outcome, they only cost round trips.
+   *
+   * The memo is per sign-in ({@link confirmedHostedSpaceIds} is cleared in
+   * `signIn`) and only records confirmed successes. A wrong skip is
+   * self-revealing: the next write to the space fails immediately and loudly
+   * with `404 Space not found`.
+   */
   private async ensureOwnedSpaceHostedById(spaceId: string): Promise<void> {
     if (!this.auth) {
       throw new Error("Owned space hosting requires wallet mode");
@@ -2048,6 +2095,10 @@ export class TinyCloudNode {
       throw new Error("Owned space hosting requires an active session");
     }
 
+    if (this.confirmedHostedSpaceIds.has(spaceId)) {
+      return;
+    }
+
     const host = this.hosts[0] ?? this.config.host;
     if (!host) {
       throw new Error("Owned space hosting requires a TinyCloud host");
@@ -2055,6 +2106,7 @@ export class TinyCloudNode {
 
     const activation = await activateSessionWithHost(host, session.delegationHeader);
     if (activation.success && !activation.skipped?.includes(spaceId)) {
+      this.confirmedHostedSpaceIds.add(spaceId);
       return;
     }
 
@@ -2079,6 +2131,7 @@ export class TinyCloudNode {
         }`,
       );
     }
+    this.confirmedHostedSpaceIds.add(spaceId);
   }
 
   /**
@@ -2508,6 +2561,7 @@ export class TinyCloudNode {
     this.tc = stagedGraph.core;
     this._recapOperationsCache = stagedPrimary.cache;
     this.runtimePermissionGrants = stagedPrimary.grants;
+    this.confirmedHostedSpaceIds.clear();
     if (this.auth) {
       this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost]);
       this._restoredTcSession = undefined;
@@ -3200,7 +3254,18 @@ export class TinyCloudNode {
     };
   }
 
+  /**
+   * The node DID for {@link config.host}.
+   *
+   * Sign-in already performs `GET /info` for the protocol-version check, and
+   * that response carries `nodeId`, so reuse it rather than fetching `/info` a
+   * second time. Only a value recorded for this exact host qualifies; older
+   * nodes that omit `nodeId` fall through to the fetch.
+   */
   private async fetchNodeId(): Promise<string> {
+    const cached = this.auth?.nodeIdForHost(this.config.host!);
+    if (cached) return cached;
+
     const response = await fetch(`${this.config.host}/info`);
     if (!response.ok) {
       throw new Error(`Failed to fetch node info: HTTP ${response.status}`);
@@ -4122,6 +4187,18 @@ export class TinyCloudNode {
         body as unknown as CanonicalizableEncryptionJson,
       ),
     });
+    // `NetworkAlreadyExists` is the only error this route maps to Conflict
+    // (`NetworkNotActive`, the other Conflict in the shared error mapper, is
+    // reachable only from the decrypt routes). So a 409 means the network is
+    // already there — which is exactly the post-condition `create` promises.
+    // Read it back rather than failing an otherwise-successful ensure.
+    if (response.status === 409) {
+      const existing = await this.getEncryptionNetwork(networkId);
+      if (existing) return existing;
+      throw new Error(
+        `Encryption network ${networkId} already exists but could not be read back`,
+      );
+    }
     if (!response.ok) {
       throw new Error(
         `Failed to create encryption network ${networkId}: HTTP ${response.status} ${await response.text()}`,
@@ -4131,15 +4208,28 @@ export class TinyCloudNode {
     return created.descriptor;
   }
 
+  /**
+   * Ensure an encryption network exists, creating it if necessary.
+   *
+   * @param nameOrNetworkId - Network name or full `urn:tinycloud:encryption:` id.
+   * @param options - See {@link EnsureEncryptionNetworkOptions}.
+   */
   async ensureEncryptionNetwork(
     nameOrNetworkId = DEFAULT_ENCRYPTION_NETWORK_NAME,
+    options: EnsureEncryptionNetworkOptions = {},
   ): Promise<NetworkDescriptor> {
     const networkId = nameOrNetworkId.startsWith("urn:tinycloud:encryption:")
       ? nameOrNetworkId
       : this.getDefaultEncryptionNetworkId(nameOrNetworkId);
-    const existing = await this.getEncryptionNetwork(networkId);
-    if (existing) {
-      return existing;
+    // The existence probe is worth a round trip only when the network is
+    // likely to be there. On a freshly bootstrapped account it always 404s,
+    // so callers that know the account is new skip straight to the create —
+    // which is itself safe to race, since 409 is handled above.
+    if (!options.assumeMissing) {
+      const existing = await this.getEncryptionNetwork(networkId);
+      if (existing) {
+        return existing;
+      }
     }
     const parsed = parseNetworkId(networkId);
     if (!didPrincipalMatches(parsed.ownerDid, this.did)) {

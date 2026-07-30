@@ -121,6 +121,7 @@ export type {
   OwnerSharePolicyRegistration,
   AccountApplication,
   AccountApplicationListOptions,
+  AccountApplicationRegisterOptions,
   AccountDelegation,
   AccountDelegationListOptions,
   AccountDelegationRevokeOptions,
