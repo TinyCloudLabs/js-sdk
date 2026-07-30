@@ -1,7 +1,8 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, realpath, stat, link, rename, unlink } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, open, readFile, realpath, stat, link, rename, rm, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { basename, join, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
 
 export const MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 export const MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -86,17 +87,15 @@ export async function writeShareOutput(directory: string, filename: string, byte
   const outputDirectory = resolve(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  // Hold the directory identity while performing every child operation. A
-  // second realpath check still leaves a rename/symlink replacement window;
-  // /dev/fd/<dirfd> keeps the following names attached to this directory.
+  // Hold the directory identity for the complete handoff. macOS does not
+  // implement openat-style child creation through /dev/fd, so plaintext is
+  // first written to a private staging directory. The output directory is
+  // only touched by the final atomic rename/link after its identity check.
   const directoryHandle = await open(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
-  // macOS exposes directory descriptors for inspection but does not permit
-  // O_CREAT through /dev/fd/<fd>/<child>. Keep the canonical spelling for
-  // mutating calls while the descriptor remains open; the descriptor is the
-  // identity check and is closed only after the exclusive operation.
   const stableDirectory = await realpath(outputDirectory);
-  const childPath = (name: string): string => join(stableDirectory, name);
-  const outputPath = childPath(safeName);
+  const outputPath = join(stableDirectory, safeName);
+  const stagingDirectory = await mkdtemp(join(tmpdir(), ".tinycloud-share-stage-"));
+  const stagingPath = join(stagingDirectory, `.tinycloud-share-${randomBytes(16).toString("hex")}.tmp`);
   let temporaryPath: string | undefined;
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   const directoryIdentity = await directoryHandle.stat();
@@ -112,7 +111,7 @@ export async function writeShareOutput(directory: string, filename: string, byte
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    temporaryPath = childPath(`.tinycloud-share-${randomBytes(16).toString("hex")}.tmp`);
+    temporaryPath = stagingPath;
     handle = await open(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
     await handle.writeFile(bytes);
     await handle.close();
@@ -137,6 +136,7 @@ export async function writeShareOutput(directory: string, filename: string, byte
   } finally {
     await handle?.close();
     try { if (temporaryPath !== undefined) await unlink(temporaryPath); } catch { /* already linked, renamed, or absent */ }
+    await rm(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
   return join(outputDirectory, safeName);

@@ -161,12 +161,9 @@ function requestedActions(values: readonly string[] | undefined): readonly ("rea
   return [...new Set(actions)] as ("read" | "list" | "edit")[];
 }
 
-async function authorizationProof(options: { readonly authorizationProof?: string; readonly authorizationProofFile?: string }): Promise<unknown> {
-  if (options.authorizationProof !== undefined && options.authorizationProofFile !== undefined) {
-    throw new CLIError("INVALID_ARGUMENT", "--authorization-proof and --authorization-proof-file are mutually exclusive", 2);
-  }
+async function authorizationProof(options: { readonly authorizationProofFile?: string }): Promise<unknown> {
   const encoded = options.authorizationProofFile === undefined
-    ? options.authorizationProof
+    ? undefined
     : await readFile(options.authorizationProofFile, "utf8").catch(() => { throw new CLIError("INVALID_ARGUMENT", "authorization proof file could not be read", 2); });
   if (encoded === undefined) return undefined;
   try {
@@ -281,7 +278,6 @@ export function registerShareCommand(program: Command): void {
     .option("--force", "Allow replacing an existing non-symlink output")
     .option("--max-bytes <bytes>", "Bound received content bytes")
     .option("--resume-token <token>", "Resume a previously returned recipient authorization step")
-    .option("--authorization-proof <json>", "JSON authorization proof for a resume step")
     .option("--authorization-proof-file <path>", "Read the JSON authorization proof from a file")
     .option("--json", "Print versioned redacted JSON")
     .option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY)
@@ -367,7 +363,14 @@ export function registerShareCommand(program: Command): void {
               ...publishServices(),
             });
             if ("state" in result) throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
-            await rememberPublishedShare(result);
+            const record = await rememberPublishedShare(result);
+            if (options.notify === true) {
+              const target = parseShareTarget(options.to);
+              if (target.kind !== "email") throw new CLIError("INVALID_ARGUMENT", "--notify requires an exact email target", 2);
+              if (shareServices.delivery === undefined) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
+              const delivery = await notifyShare({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
+              if (delivery.state === "partial-failure") process.exitCode = 9;
+            }
             return result;
           },
         });
