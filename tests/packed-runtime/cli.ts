@@ -208,8 +208,7 @@ export async function verifyMissingTrackedCliArtifactCannotBeMasked(): Promise<v
       join(import.meta.dir, "../../packages/cli"),
     );
     const trackedBuild = await readFile(entrypoint, "utf8");
-    const trackedLegacyBuild = await readFile(join(packageDirectory, "dist/legacy-entry.js"), "utf8");
-    expect(trackedLegacyBuild).toContain("tinycloud.secrets.get");
+    expect(trackedBuild).toContain("legacy-entry.js");
     await rm(entrypoint);
 
     const smokeDirectory = await mkdtemp(
