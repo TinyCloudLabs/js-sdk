@@ -10388,41 +10388,41 @@ var require_ms = __commonJS({
           return void 0;
       }
     }
-    function fmtShort(ms2) {
-      var msAbs = Math.abs(ms2);
+    function fmtShort(ms3) {
+      var msAbs = Math.abs(ms3);
       if (msAbs >= d) {
-        return Math.round(ms2 / d) + "d";
+        return Math.round(ms3 / d) + "d";
       }
       if (msAbs >= h) {
-        return Math.round(ms2 / h) + "h";
+        return Math.round(ms3 / h) + "h";
       }
       if (msAbs >= m) {
-        return Math.round(ms2 / m) + "m";
+        return Math.round(ms3 / m) + "m";
       }
       if (msAbs >= s) {
-        return Math.round(ms2 / s) + "s";
+        return Math.round(ms3 / s) + "s";
       }
-      return ms2 + "ms";
+      return ms3 + "ms";
     }
-    function fmtLong(ms2) {
-      var msAbs = Math.abs(ms2);
+    function fmtLong(ms3) {
+      var msAbs = Math.abs(ms3);
       if (msAbs >= d) {
-        return plural(ms2, msAbs, d, "day");
+        return plural(ms3, msAbs, d, "day");
       }
       if (msAbs >= h) {
-        return plural(ms2, msAbs, h, "hour");
+        return plural(ms3, msAbs, h, "hour");
       }
       if (msAbs >= m) {
-        return plural(ms2, msAbs, m, "minute");
+        return plural(ms3, msAbs, m, "minute");
       }
       if (msAbs >= s) {
-        return plural(ms2, msAbs, s, "second");
+        return plural(ms3, msAbs, s, "second");
       }
-      return ms2 + " ms";
+      return ms3 + " ms";
     }
-    function plural(ms2, msAbs, n, name2) {
+    function plural(ms3, msAbs, n, name2) {
       var isPlural = msAbs >= n * 1.5;
-      return Math.round(ms2 / n) + " " + name2 + (isPlural ? "s" : "");
+      return Math.round(ms3 / n) + " " + name2 + (isPlural ? "s" : "");
     }
   }
 });
@@ -20669,6 +20669,242 @@ var init_profiles = __esm({
   }
 });
 
+// ../sdk-core/src/manifest.ts
+var import_ms2, SERVICE_SHORT_TO_LONG2, SERVICE_LONG_TO_SHORT2;
+var init_manifest = __esm({
+  "../sdk-core/src/manifest.ts"() {
+    "use strict";
+    import_ms2 = __toESM(require_ms(), 1);
+    init_dist2();
+    SERVICE_SHORT_TO_LONG2 = Object.freeze({
+      kv: "tinycloud.kv",
+      sql: "tinycloud.sql",
+      duckdb: "tinycloud.duckdb",
+      capabilities: "tinycloud.capabilities",
+      hooks: "tinycloud.hooks",
+      encryption: "tinycloud.encryption",
+      delegation: "tinycloud.delegation"
+    });
+    SERVICE_LONG_TO_SHORT2 = Object.freeze(
+      Object.fromEntries(
+        Object.entries(SERVICE_SHORT_TO_LONG2).map(([s, l]) => [l, s])
+      )
+    );
+  }
+});
+
+// ../sdk-core/src/capabilities.ts
+var init_capabilities = __esm({
+  "../sdk-core/src/capabilities.ts"() {
+    "use strict";
+    init_manifest();
+  }
+});
+
+// src/lib/permissions.ts
+import { appendFile, readFile as readFile3 } from "fs/promises";
+import { join as join5 } from "path";
+import {
+  buildPermissionRequestArtifact,
+  isPermissionRequestArtifact
+} from "@tinycloud/operations/artifacts";
+import {
+  additionalDelegationsPath as sharedAdditionalDelegationsPath,
+  authRequestsPath as sharedAuthRequestsPath,
+  profileStoreMetadataPath,
+  readAdditionalDelegations,
+  readAuthRequests,
+  upsertProfileRecord,
+  withProfileLock,
+  writeJsonAtomic
+} from "@tinycloud/operations/state";
+async function loadAdditionalDelegations(profile) {
+  return readAdditionalDelegations(profile);
+}
+async function replayAdditionalDelegations(node, profile) {
+  const entries = await loadAdditionalDelegations(profile);
+  for (const entry of entries) {
+    const expiry = entry.delegation.expiry instanceof Date ? entry.delegation.expiry : new Date(entry.delegation.expiry);
+    if (expiry.getTime() <= Date.now()) continue;
+    try {
+      await node.useRuntimeDelegation({ ...entry.delegation, expiry });
+    } catch (err2) {
+      if (process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write(`[replay] skipping ${entry.delegation.cid}: ${err2.message}
+`);
+      }
+    }
+  }
+}
+var init_permissions = __esm({
+  "src/lib/permissions.ts"() {
+    "use strict";
+    init_manifest();
+    init_capabilities();
+    init_constants();
+    init_storage();
+    init_profiles();
+    init_errors();
+    init_constants();
+    init_space();
+    init_types2();
+  }
+});
+
+// src/lib/sdk.ts
+var sdk_exports = {};
+__export(sdk_exports, {
+  bootstrapDelegatedSession: () => bootstrapDelegatedSession,
+  createSDKInstance: () => createSDKInstance,
+  ensureAuthenticated: () => ensureAuthenticated,
+  jwkHasPrivateParameter: () => jwkHasPrivateParameter,
+  selectSignerJwk: () => selectSignerJwk
+});
+import { TinyCloudNode } from "@tinycloud/node-sdk";
+function jwkHasPrivateParameter(jwk) {
+  if (!jwk || typeof jwk !== "object") return false;
+  const d = jwk.d;
+  return typeof d === "string" && d.length > 0;
+}
+function selectSignerJwk(sessionJwk, key) {
+  if (jwkHasPrivateParameter(sessionJwk)) {
+    return sessionJwk;
+  }
+  return key ?? void 0;
+}
+function signerJwkForProfile(profileName, sessionJwk, key) {
+  const jwk = selectSignerJwk(sessionJwk, key);
+  if (jwkHasPrivateParameter(jwk)) {
+    return jwk;
+  }
+  throw new CLIError(
+    "AUTH_REQUIRED",
+    `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+    ExitCode.AUTH_REQUIRED,
+    {
+      hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`
+    }
+  );
+}
+async function createSDKInstance(ctx, options) {
+  const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
+  const session = await ProfileManager.getSession(ctx.profile);
+  const key = await ProfileManager.getKey(ctx.profile);
+  const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
+  if (!key && !effectivePrivateKey) {
+    throw new CLIError(
+      "AUTH_REQUIRED",
+      `No key found for profile "${ctx.profile}". Run \`tc init\` first.`,
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  if (profile?.authMethod === "local" && effectivePrivateKey) {
+    const node2 = new TinyCloudNode({
+      host: ctx.host,
+      privateKey: effectivePrivateKey
+    });
+    if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
+      await node2.restoreSession({
+        delegationHeader: session.delegationHeader,
+        delegationCid: session.delegationCid,
+        spaceId: session.spaceId,
+        jwk: signerJwkForProfile(ctx.profile, session.jwk, key),
+        verificationMethod: session.verificationMethod ?? profile?.sessionDid ?? profile?.did,
+        address: session.address,
+        chainId: session.chainId,
+        siwe: session.siwe,
+        signature: session.signature
+      });
+    } else {
+      await node2.signIn();
+    }
+    await replayAdditionalDelegations(node2, ctx.profile);
+    return node2;
+  }
+  const node = new TinyCloudNode({
+    host: ctx.host,
+    privateKey: options?.privateKey
+  });
+  if (options?.privateKey) {
+    await node.signIn();
+  } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
+    await node.restoreSession({
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      spaceId: session.spaceId,
+      jwk: signerJwkForProfile(ctx.profile, session.jwk, key),
+      verificationMethod: session.verificationMethod ?? profile?.did,
+      address: session.address,
+      chainId: session.chainId,
+      siwe: session.siwe,
+      signature: session.signature
+    });
+  }
+  await replayAdditionalDelegations(node, ctx.profile);
+  return node;
+}
+async function bootstrapDelegatedSession(ctx, delegation) {
+  const profile = await ProfileManager.getProfile(ctx.profile);
+  if (resolveProfilePosture(profile) !== "delegate-session") {
+    throw new CLIError(
+      "AUTH_REQUIRED",
+      `Profile "${ctx.profile}" is not a delegate-session profile.`,
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  const sessionDid = profile.sessionDid ?? profile.did;
+  if (delegation.delegateDID.split("#", 1)[0] !== sessionDid.split("#", 1)[0]) {
+    throw new CLIError(
+      "DELEGATION_AUDIENCE_MISMATCH",
+      `Delegation targets ${delegation.delegateDID}, but profile "${ctx.profile}" uses ${sessionDid}.`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const key = await ProfileManager.getKey(ctx.profile);
+  const jwk = signerJwkForProfile(ctx.profile, void 0, key);
+  await ProfileManager.setSession(ctx.profile, {
+    delegationHeader: delegation.delegationHeader,
+    delegationCid: delegation.cid,
+    spaceId: delegation.spaceId,
+    jwk,
+    verificationMethod: sessionDid
+  });
+  await ProfileManager.setProfile(ctx.profile, {
+    ...profile,
+    sessionDid,
+    spaceId: delegation.spaceId
+  });
+  return createSDKInstance(ctx);
+}
+async function ensureAuthenticated(ctx, options) {
+  if (options?.privateKey) {
+    return createSDKInstance(ctx, options);
+  }
+  const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+  if (profile?.authMethod === "local" && profile.privateKey) {
+    return createSDKInstance(ctx, { privateKey: profile.privateKey });
+  }
+  const session = await ProfileManager.getSession(ctx.profile);
+  if (!session) {
+    throw new CLIError(
+      "AUTH_REQUIRED",
+      `Not authenticated. Run \`tc auth login\` or \`tc init\` first.`,
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  return createSDKInstance(ctx, options);
+}
+var init_sdk = __esm({
+  "src/lib/sdk.ts"() {
+    "use strict";
+    init_profiles();
+    init_types2();
+    init_errors();
+    init_constants();
+    init_permissions();
+  }
+});
+
 // src/index.ts
 init_errors();
 import { readFileSync as readFileSync2 } from "fs";
@@ -20808,11 +21044,11 @@ function parseDuration(input) {
   }
   const date = new Date(input);
   if (!isNaN(date.getTime())) {
-    const ms2 = date.getTime() - Date.now();
-    if (ms2 <= 0) {
+    const ms3 = date.getTime() - Date.now();
+    if (ms3 <= 0) {
       throw new Error(`Expiry date "${input}" is in the past`);
     }
-    return ms2;
+    return ms3;
   }
   throw new Error(`Invalid duration: "${input}". Use format like "1h", "7d", or an ISO date.`);
 }
@@ -20993,7 +21229,10 @@ function publishServices() {
   };
 }
 function fetchServices() {
-  return shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn };
+  return {
+    ...shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn },
+    ...shareServices.trustedPolicyAuthority === void 0 ? {} : { trustedPolicyAuthority: shareServices.trustedPolicyAuthority }
+  };
 }
 function shareCliError(error) {
   if (error instanceof CLIError) return error;
@@ -21036,8 +21275,9 @@ function expires(value) {
   }
 }
 async function rememberPublishedShare(result) {
-  if (shareServices.records === void 0) return;
-  await shareServices.records.put(historyRecordForPublishedShare(result));
+  const record = historyRecordForPublishedShare(result);
+  if (shareServices.records !== void 0) await shareServices.records.put(record);
+  return record;
 }
 function byteLimit(value) {
   if (value === void 0) return void 0;
@@ -21052,11 +21292,13 @@ function registerShareCommand(program2) {
       if (options.inline && options.compact) throw new CLIError("INVALID_ARGUMENT", "--inline and --compact are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
       const input = await readShareInput(file, options.name, maxBytes);
+      const target = parseShareTarget(options.to);
+      if (options.notify === true && target.kind !== "email") throw new CLIError("INVALID_ARGUMENT", "--notify requires an exact email target", 2);
       const result = await publishTargetShare2({
         source: input.bytes,
         filename: input.filename,
         mediaType: "text/markdown",
-        target: parseShareTarget(options.to),
+        target,
         expiresAt: expires(options.expires),
         origin: options.viewerOrigin,
         inline: options.inline === true,
@@ -21075,7 +21317,12 @@ function registerShareCommand(program2) {
         }
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
       }
-      await rememberPublishedShare(result);
+      const record = await rememberPublishedShare(result);
+      if (options.notify === true && target.kind === "email") {
+        if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
+        const delivery = await notifyShare2({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
+        if (delivery.state === "partial-failure") process.exitCode = 9;
+      }
       if (options.json) writeJson2(redactPublishedShare(result));
       else publishHuman(result);
     } catch (error) {
@@ -21196,7 +21443,10 @@ function registerShareCommand(program2) {
   share.command("notify <id>").description("Retry idempotent delivery without recreating the share").requiredOption("--to <address>", "Recipient email").option("--json", "Print versioned JSON").action(async (id, options) => {
     try {
       if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-      const result = await notifyShare2({ shareId: id, recipient: options.to, adapter: shareServices.delivery });
+      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
+      const record = await shareServices.records.get(id);
+      if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      const result = await notifyShare2({ shareId: id, recipient: options.to, record, adapter: shareServices.delivery });
       if (options.json) writeJson2(result);
       else process.stdout.write(`${result.state}
 `);
@@ -21225,8 +21475,12 @@ function registerShareCommand(program2) {
 
 // src/share/adapters.ts
 init_profiles();
-import { readFile as readFile3, writeFile as writeFile2 } from "fs/promises";
-import { join as join5 } from "path";
+import { readFile as readFile4, writeFile as writeFile2 } from "fs/promises";
+import { join as join6 } from "path";
+import {
+  createRegisteredPolicyAuthority,
+  publishAddressedShare
+} from "@tinycloud/share-sdk";
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 function createEncryptedSessionHistory() {
   const records = /* @__PURE__ */ new Map();
@@ -21259,35 +21513,64 @@ function createEncryptedSessionHistory() {
   };
 }
 function createEncryptedProfileHistory(profileName) {
-  let keyPromise;
+  const HISTORY_VERSION = 2;
+  let privateKeyPromise;
   let operation = Promise.resolve();
-  const key = async () => keyPromise ??= (async () => {
+  const privateKey = async () => privateKeyPromise ??= (async () => {
     const profile = await profileName();
     const config = await ProfileManager.getProfile(profile);
     if (typeof config.privateKey !== "string" || config.privateKey.length === 0) throw new Error("share history requires an initialized profile");
-    const digest2 = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(config.privateKey));
-    return crypto.subtle.importKey("raw", digest2, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+    return new TextEncoder().encode(config.privateKey);
   })();
-  const path = async () => join5(await ProfileManager.getCacheDir(await profileName()), "share-history-v1.bin");
+  const path = async () => join6(await ProfileManager.getCacheDir(await profileName()), "share-history-v2.json");
+  const legacyPath = async () => join6(await ProfileManager.getCacheDir(await profileName()), "share-history-v1.bin");
+  const b64 = (value) => Buffer.from(value).toString("base64url");
+  const unb64 = (value) => {
+    if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("share history is unavailable");
+    const bytes = new Uint8Array(Buffer.from(value, "base64url"));
+    if (b64(bytes) !== value) throw new Error("share history is unavailable");
+    return bytes;
+  };
+  const derive = async (salt, legacy = false) => {
+    const secret = await privateKey();
+    if (legacy) {
+      const digest2 = await crypto.subtle.digest("SHA-256", secret);
+      return crypto.subtle.importKey("raw", digest2, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+    }
+    const material = await crypto.subtle.importKey("raw", secret, "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 1e5, hash: "SHA-256" }, material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  };
   const read3 = async () => {
     try {
-      const encoded = new Uint8Array(await readFile3(await path()));
-      if (encoded.length <= 12) return [];
-      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: encoded.slice(0, 12) }, await key(), encoded.slice(12));
+      const encoded = new Uint8Array(await readFile4(await path()));
+      const envelope = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(encoded));
+      if (envelope.version !== HISTORY_VERSION) throw new Error("share history is unavailable");
+      const salt = unb64(envelope.kdfSalt);
+      const iv = unb64(envelope.iv);
+      const ciphertext = unb64(envelope.ciphertext);
+      if (salt.length < 16 || iv.length !== 12 || ciphertext.length <= 16) throw new Error("share history is unavailable");
+      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, await derive(salt), ciphertext);
       const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-      return Array.isArray(values) ? values.filter((value) => typeof value === "object" && value !== null && typeof value.shareId === "string") : [];
+      return { values: Array.isArray(values) ? values.filter((value) => typeof value === "object" && value !== null && typeof value.shareId === "string") : [], salt };
     } catch (error) {
-      if (error.code === "ENOENT") return [];
-      throw new Error("share history is unavailable");
+      if (error.code !== "ENOENT") throw new Error("share history is unavailable");
+      try {
+        const legacy = new Uint8Array(await readFile4(await legacyPath()));
+        if (legacy.length <= 12) return { values: [], salt: crypto.getRandomValues(new Uint8Array(16)) };
+        const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: legacy.slice(0, 12) }, await derive(new Uint8Array(0), true), legacy.slice(12));
+        const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+        return { values: Array.isArray(values) ? values.filter((value) => typeof value === "object" && value !== null && typeof value.shareId === "string") : [], salt: crypto.getRandomValues(new Uint8Array(16)) };
+      } catch (legacyError) {
+        if (legacyError.code === "ENOENT") return { values: [], salt: crypto.getRandomValues(new Uint8Array(16)) };
+        throw new Error("share history is unavailable");
+      }
     }
   };
-  const write = async (values) => {
+  const write = async (values, salt) => {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const bytes = new TextEncoder().encode(JSON.stringify(values));
-    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), bytes));
-    const output = new Uint8Array(iv.length + encrypted.length);
-    output.set(iv);
-    output.set(encrypted, iv.length);
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await derive(salt), bytes));
+    const output = new TextEncoder().encode(JSON.stringify({ version: HISTORY_VERSION, kdfSalt: b64(salt), iv: b64(iv), ciphertext: b64(encrypted) }));
     await writeFile2(await path(), output, { mode: 384 });
   };
   const serial = (operationFn) => {
@@ -21298,23 +21581,24 @@ function createEncryptedProfileHistory(profileName) {
   return {
     async put(record) {
       return serial(async () => {
-        const values = await read3();
+        const state = await read3();
+        const values = [...state.values];
         const index = values.findIndex((value) => value.shareId === record.shareId);
         if (index >= 0) values[index] = record;
         else values.push(record);
-        await write(values);
+        await write(values, state.salt);
       });
     },
     async list() {
-      return serial(read3);
+      return serial(async () => (await read3()).values);
     },
     async get(shareId) {
-      return serial(async () => (await read3()).find((record) => record.shareId === shareId));
+      return serial(async () => (await read3()).values.find((record) => record.shareId === shareId));
     },
     async delete(shareId) {
       return serial(async () => {
-        const values = (await read3()).filter((record) => record.shareId !== shareId);
-        await write(values);
+        const state = await read3();
+        await write(state.values.filter((record) => record.shareId !== shareId), state.salt);
       });
     }
   };
@@ -21322,10 +21606,63 @@ function createEncryptedProfileHistory(profileName) {
 function createShareAuthorityAdapters(input = {}) {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
+  const canonicalOrigin = (value, label) => {
+    if (typeof value !== "string") throw new Error(`share ${label} is unavailable`);
+    const parsed = new URL(value);
+    const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+    if (parsed.protocol !== "https:" && !(loopback && parsed.protocol === "http:") || parsed.origin !== value) throw new Error(`share ${label} is invalid`);
+    return value;
+  };
+  let configPromise;
+  const publicConfig = async () => configPromise ??= (async () => {
+    const response = await fetchFn(`${origin}/.well-known/tinycloud-share/config.json`, {
+      headers: { accept: "application/json" },
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer"
+    });
+    if (!response.ok) throw new Error("share public config is unavailable");
+    const value = await response.json();
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share public config is invalid");
+    const object = value;
+    const decodePublicKey = (key) => {
+      if (typeof key !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(key)) throw new Error("share node receipt key is invalid");
+      const decoded = new Uint8Array(Buffer.from(key, "base64url"));
+      if (decoded.length !== 32 || Buffer.from(decoded).toString("base64url") !== key) throw new Error("share node receipt key is invalid");
+      return decoded;
+    };
+    const nodeOrigin = canonicalOrigin(input.nodeOrigin ?? object.nodeOrigin, "node origin");
+    const nodeAudience = typeof object.nodeAudience === "string" ? object.nodeAudience : "";
+    const enforcerDid = typeof object.enforcerDid === "string" ? object.enforcerDid : nodeAudience;
+    const nodeInvitationKid = typeof object.nodeInvitationKid === "string" ? object.nodeInvitationKid : "";
+    if (!nodeAudience.startsWith("did:web:") || !nodeInvitationKid.startsWith(`${nodeAudience}#`) || !enforcerDid.startsWith("did:key:") && enforcerDid !== nodeAudience) throw new Error("share node trust binding is invalid");
+    return {
+      shareOrigin: canonicalOrigin(object.shareOrigin, "origin"),
+      registryOrigin: canonicalOrigin(object.registryOrigin, "registry origin"),
+      nodeOrigin,
+      emailOrigin: canonicalOrigin(input.emailOrigin ?? object.emailOrigin, "email origin"),
+      credentialsOrigin: canonicalOrigin(object.credentialsOrigin, "credentials origin"),
+      nodeAudience,
+      enforcerDid,
+      nodeInvitationKid,
+      nodeInvitationPublicKey: decodePublicKey(object.nodeInvitationPublicKey)
+    };
+  })();
+  let nodePromise;
+  const authenticatedNode = async () => nodePromise ??= (async () => {
+    const config = await publicConfig();
+    const profile = await (input.profileName?.() ?? selectedProfileName());
+    const context = await ProfileManager.resolveContext({ profile, host: config.nodeOrigin });
+    const { ensureAuthenticated: ensureAuthenticated2 } = await Promise.resolve().then(() => (init_sdk(), sdk_exports));
+    return ensureAuthenticated2(context);
+  })();
   const endpoint = async (path, body) => {
+    return endpointAt(origin, path, body);
+  };
+  const endpointAt = async (requestOrigin, path, body) => {
     let response;
     try {
-      response = await fetchFn(`${origin}${path}`, { method: "POST", headers: { accept: "application/json", "content-type": "application/json", origin }, body: JSON.stringify(body), credentials: "include", redirect: "error", referrerPolicy: "no-referrer" });
+      response = await fetchFn(`${requestOrigin}${path}`, { method: "POST", headers: { accept: "application/json", "content-type": "application/json", origin: requestOrigin }, body: JSON.stringify(body), credentials: "include", redirect: "error", referrerPolicy: "no-referrer" });
     } catch {
       throw new Error("share authority is unavailable");
     }
@@ -21338,24 +21675,76 @@ function createShareAuthorityAdapters(input = {}) {
     if (typeof value !== "string" || !/^[A-Za-z0-9_-]*$/.test(value)) throw new Error("share authority returned invalid binary data");
     return new Uint8Array(Buffer.from(value, "base64url"));
   };
+  const exactObject = (value, keys) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share authority returned an invalid object");
+    const object = value;
+    if (Object.keys(object).length !== keys.length || keys.some((key) => !Object.hasOwn(object, key))) throw new Error("share authority returned an unexpected response");
+    return object;
+  };
+  const parseAuthorizationRequired = (value) => {
+    const keys = Object.keys(value);
+    if (value.state !== "authorization-required" || keys.some((key) => !["state", "method", "continueUrl", "resumeToken"].includes(key))) throw new Error("share authority returned an invalid authorization step");
+    if (value.method !== "openkey-device" && value.method !== "email-claim" && value.method !== "email-otp") throw new Error("share authority returned an invalid authorization method");
+    if (value.continueUrl !== void 0 && typeof value.continueUrl !== "string") throw new Error("share authority returned an invalid continuation");
+    if (value.resumeToken !== void 0 && (typeof value.resumeToken !== "string" || value.resumeToken.length < 16 || value.resumeToken.length > 512)) throw new Error("share authority returned an invalid resume token");
+    return { state: "authorization-required", method: value.method, ...value.continueUrl === void 0 ? {} : { continueUrl: value.continueUrl }, ...value.resumeToken === void 0 ? {} : { resumeToken: value.resumeToken } };
+  };
   const parseAuthorization = (value) => {
     if (value.state === "authorization-required") {
-      if (value.method !== "openkey-device" && value.method !== "email-claim" && value.method !== "email-otp") throw new Error("share authority returned an invalid authorization method");
-      return value;
+      return parseAuthorizationRequired(value);
     }
-    if (value.state === "denied") return value;
+    if (value.state === "denied") {
+      exactObject(value, ["state", "reason"]);
+      if (value.reason !== "rejected" && value.reason !== "expired" && value.reason !== "revoked" && value.reason !== "unsupported") throw new Error("share authority returned an invalid denial");
+      return { state: "denied", reason: value.reason };
+    }
     if (value.state !== "ready" || typeof value.value !== "object" || value.value === null || Array.isArray(value.value)) throw new Error("share authority returned an invalid authorization result");
     const raw = value.value;
+    exactObject(value, ["state", "value"]);
+    exactObject(raw, ["bytes", "bodyDigest", "contentSourceDigest", "binding", "proof"]);
+    const binding = exactObject(raw.binding, ["shareId", "delegationCid", "authorityMaterialHandle", "authorityMaterialDigest", "resource", "action"]);
+    const resource = exactObject(binding.resource, ["kind", "path"]);
+    if (resource.kind !== "exact" && resource.kind !== "prefix" || typeof resource.path !== "string") throw new Error("share authority returned an invalid resource binding");
     const bytes = raw.bytes instanceof Uint8Array ? raw.bytes : decodeBytes(raw.bytes ?? raw.content);
-    if (typeof raw.bodyDigest !== "string" || typeof raw.contentSourceDigest !== "string" || typeof raw.proof !== "object" || raw.proof === null || typeof raw.binding !== "object" || raw.binding === null) throw new Error("share authority returned an incomplete authorization result");
-    return { state: "ready", value: { ...raw, bytes, bodyDigest: raw.bodyDigest, contentSourceDigest: raw.contentSourceDigest, binding: raw.binding, proof: raw.proof } };
+    if (typeof raw.bodyDigest !== "string" || typeof raw.contentSourceDigest !== "string" || typeof raw.proof !== "object" || raw.proof === null || typeof binding.shareId !== "string" || typeof binding.delegationCid !== "string" || typeof binding.authorityMaterialHandle !== "string" || typeof binding.authorityMaterialDigest !== "string") throw new Error("share authority returned an incomplete authorization result");
+    return { state: "ready", value: { bytes, bodyDigest: raw.bodyDigest, contentSourceDigest: raw.contentSourceDigest, binding: { shareId: binding.shareId, delegationCid: binding.delegationCid, authorityMaterialHandle: binding.authorityMaterialHandle, authorityMaterialDigest: binding.authorityMaterialDigest, resource: { kind: resource.kind, path: resource.path }, ...binding.action === void 0 ? {} : { action: String(binding.action) } }, proof: raw.proof } };
   };
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
-    const value = await endpoint("/share/v2/policies", { source: Buffer.from(targetInput.source).toString("base64url"), filename: targetInput.filename, target: targetInput.target, expiresAt: targetInput.expiresAt.toISOString(), origin: targetInput.origin, notify: targetInput.notify ?? false });
-    if (value.state === "authorization-required" && (value.method === "openkey-device" || value.method === "email-claim" || value.method === "email-otp")) return value;
-    if (typeof value.url === "string" && typeof value.shareId === "string") return value;
-    throw new Error("share authority returned an invalid publication result");
+    const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
+    if (targetInput.origin !== config.shareOrigin || node.spaceId === void 0) throw new Error("addressed publication is not bound to the configured Share service");
+    const shareId = crypto.randomUUID().replaceAll("-", "");
+    const resourcePath = `shares/${shareId}/${targetInput.filename}`;
+    const mediaType = targetInput.mediaType ?? "application/octet-stream";
+    const stored = await node.kvForSpace(node.spaceId).put(resourcePath, targetInput.source, { contentType: mediaType });
+    if (!stored.ok) throw new Error("addressed source upload was rejected");
+    return publishAddressedShare({
+      shareId,
+      shareOrigin: config.shareOrigin,
+      nodeOrigin: config.nodeOrigin,
+      nodeAudience: config.nodeAudience,
+      enforcerDid: config.enforcerDid,
+      spaceId: node.spaceId,
+      target: targetInput.target,
+      resource: { kind: "exact", path: resourcePath },
+      actions: ["read"],
+      policyActions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
+      contentSource: { kind: "kv", space: node.spaceId, path: resourcePath, action: "tinycloud.kv/get" },
+      filename: targetInput.filename,
+      mediaType,
+      byteLength: targetInput.source.byteLength,
+      expiresAt: targetInput.expiresAt,
+      inline: targetInput.inline,
+      authority: {
+        ownerDid: node.did,
+        createOwnerDelegation: (request) => node.createOwnerDelegation(request),
+        registerOwnerSharePolicy: (request) => node.registerOwnerSharePolicy({
+          ...request,
+          nodeProof: { kid: config.nodeInvitationKid, publicKey: config.nodeInvitationPublicKey }
+        })
+      },
+      upload: targetInput.upload ?? {}
+    });
   } };
   const authorization = input.authorize ?? {
     async begin(request) {
@@ -21369,22 +21758,59 @@ function createShareAuthorityAdapters(input = {}) {
     ...input.verifyResult === void 0 ? {} : { verifyResult: input.verifyResult }
   };
   const delivery = { deliver: input.deliver ?? (async (request) => {
-    const value = await endpoint("/v1/share-email/invitations", request);
-    if (value.status !== "accepted") throw new Error("share delivery was not accepted");
-    return "delivered";
+    const record = request.record;
+    if (record === void 0 || record.link === void 0 || record.envelopeCid === void 0 || record.shareCid === void 0 || record.registrationCid === void 0 || record.policyCid === void 0 || record.ownerDelegationCid === void 0 || record.enforcementDelegationCid === void 0) throw new Error("share delivery history is incomplete");
+    const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
+    const receipt = await node.authorizeShareDelivery({
+      envelopeCid: record.envelopeCid,
+      shareCid: record.shareCid,
+      shareId: record.shareId,
+      registrationCid: record.registrationCid,
+      policyCid: record.policyCid,
+      delegationCid: record.ownerDelegationCid,
+      enforcementDelegationCid: record.enforcementDelegationCid,
+      resourcePath: record.resource.path,
+      recipientEmail: request.recipient,
+      shareUrl: record.link,
+      documentName: record.filename ?? "share.md",
+      expiresAt: new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1e3)).toISOString(),
+      nodeProof: { kid: config.nodeInvitationKid, publicKey: config.nodeInvitationPublicKey },
+      credentialsAudience: config.credentialsOrigin
+    });
+    const response = await fetchFn(`${config.emailOrigin}/share/v2`, {
+      method: "POST",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      headers: { accept: "application/json", "content-type": "application/json", "idempotency-key": request.idempotencyKey ?? `tinycloud-share:${record.shareId}` },
+      body: JSON.stringify({ authorization: receipt.authorization, proof: receipt.proof, shareUrl: record.link }),
+      signal: request.signal
+    });
+    if (!response.ok) throw new Error("share delivery was not accepted");
+    return response.status === 208 ? "already-delivered" : "delivered";
   }) };
   const revocation = { revokeDelegation: input.revokeDelegation ?? (async (request) => {
-    await endpoint("/revoke", request);
+    const result = await (await authenticatedNode()).revokeDelegation(request.delegationCid);
+    if (!result.ok) throw new Error("share delegation revocation was rejected");
   }) };
   const legacyReader = {
     async read(link2) {
-      const { TinyCloudNode } = await import("@tinycloud/node-sdk");
-      const node = new TinyCloudNode({ host: origin, autoDiscoverLocalNode: false });
+      const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
+      const node = new TinyCloudNode2({ host: (await publicConfig()).nodeOrigin, autoDiscoverLocalNode: false });
       const received = await node.sharing.receive(link2, { autoSubdelegate: false, useSessionKey: false });
       if (!received.ok) throw new Error("legacy share could not be verified");
       const value = await received.data.kv.get(received.data.path, { binary: true });
       if (!value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("legacy share content could not be read");
       return value.data.data.slice();
+    }
+  };
+  const policyAuthority = {
+    async resolve(request) {
+      const config = await publicConfig();
+      return createRegisteredPolicyAuthority({
+        nodeProof: { kid: config.nodeInvitationKid, publicKey: config.nodeInvitationPublicKey },
+        expectedTarget: { origin: config.nodeOrigin, nodeAudience: config.nodeAudience, enforcerDid: config.enforcerDid }
+      }).resolve(request);
     }
   };
   return {
@@ -21393,7 +21819,8 @@ function createShareAuthorityAdapters(input = {}) {
     records: input.profileName === void 0 ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName),
     delivery,
     revocation,
-    legacyReader
+    legacyReader,
+    policyAuthority
   };
 }
 function authenticationMessage(origin, address, nonce, issuedAt) {
@@ -21521,6 +21948,7 @@ configureShareCommandServices({
   }),
   targetAdapter: shareAuthority.targetAdapter,
   authorization: shareAuthority.authorization,
+  trustedPolicyAuthority: shareAuthority.policyAuthority,
   records: shareAuthority.records,
   delivery: shareAuthority.delivery,
   revocation: shareAuthority.revocation,

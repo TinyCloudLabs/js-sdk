@@ -26133,7 +26133,10 @@ function publishServices() {
   };
 }
 function fetchServices() {
-  return shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn };
+  return {
+    ...shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn },
+    ...shareServices.trustedPolicyAuthority === void 0 ? {} : { trustedPolicyAuthority: shareServices.trustedPolicyAuthority }
+  };
 }
 function shareCliError(error) {
   if (error instanceof CLIError) return error;
@@ -26176,8 +26179,9 @@ function expires(value) {
   }
 }
 async function rememberPublishedShare(result) {
-  if (shareServices.records === void 0) return;
-  await shareServices.records.put(historyRecordForPublishedShare(result));
+  const record = historyRecordForPublishedShare(result);
+  if (shareServices.records !== void 0) await shareServices.records.put(record);
+  return record;
 }
 function byteLimit(value) {
   if (value === void 0) return void 0;
@@ -26192,11 +26196,13 @@ function registerShareCommand(program) {
       if (options.inline && options.compact) throw new CLIError("INVALID_ARGUMENT", "--inline and --compact are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
       const input = await readShareInput(file, options.name, maxBytes);
+      const target = parseShareTarget(options.to);
+      if (options.notify === true && target.kind !== "email") throw new CLIError("INVALID_ARGUMENT", "--notify requires an exact email target", 2);
       const result = await publishTargetShare2({
         source: input.bytes,
         filename: input.filename,
         mediaType: "text/markdown",
-        target: parseShareTarget(options.to),
+        target,
         expiresAt: expires(options.expires),
         origin: options.viewerOrigin,
         inline: options.inline === true,
@@ -26215,7 +26221,12 @@ function registerShareCommand(program) {
         }
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
       }
-      await rememberPublishedShare(result);
+      const record = await rememberPublishedShare(result);
+      if (options.notify === true && target.kind === "email") {
+        if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
+        const delivery = await notifyShare2({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
+        if (delivery.state === "partial-failure") process.exitCode = 9;
+      }
       if (options.json) writeJson2(redactPublishedShare(result));
       else publishHuman(result);
     } catch (error) {
@@ -26336,7 +26347,10 @@ function registerShareCommand(program) {
   share.command("notify <id>").description("Retry idempotent delivery without recreating the share").requiredOption("--to <address>", "Recipient email").option("--json", "Print versioned JSON").action(async (id, options) => {
     try {
       if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-      const result = await notifyShare2({ shareId: id, recipient: options.to, adapter: shareServices.delivery });
+      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
+      const record = await shareServices.records.get(id);
+      if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      const result = await notifyShare2({ shareId: id, recipient: options.to, record, adapter: shareServices.delivery });
       if (options.json) writeJson2(result);
       else process.stdout.write(`${result.state}
 `);
