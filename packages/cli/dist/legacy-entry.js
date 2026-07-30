@@ -25994,9 +25994,10 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat, mkdir as mkdir3, open as open2, readFile as readFile9, realpath, stat as stat2, link, rename as rename2, unlink } from "fs/promises";
+import { lstat, mkdir as mkdir3, mkdtemp, open as open2, readFile as readFile9, realpath, stat as stat2, link, rename as rename2, rm as rm2, unlink } from "fs/promises";
 import { randomBytes as randomBytes3 } from "crypto";
 import { basename as basename2, join as join6, resolve as resolve2, sep } from "path";
+import { tmpdir } from "os";
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
 async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
@@ -26064,8 +26065,9 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const safeName = safeFilename(filename);
   const directoryHandle = await open2(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath(outputDirectory);
-  const childPath = (name2) => join6(stableDirectory, name2);
-  const outputPath = childPath(safeName);
+  const outputPath = join6(stableDirectory, safeName);
+  const stagingDirectory = await mkdtemp(join6(tmpdir(), ".tinycloud-share-stage-"));
+  const stagingPath = join6(stagingDirectory, `.tinycloud-share-${randomBytes3(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   const directoryIdentity = await directoryHandle.stat();
@@ -26081,7 +26083,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
-    temporaryPath = childPath(`.tinycloud-share-${randomBytes3(16).toString("hex")}.tmp`);
+    temporaryPath = stagingPath;
     handle = await open2(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
@@ -26104,6 +26106,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (temporaryPath !== void 0) await unlink(temporaryPath);
     } catch {
     }
+    await rm2(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
   return join6(outputDirectory, safeName);
@@ -26198,10 +26201,7 @@ function requestedActions(values) {
   return [...new Set(actions)];
 }
 async function authorizationProof(options) {
-  if (options.authorizationProof !== void 0 && options.authorizationProofFile !== void 0) {
-    throw new CLIError("INVALID_ARGUMENT", "--authorization-proof and --authorization-proof-file are mutually exclusive", 2);
-  }
-  const encoded = options.authorizationProofFile === void 0 ? options.authorizationProof : await readFile10(options.authorizationProofFile, "utf8").catch(() => {
+  const encoded = options.authorizationProofFile === void 0 ? void 0 : await readFile10(options.authorizationProofFile, "utf8").catch(() => {
     throw new CLIError("INVALID_ARGUMENT", "authorization proof file could not be read", 2);
   });
   if (encoded === void 0) return void 0;
@@ -26285,7 +26285,7 @@ function registerShareCommand(program) {
       handleError(shareCliError(error));
     }
   });
-  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--resume-token <token>", "Resume a previously returned recipient authorization step").option("--authorization-proof <json>", "JSON authorization proof for a resume step").option("--authorization-proof-file <path>", "Read the JSON authorization proof from a file").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).option("--legacy", "Read a legacy tc1: link (read-only)").action(async (url, options) => {
+  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--resume-token <token>", "Resume a previously returned recipient authorization step").option("--authorization-proof-file <path>", "Read the JSON authorization proof from a file").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).option("--legacy", "Read a legacy tc1: link (read-only)").action(async (url, options) => {
     try {
       if (options.stdout && options.json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
@@ -26357,7 +26357,14 @@ function registerShareCommand(program) {
             ...publishServices()
           });
           if ("state" in result) throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
-          await rememberPublishedShare(result);
+          const record = await rememberPublishedShare(result);
+          if (options.notify === true) {
+            const target = parseShareTarget(options.to);
+            if (target.kind !== "email") throw new CLIError("INVALID_ARGUMENT", "--notify requires an exact email target", 2);
+            if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
+            const delivery = await notifyShare2({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
+            if (delivery.state === "partial-failure") process.exitCode = 9;
+          }
           return result;
         }
       });
