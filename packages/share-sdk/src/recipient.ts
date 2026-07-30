@@ -66,7 +66,7 @@ async function digest(value: unknown): Promise<string> {
 
 async function verifyWrapped(value: unknown, key: "challenge" | "session", domain: string, trust: ShareNodeTrust): Promise<Record<string, unknown>> {
   const wrapper = object(value, `${key} response`);
-  if (Object.keys(wrapper).length !== 2 || !Object.hasOwn(wrapper, key)) throw new Error(`${key} response is invalid`);
+  if (Object.keys(wrapper).length !== 2 || !Object.hasOwn(wrapper, key) || !Object.hasOwn(wrapper, "proof")) throw new Error(`${key} response is invalid`);
   const artifact = object(wrapper[key], `${key} artifact`);
   const proof = object(wrapper.proof, `${key} proof`);
   if (proof.alg !== "EdDSA" || proof.kid !== trust.invitationKid) throw new Error(`${key} proof is invalid`);
