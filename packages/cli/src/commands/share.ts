@@ -143,6 +143,13 @@ function byteLimit(value: string | undefined): number | undefined {
   return parsed;
 }
 
+function parseAuthorizationProof(value: string): unknown {
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new CLIError("INVALID_ARGUMENT", "authorization proof must be valid JSON", 2); }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new CLIError("INVALID_ARGUMENT", "authorization proof must be a JSON object", 2);
+  return parsed;
+}
+
 export function registerShareCommand(program: Command): void {
   const share = program.command("share").description("Publish and consume TinyCloud Share links");
 
@@ -223,6 +230,7 @@ export function registerShareCommand(program: Command): void {
     .option("--force", "Allow replacing an existing non-symlink output")
     .option("--max-bytes <bytes>", "Bound received content bytes")
     .option("--resume-token <token>", "Resume a previously returned recipient authorization step")
+    .option("--authorization-proof <json>", "Detached proof for a recipient authorization resume")
     .option("--json", "Print versioned redacted JSON")
     .option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY)
     .option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN)
@@ -247,6 +255,7 @@ export function registerShareCommand(program: Command): void {
           ...(maxBytes === undefined ? {} : { maxContentBlobBytes: maxBytes }),
           ...(shareServices.authorization === undefined ? {} : { authorization: shareServices.authorization }),
           ...(options.resumeToken === undefined ? {} : { authorizationResumeToken: options.resumeToken }),
+          ...(options.authorizationProof === undefined ? {} : { authorizationProof: parseAuthorizationProof(options.authorizationProof) }),
         });
         if ("state" in result) {
           if (options.json) {

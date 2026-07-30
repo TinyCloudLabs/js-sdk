@@ -6,6 +6,7 @@ export type { AddressedPublishAuthority, AddressedSharePublishOptions } from "./
 export { createRegisteredPolicyAuthority } from "./policy-authority.js";
 export type { RegisteredPolicyAuthorityOptions } from "./policy-authority.js";
 export { checkBearerDelegation, resourceUriCovers, requiredResourceUri, type CheckBearerDelegationOptions, type DelegationCheckResult } from "@tinycloud/share-envelope";
+export { canonicalize, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
 export { MemoryShareCache } from "./cache.js";
 export type { ShareCache, ShareCacheEntry, ShareCacheKey, ShareCacheMetadata } from "./cache.js";
 export { createDelegatedShareKey, restoreDelegatedShareKey, createPolicyEnforcementDelegation, canonicalOwnerSharePolicy, computeOwnerShareRegistrationCid, validateOwnerSharePolicyRegistration, validateOwnerSharePolicyRegistrationBytes, OWNER_SHARE_REGISTRATION_DOMAIN, MAX_CONTENT_BYTES } from "./owner-policy.js";
