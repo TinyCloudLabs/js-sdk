@@ -166,9 +166,18 @@ export class ShareRecipientClient {
     const response = await this.nativeInvoke({ action: "get", resource: envelope.resource });
     if (!response.ok) throw new Error("share recipient read was rejected");
     const value = object(await response.json(), "share read response");
-    if (value.type !== "TinyCloudShareInvokeResponse" || value.version !== 2 || typeof value.content !== "string" || typeof value.bodyDigest !== "string" || typeof value.proof !== "object") throw new Error("share read response is invalid");
+    const expectedAction = nativeAction("read");
+    if (
+      value.type !== "TinyCloudShareInvokeResponse" ||
+      value.version !== 2 ||
+      value.action !== expectedAction ||
+      value.resource !== envelope.resource.path ||
+      typeof value.content !== "string" ||
+      typeof value.bodyDigest !== "string" ||
+      typeof value.proof !== "object"
+    ) throw new Error("share read response is invalid");
     const content = fromBase64Url(value.content);
-    return { bytes: content, bodyDigest: value.bodyDigest, contentSourceDigest: envelope.contentSourceDigest, binding: { shareId: envelope.shareId, delegationCid: envelope.delegationCid, authorityMaterialHandle: envelope.authorityMaterialHandle, authorityMaterialDigest: envelope.authorityMaterialDigest, resource: envelope.resource, action: String(value.action) }, proof: { detached: value.proof, response: value } };
+    return { bytes: content, bodyDigest: value.bodyDigest, contentSourceDigest: envelope.contentSourceDigest, binding: { shareId: envelope.shareId, delegationCid: envelope.delegationCid, authorityMaterialHandle: envelope.authorityMaterialHandle, authorityMaterialDigest: envelope.authorityMaterialDigest, resource: { kind: envelope.resource.kind, path: value.resource }, action: value.action }, proof: { detached: value.proof, response: value } };
   }
 
   async establishPolicySession(): Promise<SharePolicySession> {
@@ -218,22 +227,36 @@ export class ShareRecipientClient {
 export function createAddressedAuthorization(input: Omit<ShareRecipientClientOptions, "envelope">): ShareAuthorizationAdapter<ShareAuthorizedContent> {
   const client = (envelope: ShareEnvelopeV2): ShareRecipientClient => new ShareRecipientClient({ ...input, envelope });
   return {
-    async begin({ envelope }): Promise<ShareAuthorizationResult<ShareAuthorizedContent>> {
+    async begin({ envelope, method }): Promise<ShareAuthorizationResult<ShareAuthorizedContent>> {
       const current = client(envelope);
       if (input.buildPresentation !== undefined) return { state: "ready", value: await current.authorize(envelope) };
       const challenge = await current.beginChallenge(envelope);
-      return { state: "authorization-required", method: "openkey-device", resumeToken: challenge.challengeId };
+      return { state: "authorization-required", method, resumeToken: challenge.challengeId };
     },
-    async resume({ envelope, resumeToken, proof }): Promise<ShareAuthorizationResult<ShareAuthorizedContent>> {
-      if (proof === undefined) return { state: "authorization-required", method: "openkey-device", resumeToken };
+    async resume({ envelope, method, resumeToken, proof }): Promise<ShareAuthorizationResult<ShareAuthorizedContent>> {
+      if (proof === undefined) return { state: "authorization-required", method, resumeToken };
       return { state: "ready", value: await client(envelope).resumeWithProof(envelope, resumeToken, proof) };
     },
-    async verifyResult({ value, proof }) {
+    async verifyResult({ envelope, value, proof }) {
       try {
         const wrapper = object(proof, "share read proof");
         const detached = object(wrapper.detached, "share read detached proof");
         const response = object(wrapper.response, "share read response proof");
-        if (detached.alg !== "EdDSA" || detached.kid !== input.trustedNode.invitationKid || typeof response.bodyDigest !== "string" || response.bodyDigest !== value.bodyDigest) return false;
+        const envelopeAction = nativeAction("read");
+        if (
+          detached.alg !== "EdDSA" ||
+          detached.kid !== input.trustedNode.invitationKid ||
+          response.type !== "TinyCloudShareInvokeResponse" ||
+          response.version !== 2 ||
+          response.action !== envelopeAction ||
+          response.resource !== envelope.resource.path ||
+          typeof response.bodyDigest !== "string" ||
+          response.bodyDigest !== value.bodyDigest ||
+          response.shareId !== undefined && response.shareId !== envelope.shareId ||
+          response.delegationCid !== undefined && response.delegationCid !== envelope.delegationCid ||
+          response.authorityMaterialHandle !== undefined && response.authorityMaterialHandle !== envelope.authorityMaterialHandle ||
+          response.authorityMaterialDigest !== undefined && response.authorityMaterialDigest !== envelope.authorityMaterialDigest
+        ) return false;
         const unsigned = { ...response };
         delete unsigned.proof;
         return ed25519.verify(bytes(detached.signature, "share read signature"), new TextEncoder().encode(`xyz.tinycloud.share/read-response/v2\0${canonicalize(unsigned)}`), input.trustedNode.invitationPublicKey);
