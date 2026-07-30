@@ -1,6 +1,5 @@
 import { CID } from "multiformats/cid";
 import * as raw from "multiformats/codecs/raw";
-import { sha256 } from "multiformats/hashes/sha2";
 
 import { fromBase64Url, toBase64Url } from "./bytes.js";
 import { computeCid } from "./cid.js";
@@ -59,7 +58,7 @@ function assertCanonicalCid(cidString: string): void {
   if (
     cid.version !== 1 ||
     cid.code !== raw.code ||
-    cid.multihash.code !== sha256.code || // sha2-256 (0x12) only, at the link layer too
+    cid.multihash.code !== 0x12 || // sha2-256 (0x12) only, at the link layer too
     cid.toString() !== cidString
   ) {
     throw new TypeError(`not a canonical CIDv1 raw sha2-256 base32 CID: ${cidString}`);

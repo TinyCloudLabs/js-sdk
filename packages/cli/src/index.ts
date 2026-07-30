@@ -14,6 +14,16 @@ import { createProductionUploadAuthorizer } from "./share/adapters.js";
 
 const program = new Command();
 
+function selectedShareProfile(): string | undefined {
+  const args = process.argv.slice(2);
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index];
+    if (value === "--profile" || value === "-p") return args[index + 1];
+    if (value?.startsWith("--profile=")) return value.slice("--profile=".length);
+  }
+  return process.env.TC_PROFILE;
+}
+
 program
   .name("tc")
   .description("TinyCloud CLI — self-sovereign storage from the terminal")
@@ -62,7 +72,10 @@ configureShareCommandServices({
   // The CLI uses the same nonce-bound OpenKey session ceremony as the Share
   // browser. The authorizer is lazy: public inspect/receive never touches
   // profile state, and no secret is serialized into a publish result.
-  authorizeUpload: createProductionUploadAuthorizer({ fetchFn: globalThis.fetch }),
+  authorizeUpload: createProductionUploadAuthorizer({
+    fetchFn: globalThis.fetch,
+    profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
+  }),
 });
 
 const argv = process.argv.slice(2);

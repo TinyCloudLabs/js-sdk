@@ -3,7 +3,7 @@ import { sha256 } from "@noble/hashes/sha256";
 import { base32 } from "multiformats/bases/base32";
 import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
-import { sha256 as sha256Cid } from "multiformats/hashes/sha2";
+const SHA256_CODE = 0x12;
 import * as raw from "multiformats/codecs/raw";
 import { base58btc } from "multiformats/bases/base58";
 import { canonicalize } from "@tinycloud/share-envelope";
@@ -125,7 +125,7 @@ function fromB64(value: string): Uint8Array {
 }
 
 function cid(bytesValue: Uint8Array): string {
-  return CID.createV1(raw.code, createDigest(sha256Cid.code, sha256(bytesValue))).toString(base32.encoder);
+  return CID.createV1(raw.code, createDigest(SHA256_CODE, sha256(bytesValue))).toString(base32.encoder);
 }
 
 function digest(bytesValue: Uint8Array): string { return b64(sha256(bytesValue)); }

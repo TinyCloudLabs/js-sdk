@@ -21202,11 +21202,14 @@ function cookieFromResponse(response) {
   const raw = values[0] ?? response.headers.get("set-cookie") ?? void 0;
   return raw?.split(";", 1)[0];
 }
-async function profilePrivateKey() {
+async function selectedProfileName() {
   const config = await ProfileManager.getConfig();
-  const profile = await ProfileManager.getProfile(process.env.TC_PROFILE ?? config.defaultProfile);
+  return process.env.TC_PROFILE ?? config.defaultProfile;
+}
+async function profilePrivateKeyFor(profileName) {
+  const profile = await ProfileManager.getProfile(profileName);
   if (typeof profile.privateKey !== "string" || profile.privateKey.length === 0) {
-    throw new Error("share upload requires a local wallet profile");
+    throw new Error("share upload requires an authorized wallet or OpenKey device profile");
   }
   return profile.privateKey;
 }
@@ -21217,7 +21220,8 @@ function createProductionUploadAuthorizer(input = {}) {
   let sessionExpiresAt = 0;
   return async (_upload) => {
     if (sessionCookie !== void 0 && sessionExpiresAt > Date.now() + 3e4) return { cookie: sessionCookie };
-    const key = await (input.privateKey?.() ?? profilePrivateKey());
+    const profileName = await (input.profileName?.() ?? selectedProfileName());
+    const key = await (input.privateKey?.() ?? profilePrivateKeyFor(profileName));
     const signer = new PrivateKeySigner(key);
     const address = await signer.getAddress();
     const nonceResponse = await fetchFn(`${origin}/api/share/auth/openkey/nonce`, {
@@ -21251,6 +21255,15 @@ var { version: version2 } = JSON.parse(
   readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
 );
 var program = new Command();
+function selectedShareProfile() {
+  const args = process.argv.slice(2);
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index];
+    if (value === "--profile" || value === "-p") return args[index + 1];
+    if (value?.startsWith("--profile=")) return value.slice("--profile=".length);
+  }
+  return process.env.TC_PROFILE;
+}
 program.name("tc").description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version2).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output");
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
@@ -21284,7 +21297,10 @@ configureShareCommandServices({
   // The CLI uses the same nonce-bound OpenKey session ceremony as the Share
   // browser. The authorizer is lazy: public inspect/receive never touches
   // profile state, and no secret is serialized into a publish result.
-  authorizeUpload: createProductionUploadAuthorizer({ fetchFn: globalThis.fetch })
+  authorizeUpload: createProductionUploadAuthorizer({
+    fetchFn: globalThis.fetch,
+    profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile
+  })
 });
 var argv = process.argv.slice(2);
 var globalOptionsWithValues = /* @__PURE__ */ new Set(["--profile", "-p", "--host", "-H"]);

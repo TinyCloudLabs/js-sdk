@@ -1,6 +1,9 @@
 import { CID } from "multiformats/cid";
 import * as raw from "multiformats/codecs/raw";
-import { sha256 } from "multiformats/hashes/sha2";
+import { create as createDigest } from "multiformats/hashes/digest";
+import { sha256 } from "@noble/hashes/sha2";
+
+const SHA256_CODE = 0x12;
 
 /**
  * Compute the CID of a single raw block, per sharing-viewer-and-registry.md §6.3:
@@ -10,7 +13,7 @@ import { sha256 } from "multiformats/hashes/sha2";
 export async function computeCid(bytes: Uint8Array): Promise<string> {
   // Normalize cross-realm typed arrays (notably jsdom's TextEncoder output)
   // before multiformats performs its instanceof check.
-  const digest = await sha256.digest(new Uint8Array(bytes));
+  const digest = createDigest(SHA256_CODE, sha256(new Uint8Array(bytes)));
   return CID.create(1, raw.code, digest).toString();
 }
 
@@ -29,7 +32,7 @@ export function isCanonicalRawCid(cidString: string): boolean {
   return (
     cid.version === 1 &&
     cid.code === raw.code &&
-    cid.multihash.code === sha256.code &&
+    cid.multihash.code === SHA256_CODE &&
     cid.toString() === cidString
   );
 }

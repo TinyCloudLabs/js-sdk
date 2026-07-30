@@ -25,11 +25,15 @@ function cookieFromResponse(response: Response): string | undefined {
   return raw?.split(";", 1)[0];
 }
 
-async function profilePrivateKey(): Promise<string> {
+async function selectedProfileName(): Promise<string> {
   const config = await ProfileManager.getConfig();
-  const profile = await ProfileManager.getProfile(process.env.TC_PROFILE ?? config.defaultProfile);
+  return process.env.TC_PROFILE ?? config.defaultProfile;
+}
+
+async function profilePrivateKeyFor(profileName: string): Promise<string> {
+  const profile = await ProfileManager.getProfile(profileName);
   if (typeof profile.privateKey !== "string" || profile.privateKey.length === 0) {
-    throw new Error("share upload requires a local wallet profile");
+    throw new Error("share upload requires an authorized wallet or OpenKey device profile");
   }
   return profile.privateKey;
 }
@@ -43,6 +47,8 @@ export function createProductionUploadAuthorizer(input: {
   readonly origin?: string;
   readonly fetchFn?: typeof globalThis.fetch;
   readonly privateKey?: () => Promise<string>;
+  /** Resolved by the command adapter so --profile always wins over defaults. */
+  readonly profileName?: () => Promise<string>;
 } = {}): (upload: ShareUploadInput) => Promise<ShareUploadAuthorization> {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
@@ -50,7 +56,8 @@ export function createProductionUploadAuthorizer(input: {
   let sessionExpiresAt = 0;
   return async (_upload) => {
     if (sessionCookie !== undefined && sessionExpiresAt > Date.now() + 30_000) return { cookie: sessionCookie };
-    const key = await (input.privateKey?.() ?? profilePrivateKey());
+    const profileName = await (input.profileName?.() ?? selectedProfileName());
+    const key = await (input.privateKey?.() ?? profilePrivateKeyFor(profileName));
     const signer = new PrivateKeySigner(key);
     const address = await signer.getAddress();
     const nonceResponse = await fetchFn(`${origin}/api/share/auth/openkey/nonce`, {
