@@ -76,6 +76,10 @@ function publishServices(): Pick<SharePublishOptions, "uploadBlob" | "authorizeU
   };
 }
 
+function fetchServices(): Pick<ShareFetchOptions, "fetchFn"> {
+  return shareServices.fetchFn === undefined ? {} : { fetchFn: shareServices.fetchFn };
+}
+
 function shareCliError(error: unknown): CLIError {
   if (error instanceof CLIError) return error;
   if (error instanceof SharePublishError) {
@@ -186,7 +190,7 @@ export function registerShareCommand(program: Command): void {
     .action(async (url: string | undefined, options) => {
       try {
         const link = await inputUrl(url, options.stdin === true);
-        const result = await inspectShare(link, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin });
+        const result = await inspectShare(link, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin, ...fetchServices() });
         if (options.json) writeJson(result);
         else inspectHuman(result);
       } catch (error) { handleError(shareCliError(error)); }
@@ -220,6 +224,7 @@ export function registerShareCommand(program: Command): void {
         const result = await receiveShare(link, {
           registryBaseUrl: options.registry,
           expectedOrigin: options.viewerOrigin,
+          ...fetchServices(),
           ...(maxBytes === undefined ? {} : { maxContentBlobBytes: maxBytes }),
           ...(shareServices.authorization === undefined ? {} : { authorization: shareServices.authorization }),
           ...(options.resumeToken === undefined ? {} : { authorizationResumeToken: options.resumeToken }),

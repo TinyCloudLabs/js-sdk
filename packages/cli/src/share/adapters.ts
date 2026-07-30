@@ -1,4 +1,3 @@
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProfileManager } from "../config/profiles.js";
@@ -154,6 +153,9 @@ export function createProductionUploadAuthorizer(input: {
     if (sessionCookie !== undefined && sessionExpiresAt > Date.now() + 30_000) return { cookie: sessionCookie };
     const profileName = await (input.profileName?.() ?? selectedProfileName());
     const key = await (input.privateKey?.() ?? profilePrivateKeyFor(profileName));
+    // Keep public inspect/receive independent from the legacy Node SDK graph.
+    // Authentication is loaded only after a publish selects its auth path.
+    const { PrivateKeySigner } = await import("@tinycloud/node-sdk");
     const signer = new PrivateKeySigner(key);
     const address = await signer.getAddress();
     const nonceResponse = await fetchFn(`${origin}/api/share/auth/openkey/nonce`, {

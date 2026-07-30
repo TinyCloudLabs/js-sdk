@@ -20979,6 +20979,9 @@ function publishServices() {
     ...shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn }
   };
 }
+function fetchServices() {
+  return shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn };
+}
 function shareCliError(error) {
   if (error instanceof CLIError) return error;
   if (error instanceof SharePublishError) {
@@ -21064,7 +21067,7 @@ function registerShareCommand(program2) {
   share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options) => {
     try {
       const link2 = await inputUrl(url, options.stdin === true);
-      const result = await inspectShare2(link2, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin });
+      const result = await inspectShare2(link2, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin, ...fetchServices() });
       if (options.json) writeJson2(result);
       else inspectHuman(result);
     } catch (error) {
@@ -21091,6 +21094,7 @@ function registerShareCommand(program2) {
       const result = await receiveShare2(link2, {
         registryBaseUrl: options.registry,
         expectedOrigin: options.viewerOrigin,
+        ...fetchServices(),
         ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes },
         ...shareServices.authorization === void 0 ? {} : { authorization: shareServices.authorization },
         ...options.resumeToken === void 0 ? {} : { authorizationResumeToken: options.resumeToken }
@@ -21202,7 +21206,6 @@ function registerShareCommand(program2) {
 
 // src/share/adapters.ts
 init_profiles();
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
 import { readFile as readFile3, writeFile as writeFile2 } from "fs/promises";
 import { join as join5 } from "path";
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
@@ -21360,6 +21363,7 @@ function createProductionUploadAuthorizer(input = {}) {
     if (sessionCookie !== void 0 && sessionExpiresAt > Date.now() + 3e4) return { cookie: sessionCookie };
     const profileName = await (input.profileName?.() ?? selectedProfileName());
     const key = await (input.privateKey?.() ?? profilePrivateKeyFor(profileName));
+    const { PrivateKeySigner } = await import("@tinycloud/node-sdk");
     const signer = new PrivateKeySigner(key);
     const address = await signer.getAddress();
     const nonceResponse = await fetchFn(`${origin}/api/share/auth/openkey/nonce`, {
