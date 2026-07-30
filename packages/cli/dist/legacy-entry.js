@@ -26020,20 +26020,18 @@ function safeFilename(value) {
   if (value.length === 0 || value === "." || value === ".." || /[/\\\u0000-\u001f\u007f]/.test(value)) throw new Error("UNSAFE_FILENAME");
   return value;
 }
-function markdownFilename(value) {
-  const filename = safeFilename(value);
-  if (!/\.(?:md|markdown|txt)$/i.test(filename)) throw new Error("INVALID_ARGUMENT");
-  return filename;
+function shareFilename(value) {
+  return safeFilename(value);
 }
 async function readShareInput(input, name2, limit = MAX_SHARE_STDIN_BYTES) {
   if (input === "-") {
     const bytes2 = await readBoundedStdin(limit);
-    return { bytes: bytes2, filename: markdownFilename(name2 ?? "stdin.md") };
+    return { bytes: bytes2, filename: shareFilename(name2 ?? "stdin.md") };
   }
   const path = resolve2(input);
   const info = await stat2(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const filename = markdownFilename(name2 ?? basename2(path));
+  const filename = shareFilename(name2 ?? basename2(path));
   const bytes = new Uint8Array(await readFile9(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
@@ -26189,20 +26187,38 @@ function byteLimit(value) {
   if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 100 MiB", 7);
   return parsed;
 }
+function mediaTypeFor(filename) {
+  const extension = filename.toLowerCase().split(".").at(-1);
+  return extension === "md" || extension === "markdown" ? "text/markdown" : extension === "txt" ? "text/plain" : extension === "html" || extension === "htm" ? "text/html" : extension === "json" ? "application/json" : extension === "css" ? "text/css" : extension === "js" ? "text/javascript" : "application/octet-stream";
+}
+function requestedActions(values) {
+  const actions = values === void 0 || values.length === 0 ? ["read"] : values;
+  if (actions.some((value) => value !== "read" && value !== "list" && value !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
+  return [...new Set(actions)];
+}
 function registerShareCommand(program) {
   const share = program.command("share").description("Publish and consume TinyCloud Share links");
-  share.command("publish <file>").description("Publish a Markdown file or bounded stdin as a bearer share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime", "7d").option("--max-bytes <bytes>", "Bound input bytes").option("--inline", "Embed the sealed envelope in the URL fragment").option("--compact", "Use a CID-addressed compact link (default)").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY).option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests").action(async (file, options) => {
+  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime", "7d").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--inline", "Embed the sealed envelope in the URL fragment").option("--compact", "Use a CID-addressed compact link (default)").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY).option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests").action(async (files, options) => {
     try {
       if (options.inline && options.compact) throw new CLIError("INVALID_ARGUMENT", "--inline and --compact are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
-      const input = await readShareInput(file, options.name, maxBytes);
+      if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
+      const inputs = await Promise.all(files.map((file) => readShareInput(file, files.length === 1 ? options.name : void 0, maxBytes)));
       const target = parseShareTarget(options.to);
+      const actions = requestedActions(options.action);
+      if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
+      if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
+      if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
       if (options.notify === true && target.kind !== "email") throw new CLIError("INVALID_ARGUMENT", "--notify requires an exact email target", 2);
       const result = await publishTargetShare2({
-        source: input.bytes,
-        filename: input.filename,
-        mediaType: "text/markdown",
+        source: inputs[0].bytes,
+        filename: inputs[0].filename,
+        files: inputs.map((input) => ({ bytes: input.bytes, filename: input.filename, mediaType: mediaTypeFor(input.filename) })),
+        mediaType: options.mediaType ?? mediaTypeFor(inputs[0].filename),
+        allowBinary: options.binary === true,
         target,
+        resourceKind: options.prefix || inputs.length > 1 ? "prefix" : "exact",
+        actions,
         expiresAt: expires(options.expires),
         origin: options.viewerOrigin,
         inline: options.inline === true,

@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createPublicKey, verify as verifySignature } from "node:crypto";
+import { createPrivateKey, createPublicKey, sign as signBytes, verify as verifySignature } from "node:crypto";
 import { ProfileManager } from "../config/profiles.js";
 import {
   createRegisteredPolicyAuthority,
@@ -226,10 +226,10 @@ export function createShareAuthorityAdapters(input: {
   const endpoint = async (path: string, body: unknown): Promise<Record<string, unknown>> => {
     return endpointAt(origin, path, body);
   };
-  const endpointAt = async (requestOrigin: string, path: string, body: unknown): Promise<Record<string, unknown>> => {
+  const endpointAt = async (requestOrigin: string, path: string, body: unknown, contentType = "application/json"): Promise<Record<string, unknown>> => {
     let response: Response;
     try {
-      response = await fetchFn(`${requestOrigin}${path}`, { method: "POST", headers: { accept: "application/json", "content-type": "application/json", origin: requestOrigin }, body: JSON.stringify(body), credentials: "include", redirect: "error", referrerPolicy: "no-referrer" });
+      response = await fetchFn(`${requestOrigin}${path}`, { method: "POST", headers: { accept: contentType, "content-type": contentType, origin: requestOrigin }, body: JSON.stringify(body), credentials: "include", redirect: "error", referrerPolicy: "no-referrer" });
     } catch { throw new Error("share authority is unavailable"); }
     if (!response.ok) throw new Error("share authority rejected the request");
     const value = await response.json() as unknown;
@@ -238,7 +238,9 @@ export function createShareAuthorityAdapters(input: {
   };
   const decodeBytes = (value: unknown): Uint8Array => {
     if (typeof value !== "string" || !/^[A-Za-z0-9_-]*$/.test(value)) throw new Error("share authority returned invalid binary data");
-    return new Uint8Array(Buffer.from(value, "base64url"));
+    const bytes = new Uint8Array(Buffer.from(value, "base64url"));
+    if (Buffer.from(bytes).toString("base64url") !== value) throw new Error("share authority returned invalid binary data");
+    return bytes;
   };
   const exactObject = (value: unknown, keys: readonly string[]): Record<string, unknown> => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share authority returned an invalid object");
@@ -278,11 +280,13 @@ export function createShareAuthorityAdapters(input: {
     try {
       const config = await publicConfig();
       if (typeof proof !== "object" || proof === null || Array.isArray(proof)) return false;
-      const detached = proof as Record<string, unknown>;
+      const wrapper = proof as Record<string, unknown>;
+      if (typeof wrapper.detached !== "object" || wrapper.detached === null || typeof wrapper.response !== "object" || wrapper.response === null || Array.isArray(wrapper.response)) return false;
+      const detached = wrapper.detached as Record<string, unknown>;
       if (detached.alg !== "EdDSA" || detached.kid !== config.nodeInvitationKid || typeof detached.signature !== "string") return false;
       const signature = new Uint8Array(Buffer.from(detached.signature, "base64url"));
       if (signature.length !== 64 || toBase64Url(signature) !== detached.signature) return false;
-      const body = { ...value } as Record<string, unknown>;
+      const body = { ...(wrapper.response as Record<string, unknown>) };
       delete body.proof;
       const spki = Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.from([...config.nodeInvitationPublicKey])]);
       return verifySignature(null, Buffer.from(`xyz.tinycloud.share/read-response/v2\0${canonicalize(body)}`), createPublicKey({ key: spki, format: "der", type: "spki" }), signature);
@@ -319,6 +323,60 @@ export function createShareAuthorityAdapters(input: {
     const requestBodyDigest = toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalize(body)))));
     return { ...body, requestBodyDigest };
   };
+  const verifyNodeArtifact = async (value: unknown, key: "challenge" | "session" | "response", domain: string, config: SharePublicConfig): Promise<Record<string, unknown>> => {
+    const wrapper = exactObject(value, [key, "proof"]);
+    const artifact = exactObject(wrapper[key], Object.keys(wrapper[key] as Record<string, unknown>));
+    const proof = exactObject(wrapper.proof, ["alg", "kid", "signature"]);
+    if (proof.alg !== "EdDSA" || proof.kid !== config.nodeInvitationKid) throw new Error(`share ${key} proof is invalid`);
+    const signature = decodeBytes(proof.signature);
+    if (signature.length !== 64 || toBase64Url(signature) !== proof.signature) throw new Error(`share ${key} proof is invalid`);
+    const spki = Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.from(config.nodeInvitationPublicKey)]);
+    if (!verifySignature(null, Buffer.from(`${domain}${canonicalize(artifact)}`), createPublicKey({ key: spki, format: "der", type: "spki" }), signature)) throw new Error(`share ${key} proof is invalid`);
+    return artifact;
+  };
+  const holderSignature = async (holderDid: string, bytes: Uint8Array): Promise<{ readonly alg: "EdDSA"; readonly kid: string; readonly signature: string } | undefined> => {
+    const profileName = await (input.profileName?.() ?? selectedProfileName());
+    const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
+    const key = session?.jwk ?? await ProfileManager.getKey(profileName);
+    if (typeof holderDid !== "string" || !holderDid.startsWith("did:key:") || typeof key !== "object" || key === null || typeof (key as Record<string, unknown>).d !== "string") return undefined;
+    try {
+      const privateKey = createPrivateKey({ key: key as never, format: "jwk" });
+      const signature = signBytes(null, Buffer.from(bytes), privateKey);
+      return { alg: "EdDSA", kid: `${holderDid}#${holderDid.slice("did:key:".length)}`, signature: toBase64Url(new Uint8Array(signature)) };
+    } catch { return undefined; }
+  };
+  const invokeAuthorized = async (envelope: import("@tinycloud/share-envelope").ShareEnvelopeV2, session: Record<string, unknown>, config: SharePublicConfig): Promise<ShareAuthorizationResult<ShareAuthorizedContent>> => {
+    const authority = envelope.ownerAuthority;
+    if (authority === undefined) throw new Error("share authorization session is missing owner authority");
+    const outer = authority.outerEnvelope as Record<string, unknown>;
+    const target = outer.target as Record<string, unknown>;
+    const source = outer.contentSource as Record<string, unknown>;
+    const enforcement = authority.enforcementDelegation as Record<string, unknown>;
+    const holderDid = typeof session.holderDid === "string" ? session.holderDid : "";
+    const resource = String((outer.resource as Record<string, unknown>).path);
+    const action = envelope.actions.includes("list") ? "tinycloud.kv/list" : envelope.actions.includes("edit") ? "tinycloud.kv/put" : "tinycloud.kv/get";
+    const actions = [...new Set(envelope.actions.map((item) => item === "read" ? "tinycloud.kv/get" : item === "list" ? "tinycloud.kv/list" : "tinycloud.kv/put"))].sort();
+    const invocationBase = {
+      type: "TinyCloudShareReadInvocation", version: 2, sessionId: String(session.sessionId), envelopeCid: authority.envelopeCid, shareCid: authority.shareCid,
+      shareId: envelope.shareId, registrationCid: authority.registrationCid, delegationCid: envelope.delegationCid,
+      policyCid: envelope.authorizationTarget.kind === "policy" ? envelope.authorizationTarget.policyCid : "",
+      enforcementDelegationCid: String(enforcement.cid), contentSource: source, contentSourceDigest: String(outer.contentSourceDigest),
+      holderDid, nodeAudience: String(target.nodeAudience), action, actions, resource, issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Math.min(Date.now() + 60_000, Date.parse(String(session.expiresAt)))).toISOString(),
+      jti: toBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+    };
+    const requestBodyDigest = toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalize({ sessionId: invocationBase.sessionId, delegationCid: invocationBase.delegationCid, contentSource: source, contentSourceDigest: invocationBase.contentSourceDigest, action, actions, resource, invocation: invocationBase })) )));
+    const invocation = { ...invocationBase, requestBodyDigest };
+    const signature = await holderSignature(holderDid, new TextEncoder().encode(`xyz.tinycloud.share/invocation/v2\0${canonicalize(invocation)}`));
+    if (signature === undefined) return { state: "authorization-required", method: "openkey-device", resumeToken: String(session.sessionId) };
+    const value = await endpointAt(config.nodeOrigin, "/share/v2/invoke", { request: { ...invocation, proof: signature } }, "application/vnd.tinycloud.share+json");
+    const response = await verifyNodeArtifact(value, "response", "xyz.tinycloud.share/read-response/v2\0", config);
+    if (response.type !== "TinyCloudShareInvokeResponse" || response.version !== 2 || response.action !== action || response.resource !== resource || typeof response.content !== "string" || typeof response.bodyDigest !== "string") throw new Error("share invoke response is invalid");
+    const bytes = decodeBytes(response.content);
+    const digest = toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
+    if (digest !== response.bodyDigest) throw new Error("share invoke response digest is invalid");
+    return { state: "ready", value: { bytes, bodyDigest: response.bodyDigest, contentSourceDigest: envelope.contentSourceDigest, binding: { shareId: envelope.shareId, delegationCid: envelope.delegationCid, authorityMaterialHandle: envelope.authorityMaterialHandle, authorityMaterialDigest: envelope.authorityMaterialDigest, resource: envelope.resource, action }, proof: { detached: (value as Record<string, unknown>).proof, response } } };
+  };
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
@@ -336,7 +394,7 @@ export function createShareAuthorityAdapters(input: {
       if (!stored.ok) throw new Error("addressed source upload was rejected");
     }
     const actions = targetInput.actions === undefined || targetInput.actions.length === 0 ? ["read"] as const : targetInput.actions;
-    const policyActions = [...new Set(actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]))];
+    const policyActions = [...new Set(actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]))] as ("tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put")[];
     return publishAddressedShare({
       shareId,
       shareOrigin: config.shareOrigin,
@@ -350,7 +408,7 @@ export function createShareAuthorityAdapters(input: {
       policyActions,
       contentSource: { kind: "kv", space: node.spaceId, path: resourcePath, action: "tinycloud.kv/get" },
       filename: targetInput.filename,
-      mediaType,
+      mediaType: targetInput.mediaType ?? files[0]?.mediaType ?? "application/octet-stream",
       byteLength: files.reduce((total, file) => total + file.bytes.byteLength, 0),
       expiresAt: targetInput.expiresAt,
       inline: targetInput.inline,
@@ -368,20 +426,43 @@ export function createShareAuthorityAdapters(input: {
   const authorization: ShareAuthorizationAdapter<ShareAuthorizedContent> = input.authorize ?? {
     async begin(request) {
       const node = await authenticatedNode();
-      const value = await endpointAt((await publicConfig()).nodeOrigin, "/share/v2/policy/challenges", await addressedChallenge(request.envelope, node.did));
-      if (value.challenge !== undefined && typeof value.challenge === "object" && value.challenge !== null && !Array.isArray(value.challenge)) {
-        const challenge = value.challenge as Record<string, unknown>;
-        if (typeof challenge.challengeId !== "string") throw new Error("share authority returned an invalid challenge");
-        return { state: "authorization-required", method: request.method, resumeToken: challenge.challengeId };
-      }
-      return parseAuthorization(value);
+      const config = await publicConfig();
+      const challengeRequest = await addressedChallenge(request.envelope, node.did);
+      const value = await endpointAt(config.nodeOrigin, "/share/v2/policy/challenges", challengeRequest);
+      const challenge = await verifyNodeArtifact(value, "challenge", "xyz.tinycloud.share/policy-challenge/v2\0", config);
+      if (
+        challenge.type !== "TinyCloudSharePolicyChallenge" || challenge.version !== 2
+        || typeof challenge.challengeId !== "string" || typeof challenge.nonce !== "string" || typeof challenge.expiresAt !== "string"
+        || challenge.requestBodyDigest !== challengeRequest.requestBodyDigest
+        || challenge.shareCid !== challengeRequest.shareCid || challenge.shareId !== challengeRequest.shareId
+        || challenge.registrationCid !== challengeRequest.registrationCid || challenge.envelopeCid !== challengeRequest.envelopeCid
+        || challenge.delegationCid !== challengeRequest.delegationCid || challenge.policyCid !== challengeRequest.policyCid
+        || challenge.contentSourceDigest !== challengeRequest.contentSourceDigest || challenge.holderDid !== challengeRequest.holderDid
+        || challenge.targetOrigin !== challengeRequest.targetOrigin || challenge.nodeAudience !== challengeRequest.nodeAudience
+        || challenge.action !== challengeRequest.action || canonicalize(challenge.actions) !== canonicalize(challengeRequest.actions)
+        || challenge.resource !== challengeRequest.resource
+      ) throw new Error("share authority returned an unbound challenge");
+      return { state: "authorization-required", method: request.method, resumeToken: challenge.challengeId };
     },
     async resume(request) {
       const config = await publicConfig();
-      const proof = request.proof;
-      const body = typeof proof === "object" && proof !== null && !Array.isArray(proof) ? { ...(proof as Record<string, unknown>), challengeId: request.resumeToken } : { challengeId: request.resumeToken, proof };
-      const value = await endpointAt(config.nodeOrigin, "/share/v2/policy/session", body);
-      return parseAuthorization(value);
+      if (typeof request.proof !== "object" || request.proof === null || Array.isArray(request.proof)) return { state: "authorization-required", method: request.method, resumeToken: request.resumeToken };
+      const material = request.proof as Record<string, unknown>;
+      if (typeof material.nonce !== "string" || typeof material.credential !== "string" || typeof material.holderDid !== "string" || typeof material.holderBinding !== "object" || material.holderBinding === null || typeof material.presentation !== "object" || material.presentation === null || typeof material.presentationProof !== "object" || material.presentationProof === null) throw new Error("share authorization material is incomplete");
+      const value = await endpointAt(config.nodeOrigin, "/share/v2/policy/session", { challengeId: request.resumeToken, nonce: material.nonce, presentation: material.presentation, credential: material.credential, proof: material.presentationProof, holderBinding: material.holderBinding, readSignerDid: material.holderDid });
+      const session = await verifyNodeArtifact(value, "session", "xyz.tinycloud.share/policy-session/v2\0", config);
+      const authority = request.envelope.ownerAuthority;
+      const outer = authority?.outerEnvelope as Record<string, unknown> | undefined;
+      const outerResource = (outer?.resource as Record<string, unknown> | undefined)?.path;
+      if (
+        authority === undefined || session.type !== "TinyCloudSharePolicySession" || session.version !== 2
+        || typeof session.sessionId !== "string" || session.holderDid !== material.holderDid || typeof session.expiresAt !== "string"
+        || session.shareCid !== authority.shareCid || session.shareId !== request.envelope.shareId
+        || session.registrationCid !== authority.registrationCid || session.envelopeCid !== authority.envelopeCid
+        || session.delegationCid !== request.envelope.delegationCid || session.policyCid !== (request.envelope.authorizationTarget.kind === "policy" ? request.envelope.authorizationTarget.policyCid : "")
+        || session.resource !== outerResource
+      ) throw new Error("share authority returned an unbound session");
+      return invokeAuthorized(request.envelope, session, config);
     },
     verifyResult: input.verifyResult ?? verifyProductionAuthorizationResult,
   };
@@ -505,26 +586,6 @@ async function profileShareSessionAuthorization(profileName: string): Promise<Sh
   return { cookie };
 }
 
-async function establishOpenKeyShareSession(profileName: string, origin: string, fetchFn: typeof globalThis.fetch): Promise<ShareUploadAuthorization> {
-  const profile = await ProfileManager.getProfile(profileName);
-  if (profile.authMethod !== "openkey") throw new Error("share upload requires an authorized profile");
-  const { OpenKey } = await import("@openkey/sdk");
-  const openkey = new OpenKey({ host: profile.openkeyHost ?? "https://openkey.so", appName: "TinyCloud CLI", mode: "popup" });
-  const auth = await openkey.connect();
-  const nonceResponse = await fetchFn(`${origin}/api/share/auth/openkey/nonce`, { headers: { accept: "application/json", origin }, credentials: "include", redirect: "error", referrerPolicy: "no-referrer" });
-  if (!nonceResponse.ok) throw new Error("share sign-in nonce was rejected");
-  const nonceBody = await nonceResponse.json() as { readonly nonce?: unknown; readonly expiresAt?: unknown };
-  if (typeof nonceBody.nonce !== "string" || typeof nonceBody.expiresAt !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(nonceBody.nonce)) throw new Error("share sign-in challenge is invalid");
-  const issuedAt = new Date().toISOString();
-  const message = authenticationMessage(origin, auth.address, nonceBody.nonce, issuedAt);
-  const signed = await openkey.signMessage({ message, keyId: auth.keyId });
-  if (signed.address.toLowerCase() !== auth.address.toLowerCase()) throw new Error("share sign-in address mismatch");
-  const authenticated = await fetchFn(`${origin}/api/share/auth/openkey`, { method: "POST", headers: { accept: "application/json", "content-type": "application/json", origin }, credentials: "include", body: JSON.stringify({ address: auth.address, signature: signed.signature, message, nonce: nonceBody.nonce, issuedAt }), redirect: "error", referrerPolicy: "no-referrer" });
-  const cookie = cookieFromResponse(authenticated);
-  if (!authenticated.ok || cookie === undefined) throw new Error("share sign-in was rejected");
-  return { cookie };
-}
-
 /**
  * Establishes the same nonce-bound Share session used by the browser and
  * returns only the upload request headers. Private wallet material and the
@@ -551,9 +612,11 @@ export function createProductionUploadAuthorizer(input: {
       ? undefined
       : await input.sessionAuthorization();
     const storedSession = suppliedSession ?? await profileShareSessionAuthorization(profileName);
-    const sessionAuthorization = storedSession ?? (profile.authMethod === "openkey"
-      ? await establishOpenKeyShareSession(profileName, origin, fetchFn)
-      : undefined);
+    // A CLI process is noninteractive by contract.  An OpenKey profile with
+    // no host-issued Share session must be resumed by an explicit caller or
+    // browser flow; never create a popup or hide an authorization ceremony in
+    // a publish command.
+    const sessionAuthorization = storedSession;
     if (sessionAuthorization !== undefined) return sessionAuthorization;
     const key = await (input.privateKey?.() ?? profilePrivateKeyFor(profileName));
     // Keep public inspect/receive independent from the legacy Node SDK graph.
