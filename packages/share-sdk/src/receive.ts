@@ -54,6 +54,8 @@ export interface ShareFetchOptions {
   readonly fetchBlob?: (input: { readonly origin: string; readonly cid: string }) => Promise<Uint8Array>;
   readonly fetchFn?: typeof globalThis.fetch;
   readonly expectedOrigin?: string;
+  /** Out-of-band signer trust root for addressed envelopes. */
+  readonly trustedSignerDid?: string;
   readonly now?: () => number;
   readonly maxSealedBlobBytes?: number;
   readonly maxContentBlobBytes?: number;
@@ -63,8 +65,8 @@ export interface ShareFetchOptions {
   readonly authorization?: ShareAuthorizationAdapter<ShareAuthorizedContent>;
   readonly authorizationResumeToken?: string;
   readonly authorizationProof?: unknown;
-  /** Internal adapter hook; never included in serializable inspection output. */
-  readonly onResolvedEnvelope?: (envelope: ShareEnvelope | ShareEnvelopeV2, cid: string) => void;
+  /** Addressed-only presentation hook. Bearer envelopes and their keys never cross this boundary. */
+  readonly onResolvedAddressedEnvelope?: (envelope: ShareEnvelope | ShareEnvelopeV2, cid: string) => void;
 }
 
 export interface VerifyBearerEnvelopeOptions {
@@ -241,19 +243,19 @@ async function verifyV2Envelope(envelope: ShareEnvelopeV2, linkOrigin: string, o
   if (envelope.target.origin !== linkOrigin || (options.expectedOrigin !== undefined && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin))) {
     throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
   }
-  if (Date.parse(envelope.expiry) <= (options.now?.() ?? Date.now())) {
-    throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
-  }
-  let expectedSigner = envelope.signature.signerDid;
+  let expectedSigner: string | undefined = options.trustedSignerDid;
   if (envelope.authorizationTarget.kind === "policy") {
     try {
       const policy = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(envelope.authorizationTarget.policyBytes))) as Record<string, unknown>;
-      if (typeof policy.issuerDid !== "string") throw new Error("policy issuer");
-      expectedSigner = policy.issuerDid;
+      const policySigner = typeof policy.shareKeyDid === "string" ? policy.shareKeyDid : policy.issuerDid;
+      if (typeof policySigner !== "string") throw new Error("policy signer");
+      if (expectedSigner === undefined) throw new Error("addressed signer trust root is required");
+      if (expectedSigner !== policySigner) throw new Error("addressed signer trust root mismatch");
     } catch {
       throw new ShareReceiveError("envelope-invalid", "share policy is invalid");
     }
   }
+  if (expectedSigner === undefined) expectedSigner = envelope.signature.signerDid;
   try {
     if (!await verifyEnvelopeV2(envelope, { expectedSignerDid: expectedSigner })) throw new Error("signature");
   } catch {
@@ -277,12 +279,12 @@ async function verifyV1PolicyEnvelope(envelope: ShareEnvelope, linkOrigin: strin
     // project it as a verified bearer envelope in browser adapters.
     throw new ShareReceiveError("unsupported-target", "share policy target is not supported", { reason: "policy-target" });
   }
-  if (Date.parse(envelope.expiry) <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
   try {
     if (!await verifyEnvelope(envelope, { expectedSignerDid: issuerDid })) throw new Error("signature");
   } catch {
     throw new ShareReceiveError("signature-invalid", "share signature is invalid");
   }
+  if (Date.parse(envelope.expiry) <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
 }
 
 /** Verify a decrypted bearer envelope for browser adapters that own transport. */
@@ -317,7 +319,7 @@ export async function inspectShare(link: string, options: ShareFetchOptions = {}
   if (resolved.envelope.version === 1 && resolved.envelope.authorizationTarget.kind === "policy") await verifyV1PolicyEnvelope(resolved.envelope, resolved.origin, options);
   else if (resolved.envelope.version === 1) await verifyResolved(resolved.envelope, resolved.origin, options);
   else await verifyV2Envelope(resolved.envelope, resolved.origin, options);
-  options.onResolvedEnvelope?.(resolved.envelope, resolved.cid);
+  if (resolved.envelope.version === 2 || resolved.envelope.authorizationTarget.kind === "policy") options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
   return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind } };
 }
 
@@ -325,7 +327,7 @@ export async function receiveShare(link: string, options: ShareFetchOptions = {}
   const resolved = await resolveShareEnvelope(link, options);
   if (resolved.envelope.version === 2) {
     await verifyV2Envelope(resolved.envelope, resolved.origin, options);
-    options.onResolvedEnvelope?.(resolved.envelope, resolved.cid);
+    options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
     const method: ShareAuthorizationMethod = resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim";
     if (options.authorization === undefined) return { state: "authorization-required", method };
     const result = options.authorizationResumeToken === undefined
@@ -333,10 +335,15 @@ export async function receiveShare(link: string, options: ShareFetchOptions = {}
       : await options.authorization.resume({ envelope: resolved.envelope, method, resumeToken: options.authorizationResumeToken, ...(options.authorizationProof === undefined ? {} : { proof: options.authorizationProof }) });
     if (result.state === "authorization-required") return result;
     if (result.state === "denied") throw new ShareReceiveError("authorization-denied", "share authorization was denied");
-    if (result.value === null || typeof result.value !== "object" || !(result.value.bytes instanceof Uint8Array)) {
+    if (result.value === null || typeof result.value !== "object" || !(result.value.bytes instanceof Uint8Array) || result.value.proof === undefined || options.authorization.verifyResult === undefined) {
       throw new ShareReceiveError("content-integrity-failed", "share authorization returned an unsigned content result");
     }
     const authorized = result.value;
+    try {
+      if (!await options.authorization.verifyResult({ envelope: resolved.envelope, value: authorized, proof: authorized.proof })) throw new Error("node proof");
+    } catch {
+      throw new ShareReceiveError("content-integrity-failed", "node authorization proof is invalid");
+    }
     const bytes = authorized.bytes.slice();
     const maxBytes = options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES;
     if (bytes.byteLength > maxBytes) throw new ShareReceiveError("max-bytes-exceeded", "shared content exceeds the configured byte limit");
@@ -363,11 +370,11 @@ export async function receiveShare(link: string, options: ShareFetchOptions = {}
   }
   if (resolved.envelope.authorizationTarget.kind === "policy") {
     await verifyV1PolicyEnvelope(resolved.envelope, resolved.origin, options);
-    options.onResolvedEnvelope?.(resolved.envelope, resolved.cid);
+    options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
     return { state: "authorization-required", method: "email-claim" };
   }
   await verifyResolved(resolved.envelope, resolved.origin, options);
-  options.onResolvedEnvelope?.(resolved.envelope, resolved.cid);
+  // Bearer envelopes are intentionally never exposed to an adapter callback.
   let bytes: Uint8Array<ArrayBufferLike> = new Uint8Array();
   if (resolved.envelope.content !== undefined) {
     bytes = await registryFetcher(

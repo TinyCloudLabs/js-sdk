@@ -68,6 +68,8 @@ export interface SharePublishOptions {
    * attempted.
    */
   readonly authorizeUpload?: (input: ShareUploadInput) => Promise<ShareUploadAuthorization>;
+  /** Origin to which any cookie-bearing upload authorization is scoped. */
+  readonly authorizationOrigin?: string;
   readonly credentials?: RequestCredentials;
   /** Test/dev-only escape hatch for a local HTTP registry. */
   readonly allowInsecureRegistry?: boolean;
@@ -201,6 +203,11 @@ async function defaultUpload(options: SharePublishOptions, input: ShareUploadInp
   if (options.authorizeUpload !== undefined) {
     try { authorization = await options.authorizeUpload(input); }
     catch { throw new SharePublishError("upload-auth-required", "share upload authorization was rejected"); }
+  }
+  if (authorization !== undefined && options.authorizationOrigin !== undefined) {
+    let authorizationUrl: URL;
+    try { authorizationUrl = new URL(options.authorizationOrigin); } catch { throw new SharePublishError("invalid-argument", "upload authorization origin is invalid"); }
+    if (authorizationUrl.origin !== new URL(base).origin) throw new SharePublishError("upload-auth-required", "upload authorization is scoped to another origin");
   }
   const headers = new Headers({
     "content-type": "application/vnd.ipld.raw",

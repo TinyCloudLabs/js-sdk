@@ -10,9 +10,12 @@ import { theme } from "./output/theme.js";
 import { isInteractive } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
-import { createProductionUploadAuthorizer } from "./share/adapters.js";
+import { createProductionUploadAuthorizer, createShareAuthorityAdapters } from "./share/adapters.js";
 
 const program = new Command();
+const shareAuthority = createShareAuthorityAdapters({
+  profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
+});
 
 function selectedShareProfile(): string | undefined {
   const args = process.argv.slice(2);
@@ -76,6 +79,11 @@ configureShareCommandServices({
     fetchFn: globalThis.fetch,
     profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
   }),
+  targetAdapter: shareAuthority.targetAdapter,
+  authorization: shareAuthority.authorization,
+  records: shareAuthority.records,
+  delivery: shareAuthority.delivery,
+  revocation: shareAuthority.revocation,
 });
 
 const argv = process.argv.slice(2);

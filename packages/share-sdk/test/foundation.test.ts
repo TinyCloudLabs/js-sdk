@@ -239,12 +239,14 @@ describe("@tinycloud/share-sdk foundation", () => {
     const share = await makeAddressedShare();
     const inspection = await inspectShare(share.url, {
       fetchBlob: async () => share.sealedEnvelope.blob,
+      trustedSignerDid: didKeyFromEd25519PublicKey(ed25519.getPublicKey(issuerPrivateKey)),
       now: () => Date.parse("2029-01-01T00:00:00.000Z"),
     });
     expect(inspection.metadata.shareId).toBe("addressed-test");
     expect(JSON.stringify(inspection)).not.toContain("policyBytes");
     const pending = await receiveShare(share.url, {
       fetchBlob: async () => share.sealedEnvelope.blob,
+      trustedSignerDid: didKeyFromEd25519PublicKey(ed25519.getPublicKey(issuerPrivateKey)),
       now: () => Date.parse("2029-01-01T00:00:00.000Z"),
     });
     expect(pending).toEqual({ state: "authorization-required", method: "email-claim" });
@@ -252,8 +254,9 @@ describe("@tinycloud/share-sdk foundation", () => {
     const addressedBodyDigest = toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", addressedBytes)));
     const received = await receiveShare(share.url, {
       fetchBlob: async () => share.sealedEnvelope.blob,
+      trustedSignerDid: didKeyFromEd25519PublicKey(ed25519.getPublicKey(issuerPrivateKey)),
       now: () => Date.parse("2029-01-01T00:00:00.000Z"),
-      authorization: { async begin(input) { return { state: "ready", value: { bytes: addressedBytes, bodyDigest: addressedBodyDigest, contentSourceDigest: input.envelope.contentSourceDigest, binding: { shareId: input.envelope.shareId, delegationCid: input.envelope.delegationCid, authorityMaterialHandle: input.envelope.authorityMaterialHandle, authorityMaterialDigest: input.envelope.authorityMaterialDigest, resource: input.envelope.resource } } }; }, async resume() { return { state: "denied", reason: "unsupported" }; } },
+      authorization: { async begin(input) { return { state: "ready", value: { bytes: addressedBytes, bodyDigest: addressedBodyDigest, contentSourceDigest: input.envelope.contentSourceDigest, binding: { shareId: input.envelope.shareId, delegationCid: input.envelope.delegationCid, authorityMaterialHandle: input.envelope.authorityMaterialHandle, authorityMaterialDigest: input.envelope.authorityMaterialDigest, resource: input.envelope.resource }, proof: "verified-by-fixture" } }; }, async resume() { return { state: "denied", reason: "unsupported" }; }, async verifyResult() { return true; } },
     });
     expect("state" in received ? received : received.text).toBe("hello");
   });

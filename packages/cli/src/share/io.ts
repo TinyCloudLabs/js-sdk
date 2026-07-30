@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, realpath, stat, link, rename, unlink } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { basename, join, resolve, sep } from "node:path";
 
 export const MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
@@ -80,20 +81,43 @@ async function assertDirectory(path: string): Promise<void> {
 export async function writeShareOutput(directory: string, filename: string, bytes: Uint8Array, force: boolean): Promise<string> {
   const outputDirectory = resolve(directory);
   await assertDirectory(outputDirectory);
-  const outputPath = join(outputDirectory, safeFilename(filename));
-  const flags = force
-    ? constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0)
-    : constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0);
+  const safeName = safeFilename(filename);
+  // Work from the canonical directory after validation.  This prevents a
+  // caller from swapping a symlinked spelling of an ancestor between the
+  // check and the create operation.
+  const stableDirectory = await realpath(outputDirectory);
+  const outputPath = join(stableDirectory, safeName);
+  try {
+    const existing = await lstat(outputPath);
+    if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const temporaryPath = join(stableDirectory, `.tinycloud-share-${randomBytes(16).toString("hex")}.tmp`);
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    handle = await open(outputPath, flags, 0o600);
-    await handle.write(bytes);
+    handle = await open(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
+    await handle.writeFile(bytes);
+    await handle.close();
+    handle = undefined;
+    if (force) {
+      // rename replaces the directory entry itself and never follows an
+      // existing output symlink.  The content was written only to the fresh
+      // exclusive temporary file above.
+      await rename(temporaryPath, outputPath);
+    } else {
+      // A hard-link create is exclusive and does not follow a symlink at the
+      // destination.  Remove the temporary name after the link succeeds.
+      await link(temporaryPath, outputPath);
+      await unlink(temporaryPath);
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("OUTPUT_EXISTS");
     if ((error as NodeJS.ErrnoException).code === "ELOOP") throw new Error("UNSAFE_FILENAME");
     throw error;
   } finally {
     await handle?.close();
+    try { await unlink(temporaryPath); } catch { /* already linked, renamed, or absent */ }
   }
-  return outputPath;
+  return join(outputDirectory, safeName);
 }

@@ -35,6 +35,8 @@ export interface ShareAuthorizationAdapter<T> {
     readonly resumeToken: string;
     readonly proof?: unknown;
   }): Promise<ShareAuthorizationResult<T>>;
+  /** Verify the detached node proof against a pinned authority trust bundle. */
+  readonly verifyResult?: (input: { readonly envelope: ShareEnvelopeV2; readonly value: T; readonly proof: unknown }) => Promise<boolean>;
 }
 
 /**
@@ -54,8 +56,8 @@ export interface ShareAuthorizedContent {
     readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
     readonly action?: string;
   };
-  /** Optional detached proof or AEAD receipt, retained inside the adapter boundary. */
-  readonly proof?: unknown;
+  /** A detached node proof; self-reported bytes and digests are not authorization. */
+  readonly proof: unknown;
 }
 
 /**

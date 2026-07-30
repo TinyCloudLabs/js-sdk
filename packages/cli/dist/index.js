@@ -7395,7 +7395,7 @@ function weierstrass(curveDef) {
   function prepSig(msgHash, privateKey, opts = defaultSigOpts) {
     if (["recovered", "canonical"].some((k) => k in opts))
       throw new Error("sign() legacy options not supported");
-    const { hash, randomBytes: randomBytes2 } = CURVE;
+    const { hash, randomBytes: randomBytes3 } = CURVE;
     let { lowS, prehash, extraEntropy: ent } = opts;
     if (lowS == null)
       lowS = true;
@@ -7407,7 +7407,7 @@ function weierstrass(curveDef) {
     const d = normPrivateKeyToScalar(privateKey);
     const seedArgs = [int2octets(d), int2octets(h1int)];
     if (ent != null && ent !== false) {
-      const e = ent === true ? randomBytes2(Fp2.BYTES) : ent;
+      const e = ent === true ? randomBytes3(Fp2.BYTES) : ent;
       seedArgs.push(ensureBytes("extraEntropy", e));
     }
     const seed = concatBytes3(...seedArgs);
@@ -9811,7 +9811,7 @@ function eddsa(Point2, cHash, eddsaOpts = {}) {
   });
   const { prehash } = eddsaOpts;
   const { BASE, Fp: Fp2, Fn: Fn2 } = Point2;
-  const randomBytes2 = eddsaOpts.randomBytes || randomBytes;
+  const randomBytes3 = eddsaOpts.randomBytes || randomBytes;
   const adjustScalarBytes2 = eddsaOpts.adjustScalarBytes || ((bytes) => bytes);
   const domain = eddsaOpts.domain || ((data, ctx, phflag) => {
     _abool2(phflag, "phflag");
@@ -9893,7 +9893,7 @@ function eddsa(Point2, cHash, eddsaOpts = {}) {
     signature: 2 * _size,
     seed: _size
   };
-  function randomSecretKey(seed = randomBytes2(lengths.seed)) {
+  function randomSecretKey(seed = randomBytes3(lengths.seed)) {
     return _abytes2(seed, lengths.seed, "seed");
   }
   function keygen(seed) {
@@ -16730,13 +16730,13 @@ function equals2(a, b) {
     return a.code === data.code && a.size === data.size && data.bytes instanceof Uint8Array && equals(a.bytes, data.bytes);
   }
 }
-function format(link, base3) {
-  const { bytes: bytes2, version: version3 } = link;
+function format(link2, base3) {
+  const { bytes: bytes2, version: version3 } = link2;
   switch (version3) {
     case 0:
-      return toStringV0(bytes2, baseCache(link), base3 ?? base58btc.encoder);
+      return toStringV0(bytes2, baseCache(link2), base3 ?? base58btc.encoder);
     default:
-      return toStringV1(bytes2, baseCache(link), base3 ?? base32.encoder);
+      return toStringV1(bytes2, baseCache(link2), base3 ?? base32.encoder);
   }
 }
 function baseCache(cid2) {
@@ -20818,7 +20818,6 @@ function parseDuration(input) {
 
 // src/commands/share.ts
 init_errors();
-init_constants();
 
 // src/share/output.ts
 function writeJson2(value) {
@@ -20850,7 +20849,8 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat, mkdir as mkdir2, open, readFile as readFile2, realpath, stat as stat2 } from "fs/promises";
+import { lstat, mkdir as mkdir2, open, readFile as readFile2, realpath, stat as stat2, link, rename as rename2, unlink } from "fs/promises";
+import { randomBytes as randomBytes2 } from "crypto";
 import { basename as basename2, join as join4, resolve, sep } from "path";
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -20918,20 +20918,40 @@ async function assertDirectory(path) {
 async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve(directory);
   await assertDirectory(outputDirectory);
-  const outputPath = join4(outputDirectory, safeFilename(filename));
-  const flags = force ? constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0) : constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0);
+  const safeName = safeFilename(filename);
+  const stableDirectory = await realpath(outputDirectory);
+  const outputPath = join4(stableDirectory, safeName);
+  try {
+    const existing = await lstat(outputPath);
+    if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const temporaryPath = join4(stableDirectory, `.tinycloud-share-${randomBytes2(16).toString("hex")}.tmp`);
   let handle;
   try {
-    handle = await open(outputPath, flags, 384);
-    await handle.write(bytes);
+    handle = await open(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    await handle.writeFile(bytes);
+    await handle.close();
+    handle = void 0;
+    if (force) {
+      await rename2(temporaryPath, outputPath);
+    } else {
+      await link(temporaryPath, outputPath);
+      await unlink(temporaryPath);
+    }
   } catch (error) {
     if (error.code === "EEXIST") throw new Error("OUTPUT_EXISTS");
     if (error.code === "ELOOP") throw new Error("UNSAFE_FILENAME");
     throw error;
   } finally {
     await handle?.close();
+    try {
+      await unlink(temporaryPath);
+    } catch {
+    }
   }
-  return outputPath;
+  return join4(outputDirectory, safeName);
 }
 
 // src/commands/share.ts
@@ -20954,6 +20974,7 @@ function publishServices() {
   return {
     ...shareServices.uploadBlob === void 0 ? {} : { uploadBlob: shareServices.uploadBlob },
     ...shareServices.authorizeUpload === void 0 ? {} : { authorizeUpload: shareServices.authorizeUpload },
+    ...shareServices.authorizeUpload === void 0 ? {} : { authorizationOrigin: SHARE_ORIGIN },
     ...shareServices.credentials === void 0 ? {} : { credentials: shareServices.credentials },
     ...shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn }
   };
@@ -20967,7 +20988,7 @@ function shareCliError(error) {
   }
   if (error instanceof ShareReceiveError2) {
     const verification = /* @__PURE__ */ new Set(["cid-mismatch", "decrypt-failed", "envelope-invalid", "origin-mismatch", "signature-invalid", "capability-invalid", "content-integrity-failed"]);
-    const exit = error.code === "max-bytes-exceeded" ? 7 : verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 1;
+    const exit = error.code === "max-bytes-exceeded" ? 7 : verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 2;
     const code = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
     return new CLIError(code, error.message, exit);
   }
@@ -20984,7 +21005,7 @@ function shareCliError(error) {
   if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
   if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   const mapped = known[message];
-  return new CLIError(mapped?.code ?? "ERROR", mapped ? mapped.code : "share operation failed", mapped?.exit ?? ExitCode.ERROR);
+  return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
 }
 function inputUrl(value, stdin) {
   if (stdin || value === "-") return readBoundedUrlStdin();
@@ -21042,8 +21063,8 @@ function registerShareCommand(program2) {
   });
   share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options) => {
     try {
-      const link = await inputUrl(url, options.stdin === true);
-      const result = await inspectShare2(link, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin });
+      const link2 = await inputUrl(url, options.stdin === true);
+      const result = await inspectShare2(link2, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin });
       if (options.json) writeJson2(result);
       else inspectHuman(result);
     } catch (error) {
@@ -21054,10 +21075,10 @@ function registerShareCommand(program2) {
     try {
       if (options.stdout && options.json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
-      const link = await inputUrl(url, options.stdin === true);
+      const link2 = await inputUrl(url, options.stdin === true);
       if (options.legacy) {
-        if (!isLegacyShareLink2(link) || shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy receive requires an installed read-only tc1 adapter", 2);
-        const bytes = await receiveLegacyShare2(link, shareServices.legacyReader);
+        if (!isLegacyShareLink2(link2) || shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy receive requires an installed read-only tc1 adapter", 2);
+        const bytes = await receiveLegacyShare2(link2, shareServices.legacyReader);
         if (options.stdout) {
           process.stdout.write(Buffer.from(bytes));
           return;
@@ -21067,7 +21088,7 @@ function registerShareCommand(program2) {
         else receiveHuman(output2);
         return;
       }
-      const result = await receiveShare2(link, {
+      const result = await receiveShare2(link2, {
         registryBaseUrl: options.registry,
         expectedOrigin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes },
@@ -21096,11 +21117,11 @@ function registerShareCommand(program2) {
   share.command("migrate [url]").description("Read a legacy tc1 link and re-mint a modern Share link").option("--stdin", "Read the complete legacy link from stdin").option("--name <filename>", "Filename for the migrated content", "migrated.md").option("--to <target>", "Modern Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Modern share lifetime", "7d").option("--max-bytes <bytes>", "Bound migrated content bytes").option("--inline", "Embed the sealed envelope in the URL fragment").option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY).option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests").option("--json", "Print versioned redacted JSON").action(async (url, options) => {
     try {
       if (shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy migration requires an installed read-only tc1 adapter", 2);
-      const link = await inputUrl(url, options.stdin === true);
-      if (!isLegacyShareLink2(link)) throw new CLIError("UNSUPPORTED_LINK", "only tc1: links can be migrated", 2);
+      const link2 = await inputUrl(url, options.stdin === true);
+      if (!isLegacyShareLink2(link2)) throw new CLIError("UNSUPPORTED_LINK", "only tc1: links can be migrated", 2);
       const maxBytes = byteLimit(options.maxBytes) ?? MAX_SHARE_STDIN_BYTES;
       const migrated = await migrateShare2({
-        link,
+        link: link2,
         reader: shareServices.legacyReader,
         publish: async (bytes) => {
           if (bytes.byteLength > maxBytes) throw new SharePublishError("max-bytes-exceeded", "legacy content exceeds the configured byte limit");
@@ -21182,7 +21203,124 @@ function registerShareCommand(program2) {
 // src/share/adapters.ts
 init_profiles();
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { readFile as readFile3, writeFile as writeFile2 } from "fs/promises";
+import { join as join5 } from "path";
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
+function createEncryptedSessionHistory() {
+  const records = /* @__PURE__ */ new Map();
+  let keyPromise;
+  const key = async () => keyPromise ??= crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  const encode5 = async (record) => {
+    const secret = new TextEncoder().encode(JSON.stringify(record));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), secret));
+    const value = new Uint8Array(iv.length + encrypted.length);
+    value.set(iv);
+    value.set(encrypted, iv.length);
+    return value;
+  };
+  const decode7 = async (value) => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: value.slice(0, 12) }, await key(), value.slice(12))));
+  return {
+    async put(record) {
+      records.set(record.shareId, await encode5(record));
+    },
+    async list() {
+      return Promise.all([...records.values()].map(decode7));
+    },
+    async get(shareId) {
+      const value = records.get(shareId);
+      return value === void 0 ? void 0 : decode7(value);
+    },
+    async delete(shareId) {
+      records.delete(shareId);
+    }
+  };
+}
+function createEncryptedProfileHistory(profileName) {
+  let keyPromise;
+  let operation = Promise.resolve();
+  const key = async () => keyPromise ??= (async () => {
+    const profile = await profileName();
+    const config = await ProfileManager.getProfile(profile);
+    if (typeof config.privateKey !== "string" || config.privateKey.length === 0) throw new Error("share history requires an initialized profile");
+    const digest2 = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(config.privateKey));
+    return crypto.subtle.importKey("raw", digest2, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  })();
+  const path = async () => join5(await ProfileManager.getCacheDir(await profileName()), "share-history-v1.bin");
+  const read3 = async () => {
+    try {
+      const encoded = new Uint8Array(await readFile3(await path()));
+      if (encoded.length <= 12) return [];
+      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: encoded.slice(0, 12) }, await key(), encoded.slice(12));
+      const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      return Array.isArray(values) ? values.filter((value) => typeof value === "object" && value !== null && typeof value.shareId === "string") : [];
+    } catch (error) {
+      if (error.code === "ENOENT") return [];
+      throw new Error("share history is unavailable");
+    }
+  };
+  const write = async (values) => {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const bytes = new TextEncoder().encode(JSON.stringify(values));
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), bytes));
+    const output = new Uint8Array(iv.length + encrypted.length);
+    output.set(iv);
+    output.set(encrypted, iv.length);
+    await writeFile2(await path(), output, { mode: 384 });
+  };
+  const serial = (operationFn) => {
+    const next = operation.then(operationFn, operationFn);
+    operation = next.then(() => void 0, () => void 0);
+    return next;
+  };
+  return {
+    async put(record) {
+      return serial(async () => {
+        const values = await read3();
+        const index = values.findIndex((value) => value.shareId === record.shareId);
+        if (index >= 0) values[index] = record;
+        else values.push(record);
+        await write(values);
+      });
+    },
+    async list() {
+      return serial(read3);
+    },
+    async get(shareId) {
+      return serial(async () => (await read3()).find((record) => record.shareId === shareId));
+    },
+    async delete(shareId) {
+      return serial(async () => {
+        const values = (await read3()).filter((record) => record.shareId !== shareId);
+        await write(values);
+      });
+    }
+  };
+}
+function createShareAuthorityAdapters(input = {}) {
+  const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
+  const targetAdapter = { async publish(targetInput) {
+    return { state: "authorization-required", method: targetInput.target.kind === "recipientDid" ? "openkey-device" : "email-claim", continueUrl: `${origin}/authorize/share` };
+  } };
+  const authorization = {
+    async begin(input2) {
+      return { state: "authorization-required", method: input2.method, continueUrl: `${origin}/authorize/share` };
+    },
+    async resume(input2) {
+      return { state: "authorization-required", method: input2.method, resumeToken: input2.resumeToken };
+    }
+  };
+  const unavailable = async () => {
+    throw new Error("share authority is unavailable; no message was sent and no delegation was revoked");
+  };
+  return {
+    targetAdapter,
+    authorization,
+    records: input.profileName === void 0 ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName),
+    delivery: { deliver: unavailable },
+    revocation: { revokeDelegation: unavailable }
+  };
+}
 function authenticationMessage(origin, address, nonce, issuedAt) {
   return [
     `${new URL(origin).host} wants you to sign in with your Ethereum account:`,
@@ -21255,6 +21393,9 @@ var { version: version2 } = JSON.parse(
   readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
 );
 var program = new Command();
+var shareAuthority = createShareAuthorityAdapters({
+  profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile
+});
 function selectedShareProfile() {
   const args = process.argv.slice(2);
   for (let index = 0; index < args.length; index += 1) {
@@ -21300,7 +21441,12 @@ configureShareCommandServices({
   authorizeUpload: createProductionUploadAuthorizer({
     fetchFn: globalThis.fetch,
     profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile
-  })
+  }),
+  targetAdapter: shareAuthority.targetAdapter,
+  authorization: shareAuthority.authorization,
+  records: shareAuthority.records,
+  delivery: shareAuthority.delivery,
+  revocation: shareAuthority.revocation
 });
 var argv = process.argv.slice(2);
 var globalOptionsWithValues = /* @__PURE__ */ new Set(["--profile", "-p", "--host", "-H"]);

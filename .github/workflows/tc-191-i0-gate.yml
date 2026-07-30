@@ -14,6 +14,10 @@ jobs:
     name: I0 compatibility and MCP contract
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # npm pack is part of the offline contract tests. Keep its cache inside
+      # the runner workspace so a pre-existing user cache cannot make I0 fail.
+      NPM_CONFIG_CACHE: ${{ runner.temp }}/tinycloud-npm-cache
     steps:
       - uses: actions/checkout@v4
 

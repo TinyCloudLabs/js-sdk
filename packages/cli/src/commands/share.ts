@@ -28,7 +28,6 @@ import {
 } from "@tinycloud/share-sdk";
 import { parseDuration } from "../lib/duration.js";
 import { CLIError, handleError } from "../output/errors.js";
-import { ExitCode } from "../config/constants.js";
 import { inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, writeShareOutput } from "../share/io.js";
 
@@ -67,10 +66,11 @@ export function parseShareTarget(value: string): ShareTarget {
   throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
 }
 
-function publishServices(): Pick<SharePublishOptions, "uploadBlob" | "authorizeUpload" | "credentials" | "fetchFn"> {
+function publishServices(): Pick<SharePublishOptions, "uploadBlob" | "authorizeUpload" | "authorizationOrigin" | "credentials" | "fetchFn"> {
   return {
     ...(shareServices.uploadBlob === undefined ? {} : { uploadBlob: shareServices.uploadBlob }),
     ...(shareServices.authorizeUpload === undefined ? {} : { authorizeUpload: shareServices.authorizeUpload }),
+    ...(shareServices.authorizeUpload === undefined ? {} : { authorizationOrigin: SHARE_ORIGIN }),
     ...(shareServices.credentials === undefined ? {} : { credentials: shareServices.credentials }),
     ...(shareServices.fetchFn === undefined ? {} : { fetchFn: shareServices.fetchFn }),
   };
@@ -85,7 +85,7 @@ function shareCliError(error: unknown): CLIError {
   }
   if (error instanceof ShareReceiveError) {
     const verification = new Set<ShareErrorCode>(["cid-mismatch", "decrypt-failed", "envelope-invalid", "origin-mismatch", "signature-invalid", "capability-invalid", "content-integrity-failed"]);
-    const exit = error.code === "max-bytes-exceeded" ? 7 : verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 1;
+    const exit = error.code === "max-bytes-exceeded" ? 7 : verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 2;
     const code = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
     return new CLIError(code, error.message, exit);
   }
@@ -107,7 +107,7 @@ function shareCliError(error: unknown): CLIError {
   // Share adapters are external authority seams. Never echo an adapter's
   // arbitrary exception text to contract stdout/stderr; it may contain a
   // bearer URL, claim, session identifier, or provider response.
-  return new CLIError(mapped?.code ?? "ERROR", mapped ? mapped.code : "share operation failed", mapped?.exit ?? ExitCode.ERROR);
+  return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
 }
 
 function inputUrl(value: string | undefined, stdin: boolean): Promise<string> {

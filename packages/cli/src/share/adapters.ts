@@ -1,8 +1,104 @@
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { ProfileManager } from "../config/profiles.js";
-import type { ShareUploadAuthorization, ShareUploadInput } from "@tinycloud/share-sdk";
+import type { ShareUploadAuthorization, ShareUploadInput, SenderShareRecord, SenderShareRecordStorage, ShareAuthorizationAdapter, ShareAuthorizedContent, TargetPublishAdapter, ShareDeliveryAdapter, ShareRevocationAdapter } from "@tinycloud/share-sdk";
 
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
+
+/**
+ * The CLI process keeps its history encrypted even when no durable profile
+ * store is available.  A later process can replace this adapter with the
+ * profile vault without changing command semantics or exposing plaintext
+ * records to the command layer.
+ */
+export function createEncryptedSessionHistory(): SenderShareRecordStorage {
+  const records = new Map<string, Uint8Array>();
+  let keyPromise: Promise<CryptoKey> | undefined;
+  const key = async (): Promise<CryptoKey> => keyPromise ??= crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]) as Promise<CryptoKey>;
+  const encode = async (record: SenderShareRecord): Promise<Uint8Array> => {
+    const secret = new TextEncoder().encode(JSON.stringify(record));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), secret));
+    const value = new Uint8Array(iv.length + encrypted.length); value.set(iv); value.set(encrypted, iv.length); return value;
+  };
+  const decode = async (value: Uint8Array): Promise<SenderShareRecord> => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: value.slice(0, 12) }, await key(), value.slice(12)))) as SenderShareRecord;
+  return {
+    async put(record) {
+      records.set(record.shareId, await encode(record));
+    },
+    async list() { return Promise.all([...records.values()].map(decode)); },
+    async get(shareId) { const value = records.get(shareId); return value === undefined ? undefined : decode(value); },
+    async delete(shareId) { records.delete(shareId); },
+  };
+}
+
+export function createEncryptedProfileHistory(profileName: () => Promise<string>): SenderShareRecordStorage {
+  let keyPromise: Promise<CryptoKey> | undefined;
+  let operation = Promise.resolve();
+  const key = async (): Promise<CryptoKey> => keyPromise ??= (async () => {
+    const profile = await profileName();
+    const config = await ProfileManager.getProfile(profile);
+    if (typeof config.privateKey !== "string" || config.privateKey.length === 0) throw new Error("share history requires an initialized profile");
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(config.privateKey));
+    return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  })();
+  const path = async (): Promise<string> => join(await ProfileManager.getCacheDir(await profileName()), "share-history-v1.bin");
+  const read = async (): Promise<SenderShareRecord[]> => {
+    try {
+      const encoded = new Uint8Array(await readFile(await path()));
+      if (encoded.length <= 12) return [];
+      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: encoded.slice(0, 12) }, await key(), encoded.slice(12));
+      const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+      return Array.isArray(values) ? values.filter((value): value is SenderShareRecord => typeof value === "object" && value !== null && typeof (value as { shareId?: unknown }).shareId === "string") : [];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw new Error("share history is unavailable");
+    }
+  };
+  const write = async (values: readonly SenderShareRecord[]): Promise<void> => {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const bytes = new TextEncoder().encode(JSON.stringify(values));
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), bytes));
+    const output = new Uint8Array(iv.length + encrypted.length); output.set(iv); output.set(encrypted, iv.length);
+    await writeFile(await path(), output, { mode: 0o600 });
+  };
+  const serial = <T>(operationFn: () => Promise<T>): Promise<T> => { const next = operation.then(operationFn, operationFn); operation = next.then(() => undefined, () => undefined); return next; };
+  return {
+    async put(record) { return serial(async () => { const values = await read(); const index = values.findIndex((value) => value.shareId === record.shareId); if (index >= 0) values[index] = record; else values.push(record); await write(values); }); },
+    async list() { return serial(read); },
+    async get(shareId) { return serial(async () => (await read()).find((record) => record.shareId === shareId)); },
+    async delete(shareId) { return serial(async () => { const values = (await read()).filter((record) => record.shareId !== shareId); await write(values); }); },
+  };
+}
+
+/** Default noninteractive authority seams.  They return typed authorization
+ * outcomes until an OpenKey/Node adapter is installed; commands never fall
+ * through to an unconfigured legacy service or invent a successful result. */
+export function createShareAuthorityAdapters(input: { readonly origin?: string; readonly profileName?: () => Promise<string> } = {}): {
+  readonly targetAdapter: TargetPublishAdapter;
+  readonly authorization: ShareAuthorizationAdapter<ShareAuthorizedContent>;
+  readonly records: SenderShareRecordStorage;
+  readonly delivery: ShareDeliveryAdapter;
+  readonly revocation: ShareRevocationAdapter;
+} {
+  const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
+  const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
+    return { state: "authorization-required", method: targetInput.target.kind === "recipientDid" ? "openkey-device" : "email-claim", continueUrl: `${origin}/authorize/share` };
+  } };
+  const authorization: ShareAuthorizationAdapter<ShareAuthorizedContent> = {
+    async begin(input) { return { state: "authorization-required", method: input.method, continueUrl: `${origin}/authorize/share` }; },
+    async resume(input) { return { state: "authorization-required", method: input.method, resumeToken: input.resumeToken }; },
+  };
+  const unavailable = async (): Promise<never> => { throw new Error("share authority is unavailable; no message was sent and no delegation was revoked"); };
+  return {
+    targetAdapter,
+    authorization,
+    records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName),
+    delivery: { deliver: unavailable },
+    revocation: { revokeDelegation: unavailable },
+  };
+}
 
 function authenticationMessage(origin: string, address: string, nonce: string, issuedAt: string): string {
   return [
