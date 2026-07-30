@@ -17532,6 +17532,7 @@ async function discoverLocalTinyCloudNode(options2 = {}) {
   }
   const fetchFn = options2.fetch ?? globalThis.fetch;
   const identityStore = options2.identityStore ?? defaultLocalNodeIdentityStore;
+<<<<<<< HEAD
   const staticCandidates = [];
   if (options2.localNodeUrl) {
     staticCandidates.push({
@@ -17540,6 +17541,15 @@ async function discoverLocalTinyCloudNode(options2 = {}) {
       timeoutMs: LOCAL_LOOPBACK_PROBE_TIMEOUT_MS
     });
   }
+=======
+  const staticCandidates = [
+    {
+      source: "local-loopback",
+      url: options2.localNodeUrl ?? DEFAULT_LOCAL_NODE_URL,
+      timeoutMs: LOCAL_LOOPBACK_PROBE_TIMEOUT_MS
+    }
+  ];
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
   if (options2.localLinkName) {
     if (isValidDnsLabel(options2.localLinkName)) {
       staticCandidates.push({
@@ -17795,10 +17805,14 @@ function decodeBase64Url(value) {
   return Uint8Array.from(bytes2);
 }
 <<<<<<< HEAD
+<<<<<<< HEAD
 var import_ms, __defProp2, __typeError, __defNormalProp, __export2, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36_exports, base36, base36upper, base58_exports, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, _a, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base2, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base64, base64pad, base64url, base64urlpad, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode4, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N12, N22, N32, N42, N52, N62, N72, MSB2, REST2, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
 =======
 var import_ms, __defProp2, __typeError, __defNormalProp, __export2, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36_exports, base36, base36upper, base58_exports, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, _a, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base2, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base64, base64pad, base64url, base64urlpad, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode4, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N12, N22, N32, N42, N52, N62, N72, MSB2, REST2, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, DEFAULT_LOCAL_NODE_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
 >>>>>>> b319afd (TC-401: repair canonical Share receive and CLI runtime)
+=======
+var import_ms, __defProp2, __typeError, __defNormalProp, __export2, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36_exports, base36, base36upper, base58_exports, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, _a, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base2, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base64, base64pad, base64url, base64urlpad, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode4, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N12, N22, N32, N42, N52, N62, N72, MSB2, REST2, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, DEFAULT_LOCAL_NODE_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
 var init_dist3 = __esm({
   "../sdk-core/dist/index.js"() {
     "use strict";
@@ -20241,6 +20255,10 @@ var init_dist3 = __esm({
     ipRegex.v6 = (options2) => options2 && options2.exact ? v6exact : new RegExp(`${boundry(options2)}${v6}${boundry(options2)}`, "g");
     ({ toString: toString3 } = Object.prototype);
     DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL = "https://registry.tinycloud.xyz";
+<<<<<<< HEAD
+=======
+    DEFAULT_LOCAL_NODE_URL = "http://127.0.0.1:8000";
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
     LOCAL_LOOPBACK_PROBE_TIMEOUT_MS = 250;
     LOCAL_LINK_PROBE_TIMEOUT_MS = 750;
     LOCAL_LINK_HOST_SUFFIX = ".local.tinycloud.link";
@@ -20632,10 +20650,16 @@ var init_profiles = __esm({
        * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
        *
        * Local-node discovery (TC-106) only runs when no explicit host was given
+<<<<<<< HEAD
        * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
        * after DID verification against the profile's pinned identity, prefers one
        * over the stored/default host. Loopback requires an explicit `localNodeUrl`.
        * Disable discovery per profile with
+=======
+       * (`--host` / `TC_HOST`); it probes for a locally-running TinyCloud node and,
+       * after DID verification against the profile's pinned identity, prefers it
+       * over the stored/default host. Disable per profile with
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
        * `autoDiscoverLocalNode: false` in profile.json.
        */
       static async resolveContext(options) {
@@ -20702,7 +20726,11 @@ var init_capabilities = __esm({
 });
 
 // src/lib/permissions.ts
+<<<<<<< HEAD
 import { appendFile, readFile as readFile3 } from "fs/promises";
+=======
+import { appendFile, readFile as readFile4 } from "fs/promises";
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
 import { join as join5 } from "path";
 import {
   buildPermissionRequestArtifact,
@@ -21011,6 +21039,10 @@ init_formatter();
 init_profiles();
 
 // src/commands/share.ts
+<<<<<<< HEAD
+=======
+import { readFile as readFile3 } from "fs/promises";
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
 import {
   inspectShare as inspectShare2,
   receiveShare as receiveShare2,
@@ -21292,6 +21324,33 @@ function requestedActions(values) {
   if (actions.some((value) => value !== "read" && value !== "list" && value !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
   return [...new Set(actions)];
 }
+<<<<<<< HEAD
+=======
+async function authorizationProof(options) {
+  if (options.authorizationProof !== void 0 && options.authorizationProofFile !== void 0) {
+    throw new CLIError("INVALID_ARGUMENT", "--authorization-proof and --authorization-proof-file are mutually exclusive", 2);
+  }
+  const encoded = options.authorizationProofFile === void 0 ? options.authorizationProof : await readFile3(options.authorizationProofFile, "utf8").catch(() => {
+    throw new CLIError("INVALID_ARGUMENT", "authorization proof file could not be read", 2);
+  });
+  if (encoded === void 0) return void 0;
+  try {
+    const value = JSON.parse(encoded);
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("object");
+    return value;
+  } catch {
+    throw new CLIError("INVALID_ARGUMENT", "authorization proof must be a JSON object", 2);
+  }
+}
+function assertAggregateInputLimit(inputs, maxBytes) {
+  const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
+  let total = 0;
+  for (const input of inputs) {
+    total += input.bytes.byteLength;
+    if (!Number.isSafeInteger(total) || total > limit) throw new CLIError("MAX_BYTES_EXCEEDED", "combined share input exceeds the configured byte limit", 7);
+  }
+}
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
 function registerShareCommand(program2) {
   const share = program2.command("share").description("Publish and consume TinyCloud Share links");
   share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime", "7d").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--inline", "Embed the sealed envelope in the URL fragment").option("--compact", "Use a CID-addressed compact link (default)").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY).option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests").action(async (files, options) => {
@@ -21300,6 +21359,10 @@ function registerShareCommand(program2) {
       const maxBytes = byteLimit(options.maxBytes);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const inputs = await Promise.all(files.map((file) => readShareInput(file, files.length === 1 ? options.name : void 0, maxBytes)));
+<<<<<<< HEAD
+=======
+      assertAggregateInputLimit(inputs, maxBytes);
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
       const target = parseShareTarget(options.to);
       const actions = requestedActions(options.action);
       if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
@@ -21355,11 +21418,19 @@ function registerShareCommand(program2) {
       handleError(shareCliError(error));
     }
   });
+<<<<<<< HEAD
   share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--resume-token <token>", "Resume a previously returned recipient authorization step").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).option("--legacy", "Read a legacy tc1: link (read-only)").action(async (url, options) => {
+=======
+  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--resume-token <token>", "Resume a previously returned recipient authorization step").option("--authorization-proof <json>", "JSON authorization proof for a resume step").option("--authorization-proof-file <path>", "Read the JSON authorization proof from a file").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).option("--legacy", "Read a legacy tc1: link (read-only)").action(async (url, options) => {
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
     try {
       if (options.stdout && options.json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
       const link2 = await inputUrl(url, options.stdin === true);
+<<<<<<< HEAD
+=======
+      const proof = await authorizationProof(options);
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
       if (options.legacy) {
         if (!isLegacyShareLink2(link2) || shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy receive requires an installed read-only tc1 adapter", 2);
         const bytes = await receiveLegacyShare2(link2, shareServices.legacyReader);
@@ -21378,7 +21449,12 @@ function registerShareCommand(program2) {
         ...fetchServices(),
         ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes },
         ...shareServices.authorization === void 0 ? {} : { authorization: shareServices.authorization },
+<<<<<<< HEAD
         ...options.resumeToken === void 0 ? {} : { authorizationResumeToken: options.resumeToken }
+=======
+        ...options.resumeToken === void 0 ? {} : { authorizationResumeToken: options.resumeToken },
+        ...proof === void 0 ? {} : { authorizationProof: proof }
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
       });
       if ("state" in result) {
         if (options.json) {
@@ -21491,6 +21567,7 @@ function registerShareCommand(program2) {
 
 // src/share/adapters.ts
 init_profiles();
+<<<<<<< HEAD
 import { readFile as readFile4, writeFile as writeFile2 } from "fs/promises";
 import { join as join6 } from "path";
 import { createPrivateKey, createPublicKey, sign as signBytes, verify as verifySignature } from "crypto";
@@ -21499,6 +21576,17 @@ import {
   publishAddressedShare
 } from "@tinycloud/share-sdk";
 import { canonicalize as canonicalize2, toBase64Url } from "@tinycloud/share-envelope";
+=======
+import { readFile as readFile5, writeFile as writeFile2 } from "fs/promises";
+import { join as join6 } from "path";
+import { createPrivateKey, sign as signBytes } from "crypto";
+import {
+  createRegisteredPolicyAuthority,
+  createAddressedAuthorization,
+  publishAddressedShare
+} from "@tinycloud/share-sdk";
+import { fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 function createEncryptedSessionHistory() {
   const records = /* @__PURE__ */ new Map();
@@ -21569,7 +21657,11 @@ function createEncryptedProfileHistory(profileName) {
   };
   const read3 = async () => {
     try {
+<<<<<<< HEAD
       const encoded = new Uint8Array(await readFile4(await path()));
+=======
+      const encoded = new Uint8Array(await readFile5(await path()));
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
       const envelope = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(encoded));
       if (envelope.version !== HISTORY_VERSION) throw new Error("share history is unavailable");
       const salt = unb64(envelope.kdfSalt);
@@ -21582,7 +21674,11 @@ function createEncryptedProfileHistory(profileName) {
     } catch (error) {
       if (error.code !== "ENOENT") throw new Error("share history is unavailable");
       try {
+<<<<<<< HEAD
         const legacy = new Uint8Array(await readFile4(await legacyPath()));
+=======
+        const legacy = new Uint8Array(await readFile5(await legacyPath()));
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
         if (legacy.length <= 12) return { values: [], salt: crypto.getRandomValues(new Uint8Array(16)) };
         const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: legacy.slice(0, 12) }, await derive(new Uint8Array(0), true), legacy.slice(12));
         const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
@@ -21683,6 +21779,7 @@ function createShareAuthorityAdapters(input = {}) {
     const { ensureAuthenticated: ensureAuthenticated2 } = await Promise.resolve().then(() => (init_sdk(), sdk_exports));
     return ensureAuthenticated2(context);
   })();
+<<<<<<< HEAD
   const endpoint = async (path, body) => {
     return endpointAt(origin, path, body);
   };
@@ -21798,6 +21895,8 @@ function createShareAuthorityAdapters(input = {}) {
     if (!verifySignature(null, Buffer.from(`${domain}${canonicalize2(artifact)}`), createPublicKey({ key: spki, format: "der", type: "spki" }), signature)) throw new Error(`share ${key} proof is invalid`);
     return artifact;
   };
+=======
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
   const holderSignature = async (holderDid, bytes) => {
     const profileName = await (input.profileName?.() ?? selectedProfileName());
     const session = await ProfileManager.getSession(profileName);
@@ -21811,6 +21910,7 @@ function createShareAuthorityAdapters(input = {}) {
       return void 0;
     }
   };
+<<<<<<< HEAD
   const invokeAuthorized = async (envelope, session, config) => {
     const authority = envelope.ownerAuthority;
     if (authority === void 0) throw new Error("share authorization session is missing owner authority");
@@ -21856,6 +21956,8 @@ function createShareAuthorityAdapters(input = {}) {
     if (digest2 !== response.bodyDigest) throw new Error("share invoke response digest is invalid");
     return { state: "ready", value: { bytes, bodyDigest: response.bodyDigest, contentSourceDigest: envelope.contentSourceDigest, binding: { shareId: envelope.shareId, delegationCid: envelope.delegationCid, authorityMaterialHandle: envelope.authorityMaterialHandle, authorityMaterialDigest: envelope.authorityMaterialDigest, resource: envelope.resource, action }, proof: { detached: value.proof, response } } };
   };
+=======
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
@@ -21864,6 +21966,11 @@ function createShareAuthorityAdapters(input = {}) {
     const files = targetInput.files === void 0 || targetInput.files.length === 0 ? [{ bytes: targetInput.source, filename: targetInput.filename, mediaType: targetInput.mediaType }] : targetInput.files;
     const resourceKind = targetInput.resourceKind ?? (files.length > 1 ? "prefix" : "exact");
     const resourcePath = `shares/${shareId}${resourceKind === "exact" ? `/${targetInput.filename}` : ""}`;
+<<<<<<< HEAD
+=======
+    const totalBytes = files.reduce((total, file) => total + file.bytes.byteLength, 0);
+    if (!Number.isSafeInteger(totalBytes) || totalBytes > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
     const kv = node.kvForSpace(node.spaceId);
     for (const file of files) {
       const path = resourceKind === "prefix" ? `${resourcePath}/${file.filename}` : resourcePath;
@@ -21900,6 +22007,7 @@ function createShareAuthorityAdapters(input = {}) {
       upload: targetInput.upload ?? {}
     });
   } };
+<<<<<<< HEAD
   const authorization = input.authorize ?? {
     async begin(request) {
       const node = await authenticatedNode();
@@ -21924,6 +22032,29 @@ function createShareAuthorityAdapters(input = {}) {
       return invokeAuthorized(request.envelope, session, config);
     },
     verifyResult: input.verifyResult ?? verifyProductionAuthorizationResult
+=======
+  const canonicalAuthorization = async () => {
+    const [node, config] = await Promise.all([authenticatedNode(), publicConfig()]);
+    return createAddressedAuthorization({
+      nodeOrigin: config.nodeOrigin,
+      trustedNode: { invitationKid: config.nodeInvitationKid, invitationPublicKey: config.nodeInvitationPublicKey },
+      holderDid: node.did,
+      sign: async (bytes) => {
+        const signed = await holderSignature(node.did, bytes);
+        if (signed === void 0) throw new Error("share holder signer is unavailable");
+        return fromBase64Url(signed.signature);
+      }
+    });
+  };
+  const authorization = input.authorize ?? {
+    async begin(request) {
+      return (await canonicalAuthorization()).begin(request);
+    },
+    async resume(request) {
+      return (await canonicalAuthorization()).resume(request);
+    },
+    verifyResult: async (request) => (await canonicalAuthorization()).verifyResult?.(request) ?? false
+>>>>>>> 482f738 (fix: ship tracked CLI runtime artifacts)
   };
   const delivery = { deliver: input.deliver ?? (async (request) => {
     const record = request.record;
