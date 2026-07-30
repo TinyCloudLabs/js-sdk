@@ -66,6 +66,25 @@ describe("Share lifecycle and authorization parity", () => {
     expect(calls).toEqual(["bafy-owner:ancestor"]);
   });
 
+  it("persists the revocation receipt state after a successful revoke", async () => {
+    const records = new Map<string, SenderShareRecord>();
+    const storage = {
+      async put(value: SenderShareRecord) { records.set(value.shareId, value); },
+      async list() { return [...records.values()]; },
+      async get(shareId: string) { return records.get(shareId); },
+      async delete(shareId: string) { records.delete(shareId); },
+    };
+    await storage.put({ ...record, targetKind: "recipientDid", recipientMatcher: { kind: "recipientDid", value: "did:key:z6Mkrecipient" } });
+    const result = await revokeShare({
+      record: (await storage.get("share-1"))!,
+      records: storage,
+      now: () => new Date("2026-07-29T12:00:00.000Z"),
+      adapter: { async revokeDelegation() {} },
+    });
+    expect(result).toMatchObject({ state: "revoked", revokedAt: "2026-07-29T12:00:00.000Z" });
+    expect((await storage.get("share-1"))?.revokedAt).toBe("2026-07-29T12:00:00.000Z");
+  });
+
   it("normalizes exact-email and domain policy targets and keeps claim resumable", async () => {
     expect(normalizeShareTarget({ kind: "email", address: "Alice@Example.COM" })).toEqual({ kind: "email", address: "Alice@example.com" });
     expect(normalizeShareTarget({ kind: "emailDomain", domain: "Example.COM" })).toEqual({ kind: "emailDomain", domain: "example.com" });

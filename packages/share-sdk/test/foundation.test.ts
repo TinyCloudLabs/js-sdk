@@ -67,7 +67,26 @@ async function makeAddressedShare() {
   }, issuerPrivateKey);
   const envelopeKey = generateKey();
   const sealedEnvelope = await seal(new TextEncoder().encode(canonicalize(envelope)), envelopeKey);
-  return { url: encodeShareUrl({ origin, ciphertextCid: sealedEnvelope.cid, key32: envelopeKey }), sealedEnvelope };
+  return {
+    url: encodeShareUrl({ origin, ciphertextCid: sealedEnvelope.cid, key32: envelopeKey }),
+    sealedEnvelope,
+    policyEvidence: {
+      policyCid: await computeCid(policyBytes),
+      signerDid: didKeyFromEd25519PublicKey(ed25519.getPublicKey(issuerPrivateKey)),
+      registrationCid: "bafy-registration",
+      shareId: envelope.shareId,
+      recipientMatcher: envelope.recipientMatcher,
+      target: envelope.target,
+      resource: envelope.resource,
+      actions: envelope.actions,
+      contentSource: envelope.contentSource,
+      contentSourceDigest: envelope.contentSourceDigest,
+      delegationCid: envelope.delegationCid,
+      authorityMaterialHandle: envelope.authorityMaterialHandle,
+      authorityMaterialDigest: envelope.authorityMaterialDigest,
+      expiresAt: envelope.expiry,
+    },
+  };
 }
 
 describe("@tinycloud/share-sdk foundation", () => {
@@ -240,6 +259,7 @@ describe("@tinycloud/share-sdk foundation", () => {
     const inspection = await inspectShare(share.url, {
       fetchBlob: async () => share.sealedEnvelope.blob,
       trustedSignerDid: didKeyFromEd25519PublicKey(ed25519.getPublicKey(issuerPrivateKey)),
+      trustedPolicyAuthority: { resolve: async () => share.policyEvidence },
       now: () => Date.parse("2029-01-01T00:00:00.000Z"),
     });
     expect(inspection.metadata.shareId).toBe("addressed-test");
@@ -247,6 +267,7 @@ describe("@tinycloud/share-sdk foundation", () => {
     const pending = await receiveShare(share.url, {
       fetchBlob: async () => share.sealedEnvelope.blob,
       trustedSignerDid: didKeyFromEd25519PublicKey(ed25519.getPublicKey(issuerPrivateKey)),
+      trustedPolicyAuthority: { resolve: async () => share.policyEvidence },
       now: () => Date.parse("2029-01-01T00:00:00.000Z"),
     });
     expect(pending).toEqual({ state: "authorization-required", method: "email-claim" });
@@ -255,9 +276,34 @@ describe("@tinycloud/share-sdk foundation", () => {
     const received = await receiveShare(share.url, {
       fetchBlob: async () => share.sealedEnvelope.blob,
       trustedSignerDid: didKeyFromEd25519PublicKey(ed25519.getPublicKey(issuerPrivateKey)),
+      trustedPolicyAuthority: { resolve: async () => share.policyEvidence },
       now: () => Date.parse("2029-01-01T00:00:00.000Z"),
       authorization: { async begin(input) { return { state: "ready", value: { bytes: addressedBytes, bodyDigest: addressedBodyDigest, contentSourceDigest: input.envelope.contentSourceDigest, binding: { shareId: input.envelope.shareId, delegationCid: input.envelope.delegationCid, authorityMaterialHandle: input.envelope.authorityMaterialHandle, authorityMaterialDigest: input.envelope.authorityMaterialDigest, resource: input.envelope.resource }, proof: "verified-by-fixture" } }; }, async resume() { return { state: "denied", reason: "unsupported" }; }, async verifyResult() { return true; } },
     });
     expect("state" in received ? received : received.text).toBe("hello");
+  });
+
+  it("does not treat envelope policy bytes as an addressed trust root", async () => {
+    const share = await makeAddressedShare();
+    const options = {
+      fetchBlob: async () => share.sealedEnvelope.blob,
+      trustedSignerDid: didKeyFromEd25519PublicKey(ed25519.getPublicKey(issuerPrivateKey)),
+      now: () => Date.parse("2029-01-01T00:00:00.000Z"),
+    };
+    await expect(inspectShare(share.url, options)).rejects.toMatchObject({ code: "envelope-invalid" });
+    await expect(inspectShare(share.url, {
+      ...options,
+      trustedPolicyAuthority: { resolve: async () => ({ ...share.policyEvidence, signerDid: "did:key:z6Mkattacker" }) },
+    })).rejects.toMatchObject({ code: "capability-invalid" });
+  });
+
+  it("rejects addressed envelopes after their signed expiry", async () => {
+    const share = await makeAddressedShare();
+    await expect(inspectShare(share.url, {
+      fetchBlob: async () => share.sealedEnvelope.blob,
+      trustedSignerDid: didKeyFromEd25519PublicKey(ed25519.getPublicKey(issuerPrivateKey)),
+      trustedPolicyAuthority: { resolve: async () => share.policyEvidence },
+      now: () => Date.parse("2030-01-01T00:00:00.000Z"),
+    })).rejects.toMatchObject({ code: "expired" });
   });
 });

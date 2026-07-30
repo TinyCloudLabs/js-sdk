@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProfileManager } from "../config/profiles.js";
-import type { ShareUploadAuthorization, ShareUploadInput, SenderShareRecord, SenderShareRecordStorage, ShareAuthorizationAdapter, ShareAuthorizedContent, TargetPublishAdapter, ShareDeliveryAdapter, ShareRevocationAdapter, TargetPublishOutcome, TargetPublishInput, ShareAuthorizationResult, PublishedShare } from "@tinycloud/share-sdk";
+import type { ShareUploadAuthorization, ShareUploadInput, SenderShareRecord, SenderShareRecordStorage, ShareAuthorizationAdapter, ShareAuthorizedContent, TargetPublishAdapter, ShareDeliveryAdapter, ShareRevocationAdapter, TargetPublishOutcome, TargetPublishInput, ShareAuthorizationResult, PublishedShare, LegacyShareReader } from "@tinycloud/share-sdk";
 
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 
@@ -90,6 +90,7 @@ export function createShareAuthorityAdapters(input: {
   readonly records: SenderShareRecordStorage;
   readonly delivery: ShareDeliveryAdapter;
   readonly revocation: ShareRevocationAdapter;
+  readonly legacyReader: LegacyShareReader<Uint8Array>;
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
@@ -103,36 +104,71 @@ export function createShareAuthorityAdapters(input: {
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share authority returned an invalid response");
     return value as Record<string, unknown>;
   };
+  const decodeBytes = (value: unknown): Uint8Array => {
+    if (typeof value !== "string" || !/^[A-Za-z0-9_-]*$/.test(value)) throw new Error("share authority returned invalid binary data");
+    return new Uint8Array(Buffer.from(value, "base64url"));
+  };
+  const parseAuthorization = (value: Record<string, unknown>): ShareAuthorizationResult<ShareAuthorizedContent> => {
+    if (value.state === "authorization-required") {
+      if (value.method !== "openkey-device" && value.method !== "email-claim" && value.method !== "email-otp") throw new Error("share authority returned an invalid authorization method");
+      return value as unknown as ShareAuthorizationResult<ShareAuthorizedContent>;
+    }
+    if (value.state === "denied") return value as unknown as ShareAuthorizationResult<ShareAuthorizedContent>;
+    if (value.state !== "ready" || typeof value.value !== "object" || value.value === null || Array.isArray(value.value)) throw new Error("share authority returned an invalid authorization result");
+    const raw = value.value as Record<string, unknown>;
+    const bytes = raw.bytes instanceof Uint8Array ? raw.bytes : decodeBytes(raw.bytes ?? raw.content);
+    if (typeof raw.bodyDigest !== "string" || typeof raw.contentSourceDigest !== "string" || typeof raw.proof !== "object" || raw.proof === null || typeof raw.binding !== "object" || raw.binding === null) throw new Error("share authority returned an incomplete authorization result");
+    return { state: "ready", value: { ...raw, bytes, bodyDigest: raw.bodyDigest, contentSourceDigest: raw.contentSourceDigest, binding: raw.binding as ShareAuthorizedContent["binding"], proof: raw.proof } };
+  };
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
-    const value = await endpoint("/api/share/policy/publish", { source: Buffer.from(targetInput.source).toString("base64url"), filename: targetInput.filename, target: targetInput.target, expiresAt: targetInput.expiresAt.toISOString(), origin: targetInput.origin, notify: targetInput.notify ?? false });
+    const value = await endpoint("/share/v2/policies", { source: Buffer.from(targetInput.source).toString("base64url"), filename: targetInput.filename, target: targetInput.target, expiresAt: targetInput.expiresAt.toISOString(), origin: targetInput.origin, notify: targetInput.notify ?? false });
     if (value.state === "authorization-required" && (value.method === "openkey-device" || value.method === "email-claim" || value.method === "email-otp")) return value as unknown as TargetPublishOutcome;
     if (typeof value.url === "string" && typeof value.shareId === "string") return value as unknown as PublishedShare;
     throw new Error("share authority returned an invalid publication result");
   } };
   const authorization: ShareAuthorizationAdapter<ShareAuthorizedContent> = input.authorize ?? {
     async begin(request) {
-      const value = await endpoint("/api/share/authorize", { envelope: request.envelope, method: request.method });
-      return value as unknown as ShareAuthorizationResult<ShareAuthorizedContent>;
+      const value = await endpoint("/share/v2/policy/challenges", { envelope: request.envelope, method: request.method });
+      return parseAuthorization(value);
     },
     async resume(request) {
-      const value = await endpoint("/api/share/authorize/resume", { envelope: request.envelope, method: request.method, resumeToken: request.resumeToken, proof: request.proof });
-      return value as unknown as ShareAuthorizationResult<ShareAuthorizedContent>;
+      const value = await endpoint("/share/v2/policy/session", { envelope: request.envelope, method: request.method, resumeToken: request.resumeToken, proof: request.proof });
+      return parseAuthorization(value);
     },
     ...(input.verifyResult === undefined ? {} : { verifyResult: input.verifyResult }),
   };
   const delivery: ShareDeliveryAdapter = { deliver: input.deliver ?? (async (request) => {
-    const value = await endpoint("/api/share/notify", request);
-    if (value.state !== "delivered" && value.state !== "already-delivered") throw new Error("share delivery was not accepted");
-    return value.state;
+    // OpenCredentials is the delivery authority. The Share/Node surface only
+    // authorizes the invitation; it does not expose a Share-local notify
+    // route. Keep this request on the implemented credentials path and fail
+    // closed unless the authority returns its exact accepted contract.
+    const value = await endpoint("/v1/share-email/invitations", request);
+    if (value.status !== "accepted") throw new Error("share delivery was not accepted");
+    return "delivered";
   }) };
-  const revocation: ShareRevocationAdapter = { revokeDelegation: input.revokeDelegation ?? (async (request) => { await endpoint("/api/share/revoke", request); }) };
+  const revocation: ShareRevocationAdapter = { revokeDelegation: input.revokeDelegation ?? (async (request) => { await endpoint("/revoke", request); }) };
+  const legacyReader: LegacyShareReader<Uint8Array> = {
+    async read(link) {
+      // This is deliberately an explicit, read-only bridge. Modern publish
+      // never enters the legacy SDK and the raw tc1 material never crosses
+      // the command result boundary.
+      const { TinyCloudNode } = await import("@tinycloud/node-sdk");
+      const node = new TinyCloudNode({ host: origin, autoDiscoverLocalNode: false });
+      const received = await node.sharing.receive(link, { autoSubdelegate: false, useSessionKey: false });
+      if (!received.ok) throw new Error("legacy share could not be verified");
+      const value = await received.data.kv.get<Uint8Array>(received.data.path, { binary: true });
+      if (!value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("legacy share content could not be read");
+      return value.data.data.slice();
+    },
+  };
   return {
     targetAdapter,
     authorization,
     records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName),
     delivery,
     revocation,
+    legacyReader,
   };
 }
 

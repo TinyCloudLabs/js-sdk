@@ -349,7 +349,7 @@ export function registerShareCommand(program: Command): void {
         if (shareServices.records === undefined) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
         const record = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
         if (record === undefined) throw new CLIError("NOT_FOUND", "share not found", 4);
-        const result = await revokeShare({ record, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
+        const result = await revokeShare({ record, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
         if (result.state === "unsupported") {
           throw new CLIError("AUTH_REQUIRED", result.reason, 3);
         }

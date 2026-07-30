@@ -85,6 +85,7 @@ configureShareCommandServices({
   records: shareAuthority.records,
   delivery: shareAuthority.delivery,
   revocation: shareAuthority.revocation,
+  legacyReader: shareAuthority.legacyReader,
 });
 
 const argv = process.argv.slice(2);

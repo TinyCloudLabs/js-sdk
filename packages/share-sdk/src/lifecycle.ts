@@ -17,6 +17,8 @@ function targetKind(record: SenderShareRecord): string {
 /** Report retention for bearer shares; only node-enforced targets are revokeable. */
 export async function revokeShare(input: {
   readonly record: SenderShareRecord;
+  /** Optional durable store; successful revocation is persisted before return. */
+  readonly records?: SenderShareRecordStorage;
   readonly adapter?: ShareRevocationAdapter;
   readonly scope?: "direct" | "ancestor";
   readonly now?: () => Date;
@@ -28,7 +30,9 @@ export async function revokeShare(input: {
   const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
   if (delegationCid === undefined) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt" };
   await input.adapter.revokeDelegation({ delegationCid, scope });
-  return { state: "revoked", target: target as "recipientDid" | "email" | "emailDomain", delegationCid, revokedAt: (input.now?.() ?? new Date()).toISOString() };
+  const revokedAt = (input.now?.() ?? new Date()).toISOString();
+  if (input.records !== undefined) await input.records.put({ ...input.record, revokedAt });
+  return { state: "revoked", target: target as "recipientDid" | "email" | "emailDomain", delegationCid, revokedAt };
 }
 
 export interface ShareHistoryView {

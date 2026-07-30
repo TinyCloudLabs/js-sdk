@@ -21210,7 +21210,7 @@ function registerShareCommand(program2) {
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
       const record = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
       if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      const result = await revokeShare2({ record, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
+      const result = await revokeShare2({ record, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
       if (result.state === "unsupported") {
         throw new CLIError("AUTH_REQUIRED", result.reason, 3);
       }
@@ -21334,38 +21334,66 @@ function createShareAuthorityAdapters(input = {}) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share authority returned an invalid response");
     return value;
   };
+  const decodeBytes = (value) => {
+    if (typeof value !== "string" || !/^[A-Za-z0-9_-]*$/.test(value)) throw new Error("share authority returned invalid binary data");
+    return new Uint8Array(Buffer.from(value, "base64url"));
+  };
+  const parseAuthorization = (value) => {
+    if (value.state === "authorization-required") {
+      if (value.method !== "openkey-device" && value.method !== "email-claim" && value.method !== "email-otp") throw new Error("share authority returned an invalid authorization method");
+      return value;
+    }
+    if (value.state === "denied") return value;
+    if (value.state !== "ready" || typeof value.value !== "object" || value.value === null || Array.isArray(value.value)) throw new Error("share authority returned an invalid authorization result");
+    const raw = value.value;
+    const bytes = raw.bytes instanceof Uint8Array ? raw.bytes : decodeBytes(raw.bytes ?? raw.content);
+    if (typeof raw.bodyDigest !== "string" || typeof raw.contentSourceDigest !== "string" || typeof raw.proof !== "object" || raw.proof === null || typeof raw.binding !== "object" || raw.binding === null) throw new Error("share authority returned an incomplete authorization result");
+    return { state: "ready", value: { ...raw, bytes, bodyDigest: raw.bodyDigest, contentSourceDigest: raw.contentSourceDigest, binding: raw.binding, proof: raw.proof } };
+  };
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
-    const value = await endpoint("/api/share/policy/publish", { source: Buffer.from(targetInput.source).toString("base64url"), filename: targetInput.filename, target: targetInput.target, expiresAt: targetInput.expiresAt.toISOString(), origin: targetInput.origin, notify: targetInput.notify ?? false });
+    const value = await endpoint("/share/v2/policies", { source: Buffer.from(targetInput.source).toString("base64url"), filename: targetInput.filename, target: targetInput.target, expiresAt: targetInput.expiresAt.toISOString(), origin: targetInput.origin, notify: targetInput.notify ?? false });
     if (value.state === "authorization-required" && (value.method === "openkey-device" || value.method === "email-claim" || value.method === "email-otp")) return value;
     if (typeof value.url === "string" && typeof value.shareId === "string") return value;
     throw new Error("share authority returned an invalid publication result");
   } };
   const authorization = input.authorize ?? {
     async begin(request) {
-      const value = await endpoint("/api/share/authorize", { envelope: request.envelope, method: request.method });
-      return value;
+      const value = await endpoint("/share/v2/policy/challenges", { envelope: request.envelope, method: request.method });
+      return parseAuthorization(value);
     },
     async resume(request) {
-      const value = await endpoint("/api/share/authorize/resume", { envelope: request.envelope, method: request.method, resumeToken: request.resumeToken, proof: request.proof });
-      return value;
+      const value = await endpoint("/share/v2/policy/session", { envelope: request.envelope, method: request.method, resumeToken: request.resumeToken, proof: request.proof });
+      return parseAuthorization(value);
     },
     ...input.verifyResult === void 0 ? {} : { verifyResult: input.verifyResult }
   };
   const delivery = { deliver: input.deliver ?? (async (request) => {
-    const value = await endpoint("/api/share/notify", request);
-    if (value.state !== "delivered" && value.state !== "already-delivered") throw new Error("share delivery was not accepted");
-    return value.state;
+    const value = await endpoint("/v1/share-email/invitations", request);
+    if (value.status !== "accepted") throw new Error("share delivery was not accepted");
+    return "delivered";
   }) };
   const revocation = { revokeDelegation: input.revokeDelegation ?? (async (request) => {
-    await endpoint("/api/share/revoke", request);
+    await endpoint("/revoke", request);
   }) };
+  const legacyReader = {
+    async read(link2) {
+      const { TinyCloudNode } = await import("@tinycloud/node-sdk");
+      const node = new TinyCloudNode({ host: origin, autoDiscoverLocalNode: false });
+      const received = await node.sharing.receive(link2, { autoSubdelegate: false, useSessionKey: false });
+      if (!received.ok) throw new Error("legacy share could not be verified");
+      const value = await received.data.kv.get(received.data.path, { binary: true });
+      if (!value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("legacy share content could not be read");
+      return value.data.data.slice();
+    }
+  };
   return {
     targetAdapter,
     authorization,
     records: input.profileName === void 0 ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName),
     delivery,
-    revocation
+    revocation,
+    legacyReader
   };
 }
 function authenticationMessage(origin, address, nonce, issuedAt) {
@@ -21495,7 +21523,8 @@ configureShareCommandServices({
   authorization: shareAuthority.authorization,
   records: shareAuthority.records,
   delivery: shareAuthority.delivery,
-  revocation: shareAuthority.revocation
+  revocation: shareAuthority.revocation,
+  legacyReader: shareAuthority.legacyReader
 });
 var argv = process.argv.slice(2);
 var globalOptionsWithValues = /* @__PURE__ */ new Set(["--profile", "-p", "--host", "-H"]);

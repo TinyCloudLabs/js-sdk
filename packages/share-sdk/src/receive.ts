@@ -56,6 +56,11 @@ export interface ShareFetchOptions {
   readonly expectedOrigin?: string;
   /** Out-of-band signer trust root for addressed envelopes. */
   readonly trustedSignerDid?: string;
+  /**
+   * Out-of-band policy authority.  The policy bytes carried by an envelope
+   * are only a CID-addressed integrity witness; they are never a trust root.
+   */
+  readonly trustedPolicyAuthority?: SharePolicyAuthority;
   readonly now?: () => number;
   readonly maxSealedBlobBytes?: number;
   readonly maxContentBlobBytes?: number;
@@ -67,6 +72,27 @@ export interface ShareFetchOptions {
   readonly authorizationProof?: unknown;
   /** Addressed-only presentation hook. Bearer envelopes and their keys never cross this boundary. */
   readonly onResolvedAddressedEnvelope?: (envelope: ShareEnvelope | ShareEnvelopeV2, cid: string) => void;
+}
+
+export interface SharePolicyEvidence {
+  readonly policyCid: string;
+  readonly signerDid: string;
+  readonly registrationCid: string;
+  readonly shareId: string;
+  readonly recipientMatcher: unknown;
+  readonly target: { readonly origin: string; readonly nodeAudience: string; readonly spaceId: string };
+  readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
+  readonly actions: readonly string[];
+  readonly contentSource: unknown;
+  readonly contentSourceDigest: string;
+  readonly delegationCid: string;
+  readonly authorityMaterialHandle: string;
+  readonly authorityMaterialDigest: string;
+  readonly expiresAt: string;
+}
+
+export interface SharePolicyAuthority {
+  resolve(input: { readonly policyCid: string; readonly envelope: ShareEnvelopeV2 }): Promise<SharePolicyEvidence | undefined>;
 }
 
 export interface VerifyBearerEnvelopeOptions {
@@ -239,27 +265,53 @@ async function resolveShareEnvelope(link: string, options: ShareFetchOptions = {
   }
 }
 
+function actionName(value: string): string {
+  return value === "read" ? "tinycloud.kv/get" : value === "list" ? "tinycloud.kv/list" : value === "edit" ? "tinycloud.kv/put" : value;
+}
+
+function resourceContains(outer: SharePolicyEvidence["resource"], inner: SharePolicyEvidence["resource"]): boolean {
+  if (outer.kind === "exact") return inner.kind === "exact" && outer.path === inner.path;
+  const prefix = outer.path.endsWith("/") ? outer.path : `${outer.path}/`;
+  return inner.path === outer.path || inner.path.startsWith(prefix);
+}
+
+function policyEvidenceMatches(envelope: ShareEnvelopeV2, evidence: SharePolicyEvidence): boolean {
+  const registeredActions = new Set(evidence.actions.map(actionName));
+  return evidence.policyCid === (envelope.authorizationTarget.kind === "policy" ? envelope.authorizationTarget.policyCid : "")
+    && evidence.signerDid === envelope.signature.signerDid
+    && evidence.registrationCid.length > 0
+    && evidence.shareId === envelope.shareId
+    && canonicalize(evidence.recipientMatcher) === canonicalize(envelope.recipientMatcher)
+    && canonicalize(evidence.target) === canonicalize(envelope.target)
+    && resourceContains(evidence.resource, envelope.resource)
+    && envelope.actions.every((action) => registeredActions.has(actionName(action)))
+    && canonicalize(evidence.contentSource) === canonicalize(envelope.contentSource)
+    && evidence.contentSourceDigest === envelope.contentSourceDigest
+    && evidence.delegationCid === envelope.delegationCid
+    && evidence.authorityMaterialHandle === envelope.authorityMaterialHandle
+    && evidence.authorityMaterialDigest === envelope.authorityMaterialDigest
+    && evidence.expiresAt === envelope.expiry
+    && Number.isFinite(Date.parse(evidence.expiresAt))
+    && Date.parse(evidence.expiresAt) === Date.parse(envelope.expiry);
+}
+
 async function verifyV2Envelope(envelope: ShareEnvelopeV2, linkOrigin: string, options: ShareFetchOptions): Promise<void> {
   if (envelope.target.origin !== linkOrigin || (options.expectedOrigin !== undefined && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin))) {
     throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
   }
-  let expectedSigner: string | undefined = options.trustedSignerDid;
+  const expectedSigner = options.trustedSignerDid;
+  if (expectedSigner === undefined) throw new ShareReceiveError("signature-invalid", "an addressed signer trust root is required");
+  const expiry = Date.parse(envelope.expiry);
+  if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
+  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
   if (envelope.authorizationTarget.kind === "policy") {
-    try {
-      const root = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(envelope.authorizationTarget.policyBytes))) as Record<string, unknown>;
-      const nested = typeof root.policy === "object" && root.policy !== null && !Array.isArray(root.policy) ? root.policy as Record<string, unknown> : root;
-      const policySigner = typeof nested.shareKeyDid === "string" ? nested.shareKeyDid : nested.issuerDid;
-      if (typeof policySigner !== "string") throw new Error("policy signer");
-      // The policy's delegated share key is the signer for v2 owner-policy
-      // envelopes. Hosts may pin it out-of-band; otherwise the canonical
-      // policy-to-envelope binding is the minimum safe browser fallback.
-      if (expectedSigner !== undefined && expectedSigner !== policySigner) throw new Error("addressed signer trust root mismatch");
-      expectedSigner ??= policySigner;
-    } catch {
-      throw new ShareReceiveError("envelope-invalid", "share policy is invalid");
-    }
+    if (options.trustedPolicyAuthority === undefined) throw new ShareReceiveError("envelope-invalid", "an external policy authority is required");
+    let evidence: SharePolicyEvidence | undefined;
+    try { evidence = await options.trustedPolicyAuthority.resolve({ policyCid: envelope.authorizationTarget.policyCid, envelope }); } catch { evidence = undefined; }
+    if (evidence === undefined || !policyEvidenceMatches(envelope, evidence)) throw new ShareReceiveError("capability-invalid", "share policy authority evidence is not bound to the envelope");
+  } else if (envelope.authorizationTarget.kind === "recipientDid" && envelope.recipientMatcher.kind === "recipientDid" && envelope.authorizationTarget.did !== envelope.recipientMatcher.value) {
+    throw new ShareReceiveError("capability-invalid", "recipient authorization does not match the signed recipient");
   }
-  if (expectedSigner === undefined) expectedSigner = envelope.signature.signerDid;
   try {
     if (!await verifyEnvelopeV2(envelope, { expectedSignerDid: expectedSigner })) throw new Error("signature");
   } catch {
