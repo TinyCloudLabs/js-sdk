@@ -33,7 +33,8 @@ export interface ShareRecipientClientOptions {
   readonly holderDid: string;
   readonly envelope: ShareEnvelopeV2;
   readonly fetchFn?: typeof fetch;
-  readonly buildPresentation: (input: { readonly challenge: SharePolicyChallenge; readonly envelope: ShareEnvelopeV2; readonly policy: Record<string, unknown> }) => Promise<SharePresentationMaterial>;
+  readonly buildPresentation?: (input: { readonly challenge: SharePolicyChallenge; readonly envelope: ShareEnvelopeV2; readonly policy: Record<string, unknown> }) => Promise<SharePresentationMaterial>;
+  readonly sign?: (bytes: Uint8Array) => Promise<Uint8Array>;
 }
 
 export interface SharePolicySession {
@@ -99,6 +100,23 @@ export class ShareRecipientClient {
 
   constructor(private readonly options: ShareRecipientClientOptions) {
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
+    this.signer = options.sign;
+  }
+
+  async beginChallenge(envelope: ShareEnvelopeV2): Promise<SharePolicyChallenge> {
+    const authority = envelope.ownerAuthority;
+    if (authority === undefined) throw new Error("addressed owner authority is required");
+    const outer = object(authority.outerEnvelope, "outer envelope");
+    const target = object(outer.target, "outer target");
+    const resource = object(outer.resource, "outer resource");
+    const source = object(outer.contentSource, "outer content source");
+    const enforcement = object(authority.enforcementDelegation, "enforcement delegation");
+    const actions = [...new Set(envelope.actions.map(nativeAction))].sort();
+    const challengeBody = { envelopeCid: authority.envelopeCid, shareCid: authority.shareCid, shareId: envelope.shareId, registrationCid: authority.registrationCid, delegationCid: envelope.delegationCid, policyCid: envelope.authorizationTarget.kind === "policy" ? envelope.authorizationTarget.policyCid : "", enforcementDelegationCid: String(enforcement.cid), enforcementDelegation: enforcement, outerEnvelope: outer, contentSource: source, contentSourceDigest: String(outer.contentSourceDigest), holderDid: this.options.holderDid, targetOrigin: String(target.origin), nodeAudience: String(target.nodeAudience), action: selectedAction(envelope), actions, resource: String(resource.path) };
+    const requestBodyDigest = await digest(challengeBody);
+    const challenge = await verifyWrapped(await post(this.fetchFn, this.options.nodeOrigin, "/share/v2/policy/challenges", { ...challengeBody, requestBodyDigest }), "challenge", DOMAIN, this.options.trustedNode) as unknown as SharePolicyChallenge;
+    if (challenge.type !== "TinyCloudSharePolicyChallenge" || challenge.version !== 2 || challenge.challengeId.length < 16 || challenge.nonce.length < 16 || challenge.shareCid !== authority.shareCid || challenge.shareId !== envelope.shareId || challenge.registrationCid !== authority.registrationCid || challenge.envelopeCid !== authority.envelopeCid || challenge.requestBodyDigest !== requestBodyDigest || challenge.holderDid !== this.options.holderDid || challenge.action !== challengeBody.action || canonicalize(challenge.actions) !== canonicalize(actions) || challenge.resource !== resource.path) throw new Error("share authority returned an unbound challenge");
+    return challenge;
   }
 
   private async establish(envelope: ShareEnvelopeV2): Promise<SharePolicySession> {
@@ -122,6 +140,7 @@ export class ShareRecipientClient {
     const requestBodyDigest = await digest(challengeBody);
     const challenge = await verifyWrapped(await post(this.fetchFn, this.options.nodeOrigin, "/share/v2/policy/challenges", { ...challengeBody, requestBodyDigest }), "challenge", DOMAIN, this.options.trustedNode) as unknown as SharePolicyChallenge;
     if (challenge.type !== "TinyCloudSharePolicyChallenge" || challenge.version !== 2 || challenge.challengeId === undefined || challenge.nonce === undefined || challenge.shareCid !== authority.shareCid || challenge.shareId !== envelope.shareId || challenge.registrationCid !== authority.registrationCid || challenge.envelopeCid !== authority.envelopeCid || challenge.policyCid !== challengeBody.policyCid || challenge.enforcementDelegationCid !== enforcement.cid || challenge.requestBodyDigest !== requestBodyDigest || challenge.contentSourceDigest !== challengeBody.contentSourceDigest || canonicalize(challenge.contentSource) !== canonicalize(source) || challenge.holderDid !== this.options.holderDid || challenge.targetOrigin !== target.origin || challenge.nodeAudience !== target.nodeAudience || challenge.action !== challengeBody.action || canonicalize(challenge.actions) !== canonicalize(actions) || challenge.resource !== resource.path) throw new Error("share authority returned an unbound challenge");
+    if (this.options.buildPresentation === undefined) throw new Error("share presentation builder is required");
     const material = await this.options.buildPresentation({ challenge, envelope, policy: {} });
     this.holderProof = material.proof;
     this.signer = material.sign;
@@ -143,7 +162,7 @@ export class ShareRecipientClient {
   }
 
   async authorize(envelope: ShareEnvelopeV2): Promise<ShareAuthorizedContent> {
-    await this.establish(envelope);
+    if (this.session === undefined) await this.establish(envelope);
     const response = await this.nativeInvoke({ action: "get", resource: envelope.resource });
     if (!response.ok) throw new Error("share recipient read was rejected");
     const value = object(await response.json(), "share read response");
@@ -155,6 +174,25 @@ export class ShareRecipientClient {
   async establishPolicySession(): Promise<SharePolicySession> {
     if (this.session !== undefined) return this.session;
     return this.establish(this.options.envelope);
+  }
+
+  async resumeWithProof(envelope: ShareEnvelopeV2, resumeToken: string, proof: unknown): Promise<ShareAuthorizedContent> {
+    const material = object(proof, "share authorization proof");
+    const presentation = object(material.presentation, "share presentation");
+    const presentationProof = object(material.presentationProof, "share presentation proof");
+    const nonce = material.nonce;
+    const credential = material.credential;
+    const holderDid = material.holderDid;
+    const holderBinding = material.holderBinding;
+    if (typeof nonce !== "string" || typeof credential !== "string" || typeof holderDid !== "string" || typeof holderBinding !== "object" || holderBinding === null || typeof presentationProof.signature !== "string") throw new Error("share authorization proof is incomplete");
+    const value = object(await post(this.fetchFn, this.options.nodeOrigin, "/share/v2/policy/session", { challengeId: resumeToken, nonce, presentation, credential, proof: presentationProof, holderBinding, readSignerDid: holderDid }), "share policy session");
+    const session = await verifyWrapped(value, "session", SESSION_DOMAIN, this.options.trustedNode);
+    const authority = envelope.ownerAuthority;
+    const outer = authority === undefined ? undefined : object(authority.outerEnvelope, "outer envelope");
+    if (authority === undefined || session.type !== "TinyCloudSharePolicySession" || session.version !== 2 || typeof session.sessionId !== "string" || session.shareCid !== authority.shareCid || session.shareId !== envelope.shareId || session.registrationCid !== authority.registrationCid || session.envelopeCid !== authority.envelopeCid || session.delegationCid !== envelope.delegationCid || session.resource !== (outer === undefined ? "" : object(outer.resource, "outer resource").path) || typeof session.expiresAt !== "string") throw new Error("share authority returned an unbound session");
+    this.session = { sessionId: session.sessionId, expiresAt: session.expiresAt, actions: envelope.actions.map(uiAction), resource: { kind: envelope.resource.kind, path: String(session.resource) } };
+    this.signer ??= this.options.sign;
+    return this.authorize(envelope);
   }
 
   async nativeInvoke(request: { readonly action: string; readonly resource?: Record<string, unknown>; readonly body?: number[]; readonly bodyDigest?: number[]; readonly ifMatch?: string; readonly contentType?: string }): Promise<Response> {
@@ -181,10 +219,14 @@ export function createAddressedAuthorization(input: Omit<ShareRecipientClientOpt
   const client = (envelope: ShareEnvelopeV2): ShareRecipientClient => new ShareRecipientClient({ ...input, envelope });
   return {
     async begin({ envelope }): Promise<ShareAuthorizationResult<ShareAuthorizedContent>> {
-      return { state: "ready", value: await client(envelope).authorize(envelope) };
+      const current = client(envelope);
+      if (input.buildPresentation !== undefined) return { state: "ready", value: await current.authorize(envelope) };
+      const challenge = await current.beginChallenge(envelope);
+      return { state: "authorization-required", method: "openkey-device", resumeToken: challenge.challengeId };
     },
-    async resume({ envelope }): Promise<ShareAuthorizationResult<ShareAuthorizedContent>> {
-      return { state: "ready", value: await client(envelope).authorize(envelope) };
+    async resume({ envelope, resumeToken, proof }): Promise<ShareAuthorizationResult<ShareAuthorizedContent>> {
+      if (proof === undefined) return { state: "authorization-required", method: "openkey-device", resumeToken };
+      return { state: "ready", value: await client(envelope).resumeWithProof(envelope, resumeToken, proof) };
     },
     async verifyResult({ value, proof }) {
       try {
