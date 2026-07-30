@@ -157,7 +157,7 @@ export class ShareRecipientClient {
     return this.establish(this.options.envelope);
   }
 
-  async nativeInvoke(request: { readonly action: string; readonly resource?: Record<string, unknown>; readonly body?: number[]; readonly ifMatch?: string; readonly contentType?: string }): Promise<Response> {
+  async nativeInvoke(request: { readonly action: string; readonly resource?: Record<string, unknown>; readonly body?: number[]; readonly bodyDigest?: number[]; readonly ifMatch?: string; readonly contentType?: string }): Promise<Response> {
     if (this.session === undefined) throw new Error("share policy session is required");
     if (this.options.envelope.ownerAuthority === undefined || this.signer === undefined || this.holderProof === undefined) throw new Error("share holder signer is required");
     const authority = this.options.envelope.ownerAuthority;
