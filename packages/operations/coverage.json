@@ -47,7 +47,7 @@
     { "command": "share inspect [url]", "status": "legacy" },
     { "command": "share migrate [url]", "status": "legacy" },
     { "command": "share notify <id>", "status": "legacy" },
-    { "command": "share publish <file>", "status": "legacy" },
+    { "command": "share publish <files>", "status": "legacy" },
     { "command": "share receive [url]", "status": "legacy" },
     { "command": "share list", "status": "legacy" },
     { "command": "share revoke <id>", "status": "legacy" },

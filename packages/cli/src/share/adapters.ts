@@ -547,7 +547,13 @@ export function createProductionUploadAuthorizer(input: {
     if (sessionCookie !== undefined && sessionExpiresAt > Date.now() + 30_000) return { cookie: sessionCookie };
     const profileName = await (input.profileName?.() ?? selectedProfileName());
     const profile = await ProfileManager.getProfile(profileName);
-    const sessionAuthorization = await (input.sessionAuthorization?.() ?? profileShareSessionAuthorization(profileName) ?? (profile.authMethod === "openkey" ? establishOpenKeyShareSession(profileName, origin, fetchFn) : undefined));
+    const suppliedSession = input.sessionAuthorization === undefined
+      ? undefined
+      : await input.sessionAuthorization();
+    const storedSession = suppliedSession ?? await profileShareSessionAuthorization(profileName);
+    const sessionAuthorization = storedSession ?? (profile.authMethod === "openkey"
+      ? await establishOpenKeyShareSession(profileName, origin, fetchFn)
+      : undefined);
     if (sessionAuthorization !== undefined) return sessionAuthorization;
     const key = await (input.privateKey?.() ?? profilePrivateKeyFor(profileName));
     // Keep public inspect/receive independent from the legacy Node SDK graph.
