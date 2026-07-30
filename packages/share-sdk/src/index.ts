@@ -8,7 +8,7 @@ export { createDelegatedShareKey, restoreDelegatedShareKey, createPolicyEnforcem
 export type { OwnerDelegationReceipt, CreateOwnerDelegationParams, OwnerShareAction, OwnerShareMatcher, OwnerSharePolicyV2, DelegatedShareKey, SignedDelegation, RegisterOwnerSharePolicyParams, OwnerSharePolicyRegistration, OwnerSharePolicyRegistrationReceipt } from "./owner-policy.js";
 export { SHARE_DELIVERY_AUTHORIZATION_DOMAIN, validateShareDeliveryAuthorizationBytes, shareDeliveryTrustedKid } from "./delivery.js";
 export type { ShareDeliveryAuthorizationRequest, ShareDeliveryAuthorization, ShareDeliveryAuthorizationReceipt, ValidateShareDeliveryAuthorizationExpected } from "./delivery.js";
-export { MemorySenderShareRecordStorage, MemorySenderShareKeyStorage, SenderShareStore } from "./history.js";
+export { MemorySenderShareRecordStorage, MemorySenderShareKeyStorage, SenderShareStore, historyRecordForPublishedShare } from "./history.js";
 export { MemoryEncryptedShareHistoryStorage, EncryptedSenderShareHistory } from "./history.js";
 export type { SenderShareRecord, SenderShareRecordStorage, SenderShareKeyStorage, SenderShareRevocationScope, EncryptedShareHistoryStorage } from "./history.js";
 export { authorizeShare, authorizationMethodForTarget } from "./authorization.js";

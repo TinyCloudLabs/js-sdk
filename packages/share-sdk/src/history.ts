@@ -1,5 +1,6 @@
 import type { DelegatedShareKey, OwnerShareAction, OwnerShareMatcher, OwnerSharePolicyRegistrationReceipt } from "./owner-policy";
 import { restoreDelegatedShareKey } from "./owner-policy";
+import type { PublishedShare } from "./publish.js";
 
 export interface EncryptedShareHistoryStorage {
   put(value: Uint8Array): Promise<void>;
@@ -22,13 +23,13 @@ export class MemoryEncryptedShareHistoryStorage implements EncryptedShareHistory
  */
 export interface SenderShareRecord {
   readonly shareId: string;
-  readonly registrationCid: string;
-  readonly policyCid: string;
-  readonly ownerDelegationCid: string;
-  readonly enforcementDelegationCid: string;
-  readonly shareKeyDid: string;
-  readonly ownerDid: string;
-  readonly enforcerDid: string;
+  readonly registrationCid?: string;
+  readonly policyCid?: string;
+  readonly ownerDelegationCid?: string;
+  readonly enforcementDelegationCid?: string;
+  readonly shareKeyDid?: string;
+  readonly ownerDid?: string;
+  readonly enforcerDid?: string;
   readonly target: { readonly origin: string; readonly nodeAudience: string; readonly spaceId: string };
   readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
   readonly actions: readonly OwnerShareAction[];
@@ -38,6 +39,25 @@ export interface SenderShareRecord {
   readonly registeredAt: string;
   readonly expiresAt: string;
   readonly revokedAt?: string;
+  /** Complete bearer links are encrypted at rest and only revealed explicitly. */
+  readonly link?: string;
+  readonly filename?: string;
+}
+
+/** Create the durable redacted-history shape for a published bearer link. */
+export function historyRecordForPublishedShare(result: PublishedShare, now: Date = new Date()): SenderShareRecord {
+  return {
+    shareId: result.metadata.shareId,
+    target: result.metadata.target,
+    resource: result.metadata.resource,
+    actions: ["tinycloud.kv/get"],
+    recipientMatcher: { kind: "bearer" },
+    targetKind: "bearer",
+    registeredAt: now.toISOString(),
+    expiresAt: result.metadata.expiresAt,
+    link: result.url,
+    filename: result.metadata.display.filename,
+  };
 }
 
 /**
@@ -193,7 +213,9 @@ export class SenderShareStore {
   async revocationTarget(shareId: string, scope: SenderShareRevocationScope): Promise<string> {
     const record = await this.records.get(shareId);
     if (record === undefined) throw new Error(`Unknown share: ${shareId}`);
-    return scope === "direct" ? record.enforcementDelegationCid : record.ownerDelegationCid;
+    const delegationCid = scope === "direct" ? record.enforcementDelegationCid : record.ownerDelegationCid;
+    if (delegationCid === undefined) throw new Error("share has no node-enforced delegation");
+    return delegationCid;
   }
 
   /** Mark a share revoked locally after the caller's node-side revoke call succeeds. */

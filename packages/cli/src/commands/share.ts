@@ -13,6 +13,7 @@ import {
   notifyShare,
   revokeShare,
   redactPublishedShare,
+  historyRecordForPublishedShare,
   type ShareTarget,
   type TargetPublishAdapter,
   type LegacyShareReader,
@@ -125,6 +126,11 @@ function expires(value: string): Date {
   catch { throw new CLIError("INVALID_ARGUMENT", "invalid expiry duration", 2); }
 }
 
+async function rememberPublishedShare(result: PublishedShare): Promise<void> {
+  if (shareServices.records === undefined) return;
+  await shareServices.records.put(historyRecordForPublishedShare(result));
+}
+
 function byteLimit(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
@@ -176,6 +182,7 @@ export function registerShareCommand(program: Command): void {
           }
           throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
         }
+        await rememberPublishedShare(result);
         if (options.json) writeJson(redactPublishedShare(result));
         else publishHuman(result);
       } catch (error) { handleError(shareCliError(error)); }
@@ -286,6 +293,7 @@ export function registerShareCommand(program: Command): void {
               ...publishServices(),
             });
             if ("state" in result) throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
+            await rememberPublishedShare(result);
             return result;
           },
         });

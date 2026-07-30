@@ -15,6 +15,7 @@ import { createProductionUploadAuthorizer, createShareAuthorityAdapters } from "
 const program = new Command();
 const shareAuthority = createShareAuthorityAdapters({
   profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
+  fetchFn: globalThis.fetch,
 });
 
 function selectedShareProfile(): string | undefined {

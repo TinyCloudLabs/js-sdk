@@ -26,6 +26,7 @@ export async function revokeShare(input: {
   if (input.adapter === undefined) return { state: "unsupported", target, reason: "node revocation authority is required" };
   const scope = input.scope ?? "direct";
   const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
+  if (delegationCid === undefined) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt" };
   await input.adapter.revokeDelegation({ delegationCid, scope });
   return { state: "revoked", target: target as "recipientDid" | "email" | "emailDomain", delegationCid, revokedAt: (input.now?.() ?? new Date()).toISOString() };
 }
@@ -41,13 +42,14 @@ export interface ShareHistoryView {
 
 function redactRecord(record: SenderShareRecord, revealLink: boolean, link?: string): ShareHistoryView {
   const matcher = record.recipientMatcher;
+  const revealedLink = revealLink ? link ?? record.link : undefined;
   return {
     shareId: record.shareId,
     target: matcher.kind === "exactEmail" ? "email" : matcher.kind === "emailDomain" ? "email-domain" : matcher.kind === "recipientDid" ? "recipient-did" : "bearer",
     ...(matcher.kind === "exactEmail" ? { recipient: matcher.value } : matcher.kind === "emailDomain" ? { recipient: `*@${matcher.value}` } : matcher.kind === "recipientDid" ? { recipient: matcher.value } : {}),
     expiresAt: record.expiresAt,
     revoked: record.revokedAt !== undefined,
-    ...(revealLink && link === undefined ? {} : revealLink && link !== undefined ? { link } : {}),
+    ...(revealedLink === undefined ? {} : { link: revealedLink }),
   };
 }
 

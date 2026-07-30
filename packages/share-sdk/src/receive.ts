@@ -246,11 +246,15 @@ async function verifyV2Envelope(envelope: ShareEnvelopeV2, linkOrigin: string, o
   let expectedSigner: string | undefined = options.trustedSignerDid;
   if (envelope.authorizationTarget.kind === "policy") {
     try {
-      const policy = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(envelope.authorizationTarget.policyBytes))) as Record<string, unknown>;
-      const policySigner = typeof policy.shareKeyDid === "string" ? policy.shareKeyDid : policy.issuerDid;
+      const root = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(envelope.authorizationTarget.policyBytes))) as Record<string, unknown>;
+      const nested = typeof root.policy === "object" && root.policy !== null && !Array.isArray(root.policy) ? root.policy as Record<string, unknown> : root;
+      const policySigner = typeof nested.shareKeyDid === "string" ? nested.shareKeyDid : nested.issuerDid;
       if (typeof policySigner !== "string") throw new Error("policy signer");
-      if (expectedSigner === undefined) throw new Error("addressed signer trust root is required");
-      if (expectedSigner !== policySigner) throw new Error("addressed signer trust root mismatch");
+      // The policy's delegated share key is the signer for v2 owner-policy
+      // envelopes. Hosts may pin it out-of-band; otherwise the canonical
+      // policy-to-envelope binding is the minimum safe browser fallback.
+      if (expectedSigner !== undefined && expectedSigner !== policySigner) throw new Error("addressed signer trust root mismatch");
+      expectedSigner ??= policySigner;
     } catch {
       throw new ShareReceiveError("envelope-invalid", "share policy is invalid");
     }

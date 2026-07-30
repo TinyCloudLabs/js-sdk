@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProfileManager } from "../config/profiles.js";
-import type { ShareUploadAuthorization, ShareUploadInput, SenderShareRecord, SenderShareRecordStorage, ShareAuthorizationAdapter, ShareAuthorizedContent, TargetPublishAdapter, ShareDeliveryAdapter, ShareRevocationAdapter } from "@tinycloud/share-sdk";
+import type { ShareUploadAuthorization, ShareUploadInput, SenderShareRecord, SenderShareRecordStorage, ShareAuthorizationAdapter, ShareAuthorizedContent, TargetPublishAdapter, ShareDeliveryAdapter, ShareRevocationAdapter, TargetPublishOutcome, TargetPublishInput, ShareAuthorizationResult, PublishedShare } from "@tinycloud/share-sdk";
 
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 
@@ -74,7 +74,17 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
 /** Default noninteractive authority seams.  They return typed authorization
  * outcomes until an OpenKey/Node adapter is installed; commands never fall
  * through to an unconfigured legacy service or invent a successful result. */
-export function createShareAuthorityAdapters(input: { readonly origin?: string; readonly profileName?: () => Promise<string> } = {}): {
+export function createShareAuthorityAdapters(input: {
+  readonly origin?: string;
+  readonly profileName?: () => Promise<string>;
+  readonly fetchFn?: typeof globalThis.fetch;
+  /** Injected in-process authority for tests or a host-specific deployment. */
+  readonly publishTarget?: (value: TargetPublishInput) => Promise<TargetPublishOutcome>;
+  readonly authorize?: ShareAuthorizationAdapter<ShareAuthorizedContent>;
+  readonly deliver?: ShareDeliveryAdapter["deliver"];
+  readonly revokeDelegation?: ShareRevocationAdapter["revokeDelegation"];
+  readonly verifyResult?: NonNullable<ShareAuthorizationAdapter<ShareAuthorizedContent>["verifyResult"]>;
+} = {}): {
   readonly targetAdapter: TargetPublishAdapter;
   readonly authorization: ShareAuthorizationAdapter<ShareAuthorizedContent>;
   readonly records: SenderShareRecordStorage;
@@ -82,20 +92,47 @@ export function createShareAuthorityAdapters(input: { readonly origin?: string; 
   readonly revocation: ShareRevocationAdapter;
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
-  const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
-    return { state: "authorization-required", method: targetInput.target.kind === "recipientDid" ? "openkey-device" : "email-claim", continueUrl: `${origin}/authorize/share` };
-  } };
-  const authorization: ShareAuthorizationAdapter<ShareAuthorizedContent> = {
-    async begin(input) { return { state: "authorization-required", method: input.method, continueUrl: `${origin}/authorize/share` }; },
-    async resume(input) { return { state: "authorization-required", method: input.method, resumeToken: input.resumeToken }; },
+  const fetchFn = input.fetchFn ?? globalThis.fetch;
+  const endpoint = async (path: string, body: unknown): Promise<Record<string, unknown>> => {
+    let response: Response;
+    try {
+      response = await fetchFn(`${origin}${path}`, { method: "POST", headers: { accept: "application/json", "content-type": "application/json", origin }, body: JSON.stringify(body), credentials: "include", redirect: "error", referrerPolicy: "no-referrer" });
+    } catch { throw new Error("share authority is unavailable"); }
+    if (!response.ok) throw new Error("share authority rejected the request");
+    const value = await response.json() as unknown;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share authority returned an invalid response");
+    return value as Record<string, unknown>;
   };
-  const unavailable = async (): Promise<never> => { throw new Error("share authority is unavailable; no message was sent and no delegation was revoked"); };
+  const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
+    if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
+    const value = await endpoint("/api/share/policy/publish", { source: Buffer.from(targetInput.source).toString("base64url"), filename: targetInput.filename, target: targetInput.target, expiresAt: targetInput.expiresAt.toISOString(), origin: targetInput.origin, notify: targetInput.notify ?? false });
+    if (value.state === "authorization-required" && (value.method === "openkey-device" || value.method === "email-claim" || value.method === "email-otp")) return value as unknown as TargetPublishOutcome;
+    if (typeof value.url === "string" && typeof value.shareId === "string") return value as unknown as PublishedShare;
+    throw new Error("share authority returned an invalid publication result");
+  } };
+  const authorization: ShareAuthorizationAdapter<ShareAuthorizedContent> = input.authorize ?? {
+    async begin(request) {
+      const value = await endpoint("/api/share/authorize", { envelope: request.envelope, method: request.method });
+      return value as unknown as ShareAuthorizationResult<ShareAuthorizedContent>;
+    },
+    async resume(request) {
+      const value = await endpoint("/api/share/authorize/resume", { envelope: request.envelope, method: request.method, resumeToken: request.resumeToken, proof: request.proof });
+      return value as unknown as ShareAuthorizationResult<ShareAuthorizedContent>;
+    },
+    ...(input.verifyResult === undefined ? {} : { verifyResult: input.verifyResult }),
+  };
+  const delivery: ShareDeliveryAdapter = { deliver: input.deliver ?? (async (request) => {
+    const value = await endpoint("/api/share/notify", request);
+    if (value.state !== "delivered" && value.state !== "already-delivered") throw new Error("share delivery was not accepted");
+    return value.state;
+  }) };
+  const revocation: ShareRevocationAdapter = { revokeDelegation: input.revokeDelegation ?? (async (request) => { await endpoint("/api/share/revoke", request); }) };
   return {
     targetAdapter,
     authorization,
     records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName),
-    delivery: { deliver: unavailable },
-    revocation: { revokeDelegation: unavailable },
+    delivery,
+    revocation,
   };
 }
 

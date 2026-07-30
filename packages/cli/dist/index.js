@@ -20788,7 +20788,8 @@ import {
   showShare as showShare2,
   notifyShare as notifyShare2,
   revokeShare as revokeShare2,
-  redactPublishedShare
+  redactPublishedShare,
+  historyRecordForPublishedShare
 } from "@tinycloud/share-sdk";
 
 // src/lib/duration.ts
@@ -20919,17 +20920,20 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
+  const directoryHandle = await open(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath(outputDirectory);
-  const outputPath = join4(stableDirectory, safeName);
-  try {
-    const existing = await lstat(outputPath);
-    if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-  const temporaryPath = join4(stableDirectory, `.tinycloud-share-${randomBytes2(16).toString("hex")}.tmp`);
+  const childPath = (name2) => join4(stableDirectory, name2);
+  const outputPath = childPath(safeName);
+  let temporaryPath;
   let handle;
   try {
+    try {
+      const existing = await lstat(outputPath);
+      if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    temporaryPath = childPath(`.tinycloud-share-${randomBytes2(16).toString("hex")}.tmp`);
     handle = await open(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
@@ -20947,9 +20951,10 @@ async function writeShareOutput(directory, filename, bytes, force) {
   } finally {
     await handle?.close();
     try {
-      await unlink(temporaryPath);
+      if (temporaryPath !== void 0) await unlink(temporaryPath);
     } catch {
     }
+    await directoryHandle.close();
   }
   return join4(outputDirectory, safeName);
 }
@@ -21022,6 +21027,10 @@ function expires(value) {
     throw new CLIError("INVALID_ARGUMENT", "invalid expiry duration", 2);
   }
 }
+async function rememberPublishedShare(result) {
+  if (shareServices.records === void 0) return;
+  await shareServices.records.put(historyRecordForPublishedShare(result));
+}
 function byteLimit(value) {
   if (value === void 0) return void 0;
   const parsed = Number(value);
@@ -21058,6 +21067,7 @@ function registerShareCommand(program2) {
         }
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
       }
+      await rememberPublishedShare(result);
       if (options.json) writeJson2(redactPublishedShare(result));
       else publishHuman(result);
     } catch (error) {
@@ -21144,6 +21154,7 @@ function registerShareCommand(program2) {
             ...publishServices()
           });
           if ("state" in result) throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
+          await rememberPublishedShare(result);
           return result;
         }
       });
@@ -21302,26 +21313,51 @@ function createEncryptedProfileHistory(profileName) {
 }
 function createShareAuthorityAdapters(input = {}) {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
-  const targetAdapter = { async publish(targetInput) {
-    return { state: "authorization-required", method: targetInput.target.kind === "recipientDid" ? "openkey-device" : "email-claim", continueUrl: `${origin}/authorize/share` };
-  } };
-  const authorization = {
-    async begin(input2) {
-      return { state: "authorization-required", method: input2.method, continueUrl: `${origin}/authorize/share` };
-    },
-    async resume(input2) {
-      return { state: "authorization-required", method: input2.method, resumeToken: input2.resumeToken };
+  const fetchFn = input.fetchFn ?? globalThis.fetch;
+  const endpoint = async (path, body) => {
+    let response;
+    try {
+      response = await fetchFn(`${origin}${path}`, { method: "POST", headers: { accept: "application/json", "content-type": "application/json", origin }, body: JSON.stringify(body), credentials: "include", redirect: "error", referrerPolicy: "no-referrer" });
+    } catch {
+      throw new Error("share authority is unavailable");
     }
+    if (!response.ok) throw new Error("share authority rejected the request");
+    const value = await response.json();
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share authority returned an invalid response");
+    return value;
   };
-  const unavailable = async () => {
-    throw new Error("share authority is unavailable; no message was sent and no delegation was revoked");
+  const targetAdapter = { async publish(targetInput) {
+    if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
+    const value = await endpoint("/api/share/policy/publish", { source: Buffer.from(targetInput.source).toString("base64url"), filename: targetInput.filename, target: targetInput.target, expiresAt: targetInput.expiresAt.toISOString(), origin: targetInput.origin, notify: targetInput.notify ?? false });
+    if (value.state === "authorization-required" && (value.method === "openkey-device" || value.method === "email-claim" || value.method === "email-otp")) return value;
+    if (typeof value.url === "string" && typeof value.shareId === "string") return value;
+    throw new Error("share authority returned an invalid publication result");
+  } };
+  const authorization = input.authorize ?? {
+    async begin(request) {
+      const value = await endpoint("/api/share/authorize", { envelope: request.envelope, method: request.method });
+      return value;
+    },
+    async resume(request) {
+      const value = await endpoint("/api/share/authorize/resume", { envelope: request.envelope, method: request.method, resumeToken: request.resumeToken, proof: request.proof });
+      return value;
+    },
+    ...input.verifyResult === void 0 ? {} : { verifyResult: input.verifyResult }
   };
+  const delivery = { deliver: input.deliver ?? (async (request) => {
+    const value = await endpoint("/api/share/notify", request);
+    if (value.state !== "delivered" && value.state !== "already-delivered") throw new Error("share delivery was not accepted");
+    return value.state;
+  }) };
+  const revocation = { revokeDelegation: input.revokeDelegation ?? (async (request) => {
+    await endpoint("/api/share/revoke", request);
+  }) };
   return {
     targetAdapter,
     authorization,
     records: input.profileName === void 0 ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName),
-    delivery: { deliver: unavailable },
-    revocation: { revokeDelegation: unavailable }
+    delivery,
+    revocation
   };
 }
 function authenticationMessage(origin, address, nonce, issuedAt) {
@@ -21398,7 +21434,8 @@ var { version: version2 } = JSON.parse(
 );
 var program = new Command();
 var shareAuthority = createShareAuthorityAdapters({
-  profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile
+  profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
+  fetchFn: globalThis.fetch
 });
 function selectedShareProfile() {
   const args = process.argv.slice(2);

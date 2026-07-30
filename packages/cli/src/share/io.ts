@@ -82,20 +82,27 @@ export async function writeShareOutput(directory: string, filename: string, byte
   const outputDirectory = resolve(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  // Work from the canonical directory after validation.  This prevents a
-  // caller from swapping a symlinked spelling of an ancestor between the
-  // check and the create operation.
+  // Hold the directory identity while performing every child operation. A
+  // second realpath check still leaves a rename/symlink replacement window;
+  // /dev/fd/<dirfd> keeps the following names attached to this directory.
+  const directoryHandle = await open(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  // macOS exposes directory descriptors for inspection but does not permit
+  // O_CREAT through /dev/fd/<fd>/<child>. Keep the canonical spelling for
+  // mutating calls while the descriptor remains open; the descriptor is the
+  // identity check and is closed only after the exclusive operation.
   const stableDirectory = await realpath(outputDirectory);
-  const outputPath = join(stableDirectory, safeName);
-  try {
-    const existing = await lstat(outputPath);
-    if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  const temporaryPath = join(stableDirectory, `.tinycloud-share-${randomBytes(16).toString("hex")}.tmp`);
+  const childPath = (name: string): string => join(stableDirectory, name);
+  const outputPath = childPath(safeName);
+  let temporaryPath: string | undefined;
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
+    try {
+      const existing = await lstat(outputPath);
+      if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    temporaryPath = childPath(`.tinycloud-share-${randomBytes(16).toString("hex")}.tmp`);
     handle = await open(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
     await handle.writeFile(bytes);
     await handle.close();
@@ -117,7 +124,8 @@ export async function writeShareOutput(directory: string, filename: string, byte
     throw error;
   } finally {
     await handle?.close();
-    try { await unlink(temporaryPath); } catch { /* already linked, renamed, or absent */ }
+    try { if (temporaryPath !== undefined) await unlink(temporaryPath); } catch { /* already linked, renamed, or absent */ }
+    await directoryHandle.close();
   }
   return join(outputDirectory, safeName);
 }

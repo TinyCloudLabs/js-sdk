@@ -82,7 +82,7 @@ export interface PublishedShareMetadata {
   readonly version: 1;
   readonly shareId: string;
   readonly origin: string;
-  readonly target: { readonly origin: string; readonly nodeAudience: string; readonly spaceId: string };
+  readonly target: { readonly kind: "bearer"; readonly origin: string; readonly nodeAudience: string; readonly spaceId: string };
   readonly resource: { readonly kind: "exact"; readonly path: string };
   readonly actions: readonly ["read"];
   readonly expiresAt: string;
@@ -317,7 +317,7 @@ export async function publishShare(options: SharePublishOptions): Promise<Publis
     }
     const metadata: PublishedShareMetadata = {
       protocol: "tinycloud-share", version: 1, shareId, origin: options.origin,
-      target: { origin: options.origin, nodeAudience, spaceId },
+      target: { kind: "bearer", origin: options.origin, nodeAudience, spaceId },
       resource: { kind: "exact", path }, actions: ["read"], expiresAt: expiry,
       display: { filename: options.filename }, content: { cid: sealedContent.cid },
     };
