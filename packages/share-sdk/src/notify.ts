@@ -1,3 +1,5 @@
+import type { SenderShareRecord } from "./history.js";
+
 export type ShareNotifyState = "delivered" | "already-delivered" | "partial-failure";
 
 export interface ShareNotifyResult {
@@ -13,6 +15,7 @@ export interface ShareNotifyResult {
 export interface ShareNotifyInput {
   readonly shareId: string;
   readonly recipient: string;
+  readonly record?: SenderShareRecord;
   readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
@@ -37,6 +40,7 @@ export class ShareNotifyError extends Error {
 export async function notifyShare(input: {
   readonly shareId: string;
   readonly recipient: string;
+  readonly record?: SenderShareRecord;
   readonly adapter: ShareDeliveryAdapter;
   readonly idempotencyKey?: string;
   readonly maxAttempts?: number;
@@ -52,7 +56,7 @@ export async function notifyShare(input: {
     if (input.signal?.aborted) throw new ShareNotifyError("share delivery was cancelled");
     attempts += 1;
     try {
-      const state = await input.adapter.deliver({ shareId: input.shareId, recipient: input.recipient, idempotencyKey, ...(input.signal === undefined ? {} : { signal: input.signal }) });
+      const state = await input.adapter.deliver({ shareId: input.shareId, recipient: input.recipient, idempotencyKey, ...(input.record === undefined ? {} : { record: input.record }), ...(input.signal === undefined ? {} : { signal: input.signal }) });
       return { protocol: "tinycloud-share", version: 1, shareId: input.shareId, state, idempotencyKey, attempts };
     } catch (error) {
       lastError = error;

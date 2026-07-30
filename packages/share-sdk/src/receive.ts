@@ -296,8 +296,11 @@ function policyEvidenceMatches(envelope: ShareEnvelopeV2, evidence: SharePolicyE
 }
 
 async function verifyV2Envelope(envelope: ShareEnvelopeV2, linkOrigin: string, options: ShareFetchOptions): Promise<void> {
-  if (envelope.target.origin !== linkOrigin || (options.expectedOrigin !== undefined && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin))) {
-    throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
+  // v2's signed target origin is the enforcing Node, not the Share viewer.
+  // The link parser binds the separately trusted viewer origin; the external
+  // policy authority below binds the Node origin/audience/enforcer tuple.
+  if (options.expectedOrigin !== undefined && linkOrigin !== options.expectedOrigin) {
+    throw new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted origin");
   }
   // A policy CID is trusted only after the external authority resolves it
   // below. Until then, the embedded did:key is used solely to establish byte

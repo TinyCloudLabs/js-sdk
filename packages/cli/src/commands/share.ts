@@ -43,6 +43,7 @@ export interface ShareCommandServices {
   readonly uploadBlob?: ShareUpload;
   readonly authorizeUpload?: NonNullable<SharePublishOptions["authorizeUpload"]>;
   readonly authorization?: NonNullable<ShareFetchOptions["authorization"]>;
+  readonly trustedPolicyAuthority?: NonNullable<ShareFetchOptions["trustedPolicyAuthority"]>;
   readonly credentials?: "omit" | "same-origin" | "include";
   readonly fetchFn?: typeof globalThis.fetch;
   readonly records?: SenderShareRecordStorage;
@@ -77,8 +78,11 @@ function publishServices(): Pick<SharePublishOptions, "uploadBlob" | "authorizeU
   };
 }
 
-function fetchServices(): Pick<ShareFetchOptions, "fetchFn"> {
-  return shareServices.fetchFn === undefined ? {} : { fetchFn: shareServices.fetchFn };
+function fetchServices(): Pick<ShareFetchOptions, "fetchFn" | "trustedPolicyAuthority"> {
+  return {
+    ...(shareServices.fetchFn === undefined ? {} : { fetchFn: shareServices.fetchFn }),
+    ...(shareServices.trustedPolicyAuthority === undefined ? {} : { trustedPolicyAuthority: shareServices.trustedPolicyAuthority }),
+  };
 }
 
 function shareCliError(error: unknown): CLIError {
@@ -126,9 +130,10 @@ function expires(value: string): Date {
   catch { throw new CLIError("INVALID_ARGUMENT", "invalid expiry duration", 2); }
 }
 
-async function rememberPublishedShare(result: PublishedShare): Promise<void> {
-  if (shareServices.records === undefined) return;
-  await shareServices.records.put(historyRecordForPublishedShare(result));
+async function rememberPublishedShare(result: PublishedShare): Promise<SenderShareRecord> {
+  const record = historyRecordForPublishedShare(result);
+  if (shareServices.records !== undefined) await shareServices.records.put(record);
+  return record;
 }
 
 function byteLimit(value: string | undefined): number | undefined {
@@ -159,11 +164,13 @@ export function registerShareCommand(program: Command): void {
         if (options.inline && options.compact) throw new CLIError("INVALID_ARGUMENT", "--inline and --compact are mutually exclusive", 2);
         const maxBytes = byteLimit(options.maxBytes);
         const input = await readShareInput(file, options.name, maxBytes);
+        const target = parseShareTarget(options.to);
+        if (options.notify === true && target.kind !== "email") throw new CLIError("INVALID_ARGUMENT", "--notify requires an exact email target", 2);
         const result = await publishTargetShare({
           source: input.bytes,
           filename: input.filename,
           mediaType: "text/markdown",
-          target: parseShareTarget(options.to),
+          target,
           expiresAt: expires(options.expires),
           origin: options.viewerOrigin,
           inline: options.inline === true,
@@ -182,7 +189,12 @@ export function registerShareCommand(program: Command): void {
           }
           throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
         }
-        await rememberPublishedShare(result);
+        const record = await rememberPublishedShare(result);
+        if (options.notify === true && target.kind === "email") {
+          if (shareServices.delivery === undefined) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
+          const delivery = await notifyShare({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
+          if (delivery.state === "partial-failure") process.exitCode = 9;
+        }
         if (options.json) writeJson(redactPublishedShare(result));
         else publishHuman(result);
       } catch (error) { handleError(shareCliError(error)); }
@@ -334,7 +346,10 @@ export function registerShareCommand(program: Command): void {
     .action(async (id: string, options) => {
       try {
         if (shareServices.delivery === undefined) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-        const result = await notifyShare({ shareId: id, recipient: options.to, adapter: shareServices.delivery });
+        if (shareServices.records === undefined) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
+        const record = await shareServices.records.get(id);
+        if (record === undefined) throw new CLIError("NOT_FOUND", "share not found", 4);
+        const result = await notifyShare({ shareId: id, recipient: options.to, record, adapter: shareServices.delivery });
         if (options.json) writeJson(result); else process.stdout.write(`${result.state}\n`);
         if (result.state === "partial-failure") process.exitCode = 9;
       } catch (error) { handleError(shareCliError(error)); }

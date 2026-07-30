@@ -1,5 +1,6 @@
 import type { ShareAuthorizationRequired, ShareAuthorizationMethod } from "./authorization.js";
 import { authorizationMethodForTarget } from "./authorization.js";
+import type { AddressedSharePublishOptions } from "./addressed-publish.js";
 import { publishShare, type PublishedShare, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
 
 export type ShareTarget = SharePublishTarget;
@@ -10,6 +11,9 @@ export interface TargetPublishInput {
   readonly target: Exclude<ShareTarget, { readonly kind: "bearer" }>;
   readonly expiresAt: Date;
   readonly origin: string;
+  readonly mediaType?: string;
+  readonly inline?: boolean;
+  readonly upload?: AddressedSharePublishOptions["upload"];
   readonly notify?: boolean;
 }
 
@@ -74,5 +78,23 @@ export async function publishTargetShare(input: SharePublishOptions & {
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
     return bytes;
   })();
-  return input.targetAdapter.publish({ source, filename: input.filename, target, expiresAt: input.expiresAt ?? new Date((input.now?.() ?? Date.now()) + 7 * 24 * 60 * 60 * 1000), origin: input.origin, ...(input.notify === undefined ? {} : { notify: input.notify }) });
+  return input.targetAdapter.publish({
+    source,
+    filename: input.filename,
+    ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
+    target,
+    expiresAt: input.expiresAt ?? new Date((input.now?.() ?? Date.now()) + 7 * 24 * 60 * 60 * 1000),
+    origin: input.origin,
+    ...(input.inline === undefined ? {} : { inline: input.inline }),
+    upload: {
+      ...(input.registryBaseUrl === undefined ? {} : { registryBaseUrl: input.registryBaseUrl }),
+      ...(input.fetchFn === undefined ? {} : { fetchFn: input.fetchFn }),
+      ...(input.authorizeUpload === undefined ? {} : { authorizeUpload: input.authorizeUpload }),
+      ...(input.authorizationOrigin === undefined ? {} : { authorizationOrigin: input.authorizationOrigin }),
+      ...(input.credentials === undefined ? {} : { credentials: input.credentials }),
+      ...(input.allowInsecureRegistry === undefined ? {} : { allowInsecureRegistry: input.allowInsecureRegistry }),
+      ...(input.uploadBlob === undefined ? {} : { uploadBlob: input.uploadBlob }),
+    },
+    ...(input.notify === undefined ? {} : { notify: input.notify }),
+  });
 }

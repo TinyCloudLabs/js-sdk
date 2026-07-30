@@ -82,6 +82,7 @@ configureShareCommandServices({
   }),
   targetAdapter: shareAuthority.targetAdapter,
   authorization: shareAuthority.authorization,
+  trustedPolicyAuthority: shareAuthority.policyAuthority,
   records: shareAuthority.records,
   delivery: shareAuthority.delivery,
   revocation: shareAuthority.revocation,

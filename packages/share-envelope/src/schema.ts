@@ -306,6 +306,11 @@ export const v2TargetSchema = z.object({
   spaceId: z.string().refine(isCanonicalPathSegment, { message: "expected a canonical space id" }),
 }).strict();
 
+const shareDecryptionSchema = z.object({
+  networkId: z.string().min(1),
+  action: z.literal("tinycloud.encryption/decrypt"),
+}).strict();
+
 const ownerAuthoritySchema = z.object({
   registrationCid: z.string().min(1),
   shareCid: z.string().min(1),
@@ -339,6 +344,7 @@ const unsignedShareEnvelopeV2BaseSchema = z.object({
   delegationCid: z.string().min(1),
   authorityMaterialHandle: z.string().min(1),
   authorityMaterialDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  decryption: shareDecryptionSchema.optional(),
   contentSource: contentSourceSchema,
   contentSourceDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   authorizationTarget: authorizationTargetSchema,

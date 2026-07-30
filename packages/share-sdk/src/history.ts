@@ -54,9 +54,7 @@ export function historyRecordForPublishedShare(result: PublishedShare, now: Date
   if (supplied?.kind === "recipientDid" && typeof supplied.value === "string") matcher = { kind: "recipientDid", value: supplied.value };
   else if (supplied?.kind === "exactEmail" && typeof supplied.value === "string") matcher = { kind: "exactEmail", value: supplied.value };
   else if (supplied?.kind === "emailDomain" && typeof supplied.value === "string") matcher = { kind: "emailDomain", value: supplied.value };
-  else if (target === "recipientDid") matcher = { kind: "recipientDid", value: "" };
-  else if (target === "email") matcher = { kind: "exactEmail", value: "" };
-  else if (target === "emailDomain") matcher = { kind: "emailDomain", value: "" };
+  else if (target !== "bearer") throw new TypeError("addressed publication is missing its recipient binding");
   else matcher = { kind: "bearer" };
   return {
     shareId: result.metadata.shareId,

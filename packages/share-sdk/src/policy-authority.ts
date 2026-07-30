@@ -87,9 +87,11 @@ async function verifyOuterEnvelope(
   envelope: ShareEnvelopeV2,
   policyCid: string,
   expectedEnforcerDid: string,
+  expectedActions: readonly string[],
 ): Promise<{ readonly envelopeCid: string; readonly shareCid: string } | undefined> {
   try {
-    const outer = record(value, ["schema", "version", "shareId", "delegationCid", "policyCid", "target", "resource", "actions", "contentSource", "contentSourceDigest", "expiresAt", "envelopeCid", "shareCid", "signature"], "outer envelope");
+    const hasDecryption = typeof value === "object" && value !== null && Object.hasOwn(value, "decryption");
+    const outer = record(value, ["schema", "version", "shareId", "delegationCid", "policyCid", "target", "resource", "actions", ...(hasDecryption ? ["decryption"] : []), "contentSource", "contentSourceDigest", "expiresAt", "envelopeCid", "shareCid", "signature"], "outer envelope");
     const target = record(outer.target, ["origin", "nodeAudience", "enforcerDid", "spaceId"], "outer target");
     const signature = record(outer.signature, ["signerDid", "algorithm", "value"], "outer envelope signature");
     const envelopeCid = requiredString(outer.envelopeCid, "outer envelope CID");
@@ -106,7 +108,10 @@ async function verifyOuterEnvelope(
       || target.enforcerDid !== expectedEnforcerDid
       || target.spaceId !== envelope.target.spaceId
       || canonicalize(outer.resource) !== canonicalize(envelope.resource)
-      || canonicalize(outer.actions) !== canonicalize(envelope.actions.map((action) => action === "read" ? "tinycloud.kv/get" : action === "list" ? "tinycloud.kv/list" : action === "edit" ? "tinycloud.kv/put" : action))
+      || canonicalize(outer.actions) !== canonicalize(expectedActions)
+      || (hasDecryption
+        ? envelope.decryption === undefined || canonicalize(outer.decryption) !== canonicalize(envelope.decryption)
+        : envelope.decryption !== undefined)
       || canonicalize(outer.contentSource) !== canonicalize(envelope.contentSource)
       || outer.contentSourceDigest !== envelope.contentSourceDigest
       || outer.expiresAt !== envelope.expiry
@@ -166,7 +171,7 @@ export function createRegisteredPolicyAuthority(options: RegisteredPolicyAuthori
           nodeProof: { kid: options.nodeProof.kid, publicKey: proofKey },
         });
         const registration = receipt.registration;
-        const outer = await verifyOuterEnvelope(ownerAuthority.outerEnvelope, envelope, policyCid, options.expectedTarget.enforcerDid);
+        const outer = await verifyOuterEnvelope(ownerAuthority.outerEnvelope, envelope, policyCid, options.expectedTarget.enforcerDid, registration.actions);
         if (
           outer === undefined
           || ownerAuthority.registrationCid !== registration.registrationCid
