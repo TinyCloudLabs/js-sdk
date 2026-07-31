@@ -1394,6 +1394,74 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /**
+   * Complete sign-in with a versioned OpenKey authorization result.
+   *
+   * Where `signInWithPreparedSession` completes with a signature over the
+   * ORIGINAL prepared SIWE, this method completes with the SIWE bytes the
+   * OpenKey widget actually presented and signed (`signedMessage`). It
+   * exists because the versioned authorizeTinyCloud protocol lets the user
+   * narrow capabilities; the returned bytes may differ from the original
+   * request and are the only ones the signature actually verifies against.
+   *
+   * The `result` parameter is validated at the trust boundary via
+   * `validateAuthorizationResultV1` (in sdk-core). Callers should validate
+   * BEFORE calling this method so unknown/missing fields are rejected
+   * before any session state is created.
+   */
+  async signInWithOpenKeyResult(
+    result: {
+      protocolVersion: 1;
+      address: string;
+      signature: string;
+      signedMessage: string;
+      selectedActionKeys: string[];
+      permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
+    },
+    prepared: {
+      jwk: Record<string, unknown>;
+      spaceId: string;
+      verificationMethod: string;
+    },
+    keyId: string,
+    jwk: Record<string, unknown>,
+  ): Promise<ClientSession> {
+    if (result.protocolVersion !== 1) {
+      throw new Error(`Unsupported OpenKey protocol version ${result.protocolVersion}`);
+    }
+    if (!result.signedMessage) {
+      throw new Error("OpenKey result must include signedMessage");
+    }
+    // Verify the signer matches what we expect. If the address that signed
+    // does not match the address the local signer will present, refuse the
+    // session — the widget returned bytes signed by someone else.
+    const expectedAddress = canonicalizeAddress(await this.signer.getAddress());
+    if (canonicalizeAddress(result.address) !== expectedAddress) {
+      throw new Error(
+        `OpenKey returned signature from ${result.address} but expected ${expectedAddress}`,
+      );
+    }
+    // Structural check: the signed SIWE must reference the expected spaceId.
+    // We accept a substring match because the spaceId appears inside the
+    // ReCap capability list rather than as a distinct header.
+    if (!result.signedMessage.includes(prepared.spaceId)) {
+      throw new Error(
+        `OpenKey signedMessage does not reference the expected spaceId ${prepared.spaceId}`,
+      );
+    }
+    return this.signInWithPreparedSession(
+      {
+        siwe: result.signedMessage,
+        jwk: prepared.jwk,
+        spaceId: prepared.spaceId,
+        verificationMethod: prepared.verificationMethod,
+      },
+      result.signature,
+      keyId,
+      jwk,
+    );
+  }
+
+  /**
    * Clear persisted session data.
    */
   async clearPersistedSession(address?: string): Promise<void> {

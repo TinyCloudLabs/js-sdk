@@ -575,6 +575,14 @@ export {
   ISpaceCreationHandler,
   AutoApproveSpaceCreationHandler,
   defaultSpaceCreationHandler,
+  // Versioned OpenKey authorization protocol
+  TinyCloudAuthorizationRequestV1,
+  TinyCloudAuthorizationResultV1,
+  TinyCloudEffectiveGrantV1,
+  CapabilityPresentationEnvelopeV1,
+  validateAuthorizationResultV1,
+  isPlausibleOpenKeyActionId,
+  OPENKEY_ACTION_ID_SEPARATOR,
 } from "./authorization";
 
 // Spaces (v2 spec)

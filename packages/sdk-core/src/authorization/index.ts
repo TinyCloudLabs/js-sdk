@@ -79,3 +79,18 @@ export {
   // Default instance
   defaultSpaceCreationHandler,
 } from "./spaceCreation";
+
+// Versioned OpenKey authorization protocol (v1).
+//
+// Consumers use these types to accept a rich authorization result from
+// OpenKey and validate its structure at the trust boundary before completing
+// a TinyCloud session with the returned `signedMessage`.
+export {
+  TinyCloudAuthorizationRequestV1,
+  TinyCloudAuthorizationResultV1,
+  TinyCloudEffectiveGrantV1,
+  CapabilityPresentationEnvelopeV1,
+  validateAuthorizationResultV1,
+  isPlausibleOpenKeyActionId,
+  OPENKEY_ACTION_ID_SEPARATOR,
+} from "./openkey-protocol";

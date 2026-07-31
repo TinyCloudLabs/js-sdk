@@ -1235,20 +1235,77 @@ export function portableFromOpenKeyDelegation(
     );
   }
   const expiry = inferDelegationExpiry(data);
+  // Prefer the effective permissions the server returned. They are the
+  // grants the user actually signed for, which may be a narrowing of the
+  // requested set. If the server returned a broader grant than requested,
+  // refuse the delegation — the CLI should never store more authority
+  // than the caller asked for.
+  const requestedPairs = new Set(
+    permissions.flatMap((p) =>
+      isRawPermission(p)
+        ? p.actions.map((a) => `${p.service}|${p.space}|${p.path}|${a}`)
+        : p.actions.map((a) => `${p.service}|${normalizeSpaceForCompare(p.space)}|${p.path}|${a}`),
+    ),
+  );
+  const returnedPermissions = Array.isArray(data.permissions)
+    ? (data.permissions as Array<{
+        service: string;
+        space: string;
+        path: string;
+        actions: string[];
+      }>)
+    : null;
+  const resources = (returnedPermissions ?? permissions).map((permission) => {
+    const service = permission.service.startsWith("tinycloud.")
+      ? permission.service.slice("tinycloud.".length)
+      : permission.service;
+    const rawService = permission.service.startsWith("tinycloud.")
+      ? permission.service
+      : `tinycloud.${service}`;
+    // Cross-check: every returned (service, space, path, action) must
+    // appear in the requested set (or be an inferred raw encryption entry).
+    if (returnedPermissions) {
+      const rawSpace = isRawPermission({
+        service: rawService,
+        space: permission.space,
+        path: permission.path,
+        actions: [],
+      })
+        ? permission.space
+        : normalizeSpaceForCompare(permission.space);
+      for (const action of permission.actions) {
+        const key = `${rawService}|${rawSpace}|${permission.path}|${action}`;
+        if (!requestedPairs.has(key)) {
+          throw new CLIError(
+            "OPENKEY_GRANT_BROADENED",
+            `OpenKey returned grant ${rawService}/${action} on ${permission.space}/${permission.path} that was not requested.`,
+            ExitCode.PERMISSION_DENIED,
+          );
+        }
+      }
+    }
+    return {
+      service,
+      space: isRawPermission({
+        service: rawService,
+        space: permission.space,
+        path: permission.path,
+        actions: [],
+      })
+        ? permission.space
+        : returnedSpace,
+      path: permission.path,
+      actions: [...permission.actions],
+    };
+  });
+
   return {
     cid: String(data.delegationCid),
     delegationHeader: data.delegationHeader as { Authorization: string },
     spaceId: returnedSpace,
     path: primary.path,
     actions: primary.actions,
-    resources: permissions.map((permission) => ({
-      service: permission.service.startsWith("tinycloud.")
-        ? permission.service.slice("tinycloud.".length)
-        : permission.service,
-      space: isRawPermission(permission) ? permission.space : returnedSpace,
-      path: permission.path,
-      actions: [...permission.actions],
-    })),
+    resources,
     expiry,
     delegateDID: String(data.verificationMethod),
     ownerAddress: String(data.address ?? ""),
