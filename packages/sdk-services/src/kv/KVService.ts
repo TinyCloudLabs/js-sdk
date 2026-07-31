@@ -997,11 +997,38 @@ export class KVService extends BaseService implements IKVService {
           signal: this.combineSignals(options?.signal),
         };
 
+        // Resolve the fetch function to a local BEFORE flipping the flag.
+        // `this.context.fetch` is a getter (context.ts:154-156) that can
+        // itself throw (assertActive()) — if the flag were set first, that
+        // throw would be mislabeled as "may have dispatched" even though no
+        // request was ever handed to a transport (Sol B2).
+        const fetchFn = this.context.fetch;
         requestMayHaveDispatched = true;
-        const response = await this.context.fetch(url, init);
+        const response = await fetchFn(url, init);
 
         if (!response.ok) {
-          const errorText = await response.text();
+          let errorText: string;
+          try {
+            errorText = await response.text();
+          } catch {
+            // A response was received — the status is known and
+            // authoritative — but its body could not be read. Falling
+            // through to the generic catch below would report
+            // NETWORK_ERROR + requestMayHaveDispatched: true, which the
+            // allow-list treats as ambiguous regardless of status. That
+            // would turn a deterministic 4xx (nothing written) into a false
+            // ambiguity (Sol B4). Classify by status alone instead; whether
+            // this is later reconciled is still governed solely by
+            // AMBIGUOUS_WRITE_STATUSES, exactly like the body-readable path.
+            return err(
+              serviceError(
+                ErrorCodes.KV_WRITE_FAILED,
+                `Failed to batch put ${items.length} key(s): ${response.status} - <response body could not be read>`,
+                "kv",
+                { meta: { status: response.status, statusText: response.statusText } }
+              )
+            );
+          }
 
           if (response.status === 401 || response.status === 403) {
             const { resource, action } = parseAuthError(errorText);
@@ -1031,7 +1058,35 @@ export class KVService extends BaseService implements IKVService {
           );
         }
 
-        const batchResponse = this.normalizeBatchPutResponse(await response.json());
+        let rawBody: unknown;
+        try {
+          rawBody = await response.json();
+        } catch {
+          // A 2xx response whose body isn't valid JSON is precisely the
+          // unconfirmed-2xx case — the node answered success but the write
+          // set can't be confirmed. Falling through to the generic catch
+          // below would carry only `requestMayHaveDispatched`, omitting
+          // `responseReceived`/`status`/`outcome`, so this must be classified
+          // here with the identical metadata block used by the two sibling
+          // unconfirmed branches (Sol B3).
+          return err(
+            serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              "KV batchPut response was not valid JSON",
+              "kv",
+              {
+                meta: {
+                  requestMayHaveDispatched: true,
+                  responseReceived: true,
+                  status: response.status,
+                  outcome: "batch-unconfirmed",
+                },
+              }
+            )
+          );
+        }
+
+        const batchResponse = this.normalizeBatchPutResponse(rawBody);
         if (!batchResponse) {
           // The code stays NETWORK_ERROR deliberately: adding a member to
           // ErrorCodes (types.ts:73-115) widens the exported ErrorCode union

@@ -583,6 +583,85 @@ describe("KVService.batchPut", () => {
     expect(fetchCalls).toBe(0);
   });
 
+  // Sol B2: `this.context.fetch` is a getter (context.ts:154-156) that can
+  // itself throw (assertActive()) before any request is constructed or
+  // handed to a transport. The flag must only be set AFTER that getter has
+  // been evaluated, so this throw is deterministic — never reconciled.
+  test("a context.fetch getter throw is NETWORK_ERROR with requestMayHaveDispatched: false and never dispatches", async () => {
+    const service = new KVService({});
+    const baseContext = createContext(async () => {
+      throw new Error("fetch should never be invoked");
+    }, [], []);
+    const contextWithThrowingFetchGetter: IServiceContext = {
+      ...baseContext,
+      get fetch(): IServiceContext["fetch"] {
+        throw new Error("context is no longer active");
+      },
+    };
+    service.initialize(contextWithThrowingFetchGetter);
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta?.requestMayHaveDispatched).toBe(false);
+    }
+  });
+
+  // Sol B3: a 2xx response whose body is not valid JSON must be classified
+  // as the unconfirmed-2xx case with the FULL metadata block, not lose it by
+  // falling through to the generic catch.
+  test("a 2xx response whose body is not valid JSON is unconfirmed-2xx with full metadata", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        const res = response(true, 200, {});
+        res.json = async () => {
+          throw new SyntaxError("Unexpected end of JSON input");
+        };
+        return res;
+      }, [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta).toEqual({
+        requestMayHaveDispatched: true,
+        responseReceived: true,
+        status: 200,
+        outcome: "batch-unconfirmed",
+      });
+    }
+  });
+
+  // Sol B4: a deterministic 4xx whose body read rejects must stay
+  // deterministic — it must NOT be relabeled NETWORK_ERROR with
+  // requestMayHaveDispatched: true (which would make AccountService
+  // reconcile a write that the node definitively rejected).
+  test("a 400 response whose body read rejects stays a deterministic KV_WRITE_FAILED", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        const res = response(false, 400, "Bad Request");
+        res.text = async () => {
+          throw new Error("body stream already consumed");
+        };
+        return res;
+      }, [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.KV_WRITE_FAILED);
+      expect(result.error.meta).toEqual({ status: 400, statusText: "Error" });
+      // Must not be misclassified into the ambiguous transport-failure shape.
+      expect(result.error.meta?.requestMayHaveDispatched).toBeUndefined();
+    }
+  });
+
   test("JSON values written via batchPut round-trip through get() as parsed objects (canonical read)", async () => {
     let batchPartType: string | undefined;
     const service = new KVService({ prefix: "app" });

@@ -1368,8 +1368,28 @@ function isMissingIndexError(error: ServiceError): boolean {
  *  (tinycloud-node-server/src/routes/mod.rs:1631-1641, "KV batch put
  *  committed unexpected invocation outcomes"). 501/505 (protocol
  *  rejections), 408, 429 and every other 4xx are definitive: nothing was
- *  written. */
-const AMBIGUOUS_WRITE_STATUSES = new Set([500, 502, 503, 504]);
+ *  written.
+ *
+ *  Cloudflare's edge-specific 52x family (production is Cloudflare-proxied)
+ *  is evaluated by the same test — did the request reach the origin? — and
+ *  cross-checked against `packages/sdk-services/src/responseErrors.ts:26-30`,
+ *  which already special-cases 524 as an upstream timeout:
+ *    - 520 (unknown origin error) — INCLUDED. Cloudflare received *some*
+ *      response from the origin, just not a well-formed HTTP one, so the
+ *      origin was reached and may have already committed the write.
+ *    - 521 (web server is down) — EXCLUDED. Cloudflare could not open a
+ *      connection to the origin at all; the request never arrived.
+ *    - 522 (connection timed out) — EXCLUDED. The TCP handshake to the
+ *      origin itself timed out; nothing was ever delivered to the origin.
+ *    - 523 (origin unreachable) — EXCLUDED. Routing/DNS failure reaching the
+ *      origin; same as 521/522, the request never arrived.
+ *    - 524 (a timeout occurred) — INCLUDED. Cloudflare connected to the
+ *      origin and forwarded the request, but the origin did not answer
+ *      within the timeout; the origin may have processed (and committed)
+ *      the write before the response was dropped. This was excluded by the
+ *      old deny-list only by omission, not by intent — that was a
+ *      regression this allow-list must not repeat. */
+const AMBIGUOUS_WRITE_STATUSES = new Set([500, 502, 503, 504, 520, 524]);
 
 /**
  * Classify a KV batch write failure for the seed-spaces reconciliation
