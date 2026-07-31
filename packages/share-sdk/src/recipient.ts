@@ -73,13 +73,20 @@ async function digestBytes(value: Uint8Array): Promise<string> {
   return toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", value)));
 }
 
+function trustedPublicKey(value: ShareNodeTrust): Uint8Array {
+  if (!(value.invitationPublicKey instanceof Uint8Array) || value.invitationPublicKey.length !== 32) {
+    throw new Error("share node trust key is invalid");
+  }
+  return value.invitationPublicKey;
+}
+
 async function verifyWrapped(value: unknown, key: "challenge" | "session", domain: string, trust: ShareNodeTrust): Promise<Record<string, unknown>> {
   const wrapper = object(value, `${key} response`);
   if (Object.keys(wrapper).length !== 2 || !Object.hasOwn(wrapper, key) || !Object.hasOwn(wrapper, "proof")) throw new Error(`${key} response is invalid`);
   const artifact = object(wrapper[key], `${key} artifact`);
   const proof = object(wrapper.proof, `${key} proof`);
   if (proof.alg !== "EdDSA" || proof.kid !== trust.invitationKid) throw new Error(`${key} proof is invalid`);
-  if (!ed25519.verify(bytes(proof.signature, `${key} signature`), new TextEncoder().encode(`${domain}${canonicalize(artifact)}`), trust.invitationPublicKey)) throw new Error(`${key} proof is invalid`);
+  if (!ed25519.verify(bytes(proof.signature, `${key} signature`), new TextEncoder().encode(`${domain}${canonicalize(artifact)}`), trustedPublicKey(trust))) throw new Error(`${key} proof is invalid`);
   return artifact;
 }
 
@@ -166,11 +173,12 @@ export class ShareRecipientClient {
       value.resource !== envelope.resource.path ||
       typeof value.content !== "string" ||
       typeof value.bodyDigest !== "string" ||
-      !/^[A-Za-z0-9_-]{43}$/.test(value.bodyDigest)
+      !/^[A-Za-z0-9_-]{43}$/.test(value.bodyDigest) ||
+      !Object.hasOwn(value, "proof")
     ) throw new Error("share read response is invalid");
     const content = fromBase64Url(value.content);
     if (await digestBytes(content) !== value.bodyDigest) throw new Error("share read response integrity is invalid");
-    return { bytes: content, bodyDigest: value.bodyDigest, contentSourceDigest: envelope.contentSourceDigest, binding: { shareId: envelope.shareId, delegationCid: envelope.delegationCid, authorityMaterialHandle: envelope.authorityMaterialHandle, authorityMaterialDigest: envelope.authorityMaterialDigest, resource: { kind: envelope.resource.kind, path: value.resource }, action: value.action }, proof: { response: value } };
+    return { bytes: content, bodyDigest: value.bodyDigest, contentSourceDigest: envelope.contentSourceDigest, binding: { shareId: envelope.shareId, delegationCid: envelope.delegationCid, authorityMaterialHandle: envelope.authorityMaterialHandle, authorityMaterialDigest: envelope.authorityMaterialDigest, resource: { kind: envelope.resource.kind, path: value.resource }, action: value.action }, proof: { response: value, detached: value.proof } };
   }
 
   async establishPolicySession(): Promise<SharePolicySession> {
@@ -256,12 +264,11 @@ export function createAddressedAuthorization(input: Omit<ShareRecipientClientOpt
           response.bodyDigest !== value.bodyDigest ||
           response.bodyDigest !== await digestBytes(value.bytes)
         ) return false;
-        if (wrapper.detached === undefined) return true;
         const detached = object(wrapper.detached, "share read detached proof");
         if (detached.alg !== "EdDSA" || detached.kid !== input.trustedNode.invitationKid) return false;
         const unsigned = { ...response };
         delete unsigned.proof;
-        return ed25519.verify(bytes(detached.signature, "share read signature"), new TextEncoder().encode(`xyz.tinycloud.share/read-response/v2\0${canonicalize(unsigned)}`), input.trustedNode.invitationPublicKey);
+        return ed25519.verify(bytes(detached.signature, "share read signature"), new TextEncoder().encode(`xyz.tinycloud.share/read-response/v2\0${canonicalize(unsigned)}`), trustedPublicKey(input.trustedNode));
       } catch {
         return false;
       }

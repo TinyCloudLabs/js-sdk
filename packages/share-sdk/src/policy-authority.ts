@@ -10,6 +10,8 @@ import {
   validateOwnerSharePolicyRegistration,
   type OwnerDelegationReceipt,
   type SignedDelegation,
+  dagCborEncode,
+  POLICY_ENFORCEMENT_DOMAIN,
 } from "./owner-policy.js";
 import type { SharePolicyAuthority, SharePolicyEvidence } from "./receive.js";
 
@@ -70,6 +72,17 @@ async function verifyEnforcement(delegation: SignedDelegation): Promise<boolean>
   try {
     const dagCbor = fromBase64Url(delegation.dagCbor);
     if (await computeCid(dagCbor) !== delegation.cid) return false;
+    const expectedDagCbor = dagCborEncode({
+      domain: POLICY_ENFORCEMENT_DOMAIN,
+      unsigned: {
+        type: "TinyCloudSharePolicyEnforcement",
+        version: 2,
+        issuerDid: delegation.issuerDid,
+        audienceDid: delegation.audienceDid,
+        facts: delegation.facts,
+      },
+    });
+    if (expectedDagCbor.length !== dagCbor.length || expectedDagCbor.some((byte, index) => byte !== dagCbor[index])) return false;
     const signature = fromBase64Url(delegation.signature);
     return signature.length === 64 && ed25519.verify(
       signature,

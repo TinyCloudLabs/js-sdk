@@ -43,13 +43,21 @@ function signedArtifact(key: "challenge" | "session", domain: string, artifact: 
 }
 
 async function responseFor(target: ShareEnvelopeV2, content = "right"): Promise<Record<string, unknown>> {
-  return {
+  const response = {
     type: "TinyCloudShareInvokeResponse",
     version: 2,
     action: "tinycloud.kv/get",
     resource: target.resource.path,
     content: toBase64Url(new TextEncoder().encode(content)),
     bodyDigest: await digestText(content),
+  };
+  return {
+    ...response,
+    proof: {
+      alg: "EdDSA",
+      kid: nodeKid,
+      signature: toBase64Url(ed25519.sign(new TextEncoder().encode(`xyz.tinycloud.share/read-response/v2\0${canonicalize(response)}`), nodePrivateKey)),
+    },
   };
 }
 
@@ -99,9 +107,28 @@ describe("addressed recipient response binding", () => {
       bodyDigest: response.bodyDigest as string,
       contentSourceDigest: target.contentSourceDigest,
       binding: { shareId: target.shareId, delegationCid: target.delegationCid, authorityMaterialHandle: target.authorityMaterialHandle, authorityMaterialDigest: target.authorityMaterialDigest, resource: target.resource },
-      proof: { response },
+      proof: { response, detached: response.proof },
     };
     await expect(adapter.verifyResult?.({ envelope: target, value, proof: value.proof })).resolves.toBe(true);
+  });
+
+  it("rejects a read response without a detached trusted-node proof", async () => {
+    const target = envelope();
+    const adapter = createAddressedAuthorization({
+      nodeOrigin: "https://node.example",
+      trustedNode: { invitationKid: nodeKid, invitationPublicKey: nodePublicKey },
+      holderDid: "did:key:z6Mkholder",
+    });
+    const response = await responseFor(target);
+    delete response.proof;
+    const value = {
+      bytes: new TextEncoder().encode("right"),
+      bodyDigest: response.bodyDigest as string,
+      contentSourceDigest: target.contentSourceDigest,
+      binding: { shareId: target.shareId, delegationCid: target.delegationCid, authorityMaterialHandle: target.authorityMaterialHandle, authorityMaterialDigest: target.authorityMaterialDigest, resource: target.resource },
+      proof: { response },
+    };
+    await expect(adapter.verifyResult?.({ envelope: target, value, proof: value.proof })).resolves.toBe(false);
   });
 
   it("uses only fields emitted by the production v1 policy routes", async () => {

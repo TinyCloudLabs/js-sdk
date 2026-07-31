@@ -170,8 +170,12 @@ export function validateShareDeliveryAuthorizationBytes(bytesValue: Uint8Array, 
   ) {
     throw new Error("share delivery authorization is not bound to the submitted request");
   }
-  if (typeof authorization.issuedAt !== "string" || Date.parse(authorization.issuedAt) > Date.now() + 60_000) throw new Error("share delivery authorization issuedAt is invalid");
-  if (new Date(authorization.expiresAt as string).toISOString() !== authorization.expiresAt) throw new Error("share delivery authorization expiresAt is non-canonical");
+  const now = Date.now();
+  const issuedAt = typeof authorization.issuedAt === "string" ? Date.parse(authorization.issuedAt) : Number.NaN;
+  const expiresAt = typeof authorization.expiresAt === "string" ? Date.parse(authorization.expiresAt) : Number.NaN;
+  if (!Number.isFinite(issuedAt) || issuedAt > now + 60_000 || issuedAt > expiresAt) throw new Error("share delivery authorization issuedAt is invalid");
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) throw new Error("share delivery authorization is expired");
+  if (new Date(expiresAt).toISOString() !== authorization.expiresAt) throw new Error("share delivery authorization expiresAt is non-canonical");
 
   // Independent audience check: the OpenCredentials witness field must be a
   // canonical https origin, must equal the caller's own trusted value (never

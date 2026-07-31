@@ -42,7 +42,7 @@ export type CreateOwnerDelegationParams = CreateOwnerDelegationBase & (
 );
 
 const MAX_CONTENT_BYTES = 100 * 1024 * 1024;
-const ENFORCEMENT_DOMAIN = "xyz.tinycloud.share/policy-enforcement/v2\0";
+export const POLICY_ENFORCEMENT_DOMAIN = "xyz.tinycloud.share/policy-enforcement/v2\0";
 const POLICY_DOMAIN = "xyz.tinycloud.share/policy/v2\0";
 export const OWNER_SHARE_REGISTRATION_DOMAIN = "xyz.tinycloud.share/policy-registration/v2\0";
 
@@ -166,7 +166,7 @@ function assertCanonical(value: string, label: string): void {
   if (value !== canonicalize(JSON.parse(value))) throw new Error(`${label} is not canonical JSON`);
 }
 
-function dagCborEncode(value: unknown): Uint8Array {
+export function dagCborEncode(value: unknown): Uint8Array {
   const output: number[] = [];
   const writeHeader = (major: number, length: number): void => {
     if (!Number.isSafeInteger(length) || length < 0) throw new Error("DAG-CBOR value is too large");
@@ -292,7 +292,7 @@ export async function createPolicyEnforcementDelegation(input: {
     expiresAt: input.expiresAt,
   } satisfies Record<string, string | readonly string[]>;
   const unsigned = { type: "TinyCloudSharePolicyEnforcement", version: 2, issuerDid: input.shareKey.did, audienceDid: input.enforcerDid, facts };
-  const dagCborBytes = dagCborEncode({ domain: ENFORCEMENT_DOMAIN, unsigned });
+  const dagCborBytes = dagCborEncode({ domain: POLICY_ENFORCEMENT_DOMAIN, unsigned });
   const signature = b64(await input.shareKey.sign(dagCborBytes));
   return { cid: cid(dagCborBytes), dagCbor: b64(dagCborBytes), issuerDid: input.shareKey.did, audienceDid: input.enforcerDid, facts, signature };
 }
