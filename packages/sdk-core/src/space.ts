@@ -30,14 +30,18 @@ export interface SpaceHostResult {
  *
  * @param host - TinyCloud server URL (e.g., "https://node.tinycloud.xyz")
  * @param spaceId - The space ID to host
+ * @param fetchFn - Fetch implementation to use (TC-407: defaults to global fetch,
+ *   but callers should pass their instance's configured/pooled fetch so this
+ *   request observes the same transport as everything else they do)
  * @returns The peer ID string
  * @throws Error if the request fails
  */
 export async function fetchPeerId(
   host: string,
-  spaceId: string
+  spaceId: string,
+  fetchFn: typeof fetch = globalThis.fetch
 ): Promise<string> {
-  const res = await fetch(
+  const res = await fetchFn(
     `${host}/peer/generate/${encodeURIComponent(spaceId)}`
   );
 
@@ -57,13 +61,16 @@ export async function fetchPeerId(
  *
  * @param host - TinyCloud server URL
  * @param headers - Delegation headers (from siweToDelegationHeaders)
+ * @param fetchFn - Fetch implementation to use (TC-407: defaults to global fetch;
+ *   pass the caller's configured/pooled fetch to keep this on the same transport)
  * @returns Result indicating success/failure
  */
 export async function submitHostDelegation(
   host: string,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  fetchFn: typeof fetch = globalThis.fetch
 ): Promise<SpaceHostResult> {
-  const res = await fetch(`${host}/delegate`, {
+  const res = await fetchFn(`${host}/delegate`, {
     method: "POST",
     headers,
   });
@@ -120,22 +127,48 @@ export async function submitHostDelegation(
 const inFlightActivations = new Map<string, Promise<SpaceHostResult>>();
 
 /**
- * Build a collision-free single-flight key from the host and the *complete*
- * delegation header.
+ * Stable per-fetch-implementation identity (TC-407).
+ *
+ * Two `TinyCloudNode` instances can be configured with different `fetch`
+ * overrides (different pools, different trust boundaries) yet legitimately
+ * issue byte-identical activation requests to the same host. Coalescing
+ * those into one in-flight request would let one caller's transport
+ * override silently satisfy another's request, breaking transport
+ * isolation. A `WeakMap` keyed on the function reference assigns each
+ * distinct fetch identity a small integer id without retaining unrelated
+ * fetch functions (they're garbage-collectable once the owning instance is).
+ */
+const fetchIdentities = new WeakMap<typeof fetch, number>();
+let nextFetchIdentityId = 0;
+
+function fetchIdentity(fetchFn: typeof fetch): number {
+  let id = fetchIdentities.get(fetchFn);
+  if (id === undefined) {
+    id = nextFetchIdentityId++;
+    fetchIdentities.set(fetchFn, id);
+  }
+  return id;
+}
+
+/**
+ * Build a collision-free single-flight key from the host, the *complete*
+ * delegation header, and the fetch implementation's identity.
  *
  * The header is serialized in full (never truncated or hashed) as a sorted array
  * of entries, so two headers coalesce only if every name/value pair matches.
  * JSON encoding keeps the key unambiguous regardless of what characters appear
- * in a token.
+ * in a token. Including the fetch identity ensures coalescing never crosses
+ * a transport/trust boundary (see {@link fetchIdentity}).
  */
 function activationFlightKey(
   host: string,
-  delegationHeader: Record<string, string>
+  delegationHeader: Record<string, string>,
+  fetchFn: typeof fetch
 ): string {
   const entries = Object.entries(delegationHeader).sort(([a], [b]) =>
     a < b ? -1 : a > b ? 1 : 0
   );
-  return JSON.stringify([host, entries]);
+  return JSON.stringify([host, entries, fetchIdentity(fetchFn)]);
 }
 
 /**
@@ -150,16 +183,20 @@ function activationFlightKey(
  *
  * @param host - TinyCloud server URL
  * @param delegationHeader - Session delegation header (from session.delegationHeader)
+ * @param fetchFn - Fetch implementation to use (TC-407: defaults to global fetch;
+ *   pass the caller's configured/pooled fetch to keep this on the same transport).
+ *   Also partitions the single-flight coalescing key — see {@link fetchIdentity}.
  * @returns Result indicating success/failure (404 means space doesn't exist)
  */
 export async function activateSessionWithHost(
   host: string,
-  delegationHeader: { Authorization: string }
+  delegationHeader: { Authorization: string },
+  fetchFn: typeof fetch = globalThis.fetch
 ): Promise<SpaceHostResult> {
-  const key = activationFlightKey(host, delegationHeader as Record<string, string>);
+  const key = activationFlightKey(host, delegationHeader as Record<string, string>, fetchFn);
 
   const existing = inFlightActivations.get(key);
-  if (!existing) return startActivationFlight(key, host, delegationHeader);
+  if (!existing) return startActivationFlight(key, host, delegationHeader, fetchFn);
 
   try {
     return await existing;
@@ -172,7 +209,7 @@ export async function activateSessionWithHost(
     // as-is: they are the server's verdict on these exact bytes, and re-POSTing
     // them would reintroduce the fan-out. Callers keep their own retry policies
     // on top of this.
-    return joinOrStartActivationFlight(key, host, delegationHeader);
+    return joinOrStartActivationFlight(key, host, delegationHeader, fetchFn);
   }
 }
 
@@ -186,19 +223,21 @@ export async function activateSessionWithHost(
 function joinOrStartActivationFlight(
   key: string,
   host: string,
-  delegationHeader: { Authorization: string }
+  delegationHeader: { Authorization: string },
+  fetchFn: typeof fetch
 ): Promise<SpaceHostResult> {
   return (
-    inFlightActivations.get(key) ?? startActivationFlight(key, host, delegationHeader)
+    inFlightActivations.get(key) ?? startActivationFlight(key, host, delegationHeader, fetchFn)
   );
 }
 
 function startActivationFlight(
   key: string,
   host: string,
-  delegationHeader: { Authorization: string }
+  delegationHeader: { Authorization: string },
+  fetchFn: typeof fetch
 ): Promise<SpaceHostResult> {
-  const flight = postSessionActivation(host, delegationHeader);
+  const flight = postSessionActivation(host, delegationHeader, fetchFn);
   inFlightActivations.set(key, flight);
 
   // Evict on settle, for both fulfilment and rejection, so a rejected flight
@@ -216,9 +255,10 @@ function startActivationFlight(
 
 async function postSessionActivation(
   host: string,
-  delegationHeader: { Authorization: string }
+  delegationHeader: { Authorization: string },
+  fetchFn: typeof fetch
 ): Promise<SpaceHostResult> {
-  const res = await fetch(`${host}/delegate`, {
+  const res = await fetchFn(`${host}/delegate`, {
     method: "POST",
     headers: delegationHeader,
   });

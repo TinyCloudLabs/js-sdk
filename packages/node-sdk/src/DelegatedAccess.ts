@@ -60,6 +60,13 @@ export class DelegatedAccess {
     invoke: InvokeFunction,
     invokeAny?: InvokeAnyFunction,
     telemetry?: TelemetryConfig,
+    /**
+     * Fetch implementation to use for every request this access makes
+     * (TC-407). Callers should pass the owning `TinyCloudNode`'s resolved
+     * instance fetch so delegated access observes the same configured
+     * transport. Defaults to global fetch for standalone use.
+     */
+    fetchFn: typeof fetch = globalThis.fetch.bind(globalThis),
   ) {
     this.session = session;
     this._delegation = delegation;
@@ -73,7 +80,7 @@ export class DelegatedAccess {
     this._serviceContext = new ServiceContext({
       invoke,
       invokeAny,
-      fetch: globalThis.fetch.bind(globalThis),
+      fetch: fetchFn,
       hosts: [host],
       telemetry,
     });

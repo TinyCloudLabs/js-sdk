@@ -36,7 +36,8 @@
     "@tinycloud/sdk-services": "2.10.0",
     "@tinycloud/sdk-core": "2.11.0-beta.4",
     "@tinycloud/node-sdk-wasm": "1.7.5",
-    "siwe": "^3.0.0"
+    "siwe": "^3.0.0",
+    "undici": "6.28.0"
   },
   "devDependencies": {
     "@types/node": "^20",

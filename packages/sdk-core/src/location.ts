@@ -499,21 +499,51 @@ export async function resolveTinyCloudHosts(
  * Wrap a fetch implementation so identical (same-URL) requests within its
  * lifetime share one in-flight/completed response instead of firing twice.
  * Scoped to the caller — a fresh wrapper is created per {@link
- * resolveTinyCloudHosts} call, so nothing is cached across calls. Each
- * request's `Response` body is cloned on the way out so every caller gets an
- * independently readable body regardless of read order.
+ * resolveTinyCloudHosts} call, so nothing is cached across calls.
+ *
+ * The single underlying response's body is drained exactly once (via
+ * `arrayBuffer()`) and cached as a plain snapshot; every caller then gets an
+ * independent `Response` constructed from that snapshot. This deliberately
+ * avoids `Response.clone()`: a pooled transport (e.g. the Node bounded
+ * transport, TC-407) only tracks a connection's checked-out client as
+ * released once *its own* wrapped response's body-consuming methods settle,
+ * and `clone()` returns new `Response` objects backed directly by the
+ * underlying implementation, bypassing that tracking entirely — draining the
+ * one managed response ourselves keeps release accounting correct while
+ * still letting every caller read the body independently.
  */
 function memoizeFetch(fetchFn: typeof fetch): typeof fetch {
-  const cache = new Map<string, Promise<Response>>();
+  const cache = new Map<string, Promise<{
+    status: number;
+    statusText: string;
+    headers: Headers;
+    body: ArrayBuffer;
+  }>>();
   return (async (input, init) => {
     const key = String(input);
     let cached = cache.get(key);
     if (!cached) {
-      cached = fetchFn(input, init);
+      cached = (async () => {
+        const response = await fetchFn(input, init);
+        const body = await response.arrayBuffer();
+        return {
+          status: response.status,
+          statusText: response.statusText,
+          headers: new Headers(response.headers),
+          body,
+        };
+      })();
       cache.set(key, cached);
     }
-    const response = await cached;
-    return response.clone();
+    const snapshot = await cached;
+    // The Fetch spec forbids a non-null body on a "null body status"
+    // (204/205/304) response, regardless of byte length.
+    const isNullBodyStatus = snapshot.status === 204 || snapshot.status === 205 || snapshot.status === 304;
+    return new Response(isNullBodyStatus ? null : snapshot.body.slice(0), {
+      status: snapshot.status,
+      statusText: snapshot.statusText,
+      headers: snapshot.headers,
+    });
   }) as typeof fetch;
 }
 
