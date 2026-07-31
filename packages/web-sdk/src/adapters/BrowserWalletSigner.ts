@@ -1,32 +1,38 @@
 import { ISigner, Bytes } from "@tinycloud/sdk-core";
-import { providers, Signer } from "ethers";
+import { bytesToHex, stringToHex, type Address } from "viem";
+import {
+  toEip1193Provider,
+  type BrowserProvider,
+  type BrowserWalletProvider,
+} from "./browserProvider";
 
 /**
- * Browser wallet signer that wraps ethers.js Web3Provider.
+ * Browser wallet signer that wraps an EIP-1193 provider.
  * Supports MetaMask, WalletConnect, and any EIP-1193 provider.
  *
- * The wallet popup is triggered implicitly by ethers.js when
- * signMessage() is called -- no separate "strategy" type needed.
+ * The wallet popup is triggered by eth_requestAccounts when getAddress() is
+ * called -- no separate "strategy" type needed.
  */
 export class BrowserWalletSigner implements ISigner {
-  private provider: providers.Web3Provider;
-  private signer: Signer;
+  private provider: BrowserProvider;
   private cachedAddress?: string;
   private cachedChainId?: number;
 
-  constructor(externalProvider: providers.ExternalProvider | providers.Web3Provider) {
-    if ((externalProvider as providers.Web3Provider)._isProvider) {
-      this.provider = externalProvider as providers.Web3Provider;
-    } else {
-      this.provider = new providers.Web3Provider(externalProvider as providers.ExternalProvider);
-    }
-    this.signer = this.provider.getSigner();
+  constructor(externalProvider: BrowserWalletProvider) {
+    this.provider = toEip1193Provider(externalProvider);
   }
 
   async getAddress(): Promise<string> {
     if (!this.cachedAddress) {
-      // This triggers wallet connection popup if not already connected
-      this.cachedAddress = await this.signer.getAddress();
+      const addresses = await this.provider.request({
+        method: "eth_requestAccounts",
+        params: [],
+      });
+      const [address] = Array.isArray(addresses) ? addresses : [];
+      if (!address) {
+        throw new Error("No wallet account is connected");
+      }
+      this.cachedAddress = address;
     }
     return this.cachedAddress;
   }
@@ -34,8 +40,11 @@ export class BrowserWalletSigner implements ISigner {
   async getConnectedAddress(): Promise<string | undefined> {
     if (this.cachedAddress) return this.cachedAddress;
 
-    const accounts = await this.provider.send("eth_accounts", []);
-    const address = Array.isArray(accounts) ? accounts[0] : undefined;
+    const accounts = await this.provider.request({
+      method: "eth_accounts",
+      params: [],
+    });
+    const [address] = Array.isArray(accounts) ? accounts : [];
     if (typeof address === "string" && address.length > 0) {
       this.cachedAddress = address;
       return address;
@@ -45,17 +54,29 @@ export class BrowserWalletSigner implements ISigner {
 
   async getChainId(): Promise<number> {
     if (!this.cachedChainId) {
-      this.cachedChainId = await this.signer.getChainId();
+      const chainId = await this.provider.request({
+        method: "eth_chainId",
+        params: [],
+      });
+      this.cachedChainId = Number.parseInt(String(chainId), 16);
     }
     return this.cachedChainId;
   }
 
   async signMessage(message: Bytes | string): Promise<string> {
-    return this.signer.signMessage(message);
+    const address = (await this.getAddress()) as Address;
+    const rawMessage =
+      typeof message === "string"
+        ? stringToHex(message)
+        : bytesToHex(Uint8Array.from(message));
+    return this.provider.request({
+      method: "personal_sign",
+      params: [rawMessage, address],
+    }) as Promise<string>;
   }
 
-  /** Get the underlying ethers.js Web3Provider (for advanced use) */
-  getProvider(): providers.Web3Provider {
+  /** Get the underlying EIP-1193 provider (for advanced use). */
+  getProvider(): BrowserProvider {
     return this.provider;
   }
 }

@@ -5,10 +5,14 @@
  */
 
 import { z } from "zod";
-import { providers } from "ethers";
-import { ConnectionInfo } from "ethers/lib/utils";
 import type { AxiosRequestConfig } from "axios";
 import type { ClientSession } from "@tinycloud/sdk-core";
+
+export type ConnectionInfo = Record<string, unknown>;
+export type Networkish =
+  | string
+  | number
+  | { chainId: number | string; name?: string };
 
 // RPC Provider Enum (TypeScript enum form)
 
@@ -131,14 +135,14 @@ export type AnkrProvider = {
 export type CustomProvider = {
   service: RPCProviders.CustomProvider;
   url?: string | ConnectionInfo;
-  network?: providers.Networkish;
+  network?: Networkish;
 };
 
 /** Generic provider settings. */
 export type GenericProvider = {
   service: RPCProviders;
   url?: string | ConnectionInfo;
-  network?: providers.Networkish;
+  network?: Networkish;
   apiKey?: string | InfuraProviderProjectSettings;
 };
 

@@ -75,7 +75,10 @@ import {
   restoreDataFromPersisted,
 } from "./browserSessionPersistence";
 import { WebSecretsService } from "./WebSecretsService";
-import type { providers } from "ethers";
+import type {
+  BrowserProvider,
+  BrowserWalletProvider,
+} from "../adapters/browserProvider";
 
 import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
 import { BrowserNotificationHandler } from "../adapters/BrowserNotificationHandler";
@@ -282,7 +285,7 @@ export interface ShareReceiveResult<T = unknown> {
 
 export class TinyCloudWeb {
   /** The Ethereum provider */
-  public provider!: providers.Web3Provider;
+  public provider!: BrowserProvider;
 
   /** Supported RPC Providers */
   public static RPCProviders = RPCProviders;
@@ -731,7 +734,7 @@ export class TinyCloudWeb {
   }
 
   connectWallet(
-    provider: providers.ExternalProvider | providers.Web3Provider,
+    provider: BrowserWalletProvider,
     options?: { spacePrefix?: string }
   ): void {
     this.walletSigner = new BrowserWalletSigner(provider);

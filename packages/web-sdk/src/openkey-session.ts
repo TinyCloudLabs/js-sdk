@@ -3,7 +3,7 @@ import type {
   ComposedManifestRequest,
   Manifest,
 } from "@tinycloud/sdk-core";
-import { utils } from "ethers";
+import { getAddress } from "viem";
 import {
   createOpenKeyCallbackSigningStrategy,
   type OpenKeySigningRequestBody,
@@ -164,7 +164,7 @@ function normalizeOrigin(value: string): { origin: string; domain: string } {
 function validateAddress(address: string): void {
   let checksummed: string;
   try {
-    checksummed = utils.getAddress(address);
+    checksummed = getAddress(address);
   } catch {
     throw new Error("OpenKey key address must be EIP-55-compatible");
   }

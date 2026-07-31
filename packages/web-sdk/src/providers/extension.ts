@@ -2,14 +2,14 @@
  * Browser-coupled extension types.
  *
  * These types stay in web-sdk because they depend on browser-specific
- * APIs (@tinycloud/web-sdk-wasm, ethers Web3Provider, axios).
+ * APIs (@tinycloud/web-sdk-wasm, EIP-1193 provider, axios).
  *
  * @packageDocumentation
  */
 
 import { tcwSession } from "@tinycloud/web-sdk-wasm";
 import { AxiosInstance } from "axios";
-import { ethers } from "ethers";
+import type { BrowserProvider } from "../adapters/browserProvider";
 import type { ClientSession, SiweConfig } from "@tinycloud/sdk-core";
 import type { ClientConfig } from "./config";
 
@@ -30,7 +30,7 @@ export interface IConnected {
   /** List of enabled extensions. */
   extensions: Extension[];
   /** Web3 provider. */
-  provider: ethers.providers.Web3Provider;
+  provider: BrowserProvider;
   /** Promise that is initialized on construction to run the "afterConnect" methods of extensions. */
   afterConnectHooksPromise: Promise<void>;
   /** Method to verify if extension is enabled. */
