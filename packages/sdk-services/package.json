@@ -4,7 +4,7 @@
   "description": "TinyCloud SDK Services - Platform-agnostic service implementations",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
-  "sideEffects": ["**/debug.ts"],
+  "sideEffects": ["dist/index.js", "dist/index.cjs"],
   "engines": {
     "node": ">=20"
   },
