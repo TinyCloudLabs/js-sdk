@@ -1,5 +1,11 @@
 # @tinycloudlabs/web-sdk
 
+## 2.11.0-beta.2
+
+### Patch Changes
+
+- 2173048: Allow the CoordinationOS OpenKey session helper to grant its exact private invite-code record alongside the required canary record.
+
 ## 2.11.0-beta.1
 
 ### Patch Changes
