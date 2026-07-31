@@ -14,4 +14,5 @@ export type {
   AccountSpace,
   AccountSpaceListOptions,
   AccountStatus,
+  RegisterBatchSuccess,
 } from "@tinycloud/sdk-core";
