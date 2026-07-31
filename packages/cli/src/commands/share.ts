@@ -433,7 +433,7 @@ export function registerShareCommand(program: Command): void {
         if (record === undefined) throw new CLIError("NOT_FOUND", "share not found", 4);
         const result = await revokeShare({ record, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
         if (result.state === "unsupported") {
-          throw new CLIError("AUTH_REQUIRED", result.reason, 3);
+          throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
         }
         if (options.json) writeJson({ protocol: "tinycloud-share", version: 1, result }); else process.stdout.write(`${result.state}\n`);
       } catch (error) { handleError(shareCliError(error)); }

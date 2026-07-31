@@ -1,3 +1,4 @@
+import { canonicalize, toBase64Url } from "@tinycloud/share-envelope";
 import type { SenderShareRecord } from "./history.js";
 
 export type ShareNotifyState = "delivered" | "already-delivered" | "partial-failure";
@@ -59,7 +60,7 @@ export async function notifyShare(input: {
   if (input.record !== undefined && !recipientMatchesShareRecord(input.record, input.recipient)) {
     throw new ShareNotifyError("recipient does not match the stored share target");
   }
-  const idempotencyKey = input.idempotencyKey ?? `tinycloud-share:${input.shareId}`;
+  const idempotencyKey = input.idempotencyKey ?? await defaultIdempotencyKey(input.shareId, input.recipient);
   const attemptsLimit = input.maxAttempts ?? 3;
   if (!Number.isSafeInteger(attemptsLimit) || attemptsLimit < 1 || attemptsLimit > 8) throw new ShareNotifyError("maxAttempts is invalid");
   let attempts = 0;
@@ -76,4 +77,14 @@ export async function notifyShare(input: {
   }
   void lastError;
   return { protocol: "tinycloud-share", version: 1, shareId: input.shareId, state: "partial-failure", idempotencyKey, attempts, retryable: true };
+}
+
+/** Bind the default retry key to the canonical recipient as well as the share. */
+async function defaultIdempotencyKey(shareId: string, recipient: string): Promise<string> {
+  const canonicalRecipient = canonicalize(recipient.trim().toLowerCase());
+  const digest = new Uint8Array(await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonicalRecipient),
+  ));
+  return `tinycloud-share:${shareId}:${toBase64Url(digest)}`;
 }

@@ -73,9 +73,9 @@ program.hook("preAction", async (thisCommand) => {
 
 configureShareCommandServices({
   fetchFn: globalThis.fetch,
-  // The CLI uses the same nonce-bound OpenKey session ceremony as the Share
-  // browser. The authorizer is lazy: public inspect/receive never touches
-  // profile state, and no secret is serialized into a publish result.
+  // The CLI mints a body-bound Node upload attestation from the selected
+  // OpenKey session. The authorizer is lazy: public inspect/receive never
+  // touches profile state, and no secret is serialized into a publish result.
   authorizeUpload: createProductionUploadAuthorizer({
     fetchFn: globalThis.fetch,
     profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,

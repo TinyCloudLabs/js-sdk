@@ -3,7 +3,7 @@ import type { SenderShareRecord, SenderShareRecordStorage } from "./history.js";
 export type ShareRevocationResult =
   | { readonly state: "revoked"; readonly target: "recipientDid" | "email" | "emailDomain"; readonly delegationCid: string; readonly revokedAt: string }
   | { readonly state: "retention-only"; readonly target: "bearer"; readonly reason: "bearer-capability-cannot-be-revoked" }
-  | { readonly state: "unsupported"; readonly target: string; readonly reason: string };
+  | { readonly state: "unsupported"; readonly target: string; readonly reason: string; readonly code: "unsupported-target" };
 
 export interface ShareRevocationAdapter {
   revokeDelegation(input: { readonly delegationCid: string; readonly scope: "direct" | "ancestor" }): Promise<void>;
@@ -25,10 +25,10 @@ export async function revokeShare(input: {
 }): Promise<ShareRevocationResult> {
   const target = targetKind(input.record);
   if (target === "bearer") return { state: "retention-only", target, reason: "bearer-capability-cannot-be-revoked" };
-  if (input.adapter === undefined) return { state: "unsupported", target, reason: "node revocation authority is required" };
+  if (input.adapter === undefined) return { state: "unsupported", target, reason: "node revocation authority is required", code: "unsupported-target" };
   const scope = input.scope ?? "direct";
   const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
-  if (delegationCid === undefined) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt" };
+  if (delegationCid === undefined) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
   await input.adapter.revokeDelegation({ delegationCid, scope });
   const revokedAt = (input.now?.() ?? new Date()).toISOString();
   if (input.records !== undefined) await input.records.put({ ...input.record, revokedAt });

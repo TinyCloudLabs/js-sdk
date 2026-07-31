@@ -53,7 +53,17 @@ describe("Share lifecycle and authorization parity", () => {
       adapter: { async deliver(input) { keys.push(input.idempotencyKey!); throw new Error("offline"); } },
     });
     expect(result.state).toBe("partial-failure");
-    expect(keys).toEqual(["tinycloud-share:share-1", "tinycloud-share:share-1"]);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[0]).toMatch(/^tinycloud-share:share-1:[A-Za-z0-9_-]{43}$/);
+    const other = await notifyShare({
+      shareId: "share-1",
+      recipient: "other@example.com",
+      maxAttempts: 1,
+      adapter: { async deliver(input) { keys.push(input.idempotencyKey!); throw new Error("offline"); } },
+    });
+    expect(other.state).toBe("partial-failure");
+    expect(keys[2]).not.toBe(keys[0]);
   });
 
   it("derives notification recipients from the stored matcher", async () => {
@@ -68,6 +78,16 @@ describe("Share lifecycle and authorization parity", () => {
 
   it("never reports bearer deletion as cryptographic revocation", async () => {
     await expect(revokeShare({ record })).resolves.toEqual({ state: "retention-only", target: "bearer", reason: "bearer-capability-cannot-be-revoked" });
+  });
+
+  it("classifies a missing addressed revocation authority as unsupported target", async () => {
+    const addressed = { ...record, targetKind: "recipientDid" as const, recipientMatcher: { kind: "recipientDid" as const, value: "did:key:z6Mkrecipient" } };
+    await expect(revokeShare({ record: addressed })).resolves.toEqual({
+      state: "unsupported",
+      target: "recipientDid",
+      reason: "node revocation authority is required",
+      code: "unsupported-target",
+    });
   });
 
   it("revokes the owner delegation for ancestor scope", async () => {

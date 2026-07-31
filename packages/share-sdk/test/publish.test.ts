@@ -1,6 +1,28 @@
 import { describe, expect, it } from "bun:test";
 import { inspectShare, publishShare, receiveShare, redactPublishedShare, SharePublishError } from "../src/index.js";
 
+function assertNoSecretFields(value: unknown): void {
+  const forbidden = new Set([
+    "d", "p", "q", "dp", "dq", "qi", "oth", "privatekey", "privatejwk", "sessionjwk", "cookie", "set-cookie",
+    "resumetoken", "accesstoken", "bearer", "token", "claims", "authorization", "proof",
+  ]);
+  const visit = (current: unknown): void => {
+    if (Array.isArray(current)) {
+      current.forEach(visit);
+      return;
+    }
+    if (typeof current !== "object" || current === null) return;
+    for (const [key, child] of Object.entries(current)) {
+      expect(forbidden.has(key.toLowerCase())).toBe(false);
+      if (typeof child === "string") {
+        expect(child).not.toMatch(/(?:^|[#?&])(k|key|token|cookie|sig|signature)=/i);
+      }
+      visit(child);
+    }
+  };
+  visit(value);
+}
+
 describe("publishShare", () => {
   it("round-trips compact and inline bearer links through the shared verifier", async () => {
     const blobs = new Map<string, Uint8Array>();
@@ -25,6 +47,7 @@ describe("publishShare", () => {
     expect(JSON.stringify(redactPublishedShare(compact))).not.toContain(compact.url);
     expect(JSON.stringify(compact)).not.toContain(compact.url);
     expect(redactPublishedShare(compact)).not.toHaveProperty("url");
+    assertNoSecretFields(redactPublishedShare(compact));
 
     const inline = await publishShare({ ...options, inline: true });
     expect((await receiveShare(inline.url, options)).text).toBe("# decision\n\nbounded markdown\n");

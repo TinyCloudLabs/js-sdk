@@ -2,7 +2,6 @@ import { constants } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readFile, realpath, stat, link, rename, rm, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { basename, join, resolve, sep } from "node:path";
-import { tmpdir } from "node:os";
 
 export const MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 export const MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -94,15 +93,23 @@ export async function writeShareOutput(directory: string, filename: string, byte
   const directoryHandle = await open(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath(outputDirectory);
   const outputPath = join(stableDirectory, safeName);
-  const stagingDirectory = await mkdtemp(join(tmpdir(), ".tinycloud-share-stage-"));
-  const stagingPath = join(stagingDirectory, `.tinycloud-share-${randomBytes(16).toString("hex")}.tmp`);
-  let temporaryPath: string | undefined;
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async (): Promise<void> => {
     const current = await stat(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
+  // Stage inside the held output directory. If an attacker swaps the parent
+  // pathname after this identity check, the old staging path becomes
+  // unreachable through the replacement pathname and the final handoff fails;
+  // plaintext is never placed in the replacement directory. Node has no
+  // openat equivalent here, so the identity checks remain part of the guard.
+  await assertStableDirectory();
+  const stagingDirectory = await mkdtemp(join(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingInfo = await lstat(stagingDirectory);
+  if (!stagingInfo.isDirectory() || (stagingInfo.mode & 0o777) !== 0o700) throw new Error("OUTPUT_EXISTS");
+  const stagingPath = join(stagingDirectory, `.tinycloud-share-${randomBytes(16).toString("hex")}.tmp`);
+  let temporaryPath: string | undefined;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     await assertStableDirectory();
     try {

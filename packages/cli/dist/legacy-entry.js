@@ -25998,7 +25998,6 @@ import { constants } from "fs";
 import { lstat, mkdir as mkdir3, mkdtemp, open as open2, readFile as readFile9, realpath, stat as stat2, link, rename as rename2, rm as rm2, unlink } from "fs/promises";
 import { randomBytes as randomBytes3 } from "crypto";
 import { basename as basename2, join as join6, resolve as resolve2, sep } from "path";
-import { tmpdir } from "os";
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
 async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
@@ -26067,15 +26066,18 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const directoryHandle = await open2(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath(outputDirectory);
   const outputPath = join6(stableDirectory, safeName);
-  const stagingDirectory = await mkdtemp(join6(tmpdir(), ".tinycloud-share-stage-"));
-  const stagingPath = join6(stagingDirectory, `.tinycloud-share-${randomBytes3(16).toString("hex")}.tmp`);
-  let temporaryPath;
-  let handle;
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
     const current = await stat2(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
+  await assertStableDirectory();
+  const stagingDirectory = await mkdtemp(join6(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingInfo = await lstat(stagingDirectory);
+  if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
+  const stagingPath = join6(stagingDirectory, `.tinycloud-share-${randomBytes3(16).toString("hex")}.tmp`);
+  let temporaryPath;
+  let handle;
   try {
     await assertStableDirectory();
     try {
@@ -26420,7 +26422,7 @@ function registerShareCommand(program) {
       if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
       const result = await revokeShare2({ record, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
       if (result.state === "unsupported") {
-        throw new CLIError("AUTH_REQUIRED", result.reason, 3);
+        throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
       }
       if (options.json) writeJson2({ protocol: "tinycloud-share", version: 1, result });
       else process.stdout.write(`${result.state}

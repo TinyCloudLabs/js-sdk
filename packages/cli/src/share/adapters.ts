@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createPrivateKey, sign as signBytes } from "node:crypto";
+import { createHash, createPrivateKey, sign as signBytes } from "node:crypto";
 import { ProfileManager } from "../config/profiles.js";
 import {
   createRegisteredPolicyAuthority,
@@ -20,7 +20,7 @@ import {
   type TargetPublishInput,
   type LegacyShareReader,
 } from "@tinycloud/share-sdk";
-import { fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
+import { canonicalize, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
 
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 
@@ -231,10 +231,10 @@ export function createShareAuthorityAdapters(input: {
     const { ensureAuthenticated } = await import("../lib/sdk.js");
     return ensureAuthenticated(context);
   })();
-  const holderSignature = async (holderDid: string, bytes: Uint8Array): Promise<{ readonly alg: "EdDSA"; readonly kid: string; readonly signature: string } | undefined> => {
+  const holderSignature = async (holderDid: string, bytes: Uint8Array, session?: Record<string, unknown> | null): Promise<{ readonly alg: "EdDSA"; readonly kid: string; readonly signature: string } | undefined> => {
     const profileName = await (input.profileName?.() ?? selectedProfileName());
-    const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
-    const key = session?.jwk ?? await ProfileManager.getKey(profileName);
+    const currentSession = session ?? await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
+    const key = currentSession?.jwk;
     if (typeof holderDid !== "string" || !holderDid.startsWith("did:key:") || typeof key !== "object" || key === null || typeof (key as Record<string, unknown>).d !== "string") return undefined;
     try {
       const privateKey = createPrivateKey({ key: key as never, format: "jwk" });
@@ -291,17 +291,31 @@ export function createShareAuthorityAdapters(input: {
     });
   } };
   const canonicalAuthorization = async (): Promise<ShareAuthorizationAdapter<ShareAuthorizedContent>> => {
-    const [node, config] = await Promise.all([authenticatedNode(), publicConfig()]);
-    return createAddressedAuthorization({
+    const [config, profileName] = await Promise.all([publicConfig(), input.profileName?.() ?? selectedProfileName()]);
+    const profile = await ProfileManager.getProfile(profileName).catch(() => {
+      throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an initialized profile");
+    });
+    const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
+    const holderDid = typeof session?.verificationMethod === "string" ? session.verificationMethod : profile.sessionDid ?? profile.did;
+    if (profile.authMethod !== "openkey" || session === null || typeof session.delegationHeader !== "object" || session.delegationHeader === null || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || typeof holderDid !== "string" || !holderDid.startsWith("did:key:") || typeof session.jwk !== "object" || session.jwk === null || typeof (session.jwk as Record<string, unknown>).d !== "string") {
+      throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an active OpenKey session");
+    }
+    const addressed = createAddressedAuthorization({
       nodeOrigin: config.nodeOrigin,
       trustedNode: { invitationKid: config.nodeInvitationKid, invitationPublicKey: config.nodeInvitationPublicKey },
-      holderDid: node.did,
+      holderDid,
       sign: async (bytes) => {
-        const signed = await holderSignature(node.did, bytes);
+        const signed = await holderSignature(holderDid, bytes, session);
         if (signed === undefined) throw new Error("share holder signer is unavailable");
         return fromBase64Url(signed.signature);
       },
     });
+    const matchesRecipient = (envelope: Parameters<ShareAuthorizationAdapter<ShareAuthorizedContent>["begin"]>[0]["envelope"]): boolean => envelope.authorizationTarget.kind !== "recipientDid" || (envelope.authorizationTarget.did === holderDid && envelope.recipientMatcher.kind === "recipientDid" && envelope.recipientMatcher.value === holderDid);
+    return {
+      async begin(request) { return matchesRecipient(request.envelope) ? addressed.begin(request) : { state: "denied", reason: "rejected" as const }; },
+      async resume(request) { return matchesRecipient(request.envelope) ? addressed.resume(request) : { state: "denied", reason: "rejected" as const }; },
+      verifyResult: addressed.verifyResult,
+    };
   };
   const authorization: ShareAuthorizationAdapter<ShareAuthorizedContent> = input.authorize ?? {
     async begin(request) { return (await canonicalAuthorization()).begin(request); },
@@ -387,136 +401,113 @@ export function createShareAuthorityAdapters(input: {
   };
 }
 
-function authenticationMessage(origin: string, address: string, nonce: string, issuedAt: string): string {
-  return [
-    `${new URL(origin).host} wants you to sign in with your Ethereum account:`,
-    address,
-    "",
-    "Sign in to TinyCloud Share.",
-    "",
-    `URI: ${origin}`,
-    "Version: 1",
-    `Nonce: ${nonce}`,
-    `Issued At: ${issuedAt}`,
-  ].join("\n");
-}
-
-function cookieFromResponse(response: Response): string | undefined {
-  const headers = response.headers as Headers & { getSetCookie?: () => string[] };
-  const values = headers.getSetCookie?.() ?? [];
-  const raw = values[0] ?? response.headers.get("set-cookie") ?? undefined;
-  return raw?.split(";", 1)[0];
-}
-
 async function selectedProfileName(): Promise<string> {
   const config = await ProfileManager.getConfig();
   return process.env.TC_PROFILE ?? config.defaultProfile;
 }
 
-async function profilePrivateKeyFor(profileName: string): Promise<string> {
-  const profile = await ProfileManager.getProfile(profileName).catch(() => {
-    throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an initialized profile");
-  });
-  if (typeof profile.privateKey !== "string" || profile.privateKey.length === 0) {
-    throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an authorized wallet or host-issued Share session");
+function canonicalNodeOrigin(value: unknown): string {
+  if (typeof value !== "string") throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires a configured Node host");
+  let parsed: URL;
+  try { parsed = new URL(value); } catch { throw new ShareAuthorityError("UNAVAILABLE", "configured Node host is invalid"); }
+  const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+  if ((parsed.protocol !== "https:" && !(loopback && parsed.protocol === "http:")) || parsed.origin !== value || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new ShareAuthorityError("UNAVAILABLE", "configured Node host is invalid");
   }
-  return profile.privateKey;
+  return parsed.origin;
 }
 
-async function profileShareSessionState(profileName: string): Promise<{ readonly authorization?: ShareUploadAuthorization; readonly resumeToken?: string }> {
-  const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
-  const cookie = session?.shareSessionCookie ?? session?.shareCookie;
-  return {
-    ...(typeof cookie === "string" && /^share_session=[A-Za-z0-9_-]{32,}$/.test(cookie) ? { authorization: { cookie } } : {}),
-    ...(typeof session?.shareUploadResumeToken === "string" && /^[A-Za-z0-9_-]{16,512}$/.test(session.shareUploadResumeToken) ? { resumeToken: session.shareUploadResumeToken } : {}),
+function base64UrlSha256(value: Uint8Array): string {
+  return createHash("sha256").update(value).digest("base64url");
+}
+
+function strictUploadAttestation(value: unknown, upload: ShareUploadInput, origin: string, sessionDid: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ShareAuthorityError("UNAVAILABLE", "Node returned an invalid upload attestation");
+  const record = value as Record<string, unknown>;
+  const expectedKeys = ["type", "version", "issuer", "kid", "ownerDid", "sessionDid", "shareOrigin", "encryptedBlobCid", "encryptedBlobSha256", "byteLength", "deleteAfter", "retention", "issuedAt", "expiresAt", "jti", "signature"];
+  if (Object.keys(record).sort().join("\0") !== expectedKeys.sort().join("\0")) throw new ShareAuthorityError("UNAVAILABLE", "Node returned an invalid upload attestation");
+  if (record.type !== "TinyCloudShareUploadAttestation" || record.version !== 1 || typeof record.issuer !== "string" || !record.issuer.startsWith("did:web:") || typeof record.kid !== "string" || !record.kid.startsWith(`${record.issuer}#`) || typeof record.ownerDid !== "string" || !record.ownerDid.startsWith("did:") || record.sessionDid !== sessionDid || typeof record.shareOrigin !== "string" || record.shareOrigin !== origin || record.encryptedBlobCid !== upload.cid || record.encryptedBlobSha256 !== base64UrlSha256(upload.blob) || record.byteLength !== upload.contentLength || record.deleteAfter !== upload.deleteAfter || record.retention === null || record.retention === undefined || typeof record.issuedAt !== "string" || typeof record.expiresAt !== "string" || typeof record.jti !== "string" || !/^[A-Za-z0-9_-]{16,}$/.test(record.jti) || typeof record.signature !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(record.signature)) throw new ShareAuthorityError("UNAVAILABLE", "Node returned an invalid upload attestation");
+  const issuedAt = Date.parse(record.issuedAt);
+  const expiresAt = Date.parse(record.expiresAt);
+  const now = Date.now();
+  if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || new Date(issuedAt).toISOString() !== record.issuedAt || new Date(expiresAt).toISOString() !== record.expiresAt || expiresAt <= now || expiresAt - issuedAt > 120_000 || issuedAt > now + 30_000) throw new ShareAuthorityError("UNAVAILABLE", "Node returned an expired upload attestation");
+  return record;
+}
+
+async function openKeyUploadAuthorization(input: { readonly fetchFn: typeof fetch; readonly origin: string; readonly profileName: string; readonly upload: ShareUploadInput }): Promise<ShareUploadAuthorization> {
+  const profile = await ProfileManager.getProfile(input.profileName).catch(() => {
+    throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an initialized profile");
+  });
+  if (profile.authMethod !== "openkey") throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an OpenKey session");
+  const session = await ProfileManager.getSession(input.profileName) as Record<string, unknown> | null;
+  const sessionDid = session?.verificationMethod;
+  if (session === null || typeof sessionDid !== "string" || !sessionDid.startsWith("did:key:") || typeof session.delegationHeader !== "object" || session.delegationHeader === null || typeof (session.delegationHeader as Record<string, unknown>).Authorization !== "string" || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || typeof session.jwk !== "object" || session.jwk === null || typeof (session.jwk as Record<string, unknown>).d !== "string") {
+    throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an active OpenKey session");
+  }
+  const requestWithoutDigest = {
+    shareOrigin: input.origin,
+    encryptedBlobCid: input.upload.cid,
+    encryptedBlobSha256: base64UrlSha256(input.upload.blob),
+    byteLength: input.upload.contentLength,
+    deleteAfter: input.upload.deleteAfter,
+    retention: "until-delete",
   };
+  const requestBodyDigest = base64UrlSha256(new TextEncoder().encode(canonicalize(requestWithoutDigest)));
+  const body = canonicalize({ ...requestWithoutDigest, requestBodyDigest });
+  const { invokeAny } = await import("@tinycloud/node-sdk-wasm");
+  const authorization = invokeAny(session as never, [{ spaceId: session.spaceId, service: "capabilities", path: "", action: "tinycloud.capabilities/read" }], [{ requestBodyDigest }]);
+  const nodeOrigin = canonicalNodeOrigin(profile.host);
+  let response: Response;
+  try {
+    const headers = new Headers(authorization as any);
+    headers.set("accept", "application/json");
+    headers.set("content-type", "application/json");
+    response = await input.fetchFn(new URL("/share/upload/attestation", nodeOrigin), { method: "POST", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", headers, body });
+  } catch {
+    throw new ShareAuthorityError("UNAVAILABLE", "Node upload authorization is unavailable");
+  }
+  if (response.status === 401 || response.status === 403) throw new ShareAuthorityError("AUTH_REQUIRED", "Node upload authorization was rejected");
+  if (!response.ok) throw new ShareAuthorityError("UNAVAILABLE", "Node upload authorization is unavailable");
+  let value: unknown;
+  try { value = await response.json(); } catch { throw new ShareAuthorityError("UNAVAILABLE", "Node returned an invalid upload attestation"); }
+  const attestation = strictUploadAttestation(value, input.upload, input.origin, sessionDid);
+  return { "x-tinycloud-authorization": JSON.stringify(attestation) };
 }
 
 /**
- * Establishes the same nonce-bound Share session used by the browser and
- * returns only the upload request headers. Private wallet material and the
- * session cookie never cross this adapter's boundary or enter SDK results.
+ * Mints a one-shot Node upload attestation and returns only the canonical
+ * Share authorization header. The session JWK and invocation header remain
+ * in memory for the duration of this call.
  */
 export function createProductionUploadAuthorizer(input: {
   readonly origin?: string;
   readonly fetchFn?: typeof globalThis.fetch;
-  readonly privateKey?: () => Promise<string>;
-  /** A host-issued Share session for OpenKey profiles; never derive upload authority from a session JWK. */
+  /** Test-only seam; production uses the persisted OpenKey session. */
   readonly sessionAuthorization?: () => Promise<ShareUploadAuthorization | undefined>;
-  /** Explicit noninteractive acquisition hook. It may return a host-issued cookie, never a private JWK. */
+  /** Test-only explicit acquisition hook. */
   readonly acquireUploadAuthorization?: (input: { readonly profileName: string; readonly upload: ShareUploadInput }) => Promise<ShareUploadAuthorization | undefined>;
-  /** Resume a previously issued opaque host challenge without persisting private key material. */
+  /** Test-only resume hook. */
   readonly resumeUploadAuthorization?: (input: { readonly profileName: string; readonly resumeToken: string; readonly upload: ShareUploadInput }) => Promise<ShareUploadAuthorization | undefined>;
+  /** Test-only seam. The production CLI entrypoint never sets this flag. */
+  readonly testOnly?: boolean;
   /** Resolved by the command adapter so --profile always wins over defaults. */
   readonly profileName?: () => Promise<string>;
 } = {}): (upload: ShareUploadInput) => Promise<ShareUploadAuthorization> {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
+  if (origin !== DEFAULT_SHARE_ORIGIN) throw new ShareAuthorityError("UNAVAILABLE", "share upload authorization is restricted to the canonical Share origin");
   const fetchFn = input.fetchFn ?? globalThis.fetch;
-  let sessionCookie: string | undefined;
-  let sessionExpiresAt = 0;
   return async (upload) => {
-    if (sessionCookie !== undefined && sessionExpiresAt > Date.now() + 30_000) return { cookie: sessionCookie };
     const profileName = await (input.profileName?.() ?? selectedProfileName());
-    const suppliedSession = input.sessionAuthorization === undefined
-      ? undefined
-      : await input.sessionAuthorization();
-    if (suppliedSession !== undefined) return suppliedSession;
-    const acquired = await input.acquireUploadAuthorization?.({ profileName, upload });
-    if (acquired !== undefined) return acquired;
-    const storedSession = await profileShareSessionState(profileName);
-    // A CLI process is noninteractive by contract.  An OpenKey profile with
-    // no host-issued Share session must be resumed by an explicit caller or
-    // browser flow; never create a popup or hide an authorization ceremony in
-    // a publish command.
-    if (storedSession.authorization !== undefined) return storedSession.authorization;
-    if (storedSession.resumeToken !== undefined) {
-      const resumed = await input.resumeUploadAuthorization?.({ profileName, resumeToken: storedSession.resumeToken, upload });
-      if (resumed !== undefined) return resumed;
+    if (input.testOnly === true) {
+      const suppliedSession = input.sessionAuthorization === undefined ? undefined : await input.sessionAuthorization();
+      if (suppliedSession !== undefined) return suppliedSession;
+      const acquired = await input.acquireUploadAuthorization?.({ profileName, upload });
+      if (acquired !== undefined) return acquired;
     }
     const profile = await ProfileManager.getProfile(profileName).catch(() => {
       throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an initialized profile");
     });
-    if (profile.authMethod === "openkey") throw new ShareAuthorityError("AUTH_REQUIRED", "share upload authorization must be acquired or resumed explicitly for an OpenKey profile");
-    const key = await (input.privateKey?.() ?? profilePrivateKeyFor(profileName));
-    // Keep public inspect/receive independent from the legacy Node SDK graph.
-    // Authentication is loaded only after a publish selects its auth path.
-    const { PrivateKeySigner } = await import("@tinycloud/node-sdk");
-    const signer = new PrivateKeySigner(key);
-    const address = await signer.getAddress();
-    let nonceResponse: Response;
-    try {
-      nonceResponse = await fetchFn(`${origin}/api/share/auth/openkey/nonce`, {
-        headers: { accept: "application/json", origin },
-        redirect: "error",
-        referrerPolicy: "no-referrer",
-      });
-    } catch {
-      throw new ShareAuthorityError("UNAVAILABLE", "share sign-in service is unavailable");
-    }
-    if (nonceResponse.status === 401 || nonceResponse.status === 403) throw new ShareAuthorityError("AUTH_REQUIRED", "share sign-in nonce was rejected");
-    if (!nonceResponse.ok) throw new ShareAuthorityError("UNAVAILABLE", "share sign-in service is unavailable");
-    const nonceBody = await nonceResponse.json() as { readonly nonce?: unknown; readonly expiresAt?: unknown };
-    if (typeof nonceBody.nonce !== "string" || typeof nonceBody.expiresAt !== "string") throw new Error("share sign-in challenge is invalid");
-    const issuedAt = new Date().toISOString();
-    const message = authenticationMessage(origin, address, nonceBody.nonce, issuedAt);
-    const signature = await signer.signMessage(message);
-    let authenticated: Response;
-    try {
-      authenticated = await fetchFn(`${origin}/api/share/auth/openkey`, {
-        method: "POST",
-        headers: { accept: "application/json", "content-type": "application/json", origin },
-        body: JSON.stringify({ address, signature, message, nonce: nonceBody.nonce, issuedAt }),
-        redirect: "error",
-        referrerPolicy: "no-referrer",
-      });
-    } catch {
-      throw new ShareAuthorityError("UNAVAILABLE", "share sign-in service is unavailable");
-    }
-    const cookie = cookieFromResponse(authenticated);
-    if (authenticated.status === 401 || authenticated.status === 403 || cookie === undefined) throw new ShareAuthorityError("AUTH_REQUIRED", "share sign-in was rejected");
-    if (!authenticated.ok) throw new ShareAuthorityError("UNAVAILABLE", "share sign-in service is unavailable");
-    sessionCookie = cookie;
-    sessionExpiresAt = Date.now() + 15 * 60_000;
-    return { cookie };
+    if (profile.authMethod === "openkey") return openKeyUploadAuthorization({ fetchFn, origin, profileName, upload });
+    throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an active OpenKey session");
   };
 }
