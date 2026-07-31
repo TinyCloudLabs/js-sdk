@@ -53,6 +53,14 @@ export interface AccountSpace {
   expiresAt?: Date;
 }
 
+export interface RegisterBatchSuccess {
+  spaces: AccountSpace[];
+  /** Present iff the batch write failed ambiguously and per-space
+   *  reconciliation recovered it. The original batch error verbatim, so
+   *  callers can record the degradation structurally (TC-361). */
+  recoveredFromBatchError?: ServiceError;
+}
+
 export interface AccountDelegation {
   cid: string;
   direction: "granted" | "received";
@@ -352,8 +360,8 @@ export class AccountService {
      */
     registerBatch: async (
       spaces: readonly (SpaceInfo | AccountSpace)[],
-    ): Promise<Result<AccountSpace[]>> => {
-      if (spaces.length === 0) return ok([]);
+    ): Promise<Result<RegisterBatchSuccess>> => {
+      if (spaces.length === 0) return ok({ spaces: [] });
 
       await this.config.ensureAccountSpaceHosted?.();
 
@@ -375,7 +383,7 @@ export class AccountService {
         // Index write is derived/best-effort: its failure must never cause a
         // KV rewrite, so it stays on the existing "quietly" path.
         await this.upsertSpacesIndexQuietly(registered);
-        return ok(registered);
+        return ok({ spaces: registered });
       }
 
       if (!isAmbiguousBatchFailure(batchResult.error)) {
@@ -415,7 +423,7 @@ export class AccountService {
       );
 
       await this.upsertSpacesIndexQuietly(registered);
-      return ok(registered);
+      return ok({ spaces: registered, recoveredFromBatchError: batchResult.error });
     },
 
     syncAccessible: async (): Promise<Result<AccountSpace[]>> => {
@@ -1353,6 +1361,16 @@ function isMissingIndexError(error: ServiceError): boolean {
   return /no such table:/i.test(error.message);
 }
 
+/** Server/gateway statuses where the write may have committed before the
+ *  failure. 500 is included on node-side evidence: the KV invoke route can
+ *  complete `invoke_with_options` — i.e. COMMIT the batch — and only then
+ *  return 500 while validating the committed outcomes
+ *  (tinycloud-node-server/src/routes/mod.rs:1631-1641, "KV batch put
+ *  committed unexpected invocation outcomes"). 501/505 (protocol
+ *  rejections), 408, 429 and every other 4xx are definitive: nothing was
+ *  written. */
+const AMBIGUOUS_WRITE_STATUSES = new Set([500, 502, 503, 504]);
+
 /**
  * Classify a KV batch write failure for the seed-spaces reconciliation
  * fallback (TC-373).
@@ -1364,15 +1382,32 @@ function isMissingIndexError(error: ServiceError): boolean {
  * never be retried — retrying would either repeat a definite rejection for
  * no benefit (auth, quota, a space that doesn't exist) or ignore an explicit
  * caller cancellation.
+ *
+ * This is an ALLOW-LIST: default `false`. Only the states enumerated below
+ * are treated as ambiguous; everything else — including every unknown or
+ * future error code — is deterministic and must surface immediately rather
+ * than trigger five pointless per-space reconcile puts.
  */
 function isAmbiguousBatchFailure(error: ServiceError): boolean {
-  if (error.code === ErrorCodes.AUTH_UNAUTHORIZED) return false; // 401/403
-  if (error.code === ErrorCodes.STORAGE_QUOTA_EXCEEDED) return false; // 402
-  if (error.code === ErrorCodes.STORAGE_LIMIT_REACHED) return false; // 413
-  if (error.code === ErrorCodes.ABORTED) return false; // caller abort
-  if (error.meta?.status === 404) return false; // space not hosted
+  // Transport-layer failures: ambiguous ONLY if a fully-constructed request
+  // was actually handed to fetch. A pre-dispatch throw (serialization, WASM
+  // signing — including one wrapError labels TIMEOUT) is deterministic.
+  if (
+    error.code === ErrorCodes.NETWORK_ERROR ||
+    error.code === ErrorCodes.TIMEOUT
+  ) {
+    return error.meta?.requestMayHaveDispatched === true;
+  }
 
-  return true;
+  // The server responded, but the outcome is unstated.
+  if (error.code === ErrorCodes.KV_WRITE_FAILED) {
+    const status = error.meta?.status;
+    return typeof status === "number" && AMBIGUOUS_WRITE_STATUSES.has(status);
+  }
+
+  // Everything else — including every unknown/future code — is treated as
+  // deterministic. Unknown ≠ ambiguous: fail fast and surface.
+  return false;
 }
 
 async function ignoreIndexFailure(task: () => Promise<unknown>): Promise<void> {

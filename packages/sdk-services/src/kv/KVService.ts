@@ -962,6 +962,14 @@ export class KVService extends BaseService implements IKVService {
         seen.add(path);
       }
 
+      // Conservative: `true` means we handed a fully-constructed request to
+      // fetch(). It does NOT prove bytes reached the node — DNS/connect
+      // failures and synchronous fetch rejections are included. Proving
+      // actual dispatch requires lower-level transport instrumentation (out
+      // of scope). The over-approximation is intentional and bounded: it can
+      // only cause a reconciliation of at most N idempotent, byte-identical
+      // overwrites — never a corrupted or differently-timestamped record.
+      let requestMayHaveDispatched = false;
       try {
         const body = new FormData();
         for (let index = 0; index < items.length; index++) {
@@ -981,12 +989,16 @@ export class KVService extends BaseService implements IKVService {
           }))
         );
 
-        const response = await this.context.fetch(`${this.host}/invoke`, {
+        const url = `${this.host}/invoke`;
+        const init = {
           method: "POST",
           headers,
           body,
           signal: this.combineSignals(options?.signal),
-        });
+        };
+
+        requestMayHaveDispatched = true;
+        const response = await this.context.fetch(url, init);
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -1021,11 +1033,25 @@ export class KVService extends BaseService implements IKVService {
 
         const batchResponse = this.normalizeBatchPutResponse(await response.json());
         if (!batchResponse) {
+          // The code stays NETWORK_ERROR deliberately: adding a member to
+          // ErrorCodes (types.ts:73-115) widens the exported ErrorCode union
+          // (:117) and would break consumers with exhaustive switches. The
+          // node answered 2xx (the write very likely landed) but the body
+          // could not confirm it, so the ambiguity is carried in metadata
+          // instead of a dedicated code.
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
               "KV batchPut response did not include matching written keys and count",
-              "kv"
+              "kv",
+              {
+                meta: {
+                  requestMayHaveDispatched: true,
+                  responseReceived: true,
+                  status: response.status,
+                  outcome: "batch-unconfirmed",
+                },
+              }
             )
           );
         }
@@ -1043,18 +1069,32 @@ export class KVService extends BaseService implements IKVService {
           batchResponse.written.every((key) => requestedPaths.has(key));
 
         if (!matchesRequest) {
+          // Same rationale as above: NETWORK_ERROR is kept and the
+          // ambiguity is carried in meta rather than a new ErrorCodes member.
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
               `KV batchPut response did not confirm all ${paths.length} requested key(s) were written`,
-              "kv"
+              "kv",
+              {
+                meta: {
+                  requestMayHaveDispatched: true,
+                  responseReceived: true,
+                  status: response.status,
+                  outcome: "batch-unconfirmed",
+                },
+              }
             )
           );
         }
 
         return ok(batchResponse);
       } catch (error) {
-        return err(wrapError("kv", error));
+        const wrapped = wrapError("kv", error);
+        return err({
+          ...wrapped,
+          meta: { ...wrapped.meta, requestMayHaveDispatched },
+        });
       }
     });
   }

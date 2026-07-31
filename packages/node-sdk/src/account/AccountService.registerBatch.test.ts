@@ -122,13 +122,18 @@ function makeHarness(options: HarnessOptions = {}) {
 
 describe("AccountService.spaces.registerBatch", () => {
   test("writes all 5 spaces in ONE batchPut call, never falling back to per-space put", async () => {
-    const { service, batchPut, put } = makeHarness();
+    const { service, batchPut, put, dbBatch } = makeHarness();
 
     const result = await service.spaces.registerBatch(FIVE_SPACES);
 
     expect(result.ok).toBe(true);
-    expect(result.ok && result.data).toHaveLength(5);
+    expect(result.ok && result.data.spaces).toHaveLength(5);
+    expect(result.ok && result.data.recoveredFromBatchError).toBeUndefined();
+    // Clean-path regression guard (TC-373): exactly one batchPut, exactly
+    // one index write, zero per-space put calls. Any future change that
+    // trades a request for convenience must fail this loudly.
     expect(batchPut).toHaveBeenCalledTimes(1);
+    expect(dbBatch).toHaveBeenCalledTimes(1);
     expect(put).not.toHaveBeenCalled();
     const [items] = batchPut.mock.calls[0] as [Array<{ key: string }>];
     expect(items).toHaveLength(5);
@@ -142,7 +147,7 @@ describe("AccountService.spaces.registerBatch", () => {
 
     const result = await service.spaces.registerBatch([]);
 
-    expect(result).toEqual({ ok: true, data: [] });
+    expect(result).toEqual({ ok: true, data: { spaces: [] } });
     expect(batchPut).not.toHaveBeenCalled();
     expect(put).not.toHaveBeenCalled();
     expect(dbBatch).not.toHaveBeenCalled();
@@ -170,6 +175,19 @@ describe("AccountService.spaces.registerBatch", () => {
     ["quota (413)", { code: ErrorCodes.STORAGE_LIMIT_REACHED, message: "Storage limit reached", service: "kv" }],
     ["space not hosted (404)", { code: "KV_WRITE_FAILED", message: "404 - Space not found", service: "kv", meta: { status: 404 } }],
     ["caller abort", { code: ErrorCodes.ABORTED, message: "Request was aborted.", service: "kv" }],
+    ["auth required (client-side, nothing constructed)", { code: ErrorCodes.AUTH_REQUIRED, message: "Authentication required. Please sign in first.", service: "kv" }],
+    ["invalid input (duplicate key, never dispatches, no meta)", { code: ErrorCodes.INVALID_INPUT, message: "KV batchPut received duplicate key after prefix resolution: spaces/x", service: "kv" }],
+    ["KV_WRITE_FAILED 400", { code: "KV_WRITE_FAILED", message: "400 - Bad Request", service: "kv", meta: { status: 400 } }],
+    ["KV_WRITE_FAILED 408", { code: "KV_WRITE_FAILED", message: "408 - Request Timeout", service: "kv", meta: { status: 408 } }],
+    ["KV_WRITE_FAILED 409", { code: "KV_WRITE_FAILED", message: "409 - Conflict", service: "kv", meta: { status: 409 } }],
+    ["KV_WRITE_FAILED 422", { code: "KV_WRITE_FAILED", message: "422 - Unprocessable Entity", service: "kv", meta: { status: 422 } }],
+    ["KV_WRITE_FAILED 429", { code: "KV_WRITE_FAILED", message: "429 - Too Many Requests", service: "kv", meta: { status: 429 } }],
+    ["KV_WRITE_FAILED 501", { code: "KV_WRITE_FAILED", message: "501 - Not Implemented", service: "kv", meta: { status: 501 } }],
+    ["KV_WRITE_FAILED 505", { code: "KV_WRITE_FAILED", message: "505 - HTTP Version Not Supported", service: "kv", meta: { status: 505 } }],
+    ["NETWORK_ERROR with no meta at all", { code: ErrorCodes.NETWORK_ERROR, message: "fetch failed", service: "kv" }],
+    ["NETWORK_ERROR with requestMayHaveDispatched: false (pre-dispatch throw)", { code: ErrorCodes.NETWORK_ERROR, message: "fetch failed", service: "kv", meta: { requestMayHaveDispatched: false } }],
+    ["TIMEOUT with requestMayHaveDispatched: false (pre-fetch invokeAny timeout)", { code: ErrorCodes.TIMEOUT, message: "Request timed out.", service: "kv", meta: { requestMayHaveDispatched: false } }],
+    ["an unknown/future error code", { code: "SOME_FUTURE_CODE", message: "something new", service: "kv" }],
   ])("never falls back to per-space put for %s", async (_label, error) => {
     const { service, put, batchPut } = makeHarness({
       batchPutImpl: async () => ({ ok: false, error }),
@@ -209,6 +227,16 @@ describe("AccountService.spaces.registerBatch", () => {
 
       expect(result.ok).toBe(true);
       expect(put).toHaveBeenCalledTimes(5);
+
+      // Primary contract (TC-361): the recovery is surfaced structurally on
+      // the success payload, not only via console.warn.
+      if (result.ok) {
+        expect(result.data.spaces).toHaveLength(5);
+        expect(result.data.recoveredFromBatchError?.code).toBe("KV_WRITE_FAILED");
+        expect(result.data.recoveredFromBatchError?.message).toContain(
+          "500 - internal error after commit",
+        );
+      }
 
       // The fallback must reuse the EXACT SAME record objects computed for
       // the batch attempt, not regenerate them via a second
@@ -277,5 +305,41 @@ describe("AccountService.spaces.registerBatch", () => {
     // Crucially: the index failure must not cause a retry/rewrite of the KV data.
     expect(put).not.toHaveBeenCalled();
     expect(dbBatch).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    [
+      "NETWORK_ERROR with requestMayHaveDispatched: true",
+      { code: ErrorCodes.NETWORK_ERROR, message: "connection reset mid-flight", service: "kv", meta: { requestMayHaveDispatched: true } },
+    ],
+    [
+      "TIMEOUT with requestMayHaveDispatched: true",
+      { code: ErrorCodes.TIMEOUT, message: "Request timed out.", service: "kv", meta: { requestMayHaveDispatched: true } },
+    ],
+    [
+      "the unconfirmed-2xx shape",
+      {
+        code: ErrorCodes.NETWORK_ERROR,
+        message: "KV batchPut response did not confirm all 5 requested key(s) were written",
+        service: "kv",
+        meta: { requestMayHaveDispatched: true, responseReceived: true, status: 200, outcome: "batch-unconfirmed" },
+      },
+    ],
+    ["KV_WRITE_FAILED 500 (commit-then-500)", { code: "KV_WRITE_FAILED", message: "500 - internal error after commit", service: "kv", meta: { status: 500 } }],
+    ["KV_WRITE_FAILED 502", { code: "KV_WRITE_FAILED", message: "502 bad gateway", service: "kv", meta: { status: 502 } }],
+    ["KV_WRITE_FAILED 503", { code: "KV_WRITE_FAILED", message: "503 service unavailable", service: "kv", meta: { status: 503 } }],
+    ["KV_WRITE_FAILED 504", { code: "KV_WRITE_FAILED", message: "504 gateway timeout", service: "kv", meta: { status: 504 } }],
+  ])("reconciles via per-space puts for %s (one row per include decision)", async (_label, error) => {
+    const { service, put } = makeHarness({
+      batchPutImpl: async () => ({ ok: false, error }),
+    });
+
+    const result = await service.spaces.registerBatch(FIVE_SPACES);
+
+    expect(result.ok).toBe(true);
+    expect(put).toHaveBeenCalledTimes(5);
+    if (result.ok) {
+      expect(result.data.recoveredFromBatchError?.code).toBe(error.code);
+    }
   });
 });

@@ -415,6 +415,14 @@ describe("KVService.batchPut", () => {
     if (!result.ok) {
       expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
       expect(result.error.message).toContain("5 requested key(s)");
+      // TC-373 §2a: the node DID answer 2xx, so the ambiguity is carried in
+      // meta rather than a new error code (Sol B4).
+      expect(result.error.meta).toEqual({
+        requestMayHaveDispatched: true,
+        responseReceived: true,
+        status: 200,
+        outcome: "batch-unconfirmed",
+      });
     }
   });
 
@@ -432,6 +440,12 @@ describe("KVService.batchPut", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta).toEqual({
+        requestMayHaveDispatched: true,
+        responseReceived: true,
+        status: 200,
+        outcome: "batch-unconfirmed",
+      });
     }
   });
 
@@ -452,6 +466,121 @@ describe("KVService.batchPut", () => {
 
     const result = await service.batchPut(fiveItems());
     expect(result.ok).toBe(false);
+    // Sol B6d: this test asserted only result.ok === false before; give it
+    // the same explicit code + meta assertions as its siblings.
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta).toEqual({
+        requestMayHaveDispatched: true,
+        responseReceived: true,
+        status: 200,
+        outcome: "batch-unconfirmed",
+      });
+    }
+  });
+
+  test("rejects a 2xx response whose body cannot be normalized at all (missing written/count)", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => response(true, 200, {}), [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta).toEqual({
+        requestMayHaveDispatched: true,
+        responseReceived: true,
+        status: 200,
+        outcome: "batch-unconfirmed",
+      });
+    }
+  });
+
+  test("a fetch-level throw (post-dispatch) is NETWORK_ERROR with requestMayHaveDispatched: true", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        throw new Error("connection reset");
+      }, [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta?.requestMayHaveDispatched).toBe(true);
+    }
+  });
+
+  test("a fetch-level TimeoutError throw is TIMEOUT with requestMayHaveDispatched: true", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        const timeoutError = new Error("the operation timed out");
+        timeoutError.name = "TimeoutError";
+        throw timeoutError;
+      }, [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.TIMEOUT);
+      expect(result.error.meta?.requestMayHaveDispatched).toBe(true);
+    }
+  });
+
+  test("a pre-fetch invokeAny throw (plain Error) is NETWORK_ERROR with requestMayHaveDispatched: false and never reaches fetch", async () => {
+    let fetchCalls = 0;
+    const service = new KVService({});
+    const baseContext = createContext(async () => {
+      fetchCalls++;
+      return response(true, 200, { written: [...FIVE_KEYS], count: 5 });
+    }, [], []);
+    service.initialize({
+      ...baseContext,
+      invokeAny: () => {
+        throw new Error("signing failed");
+      },
+    });
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta?.requestMayHaveDispatched).toBe(false);
+    }
+    expect(fetchCalls).toBe(0);
+  });
+
+  // Sol B1/B6c: a pre-fetch throw whose name/message says "timeout" must NOT
+  // be reconciled by AccountService — it is deterministic (nothing was
+  // dispatched), even though wrapError labels it TIMEOUT.
+  test("a pre-fetch invokeAny TimeoutError throw is TIMEOUT with requestMayHaveDispatched: false and never reaches fetch", async () => {
+    let fetchCalls = 0;
+    const service = new KVService({});
+    const baseContext = createContext(async () => {
+      fetchCalls++;
+      return response(true, 200, { written: [...FIVE_KEYS], count: 5 });
+    }, [], []);
+    service.initialize({
+      ...baseContext,
+      invokeAny: () => {
+        const timeoutError = new Error("the operation timed out");
+        timeoutError.name = "TimeoutError";
+        throw timeoutError;
+      },
+    });
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.TIMEOUT);
+      expect(result.error.meta?.requestMayHaveDispatched).toBe(false);
+    }
+    expect(fetchCalls).toBe(0);
   });
 
   test("JSON values written via batchPut round-trip through get() as parsed objects (canonical read)", async () => {

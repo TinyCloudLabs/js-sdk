@@ -76,7 +76,7 @@ describe("seed-spaces bootstrap step batches all 5 spaces in ONE call (TC-373)",
 
     const registerBatch = mock(async (spaces: any[]) => ({
       ok: true,
-      data: spaces.map((s) => ({ ...s })),
+      data: { spaces: spaces.map((s) => ({ ...s })) },
     }));
     const register = mock(async () => ({ ok: true, data: {} }));
     (node as any)._account = { spaces: { registerBatch, register } };

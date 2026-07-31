@@ -148,6 +148,7 @@ export {
   type SecretReadInput,
   type SecretPermissionHint,
   type SecretReadResult,
+  type BootstrapWarning,
 } from "./TinyCloudNode";
 export type { OwnerDelegationPermission } from "@tinycloud/sdk-core";
 
@@ -167,6 +168,7 @@ export type {
   AccountSpace,
   AccountSpaceListOptions,
   AccountStatus,
+  RegisterBatchSuccess,
 } from "./account/AccountService";
 
 // Capability-chain primitives (spec: .claude/specs/capability-chain.md).
