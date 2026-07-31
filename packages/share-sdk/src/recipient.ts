@@ -102,6 +102,17 @@ function selectedAction(envelope: ShareEnvelopeV2): string {
   return envelope.actions.includes("list") ? "tinycloud.kv/list" : envelope.actions.includes("edit") ? "tinycloud.kv/put" : "tinycloud.kv/get";
 }
 
+async function verifyDetachedResponse(response: Response, trust: ShareNodeTrust): Promise<void> {
+  let value: unknown;
+  try { value = await response.clone().json(); } catch { throw new Error("share read response is invalid"); }
+  const record = object(value, "share read response");
+  const proof = object(record.proof, "share read detached proof");
+  if (proof.alg !== "EdDSA" || proof.kid !== trust.invitationKid) throw new Error("share read detached proof is invalid");
+  const unsigned = { ...record };
+  delete unsigned.proof;
+  if (!ed25519.verify(bytes(proof.signature, "share read signature"), new TextEncoder().encode(`xyz.tinycloud.share/read-response/v2\0${canonicalize(unsigned)}`), trustedPublicKey(trust))) throw new Error("share read detached proof is invalid");
+}
+
 async function post(fetchFn: typeof fetch, origin: string, path: string, body: unknown): Promise<unknown> {
   const response = await fetchFn(new URL(path, origin), { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify(body) });
   if (!response.ok) throw new Error("share authority rejected the request");
@@ -233,7 +244,9 @@ export class ShareRecipientClient {
     const invocation = { ...invocationBase, requestBodyDigest };
     const proof = { ...this.holderProof, signature: toBase64Url(await this.signer(new TextEncoder().encode(`${INVOCATION_DOMAIN}${canonicalize(invocation)}`))) };
     const signedRequest = { sessionId: this.session.sessionId, delegationCid: this.options.envelope.delegationCid, authorityMaterialHandle: this.options.envelope.authorityMaterialHandle, authorityMaterialDigest: this.options.envelope.authorityMaterialDigest, contentSource: this.options.envelope.contentSource, contentSourceDigest: this.options.envelope.contentSourceDigest, action, actions, resource, requestBodyDigest, invocation, proof };
-    return this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { accept: "application/vnd.tinycloud.share+json", "content-type": "application/vnd.tinycloud.share+json" }, body: JSON.stringify({ request: signedRequest, ...(action === "tinycloud.kv/list" ? { limit: 100 } : {}), ...(bodyBytes === undefined ? {} : { body: toBase64Url(bodyBytes), bodyDigest, ifMatch: request.ifMatch, contentType: request.contentType }) }) });
+    const response = await this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { accept: "application/vnd.tinycloud.share+json", "content-type": "application/vnd.tinycloud.share+json" }, body: JSON.stringify({ request: signedRequest, ...(action === "tinycloud.kv/list" ? { limit: 100 } : {}), ...(bodyBytes === undefined ? {} : { body: toBase64Url(bodyBytes), bodyDigest, ifMatch: request.ifMatch, contentType: request.contentType }) }) });
+    if (response.ok) await verifyDetachedResponse(response, this.options.trustedNode);
+    return response;
   }
 }
 
