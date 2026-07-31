@@ -6,7 +6,7 @@ module.exports = {
   entry: "./src/coordinationos-vendor.ts",
   output: {
     ...esmConfig.output,
-    filename: "tinycloud-web-sdk-2.10.0-beta.0.mjs",
+    filename: "tinycloud-web-sdk-2.11.0-beta.1.mjs",
     path: path.resolve(__dirname, "dist/vendor"),
   },
 };

@@ -111,6 +111,8 @@ const ENDPOINT = "https://openkey.example.test/api/delegate/sign";
 const SESSION_PREFIX = "coordinationos:tinycloud:session:v1:" as const;
 const CANARY_PATH =
   "coordinationos/integration/v1/XxEf1YZ9gjryBBuLxMubX_/canary";
+const INVITE_CODE_PATH =
+  "coordinationos/integration/v1/XxEf1YZ9gjryBBuLxMubX_/invite-code";
 const MANIFEST = {
   manifest_version: 1,
   app_id: "xyz.tinycloud.coordinationos",
@@ -124,6 +126,18 @@ const MANIFEST = {
       service: "tinycloud.kv",
       space: "applications",
       path: CANARY_PATH,
+      actions: ["get", "put"],
+    },
+  ],
+} as const;
+const INVITE_MANIFEST = {
+  ...MANIFEST,
+  permissions: [
+    ...MANIFEST.permissions,
+    {
+      service: "tinycloud.kv",
+      space: "applications",
+      path: INVITE_CODE_PATH,
       actions: ["get", "put"],
     },
   ],
@@ -375,6 +389,53 @@ test("fresh sign-in sends one unchanged SIWE sign-in body with one Bearer token"
     ...VALID_REQUEST,
     keyId: KEY_ID,
   });
+});
+
+test("fresh sign-in grants only the exact canary and invite-code records", async () => {
+  const input = options(TOKEN);
+  input.manifest = INVITE_MANIFEST as any;
+
+  const result = await establishOpenKeySession(input);
+
+  expect(result.status).toBe("established");
+  expect(constructedConfigs[0].capabilityRequest.resources).toEqual([
+    {
+      service: "tinycloud.kv",
+      space: "applications",
+      path: CANARY_PATH,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+    },
+    {
+      service: "tinycloud.kv",
+      space: "applications",
+      path: INVITE_CODE_PATH,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+    },
+  ]);
+});
+
+test.each([
+  ["invite without canary", [INVITE_MANIFEST.permissions[1]]],
+  [
+    "unknown extra record",
+    [
+      ...INVITE_MANIFEST.permissions,
+      {
+        service: "tinycloud.kv",
+        space: "applications",
+        path: "coordinationos/integration/v1/extra",
+        actions: ["get", "put"],
+      },
+    ],
+  ],
+])("rejects %s before construction", async (_name, permissions) => {
+  const input = options(TOKEN);
+  input.manifest = {...MANIFEST, permissions} as any;
+
+  await expect(establishOpenKeySession(input)).rejects.toThrow(
+    "approved CoordinationOS KV records",
+  );
+  expect(constructorCount).toBe(0);
 });
 
 test("a simulated second callback rejects locally after one signer fetch", async () => {
