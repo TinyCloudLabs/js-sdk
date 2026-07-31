@@ -619,9 +619,9 @@ export interface TinyCloudNodeConfig {
   tinycloudRegistryUrl?: string | null;
   /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
   tinycloudFallbackHosts?: string[] | null;
-  /** Probe for a locally-running TinyCloud node before registry/fallback resolution. Default: true. */
+  /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
   autoDiscoverLocalNode?: boolean;
-  /** Local loopback node URL to probe. Default: http://127.0.0.1:8000. */
+  /** Local loopback node URL to probe. Omit to avoid probing loopback. */
   localNodeUrl?: string;
   /** Known `*.local.tinycloud.link` subdomain name, probed directly. */
   localLinkName?: string;

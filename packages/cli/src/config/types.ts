@@ -72,12 +72,12 @@ export interface ProfileConfig {
    */
   openkeyHost?: string;
   /**
-   * Probe for a locally-running TinyCloud node before using the profile's
+   * Probe configured/registered local nodes before using the profile's
    * stored host. Default: true. Set false to restore the pre-TC-106
    * resolution order (--host > TC_HOST > profile.host > default).
    */
   autoDiscoverLocalNode?: boolean;
-  /** Local loopback node URL to probe. Default: http://127.0.0.1:8000. */
+  /** Local loopback node URL to probe. Omit to avoid probing loopback. */
   localNodeUrl?: string;
   /** Known `*.local.tinycloud.link` subdomain name, probed directly. */
   localLinkName?: string;

@@ -44,7 +44,7 @@ export const DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL =
   "https://registry.tinycloud.xyz";
 export const DEFAULT_TINYCLOUD_FALLBACK_HOST = "https://node.tinycloud.xyz";
 
-/** Default local loopback node URL probed before registry/fallback resolution. */
+/** Conventional local loopback node URL. Probed only when explicitly configured. */
 export const DEFAULT_LOCAL_NODE_URL = "http://127.0.0.1:8000";
 /** Probe timeout for the local loopback candidate. No retries. */
 export const LOCAL_LOOPBACK_PROBE_TIMEOUT_MS = 250;
@@ -194,7 +194,7 @@ export interface DiscoverLocalTinyCloudNodeOptions {
   subject?: string;
   /** Enable local-node auto-discovery. Default true. */
   autoDiscoverLocalNode?: boolean;
-  /** Local loopback node URL to probe. Default http://127.0.0.1:8000. */
+  /** Local loopback node URL to probe. Omit to avoid probing loopback. */
   localNodeUrl?: string;
   /** Known `*.local.tinycloud.link` subdomain name, probed directly. */
   localLinkName?: string;
@@ -230,12 +230,12 @@ export interface ResolveTinyCloudHostsOptions {
   /** Verify centralized/blockchain record signatures. Default true. */
   verifyRecords?: boolean;
   /**
-   * Probe for a locally-running TinyCloud node before falling back to
-   * registry/hosted resolution. Default true. Setting false restores the
-   * exact pre-TC-106 resolution order (registry → fallback).
+   * Probe configured and registered local TinyCloud node endpoints before
+   * falling back to registry/hosted resolution. Default true. The loopback
+   * URL is probed only when `localNodeUrl` is explicitly configured.
    */
   autoDiscoverLocalNode?: boolean;
-  /** Local loopback node URL to probe. Default http://127.0.0.1:8000. */
+  /** Local loopback node URL to probe. Omit to avoid probing loopback. */
   localNodeUrl?: string;
   /** Known `*.local.tinycloud.link` subdomain name, probed directly. */
   localLinkName?: string;
@@ -544,17 +544,18 @@ export async function discoverLocalTinyCloudNode(
   const identityStore =
     options.identityStore ?? defaultLocalNodeIdentityStore;
 
-  // Cheap, static candidates first — no network round trip beyond the probe
-  // itself. The registry lookup below is only reached if these don't pan
-  // out, so the common case (a node running at the default loopback) never
-  // pays for an extra registry request.
-  const staticCandidates: LocalNodeCandidate[] = [
-    {
+  // Explicit static candidates first — no network round trip beyond their
+  // probes. Loopback is intentionally opt-in: silently fetching 127.0.0.1
+  // from a web SDK can trigger a browser local-network permission prompt.
+  // Registry-discovered *.local.tinycloud.link candidates remain enabled.
+  const staticCandidates: LocalNodeCandidate[] = [];
+  if (options.localNodeUrl) {
+    staticCandidates.push({
       source: "local-loopback",
-      url: options.localNodeUrl ?? DEFAULT_LOCAL_NODE_URL,
+      url: options.localNodeUrl,
       timeoutMs: LOCAL_LOOPBACK_PROBE_TIMEOUT_MS,
-    },
-  ];
+    });
+  }
   if (options.localLinkName) {
     if (isValidDnsLabel(options.localLinkName)) {
       staticCandidates.push({
