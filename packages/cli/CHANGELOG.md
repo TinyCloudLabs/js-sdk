@@ -1,5 +1,53 @@
 # @tinycloud/cli
 
+## 0.8.3-beta.3
+
+### Patch Changes
+
+- 746cb02: Stop implicitly probing `127.0.0.1` during TinyCloud host discovery. Loopback
+  discovery now requires an explicit `localNodeUrl`, while configured and
+  registry-discovered `*.local.tinycloud.link` nodes continue to work.
+- Updated dependencies [746cb02]
+  - @tinycloud/node-sdk@2.11.0-beta.4
+  - @tinycloud/operations@0.3.2-beta.3
+
+## 0.8.3-beta.2
+
+### Patch Changes
+
+- @tinycloud/node-sdk@2.11.0-beta.3
+- @tinycloud/operations@0.3.2-beta.2
+
+## 0.8.3-beta.1
+
+### Patch Changes
+
+- Updated dependencies [d1d675b]
+  - @tinycloud/node-sdk@2.11.0-beta.1
+  - @tinycloud/operations@0.3.2-beta.1
+
+## 0.8.3-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@2.11.0-beta.0
+- @tinycloud/operations@0.3.2-beta.0
+
+## 0.8.2
+
+### Patch Changes
+
+- Updated dependencies [28cc430]
+  - @tinycloud/node-sdk@2.10.0
+  - @tinycloud/operations@0.3.1
+
+## 0.8.2-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@2.10.0-beta.1
+- @tinycloud/operations@0.3.1-beta.1
+
 ## 0.8.2-beta.0
 
 ### Patch Changes

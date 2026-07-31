@@ -140,17 +140,22 @@ export {
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
+  type EnsureEncryptionNetworkOptions,
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
+  type RegisterOwnerSharePolicyParams,
+  type OwnerSharePolicyRegistrationReceipt,
   type SecretReadInput,
   type SecretPermissionHint,
   type SecretReadResult,
 } from "./TinyCloudNode";
+export type { OwnerDelegationPermission } from "@tinycloud/sdk-core";
 
 export { AccountService } from "./account/AccountService";
 export type {
   AccountApplication,
   AccountApplicationListOptions,
+  AccountApplicationRegisterOptions,
   AccountDelegation,
   AccountDelegationListOptions,
   AccountDelegationRevokeOptions,

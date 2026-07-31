@@ -1,5 +1,57 @@
 # @tinycloudlabs/node-sdk
 
+## 2.11.0-beta.4
+
+### Patch Changes
+
+- 746cb02: Stop implicitly probing `127.0.0.1` during TinyCloud host discovery. Loopback
+  discovery now requires an explicit `localNodeUrl`, while configured and
+  registry-discovered `*.local.tinycloud.link` nodes continue to work.
+- Updated dependencies [746cb02]
+  - @tinycloud/sdk-core@2.11.0-beta.4
+
+## 2.11.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [55e76c5]
+  - @tinycloud/sdk-core@2.11.0-beta.3
+
+## 2.11.0-beta.1
+
+### Patch Changes
+
+- d1d675b: Allow owner delegations to sign exact permissions across TinyCloud services, including the owner encryption network's decrypt capability, while preserving the legacy single-resource API.
+- Updated dependencies [d1d675b]
+  - @tinycloud/sdk-core@2.11.0-beta.1
+
+## 2.11.0-beta.0
+
+### Patch Changes
+
+- Updated dependencies [b5d2e10]
+  - @tinycloud/sdk-core@2.11.0-beta.0
+
+## 2.10.0
+
+### Minor Changes
+
+- 28cc430: Add batch KV reads and memoize TinyCloud node descriptor lookups to reduce SDK round trips.
+
+### Patch Changes
+
+- Updated dependencies [28cc430]
+- Updated dependencies [48a5408]
+  - @tinycloud/sdk-core@2.10.0
+  - @tinycloud/sdk-services@2.10.0
+
+## 2.10.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies [48a5408]
+  - @tinycloud/sdk-core@2.10.0-beta.1
+
 ## 2.10.0-beta.0
 
 ### Minor Changes

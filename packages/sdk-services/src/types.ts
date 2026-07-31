@@ -215,6 +215,7 @@ export interface FetchRequestInit {
   headers?: ServiceHeaders;
   body?: Blob | FormData | string;
   signal?: AbortSignal;
+  redirect?: "error";
 }
 
 /**

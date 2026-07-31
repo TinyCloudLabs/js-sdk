@@ -2,32 +2,8 @@ name: Operations and MCP conformance
 
 on:
   pull_request:
-    paths:
-      - "packages/operations/**"
-      - "packages/cli/**"
-      - "packages/mcp/**"
-      - "packages/node-sdk/**"
-      - "packages/sdk-core/**"
-      - "packages/sdk-services/**"
-      - "packages/sdk-rs/**"
-      - "tests/operations-mcp-conformance/**"
-      - "scripts/check-operations-mcp*.ts"
-      - "scripts/generate-operations-mcp.ts"
-      - ".github/workflows/operations-mcp.yml"
-      - "package.json"
-      - "bun.lock"
   push:
     branches: [master]
-    paths:
-      - "packages/operations/**"
-      - "packages/cli/**"
-      - "packages/mcp/**"
-      - "tests/operations-mcp-conformance/**"
-      - "scripts/check-operations-mcp*.ts"
-      - "scripts/generate-operations-mcp.ts"
-      - ".github/workflows/operations-mcp.yml"
-      - "package.json"
-      - "bun.lock"
 
 concurrency:
   group: operations-mcp-${{ github.workflow }}-${{ github.ref }}

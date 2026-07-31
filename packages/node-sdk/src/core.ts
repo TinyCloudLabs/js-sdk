@@ -113,15 +113,21 @@ export {
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
+  type EnsureEncryptionNetworkOptions,
   type SecretReadInput,
   type SecretPermissionHint,
   type SecretReadResult,
+  type CreateOwnerDelegationParams,
+  type OwnerDelegationReceipt,
+  type RegisterOwnerSharePolicyParams,
+  type OwnerSharePolicyRegistrationReceipt,
 } from "./TinyCloudNode";
 
 export { AccountService } from "./account/AccountService";
 export type {
   AccountApplication,
   AccountApplicationListOptions,
+  AccountApplicationRegisterOptions,
   AccountDelegation,
   AccountDelegationListOptions,
   AccountDelegationRevokeOptions,

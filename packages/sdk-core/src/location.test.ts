@@ -243,10 +243,11 @@ describe("resolveCloudLocation", () => {
 });
 
 describe("discoverLocalTinyCloudNode candidate ordering", () => {
-  it("adopts the default loopback candidate first and pins its DID", async () => {
+  it("adopts an explicitly configured loopback candidate and pins its DID", async () => {
     const requests: string[] = [];
     const store = createInMemoryLocalNodeIdentityStore();
     const discovered = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: NODE_DID } }, requests),
       identityStore: store,
     });
@@ -267,6 +268,7 @@ describe("discoverLocalTinyCloudNode candidate ordering", () => {
     const linkUrl = "https://myname.local.tinycloud.link";
     const requests: string[] = [];
     const discovered = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       localLinkName: "myname",
       fetch: fakeFetch({ [linkUrl]: { nodeDid: NODE_DID } }, requests),
       identityStore: createInMemoryLocalNodeIdentityStore(),
@@ -300,6 +302,7 @@ describe("discoverLocalTinyCloudNode candidate ordering", () => {
   it("only consults the registry after the static candidates fail", async () => {
     const requests: string[] = [];
     const discovered = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       subject: TEST_SUBJECT,
       registryUrl: "https://registry.example",
       verifyRecords: false,
@@ -329,6 +332,7 @@ describe("discoverLocalTinyCloudNode probe failures", () => {
   for (const [label, error] of failureModes) {
     it(`silently returns null on ${label}`, async () => {
       const discovered = await discoverLocalTinyCloudNode({
+        localNodeUrl: DEFAULT_LOCAL_NODE_URL,
         fetch: fakeFetch({}, [], () => error),
         identityStore: createInMemoryLocalNodeIdentityStore(),
       });
@@ -338,6 +342,7 @@ describe("discoverLocalTinyCloudNode probe failures", () => {
 
   it("skips a candidate whose /healthz is unhealthy", async () => {
     const discovered = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { healthy: false } }),
       identityStore: createInMemoryLocalNodeIdentityStore(),
     });
@@ -347,6 +352,7 @@ describe("discoverLocalTinyCloudNode probe failures", () => {
   it("skips a healthy candidate whose /info reports no nodeId", async () => {
     const store = createInMemoryLocalNodeIdentityStore();
     const discovered = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: {} }),
       identityStore: store,
     });
@@ -358,6 +364,7 @@ describe("discoverLocalTinyCloudNode probe failures", () => {
 describe("discoverLocalTinyCloudNode identity pinning", () => {
   it("adopts a node whose DID matches expectedNodeDid", async () => {
     const discovered = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       expectedNodeDid: NODE_DID,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: NODE_DID } }),
       identityStore: createInMemoryLocalNodeIdentityStore(),
@@ -368,6 +375,7 @@ describe("discoverLocalTinyCloudNode identity pinning", () => {
   it("rejects a node whose DID does not match expectedNodeDid", async () => {
     const store = createInMemoryLocalNodeIdentityStore();
     const discovered = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       expectedNodeDid: NODE_DID,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: OTHER_NODE_DID } }),
       identityStore: store,
@@ -381,6 +389,7 @@ describe("discoverLocalTinyCloudNode identity pinning", () => {
     const store = createInMemoryLocalNodeIdentityStore();
 
     const first = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: NODE_DID } }),
       identityStore: store,
     });
@@ -388,6 +397,7 @@ describe("discoverLocalTinyCloudNode identity pinning", () => {
     expect(await store.get(DEFAULT_LOCAL_NODE_URL)).toBe(NODE_DID);
 
     const second = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: OTHER_NODE_DID } }),
       identityStore: store,
     });
@@ -401,6 +411,7 @@ describe("discoverLocalTinyCloudNode identity pinning", () => {
     await store.set(DEFAULT_LOCAL_NODE_URL, NODE_DID);
 
     const discovered = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: NODE_DID } }),
       identityStore: store,
     });
@@ -412,6 +423,7 @@ describe("discoverLocalTinyCloudNode identity pinning", () => {
     await store.set(DEFAULT_LOCAL_NODE_URL, OTHER_NODE_DID);
 
     const discovered = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       expectedNodeDid: NODE_DID,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: NODE_DID } }),
       identityStore: store,
@@ -425,6 +437,7 @@ describe("discoverLocalTinyCloudNode identity pinning", () => {
 
     // First call: expectedNodeDid confirms the node's real DID.
     const first = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       expectedNodeDid: NODE_DID,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: NODE_DID } }),
       identityStore: store,
@@ -436,6 +449,7 @@ describe("discoverLocalTinyCloudNode identity pinning", () => {
     // Second call: caller drops expectedNodeDid entirely. It must succeed
     // against the refreshed pin rather than falling back to the stale one.
     const second = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: NODE_DID } }),
       identityStore: store,
     });
@@ -447,6 +461,7 @@ describe("discoverLocalTinyCloudNode localLinkName validation", () => {
   it("rejects a localLinkName that isn't a single DNS label", async () => {
     const requests: string[] = [];
     const discovered = await discoverLocalTinyCloudNode({
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       localLinkName: "evil.com/",
       fetch: fakeFetch({}, requests),
       identityStore: createInMemoryLocalNodeIdentityStore(),
@@ -511,7 +526,6 @@ describe("discoverLocalTinyCloudNode local-link registry extraction", () => {
     });
     // Hosted node.tinycloud.xyz and the insecure link entry were never probed.
     expect(requests).toEqual([
-      `${DEFAULT_LOCAL_NODE_URL}/healthz`,
       `https://registry.example/v1/locations/${encodeURIComponent(TEST_SUBJECT)}`,
       `${linkUrl}/healthz`,
       `${linkUrl}/info`,
@@ -541,14 +555,15 @@ describe("discoverLocalTinyCloudNode local-link registry extraction", () => {
       identityStore: createInMemoryLocalNodeIdentityStore(),
     });
     expect(discovered).toBeNull();
-    expect(requests).toEqual([`${DEFAULT_LOCAL_NODE_URL}/healthz`]);
+    expect(requests).toEqual([]);
   });
 });
 
 describe("resolveTinyCloudHosts local discovery integration", () => {
-  it("prefers a verified local node over registry and fallback", async () => {
+  it("prefers an explicitly configured, verified loopback node over registry and fallback", async () => {
     const requests: string[] = [];
     const resolved = await resolveTinyCloudHosts(TEST_SUBJECT, {
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       fetch: fakeFetch({ [DEFAULT_LOCAL_NODE_URL]: { nodeDid: NODE_DID } }, requests),
       localNodeIdentityStore: createInMemoryLocalNodeIdentityStore(),
     });
@@ -563,7 +578,7 @@ describe("resolveTinyCloudHosts local discovery integration", () => {
     ).toBe(false);
   });
 
-  it("falls back to registry resolution when every local probe fails", async () => {
+  it("does not probe loopback by default before registry resolution", async () => {
     const requests: string[] = [];
     const resolved = await resolveTinyCloudHosts(TEST_SUBJECT, {
       fetch: fakeFetch({}, requests, (url) =>
@@ -576,7 +591,10 @@ describe("resolveTinyCloudHosts local discovery integration", () => {
 
     expect(resolved.location.source).toBe("fallback");
     expect(resolved.hosts).toEqual([DEFAULT_TINYCLOUD_FALLBACK_HOST]);
-    expect(requests[0]).toBe(`${DEFAULT_LOCAL_NODE_URL}/healthz`);
+    expect(requests).not.toContain(`${DEFAULT_LOCAL_NODE_URL}/healthz`);
+    expect(requests[0]).toBe(
+      `${DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL}/v1/locations/${encodeURIComponent(TEST_SUBJECT)}`,
+    );
   });
 
   it("fetches the subject's registry LocationRecord only once, even though local discovery and centralized resolution both need it", async () => {
@@ -600,6 +618,7 @@ describe("resolveTinyCloudHosts local discovery integration", () => {
 
   it("falls back when the local node fails identity verification", async () => {
     const resolved = await resolveTinyCloudHosts(TEST_SUBJECT, {
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       expectedNodeDid: NODE_DID,
       fetch: fakeFetch(
         { [DEFAULT_LOCAL_NODE_URL]: { nodeDid: OTHER_NODE_DID } },
@@ -620,6 +639,7 @@ describe("resolveTinyCloudHosts local discovery integration", () => {
     const requests: string[] = [];
     const resolved = await resolveTinyCloudHosts(TEST_SUBJECT, {
       autoDiscoverLocalNode: false,
+      localNodeUrl: DEFAULT_LOCAL_NODE_URL,
       fetch: fakeFetch(
         { [DEFAULT_LOCAL_NODE_URL]: { nodeDid: NODE_DID } },
         requests,

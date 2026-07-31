@@ -107,9 +107,9 @@ export interface NodeUserAuthorizationConfig {
   tinycloudRegistryUrl?: string | null;
   /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
   tinycloudFallbackHosts?: string[] | null;
-  /** Probe for a locally-running TinyCloud node before registry/fallback resolution. Default: true. */
+  /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
   autoDiscoverLocalNode?: boolean;
-  /** Local loopback node URL to probe. Default: http://127.0.0.1:8000. */
+  /** Local loopback node URL to probe. Omit to avoid probing loopback. */
   localNodeUrl?: string;
   /** Known `*.local.tinycloud.link` subdomain name, probed directly. */
   localLinkName?: string;
@@ -234,6 +234,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private _address?: string;
   private _chainId?: number;
   private _nodeFeatures: string[] = [];
+  /**
+   * `nodeId` from the `GET /info` performed during sign-in/restore, tagged with
+   * the host it came from. Callers that need the node DID (encryption-network
+   * admin invocations) reuse this instead of re-fetching `/info`.
+   */
+  private _nodeInfoIdentity?: { host: string; nodeId: string };
   private _lastActivationSkippedSpaceIds: string[] = [];
 
   constructor(config: NodeUserAuthorizationConfig) {
@@ -474,6 +480,18 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   get nodeFeatures(): string[] {
     return this._nodeFeatures;
+  }
+
+  /**
+   * The node DID reported by `GET /info` for `host`, if the sign-in (or
+   * restore) that populated it targeted that same host. Returns `undefined`
+   * for any other host, and for nodes whose `/info` omits `nodeId`, so callers
+   * fall back to fetching it themselves rather than using a foreign node's DID.
+   */
+  nodeIdForHost(host: string): string | undefined {
+    return this._nodeInfoIdentity?.host === host
+      ? this._nodeInfoIdentity.nodeId
+      : undefined;
   }
 
   get lastActivationSkippedSpaceIds(): string[] {
@@ -1094,11 +1112,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._chainId = chainId;
 
     // Verify SDK-node protocol compatibility and discover supported features
+    const infoHost = this.primaryTinyCloudHost;
     const nodeInfo = await checkNodeInfo(
-      this.primaryTinyCloudHost,
+      infoHost,
       this.wasm.protocolVersion(),
     );
     this._nodeFeatures = nodeInfo.features;
+    // `/info` already told us the node DID. Keep it so encryption-network
+    // admin invocations do not re-fetch `/info` just to learn it.
+    this._nodeInfoIdentity = nodeInfo.nodeId
+      ? { host: infoHost, nodeId: nodeInfo.nodeId }
+      : undefined;
 
     // Call extension hooks
     for (const ext of this.extensions) {
@@ -1344,11 +1368,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._chainId = chainId;
 
     // Verify SDK-node protocol compatibility and discover supported features
+    const infoHost = this.primaryTinyCloudHost;
     const nodeInfo = await checkNodeInfo(
-      this.primaryTinyCloudHost,
+      infoHost,
       this.wasm.protocolVersion(),
     );
     this._nodeFeatures = nodeInfo.features;
+    // `/info` already told us the node DID. Keep it so encryption-network
+    // admin invocations do not re-fetch `/info` just to learn it.
+    this._nodeInfoIdentity = nodeInfo.nodeId
+      ? { host: infoHost, nodeId: nodeInfo.nodeId }
+      : undefined;
 
     // Call extension hooks
     for (const ext of this.extensions) {

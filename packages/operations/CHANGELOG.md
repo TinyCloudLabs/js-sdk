@@ -1,5 +1,54 @@
 # @tinycloud/operations
 
+## 0.3.2-beta.3
+
+### Patch Changes
+
+- Updated dependencies [746cb02]
+  - @tinycloud/sdk-core@2.11.0-beta.4
+  - @tinycloud/node-sdk@2.11.0-beta.4
+
+## 0.3.2-beta.2
+
+### Patch Changes
+
+- Updated dependencies [55e76c5]
+  - @tinycloud/sdk-core@2.11.0-beta.3
+  - @tinycloud/node-sdk@2.11.0-beta.3
+
+## 0.3.2-beta.1
+
+### Patch Changes
+
+- Updated dependencies [d1d675b]
+  - @tinycloud/sdk-core@2.11.0-beta.1
+  - @tinycloud/node-sdk@2.11.0-beta.1
+
+## 0.3.2-beta.0
+
+### Patch Changes
+
+- Updated dependencies [b5d2e10]
+  - @tinycloud/sdk-core@2.11.0-beta.0
+  - @tinycloud/node-sdk@2.11.0-beta.0
+
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [28cc430]
+- Updated dependencies [48a5408]
+  - @tinycloud/node-sdk@2.10.0
+  - @tinycloud/sdk-core@2.10.0
+
+## 0.3.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [48a5408]
+  - @tinycloud/sdk-core@2.10.0-beta.1
+  - @tinycloud/node-sdk@2.10.0-beta.1
+
 ## 0.3.1-beta.0
 
 ### Patch Changes

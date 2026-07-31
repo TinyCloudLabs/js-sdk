@@ -6,6 +6,7 @@ export default defineConfig({
     "src/bootstrap/index.ts",
     "src/policy/index.ts",
     "src/requester/index.ts",
+    "src/delegations/index.ts",
   ],
   format: ["esm", "cjs"],
   dts: true,

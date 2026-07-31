@@ -1,5 +1,115 @@
 # @tinycloudlabs/sdk-core
 
+## 2.11.0-beta.4
+
+### Patch Changes
+
+- 746cb02: Stop implicitly probing `127.0.0.1` during TinyCloud host discovery. Loopback
+  discovery now requires an explicit `localNodeUrl`, while configured and
+  registry-discovered `*.local.tinycloud.link` nodes continue to work.
+
+## 2.11.0-beta.3
+
+### Patch Changes
+
+- 55e76c5: Recognize grouped manifest actions when a verified ReCap returns one capability entry per action.
+
+## 2.11.0-beta.1
+
+### Patch Changes
+
+- d1d675b: Allow owner delegations to sign exact permissions across TinyCloud services, including the owner encryption network's decrypt capability, while preserving the legacy single-resource API.
+
+## 2.11.0-beta.0
+
+### Minor Changes
+
+- b5d2e10: Stop browser sign-in hanging forever on an invisible space-creation dialog (TC-362).
+
+  `ModalSpaceCreationHandler.confirmSpaceCreation` returned a promise that only ever
+  settled on a click inside a shadow-DOM `<tinycloud-space-modal>`. When that dialog
+  was not reachable — for example hidden behind an app's own full-screen "Connecting…"
+  overlay — `ensureSpaceExists` awaited it forever and sign-in looked permanently stuck,
+  with nothing in the light DOM to explain why.
+  - The wait is now bounded (default 2 minutes, configurable via the new
+    `TinyCloudWeb` config option `spaceCreationTimeoutMs` or
+    `new ModalSpaceCreationHandler({ timeoutMs })`; `0` restores the unbounded wait).
+    On expiry the handler closes the dialog and rejects with a `SpaceCreationTimeoutError`
+    whose message names the element, the likely cause, and the three ways out.
+  - **Behaviour change:** `autoCreateSpace` is now honoured in the browser. `TinyCloudWeb`
+    used to install the modal handler unconditionally, and node-sdk gives an explicit
+    handler precedence over `autoCreateSpace`, so the option was dead config in the browser.
+    `autoCreateSpace: true` now creates the space with no dialog, `autoCreateSpace: false`
+    skips creation entirely, and leaving it unset keeps today's modal confirmation.
+    An explicit `spaceCreationHandler` still wins over both.
+  - While the SDK is blocked on the user it sets
+    `data-tinycloud-awaiting-user-input="space-creation"` on `<html>`, fires
+    `tinycloud:awaiting-user-input` / `tinycloud:awaiting-user-input-resolved` on `window`,
+    and logs an explanatory warning — so a stuck sign-in is diagnosable from outside
+    the shadow root. New helper `pendingUserInputKind()` reports the same state.
+  - The owner-policy sharing path signs mid-compose by re-opening the wallet/OpenKey
+    signing surface. An unanswered or cancelled prompt there used to surface the same
+    `PERMISSION_DENIED` "the active session ReCap does not authorize this sharing
+    delegation" message as a genuine HTTP 403. It is now reported as `TIMEOUT` or
+    `ABORTED` with a message that says what to do, and the underlying error is kept
+    as `cause`.
+
+## 2.10.0
+
+### Minor Changes
+
+- 28cc430: Add batch KV reads and memoize TinyCloud node descriptor lookups to reduce SDK round trips.
+
+### Patch Changes
+
+- 48a5408: Coalesce concurrent identical session activations into a single `POST /delegate` (TC-332).
+
+  `activateSessionWithHost` had no de-duplication, so the ~17 call sites that replay a
+  byte-identical session delegation header — registry sync, space-hosting hooks and their
+  retry wrappers, several of which fire without awaiting each other — could issue the same
+  request concurrently. A parentless root session delegation acquires no chain guard locks on
+  the node, and PostgreSQL deployments have no `writer_lock` to serialize writes, so two
+  identical concurrent requests compute the same `epoch_hash`, both insert into `epoch`, and
+  the loser fails with a unique-constraint violation surfaced as HTTP 500.
+
+  Concurrent callers with the same host and header now share one in-flight request. Only
+  in-flight promises are shared, never completed results, so sequential calls still issue a
+  fresh request and a revoked session is never masked by a cached success. A caller that
+  joins a request which then fails at the network level gets its own second attempt rather
+  than inheriting a failure it did not cause.
+
+- Updated dependencies [28cc430]
+  - @tinycloud/sdk-services@2.10.0
+
+## 2.10.0-beta.1
+
+### Patch Changes
+
+- 48a5408: Coalesce concurrent identical session activations into a single `POST /delegate` (TC-332).
+
+  `activateSessionWithHost` had no de-duplication, so the ~17 call sites that replay a
+  byte-identical session delegation header — registry sync, space-hosting hooks and their
+  retry wrappers, several of which fire without awaiting each other — could issue the same
+  request concurrently. A parentless root session delegation acquires no chain guard locks on
+  the node, and PostgreSQL deployments have no `writer_lock` to serialize writes, so two
+  identical concurrent requests compute the same `epoch_hash`, both insert into `epoch`, and
+  the loser fails with a unique-constraint violation surfaced as HTTP 500.
+
+  Concurrent callers with the same host and header now share one in-flight request. Only
+  in-flight promises are shared, never completed results, so sequential calls still issue a
+  fresh request and a revoked session is never masked by a cached success. A caller that
+  joins a request which then fails at the network level gets its own second attempt rather
+  than inheriting a failure it did not cause.
+
+## Unreleased
+
+### Minor Changes
+
+- Add the signed v2 share-envelope/link codec, compact CID and bounded inline
+  resolution, verified ciphertext cache, local capability intersection, and
+  `ShareRecipientClient`. The legacy `tc1` `SharingService.receive` path is
+  unchanged; v2 callers use `receiveV2` and explicit `ShareAccessV2` methods.
+
 ## 2.10.0-beta.0
 
 ### Minor Changes

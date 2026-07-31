@@ -52,6 +52,10 @@ import {
   type ResolvedDelegate,
   type PermissionEntry,
   type NetworkDescriptor,
+  type CreateOwnerDelegationParams,
+  type OwnerDelegationReceipt,
+  type RegisterOwnerSharePolicyParams,
+  type OwnerSharePolicyRegistrationReceipt,
   type LocalNodeIdentityStore,
   SignInOptions,
   composeManifestRequest,
@@ -82,10 +86,7 @@ import {
   type BrowserSessionLoadResult,
 } from "../adapters/BrowserSessionStorage";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
-import {
-  ModalSpaceCreationHandler,
-  defaultWebSpaceCreationHandler,
-} from "../authorization/WebSpaceCreationHandler";
+import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
 import type { NotificationConfig } from "../notifications/types";
 import { WasmInitializer } from "./WasmInitializer";
 import { invoke } from "./Storage/tinycloud/module";
@@ -120,9 +121,9 @@ export interface Config extends ClientConfig {
   tinycloudRegistryUrl?: string | null;
   /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
   tinycloudFallbackHosts?: string[] | null;
-  /** Probe for a locally-running TinyCloud node before registry/fallback resolution. Default: true. */
+  /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
   autoDiscoverLocalNode?: boolean;
-  /** Local loopback node URL to probe. Default: http://127.0.0.1:8000. */
+  /** Local loopback node URL to probe. Omit to avoid probing loopback. */
   localNodeUrl?: string;
   /** Known `*.local.tinycloud.link` subdomain name, probed directly. */
   localLinkName?: string;
@@ -135,11 +136,28 @@ export interface Config extends ClientConfig {
    */
   localNodeIdentityStore?: LocalNodeIdentityStore;
 
-  /** Whether to auto-create space on sign-in (default: true) */
+  /**
+   * How the user's space is created on sign-in when it does not exist yet.
+   *
+   * - unset (default): confirm in a `<tinycloud-space-modal>` dialog first.
+   * - `true`: create it without asking. No dialog is shown, so sign-in cannot
+   *   block on one.
+   * - `false`: never create it. Sign-in continues without a primary space,
+   *   which is what you want when the app only ever uses delegated spaces.
+   *
+   * Ignored when {@link Config.spaceCreationHandler} is set.
+   */
   autoCreateSpace?: boolean;
 
   /** Space creation handler (default: ModalSpaceCreationHandler) */
   spaceCreationHandler?: ISpaceCreationHandler;
+
+  /**
+   * How long the default space-creation dialog waits for the user before
+   * failing sign-in, in milliseconds (default: 120000). Only applies when the
+   * modal handler is in use.
+   */
+  spaceCreationTimeoutMs?: number;
 
   /** Session expiration time in milliseconds (default: 1 hour) */
   sessionExpirationMs?: number;
@@ -405,9 +423,13 @@ export class TinyCloudWeb {
       nodeConfig.ensResolver = new BrowserENSResolver(this.provider);
     }
 
-    // Space creation handler
-    nodeConfig.spaceCreationHandler =
-      this.config.spaceCreationHandler ?? new ModalSpaceCreationHandler();
+    // Space creation handler.
+    //
+    // Do NOT unconditionally install the modal handler here: node-sdk gives an
+    // explicit handler precedence over `autoCreateSpace`, so always setting one
+    // made `autoCreateSpace` dead config in the browser and forced every app
+    // through a dialog it may have opted out of.
+    nodeConfig.spaceCreationHandler = resolveSpaceCreationHandler(this.config);
 
     this._node = new TinyCloudNode(nodeConfig);
   }
@@ -734,6 +756,48 @@ export class TinyCloudWeb {
   }): Promise<PortableDelegation> {
     const node = await this.ensureNode();
     return node.createDelegation(params);
+  }
+
+  /** Create and activate a wallet-rooted delegation for an ephemeral share key. */
+  async createOwnerDelegation(
+    params: CreateOwnerDelegationParams extends infer PermissionShape
+      ? PermissionShape extends CreateOwnerDelegationParams
+        ? Omit<PermissionShape, "spaceId"> & { readonly spaceId?: string }
+        : never
+      : never,
+  ): Promise<OwnerDelegationReceipt> {
+    const node = await this.ensureNode();
+    const spaceId = params.spaceId ?? this.spaceId;
+    if (spaceId === undefined) throw new Error("Owner share delegation requires an authenticated space.");
+    if ("permissions" in params) {
+      return node.createOwnerDelegation({
+        delegateDid: params.delegateDid,
+        permissions: params.permissions!,
+        expiresAt: params.expiresAt,
+        spaceId,
+      });
+    }
+    return node.createOwnerDelegation({
+      delegateDid: params.delegateDid,
+      path: params.path,
+      actions: params.actions,
+      expiresAt: params.expiresAt,
+      spaceId,
+    });
+  }
+
+  /** Register an owner-bound addressed sharing policy through TinyCloud Node. */
+  async registerOwnerSharePolicy(
+    params: RegisterOwnerSharePolicyParams,
+  ): Promise<OwnerSharePolicyRegistrationReceipt> {
+    const node = await this.ensureNode();
+    return node.registerOwnerSharePolicy(params);
+  }
+
+  /** Authorize a short-lived, one-use v2 delivery using the authenticated invocation chain. */
+  async authorizeShareDelivery(input: Parameters<TinyCloudNode["authorizeShareDelivery"]>[0]): ReturnType<TinyCloudNode["authorizeShareDelivery"]> {
+    const node = await this.ensureNode();
+    return node.authorizeShareDelivery(input);
   }
 
   /**

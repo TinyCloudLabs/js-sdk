@@ -139,6 +139,14 @@ import {
   type DecryptTransport,
   type EncryptionCrypto,
   type NetworkDescriptor,
+  type RegisterOwnerSharePolicyParams,
+  type CreateOwnerDelegationParams as CoreCreateOwnerDelegationParams,
+  type OwnerDelegationPermission,
+  type OwnerDelegationReceipt as CoreOwnerDelegationReceipt,
+  type OwnerSharePolicyRegistrationReceipt,
+  validateOwnerSharePolicyRegistrationBytes,
+  type ShareDeliveryAuthorizationReceipt,
+  validateShareDeliveryAuthorizationBytes,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -158,6 +166,12 @@ import {
   extractSiweExpiration,
 } from "./delegateToHelpers";
 import { NodeSecretsService } from "./NodeSecretsService";
+
+export type {
+  RegisterOwnerSharePolicyParams,
+  OwnerSharePolicyRegistrationReceipt,
+  ShareDeliveryAuthorizationReceipt,
+} from "@tinycloud/sdk-core";
 
 /** Default TinyCloud host */
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
@@ -248,13 +262,7 @@ const ROOT_DELEGATION_ACTIONS: string[] = [
  */
 const DEFAULT_SESSION_EXPIRATION_MS = EXPIRY.SESSION_MS;
 
-export interface CreateOwnerDelegationParams {
-  readonly delegateDid: string;
-  readonly spaceId: string;
-  readonly path: string;
-  readonly actions: readonly string[];
-  readonly expiresAt: Date;
-}
+export type CreateOwnerDelegationParams = CoreCreateOwnerDelegationParams;
 
 export function decodeAuthorizationBytes(authorization: string): Uint8Array {
   const encoded = authorization.replace(/^Bearer /i, "");
@@ -270,19 +278,15 @@ export function decodeAuthorizationBytes(authorization: string): Uint8Array {
   ) {
     throw new Error("Delegation Authorization is not canonical base64url DAG-CBOR");
   }
-  const decoded = Uint8Array.from(Buffer.from(unpadded, "base64url"));
-  if (Buffer.from(decoded).toString("base64url") !== unpadded) {
+  const decoded = base64UrlDecode(unpadded);
+  if (base64UrlEncode(decoded) !== unpadded) {
     throw new Error("Delegation Authorization is not canonical base64url DAG-CBOR");
   }
   return decoded;
 }
 
-export interface OwnerDelegationReceipt {
+export interface OwnerDelegationReceipt extends CoreOwnerDelegationReceipt {
   readonly delegation: Delegation;
-  /** Exact signed DAG-CBOR bytes submitted in the Authorization header. */
-  readonly signedDagCbor: Uint8Array;
-  /** Locally derived by the node WASM implementation; this is delegation identity. */
-  readonly delegationCid: string;
   readonly nodeReceipt: {
     /** Raw /delegate response CID: a commit-event id, not delegation identity. */
     readonly commitEventCid?: string;
@@ -492,22 +496,110 @@ function sameInstant(left: Date, right: Date): boolean {
   return left.getTime() === right.getTime();
 }
 
-function sharingActionsToAbilities(path: string, actions: string[]): AbilitiesMap | undefined {
-  const abilities: AbilitiesMap = {};
-
-  for (const action of actions) {
-    const slash = action.indexOf("/");
-    if (slash === -1) return undefined;
-
-    const shortService = SERVICE_LONG_TO_SHORT[action.slice(0, slash)];
-    if (shortService === undefined) return undefined;
-
-    abilities[shortService] ??= {};
-    abilities[shortService][path] ??= [];
-    abilities[shortService][path].push(action);
+function ownerDelegationPermissions(
+  params: CreateOwnerDelegationParams,
+): OwnerDelegationPermission[] {
+  const hasPermissions = Object.prototype.hasOwnProperty.call(params, "permissions");
+  const hasLegacy = Object.prototype.hasOwnProperty.call(params, "path")
+    || Object.prototype.hasOwnProperty.call(params, "actions");
+  if (hasPermissions === hasLegacy) {
+    throw new Error("Owner delegation requires exactly one authority shape: path/actions or permissions");
   }
 
-  return Object.keys(abilities).length > 0 ? abilities : undefined;
+  const permissions: OwnerDelegationPermission[] = [];
+  if (hasPermissions) {
+    if (!Array.isArray(params.permissions)) {
+      throw new Error("Owner delegation permissions are invalid");
+    }
+    permissions.push(...params.permissions.map((permission) => ({
+      service: permission.service,
+      path: permission.path,
+      actions: [...permission.actions],
+    })));
+  } else {
+    if (typeof params.path !== "string" || !Array.isArray(params.actions)) {
+      throw new Error("Owner delegation requires bounded capabilities");
+    }
+    const byService = new Map<string, string[]>();
+    for (const action of params.actions) {
+      if (typeof action !== "string") {
+        throw new Error("Owner delegation capabilities are unsupported");
+      }
+      const slash = action.indexOf("/");
+      const service = slash === -1 ? "" : action.slice(0, slash);
+      if (SERVICE_LONG_TO_SHORT[service] === undefined) {
+        throw new Error("Owner delegation capabilities are unsupported");
+      }
+      const actions = byService.get(service) ?? [];
+      actions.push(action);
+      byService.set(service, actions);
+    }
+    for (const [service, actions] of byService) {
+      permissions.push({ service, path: params.path, actions });
+    }
+  }
+
+  if (permissions.length === 0 || permissions.length > 16) {
+    throw new Error("Owner delegation requires bounded capabilities");
+  }
+  const resources = new Set<string>();
+  for (const permission of permissions) {
+    if (
+      typeof permission.service !== "string"
+      || SERVICE_LONG_TO_SHORT[permission.service] === undefined
+      || typeof permission.path !== "string"
+      || permission.path.length === 0
+      || permission.path.trim() !== permission.path
+      || /[\u0000-\u001f\u007f\\*]/.test(permission.path)
+      || !Array.isArray(permission.actions)
+      || permission.actions.length === 0
+      || permission.actions.length > 32
+    ) {
+      throw new Error("Owner delegation requires bounded capabilities");
+    }
+    const resourceKey = `${permission.service}\0${permission.path}`;
+    if (resources.has(resourceKey)) {
+      throw new Error("Owner delegation permissions contain duplicate resources");
+    }
+    resources.add(resourceKey);
+    const actions = new Set<string>();
+    for (const action of permission.actions) {
+      if (
+        typeof action !== "string"
+        || !action.startsWith(`${permission.service}/`)
+        || action.length === permission.service.length + 1
+        || actions.has(action)
+      ) {
+        throw new Error("Owner delegation capabilities are unsupported");
+      }
+      actions.add(action);
+    }
+    if (permission.service === ENCRYPTION_PERMISSION_SERVICE) {
+      try {
+        parseNetworkId(permission.path);
+      } catch {
+        throw new Error("Owner delegation encryption permission requires a canonical network URN");
+      }
+    }
+  }
+  return permissions;
+}
+
+function ownerPermissionsToAbilities(
+  permissions: readonly OwnerDelegationPermission[],
+): { readonly abilities: AbilitiesMap; readonly rawAbilities: Record<string, string[]> } {
+  const abilities: AbilitiesMap = {};
+  const rawAbilities: Record<string, string[]> = {};
+  for (const permission of permissions) {
+    if (permission.service === ENCRYPTION_PERMISSION_SERVICE) {
+      rawAbilities[permission.path] = [...permission.actions];
+      continue;
+    }
+    const shortService = SERVICE_LONG_TO_SHORT[permission.service]!;
+    abilities[shortService] ??= {};
+    abilities[shortService][permission.path] = [...permission.actions];
+  }
+  return { abilities, rawAbilities };
 }
 
 /**
@@ -527,9 +619,9 @@ export interface TinyCloudNodeConfig {
   tinycloudRegistryUrl?: string | null;
   /** Fallback TinyCloud hosts. Default: hosted TinyCloud node. */
   tinycloudFallbackHosts?: string[] | null;
-  /** Probe for a locally-running TinyCloud node before registry/fallback resolution. Default: true. */
+  /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
   autoDiscoverLocalNode?: boolean;
-  /** Local loopback node URL to probe. Default: http://127.0.0.1:8000. */
+  /** Local loopback node URL to probe. Omit to avoid probing loopback. */
   localNodeUrl?: string;
   /** Known `*.local.tinycloud.link` subdomain name, probed directly. */
   localLinkName?: string;
@@ -629,6 +721,22 @@ export interface DelegateToResult {
 export interface RuntimePermissionGrantOptions {
   /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
   expiry?: string | number;
+}
+
+export interface EnsureEncryptionNetworkOptions {
+  /**
+   * Skip the `GET /encryption/networks/{id}` existence probe and go straight
+   * to the create.
+   *
+   * The probe pays for itself only when the network already exists. On a
+   * freshly bootstrapped account it is a guaranteed 404, so it costs a round
+   * trip on the cold sign-in path and saves nothing. Creating without it is
+   * safe: the server answers `409 Conflict` if the network is already there,
+   * which {@link TinyCloudNode.createEncryptionNetwork} resolves by reading the
+   * existing descriptor. Set this only when the caller knows the account was
+   * just provisioned.
+   */
+  assumeMissing?: boolean;
 }
 
 interface RuntimePermissionOperation {
@@ -822,6 +930,13 @@ export class TinyCloudNode {
    * so this avoids re-parsing the recap on every registration.
    */
   private _recapOperationsCache?: { siwe: string; operations: RuntimePermissionOperation[] };
+
+  /**
+   * Owned space ids this sign-in has already confirmed are hosted. Consulted by
+   * {@link ensureOwnedSpaceHostedById}; cleared on every {@link signIn} because
+   * hosting is confirmed against the session that was active at the time.
+   */
+  private readonly confirmedHostedSpaceIds = new Set<string>();
 
   /**
    * TinyCloudSession captured by {@link restoreSession} when there's no
@@ -1354,6 +1469,7 @@ export class TinyCloudNode {
     this._spaceService = undefined;
     this._serviceContext = undefined;
     this.runtimePermissionGrants = [];
+    this.confirmedHostedSpaceIds.clear();
 
     await this.tc.signIn(options);
     this.syncResolvedHostFromAuth();
@@ -1604,6 +1720,10 @@ export class TinyCloudNode {
           step.manifests.length > 0
             ? [...step.manifests]
             : TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
+          // Bootstrap only runs on an account with no registry records, so the
+          // manifest-hash pre-read is definitionally a miss. Skip it; the write
+          // it guards is an INSERT OR REPLACE and is safe to repeat.
+          { assumeUnregistered: true },
         );
         if (!registered.ok) {
           throw new Error(`Failed to seed bootstrap applications: ${registered.error.message}`);
@@ -1611,7 +1731,10 @@ export class TinyCloudNode {
       }
 
       if (step.kind === "encryption-network-create") {
-        await this.ensureEncryptionNetwork(step.networkId);
+        // Bootstrap only runs on a fresh account, so the existence probe is a
+        // guaranteed 404. Create directly; a 409 is resolved to the existing
+        // descriptor.
+        await this.ensureEncryptionNetwork(step.networkId, { assumeMissing: true });
       }
 
       if (step.kind === "secret-records-schema") {
@@ -1946,6 +2069,22 @@ export class TinyCloudNode {
     }
   }
 
+  /**
+   * Ensure one of this user's owned spaces is hosted, at most once per space
+   * per sign-in.
+   *
+   * Account bootstrap funnels six calls through here (via
+   * `AccountService.ensureAccountSpaceHosted`), and each one re-submits
+   * `activateSessionWithHost` with the *primary* session. That session's recap
+   * covers only `default` and `secrets`, so the account space appears in
+   * neither `activated` nor `skipped` and the guard below returns immediately
+   * — the repeat calls cannot change the outcome, they only cost round trips.
+   *
+   * The memo is per sign-in ({@link confirmedHostedSpaceIds} is cleared in
+   * `signIn`) and only records confirmed successes. A wrong skip is
+   * self-revealing: the next write to the space fails immediately and loudly
+   * with `404 Space not found`.
+   */
   private async ensureOwnedSpaceHostedById(spaceId: string): Promise<void> {
     if (!this.auth) {
       throw new Error("Owned space hosting requires wallet mode");
@@ -1956,6 +2095,10 @@ export class TinyCloudNode {
       throw new Error("Owned space hosting requires an active session");
     }
 
+    if (this.confirmedHostedSpaceIds.has(spaceId)) {
+      return;
+    }
+
     const host = this.hosts[0] ?? this.config.host;
     if (!host) {
       throw new Error("Owned space hosting requires a TinyCloud host");
@@ -1963,6 +2106,7 @@ export class TinyCloudNode {
 
     const activation = await activateSessionWithHost(host, session.delegationHeader);
     if (activation.success && !activation.skipped?.includes(spaceId)) {
+      this.confirmedHostedSpaceIds.add(spaceId);
       return;
     }
 
@@ -1987,6 +2131,7 @@ export class TinyCloudNode {
         }`,
       );
     }
+    this.confirmedHostedSpaceIds.add(spaceId);
   }
 
   /**
@@ -2416,6 +2561,7 @@ export class TinyCloudNode {
     this.tc = stagedGraph.core;
     this._recapOperationsCache = stagedPrimary.cache;
     this.runtimePermissionGrants = stagedPrimary.grants;
+    this.confirmedHostedSpaceIds.clear();
     if (this.auth) {
       this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost]);
       this._restoredTcSession = undefined;
@@ -3108,7 +3254,18 @@ export class TinyCloudNode {
     };
   }
 
+  /**
+   * The node DID for {@link config.host}.
+   *
+   * Sign-in already performs `GET /info` for the protocol-version check, and
+   * that response carries `nodeId`, so reuse it rather than fetching `/info` a
+   * second time. Only a value recorded for this exact host qualifies; older
+   * nodes that omit `nodeId` fall through to the fetch.
+   */
   private async fetchNodeId(): Promise<string> {
+    const cached = this.auth?.nodeIdForHost(this.config.host!);
+    if (cached) return cached;
+
     const response = await fetch(`${this.config.host}/info`);
     if (!response.ok) {
       throw new Error(`Failed to fetch node info: HTTP ${response.status}`);
@@ -3659,22 +3816,33 @@ export class TinyCloudNode {
   ): Promise<OwnerDelegationReceipt> {
     const assertOwnerGraphActive = assertActive ?? this._serviceGraph.assertActive.bind(this._serviceGraph);
     assertOwnerGraphActive();
-    if (!params.delegateDid.startsWith("did:key:") || params.actions.length === 0 || params.path.length === 0) {
+    if (!params.delegateDid.startsWith("did:key:")) {
       throw new Error("Owner delegation requires an external did:key audience and bounded capabilities");
     }
+    const permissions = ownerDelegationPermissions(params);
     const now = new Date();
-    if (params.expiresAt.getTime() <= now.getTime() || params.expiresAt.getTime() - now.getTime() > EXPIRY.MAX_MS) {
+    if (!(params.expiresAt instanceof Date) || params.expiresAt.getTime() <= now.getTime() || params.expiresAt.getTime() - now.getTime() > EXPIRY.MAX_MS) {
       throw new Error("Owner delegation expiry must be explicit, future, and within EXPIRY.MAX_MS");
     }
     if (!this.signer) throw new Error("Owner wallet signer is required");
     const session = this.currentTinyCloudSession();
     if (!session) throw new Error("Owner session is required");
-    const abilities = sharingActionsToAbilities(params.path, [...params.actions]);
-    if (!abilities) throw new Error("Owner delegation capabilities are unsupported");
+    const ownerDid = pkhDid(session.address, session.chainId);
+    for (const permission of permissions) {
+      if (
+        permission.service === ENCRYPTION_PERMISSION_SERVICE
+        && !principalDidEquals(parseNetworkId(permission.path).ownerDid, ownerDid)
+      ) {
+        throw new Error("Owner delegation cannot grant a foreign encryption network");
+      }
+    }
+    const { abilities, rawAbilities } = ownerPermissionsToAbilities(permissions);
+    const primary = permissions[0]!;
 
     const host = this.config.host!;
     const prepared = this.wasmBindings.prepareSession({
       abilities,
+      ...(Object.keys(rawAbilities).length === 0 ? {} : { rawAbilities }),
       address: this.wasmBindings.ensureEip55(session.address),
       chainId: session.chainId,
       domain: this.siweDomain,
@@ -3694,10 +3862,10 @@ export class TinyCloudNode {
     const delegation: Delegation = {
       cid: delegationSession.delegationCid,
       delegateDID: params.delegateDid,
-      delegatorDID: pkhDid(session.address, session.chainId),
+      delegatorDID: ownerDid,
       spaceId: params.spaceId,
-      path: params.path,
-      actions: [...params.actions],
+      path: primary.path,
+      actions: [...primary.actions],
       expiry: params.expiresAt,
       isRevoked: false,
       allowSubDelegation: true,
@@ -3708,12 +3876,92 @@ export class TinyCloudNode {
       delegation,
       signedDagCbor: decodeAuthorizationBytes(delegationSession.delegationHeader.Authorization),
       delegationCid: delegationSession.delegationCid,
+      permissions,
       nodeReceipt: {
         commitEventCid: (activation as typeof activation & { commitEventCid?: string }).commitEventCid,
         activated: activation.activated ?? [],
         skipped: activation.skipped ?? [],
       },
     };
+  }
+
+  /** Register a policy that is already bound to an activated owner delegation. */
+  async registerOwnerSharePolicy(
+    params: RegisterOwnerSharePolicyParams,
+  ): Promise<OwnerSharePolicyRegistrationReceipt> {
+    this._serviceGraph.assertActive();
+    if (params.policy.bytes.byteLength > 2 * 1024 * 1024) throw new Error("Owner share policy is too large");
+    const response = await fetch(`${this.config.host!}/share/v2/policies`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({
+        policy: { bytes: base64UrlEncode(params.policy.bytes), cid: params.policy.cid, proof: params.policy.proof },
+        ownerDelegation: { cid: params.ownerDelegation.delegationCid, dagCbor: base64UrlEncode(params.ownerDelegation.signedDagCbor) },
+        enforcementDelegation: params.enforcementDelegation,
+        contentSourceDigest: params.contentSourceDigest,
+      }),
+    });
+    if (!response.ok) {
+      let code = "";
+      try {
+        const body = await response.clone().json() as { readonly error?: { readonly code?: unknown } };
+        if (typeof body.error?.code === "string") code = ` ${body.error.code}`;
+      } catch {
+        // Keep the stable HTTP failure when the server did not return JSON.
+      }
+      throw new Error(`Owner share policy registration failed: ${response.status}${code}`);
+    }
+    const responseBytes = new Uint8Array(await response.arrayBuffer());
+    return validateOwnerSharePolicyRegistrationBytes(responseBytes, params);
+  }
+
+  /** Authorize a short-lived, one-use v2 delivery using the authenticated invocation chain. */
+  async authorizeShareDelivery(input: {
+    readonly envelopeCid: string;
+    readonly shareCid: string;
+    readonly shareId: string;
+    readonly registrationCid: string;
+    readonly policyCid: string;
+    readonly delegationCid: string;
+    readonly enforcementDelegationCid: string;
+    readonly resourcePath: string;
+    readonly recipientEmail: string;
+    readonly shareUrl: string;
+    readonly documentName: string;
+    readonly expiresAt: string;
+    /** The enrolled receipt key from the node trust bundle. */
+    readonly nodeProof: { readonly kid: string; readonly publicKey: Uint8Array };
+    /** The trusted OpenCredentials witness origin from the same trust bundle as `nodeProof`. */
+    readonly credentialsAudience: string;
+  }): Promise<ShareDeliveryAuthorizationReceipt> {
+    const session = this.currentTinyCloudSession();
+    const serviceSession = this._serviceContext?.session;
+    if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
+    const body = {
+      envelopeCid: input.envelopeCid,
+      shareCid: input.shareCid,
+      shareId: input.shareId,
+      registrationCid: input.registrationCid,
+      policyCid: input.policyCid,
+      delegationCid: input.delegationCid,
+      enforcementDelegationCid: input.enforcementDelegationCid,
+      recipientEmail: input.recipientEmail,
+      shareUrl: input.shareUrl,
+      documentName: input.documentName,
+      jti: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
+      expiresAt: input.expiresAt,
+    };
+    const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));
+    const request = { ...body, requestBodyDigest };
+    const authorization = authorizationHeader(this.invokeAnyWithRuntimePermissions(serviceSession, [{ spaceId: session.spaceId, service: "kv", path: input.resourcePath, action: "tinycloud.kv/get" }]));
+    const response = await fetch(`${this.config.host!}/share/v2/deliveries/authorize`, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json", authorization },
+      body: canonicalizeEncryptionJson(request),
+    });
+    if (!response.ok) throw new Error(`Share delivery authorization failed: ${response.status}`);
+    const responseBytes = new Uint8Array(await response.arrayBuffer());
+    return validateShareDeliveryAuthorizationBytes(responseBytes, { request, nodeProof: input.nodeProof, credentialsAudience: input.credentialsAudience });
   }
 
   private async createRootDelegationForSharing(params: {
@@ -3939,6 +4187,18 @@ export class TinyCloudNode {
         body as unknown as CanonicalizableEncryptionJson,
       ),
     });
+    // `NetworkAlreadyExists` is the only error this route maps to Conflict
+    // (`NetworkNotActive`, the other Conflict in the shared error mapper, is
+    // reachable only from the decrypt routes). So a 409 means the network is
+    // already there — which is exactly the post-condition `create` promises.
+    // Read it back rather than failing an otherwise-successful ensure.
+    if (response.status === 409) {
+      const existing = await this.getEncryptionNetwork(networkId);
+      if (existing) return existing;
+      throw new Error(
+        `Encryption network ${networkId} already exists but could not be read back`,
+      );
+    }
     if (!response.ok) {
       throw new Error(
         `Failed to create encryption network ${networkId}: HTTP ${response.status} ${await response.text()}`,
@@ -3948,15 +4208,28 @@ export class TinyCloudNode {
     return created.descriptor;
   }
 
+  /**
+   * Ensure an encryption network exists, creating it if necessary.
+   *
+   * @param nameOrNetworkId - Network name or full `urn:tinycloud:encryption:` id.
+   * @param options - See {@link EnsureEncryptionNetworkOptions}.
+   */
   async ensureEncryptionNetwork(
     nameOrNetworkId = DEFAULT_ENCRYPTION_NETWORK_NAME,
+    options: EnsureEncryptionNetworkOptions = {},
   ): Promise<NetworkDescriptor> {
     const networkId = nameOrNetworkId.startsWith("urn:tinycloud:encryption:")
       ? nameOrNetworkId
       : this.getDefaultEncryptionNetworkId(nameOrNetworkId);
-    const existing = await this.getEncryptionNetwork(networkId);
-    if (existing) {
-      return existing;
+    // The existence probe is worth a round trip only when the network is
+    // likely to be there. On a freshly bootstrapped account it always 404s,
+    // so callers that know the account is new skip straight to the create —
+    // which is itself safe to race, since 409 is handled above.
+    if (!options.assumeMissing) {
+      const existing = await this.getEncryptionNetwork(networkId);
+      if (existing) {
+        return existing;
+      }
     }
     const parsed = parseNetworkId(networkId);
     if (!didPrincipalMatches(parsed.ownerDid, this.did)) {

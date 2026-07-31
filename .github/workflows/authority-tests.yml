@@ -2,22 +2,8 @@ name: Authority tests
 
 on:
   pull_request:
-    paths:
-      - "packages/sdk-core/**"
-      - "packages/node-sdk/**"
-      - "packages/sdk-services/**"
-      - "bun.lock"
-      - "package.json"
-      - ".github/workflows/authority-tests.yml"
   push:
     branches: [master]
-    paths:
-      - "packages/sdk-core/**"
-      - "packages/node-sdk/**"
-      - "packages/sdk-services/**"
-      - "bun.lock"
-      - "package.json"
-      - ".github/workflows/authority-tests.yml"
   workflow_dispatch:
 
 permissions:

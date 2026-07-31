@@ -635,3 +635,92 @@ describe("SharingService.delegateReceivedShare", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+describe("SharingService.generate root-delegation signing failures", () => {
+  // TC-362 follow-on: the owner-policy path re-opens the wallet/OpenKey signing
+  // surface mid-compose. An unanswered prompt and a genuine authorization
+  // refusal used to collapse into the same PERMISSION_DENIED message, so a
+  // user who simply missed a signing popup was told they lacked permission.
+  function makeGeneratingService(
+    onRootDelegationNeeded: NonNullable<
+      ConstructorParameters<typeof SharingService>[0]["onRootDelegationNeeded"]
+    >,
+  ): SharingService {
+    const shareJwk = { kty: "OKP", crv: "Ed25519", x: SHARE_X, d: SHARE_D };
+    return new SharingService({
+      hosts: [HOST],
+      invoke: mock(async () => ({ ok: true, data: undefined })) as never,
+      fetch: mock(async () => new Response(null, { status: 200 })),
+      keyProvider: {
+        createSessionKey: (name: string) => name,
+        getDID: () => `${SHARE_DID}#${SHARE_DID.slice("did:key:".length)}`,
+        getJWK: () => shareJwk,
+      } as unknown as KeyProvider,
+      registry: new CapabilityKeyRegistry(),
+      createKVService: mock(() => ({})) as never,
+      createDelegationWasm: mock(() => {
+        throw new Error("should not be reached");
+      }) as never,
+      computeCid: () => "bafy-child",
+      session: {
+        spaceId: SPACE,
+        delegationCid: "bafy-session",
+        verificationMethod: "did:key:zSession#zSession",
+        jwk: shareJwk,
+      } as unknown as ServiceSession,
+      onRootDelegationNeeded,
+    });
+  }
+
+  test("reports an unanswered signing prompt as TIMEOUT, not PERMISSION_DENIED", async () => {
+    const service = makeGeneratingService(async () => {
+      throw Object.assign(new Error("Request timed out."), { code: "TIMEOUT" });
+    });
+
+    const result = await service.generate({
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("TIMEOUT");
+    expect(result.error.message).toContain("Timed out waiting for the signature");
+    expect(result.error.cause).toBeInstanceOf(Error);
+  });
+
+  test("reports a cancelled signing prompt as ABORTED", async () => {
+    const service = makeGeneratingService(async () => {
+      throw Object.assign(new Error("User rejected the request"), {
+        name: "AbortError",
+      });
+    });
+
+    const result = await service.generate({
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("ABORTED");
+  });
+
+  test("still reports a genuine authorization failure as PERMISSION_DENIED", async () => {
+    const service = makeGeneratingService(async () => {
+      throw Object.assign(new Error("Request failed"), { code: "403" });
+    });
+
+    const result = await service.generate({
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("PERMISSION_DENIED");
+    expect(result.error.message).toContain(
+      "The active session ReCap does not authorize",
+    );
+  });
+});

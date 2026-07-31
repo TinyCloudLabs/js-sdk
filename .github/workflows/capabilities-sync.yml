@@ -24,16 +24,8 @@ name: capabilities-sync
 
 on:
   pull_request:
-    paths:
-      - "packages/bootstrap/src/generated/capabilities.ts"
-      - "packages/sdk-rs/Cargo.toml"
-      - ".github/workflows/capabilities-sync.yml"
   push:
     branches: [master]
-    paths:
-      - "packages/bootstrap/src/generated/capabilities.ts"
-      - "packages/sdk-rs/Cargo.toml"
-      - ".github/workflows/capabilities-sync.yml"
   workflow_dispatch:
 
 permissions:

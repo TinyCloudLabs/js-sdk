@@ -273,6 +273,7 @@ export type {
   VaultPutOptions,
   VaultGetOptions,
   VaultListOptions,
+  VaultListPage,
   VaultGrantOptions,
   VaultEntry,
   VaultNetworkReadResult,

@@ -8,12 +8,14 @@ import type {
   VaultGetOptions,
   VaultGrantOptions,
   VaultListOptions,
+  VaultNetworkReadResult,
   VaultPutOptions,
 } from "@tinycloud/sdk-core";
 import {
   DecryptTransportResponseError,
   parsePermissionHint,
   type PermissionHint as ServicePermissionHint,
+  type VaultListPage,
 } from "@tinycloud/sdk-services";
 import { DecryptTransportResponseError as EncryptionDecryptTransportResponseError } from "@tinycloud/sdk-services/encryption";
 import type {
@@ -82,11 +84,20 @@ class LegacyVault implements IDataVaultService {
   ): Promise<Result<VaultEntry<T>, VaultError>> {
     return success({ value: undefined as T, metadata: {}, keyId: "legacy" });
   }
+  async readNetworkEncrypted<T = unknown>(
+    _key: string,
+    _options?: VaultGetOptions<T>,
+  ): Promise<VaultNetworkReadResult<T>> {
+    return { status: "read_failed" };
+  }
   async delete(_key: string): Promise<Result<void, VaultError>> {
     return success(undefined);
   }
   async list(_options?: VaultListOptions): Promise<Result<string[], VaultError>> {
     return success([]);
+  }
+  async listPage(_options?: VaultListOptions): Promise<Result<VaultListPage, VaultError>> {
+    return success({ keys: [], truncated: false });
   }
   async head(_key: string): Promise<Result<Record<string, string>, VaultError>> {
     return success({});

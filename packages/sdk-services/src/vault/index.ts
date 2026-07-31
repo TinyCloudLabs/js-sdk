@@ -20,6 +20,7 @@ export {
   type VaultPutOptions,
   type VaultGetOptions,
   type VaultListOptions,
+  type VaultListPage,
   type VaultGrantOptions,
   type VaultEntry,
   type VaultNetworkReadResult,
