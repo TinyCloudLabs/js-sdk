@@ -153,6 +153,15 @@ export interface NodeUserAuthorizationConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Include implicit account registry permissions when composing `manifest`. Default true. */
   includeAccountRegistryPermissions?: boolean;
+  /**
+   * Fetch implementation to use for every network request this instance
+   * makes (TC-407): host resolution, `/info`, peer-ID lookup, host
+   * delegation, and session activation. Callers should pass the same
+   * resolved fetch used elsewhere (e.g. `TinyCloudNode`'s configured/pooled
+   * default) so a configured transport is observed everywhere. Defaults to
+   * global fetch.
+   */
+  fetch?: typeof fetch;
 }
 
 export interface CreateBootstrapSessionOptions {
@@ -241,9 +250,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
    */
   private _nodeInfoIdentity?: { host: string; nodeId: string };
   private _lastActivationSkippedSpaceIds: string[] = [];
+  /** The single fetch resolved for this instance's lifetime (TC-407). */
+  private readonly fetch: typeof fetch;
 
   constructor(config: NodeUserAuthorizationConfig) {
     this.wasm = config.wasmBindings;
+    // Forward rather than eagerly `.bind()` the current `globalThis.fetch`
+    // when no override is supplied: this instance is long-lived, so a
+    // caller that reassigns `globalThis.fetch` after construction (e.g. a
+    // test double) must still be observed.
+    this.fetch = config.fetch ?? ((input, init) => globalThis.fetch(input, init));
 
     this.signer = config.signer;
     this.signStrategy = config.signStrategy ?? defaultSignStrategy;
@@ -463,6 +479,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       localLinkName: this.localLinkName,
       expectedNodeDid: this.expectedNodeDid,
       localNodeIdentityStore: this.localNodeIdentityStore,
+      fetch: this.fetch,
     });
     this.tinycloudHosts = resolved.hosts;
   }
@@ -711,7 +728,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const spaceId = targetSpaceId ?? this._tinyCloudSession.spaceId;
 
     // Get peer ID from TinyCloud server
-    const peerId = await fetchPeerId(host, spaceId);
+    const peerId = await fetchPeerId(host, spaceId, this.fetch);
 
     // Generate host SIWE message
     const siwe = this.wasm.generateHostSIWEMessage({
@@ -728,7 +745,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     // Convert to delegation headers and submit
     const headers = this.wasm.siweToDelegationHeaders({ siwe, signature });
-    const result = await submitHostDelegation(host, headers);
+    const result = await submitHostDelegation(host, headers, this.fetch);
 
     return result.success;
   }
@@ -773,6 +790,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const result = await activateSessionWithHost(
       host,
       this._tinyCloudSession.delegationHeader,
+      this.fetch,
     );
     this.recordActivationSkippedSpaces(result, primarySpaceId);
 
@@ -835,6 +853,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const retryResult = await activateSessionWithHost(
         host,
         this._tinyCloudSession.delegationHeader,
+        this.fetch,
       );
 
       if (!retryResult.success) {
@@ -880,6 +899,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const retryResult = await activateSessionWithHost(
         host,
         this._tinyCloudSession.delegationHeader,
+        this.fetch,
       );
 
       if (!retryResult.success) {
@@ -1116,6 +1136,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const nodeInfo = await checkNodeInfo(
       infoHost,
       this.wasm.protocolVersion(),
+      this.fetch,
     );
     this._nodeFeatures = nodeInfo.features;
     // `/info` already told us the node DID. Keep it so encryption-network
@@ -1372,6 +1393,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const nodeInfo = await checkNodeInfo(
       infoHost,
       this.wasm.protocolVersion(),
+      this.fetch,
     );
     this._nodeFeatures = nodeInfo.features;
     // `/info` already told us the node DID. Keep it so encryption-network

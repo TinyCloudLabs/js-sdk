@@ -682,6 +682,17 @@ export interface TinyCloudNodeConfig {
   autoBootstrapAccount?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
+  /**
+   * Explicit fetch override (TC-407). Resolved once for this instance's
+   * lifetime and used for every request the instance makes — discovery,
+   * sign-in, service graphs, and raw host calls alike. Bypasses the
+   * Node-registered bounded default transport entirely and is isolated
+   * from other clients (including for activation single-flight
+   * coalescing). Defaults to the Node-registered bounded transport, or
+   * plain global fetch when no Node defaults are registered (e.g. under
+   * `/core` in browser builds).
+   */
+  fetch?: typeof fetch;
 }
 
 /**
@@ -873,6 +884,12 @@ function authorizationHeader(headers: Record<string, string> | [string, string][
 export interface NodeDefaults {
   createWasmBindings: () => IWasmBindings;
   createSigner: (privateKey: string, chainId?: number) => ISigner;
+  /**
+   * Returns the process-wide bounded default fetch (TC-407). Registered only
+   * by the Node entry point so the `/core` (browser) entry point never
+   * touches the Undici-backed transport module.
+   */
+  createDefaultFetch?: () => typeof fetch;
 }
 
 export class TinyCloudNode {
@@ -891,6 +908,15 @@ export class TinyCloudNode {
   private tc: TinyCloud | null = null;
   private _address?: string;
   private _chainId: number = 1;
+  /**
+   * The single fetch selected for this instance's lifetime (TC-407):
+   * `config.fetch` if provided, else the Node-registered bounded default,
+   * else plain global fetch (e.g. under `/core` in browser builds). Every
+   * normal instance request — discovery, sign-in, service graphs, and the
+   * raw `/info`/share/encryption calls — is threaded through this same
+   * value so a configured fetch is observed everywhere.
+   */
+  private readonly _fetch: typeof fetch;
   private wasmBindings: IWasmBindings;
   private sessionManager: ISessionManager;
   private _serviceGraph!: ServiceGraphLifetime;
@@ -1092,6 +1118,19 @@ export class TinyCloudNode {
       host: config.host ?? DEFAULT_HOST,
     };
 
+    // Resolve exactly one fetch for this instance's lifetime (TC-407): an
+    // explicit override wins outright and is fully isolated from the
+    // module-shared default; otherwise use the Node-registered bounded
+    // transport, or plain global fetch when no Node defaults are registered
+    // (e.g. under `/core` in browser builds). The plain-global-fetch case
+    // forwards rather than eagerly `.bind()`s so a caller that reassigns
+    // `globalThis.fetch` after construction (e.g. a test double) is still
+    // observed.
+    this._fetch =
+      config.fetch ??
+      TinyCloudNode.nodeDefaults?.createDefaultFetch?.() ??
+      ((input, init) => globalThis.fetch(input, init));
+
     // Initialize WASM bindings (uses registered Node defaults if not provided)
     if (config.wasmBindings) {
       this.wasmBindings = config.wasmBindings;
@@ -1163,7 +1202,7 @@ export class TinyCloudNode {
         // Create a new service context for the KV service
         const kvContext = receiveOnlyGraph.track(new ServiceContext({
           invoke: config.invoke,
-          fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
+          fetch: config.fetch ?? this._fetch,
           hosts: config.hosts,
           telemetry: this.config.telemetry,
         }));
@@ -1212,6 +1251,7 @@ export class TinyCloudNode {
       localLinkName: config.localLinkName,
       expectedNodeDid: config.expectedNodeDid,
       localNodeIdentityStore: config.localNodeIdentityStore,
+      fetch: this._fetch,
       autoCreateSpace: useBootstrapSignInRequest ? false : config.autoCreateSpace,
       enablePublicSpace: config.enablePublicSpace ?? true,
       spaceCreationHandler: useBootstrapSignInRequest
@@ -1246,10 +1286,9 @@ export class TinyCloudNode {
     return new ServiceGraphLifetime(
       this.invokeWithRuntimePermissions,
       this.invokeAnyWithRuntimePermissions,
-      // Resolve fetch at request time. This keeps the graph-owned lifetime
-      // signal while preserving the SDK's existing injectable global fetch
-      // behavior (including adapters that install it after construction).
-      (url, init) => globalThis.fetch(url, init),
+      // Route every graph request through this instance's single resolved
+      // fetch (TC-407) rather than the raw global — see `this._fetch`.
+      (url, init) => this._fetch(url, init),
     );
   }
 
@@ -1674,7 +1713,7 @@ export class TinyCloudNode {
       if (!session) {
         throw new Error(`Missing bootstrap session for ${step.space}`);
       }
-      const activated = await activateSessionWithHost(host, session.delegationHeader);
+      const activated = await activateSessionWithHost(host, session.delegationHeader, this._fetch);
       if (!activated.success || activated.skipped?.includes(step.spaceId)) {
         throw new Error(
           `Failed to activate bootstrap session for ${step.spaceId}: ${
@@ -2104,7 +2143,7 @@ export class TinyCloudNode {
       throw new Error("Owned space hosting requires a TinyCloud host");
     }
 
-    const activation = await activateSessionWithHost(host, session.delegationHeader);
+    const activation = await activateSessionWithHost(host, session.delegationHeader, this._fetch);
     if (activation.success && !activation.skipped?.includes(spaceId)) {
       this.confirmedHostedSpaceIds.add(spaceId);
       return;
@@ -2123,7 +2162,7 @@ export class TinyCloudNode {
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const retry = await activateSessionWithHost(host, session.delegationHeader);
+    const retry = await activateSessionWithHost(host, session.delegationHeader, this._fetch);
     if (!retry.success || retry.skipped?.includes(spaceId)) {
       throw new Error(
         `Failed to activate session after creating owned space ${spaceId}: ${
@@ -2180,6 +2219,7 @@ export class TinyCloudNode {
     const activation = await activateSessionWithHost(
       host,
       this.auth.tinyCloudSession.delegationHeader,
+      this._fetch,
     );
     if (!activation.success || activation.skipped?.includes(spaceId)) {
       throw new Error(
@@ -2760,7 +2800,7 @@ export class TinyCloudNode {
         const service = new KVService({ prefix: config.pathPrefix?.replace(/\/$/, '') });
         const context = graph.track(new ServiceContext({
           invoke: config.invoke,
-          fetch: config.fetch ?? globalThis.fetch.bind(globalThis),
+          fetch: config.fetch ?? this._fetch,
           hosts: config.hosts,
           telemetry: this.config.telemetry,
         }));
@@ -2910,6 +2950,7 @@ export class TinyCloudNode {
       localLinkName: this.config.localLinkName,
       expectedNodeDid: this.config.expectedNodeDid,
       localNodeIdentityStore: this.config.localNodeIdentityStore,
+      fetch: this._fetch,
     });
     return resolved.hosts[0];
   }
@@ -2984,6 +3025,7 @@ export class TinyCloudNode {
       localLinkName: this.config.localLinkName,
       expectedNodeDid: this.config.expectedNodeDid,
       localNodeIdentityStore: this.config.localNodeIdentityStore,
+      fetch: this._fetch,
       autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: useBootstrapSignInRequest
@@ -3051,6 +3093,7 @@ export class TinyCloudNode {
       localLinkName: this.config.localLinkName,
       expectedNodeDid: this.config.expectedNodeDid,
       localNodeIdentityStore: this.config.localNodeIdentityStore,
+      fetch: this._fetch,
       autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
       spaceCreationHandler: useBootstrapSignInRequest
@@ -3266,7 +3309,7 @@ export class TinyCloudNode {
     const cached = this.auth?.nodeIdForHost(this.config.host!);
     if (cached) return cached;
 
-    const response = await fetch(`${this.config.host}/info`);
+    const response = await this._fetch(`${this.config.host}/info`);
     if (!response.ok) {
       throw new Error(`Failed to fetch node info: HTTP ${response.status}`);
     }
@@ -3541,7 +3584,7 @@ export class TinyCloudNode {
           return self._publicKV ?? self.tc!.publicKV;
         },
         readPublicSpace: <T>(host: string, targetSpaceId: string, key: string) =>
-          TinyCloud.readPublicSpace<T>(host, targetSpaceId, key),
+          TinyCloud.readPublicSpace<T>(host, targetSpaceId, key, self._fetch),
         makePublicSpaceId: TinyCloud.makePublicSpaceId,
         did,
         address: address ?? "",
@@ -3854,7 +3897,7 @@ export class TinyCloudNode {
     const signature = await this.signer.signMessage(prepared.siwe);
     assertOwnerGraphActive();
     const delegationSession = this.wasmBindings.completeSessionSetup({ ...prepared, signature });
-    const activation = await activateSessionWithHost(host, delegationSession.delegationHeader);
+    const activation = await activateSessionWithHost(host, delegationSession.delegationHeader, this._fetch);
     assertOwnerGraphActive();
     if (!activation.success) {
       throw new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim());
@@ -3891,7 +3934,7 @@ export class TinyCloudNode {
   ): Promise<OwnerSharePolicyRegistrationReceipt> {
     this._serviceGraph.assertActive();
     if (params.policy.bytes.byteLength > 2 * 1024 * 1024) throw new Error("Owner share policy is too large");
-    const response = await fetch(`${this.config.host!}/share/v2/policies`, {
+    const response = await this._fetch(`${this.config.host!}/share/v2/policies`, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({
@@ -3904,7 +3947,14 @@ export class TinyCloudNode {
     if (!response.ok) {
       let code = "";
       try {
-        const body = await response.clone().json() as { readonly error?: { readonly code?: unknown } };
+        // Read the body once via `.text()` rather than `.clone().json()`:
+        // the pooled Node transport only tracks a checked-out connection as
+        // released once *this* response's own body-consuming methods
+        // settle (see nodeTransport.ts's `wrapResponseForRelease`); `clone()`
+        // hands back an independent `Response` whose consumption that
+        // tracking never observes, leaking the slot on every non-2xx reply.
+        const text = await response.text();
+        const body = JSON.parse(text) as { readonly error?: { readonly code?: unknown } };
         if (typeof body.error?.code === "string") code = ` ${body.error.code}`;
       } catch {
         // Keep the stable HTTP failure when the server did not return JSON.
@@ -3954,7 +4004,7 @@ export class TinyCloudNode {
     const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));
     const request = { ...body, requestBodyDigest };
     const authorization = authorizationHeader(this.invokeAnyWithRuntimePermissions(serviceSession, [{ spaceId: session.spaceId, service: "kv", path: input.resourcePath, action: "tinycloud.kv/get" }]));
-    const response = await fetch(`${this.config.host!}/share/v2/deliveries/authorize`, {
+    const response = await this._fetch(`${this.config.host!}/share/v2/deliveries/authorize`, {
       method: "POST",
       headers: { accept: "application/json", "content-type": "application/json", authorization },
       body: canonicalizeEncryptionJson(request),
@@ -4145,7 +4195,7 @@ export class TinyCloudNode {
     return this.fetchEncryptionNetworkAt(
       this.config.host!,
       networkId,
-      globalThis.fetch.bind(globalThis),
+      this._fetch,
     );
   }
 
@@ -4177,7 +4227,7 @@ export class TinyCloudNode {
       action: NETWORK_CREATE_ACTION,
       facts,
     });
-    const response = await fetch(`${this.config.host}/encryption/networks`, {
+    const response = await this._fetch(`${this.config.host}/encryption/networks`, {
       method: "POST",
       headers: {
         Authorization: signed.authorization,
@@ -4568,6 +4618,7 @@ export class TinyCloudNode {
     const activateResult = await activateSessionWithHost(
       targetHost,
       delegation.delegationHeader,
+      this._fetch,
     );
     if (!activateResult.success) {
       throw new Error(
@@ -4681,6 +4732,7 @@ export class TinyCloudNode {
       const activateResult = await activateSessionWithHost(
         this.config.host!,
         delegatedSession.delegationHeader,
+        this._fetch,
       );
       if (!activateResult.success) {
         throw new Error(
@@ -4893,7 +4945,8 @@ export class TinyCloudNode {
 
     const activateResult = await activateSessionWithHost(
       this.config.host!,
-      delegationSession.delegationHeader
+      delegationSession.delegationHeader,
+      this._fetch,
     );
 
     if (!activateResult.success) {
@@ -5394,6 +5447,7 @@ export class TinyCloudNode {
     const activateResult = await activateSessionWithHost(
       this.config.host!,
       delegationHeader,
+      this._fetch,
     );
     if (!activateResult.success) {
       throw new Error(
@@ -5440,6 +5494,7 @@ export class TinyCloudNode {
     const activateResult = await activateSessionWithHost(
       targetHost,
       delegationHeader,
+      this._fetch,
     );
     if (!activateResult.success) {
       throw new Error(
@@ -6300,7 +6355,8 @@ export class TinyCloudNode {
     // Activate the delegation with the server
     const activateResult = await activateSessionWithHost(
       this.config.host!,
-      delegationSession.delegationHeader
+      delegationSession.delegationHeader,
+      this._fetch,
     );
 
     if (!activateResult.success) {
@@ -6349,7 +6405,8 @@ export class TinyCloudNode {
 
       const publicActivateResult = await activateSessionWithHost(
         this.config.host!,
-        publicSession.delegationHeader
+        publicSession.delegationHeader,
+        this._fetch,
       );
 
       if (publicActivateResult.success) {
@@ -6439,6 +6496,7 @@ export class TinyCloudNode {
         this.wasmBindings.invoke,
         this.wasmBindings.invokeAny,
         this.config.telemetry,
+        this._fetch,
       );
     }
 
@@ -6495,7 +6553,8 @@ export class TinyCloudNode {
     // Activate with server
     const activateResult = await activateSessionWithHost(
       targetHost,
-      invokerSession.delegationHeader
+      invokerSession.delegationHeader,
+      this._fetch,
     );
 
     if (!activateResult.success) {
@@ -6537,6 +6596,7 @@ export class TinyCloudNode {
       this.wasmBindings.invoke,
       this.wasmBindings.invokeAny,
       this.config.telemetry,
+      this._fetch,
     );
   }
 
@@ -6650,7 +6710,8 @@ export class TinyCloudNode {
     // Activate the sub-delegation with the server
     const activateResult = await activateSessionWithHost(
       targetHost,
-      subDelegationSession.delegationHeader
+      subDelegationSession.delegationHeader,
+      this._fetch,
     );
 
     if (!activateResult.success) {

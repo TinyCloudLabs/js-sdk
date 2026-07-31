@@ -200,6 +200,47 @@ describe("resolveTinyCloudHosts", () => {
     expect(resolved.location.source).toBe("centralized");
     expect(resolved.hosts).toEqual(["https://registry.node.test"]);
   });
+
+  it("drains the shared response itself instead of relying on clone(), so pooled-transport release tracking works (TC-407)", async () => {
+    const subject =
+      "did:pkh:eip155:1:0x0000000000000000000000000000000000000000";
+    let underlyingFetchCalls = 0;
+    let drainedCount = 0;
+    // Mimics the Node bounded transport (packages/node-sdk/src/transport/nodeTransport.ts):
+    // a connection is only released once a body-consuming method on THIS
+    // SAME Response settles. `Response.clone()` returns new objects backed
+    // directly by the underlying implementation and bypasses that tracking
+    // entirely, so the memoizer must never call it.
+    const pooledFetch: typeof fetch = async () => {
+      underlyingFetchCalls++;
+      const real = new Response("{}", { status: 404 });
+      return new Proxy(real, {
+        get(target, prop) {
+          if (prop === "arrayBuffer" || prop === "json" || prop === "text") {
+            const consume = Reflect.get(target, prop, target);
+            return async (...args: unknown[]) => {
+              const result = await (consume as Function).apply(target, args);
+              drainedCount++;
+              return result;
+            };
+          }
+          if (prop === "clone") {
+            throw new Error("clone() must not be called on the pooled response");
+          }
+          const value = Reflect.get(target, prop, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    };
+
+    await resolveTinyCloudHosts(subject, {
+      autoDiscoverLocalNode: false,
+      fetch: pooledFetch,
+    });
+
+    expect(underlyingFetchCalls).toBe(1);
+    expect(drainedCount).toBe(1);
+  });
 });
 
 describe("resolveCloudLocation", () => {
