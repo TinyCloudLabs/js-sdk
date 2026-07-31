@@ -205,10 +205,10 @@ async function coordinationOsUserNamespace(keyId: string): Promise<string> {
     .slice(0, 22);
 }
 
-async function validateCanaryManifest(
+async function validateCoordinationOsManifest(
   manifest: Manifest,
   keyId: string,
-): Promise<string> {
+): Promise<string[]> {
   if (
     manifest === null ||
     typeof manifest !== "object" ||
@@ -229,8 +229,26 @@ async function validateCanaryManifest(
   ];
   const permissionKeys = ["service", "space", "path", "actions"];
   const permissions = (manifest as Manifest).permissions;
-  const permission = permissions?.[0];
   const namespace = await coordinationOsUserNamespace(keyId);
+  const canaryPath =
+    `coordinationos/integration/v1/${namespace}/canary`;
+  const inviteCodePath =
+    `coordinationos/integration/v1/${namespace}/invite-code`;
+  const validPermission = (
+    permission: Manifest["permissions"][number] | undefined,
+    path: string,
+  ): boolean =>
+    permission !== null &&
+    typeof permission === "object" &&
+    !Array.isArray(permission) &&
+    ownKeysEqual(permission, permissionKeys) &&
+    permission.service === "tinycloud.kv" &&
+    permission.space === "applications" &&
+    permission.path === path &&
+    Array.isArray(permission.actions) &&
+    permission.actions.length === 2 &&
+    permission.actions[0] === "get" &&
+    permission.actions[1] === "put";
   const valid =
     ownKeysEqual(manifest, manifestKeys) &&
     manifest.manifest_version === 1 &&
@@ -241,40 +259,33 @@ async function validateCanaryManifest(
     manifest.defaults === false &&
     manifest.expiry === "1h" &&
     Array.isArray(permissions) &&
-    permissions.length === 1 &&
-    permission !== null &&
-    typeof permission === "object" &&
-    !Array.isArray(permission) &&
-    ownKeysEqual(permission, permissionKeys) &&
-    permission.service === "tinycloud.kv" &&
-    permission.space === "applications" &&
-    permission.path ===
-      `coordinationos/integration/v1/${namespace}/canary` &&
-    Array.isArray(permission.actions) &&
-    permission.actions.length === 2 &&
-    permission.actions[0] === "get" &&
-    permission.actions[1] === "put";
+    (permissions.length === 1 || permissions.length === 2) &&
+    validPermission(permissions[0], canaryPath) &&
+    (
+      permissions.length === 1 ||
+      validPermission(permissions[1], inviteCodePath)
+    );
 
   if (!valid) {
-    throw new Error("Manifest must grant only the CoordinationOS KV canary");
+    throw new Error(
+      "Manifest must grant only the approved CoordinationOS KV records",
+    );
   }
-  return permission.path;
+  return permissions.map((permission) => permission.path);
 }
 
 function coordinationOsCapabilityRequest(
   manifest: Manifest,
-  canaryPath: string,
+  paths: string[],
 ): ComposedManifestRequest {
   return {
     manifests: [manifest],
-    resources: [
-      {
-        service: "tinycloud.kv",
-        space: "applications",
-        path: canaryPath,
-        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
-      },
-    ],
+    resources: paths.map((path) => ({
+      service: "tinycloud.kv",
+      space: "applications",
+      path,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+    })),
     delegationTargets: [],
     registryRecords: [],
     expiryMs: SESSION_EXPIRATION_MS,
@@ -368,7 +379,7 @@ export async function establishOpenKeySession(
   if (options.sessionStorageKeyPrefix !== SESSION_STORAGE_KEY_PREFIX) {
     throw new Error("OpenKey session storage prefix is invalid");
   }
-  const canaryPath = await validateCanaryManifest(
+  const coordinationOsPaths = await validateCoordinationOsManifest(
     options.manifest,
     options.key.keyId,
   );
@@ -422,7 +433,7 @@ export async function establishOpenKeySession(
     manifest: options.manifest,
     capabilityRequest: coordinationOsCapabilityRequest(
       options.manifest,
-      canaryPath,
+      coordinationOsPaths,
     ),
     includeAccountRegistryPermissions: false,
     autoCreateSpace: false,
