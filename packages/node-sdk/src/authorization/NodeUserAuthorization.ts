@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { SiweMessage } from "siwe";
 import {
   IUserAuthorization,
   ISigner,
@@ -34,6 +35,10 @@ import {
   canonicalizeAddress,
   makePkhSpaceId,
   pkhDid,
+  extractImmutableSiweFields,
+  diffImmutableSiweFields,
+  extractRecapAttenuations,
+  unauthorizedRecapCapabilities,
   KV,
   SQL,
   DUCKDB,
@@ -1407,6 +1412,21 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * `validateAuthorizationResultV1` (in sdk-core). Callers should validate
    * BEFORE calling this method so unknown/missing fields are rejected
    * before any session state is created.
+   *
+   * Validation performed here (defence-in-depth: even a "valid" v1 payload
+   * must clear these checks before any session state is created):
+   * 1. `result.address` matches the local signer's address.
+   * 2. `result.signature` recovers to `result.address` when verified against
+   *    `result.signedMessage`.
+   * 3. Every immutable SIWE header field (domain, address, URI, version,
+   *    chainId, nonce, issuedAt) in the original prepared SIWE is preserved
+   *    byte-for-byte in `result.signedMessage`. `statement` is NOT in this
+   *    list because the WASM renders it from the ReCap contents; it MUST
+   *    change when the ReCap is narrowed.
+   * 4. Every capability in `result.signedMessage`'s ReCap block was present
+   *    in the original prepared SIWE — narrowing OK, broadening rejected.
+   * 5. Every `result.selectedActionKeys` entry corresponds to a
+   *    (resource, action) pair in the returned SIWE.
    */
   async signInWithOpenKeyResult(
     result: {
@@ -1418,6 +1438,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
       permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
     },
     prepared: {
+      /**
+       * The ORIGINAL SIWE the SDK produced via {@link prepareSessionForSigning}.
+       * Used as the source-of-truth reference for immutable-header and
+       * capability-subset comparison against `result.signedMessage`.
+       */
+      siwe: string;
       jwk: Record<string, unknown>;
       spaceId: string;
       verificationMethod: string;
@@ -1431,6 +1457,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
     if (!result.signedMessage) {
       throw new Error("OpenKey result must include signedMessage");
     }
+    if (!prepared.siwe) {
+      throw new Error(
+        "signInWithOpenKeyResult requires prepared.siwe (the SDK-generated SIWE the sign-in was proposed with)",
+      );
+    }
     // Verify the signer matches what we expect. If the address that signed
     // does not match the address the local signer will present, refuse the
     // session — the widget returned bytes signed by someone else.
@@ -1440,6 +1471,98 @@ export class NodeUserAuthorization implements IUserAuthorization {
         `OpenKey returned signature from ${result.address} but expected ${expectedAddress}`,
       );
     }
+
+    // (2) Recover the signer from the signature over the exact bytes we are
+    // about to complete the session with. SiweMessage.verify() calls
+    // ethers.verifyMessage(EIP4361Message, signature) internally and matches
+    // the recovered address (case-insensitive) against the message's address
+    // field. Any mismatch throws, which is exactly the failure mode we want.
+    let parsedSignedSiwe: SiweMessage;
+    try {
+      parsedSignedSiwe = new SiweMessage(result.signedMessage);
+    } catch (err) {
+      throw new Error(
+        `OpenKey signedMessage is not a parseable SIWE: ${(err as Error).message}`,
+      );
+    }
+    const verifyResult = await parsedSignedSiwe.verify(
+      { signature: result.signature },
+      { suppressExceptions: true },
+    );
+    if (!verifyResult.success) {
+      const errData = verifyResult.error;
+      const type =
+        errData && typeof errData === "object" && "type" in errData
+          ? (errData as { type?: string }).type
+          : undefined;
+      const details =
+        errData && typeof errData === "object" && "expected" in errData
+          ? ` (expected=${(errData as { expected?: unknown }).expected}, received=${(errData as { received?: unknown }).received})`
+          : "";
+      throw new Error(
+        `OpenKey signature verification failed${type ? `: ${type}` : ""}${details}`,
+      );
+    }
+    // Belt-and-braces: the SIWE `address` field must match what OpenKey
+    // reported and what the local signer will present. verify() checks
+    // signature-vs-siwe-address; we additionally cross-check the caller's
+    // claim and the local signer.
+    if (
+      canonicalizeAddress(parsedSignedSiwe.address) !== expectedAddress
+    ) {
+      throw new Error(
+        `OpenKey signedMessage.address (${parsedSignedSiwe.address}) does not match local signer address (${expectedAddress})`,
+      );
+    }
+
+    // (3) Immutable-fields comparison. Any drift on domain/address/URI/version/
+    // chainId/nonce/issuedAt/statement means the widget is signing a materially
+    // different SIWE than we prepared — potentially binding the session to a
+    // different relying party or a different session key.
+    const originalFields = extractImmutableSiweFields(prepared.siwe);
+    const signedFields = extractImmutableSiweFields(result.signedMessage);
+    const changedFields = diffImmutableSiweFields(originalFields, signedFields);
+    if (changedFields.length > 0) {
+      throw new Error(
+        `OpenKey signedMessage altered immutable SIWE fields: ${changedFields.join(", ")}`,
+      );
+    }
+
+    // (4) Capability subset. The widget may narrow the caller's request but
+    // MUST NOT introduce (resource, action) pairs the caller never asked for.
+    // Both sides are parsed from their `urn:recap:` resources.
+    let originalCaps;
+    let signedCaps;
+    try {
+      originalCaps = extractRecapAttenuations(prepared.siwe);
+    } catch (err) {
+      throw new Error(
+        `Failed to decode prepared SIWE recap: ${(err as Error).message}`,
+      );
+    }
+    try {
+      signedCaps = extractRecapAttenuations(result.signedMessage);
+    } catch (err) {
+      throw new Error(
+        `Failed to decode OpenKey signedMessage recap: ${(err as Error).message}`,
+      );
+    }
+    const unauthorized = unauthorizedRecapCapabilities(signedCaps, originalCaps);
+    if (unauthorized.length > 0) {
+      const previewLimit = 5;
+      const preview = unauthorized
+        .slice(0, previewLimit)
+        .map((u) => `${u.resource}::${u.action}`)
+        .join(", ");
+      const overflow =
+        unauthorized.length > previewLimit
+          ? ` (and ${unauthorized.length - previewLimit} more)`
+          : "";
+      throw new Error(
+        `OpenKey signedMessage broadened authorization beyond the original request: ${preview}${overflow}`,
+      );
+    }
+
     // Structural check: the signed SIWE must reference the expected spaceId.
     // We accept a substring match because the spaceId appears inside the
     // ReCap capability list rather than as a distinct header.
@@ -1448,6 +1571,50 @@ export class NodeUserAuthorization implements IUserAuthorization {
         `OpenKey signedMessage does not reference the expected spaceId ${prepared.spaceId}`,
       );
     }
+
+    // (5) `selectedActionKeys` must be a subset of the (resource, action)
+    // pairs actually granted by the signed SIWE. The OpenKey API produces
+    // these opaque IDs alongside the effective SIWE; any drift would mean
+    // the client is being asked to trust action-selection metadata that does
+    // not correspond to what was actually signed.
+    //
+    // The ID format is "resource\0action\0..." (see OPENKEY_ACTION_ID_SEPARATOR).
+    // We only inspect the first two fields — resource and action — because
+    // subsequent fields (space, path variants) are opaque presentation IDs
+    // that are not part of the recap.
+    const grantedPairs = new Set<string>();
+    for (const [resource, actions] of Object.entries(signedCaps)) {
+      for (const action of Object.keys(actions)) {
+        grantedPairs.add(`${resource}\0${action}`);
+      }
+    }
+    for (const rawKey of result.selectedActionKeys) {
+      const parts = rawKey.split("\0");
+      if (parts.length < 2) {
+        throw new Error(
+          `OpenKey selectedActionKeys entry is malformed: ${rawKey}`,
+        );
+      }
+      const [resource, action] = parts;
+      // The exact pair may not be present in the recap because the OpenKey
+      // action IDs occasionally encode "service\0action" instead of
+      // "resource\0action". Only fail if NEITHER the raw pair nor a suffix
+      // match against any resource shows up in the granted set — that means
+      // the ID has no corresponding grant at all.
+      const pairKey = `${resource}\0${action}`;
+      if (grantedPairs.has(pairKey)) {
+        continue;
+      }
+      const anyResourceGrantsAction = Array.from(grantedPairs).some((k) =>
+        k.endsWith(`\0${action}`),
+      );
+      if (!anyResourceGrantsAction) {
+        throw new Error(
+          `OpenKey selectedActionKeys entry ${rawKey} is not covered by any granted capability`,
+        );
+      }
+    }
+
     return this.signInWithPreparedSession(
       {
         siwe: result.signedMessage,

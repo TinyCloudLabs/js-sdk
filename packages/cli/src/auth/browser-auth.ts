@@ -130,6 +130,13 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
  * the payload looks well-formed; otherwise a human-readable reason. Called
  * before the delegation is persisted so a tampered response cannot install
  * a session with unexpected fields.
+ *
+ * The `permissions` field is optional (older OpenKey builds omit it). When
+ * present it must be a strict `{ service, space, path, actions[] }` shape.
+ * The stronger subset-vs-requested check lives in
+ * `portableFromOpenKeyDelegation` (which has access to the original request);
+ * this validator's job is only to refuse a structurally-malformed response
+ * before any subset comparison can be made.
  */
 export function validateDelegationCallbackPayload(value: unknown): string | null {
   if (!value || typeof value !== "object") return "expected an object";
@@ -146,6 +153,30 @@ export function validateDelegationCallbackPayload(value: unknown): string | null
   }
   if (typeof v.spaceId !== "string" || !v.spaceId) {
     return "spaceId must be a non-empty string";
+  }
+  if (v.permissions !== undefined) {
+    if (!Array.isArray(v.permissions)) {
+      return "permissions, when present, must be an array";
+    }
+    for (let i = 0; i < v.permissions.length; i++) {
+      const entry = v.permissions[i];
+      if (!entry || typeof entry !== "object") {
+        return `permissions[${i}] must be an object`;
+      }
+      const e = entry as Record<string, unknown>;
+      if (typeof e.service !== "string" || !e.service) {
+        return `permissions[${i}].service must be a non-empty string`;
+      }
+      if (typeof e.space !== "string") {
+        return `permissions[${i}].space must be a string`;
+      }
+      if (typeof e.path !== "string") {
+        return `permissions[${i}].path must be a string`;
+      }
+      if (!Array.isArray(e.actions) || e.actions.some((a) => typeof a !== "string" || !a)) {
+        return `permissions[${i}].actions must be a non-empty string[]`;
+      }
+    }
   }
   return null;
 }

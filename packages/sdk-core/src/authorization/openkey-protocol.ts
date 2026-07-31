@@ -137,3 +137,230 @@ export function isPlausibleOpenKeyActionId(id: unknown): id is string {
     id.length > 0
   );
 }
+
+/**
+ * Immutable SIWE header fields the OpenKey widget is NOT allowed to alter.
+ * The user may narrow capabilities (which changes the ReCap `urn:recap:`
+ * resource AND — because the WASM statement is a human-readable rendering of
+ * the ReCap — the statement text along with it). But domain/address/URI/
+ * version/chainId/nonce/issuedAt bind the message to a specific relying party
+ * plus a specific session-key request and MUST come back identical byte-for-byte.
+ *
+ * `statement` is intentionally NOT part of the immutable set: it derives from
+ * the ReCap and MUST be allowed to change when the ReCap changes. The
+ * capability-subset check (via `unauthorizedRecapCapabilities`) is the
+ * authoritative gate for what the widget was allowed to change.
+ */
+export interface ImmutableSiweFields {
+  domain?: string;
+  address?: string;
+  uri?: string;
+  version?: string;
+  chainId?: string;
+  nonce?: string;
+  issuedAt?: string;
+}
+
+/**
+ * Extract the header fields that must be preserved byte-for-byte between the
+ * caller's original prepared SIWE and the bytes OpenKey actually signed. Uses
+ * line-based parsing tolerant of the specific format the WASM emitter uses:
+ *
+ *   <domain> wants you to sign in with your Ethereum account:
+ *   <address>
+ *
+ *   <statement>
+ *
+ *   URI: <uri>
+ *   Version: <n>
+ *   Chain ID: <n>
+ *   Nonce: <hex>
+ *   Issued At: <iso8601>
+ *   Resources:
+ *   - <resource1>
+ *   ...
+ *
+ * Returns fields it was able to identify; downstream comparison is field-by-field
+ * so a missing field on both sides is treated as equal.
+ */
+export function extractImmutableSiweFields(siwe: string): ImmutableSiweFields {
+  const lines = siwe.split(/\r?\n/);
+  const result: ImmutableSiweFields = {};
+
+  const headerLine = lines[0];
+  if (headerLine) {
+    const domainMatch = headerLine.match(/^(.+?)\s+wants you to sign in/);
+    if (domainMatch) {
+      result.domain = domainMatch[1];
+    }
+  }
+
+  // Address is the second non-empty line following the header. Simplest to
+  // pattern-match on an EIP-55 address rather than track line offsets.
+  for (let i = 1; i < lines.length && i < 5; i++) {
+    const line = lines[i]?.trim() ?? "";
+    if (/^0x[0-9a-fA-F]{40}$/.test(line)) {
+      result.address = line;
+      break;
+    }
+  }
+
+  for (const line of lines) {
+    const match = line.match(/^([A-Z][A-Za-z ]*):\s*(.*)$/);
+    if (!match) continue;
+    const [, key, value] = match;
+    switch (key) {
+      case "URI":
+        result.uri = value;
+        break;
+      case "Version":
+        result.version = value;
+        break;
+      case "Chain ID":
+        result.chainId = value;
+        break;
+      case "Nonce":
+        result.nonce = value;
+        break;
+      case "Issued At":
+        result.issuedAt = value;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Diff two SIWE header field sets. Returns the field names that differ. An
+ * empty array means the caller's prepared header and the signed header agree
+ * on every immutable field.
+ */
+export function diffImmutableSiweFields(
+  original: ImmutableSiweFields,
+  signed: ImmutableSiweFields,
+): string[] {
+  const keys: (keyof ImmutableSiweFields)[] = [
+    "domain",
+    "address",
+    "uri",
+    "version",
+    "chainId",
+    "nonce",
+    "issuedAt",
+  ];
+  const diffs: string[] = [];
+  for (const key of keys) {
+    if (original[key] !== signed[key]) {
+      diffs.push(key);
+    }
+  }
+  return diffs;
+}
+
+/**
+ * Parsed ReCap attenuation payload. Keyed by resource URI ("space/service/path"),
+ * each value is a map of action -> list of caveat objects. Consumers care about
+ * subset comparisons on (resource, action) pairs; caveats are compared shallowly
+ * (any narrowing of caveats is treated as still a subset when the parent grants
+ * the same action).
+ */
+export interface RecapAttenuation {
+  [resource: string]: {
+    [action: string]: unknown[];
+  };
+}
+
+/**
+ * Extract the union of `att` maps from every `urn:recap:` resource in a SIWE
+ * message. Returns an empty object if the SIWE contains no ReCap resources
+ * (which is legal — a plain SIWE grants nothing beyond the message itself).
+ *
+ * Throws if a `urn:recap:` payload is present but cannot be decoded as
+ * base64url JSON with an `att` object. Silent tolerance would let a compromised
+ * OpenKey response bypass the subset check by returning garbage.
+ */
+export function extractRecapAttenuations(siwe: string): RecapAttenuation {
+  const merged: RecapAttenuation = {};
+  const lines = siwe.split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/urn:recap:([A-Za-z0-9_-]+=*)/);
+    if (!match) continue;
+    const encoded = match[1];
+    let decodedJson: string;
+    try {
+      // base64url decode, tolerating with or without padding
+      const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+      decodedJson = Buffer.from(padded, "base64").toString("utf8");
+    } catch (err) {
+      throw new Error(
+        `Failed to decode urn:recap: payload: ${(err as Error).message}`,
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(decodedJson);
+    } catch (err) {
+      throw new Error(
+        `urn:recap: payload is not valid JSON: ${(err as Error).message}`,
+      );
+    }
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("urn:recap: payload must be an object");
+    }
+    const att = (parsed as Record<string, unknown>).att;
+    if (att === undefined) {
+      continue; // ReCap without an `att` block grants nothing.
+    }
+    if (typeof att !== "object" || att === null || Array.isArray(att)) {
+      throw new Error("urn:recap: att must be an object");
+    }
+    for (const [resource, actionMap] of Object.entries(att as Record<string, unknown>)) {
+      if (!actionMap || typeof actionMap !== "object" || Array.isArray(actionMap)) {
+        throw new Error(`urn:recap: att[${resource}] must be an object`);
+      }
+      const existing = merged[resource] ?? {};
+      for (const [action, caveats] of Object.entries(actionMap as Record<string, unknown>)) {
+        if (!Array.isArray(caveats)) {
+          throw new Error(
+            `urn:recap: att[${resource}][${action}] must be an array`,
+          );
+        }
+        const previous = existing[action] ?? [];
+        existing[action] = previous.concat(caveats);
+      }
+      merged[resource] = existing;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Prove that `child` grants are a subset of `parent` grants. Returns a list of
+ * unauthorized (resource, action) pairs — empty means every capability in
+ * `child` was authorized by `parent`.
+ *
+ * "Subset" here means: every (resource, action) pair the child grants must also
+ * appear in the parent. Caveats are NOT compared; a caveat-narrowed action is
+ * treated as a subset of the same unrestricted action in the parent. This
+ * matches the intent of the OpenKey narrowing flow — the widget may add
+ * caveats but never remove them or introduce new (resource, action) pairs.
+ */
+export function unauthorizedRecapCapabilities(
+  child: RecapAttenuation,
+  parent: RecapAttenuation,
+): Array<{ resource: string; action: string }> {
+  const unauthorized: Array<{ resource: string; action: string }> = [];
+  for (const [resource, actions] of Object.entries(child)) {
+    const parentActions = parent[resource];
+    for (const action of Object.keys(actions)) {
+      if (!parentActions || parentActions[action] === undefined) {
+        unauthorized.push({ resource, action });
+      }
+    }
+  }
+  return unauthorized;
+}

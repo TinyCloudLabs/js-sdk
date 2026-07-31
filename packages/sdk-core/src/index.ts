@@ -583,6 +583,13 @@ export {
   validateAuthorizationResultV1,
   isPlausibleOpenKeyActionId,
   OPENKEY_ACTION_ID_SEPARATOR,
+  // OpenKey narrowing verification helpers
+  ImmutableSiweFields,
+  RecapAttenuation,
+  extractImmutableSiweFields,
+  diffImmutableSiweFields,
+  extractRecapAttenuations,
+  unauthorizedRecapCapabilities,
 } from "./authorization";
 
 // Spaces (v2 spec)
