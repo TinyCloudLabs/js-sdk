@@ -172,9 +172,10 @@ export class ProfileManager {
    * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
    *
    * Local-node discovery (TC-106) only runs when no explicit host was given
-   * (`--host` / `TC_HOST`); it probes for a locally-running TinyCloud node and,
-   * after DID verification against the profile's pinned identity, prefers it
-   * over the stored/default host. Disable per profile with
+   * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
+   * after DID verification against the profile's pinned identity, prefers one
+   * over the stored/default host. Loopback requires an explicit `localNodeUrl`.
+   * Disable discovery per profile with
    * `autoDiscoverLocalNode: false` in profile.json.
    */
   static async resolveContext(options: {

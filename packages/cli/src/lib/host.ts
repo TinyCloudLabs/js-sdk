@@ -41,7 +41,7 @@ export function profileLocalNodeIdentityStore(
 }
 
 /**
- * Probe for a locally-running TinyCloud node using the profile's discovery
+ * Probe for a configured or registered local TinyCloud node using the profile's discovery
  * knobs and profile-persisted DID pins. Returns the verified local node URL,
  * or null when discovery is disabled, nothing local is running, or the local
  * node fails identity verification — callers fall back to their normal host.

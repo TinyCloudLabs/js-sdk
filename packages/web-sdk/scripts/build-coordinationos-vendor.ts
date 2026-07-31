@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CONTRACT_VERSION = "2.11.0-beta.1";
+const CONTRACT_VERSION = "2.11.0-beta.2";
 const CONTRACT_EXPORTS = [
   "TinyCloudWeb",
   "createOpenKeyCallbackSigningStrategy",
