@@ -23,6 +23,7 @@
   "type": "module",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
+  "sideEffects": ["dist/index.cjs", "dist/index.mjs"],
   "scripts": {
     "build": "rimraf dist && webpack --mode production --config webpack.config.cjs",
     "build:coordinationos-vendor": "rimraf dist/vendor && cross-env NODE_ENV=production webpack --mode production --config webpack.coordinationos-vendor.config.cjs && bun scripts/build-coordinationos-vendor.ts",
