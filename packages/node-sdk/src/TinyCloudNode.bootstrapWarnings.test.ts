@@ -11,7 +11,12 @@
 
 import { describe, expect, mock, test } from "bun:test";
 
-import type { IWasmBindings, ISessionManager, ClientSession } from "@tinycloud/sdk-core";
+import type {
+  IWasmBindings,
+  ISessionManager,
+  ClientSession,
+  BootstrapSeedSpacesStep,
+} from "@tinycloud/sdk-core";
 import { createOpenKeyCallbackSigningStrategy } from "@tinycloud/sdk-core";
 import { TinyCloudNode, type BootstrapWarning } from "./TinyCloudNode";
 
@@ -180,5 +185,56 @@ describe("bootstrapStatus.warnings — recovered ambiguous batch write (TC-373 /
     expect(node.bootstrapStatus.skipped).toBe(true);
     expect(node.bootstrapStatus.reason).toBe("boom");
     expect(node.bootstrapStatus.warnings).toBeUndefined();
+  });
+
+  // Sol B3 (round 2): the three tests above all replace `runAccountBootstrap`
+  // itself with a mock, so they only assert that TinyCloudNode plumbs
+  // whatever `runAccountBootstrap` returns onto `bootstrapStatus` — they would
+  // still pass even if the mapping from `recoveredFromBatchError` to a
+  // `BootstrapWarning` at TinyCloudNode.ts:1667-1675 were deleted entirely.
+  // This test drives the REAL `runAccountBootstrap` and only stubs the KV
+  // layer it calls (`account.spaces.registerBatch`), so it actually guards
+  // the mapping code itself.
+  test("the REAL runAccountBootstrap seed-spaces path maps recoveredFromBatchError to a BootstrapWarning", async () => {
+    const warningSpy = mock(() => {});
+    const node = makeNode(warningSpy);
+
+    // runAccountBootstrap() only requires `this.auth` (set synchronously in
+    // the constructor via setupAuth) and `this._address` (normally set
+    // inside signIn()). Set the address directly instead of calling
+    // signIn(), so the *only* real bootstrap step that runs is the
+    // seed-spaces one under test.
+    (node as any)._address = FAKE_ADDRESS;
+
+    const batchError = {
+      code: "KV_WRITE_FAILED",
+      message: "500 - internal error after commit, reconciled",
+      service: "kv",
+    };
+
+    // Stub only the KV batch outcome. Everything downstream of it —
+    // including the `if (batchError) warnings.push(...)` mapping — is the
+    // real production code.
+    node.account.spaces.registerBatch = mock(async () => ({
+      ok: true as const,
+      data: { spaces: [], recoveredFromBatchError: batchError },
+    }));
+
+    const seedSpacesStep: BootstrapSeedSpacesStep = {
+      id: "account:seed-spaces",
+      kind: "seed-spaces",
+      spaces: [],
+    };
+
+    const warnings = await (node as any).runAccountBootstrap([seedSpacesStep]);
+
+    expect(warnings).toEqual([
+      {
+        stepId: "account:seed-spaces",
+        kind: "batch-write-reconciled",
+        code: "KV_WRITE_FAILED",
+        message: "500 - internal error after commit, reconciled",
+      },
+    ]);
   });
 });

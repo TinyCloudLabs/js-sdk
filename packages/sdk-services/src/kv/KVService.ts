@@ -1010,7 +1010,7 @@ export class KVService extends BaseService implements IKVService {
           let errorText: string;
           try {
             errorText = await response.text();
-          } catch {
+          } catch (textError) {
             // A response was received — the status is known and
             // authoritative — but its body could not be read. Falling
             // through to the generic catch below would report
@@ -1020,12 +1020,19 @@ export class KVService extends BaseService implements IKVService {
             // ambiguity (Sol B4). Classify by status alone instead; whether
             // this is later reconciled is still governed solely by
             // AMBIGUOUS_WRITE_STATUSES, exactly like the body-readable path.
+            //
+            // Sol B2 (round 2): preserve the underlying rejection instead of
+            // discarding it — a bare `catch {}` here would make a
+            // body-read failure silently invisible, which is exactly the
+            // debugging trap the no-swallowed-errors rule exists to
+            // prevent.
+            const cause = textError instanceof Error ? textError : new Error(String(textError));
             return err(
               serviceError(
                 ErrorCodes.KV_WRITE_FAILED,
-                `Failed to batch put ${items.length} key(s): ${response.status} - <response body could not be read>`,
+                `Failed to batch put ${items.length} key(s): ${response.status} - <response body could not be read: ${cause.message}>`,
                 "kv",
-                { meta: { status: response.status, statusText: response.statusText } }
+                { cause, meta: { status: response.status, statusText: response.statusText } }
               )
             );
           }
@@ -1061,7 +1068,7 @@ export class KVService extends BaseService implements IKVService {
         let rawBody: unknown;
         try {
           rawBody = await response.json();
-        } catch {
+        } catch (jsonError) {
           // A 2xx response whose body isn't valid JSON is precisely the
           // unconfirmed-2xx case — the node answered success but the write
           // set can't be confirmed. Falling through to the generic catch
@@ -1069,12 +1076,20 @@ export class KVService extends BaseService implements IKVService {
           // `responseReceived`/`status`/`outcome`, so this must be classified
           // here with the identical metadata block used by the two sibling
           // unconfirmed branches (Sol B3).
+          //
+          // Sol B2 (round 2): preserve the underlying rejection instead of
+          // discarding it — a bare `catch {}` here would make a
+          // JSON-parse failure silently invisible, which is exactly the
+          // debugging trap the no-swallowed-errors rule exists to
+          // prevent.
+          const cause = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
-              "KV batchPut response was not valid JSON",
+              `KV batchPut response was not valid JSON: ${cause.message}`,
               "kv",
               {
+                cause,
                 meta: {
                   requestMayHaveDispatched: true,
                   responseReceived: true,

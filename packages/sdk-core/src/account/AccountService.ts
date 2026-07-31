@@ -1379,17 +1379,24 @@ function isMissingIndexError(error: ServiceError): boolean {
  *      origin was reached and may have already committed the write.
  *    - 521 (web server is down) — EXCLUDED. Cloudflare could not open a
  *      connection to the origin at all; the request never arrived.
- *    - 522 (connection timed out) — EXCLUDED. The TCP handshake to the
- *      origin itself timed out; nothing was ever delivered to the origin.
+ *    - 522 (connection timed out) — INCLUDED. Cloudflare documents two
+ *      distinct 522 modes: in one, the TCP handshake to the origin itself
+ *      times out and nothing is ever delivered; in the other, the TCP
+ *      connection IS established and the request is sent, but the origin
+ *      never ACKs the response. That second mode means the request can
+ *      have reached the origin and been processed before the timeout
+ *      fired, so a committed write cannot be ruled out
+ *      (https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-522/).
  *    - 523 (origin unreachable) — EXCLUDED. Routing/DNS failure reaching the
- *      origin; same as 521/522, the request never arrived.
+ *      origin; unlike 522's post-connection mode, the request never
+ *      arrived.
  *    - 524 (a timeout occurred) — INCLUDED. Cloudflare connected to the
  *      origin and forwarded the request, but the origin did not answer
  *      within the timeout; the origin may have processed (and committed)
  *      the write before the response was dropped. This was excluded by the
  *      old deny-list only by omission, not by intent — that was a
  *      regression this allow-list must not repeat. */
-const AMBIGUOUS_WRITE_STATUSES = new Set([500, 502, 503, 504, 520, 524]);
+const AMBIGUOUS_WRITE_STATUSES = new Set([500, 502, 503, 504, 520, 522, 524]);
 
 /**
  * Classify a KV batch write failure for the seed-spaces reconciliation

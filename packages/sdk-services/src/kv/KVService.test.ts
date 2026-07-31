@@ -662,6 +662,38 @@ describe("KVService.batchPut", () => {
     }
   });
 
+  // Non-blocking coverage gap noted in the TC-373 round-2 review: only the
+  // deterministic-400 body-read-rejects branch was directly tested above.
+  // An AMBIGUOUS 5xx (503 is a member of AccountService's
+  // AMBIGUOUS_WRITE_STATUSES) whose body read also rejects must stay
+  // KV_WRITE_FAILED with its real status, exactly like the 400 case — the
+  // production code path is identical for both, but only the status
+  // determines whether AccountService.registerBatch later reconciles it via
+  // per-space puts.
+  test("a 503 response whose body read rejects stays KV_WRITE_FAILED with its real status (ambiguous, DOES trigger reconciliation)", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        const res = response(false, 503, "Service Unavailable");
+        res.text = async () => {
+          throw new Error("body stream already consumed");
+        };
+        return res;
+      }, [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.KV_WRITE_FAILED);
+      expect(result.error.meta).toEqual({ status: 503, statusText: "Error" });
+      expect(result.error.meta?.requestMayHaveDispatched).toBeUndefined();
+      // 503 is in AMBIGUOUS_WRITE_STATUSES (AccountService.ts), unlike 400 in
+      // the sibling test above — this is the status that governs whether
+      // AccountService.registerBatch reconciles via per-space puts.
+    }
+  });
+
   test("JSON values written via batchPut round-trip through get() as parsed objects (canonical read)", async () => {
     let batchPartType: string | undefined;
     const service = new KVService({ prefix: "app" });

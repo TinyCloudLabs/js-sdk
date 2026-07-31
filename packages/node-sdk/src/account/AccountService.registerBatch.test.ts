@@ -184,11 +184,11 @@ describe("AccountService.spaces.registerBatch", () => {
     ["KV_WRITE_FAILED 429", { code: "KV_WRITE_FAILED", message: "429 - Too Many Requests", service: "kv", meta: { status: 429 } }],
     ["KV_WRITE_FAILED 501", { code: "KV_WRITE_FAILED", message: "501 - Not Implemented", service: "kv", meta: { status: 501 } }],
     ["KV_WRITE_FAILED 505", { code: "KV_WRITE_FAILED", message: "505 - HTTP Version Not Supported", service: "kv", meta: { status: 505 } }],
-    // Sol B1: Cloudflare 52x family, excluded members — the request never
-    // reached the origin (connection refused / connect timeout / routing
-    // failure), so nothing was written.
+    // Sol B1 (round 2): Cloudflare 52x family, excluded members — the
+    // request never reached the origin (connection refused / routing
+    // failure), so nothing was written. 522 moved to the include matrix
+    // below: it has a post-connection mode where the origin was reached.
     ["KV_WRITE_FAILED 521 (Cloudflare: web server is down)", { code: "KV_WRITE_FAILED", message: "521 - Web Server Is Down", service: "kv", meta: { status: 521 } }],
-    ["KV_WRITE_FAILED 522 (Cloudflare: connection timed out)", { code: "KV_WRITE_FAILED", message: "522 - Connection Timed Out", service: "kv", meta: { status: 522 } }],
     ["KV_WRITE_FAILED 523 (Cloudflare: origin is unreachable)", { code: "KV_WRITE_FAILED", message: "523 - Origin Is Unreachable", service: "kv", meta: { status: 523 } }],
     ["NETWORK_ERROR with no meta at all", { code: ErrorCodes.NETWORK_ERROR, message: "fetch failed", service: "kv" }],
     ["NETWORK_ERROR with requestMayHaveDispatched: false (pre-dispatch throw)", { code: ErrorCodes.NETWORK_ERROR, message: "fetch failed", service: "kv", meta: { requestMayHaveDispatched: false } }],
@@ -339,6 +339,11 @@ describe("AccountService.spaces.registerBatch", () => {
     // reached (some response, or the origin received the request and
     // processed it before the timeout), so the write may have landed.
     ["KV_WRITE_FAILED 520 (Cloudflare: unknown origin error)", { code: "KV_WRITE_FAILED", message: "520 - Web Server Returned An Unknown Error", service: "kv", meta: { status: 520 } }],
+    // Sol B1 (round 2): 522 has a post-connection mode — the TCP connection
+    // to the origin was established and the request sent, but the origin
+    // never ACKs the response — so the origin may already have processed
+    // the write.
+    ["KV_WRITE_FAILED 522 (Cloudflare: connection timed out)", { code: "KV_WRITE_FAILED", message: "522 - Connection Timed Out", service: "kv", meta: { status: 522 } }],
     ["KV_WRITE_FAILED 524 (Cloudflare: a timeout occurred)", { code: "KV_WRITE_FAILED", message: "524 - A Timeout Occurred", service: "kv", meta: { status: 524 } }],
   ])("reconciles via per-space puts for %s (one row per include decision)", async (_label, error) => {
     const { service, put } = makeHarness({
