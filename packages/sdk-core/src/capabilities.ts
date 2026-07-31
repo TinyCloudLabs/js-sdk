@@ -136,8 +136,11 @@ export interface SubsetCheckResult {
  * - Action containment: every requested URN must be matched exactly or by a
  *   service-scoped wildcard such as `tinycloud.kv/*`.
  *
- * Any `requested` entry that does not find a matching `granted` entry is
- * added to `missing` and the overall result is non-subset.
+ * Grant entries with the same service, space, path coverage, and caveats are
+ * considered together. This matters because ReCap parsers may return one
+ * entry per action even when the original manifest grouped those actions.
+ * Any `requested` entry whose actions are not collectively covered is added
+ * to `missing` and the overall result is non-subset.
  *
  * Both sides are expected to be in the canonical long-form shape (service
  * starts with `tinycloud.`, actions are full URNs). Use {@link parseRecapCapabilities}
@@ -150,12 +153,24 @@ export function isCapabilitySubset(
   const missing: PermissionEntry[] = [];
 
   for (const req of requested) {
-    const match = granted.find((g) => canonicalizeEntryMatches(req, g));
-    if (match === undefined) {
+    const matchingScope = granted.filter((entry) =>
+      canonicalizeEntryScopeMatches(req, entry)
+    );
+    const requestedActions = expandActionShortNames(
+      req.service,
+      req.actions
+    );
+    const grantedActions = matchingScope.flatMap((entry) =>
+      expandActionShortNames(entry.service, entry.actions)
+    );
+    const covered = requestedActions.every((requestedAction) =>
+      grantedActions.some((grantedAction) =>
+        actionContains(grantedAction, requestedAction)
+      )
+    );
+    if (!covered) {
       missing.push(cloneEntry(req));
-      continue;
     }
-    // `match` is confirmed to cover `req`; nothing to record.
   }
 
   return { subset: missing.length === 0, missing };
@@ -165,7 +180,7 @@ export function isCapabilitySubset(
  * Returns true when `granted` fully covers `requested` — same service, same
  * space, path containment per spec, and action set containment.
  */
-function canonicalizeEntryMatches(
+function canonicalizeEntryScopeMatches(
   requested: PermissionEntry,
   granted: PermissionEntry
 ): boolean {
@@ -183,18 +198,6 @@ function canonicalizeEntryMatches(
   }
   if (!pathContains(granted.path, requested.path)) {
     return false;
-  }
-  // Normalize actions to full URN form on both sides before set comparison,
-  // so a caller passing short names ("get") against a granted entry with
-  // full URNs still behaves correctly.
-  const reqActions = new Set(
-    expandActionShortNames(requested.service, requested.actions)
-  );
-  const grantedActions = expandActionShortNames(granted.service, granted.actions);
-  for (const a of reqActions) {
-    if (!grantedActions.some((grantedAction) => actionContains(grantedAction, a))) {
-      return false;
-    }
   }
   // There is no safe general partial ordering for arbitrary ReCap caveat
   // objects. A caveated authority therefore only covers the same caveat set;
