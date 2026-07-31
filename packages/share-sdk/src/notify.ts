@@ -33,6 +33,15 @@ export class ShareNotifyError extends Error {
   }
 }
 
+/** Match a delivery address against the recipient constraint recorded when the share was created. */
+export function recipientMatchesShareRecord(record: SenderShareRecord, recipient: string): boolean {
+  const matcher = record.recipientMatcher;
+  if (matcher.kind === "bearer" || matcher.kind === "recipientDid") return false;
+  if (matcher.kind === "exactEmail") return matcher.value === recipient;
+  const at = recipient.lastIndexOf("@");
+  return at > 0 && recipient.slice(at + 1).toLowerCase() === matcher.value;
+}
+
 /**
  * Delivery is deliberately separate from publication. A failed notification
  * never causes a second envelope or link to be minted.
@@ -47,6 +56,9 @@ export async function notifyShare(input: {
   readonly signal?: AbortSignal;
 }): Promise<ShareNotifyResult> {
   if (!input.shareId || !input.recipient || !input.recipient.includes("@")) throw new ShareNotifyError("recipient is invalid");
+  if (input.record !== undefined && !recipientMatchesShareRecord(input.record, input.recipient)) {
+    throw new ShareNotifyError("recipient does not match the stored share target");
+  }
   const idempotencyKey = input.idempotencyKey ?? `tinycloud-share:${input.shareId}`;
   const attemptsLimit = input.maxAttempts ?? 3;
   if (!Number.isSafeInteger(attemptsLimit) || attemptsLimit < 1 || attemptsLimit > 8) throw new ShareNotifyError("maxAttempts is invalid");

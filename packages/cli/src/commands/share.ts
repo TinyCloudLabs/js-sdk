@@ -109,11 +109,13 @@ function shareCliError(error: unknown): CLIError {
     OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 8 },
     INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 },
     "share not found": { code: "NOT_FOUND", exit: 4 },
+    AUTH_REQUIRED: { code: "AUTH_REQUIRED", exit: 3 },
+    UNAVAILABLE: { code: "UNAVAILABLE", exit: 4 },
   };
   if (nodeCode === "ENOENT") return new CLIError("INVALID_ARGUMENT", "share input was not found", 2);
   if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
   if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
-  const mapped = known[message];
+  const mapped = typeof nodeCode === "string" && known[nodeCode] !== undefined ? known[nodeCode] : known[message];
   // Share adapters are external authority seams. Never echo an adapter's
   // arbitrary exception text to contract stdout/stderr; it may contain a
   // bearer URL, claim, session identifier, or provider response.

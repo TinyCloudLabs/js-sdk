@@ -5,6 +5,7 @@ import {
   authorizeShare,
   listShares,
   notifyShare,
+  recipientMatchesShareRecord,
   revokeShare,
   normalizeShareTarget,
   publishPolicyShare,
@@ -53,6 +54,16 @@ describe("Share lifecycle and authorization parity", () => {
     });
     expect(result.state).toBe("partial-failure");
     expect(keys).toEqual(["tinycloud-share:share-1", "tinycloud-share:share-1"]);
+  });
+
+  it("derives notification recipients from the stored matcher", async () => {
+    const exact = { ...record, targetKind: "email" as const, recipientMatcher: { kind: "exactEmail" as const, value: "Alice@example.com" } };
+    expect(recipientMatchesShareRecord(exact, "Alice@example.com")).toBe(true);
+    expect(recipientMatchesShareRecord(exact, "Mallory@example.com")).toBe(false);
+    const domain = { ...record, targetKind: "emailDomain" as const, recipientMatcher: { kind: "emailDomain" as const, value: "example.com" } };
+    expect(recipientMatchesShareRecord(domain, "alice@example.com")).toBe(true);
+    expect(recipientMatchesShareRecord(domain, "alice@other.example")).toBe(false);
+    await expect(notifyShare({ shareId: exact.shareId, recipient: "Mallory@example.com", record: exact, adapter: { async deliver() { throw new Error("must not deliver"); } } })).rejects.toThrow(/stored share target/);
   });
 
   it("never reports bearer deletion as cryptographic revocation", async () => {

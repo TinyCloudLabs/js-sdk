@@ -18,7 +18,7 @@ export { MemoryEncryptedShareHistoryStorage, EncryptedSenderShareHistory } from 
 export type { SenderShareRecord, SenderShareRecordStorage, SenderShareKeyStorage, SenderShareRevocationScope, EncryptedShareHistoryStorage } from "./history.js";
 export { authorizeShare, authorizationMethodForTarget } from "./authorization.js";
 export type { ShareAuthorizationMethod, ShareAuthorizationRequired, ShareAuthorizationDenied, ShareAuthorizationReady, ShareAuthorizationResult, ShareAuthorizationAdapter, ShareAuthorizedContent } from "./authorization.js";
-export { notifyShare, ShareNotifyError } from "./notify.js";
+export { notifyShare, recipientMatchesShareRecord, ShareNotifyError } from "./notify.js";
 export type { ShareNotifyState, ShareNotifyResult, ShareNotifyInput, ShareDeliveryAdapter } from "./notify.js";
 export { listShares, showShare, revokeShare } from "./lifecycle.js";
 export type { ShareHistoryView, ShareRevocationResult, ShareRevocationAdapter } from "./lifecycle.js";
