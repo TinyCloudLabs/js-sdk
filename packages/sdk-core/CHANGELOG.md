@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 2.11.0-beta.3
+
+### Patch Changes
+
+- 55e76c5: Recognize grouped manifest actions when a verified ReCap returns one capability entry per action.
+
 ## 2.11.0-beta.1
 
 ### Patch Changes
