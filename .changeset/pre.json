@@ -24,6 +24,7 @@
     "@tinycloud/sdk-services-test": "14.0.0"
   },
   "changesets": [
+    "calm-sites-stay-local",
     "coordinationos-openkey-session",
     "fair-clouds-delegate",
     "quiet-guests-store",
