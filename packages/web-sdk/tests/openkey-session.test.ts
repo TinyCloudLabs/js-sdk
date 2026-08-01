@@ -389,6 +389,7 @@ test("fresh sign-in sends one unchanged SIWE sign-in body with one Bearer token"
     ...VALID_REQUEST,
     keyId: KEY_ID,
   });
+  expect(constructedConfigs[0].autoBootstrapAccount).toBe(false);
 });
 
 test("fresh sign-in grants only the exact canary and invite-code records", async () => {
@@ -488,6 +489,7 @@ const forbiddenOverrides = [
   "sessionStorageKeyPrefix",
   "includeAccountRegistryPermissions",
   "autoCreateSpace",
+  "autoBootstrapAccount",
   "spaceCreationHandler",
   "spacePrefix",
   "kvPrefix",

@@ -167,6 +167,8 @@ export interface Config extends ClientConfig {
   persistSession?: boolean;
   /** Custom session storage implementation. */
   sessionStorage?: ISessionStorage;
+  /** Whether to run node-sdk's canonical first-account bootstrap after sign-in. */
+  autoBootstrapAccount?: boolean;
   /** Browser storage key prefix for isolating apps/environments. */
   sessionStorageKeyPrefix?: string;
 
@@ -415,6 +417,7 @@ export class TinyCloudWeb {
       signStrategy: this.config.signStrategy,
       includeAccountRegistryPermissions:
         this.config.includeAccountRegistryPermissions,
+      autoBootstrapAccount: this.config.autoBootstrapAccount,
       telemetry: this.config.telemetry,
     };
 

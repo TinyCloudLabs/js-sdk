@@ -102,6 +102,7 @@ import {
   type ResolvedDelegate,
   // Capability-chain delegation
   type PermissionEntry,
+  ErrorCodes,
   ENCRYPTION_PERMISSION_SERVICE,
   CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
@@ -178,6 +179,9 @@ const DEFAULT_HOST = "https://node.tinycloud.xyz";
 const DEFAULT_ENCRYPTION_NETWORK_NAME = "default";
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
+export const BOOTSTRAP_COMPLETION_MARKER_KEY = "system/bootstrap/complete";
+export const BOOTSTRAP_COMPLETION_MARKER_VERSION = 1;
+export const ACCEPTED_MARKER_VERSIONS: readonly number[] = [BOOTSTRAP_COMPLETION_MARKER_VERSION];
 const NETWORK_ADMIN_TYPE = "tinycloud.encryption.network-admin/v1";
 
 /** Input for {@link TinyCloudNode.readSecret}. The target space is required. */
@@ -896,6 +900,17 @@ export interface BootstrapWarning {
   message: string;
 }
 
+/** Durable attestation that the canonical account bootstrap ceremony completed. */
+export interface BootstrapCompletionMarker {
+  v: number;
+  stepIds: string[];
+  completedAt: string;
+}
+
+type BootstrapDecision =
+  | { action: "skip" }
+  | { action: "run"; mode: "fresh" | "repair" };
+
 export class TinyCloudNode {
   /** @internal Registered by importing @tinycloud/node-sdk (not /core) */
   private static nodeDefaults?: NodeDefaults;
@@ -977,9 +992,10 @@ export class TinyCloudNode {
 
   /**
    * Outcome of the last signIn()'s account-bootstrap attempt. `skipped` is
-   * true when bootstrap did not complete (interactive signer, auto-sign
-   * denied, or a bootstrap step failed); `reason` carries the cause so apps
-   * can surface a "finish account setup" call-to-action. `warnings` is
+   * true when bootstrap did not complete (interactive signer, auto-bootstrap
+   * disabled, already provisioned, or a decision/provisioning step failed);
+   * `reason` carries the cause so apps can surface a "finish account setup"
+   * call-to-action. `warnings` is
    * present when bootstrap completed, but one or more steps recovered from
    * an ambiguous failure (e.g. a KV batch write reconciled via per-space
    * fallback) — clean vs. recovered runs are otherwise byte-identical.
@@ -1563,6 +1579,7 @@ export class TinyCloudNode {
     this._bootstrapStatus = { skipped: false };
 
     if (this.config.autoBootstrapAccount === false) {
+      this._bootstrapStatus = { skipped: true, reason: "auto-bootstrap-disabled" };
       return false;
     }
     if (!this.auth || !this._address) {
@@ -1585,12 +1602,15 @@ export class TinyCloudNode {
     }
 
     const steps = bootstrapSteps(this._address, this._chainId);
-    if (!(await this.isFreshBootstrapAccount(steps))) {
-      return false;
-    }
-
     try {
-      const warnings = await this.runAccountBootstrap(steps);
+      const decision = await this.resolveBootstrapDecision(steps);
+      if (decision.action === "skip") {
+        this._bootstrapStatus = { skipped: true, reason: "already-provisioned" };
+        return false;
+      }
+
+      const warnings = await this.runAccountBootstrap(steps, { mode: decision.mode });
+      await this.writeBootstrapCompletionMarker(steps);
       if (warnings.length > 0) {
         this._bootstrapStatus = { skipped: false, warnings };
         this.notificationHandler.warning(
@@ -1615,36 +1635,129 @@ export class TinyCloudNode {
     return true;
   }
 
-  private async isFreshBootstrapAccount(steps: BootstrapStep[]): Promise<boolean> {
+  private async resolveBootstrapDecision(steps: BootstrapStep[]): Promise<BootstrapDecision> {
     const enshrinedSpaceIds = new Set<string>();
     for (const step of steps) {
       if (step.kind === "session") {
         enshrinedSpaceIds.add(step.spaceId);
       }
     }
-    const skipped = (this.auth as NodeUserAuthorization).lastActivationSkippedSpaceIds;
+    const auth = this.auth;
+    if (!auth) {
+      throw new Error("Account bootstrap requires an active wallet session");
+    }
+    const skipped = auth.lastActivationSkippedSpaceIds;
     if (skipped.some((spaceId) => enshrinedSpaceIds.has(spaceId))) {
-      return true;
+      return { action: "run", mode: "fresh" };
     }
 
     try {
-      const indexed = await this.account.index.spaces.list();
-      if (indexed.ok && indexed.data.length === 0) {
-        return true;
+      const defaultSpaceId = this.ownedSpaceId("default");
+      const markerPermission: PermissionEntry = {
+        service: "tinycloud.kv",
+        space: defaultSpaceId,
+        path: BOOTSTRAP_COMPLETION_MARKER_KEY,
+        actions: ["get"],
+      };
+
+      if (!this.hasRuntimePermissions([markerPermission])) {
+        const session = await auth.createBootstrapSession({
+          spaceId: defaultSpaceId,
+          capabilityRequest: BOOTSTRAP_SESSION_REQUESTS.default,
+        });
+        const host = this.hosts[0] ?? this.config.host;
+        if (!host) {
+          throw new Error("Account bootstrap requires a TinyCloud host");
+        }
+        const activated = await activateSessionWithHost(host, session.delegationHeader);
+        if (!activated.success) {
+          if (activated.status === 404) {
+            return { action: "run", mode: "fresh" };
+          }
+          throw new Error(`Failed to activate bootstrap probe session: ${activated.error ?? "unknown error"}`);
+        }
+        this.registerBootstrapRuntimeGrant(session, BOOTSTRAP_SESSION_REQUESTS.default);
+      }
+
+      const marker = await this.readBootstrapCompletionMarker();
+      if (marker.ok) {
+        if (this.isAcceptedBootstrapCompletionMarker(marker.data.data)) {
+          return { action: "skip" };
+        }
+        return { action: "run", mode: "repair" };
+      }
+
+      if (
+        marker.error.code === ErrorCodes.KV_NOT_FOUND &&
+        this.markerReadIsUnhostedSpace(marker.error.meta)
+      ) {
+        return { action: "run", mode: "fresh" };
       }
     } catch {
-      // A missing account index is expected before bootstrap; fall through to KV.
+      // Probe and transport failures are unknown state: make one bounded,
+      // idempotent repair attempt instead of treating them as provisioned.
+      return { action: "run", mode: "repair" };
     }
 
-    try {
-      const spaces = await this.account.spaces.list();
-      return spaces.ok && spaces.data.length === 0;
-    } catch {
-      return false;
+    return { action: "run", mode: "repair" };
+  }
+
+  private async readBootstrapCompletionMarker() {
+    return this.kvForSpace(this.ownedSpaceId("default")).get<unknown>(
+      BOOTSTRAP_COMPLETION_MARKER_KEY,
+    );
+  }
+
+  private async writeBootstrapCompletionMarker(steps: BootstrapStep[]): Promise<void> {
+    if (!this._address) {
+      throw new Error("Bootstrap completion marker requires an active wallet session");
+    }
+    const canonicalStepIds = new Set(
+      bootstrapSteps(this._address, this._chainId).map((step) => step.id),
+    );
+    const providedStepIds = new Set(steps.map((step) => step.id));
+    if (
+      canonicalStepIds.size !== providedStepIds.size ||
+      [...canonicalStepIds].some((stepId) => !providedStepIds.has(stepId))
+    ) {
+      throw new Error("Bootstrap completion marker requires the canonical bootstrap step set");
+    }
+
+    const marker: BootstrapCompletionMarker = {
+      v: BOOTSTRAP_COMPLETION_MARKER_VERSION,
+      stepIds: [...canonicalStepIds],
+      completedAt: new Date().toISOString(),
+    };
+    const written = await this.kvForSpace(this.ownedSpaceId("default")).put(
+      BOOTSTRAP_COMPLETION_MARKER_KEY,
+      marker,
+    );
+    if (!written.ok) {
+      throw new Error(`Failed to write bootstrap completion marker: ${written.error.message}`);
     }
   }
 
-  private async runAccountBootstrap(steps: BootstrapStep[]): Promise<BootstrapWarning[]> {
+  private isAcceptedBootstrapCompletionMarker(value: unknown): boolean {
+    if (typeof value !== "object" || value === null) return false;
+    const entries = Object.entries(value);
+    const markerValue = (name: string): unknown =>
+      entries.find(([key]) => key === name)?.[1];
+    const version = markerValue("v");
+    return (
+      typeof version === "number" &&
+      Number.isInteger(version) &&
+      ACCEPTED_MARKER_VERSIONS.some((acceptedVersion) => acceptedVersion === version)
+    );
+  }
+
+  private markerReadIsUnhostedSpace(meta: Record<string, unknown> | undefined): boolean {
+    return meta?.status === 404;
+  }
+
+  private async runAccountBootstrap(
+    steps: BootstrapStep[],
+    { mode }: { mode: "fresh" | "repair" } = { mode: "fresh" },
+  ): Promise<BootstrapWarning[]> {
     if (!this.auth || !this._address) {
       throw new Error("Account bootstrap requires an active wallet session");
     }
@@ -1765,9 +1878,8 @@ export class TinyCloudNode {
           step.manifests.length > 0
             ? [...step.manifests]
             : TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
-          // Bootstrap only runs on an account with no registry records, so the
-          // manifest-hash pre-read is definitionally a miss. Skip it; the write
-          // it guards is an INSERT OR REPLACE and is safe to repeat.
+          // The write is an INSERT OR REPLACE and is safe to repeat during a
+          // repair, so skip the manifest-hash pre-read.
           { assumeUnregistered: true },
         );
         if (!registered.ok) {
@@ -1776,10 +1888,9 @@ export class TinyCloudNode {
       }
 
       if (step.kind === "encryption-network-create") {
-        // Bootstrap only runs on a fresh account, so the existence probe is a
-        // guaranteed 404. Create directly; a 409 is resolved to the existing
-        // descriptor.
-        await this.ensureEncryptionNetwork(step.networkId, { assumeMissing: true });
+        // A repair probes before creating because the network may already
+        // exist; a 409 remains a race guard in both modes.
+        await this.ensureEncryptionNetwork(step.networkId, { assumeMissing: mode === "fresh" });
       }
 
       if (step.kind === "secret-records-schema") {

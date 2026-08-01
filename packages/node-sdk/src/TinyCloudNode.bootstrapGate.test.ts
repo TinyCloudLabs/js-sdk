@@ -122,7 +122,7 @@ function makeExternalSigner(signCallSpy?: ReturnType<typeof mock>) {
  * We replace tc.signIn() (the TinyCloud layer) with a function that returns
  * a fake session and sets the internal address/chainId fields that
  * TinyCloudNode.signIn() reads after the inner signIn resolves.
- * We also stub isFreshBootstrapAccount and the post-bootstrap helpers.
+ * We also stub resolveBootstrapDecision and the post-bootstrap helpers.
  */
 function stubNodeForSignIn(
   node: TinyCloudNode,
@@ -144,8 +144,10 @@ function stubNodeForSignIn(
   // Stub initializeServices (sets up service context, needs real session).
   (node as any).initializeServices = () => {};
 
-  // Control isFreshBootstrapAccount to simulate fresh vs existing account.
-  (node as any).isFreshBootstrapAccount = async () => freshAccount;
+  // Control the bootstrap decision to simulate fresh vs existing accounts.
+  (node as any).resolveBootstrapDecision = async () =>
+    freshAccount ? { action: "run", mode: "fresh" } : { action: "skip" };
+  (node as any).writeBootstrapCompletionMarker = async () => {};
 
   // Stub post-bootstrap helpers that would hit the network.
   (node as any).ensureRequestedEncryptionNetworks = async () => {};
@@ -197,6 +199,7 @@ describe("bootstrap gate — interactive signer", () => {
       host: "https://tinycloud.test",
     });
     expect(node.bootstrapSkipped).toBe(false);
+    expect(node.bootstrapStatus).toEqual({ skipped: false });
   });
 
   test("bootstrapSkipped is false when account is not fresh (no bootstrap needed)", async () => {
@@ -207,8 +210,7 @@ describe("bootstrap gate — interactive signer", () => {
       host: "https://tinycloud.test",
     });
 
-    // freshAccount=false → isFreshBootstrapAccount returns false → bootstrap
-    // would be skipped by the freshness check anyway, not the interactive gate.
+    // The interactive gate fires before the bootstrap decision.
     stubNodeForSignIn(node, { freshAccount: false });
     stubRunAccountBootstrap(node);
 
@@ -248,6 +250,10 @@ describe("bootstrap gate — non-interactive config (autoBootstrapAccount=false)
     // gate, so _bootstrapSkipped is reset to false (the reset happens at the
     // top of bootstrapAccountIfNeeded before the early-return).
     expect(node.bootstrapSkipped).toBe(false);
+    expect(node.bootstrapStatus).toEqual({
+      skipped: true,
+      reason: "auto-bootstrap-disabled",
+    });
   });
 });
 
@@ -301,7 +307,7 @@ describe("bootstrap gate — OpenKey auto-sign strategy", () => {
     await node.signIn();
 
     expect(node.bootstrapSkipped).toBe(false);
-    // isFreshBootstrapAccount returned false → bootstrap not run.
+    // The decision returned skip → bootstrap not run.
     expect(bootstrapMock).not.toHaveBeenCalled();
   });
 });

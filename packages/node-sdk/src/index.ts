@@ -161,6 +161,10 @@ export {
   type SecretPermissionHint,
   type SecretReadResult,
   type BootstrapWarning,
+  type BootstrapCompletionMarker,
+  BOOTSTRAP_COMPLETION_MARKER_KEY,
+  BOOTSTRAP_COMPLETION_MARKER_VERSION,
+  ACCEPTED_MARKER_VERSIONS,
 } from "./TinyCloudNode";
 export type { OwnerDelegationPermission } from "@tinycloud/sdk-core";
 
