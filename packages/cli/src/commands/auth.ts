@@ -293,6 +293,10 @@ export function registerAuthCommand(program: Command): void {
           const delegationCids: string[] = [];
           let expiry: string | undefined;
           const openkeyHost = resolveOpenKeyHost(profile);
+          // Sol MAJOR-9: accumulate EFFECTIVE grants from each signed
+          // delegation so the CLI output reports what was actually
+          // conferred (never over-reports the originally-requested set).
+          const openkeyEffective: typeof requested = [];
           for (const group of groupPermissionsBySpace(requested)) {
             const delegationData = await startAuthFlow(profile.did, {
               jwk: key,
@@ -312,6 +316,7 @@ export function registerAuthCommand(program: Command): void {
             // user is allowed to narrow their grant in the OpenKey UI;
             // storing the request would over-report authority.
             const effective = permissionsFromDelegation(delegation);
+            openkeyEffective.push(...effective);
             const stored = storedAdditionalDelegation(delegation, effective);
             await appendAdditionalDelegation(ctx.profile, stored);
             await node.useRuntimeDelegation(delegation);
@@ -326,7 +331,7 @@ export function registerAuthCommand(program: Command): void {
           }
           outputJson({
             changed: delegationCids.length > 0,
-            added: requested,
+            added: openkeyEffective,
             delegationCid: delegationCids[0],
             delegationCids,
             expiry,
@@ -356,8 +361,13 @@ export function registerAuthCommand(program: Command): void {
         await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession);
         const delegationCids: string[] = [];
         let expiry: string | undefined;
+        // Sol MAJOR-9: accumulate EFFECTIVE grants across every signed
+        // local delegation so the CLI's `added` output matches what was
+        // actually granted, never the originally-requested set.
+        const localEffective: typeof requested = [];
         for (const delegation of delegations) {
           const covering = permissionsFromDelegation(delegation);
+          localEffective.push(...covering);
           const stored = storedAdditionalDelegation(delegation, covering);
           await appendAdditionalDelegation(ctx.profile, stored);
           delegationCids.push(delegation.cid);
@@ -377,7 +387,7 @@ export function registerAuthCommand(program: Command): void {
 
         outputJson({
           changed: true,
-          added: requested,
+          added: localEffective,
           delegationCid: delegationCids[0],
           delegationCids,
           expiry,

@@ -96,6 +96,15 @@ describe("extractImmutableSiweFields", () => {
     expect(fields.chainId).toBe("1");
     expect(fields.nonce).toBe("abcdef01");
     expect(fields.issuedAt).toBe("2026-08-01T00:00:00.000Z");
+    // Sol MAJOR-4: extended immutable-field coverage.
+    expect(fields.expirationTime).toBe("2026-08-01T01:00:00.000Z");
+    // The statement is the single line "By signing..." between the
+    // address blank line and the "URI:" line.
+    expect(fields.statement).toBe(
+      "By signing this message you agree to the terms.",
+    );
+    // No non-recap resources in the fixture.
+    expect(fields.nonRecapResources).toBe("");
   });
 });
 
@@ -120,6 +129,28 @@ describe("diffImmutableSiweFields", () => {
       SAMPLE_SIWE.replace("example.com", "attacker.example"),
     );
     expect(diffImmutableSiweFields(original, changed)).toEqual(["domain"]);
+  });
+
+  it("flags expirationTime drift (Sol MAJOR-4)", () => {
+    const original = extractImmutableSiweFields(SAMPLE_SIWE);
+    const changed = extractImmutableSiweFields(
+      SAMPLE_SIWE.replace(
+        "Expiration Time: 2026-08-01T01:00:00.000Z",
+        "Expiration Time: 2027-01-01T00:00:00.000Z",
+      ),
+    );
+    expect(diffImmutableSiweFields(original, changed)).toContain("expirationTime");
+  });
+
+  it("flags statement drift (Sol MAJOR-4)", () => {
+    const original = extractImmutableSiweFields(SAMPLE_SIWE);
+    const changed = extractImmutableSiweFields(
+      SAMPLE_SIWE.replace(
+        "By signing this message you agree to the terms.",
+        "You are transferring your entire wallet.",
+      ),
+    );
+    expect(diffImmutableSiweFields(original, changed)).toContain("statement");
   });
 });
 
@@ -248,7 +279,12 @@ describe("unauthorizedRecapCapabilities", () => {
       ]);
     });
 
-    it("accepts when child selects a subset of parent's caveat alternatives", () => {
+    it("REJECTS when child selects a strict subset of parent's caveat alternatives (Sol MAJOR-6 strict equality)", () => {
+      // Sol MAJOR-6: without a formal attenuation-proof mechanism, we
+      // treat any divergence — including dropping an alternative from
+      // a disjunction — as a mismatch. Subsetting used to be accepted;
+      // the strict-equality rule now rejects it because we cannot
+      // prove that the transformation was intentional.
       const parent = {
         "space/kv/data": {
           "tinycloud.kv/put": [{ path: "a" }, { path: "b" }, { path: "c" }],
@@ -259,10 +295,15 @@ describe("unauthorizedRecapCapabilities", () => {
           "tinycloud.kv/put": [{ path: "a" }],
         },
       };
-      expect(unauthorizedRecapCapabilities(child, parent)).toEqual([]);
+      expect(unauthorizedRecapCapabilities(child, parent)).toEqual([
+        { resource: "space/kv/data", action: "tinycloud.kv/put" },
+      ]);
     });
 
-    it("accepts when parent has no caveats — child may impose any restriction", () => {
+    it("REJECTS when parent has no caveats but child adds one (Sol MAJOR-6 strict equality)", () => {
+      // Sol MAJOR-6: any divergence in the multiset of caveats is a
+      // mismatch, including adding restrictions to an unrestricted
+      // parent. Formal attenuation may later relax this.
       const parent = {
         "space/kv/data": {
           "tinycloud.kv/put": [],
@@ -273,7 +314,24 @@ describe("unauthorizedRecapCapabilities", () => {
           "tinycloud.kv/put": [{ maxSize: 500 }],
         },
       };
-      // Empty parent caveats = unrestricted, so child adding restrictions is fine
+      expect(unauthorizedRecapCapabilities(child, parent)).toEqual([
+        { resource: "space/kv/data", action: "tinycloud.kv/put" },
+      ]);
+    });
+
+    it("accepts identical caveat multisets (order-independent)", () => {
+      // Order within a caveat list should not matter; the canonical
+      // multiset comparison treats [{a:1},{b:2}] equal to [{b:2},{a:1}].
+      const parent = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ a: 1 }, { b: 2 }],
+        },
+      };
+      const child = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ b: 2 }, { a: 1 }],
+        },
+      };
       expect(unauthorizedRecapCapabilities(child, parent)).toEqual([]);
     });
 

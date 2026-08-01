@@ -1438,6 +1438,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
       siwe: string;
       jwk: Record<string, unknown>;
       host?: string;
+      /**
+       * Sol MAJOR-3: OpenKey key ID (managed or external key) to sign
+       * with. When omitted, the OpenKey SDK falls back to the last
+       * connected key. Callers who want to bind the flow to a specific
+       * OpenKey key can override via options.openkeyKeyId; otherwise the
+       * bridge relies on the SDK's connected-key state.
+       */
+      keyId?: string;
     }) => Promise<{
       protocolVersion: 1;
       address: string;
@@ -1446,7 +1454,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       selectedActionKeys: string[];
       permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
     }>,
-    options?: { host?: string },
+    options?: { host?: string; openkeyKeyId?: string },
   ): Promise<ClientSession> {
     // 1. Prepare — this creates a SIWE bound to a fresh session key.
     const { prepared, keyId, jwk } = await this.prepareSessionForSigning();
@@ -1459,12 +1467,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
     //    We forward the TinyCloud host so the widget can bind it into
     //    its authorization context (Sol MAJOR-2). Falls back to the
     //    first resolved TinyCloud host when not overridden.
+    //
+    //    Sol MAJOR-3: forward an OpenKey keyId when the caller supplied
+    //    one so the widget/SDK routes to the specific OpenKey key rather
+    //    than the SDK's connected-key default.
     const hostHint = options?.host ?? this.tinycloudHosts?.[0];
     const result = await authorizeFn({
       protocolVersion: 1,
       siwe: prepared.siwe,
       jwk,
       host: hostHint,
+      keyId: options?.openkeyKeyId,
     });
 
     // 3. Complete with the EXACT bytes OpenKey signed. Every subset
@@ -1711,9 +1724,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
     }
 
-    // Structurally-required capabilities that the widget/UI is not expected
-    // to surface as selectable (they cannot be removed). Coverage counting
-    // for Rule A ignores them.
+    // Sol MAJOR-5: rich-result `permissions` MUST equal the signed
+    // authority for EVERY resource/action pair, including structurally-
+    // required capabilities. Removing required capabilities from the
+    // coverage set let a widget silently omit them from the reported
+    // grants — which is fine for user consent (the user cannot remove
+    // them anyway) but a wire-format drift for the SDK's authoritative
+    // return value. Callers that build a UI on top of `permissions` end
+    // up under-reporting authority when required pairs are absent.
+    // Track both the full set (for rich-result equality) and the
+    // non-required set (retained for selectedActionKeys Rule A which
+    // legitimately does not surface required pairs in the widget UI).
     const isStructurallyRequired = (action: string) =>
       action === "tinycloud.capabilities/read" || action === "capabilities/read";
 
@@ -1725,6 +1746,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
         nonRequiredGrantedPairs.add(pair);
       }
     }
+    // Sol MAJOR-5: the full granted-pair set — including required
+    // capabilities — is what `permissions` must equal exactly.
+    const allSignedGrantedPairs = new Set<string>(grantedPairs);
 
     // Rule B — validate each returned selectedActionKeys entry.
     // Build a set of grounded pairs so we can also enforce Rule A.
@@ -1806,12 +1830,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
     //   4. Permission entries MUST be duplicate-free after canonical
     //      normalization; duplicates would let the same authority be
     //      reported twice and mask a missing entry.
+    // Sol MAJOR-5: reject empty `permissions` for a capability-bearing
+    // SIWE regardless of whether the pairs are structurally required.
+    // A signed SIWE with any granted authority MUST come back with a
+    // matching non-empty permissions[] — otherwise the SDK cannot
+    // reconcile local state with what was actually signed.
     if (
-      nonRequiredGrantedPairs.size > 0 &&
+      allSignedGrantedPairs.size > 0 &&
       result.permissions.length === 0
     ) {
       throw new Error(
-        "OpenKey permissions is empty but signedMessage carries non-required capabilities — refusing to accept a session without an authoritative grant list",
+        "OpenKey permissions is empty but signedMessage carries capabilities — refusing to accept a session without an authoritative grant list",
       );
     }
     const permissionCanonicalKeys = new Set<string>();
@@ -1878,14 +1907,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
         permissionPairsCovered.add(`${matchedResource}\0${action}`);
       }
     }
-    // Rule 1 reinforcement: every non-required signed capability MUST
-    // appear in the permissions list. This is the missing coverage
-    // check — Rule A above enforces it via selectedActionKeys, but the
-    // permissions[] array is the SDK's authoritative return value and
-    // must equal the same set.
-    if (nonRequiredGrantedPairs.size > 0) {
+    // Sol MAJOR-5: EXACT equality between `permissions` coverage and the
+    // signed authority — for every resource/action pair, including
+    // structurally-required ones. Any missing or extra pair is a
+    // wire-format drift and the SDK refuses to build a session state
+    // that does not match the signed bytes byte-for-byte.
+    if (allSignedGrantedPairs.size > 0) {
       const missingFromPerms: string[] = [];
-      for (const pair of nonRequiredGrantedPairs) {
+      for (const pair of allSignedGrantedPairs) {
         if (!permissionPairsCovered.has(pair)) {
           missingFromPerms.push(pair);
         }
@@ -1904,7 +1933,29 @@ export class NodeUserAuthorization implements IUserAuthorization {
           `OpenKey permissions is missing entries for signedMessage capabilities: ${preview}${overflow}`,
         );
       }
+      const extrasInPerms: string[] = [];
+      for (const pair of permissionPairsCovered) {
+        if (!allSignedGrantedPairs.has(pair)) {
+          extrasInPerms.push(pair);
+        }
+      }
+      if (extrasInPerms.length > 0) {
+        const previewLimit = 5;
+        const preview = extrasInPerms
+          .slice(0, previewLimit)
+          .map((p) => p.replace("\0", "::"))
+          .join(", ");
+        const overflow =
+          extrasInPerms.length > previewLimit
+            ? ` (and ${extrasInPerms.length - previewLimit} more)`
+            : "";
+        throw new Error(
+          `OpenKey permissions contains entries not present in the signed authority: ${preview}${overflow}`,
+        );
+      }
     }
+    // Retain nonRequiredGrantedPairs reference so tsc doesn't drop it.
+    void nonRequiredGrantedPairs;
 
     return this.signInWithPreparedSession(
       {

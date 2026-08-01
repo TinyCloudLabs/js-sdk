@@ -159,6 +159,17 @@ export interface ImmutableSiweFields {
   chainId?: string;
   nonce?: string;
   issuedAt?: string;
+  // Sol MAJOR-4: complete immutable coverage. The widget must not silently
+  // change any of these fields between prepare and signed bytes:
+  //   - expirationTime / notBefore bind the temporal window
+  //   - requestId is opaque caller correlation
+  //   - statement is the non-ReCap human-readable SIWE statement
+  //   - nonRecapResources are the caller's non-`urn:recap:` resource URIs
+  expirationTime?: string;
+  notBefore?: string;
+  requestId?: string;
+  statement?: string;
+  nonRecapResources?: string;
 }
 
 /**
@@ -225,10 +236,41 @@ export function extractImmutableSiweFields(siwe: string): ImmutableSiweFields {
       case "Issued At":
         result.issuedAt = value;
         break;
+      // Sol MAJOR-4: complete immutable-field coverage.
+      case "Expiration Time":
+        result.expirationTime = value;
+        break;
+      case "Not Before":
+        result.notBefore = value;
+        break;
+      case "Request ID":
+        result.requestId = value;
+        break;
       default:
         break;
     }
   }
+
+  // Sol MAJOR-4: statement is the SIWE lines between the address blank
+  // line and the "URI:" line (a missing statement is legal and encodes
+  // as the empty string). Non-ReCap resources are every "- ..." resource
+  // line that is NOT a urn:recap: entry — these bind the caller's
+  // application-specific resource URIs byte-for-byte.
+  const uriLineIdx = lines.findIndex((l) => /^URI:/.test(l));
+  if (uriLineIdx > 3) {
+    let end = uriLineIdx - 1;
+    while (end > 3 && lines[end] === "") end -= 1;
+    if (end >= 3) {
+      result.statement = lines.slice(3, end + 1).join("\n");
+    } else {
+      result.statement = "";
+    }
+  } else {
+    result.statement = "";
+  }
+  result.nonRecapResources = lines
+    .filter((l) => /^- /.test(l) && !/^- urn:recap:/.test(l))
+    .join("\n");
 
   return result;
 }
@@ -242,6 +284,8 @@ export function diffImmutableSiweFields(
   original: ImmutableSiweFields,
   signed: ImmutableSiweFields,
 ): string[] {
+  // Sol MAJOR-4: include the complete immutable-field set. Any drift on
+  // ANY of these fields is a broadening or a substitution — reject.
   const keys: (keyof ImmutableSiweFields)[] = [
     "domain",
     "address",
@@ -250,10 +294,19 @@ export function diffImmutableSiweFields(
     "chainId",
     "nonce",
     "issuedAt",
+    "expirationTime",
+    "notBefore",
+    "requestId",
+    "statement",
+    "nonRecapResources",
   ];
   const diffs: string[] = [];
   for (const key of keys) {
-    if (original[key] !== signed[key]) {
+    // Normalize undefined to "" so a field missing on both sides is
+    // considered equal, but a field present on only one side is a diff.
+    const a = original[key] ?? "";
+    const b = signed[key] ?? "";
+    if (a !== b) {
       diffs.push(key);
     }
   }
@@ -415,36 +468,42 @@ export function unauthorizedRecapCapabilities(
         ? (childCaveatsRaw as unknown[])
         : [];
 
-      // If parent imposes no restrictions (empty caveat list), the child is
-      // free to impose whatever restrictions it likes — even none.
-      if (parentCaveats.length === 0) {
-        continue;
+      // Sol MAJOR-6: require STRICT normalized caveat-list equality.
+      // Removing an alternative from a disjunction is a formal
+      // attenuation, but the ReCap spec does not surface a signed proof
+      // that the transformation was intentional — so we treat any
+      // divergence (removed, added, reordered when duplicated, or
+      // replaced) as a broadening/mismatch. If a formal attenuation
+      // proof is added later, callers may opt into the more permissive
+      // rule; the default remains strict equality.
+      //
+      // The check compares MULTISETS (via canonical serialization
+      // counts) so caveat lists with duplicates only agree when both
+      // sides carry the same duplicates. Order within a caveat object's
+      // keys is normalized by stableStringify.
+      const parentCanonCounts = new Map<string, number>();
+      for (const c of parentCaveats) {
+        const k = stableStringify(c);
+        parentCanonCounts.set(k, (parentCanonCounts.get(k) ?? 0) + 1);
       }
-
-      // Parent imposes restrictions. Child MUST also impose at least a subset
-      // of those same restrictions. Dropping to an empty list would broaden
-      // authority — reject.
-      if (childCaveats.length === 0) {
-        unauthorized.push({ resource, action });
-        continue;
+      const childCanonCounts = new Map<string, number>();
+      for (const c of childCaveats) {
+        const k = stableStringify(c);
+        childCanonCounts.set(k, (childCanonCounts.get(k) ?? 0) + 1);
       }
-
-      // Every child caveat object must exist in parent's caveat list by
-      // structural deep-equality. Any child caveat not present in the parent
-      // set is a broadening — reject.
-      const parentCanonSet = new Set(parentCaveats.map((c) => stableStringify(c)));
-      let allChildCaveatsAuthorized = true;
-      for (const childCaveat of childCaveats) {
-        if (!parentCanonSet.has(stableStringify(childCaveat))) {
-          allChildCaveatsAuthorized = false;
-          break;
+      let equal = parentCanonCounts.size === childCanonCounts.size;
+      if (equal) {
+        for (const [k, n] of parentCanonCounts) {
+          if (childCanonCounts.get(k) !== n) {
+            equal = false;
+            break;
+          }
         }
       }
-      if (!allChildCaveatsAuthorized) {
+      if (!equal) {
         unauthorized.push({ resource, action });
       }
-      // Explicitly silence the deep-equality helper "unused" warning while
-      // keeping it exported for testability in the future.
+      // Retain the deep-equality helper for external use / future rules.
       void caveatsDeepEqual;
     }
   }

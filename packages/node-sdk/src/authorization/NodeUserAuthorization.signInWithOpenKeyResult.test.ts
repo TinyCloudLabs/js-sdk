@@ -71,13 +71,10 @@ function deriveLegacyTwoPartActionKeysFromSiwe(siwe: string): string[] {
 
 /**
  * Derive a `permissions` array matching the effective grants encoded in the
- * SIWE. Excludes the structurally-required `tinycloud.capabilities/read`
- * for parity with `deriveSelectedActionKeysFromSiwe` — its Rule A coverage
- * is not required by the SDK.
- *
- * Sol MAJOR-4: `signInWithOpenKeyResult` now rejects an empty permissions
- * array whenever the signed SIWE carries non-required capabilities.
- * Tests that previously passed `permissions: []` therefore need this helper.
+ * SIWE. Sol MAJOR-5 update: the SDK now requires permissions to equal the
+ * signed authority for EVERY resource/action pair — INCLUDING structurally-
+ * required capabilities like `tinycloud.capabilities/read`. Tests that used
+ * to skip the required actions therefore need to include them here.
  */
 function derivePermissionsFromSiwe(
   siwe: string,
@@ -96,7 +93,6 @@ function derivePermissionsFromSiwe(
     }
     const grouped = new Map<string, string[]>();
     for (const ability of Object.keys(actions)) {
-      if (ability === "tinycloud.capabilities/read" || ability === "capabilities/read") continue;
       const slashIdx = ability.indexOf("/");
       const service = slashIdx > 0 ? ability.slice(0, slashIdx) : "";
       const list = grouped.get(service) ?? [];
