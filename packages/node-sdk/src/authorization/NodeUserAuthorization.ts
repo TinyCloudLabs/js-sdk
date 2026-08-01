@@ -39,6 +39,7 @@ import {
   diffImmutableSiweFields,
   extractRecapAttenuations,
   unauthorizedRecapCapabilities,
+  parseCanonicalRecapResource,
   KV,
   SQL,
   DUCKDB,
@@ -1606,12 +1607,24 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
 
     // (3) Immutable-fields comparison. Any drift on domain/address/URI/version/
-    // chainId/nonce/issuedAt/statement means the widget is signing a materially
-    // different SIWE than we prepared — potentially binding the session to a
-    // different relying party or a different session key.
+    // chainId/nonce/issuedAt/expirationTime/notBefore/requestId/nonRecapResources
+    // means the widget is signing a materially different SIWE than we prepared —
+    // potentially binding the session to a different relying party or a different
+    // session key.
+    //
+    // Sol final continuation contract requirement 2: pass `originalHasRecap`
+    // so `diffImmutableSiweFields` excludes `statement` for ReCap-bearing
+    // SIWEs. WASM's `prepareSession` renders the entire statement from the
+    // ReCap contents, so narrowing ALWAYS changes the statement — the
+    // ReCap subset check below is the authoritative narrowing gate. For
+    // plain SIWE flows (no urn:recap: resource) the statement remains
+    // byte-immutable.
+    const originalHasRecap = /(?:^|\n)-\s+urn:recap:/i.test(prepared.siwe);
     const originalFields = extractImmutableSiweFields(prepared.siwe);
     const signedFields = extractImmutableSiweFields(result.signedMessage);
-    const changedFields = diffImmutableSiweFields(originalFields, signedFields);
+    const changedFields = diffImmutableSiweFields(originalFields, signedFields, {
+      originalHasRecap,
+    });
     if (changedFields.length > 0) {
       throw new Error(
         `OpenKey signedMessage altered immutable SIWE fields: ${changedFields.join(", ")}`,
@@ -1694,16 +1707,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // `tinycloud:...:name` prefix.
     const grantedFourPartIndex = new Map<string, string>();
     for (const [resource, actions] of Object.entries(signedCaps)) {
-      // Extract space/path from the resource URI.
-      let space = resource;
-      let path = "";
-      if (resource.startsWith("tinycloud:")) {
-        const slash = resource.indexOf("/");
-        if (slash >= 0) {
-          space = resource.slice(0, slash);
-          path = resource.slice(slash + 1);
-        }
-      }
+      // Sol final continuation contract requirement 1: use the SHARED
+      // canonical resource parser so consumer four-part IDs match the
+      // producer's IDs byte-for-byte. Prior inline code left the service
+      // segment inside `path` (e.g. `path="kv"` for a `<space>/kv`
+      // resource), which produced a different ID than OpenKey emits via
+      // WASM `parseRecapFromSiwe` (which strips the service segment). The
+      // divergence was the actual production round-trip failure Sol cited.
+      const { space, path } = parseCanonicalRecapResource(resource);
       for (const action of Object.keys(actions)) {
         // Populate the coverage set with the canonical resource\0action
         // pair so Rule A can check every non-required capability got
@@ -1865,30 +1876,50 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
       permissionCanonicalKeys.add(canonicalKey);
 
-      // Canonical resource resolution. When path is empty, the only
-      // valid form is `space`. When path is non-empty, the only valid
-      // form is `space/path`. Both are ReCap-valid — but for a given
-      // (space, path) tuple exactly one form is expected. We refuse
-      // substring fallback so a permission on `space` cannot silently
-      // match a `space/leaked/path` resource.
-      let matchedResource: string;
-      if (path) {
-        const withPathKey = `${space}/${path}`;
-        if (signedCaps[withPathKey] !== undefined) {
-          matchedResource = withPathKey;
-        } else {
-          throw new Error(
-            `OpenKey permissions entry (${service} ${space} ${path}) claims grants not confirmed in signedMessage capabilities`,
-          );
-        }
+      // Sol final continuation contract requirement 1: canonical
+      // resource resolution matches the shared `parseCanonicalRecapResource`
+      // used elsewhere. Two distinct on-wire resource shapes exist:
+      //   (a) `tinycloud:pkh:...` spaces derived from the WASM
+      //       `prepareSession` `abilities` map. These encode as
+      //       `<space>/<short-service>[/<sub-path>]` and the canonical
+      //       parser strips the `<short-service>` segment out of the
+      //       reported `path`. To match back to the raw ATT resource key
+      //       we RECONSTRUCT `<space>/<short>[/<path>]`.
+      //   (b) Non-`tinycloud:` URNs (e.g. `urn:tinycloud:encryption:...`)
+      //       emitted via `rawAbilities`. Here the resource URI IS the
+      //       space verbatim — there is no `<short-service>` segment to
+      //       reconstruct. `parseCanonicalRecapResource` returns
+      //       `{ space: uri, path: "" }` for these; the matched
+      //       resource is just `space`.
+      //
+      // We refuse the substring fallback that would let a permission on
+      // `space` silently match a `<space>/leaked/path` resource.
+      let expectedResource: string;
+      if (space.startsWith("tinycloud:")) {
+        const shortService = service.startsWith("tinycloud.")
+          ? service.slice("tinycloud.".length)
+          : service;
+        expectedResource = path
+          ? `${space}/${shortService}/${path}`
+          : `${space}/${shortService}`;
       } else {
-        if (signedCaps[space] !== undefined) {
-          matchedResource = space;
-        } else {
+        // Raw ability resource: URI is the resource key verbatim.
+        // A non-empty `path` on a non-tinycloud URI would be a wire
+        // shape drift — reject rather than silently permit.
+        if (path) {
           throw new Error(
-            `OpenKey permissions entry (${service} ${space} ${path}) claims grants not confirmed in signedMessage capabilities`,
+            `OpenKey permissions entry (${service} ${space} ${path}) carries a path on a non-tinycloud: resource URI, which is not a recognized encoding`,
           );
         }
+        expectedResource = space;
+      }
+      let matchedResource: string;
+      if (signedCaps[expectedResource] !== undefined) {
+        matchedResource = expectedResource;
+      } else {
+        throw new Error(
+          `OpenKey permissions entry (${service} ${space} ${path}) claims grants not confirmed in signedMessage capabilities`,
+        );
       }
       const grantedActionsForResource = new Set(
         Object.keys(signedCaps[matchedResource]),

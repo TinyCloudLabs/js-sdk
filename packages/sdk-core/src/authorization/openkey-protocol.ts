@@ -139,6 +139,59 @@ export function isPlausibleOpenKeyActionId(id: unknown): id is string {
 }
 
 /**
+ * Canonical decomposition of a ReCap `att` resource URI into `{ space, path }`
+ * matching the SEMANTIC the WASM `parseRecapFromSiwe` emitter uses.
+ *
+ * Sol final continuation contract requirement 1: every producer AND consumer
+ * of canonical four-part action IDs must parse resources the same way. The
+ * on-wire structure of a TinyCloud ReCap resource is:
+ *
+ *   `<space>/<short-service>[/<sub-path>]`
+ *
+ * where `<space>` is a `tinycloud:pkh:...` URN and `<short-service>` is the
+ * unqualified service name (`kv`, `sql`, `capabilities`, …). WASM's
+ * `parseRecapFromSiwe` returns `{ service: <short>, space: <space>, path: <sub-path OR "">}`
+ * — the service segment is NEVER part of the `path`. Prior consumer parsing
+ * left the service segment INSIDE `path`, which produced a four-part ID
+ * different from what OpenKey emits (which uses WASM's `entry.path`
+ * directly). That divergence caused every real production round-trip to
+ * fail the `grantedFourPartIndex.get(rawKey)` lookup silently — Sol
+ * explicitly cited this as blocking approval.
+ *
+ * Behaviour:
+ *   - Non-`tinycloud:` URIs are returned unchanged as `{ space: uri, path: "" }`.
+ *   - `tinycloud:<...>` without any `/` → `{ space: uri, path: "" }`.
+ *   - `tinycloud:<...>/short` → `{ space, path: "" }` (service segment stripped).
+ *   - `tinycloud:<...>/short/rest...` → `{ space, path: "rest..." }`.
+ *
+ * This makes the consumer's canonical `path` byte-for-byte equal to WASM's
+ * `entry.path`, and therefore byte-for-byte equal to the `path` OpenKey's
+ * `computeActionKey` uses when emitting four-part IDs.
+ */
+export function parseCanonicalRecapResource(resource: string): {
+  space: string;
+  path: string;
+} {
+  if (!resource.startsWith("tinycloud:")) {
+    return { space: resource, path: "" };
+  }
+  const firstSlash = resource.indexOf("/");
+  if (firstSlash < 0) {
+    return { space: resource, path: "" };
+  }
+  const space = resource.slice(0, firstSlash);
+  const rest = resource.slice(firstSlash + 1);
+  const secondSlash = rest.indexOf("/");
+  if (secondSlash < 0) {
+    // `<space>/<short>` — the service short-name is the entire remainder;
+    // there is no sub-path, so `path` is empty.
+    return { space, path: "" };
+  }
+  // `<space>/<short>/<sub-path>` — strip the `<short>` segment.
+  return { space, path: rest.slice(secondSlash + 1) };
+}
+
+/**
  * Immutable SIWE header fields the OpenKey widget is NOT allowed to alter.
  * The user may narrow capabilities (which changes the ReCap `urn:recap:`
  * resource AND — because the WASM statement is a human-readable rendering of
@@ -279,14 +332,35 @@ export function extractImmutableSiweFields(siwe: string): ImmutableSiweFields {
  * Diff two SIWE header field sets. Returns the field names that differ. An
  * empty array means the caller's prepared header and the signed header agree
  * on every immutable field.
+ *
+ * Sol final continuation contract requirement 2: `statement` is
+ * ReCap-DERIVED whenever the SIWE carries a `urn:recap:` resource — the
+ * WASM `prepareSession` emitter renders "I further authorize the stated URI
+ * to perform the following actions..." from the ReCap contents and DROPS
+ * any caller-supplied `statement`. Narrowing the ReCap therefore ALWAYS
+ * changes the statement, and treating statement as byte-immutable made
+ * every legitimate narrowing fail immediate rejection — the exact
+ * production round-trip failure Sol cited as blocking approval.
+ *
+ * Correct semantics:
+ *   - For ReCap-bearing SIWEs, statement is validated indirectly via the
+ *     `unauthorizedRecapCapabilities` subset check (the ReCap the
+ *     statement renders is the true authoritative narrowing check).
+ *   - For plain (no-ReCap) SIWEs, statement IS caller-authored and MUST
+ *     remain byte-for-byte identical.
+ *
+ * Callers signal which regime applies via `options.originalHasRecap`.
+ * When omitted (legacy callers), statement is included in the diff — the
+ * safer default for non-ReCap flows.
  */
 export function diffImmutableSiweFields(
   original: ImmutableSiweFields,
   signed: ImmutableSiweFields,
+  options?: { originalHasRecap?: boolean },
 ): string[] {
   // Sol MAJOR-4: include the complete immutable-field set. Any drift on
   // ANY of these fields is a broadening or a substitution — reject.
-  const keys: (keyof ImmutableSiweFields)[] = [
+  const baseKeys: (keyof ImmutableSiweFields)[] = [
     "domain",
     "address",
     "uri",
@@ -297,9 +371,15 @@ export function diffImmutableSiweFields(
     "expirationTime",
     "notBefore",
     "requestId",
-    "statement",
     "nonRecapResources",
   ];
+  // Sol final continuation contract requirement 2: only include
+  // `statement` when the original had NO ReCap. A ReCap-bearing SIWE
+  // has its statement derived from the ReCap contents by WASM, and the
+  // ReCap subset check is the authoritative narrowing gate.
+  const keys = options?.originalHasRecap
+    ? baseKeys
+    : [...baseKeys, "statement" as keyof ImmutableSiweFields];
   const diffs: string[] = [];
   for (const key of keys) {
     // Normalize undefined to "" so a field missing on both sides is

@@ -583,6 +583,7 @@ export {
   validateAuthorizationResultV1,
   isPlausibleOpenKeyActionId,
   OPENKEY_ACTION_ID_SEPARATOR,
+  parseCanonicalRecapResource,
   // OpenKey narrowing verification helpers
   ImmutableSiweFields,
   RecapAttenuation,

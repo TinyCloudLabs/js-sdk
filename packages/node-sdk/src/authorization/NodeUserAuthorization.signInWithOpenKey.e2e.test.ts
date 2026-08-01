@@ -16,7 +16,10 @@
 // requires.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { extractRecapAttenuations } from "@tinycloud/sdk-core";
+import {
+  extractRecapAttenuations,
+  parseCanonicalRecapResource,
+} from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { wireOpenKeyAuthorize, type OpenKeyAuthorizeTinyCloud } from "./openKeyBridge";
 import { NodeWasmBindings } from "../NodeWasmBindings";
@@ -130,15 +133,14 @@ function makeSimulatedOpenKey(opts: {
         actions: string[];
       }> = [];
       for (const [resource, actions] of Object.entries(signedAttn)) {
-        let space = resource;
-        let path = "";
-        if (resource.startsWith("tinycloud:")) {
-          const slash = resource.indexOf("/");
-          if (slash >= 0) {
-            space = resource.slice(0, slash);
-            path = resource.slice(slash + 1);
-          }
-        }
+        // Sol final continuation contract requirement 1: use the SHARED
+        // canonical resource parser so the simulated OpenKey server
+        // emits the same shape the real OpenKey Hono route emits (via
+        // WASM `parseRecapFromSiwe`) and the same shape the SDK
+        // consumer expects. Prior inline code left the service segment
+        // inside `path`, so an OpenKey-shaped simulation could quietly
+        // diverge from the real server.
+        const { space, path } = parseCanonicalRecapResource(resource);
         const grouped = new Map<string, string[]>();
         for (const ability of Object.keys(actions)) {
           const slashIdx = ability.indexOf("/");

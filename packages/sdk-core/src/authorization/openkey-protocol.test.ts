@@ -6,6 +6,7 @@ import {
   diffImmutableSiweFields,
   extractRecapAttenuations,
   unauthorizedRecapCapabilities,
+  parseCanonicalRecapResource,
 } from "./openkey-protocol";
 
 describe("validateAuthorizationResultV1", () => {
@@ -364,5 +365,72 @@ describe("unauthorizedRecapCapabilities", () => {
         { resource: "space/kv/data", action: "tinycloud.kv/put" },
       ]);
     });
+  });
+});
+
+// Sol final continuation contract requirement 1: canonical ReCap resource
+// parser must match the WASM `parseRecapFromSiwe` semantic — the middle
+// `<short-service>` segment is NEVER part of `path`. Every producer AND
+// consumer of canonical four-part action IDs walks through this helper.
+describe("parseCanonicalRecapResource (Sol continuation req 1)", () => {
+  const space = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
+
+  it("returns { space, path: '' } for a whole-space grant `<space>/<short>`", () => {
+    // WASM: `abilities: { kv: { "": [...] } }` produces URI `<space>/kv`
+    // and `parseRecapFromSiwe` reports `path=""`.
+    expect(parseCanonicalRecapResource(`${space}/kv`)).toEqual({
+      space,
+      path: "",
+    });
+  });
+
+  it("strips the service segment from `<space>/<short>/<sub-path>`", () => {
+    // WASM: `abilities: { kv: { "listen/transcript": [...] } }` produces
+    // URI `<space>/kv/listen/transcript` and reports `path="listen/transcript"`.
+    expect(
+      parseCanonicalRecapResource(`${space}/kv/listen/transcript`),
+    ).toEqual({ space, path: "listen/transcript" });
+  });
+
+  it("keeps a repeated-space path (`<space>/<short>/<space>`) verbatim", () => {
+    // WASM: `abilities: { kv: { [spaceId]: [...] } }` produces
+    // URI `<space>/kv/<space>` and reports `path=<space>`.
+    expect(parseCanonicalRecapResource(`${space}/kv/${space}`)).toEqual({
+      space,
+      path: space,
+    });
+  });
+
+  it("returns non-tinycloud URIs unchanged as space (path empty)", () => {
+    const encryptionUri =
+      "urn:tinycloud:encryption:did:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
+    expect(parseCanonicalRecapResource(encryptionUri)).toEqual({
+      space: encryptionUri,
+      path: "",
+    });
+  });
+
+  it("returns `<space>` unchanged when no `/` is present after the tinycloud: prefix", () => {
+    // Rare — a bare space URI without any ability grants a zero-ability
+    // resource. Parser must not throw.
+    expect(parseCanonicalRecapResource(space)).toEqual({ space, path: "" });
+  });
+
+  it("mirrors WASM `parseRecapFromSiwe`: path equals what WASM's entry.path would be", () => {
+    // This is the load-bearing invariant: for every real production URI
+    // shape, the canonical parser's `path` equals what the WASM SDK
+    // returns from `parseRecapFromSiwe`. Concrete cases we've verified
+    // against a real WASM build:
+    const cases: Array<{ uri: string; wasmPath: string }> = [
+      { uri: `${space}/kv`, wasmPath: "" },
+      { uri: `${space}/kv/listen/transcript`, wasmPath: "listen/transcript" },
+      { uri: `${space}/kv/${space}`, wasmPath: space },
+      { uri: `${space}/capabilities/${space}`, wasmPath: space },
+    ];
+    for (const { uri, wasmPath } of cases) {
+      const { space: parsedSpace, path } = parseCanonicalRecapResource(uri);
+      expect(parsedSpace).toBe(space);
+      expect(path).toBe(wasmPath);
+    }
   });
 });

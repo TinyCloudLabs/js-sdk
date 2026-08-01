@@ -14,7 +14,10 @@ import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
-import { extractRecapAttenuations } from "@tinycloud/sdk-core";
+import {
+  extractRecapAttenuations,
+  parseCanonicalRecapResource,
+} from "@tinycloud/sdk-core";
 
 /**
  * Derive selectedActionKeys entries in the CANONICAL four-part OpenKey ID
@@ -30,16 +33,11 @@ function deriveSelectedActionKeysFromSiwe(siwe: string): string[] {
   const caps = extractRecapAttenuations(siwe);
   const out: string[] = [];
   for (const [resource, actions] of Object.entries(caps)) {
-    // Split the resource URI into space + path the same way OpenKey does.
-    let space = resource;
-    let path = "";
-    if (resource.startsWith("tinycloud:")) {
-      const slash = resource.indexOf("/");
-      if (slash >= 0) {
-        space = resource.slice(0, slash);
-        path = resource.slice(slash + 1);
-      }
-    }
+    // Sol final continuation contract requirement 1: parse the resource
+    // URI with the SHARED canonical semantics — service segment stripped
+    // out of `path` so the emitted four-part IDs match what
+    // OpenKey's `computeActionKey` produces via WASM `parseRecapFromSiwe`.
+    const { space, path } = parseCanonicalRecapResource(resource);
     for (const ability of Object.keys(actions)) {
       if (ability === "tinycloud.capabilities/read" || ability === "capabilities/read") continue;
       const slashIdx = ability.indexOf("/");
@@ -82,15 +80,10 @@ function derivePermissionsFromSiwe(
   const caps = extractRecapAttenuations(siwe);
   const out: Array<{ service: string; space: string; path: string; actions: string[] }> = [];
   for (const [resource, actions] of Object.entries(caps)) {
-    let space = resource;
-    let path = "";
-    if (resource.startsWith("tinycloud:")) {
-      const slash = resource.indexOf("/");
-      if (slash >= 0) {
-        space = resource.slice(0, slash);
-        path = resource.slice(slash + 1);
-      }
-    }
+    // Sol final continuation contract requirement 1: use the SHARED
+    // canonical resource parser so `permissions[]` emits the same
+    // (space, path) tuples the SDK consumer expects.
+    const { space, path } = parseCanonicalRecapResource(resource);
     const grouped = new Map<string, string[]>();
     for (const ability of Object.keys(actions)) {
       const slashIdx = ability.indexOf("/");
@@ -455,6 +448,139 @@ test("signInWithOpenKeyResult rejects when signedMessage broadens capabilities",
       preparation.prepared.jwk,
     ),
   ).rejects.toThrow(/broadened authorization/);
+});
+
+test("signInWithOpenKeyResult accepts a narrowed SIWE with ReCap-derived statement drift (Sol continuation req 2)", async () => {
+  // Sol final continuation contract requirement 2: for a ReCap-bearing SIWE,
+  // the WASM `prepareSession` renders the ENTIRE statement from the ReCap
+  // contents ("I further authorize the stated URI to perform the following
+  // actions on my behalf..."). Any narrowing therefore MUST change the
+  // statement — treating statement as byte-immutable would reject every
+  // legitimate narrowing, which is exactly the production failure Sol cited.
+  // This test proves the diff excludes statement when the original SIWE
+  // carries a ReCap, so a narrowing round-trip through the real consumer
+  // succeeds end-to-end.
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner(PRIVATE_KEY);
+  const address = await signer.getAddress();
+  const chainId = await signer.getChainId();
+  const auth = new NodeUserAuthorization({
+    signer,
+    wasmBindings: wasm,
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    defaultActions: {
+      kv: { "": ["tinycloud.kv/get", "tinycloud.kv/put"] },
+      sql: { "": ["tinycloud.sql/read"] },
+      capabilities: { "": ["tinycloud.capabilities/read"] },
+    },
+  });
+  const preparation = await auth.prepareSessionForSigning();
+  // Pre-check: the prepared SIWE MUST carry a ReCap-derived statement.
+  // If this precondition ever weakens, the test is no longer meaningful.
+  expect(preparation.prepared.siwe).toContain("I further authorize");
+
+  const nonceMatch = preparation.prepared.siwe.match(/Nonce:\s*(.+)/);
+  const issuedAtMatch = preparation.prepared.siwe.match(/Issued At:\s*(.+)/);
+  const expiresAtMatch = preparation.prepared.siwe.match(/Expiration Time:\s*(.+)/);
+  const narrowedPrepared = wasm.prepareSession({
+    abilities: {
+      kv: { "": ["tinycloud.kv/get"] },
+      capabilities: { "": ["tinycloud.capabilities/read"] },
+    },
+    address,
+    chainId,
+    domain: "example.com",
+    issuedAt: issuedAtMatch![1],
+    expirationTime: expiresAtMatch![1],
+    spaceId: preparation.prepared.spaceId,
+    jwk: preparation.prepared.jwk,
+    nonce: nonceMatch![1],
+  });
+  // Pre-check: the narrowed statement MUST differ from the prepared one.
+  // If they were identical, the immutable-statement bug would not be hit.
+  const stmt = (s: string) => {
+    const uriIdx = s.split("\n").findIndex((l) => /^URI:/.test(l));
+    return s.split("\n").slice(3, uriIdx).join("\n").trim();
+  };
+  expect(stmt(preparation.prepared.siwe)).not.toBe(stmt(narrowedPrepared.siwe));
+  expect(stmt(narrowedPrepared.siwe)).toContain("tinycloud.kv': 'get");
+  expect(stmt(narrowedPrepared.siwe)).not.toMatch(/tinycloud\.kv': 'put/);
+  expect(stmt(narrowedPrepared.siwe)).not.toMatch(/tinycloud\.sql/);
+
+  const signature = await signer.signMessage(narrowedPrepared.siwe);
+  const selectedActionKeys = deriveSelectedActionKeysFromSiwe(narrowedPrepared.siwe);
+  const permissions = derivePermissionsFromSiwe(narrowedPrepared.siwe);
+
+  const clientSession = await auth.signInWithOpenKeyResult(
+    {
+      protocolVersion: 1,
+      address,
+      signature,
+      signedMessage: narrowedPrepared.siwe,
+      selectedActionKeys,
+      permissions,
+    },
+    {
+      siwe: preparation.prepared.siwe,
+      jwk: preparation.prepared.jwk,
+      spaceId: preparation.prepared.spaceId,
+      verificationMethod: preparation.prepared.verificationMethod,
+    },
+    preparation.keyId,
+    preparation.prepared.jwk,
+  );
+  expect(clientSession.address).toBe(address);
+  // The session's siwe is now the NARROWED bytes.
+  expect(clientSession.siwe).toBe(narrowedPrepared.siwe);
+});
+
+test("diffImmutableSiweFields still enforces statement equality when the ORIGINAL SIWE has NO ReCap (Sol continuation req 2 contrapositive)", async () => {
+  // Sol final continuation contract requirement 2 (contrapositive): the
+  // relaxation ONLY applies when the original SIWE carries a ReCap. A
+  // plain (no-ReCap) SIWE carries a caller-authored statement that MUST
+  // remain byte-for-byte identical between prepared and signed.
+  //
+  // The full round-trip through `signInWithOpenKeyResult` for a plain
+  // SIWE would fail earlier at signature verification (constructing a
+  // valid plain SIWE without ReCap requires a real signer + full SIWE
+  // library work that duplicates the SDK). Instead we exercise the
+  // pure `diffImmutableSiweFields` helper directly — which is what
+  // `signInWithOpenKeyResult` calls internally — and prove the
+  // `originalHasRecap` flag correctly toggles the statement immutability
+  // rule.
+  const { diffImmutableSiweFields } = await import("@tinycloud/sdk-core");
+  const original = {
+    domain: "example.com",
+    address: "0x1111111111111111111111111111111111111111",
+    uri: "https://example.com",
+    version: "1",
+    chainId: "1",
+    nonce: "abcdef",
+    issuedAt: "2026-08-01T00:00:00Z",
+    expirationTime: "2026-08-08T00:00:00Z",
+    statement: "Original statement, authored by caller.",
+    nonRecapResources: "",
+  };
+  const signedWithChangedStatement = {
+    ...original,
+    statement: "Attacker-injected statement.",
+  };
+  // Case 1: originalHasRecap = false → statement drift IS a violation.
+  const plainDiffs = diffImmutableSiweFields(original, signedWithChangedStatement, {
+    originalHasRecap: false,
+  });
+  expect(plainDiffs).toContain("statement");
+  // Case 2: originalHasRecap = true → statement drift is TOLERATED
+  // (the ReCap subset check is the authoritative narrowing gate for
+  // ReCap-bearing SIWEs, and the WASM emitter re-renders the statement
+  // from the narrowed ReCap on every narrowing).
+  const recapDiffs = diffImmutableSiweFields(original, signedWithChangedStatement, {
+    originalHasRecap: true,
+  });
+  expect(recapDiffs).not.toContain("statement");
 });
 
 test("signInWithOpenKeyResult accepts when signedMessage narrows capabilities", async () => {

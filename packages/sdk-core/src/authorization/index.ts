@@ -93,6 +93,7 @@ export {
   validateAuthorizationResultV1,
   isPlausibleOpenKeyActionId,
   OPENKEY_ACTION_ID_SEPARATOR,
+  parseCanonicalRecapResource,
   // Signed-SIWE narrowing verification: used by node-sdk to prove the OpenKey
   // widget only narrowed (never broadened) the caller's prepared authorization.
   ImmutableSiweFields,
