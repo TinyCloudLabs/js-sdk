@@ -789,6 +789,195 @@ test("signInWithOpenKeyResult REJECTS legacy two-part selectedActionKeys", async
   ).rejects.toThrow(/malformed/);
 });
 
+// Sol final continuation contract MAJOR-1: pass an EXPLICITLY WIRE-SHAPED
+// finalize body — constructed byte-for-byte in the shape the OpenKey
+// `/authorize-sign` Hono route returns — directly to the REAL
+// `signInWithOpenKeyResult` consumer. The existing e2e test in
+// `NodeUserAuthorization.signInWithOpenKey.e2e.test.ts` exercises the
+// `wireOpenKeyAuthorize` bridge; this test exercises the CONSUMER
+// itself, which is what the OpenKey server response ultimately hits
+// after the bridge translates types. Any wire-format drift (missing
+// `permissions`, non-canonical selectedActionKeys, wrong protocolVersion,
+// missing signedMessage) would fail here even if the bridge accepted
+// the response.
+test("signInWithOpenKeyResult accepts a finalize body in the EXACT wire shape the Hono /authorize-sign route emits (Sol MAJOR-1 final)", async () => {
+  // 1. Build a real prepared session via the SDK — this is what a
+  //    caller passes to OpenKey on the wire. The prepared SIWE has
+  //    the production shape (non-empty ReCap statement, full header
+  //    set) — the same shape Sol's OpenKey-side e2e test uses.
+  const { auth, signer, preparation } = await buildAuthWithPreparedSession();
+  const address = await signer.getAddress();
+
+  // 2. Simulate the Hono /authorize-sign route's SIGN step: sign the
+  //    exact prepared SIWE bytes with the real signer. In production
+  //    OpenKey's server-side signManagedKey performs this signature;
+  //    the byte-for-byte value doesn't matter as long as it verifies
+  //    against signedMessage, which is what the SDK validates.
+  const signature = await signer.signMessage(preparation.prepared.siwe);
+
+  // 3. Derive selectedActionKeys + permissions the way the actual
+  //    OpenKey Hono route derives them — from the RAW `parsePreparedRecap`
+  //    entries of the signed message, in the canonical four-part
+  //    `service\0space\0path\0ability` shape. We reuse the SAME test
+  //    helper that mirrors OpenKey's `computeActionKey` output for
+  //    consistency across both sides of the wire.
+  const selectedActionKeys = deriveSelectedActionKeysFromSiwe(
+    preparation.prepared.siwe,
+  );
+  const permissions = derivePermissionsFromSiwe(preparation.prepared.siwe);
+
+  // 4. Assemble the finalize body EXACTLY as the Hono route emits it:
+  //      `{ protocolVersion, address, signature, signedMessage,
+  //         selectedActionKeys, permissions }`
+  //    with `protocolVersion: 1` (route hardcode), address canonicalized,
+  //    signedMessage as the signed bytes, and selectedActionKeys/
+  //    permissions grouped per the route's `effectiveGrants` +
+  //    `effectiveSelectedActionKeys` derivation. Pass DIRECTLY to
+  //    `signInWithOpenKeyResult` — no bridge, no simulator.
+  const finalizeBody = {
+    protocolVersion: 1 as const,
+    address,
+    signature,
+    signedMessage: preparation.prepared.siwe,
+    selectedActionKeys,
+    permissions,
+  };
+
+  const clientSession = await auth.signInWithOpenKeyResult(
+    finalizeBody,
+    {
+      siwe: preparation.prepared.siwe,
+      jwk: preparation.prepared.jwk,
+      spaceId: preparation.prepared.spaceId,
+      verificationMethod: preparation.prepared.verificationMethod,
+    },
+    preparation.keyId,
+    preparation.prepared.jwk,
+  );
+
+  // 5. Assert the SDK consumer accepted the wire-format finalize body
+  //    end-to-end. The resulting session must carry the signed SIWE
+  //    bytes and the correct signer address — proving every validator
+  //    (protocol version, address canonicalization, signature-verify,
+  //    immutable-fields diff, ReCap subset, selectedActionKeys grounding,
+  //    permissions coverage) passed.
+  expect(clientSession.address).toBe(address);
+  expect(clientSession.siwe).toBe(preparation.prepared.siwe);
+
+  // 6. Additionally cross-check the selectedActionKeys shape against
+  //    the wire contract — each entry MUST be a canonical four-part ID
+  //    (this is the exact regression Sol MAJOR-1 called out as a wire-
+  //    drift risk between producer and consumer). A regression that
+  //    slipped in a three-part or two-part legacy ID would have been
+  //    rejected earlier by signInWithOpenKeyResult; asserting the
+  //    shape here documents the contract at the test level.
+  expect(finalizeBody.selectedActionKeys.length).toBeGreaterThan(0);
+  for (const key of finalizeBody.selectedActionKeys) {
+    expect(key.split("\0").length).toBe(4);
+  }
+  // Every permissions entry must have non-empty actions.
+  for (const perm of finalizeBody.permissions) {
+    expect(typeof perm.service).toBe("string");
+    expect(typeof perm.space).toBe("string");
+    expect(typeof perm.path).toBe("string");
+    expect(Array.isArray(perm.actions)).toBe(true);
+    expect(perm.actions.length).toBeGreaterThan(0);
+  }
+});
+
+// Sol final continuation contract MAJOR-1 (companion): a NARROWED
+// finalize body — the shape the OpenKey Hono route emits after the
+// user deselects some abilities — must also be accepted by the real
+// consumer. Together with the unmodified test above, this proves the
+// consumer accepts BOTH the identity round-trip AND the narrowing
+// round-trip when handed the actual Hono finalize wire body.
+test("signInWithOpenKeyResult accepts a NARROWED finalize body in the Hono /authorize-sign wire shape (Sol MAJOR-1 final)", async () => {
+  // Build a broader prepared session — the SDK proposes kv/get+put+del
+  // and sql/read plus capabilities/read. In production the user then
+  // narrows via the OpenKey widget; the Hono route regenerates a
+  // narrowed SIWE via `narrowSiwePreservingImmutable` and signs it
+  // server-side. We simulate the regenerate step here directly with
+  // WASM `prepareSession`, which is EXACTLY what the Hono route calls.
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner(PRIVATE_KEY);
+  const address = await signer.getAddress();
+  const chainId = await signer.getChainId();
+  const auth = new NodeUserAuthorization({
+    signer,
+    wasmBindings: wasm,
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    defaultActions: {
+      kv: { "": ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/del"] },
+      sql: { "": ["tinycloud.sql/read"] },
+      capabilities: { "": ["tinycloud.capabilities/read"] },
+    },
+  });
+  const preparation = await auth.prepareSessionForSigning();
+  // Preserve every immutable header line by reusing the prepared
+  // nonce/issuedAt/expirationTime — the Hono route's
+  // narrowSiwePreservingImmutable does the same thing.
+  const nonceMatch = preparation.prepared.siwe.match(/Nonce:\s*(.+)/);
+  const issuedAtMatch = preparation.prepared.siwe.match(/Issued At:\s*(.+)/);
+  const expiresAtMatch = preparation.prepared.siwe.match(/Expiration Time:\s*(.+)/);
+  const narrowedPrepared = wasm.prepareSession({
+    abilities: {
+      kv: { "": ["tinycloud.kv/get"] },
+      capabilities: { "": ["tinycloud.capabilities/read"] },
+    },
+    address,
+    chainId,
+    domain: "example.com",
+    issuedAt: issuedAtMatch![1]!,
+    expirationTime: expiresAtMatch![1]!,
+    spaceId: preparation.prepared.spaceId,
+    jwk: preparation.prepared.jwk,
+    nonce: nonceMatch![1]!,
+  });
+  const signature = await signer.signMessage(narrowedPrepared.siwe);
+
+  // Derive the wire shape from the NARROWED SIWE — this is how the
+  // Hono route builds `effectiveSelectedActionKeys` and `effectiveGrants`
+  // after signing narrowed bytes.
+  const selectedActionKeys = deriveSelectedActionKeysFromSiwe(narrowedPrepared.siwe);
+  const permissions = derivePermissionsFromSiwe(narrowedPrepared.siwe);
+
+  const finalizeBody = {
+    protocolVersion: 1 as const,
+    address,
+    signature,
+    signedMessage: narrowedPrepared.siwe,
+    selectedActionKeys,
+    permissions,
+  };
+
+  const clientSession = await auth.signInWithOpenKeyResult(
+    finalizeBody,
+    {
+      siwe: preparation.prepared.siwe,
+      jwk: preparation.prepared.jwk,
+      spaceId: preparation.prepared.spaceId,
+      verificationMethod: preparation.prepared.verificationMethod,
+    },
+    preparation.keyId,
+    preparation.prepared.jwk,
+  );
+  expect(clientSession.address).toBe(address);
+  // The session's SIWE MUST be the narrowed bytes — the whole point of
+  // the wire round-trip is that OpenKey may return different bytes than
+  // the caller's original prepared SIWE.
+  expect(clientSession.siwe).toBe(narrowedPrepared.siwe);
+  // The consumer MUST have accepted a signedMessage whose ReCap-derived
+  // `statement` differs from the prepared statement — this is the exact
+  // regression Sol MAJOR-1 called out as a wire acceptance gap.
+  expect(clientSession.siwe).toContain("I further authorize");
+  expect(clientSession.siwe).toMatch(/tinycloud\.kv': 'get/);
+  expect(clientSession.siwe).not.toMatch(/tinycloud\.kv': 'put/);
+  expect(clientSession.siwe).not.toMatch(/tinycloud\.sql/);
+});
+
 test("signInWithOpenKeyResult rejects a three-part malformed selectedActionKey", async () => {
   // Sol continuation contract: neither 3-part nor 5+-part IDs are valid.
   // The SDK must fail closed rather than silently accepting a truncated ID.
