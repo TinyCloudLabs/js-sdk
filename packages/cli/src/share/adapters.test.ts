@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { ProfileManager } from "../config/profiles.js";
 import { NodeWasmBindings } from "../../../node-sdk/src/NodeWasmBindings.js";
 import { PrivateKeySigner } from "../../../node-sdk/src/signers/PrivateKeySigner.js";
@@ -36,6 +37,19 @@ const session = await (async () => {
   return { ...complete, jwk, verificationMethod: profile.sessionDid };
 })();
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("base64url");
+const exactNodeResponse = JSON.parse(await readFile(new URL("./upload-attestation-node-response.json", import.meta.url), "utf8")) as Record<string, unknown>;
+const nodeResponse = (): Record<string, unknown> => ({
+  ...exactNodeResponse,
+  sessionDid: profile.sessionDid,
+  shareOrigin: "https://share.tinycloud.xyz",
+  encryptedBlobCid: upload.cid,
+  encryptedBlobSha256: sha256(upload.blob),
+  byteLength: upload.contentLength,
+  deleteAfter: upload.deleteAfter,
+  issuedAt: new Date().toISOString(),
+  authorityExpiresAt: new Date(Date.now() + 120_000).toISOString(),
+  expiresAt: new Date(Date.now() + 60_000).toISOString(),
+});
 const restore: Array<{ mockRestore: () => void }> = [];
 
 afterEach(() => {
@@ -77,12 +91,7 @@ describe("Share upload authority adapter", () => {
       profileName: async () => profile.name,
       fetchFn: (async (input, init) => {
         requests.push({ url: String(input), init });
-        const issuedAt = new Date().toISOString();
-        const expiresAt = new Date(Date.now() + 120_000).toISOString();
-        return new Response(JSON.stringify({
-          type: "TinyCloudShareUploadAttestation", version: 1, issuer: "did:web:node.example", kid: "did:web:node.example#invitation", ownerDid: "did:key:owner", sessionDid: profile.sessionDid,
-          shareOrigin: "https://share.tinycloud.xyz", encryptedBlobCid: upload.cid, encryptedBlobSha256: sha256(upload.blob), byteLength: upload.contentLength, deleteAfter: upload.deleteAfter, retention: "until-delete", issuedAt, expiresAt, jti: "jti-for-test-012345", signature: "A".repeat(86),
-        }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(nodeResponse()), { status: 200, headers: { "content-type": "application/json" } });
       }) as typeof globalThis.fetch,
     });
 
@@ -94,6 +103,36 @@ describe("Share upload authority adapter", () => {
     expect(requests[0]?.init?.redirect).toBe("error");
     expect(new Headers(requests[0]?.init?.headers).has("authorization")).toBe(true);
     expect(requests[0]?.init?.body).toContain('"requestBodyDigest"');
+  });
+
+  it("requires Node's authority expiry and retains it in the Share authorization", async () => {
+    restore.push(spyOn(ProfileManager, "getProfile").mockResolvedValue(profile));
+    restore.push(spyOn(ProfileManager, "getSession").mockResolvedValue(session));
+    const response = nodeResponse();
+    const authorize = createProductionUploadAuthorizer({
+      origin: "https://share.tinycloud.xyz",
+      profileName: async () => profile.name,
+      fetchFn: (async () => new Response(JSON.stringify(response), { status: 200 })) as typeof globalThis.fetch,
+    });
+    const authorization = await authorize(upload);
+    const attestation = JSON.parse(new Headers(authorization).get("x-tinycloud-upload-attestation")!);
+    expect(attestation.authorityExpiresAt).toBe(response.authorityExpiresAt);
+  });
+
+  it("rejects a Node response missing authorityExpiresAt or using a noncanonical authority expiry", async () => {
+    restore.push(spyOn(ProfileManager, "getProfile").mockResolvedValue(profile));
+    restore.push(spyOn(ProfileManager, "getSession").mockResolvedValue(session));
+    for (const authorityExpiresAt of [undefined, "2026-08-01T00:02:00Z"]) {
+      const response = nodeResponse();
+      if (authorityExpiresAt === undefined) delete response.authorityExpiresAt;
+      else response.authorityExpiresAt = authorityExpiresAt;
+      const authorize = createProductionUploadAuthorizer({
+        origin: "https://share.tinycloud.xyz",
+        profileName: async () => profile.name,
+        fetchFn: (async () => new Response(JSON.stringify(response), { status: 200 })) as typeof globalThis.fetch,
+      });
+      await expect(authorize(upload)).rejects.toThrow();
+    }
   });
 
   it("rejects malformed Node attestations without invoking test-only acquisition seams", async () => {
