@@ -1669,12 +1669,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // `signedCaps` are the raw ReCap resource URIs — `space` for whole-space
     // grants, or `space/path` when a path is present. The action key is
     // `ability` (e.g. `tinycloud.kv/get`). We build a canonical index of
-    // grantedPairs keyed by the four-part tuple and only accept
-    // selectedActionKeys that parse in the four-part form OR the legacy
-    // two-part `resource\0action` form (kept for backward compatibility).
+    // granted authority keyed by the four-part tuple and REJECT
+    // selectedActionKeys that do not conform to it. Legacy 2-part
+    // `resource\0action` IDs are no longer accepted.
     const grantedPairs = new Set<string>();
     // 4-part index: `${service}\0${space}\0${path}\0${ability}` → canonical
-    // OpenKey ID. `service` is derived from the ability's namespace prefix
+    // resource\0action pair (used to populate the coverage-check set).
+    // `service` is derived from the ability's namespace prefix
     // (`tinycloud.kv/get` → `tinycloud.kv`). `space` and `path` are derived
     // from the resource URI by splitting on the first `/` after the
     // `tinycloud:...:name` prefix.
@@ -1691,9 +1692,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
         }
       }
       for (const action of Object.keys(actions)) {
-        // Legacy two-part index: `${resource}\0${action}`.
+        // Populate the coverage set with the canonical resource\0action
+        // pair so Rule A can check every non-required capability got
+        // covered by a matching selectedActionKeys entry.
         grantedPairs.add(`${resource}\0${action}`);
-        // Canonical four-part: derive `service` from the ability prefix.
+        // Canonical four-part index: derive `service` from the ability
+        // prefix. Missing prefix (bare action) is refused server-side
+        // in OpenKey — we simply skip it here rather than fabricate a
+        // half-form 4-part ID.
         const slashIdx = action.indexOf("/");
         const service = slashIdx > 0 ? action.slice(0, slashIdx) : "";
         if (service) {
@@ -1737,31 +1743,24 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const selectedResourceActionPairs = new Set<string>();
     for (const rawKey of result.selectedActionKeys) {
       const parts = rawKey.split("\0");
-      let matchedPair: string | null = null;
-      if (parts.length === 4) {
-        // Canonical four-part: `service\0space\0path\0ability`.
-        const canonical = grantedFourPartIndex.get(rawKey);
-        if (canonical) {
-          matchedPair = canonical;
-        }
-      } else if (parts.length === 2) {
-        // Legacy two-part: `resource\0action`.
-        const [resource, action] = parts;
-        const pairKey = `${resource}\0${action}`;
-        if (grantedPairs.has(pairKey)) {
-          matchedPair = pairKey;
-        }
-      } else {
+      // Sol continuation contract: OpenKey emits ONLY the canonical
+      // four-part `service\0space\0path\0ability` shape. Legacy 2-part
+      // IDs are no longer accepted — the previous fallback let a
+      // malicious widget forward a `resource\0action` pair that matched
+      // by suffix without proving service canonicalization, which
+      // silently expanded authority when service short-names collided.
+      if (parts.length !== 4) {
         throw new Error(
-          `OpenKey selectedActionKeys entry is malformed (expected 4-part service\\0space\\0path\\0ability or legacy 2-part resource\\0action): ${rawKey}`,
+          `OpenKey selectedActionKeys entry is malformed (expected canonical 4-part service\\0space\\0path\\0ability): ${rawKey}`,
         );
       }
-      if (!matchedPair) {
+      const canonical = grantedFourPartIndex.get(rawKey);
+      if (!canonical) {
         throw new Error(
           `OpenKey selectedActionKeys entry ${rawKey} is not covered by any granted capability`,
         );
       }
-      selectedResourceActionPairs.add(matchedPair);
+      selectedResourceActionPairs.add(canonical);
     }
 
     // Rule A — every non-required granted pair MUST be covered by at least

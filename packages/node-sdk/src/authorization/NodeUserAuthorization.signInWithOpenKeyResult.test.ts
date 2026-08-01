@@ -51,10 +51,11 @@ function deriveSelectedActionKeysFromSiwe(siwe: string): string[] {
 }
 
 /**
- * Legacy two-part encoder retained for backward-compat coverage: some older
- * OpenKey builds emitted `${resource}\0${ability}`. The SDK still accepts
- * this format so old clients keep working while migrating to the canonical
- * four-part IDs.
+ * Legacy two-part encoder. Retained as a helper so the regression test
+ * below can prove that the SDK now REJECTS this format — Sol continuation
+ * contract requires canonical four-part IDs and forbids the two-part
+ * fallback that historically resolved to unrelated authority when short
+ * service names collided.
  */
 function deriveLegacyTwoPartActionKeysFromSiwe(siwe: string): string[] {
   const caps = extractRecapAttenuations(siwe);
@@ -627,41 +628,43 @@ test("signInWithOpenKeyResult accepts real OpenKey four-part selectedActionKeys"
   expect(clientSession.address).toBe(address);
 });
 
-test("signInWithOpenKeyResult accepts legacy two-part selectedActionKeys for backward compat", async () => {
-  // Backward-compat: older OpenKey builds emitted `${resource}\0${ability}`.
-  // Continue to accept them so pinned deployments keep working while
-  // migrating to canonical four-part IDs.
+test("signInWithOpenKeyResult REJECTS legacy two-part selectedActionKeys", async () => {
+  // Sol continuation contract: OpenKey emits ONLY the canonical four-part
+  // `service\0space\0path\0ability` shape. The historical two-part
+  // `resource\0action` fallback resolved by suffix match — which
+  // silently accepted a rawKey that DIDN'T carry a validated service
+  // namespace. Rejecting it closes that gap.
   const { auth, signer, preparation } = await buildAuthWithPreparedSession();
   const signature = await signer.signMessage(preparation.prepared.siwe);
   const address = await signer.getAddress();
 
-  const selectedActionKeys = deriveLegacyTwoPartActionKeysFromSiwe(preparation.prepared.siwe);
+  const legacyTwoPartKeys = deriveLegacyTwoPartActionKeysFromSiwe(preparation.prepared.siwe);
   const permissions = derivePermissionsFromSiwe(preparation.prepared.siwe);
-  expect(selectedActionKeys.length).toBeGreaterThan(0);
-  for (const key of selectedActionKeys) {
+  expect(legacyTwoPartKeys.length).toBeGreaterThan(0);
+  for (const key of legacyTwoPartKeys) {
     expect(key.split("\0").length).toBe(2);
   }
 
-  const clientSession = await auth.signInWithOpenKeyResult(
-    {
-      protocolVersion: 1,
-      address,
-      signature,
-      signedMessage: preparation.prepared.siwe,
-      selectedActionKeys,
-      permissions,
-    },
-    {
-      siwe: preparation.prepared.siwe,
-      jwk: preparation.prepared.jwk,
-      spaceId: preparation.prepared.spaceId,
-      verificationMethod: preparation.prepared.verificationMethod,
-    },
-    preparation.keyId,
-    preparation.prepared.jwk,
-  );
-
-  expect(clientSession.address).toBe(address);
+  await expect(
+    auth.signInWithOpenKeyResult(
+      {
+        protocolVersion: 1,
+        address,
+        signature,
+        signedMessage: preparation.prepared.siwe,
+        selectedActionKeys: legacyTwoPartKeys,
+        permissions,
+      },
+      {
+        siwe: preparation.prepared.siwe,
+        jwk: preparation.prepared.jwk,
+        spaceId: preparation.prepared.spaceId,
+        verificationMethod: preparation.prepared.verificationMethod,
+      },
+      preparation.keyId,
+      preparation.prepared.jwk,
+    ),
+  ).rejects.toThrow(/malformed/);
 });
 
 test("signInWithOpenKeyResult rejects a three-part malformed selectedActionKey", async () => {
