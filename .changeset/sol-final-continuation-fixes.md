@@ -39,8 +39,11 @@ Delivered:
   `packages/sdk-core/src/authorization/openkey-protocol.test.ts::parseCanonicalRecapResource`
   cover: whole-space grant (`path` empty), path-scoped grant (short
   stripped), repeated-space grant (`path` = space), non-tinycloud URN
-  passthrough, and a cross-check against real WASM `parseRecapFromSiwe`
-  outputs for four representative URI shapes.
+  passthrough, and a cross-check against hardcoded expected-path values
+  that match what real WASM `parseRecapFromSiwe` emits for those URI
+  shapes (verified against a real WASM build offline; this test does not
+  invoke WASM at runtime). The actual live-WASM evidence is in the
+  separate mandatory cross-repository Hono finalize test.
 
 Requirement 1 (final) — Wire-format acceptance test at the HTTP boundary.
 
