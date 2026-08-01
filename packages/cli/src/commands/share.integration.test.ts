@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configureShareCommandServices, registerShareCommand } from "./share.js";
-import { MemorySenderShareRecordStorage } from "@tinycloud/share-sdk";
+import { MemorySenderShareRecordStorage, type SharePolicyEvidence } from "@tinycloud/share-sdk";
 import { ed25519 } from "@noble/curves/ed25519";
 import { canonicalize, computeCid, didKeyFromEd25519PublicKey, encodeShareUrl, generateKey, seal, signEnvelopeV2, toBase64Url } from "@tinycloud/share-envelope";
 
@@ -40,7 +40,7 @@ async function runShareCaptured(args: readonly string[]): Promise<{ stdout: stri
   }
 }
 
-async function addressedFixture(): Promise<{ url: string; blob: Uint8Array; policy: Record<string, unknown> }> {
+async function addressedFixture(): Promise<{ url: string; blob: Uint8Array; policy: SharePolicyEvidence }> {
   const issuerPrivateKey = new Uint8Array(32).fill(17);
   const recipientDid = "did:key:z6MkggtHVWQUGJ3FVjJKXeb5oZThQvLmJVMV8hfNUz4ezcav";
   const matcher = { kind: "recipientDid" as const, value: recipientDid };
@@ -124,7 +124,7 @@ describe("tc share command integration", () => {
     const fixture = await addressedFixture();
     configureShareCommandServices({
       fetchFn: Object.assign(async () => new Response(fixture.blob, { status: 200 }), { preconnect: () => undefined }) as typeof globalThis.fetch,
-      trustedPolicyAuthority: { resolve: async () => fixture.policy as never },
+      trustedPolicyAuthority: { resolve: async () => fixture.policy },
       authorization: {
         begin: async () => ({ state: "authorization-required", method: "openkey-device", resumeToken: token, continueUrl: "https://authority.example/continue" }),
         resume: async () => ({ state: "denied", reason: "rejected" }),
