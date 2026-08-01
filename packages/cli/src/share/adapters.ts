@@ -23,6 +23,7 @@ import {
   type LegacyShareReader,
 } from "@tinycloud/share-sdk";
 import { canonicalize, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
+import { activateSessionWithHost } from "@tinycloud/sdk-core";
 
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 
@@ -458,6 +459,10 @@ function canonicalNodeOrigin(value: unknown): string {
   return parsed.origin;
 }
 
+function canonicalNodeAudience(origin: string): string {
+  return `did:web:${new URL(origin).hostname}`;
+}
+
 function base64UrlSha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("base64url");
 }
@@ -503,11 +508,16 @@ async function openKeyUploadAuthorization(input: { readonly fetchFn: typeof fetc
   const requestBodyDigest = base64UrlSha256(new TextEncoder().encode(canonicalize(requestWithoutDigest)));
   const body = canonicalize({ ...requestWithoutDigest, requestBodyDigest });
   const entries = [{ spaceId: session.spaceId, service: "capabilities", action: "tinycloud.capabilities/read" }] as unknown as Parameters<import("@tinycloud/node-sdk").TinyCloudNode["invokeAny"]>[0];
-  const authorization = input.node.invokeAny(entries, [{ requestBodyDigest }]);
   const nodeOrigin = canonicalNodeOrigin(profile.host);
+  const activation = await activateSessionWithHost(nodeOrigin, session.delegationHeader as { Authorization: string });
+  if (!activation.success) throw new ShareAuthorityError("AUTH_REQUIRED", "Node upload authorization was rejected");
+  const invocationHeaders = new Headers(input.node.invokeAny(entries, [{ requestBodyDigest }]) as any);
+  const invocation = invocationHeaders.get("authorization");
+  if (invocation === null) throw new ShareAuthorityError("AUTH_REQUIRED", "Node upload authorization was rejected");
+  const authorization = await input.node.bindInvocationAudience(invocation, canonicalNodeAudience(nodeOrigin));
   let response: Response;
   try {
-    const headers = new Headers(authorization as any);
+    const headers = new Headers({ authorization });
     headers.set("accept", "application/json");
     headers.set("content-type", "application/json");
     response = await input.fetchFn(new URL("/share/upload/attestation", nodeOrigin), { method: "POST", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", headers, body });

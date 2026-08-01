@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { ProfileManager } from "../config/profiles.js";
@@ -52,6 +52,15 @@ const nodeResponse = (): Record<string, unknown> => ({
 });
 const restore: Array<{ mockRestore: () => void }> = [];
 
+beforeEach(() => {
+  restore.push(spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    if (String(input).endsWith("/delegate")) {
+      return new Response(JSON.stringify({ activated: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    throw new Error("unexpected test fetch");
+  }));
+});
+
 afterEach(() => {
   while (restore.length > 0) restore.pop()?.mockRestore();
 });
@@ -102,7 +111,35 @@ describe("Share upload authority adapter", () => {
     expect(requests[0]?.url).toBe("https://node.example/share/upload/attestation");
     expect(requests[0]?.init?.redirect).toBe("error");
     expect(new Headers(requests[0]?.init?.headers).has("authorization")).toBe(true);
+    const invocation = new Headers(requests[0]?.init?.headers).get("authorization");
+    const payload = JSON.parse(Buffer.from(invocation!.split(".")[1]!, "base64url")) as { aud?: string };
+    expect(payload.aud).toBe("did:web:node.example");
     expect(requests[0]?.init?.body).toContain('"requestBodyDigest"');
+  });
+
+  it("activates a complete OpenKey session before the packed invocation reaches Node", async () => {
+    restore.push(spyOn(ProfileManager, "getProfile").mockResolvedValue(profile));
+    restore.push(spyOn(ProfileManager, "getSession").mockResolvedValue(session));
+    let activated = false;
+    const activationFetch = spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      expect(String(input)).toBe("https://node.example/delegate");
+      activated = true;
+      return new Response(JSON.stringify({ activated: ["redacted-space"] }), { status: 200 });
+    });
+    restore.push(activationFetch);
+    const authorize = createProductionUploadAuthorizer({
+      origin: "https://share.tinycloud.xyz",
+      profileName: async () => profile.name,
+      fetchFn: (async () => {
+        if (!activated) return new Response("upload delegation missing", { status: 403 });
+        return new Response(JSON.stringify(nodeResponse()), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof globalThis.fetch,
+    });
+
+    await expect(authorize(upload)).resolves.toEqual(expect.objectContaining({
+      "x-tinycloud-retention": '"until-delete"',
+    }));
+    expect(activationFetch).toHaveBeenCalledTimes(1);
   });
 
   it("requires Node's authority expiry and retains it in the Share authorization", async () => {

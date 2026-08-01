@@ -2992,6 +2992,13 @@ export class TinyCloudNode {
     return signBytesWithJwk(bytes, session.jwk);
   }
 
+  /** Bind a session-signed invocation to the canonical service audience. */
+  async bindInvocationAudience(authorization: string, audience: string): Promise<string> {
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    return rewriteInvocationAudience(authorization, audience, session.jwk);
+  }
+
   /**
    * Connect a wallet to upgrade from session-only mode to wallet mode.
    *
