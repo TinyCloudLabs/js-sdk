@@ -18007,8 +18007,8 @@ async function receiveShare(link2, options = {}) {
     const bytes4 = authorized.bytes.slice();
     const maxBytes = options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES;
     if (bytes4.byteLength > maxBytes) throw new ShareReceiveError("max-bytes-exceeded", "shared content exceeds the configured byte limit");
-    const digestBytes2 = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes4));
-    const bodyDigest = toBase64Url(digestBytes2);
+    const digestBytes3 = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes4));
+    const bodyDigest = toBase64Url(digestBytes3);
     if (authorized.bodyDigest !== bodyDigest) throw new ShareReceiveError("content-integrity-failed", "authorized content digest does not match");
     if (authorized.contentSourceDigest !== resolved.envelope.contentSourceDigest) throw new ShareReceiveError("content-integrity-failed", "authorized content source does not match");
     const binding = authorized.binding;
@@ -18934,7 +18934,7 @@ async function migrateShare(input) {
   const value = await receiveLegacyShare(input.link, input.reader);
   return { protocol: "tinycloud-share", version: 1, legacy: true, value, migrated: await input.publish(value) };
 }
-var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, BEARER_READ_ABILITY, READ_ABILITIES, ED25519_VERIFY_OPTS, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_SIGNATURE_DOMAIN, ENVELOPE_V2_SIGNATURE_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, DEFAULT_MAX_CONTENT_BLOB_BYTES, CONTENT_SEALED_OVERHEAD, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_SEALED_OVERHEAD, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, base58btc2, base58flickr2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError;
+var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, BEARER_READ_ABILITY, READ_ABILITIES, ED25519_VERIFY_OPTS, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_SIGNATURE_DOMAIN, ENVELOPE_V2_SIGNATURE_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, DEFAULT_MAX_CONTENT_BLOB_BYTES, CONTENT_SEALED_OVERHEAD, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_SEALED_OVERHEAD, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, base58btc2, base58flickr2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN;
 var init_dist3 = __esm({
   "../share-sdk/dist/index.js"() {
     "use strict";
@@ -23151,8 +23151,8 @@ var init_dist3 = __esm({
         if (multihashBytes.byteLength !== specs.multihashSize) {
           throw new Error("Incorrect length");
         }
-        const digestBytes2 = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
-        const digest4 = new Digest(specs.multihashCode, specs.digestSize, digestBytes2, multihashBytes);
+        const digestBytes3 = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
+        const digest4 = new Digest(specs.multihashCode, specs.digestSize, digestBytes3, multihashBytes);
         const cid2 = specs.version === 0 ? _CID.createV0(digest4) : _CID.createV1(specs.codec, digest4);
         return [cid2, bytes3.subarray(specs.size)];
       }
@@ -23873,8 +23873,8 @@ var init_dist3 = __esm({
         if (multihashBytes.byteLength !== specs.multihashSize) {
           throw new Error("Incorrect length");
         }
-        const digestBytes2 = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
-        const digest4 = new Digest2(specs.multihashCode, specs.digestSize, digestBytes2, multihashBytes);
+        const digestBytes3 = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
+        const digest4 = new Digest2(specs.multihashCode, specs.digestSize, digestBytes3, multihashBytes);
         const cid2 = specs.version === 0 ? _CID2.createV0(digest4) : _CID2.createV1(specs.codec, digest4);
         return [cid2, bytes3.subarray(specs.size)];
       }
@@ -23939,6 +23939,20 @@ var init_dist3 = __esm({
         this.name = "ShareNotifyError";
       }
     };
+    SHARE_V2_PROTOCOL = Object.freeze({
+      challengeDomain: "xyz.tinycloud.share/policy-challenge/v2\0",
+      sessionDomain: "xyz.tinycloud.share/policy-session/v2\0",
+      invocationDomain: "xyz.tinycloud.share/invocation/v2\0",
+      readResponseDomain: "xyz.tinycloud.share/read-response/v2\0",
+      holderBindingDomain: "xyz.tinycloud.share/email-claim-holder-binding/v1\0",
+      holderBindingName: "holderBinding",
+      holderBindingType: "TinyCloudEmailClaimHolderBinding",
+      holderBindingVersion: 1
+    });
+    DOMAIN = SHARE_V2_PROTOCOL.challengeDomain;
+    PRESENTATION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
+    SESSION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
+    INVOCATION_DOMAIN = SHARE_V2_PROTOCOL.invocationDomain;
   }
 });
 
@@ -33392,6 +33406,13 @@ function writeJson2(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}
 `);
 }
+function authorizationRequiredJson(result) {
+  return {
+    state: "authorization-required",
+    method: result.method,
+    next: "complete authorization through the configured authority adapter, then retry with the required proof"
+  };
+}
 function publishHuman(result) {
   process.stdout.write(`${result.url}
 `);
@@ -33684,7 +33705,7 @@ function registerShareCommand(program) {
       });
       if ("state" in result) {
         if (options.json) {
-          writeJson2({ protocol: "tinycloud-share", version: 1, authorization: result });
+          writeJson2({ protocol: "tinycloud-share", version: 1, authorization: authorizationRequiredJson(result) });
           process.exitCode = 6;
           return;
         }
@@ -33741,7 +33762,7 @@ function registerShareCommand(program) {
       });
       if ("state" in result) {
         if (options.json) {
-          writeJson2({ protocol: "tinycloud-share", version: 1, authorization: result });
+          writeJson2({ protocol: "tinycloud-share", version: 1, authorization: authorizationRequiredJson(result) });
           process.exitCode = 6;
           return;
         }

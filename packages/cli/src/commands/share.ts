@@ -30,7 +30,7 @@ import {
 } from "@tinycloud/share-sdk";
 import { parseDuration } from "../lib/duration.js";
 import { CLIError, handleError } from "../output/errors.js";
-import { inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
+import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, writeShareOutput } from "../share/io.js";
 
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
@@ -240,7 +240,7 @@ export function registerShareCommand(program: Command): void {
         });
         if ("state" in result) {
           if (options.json) {
-            writeJson({ protocol: "tinycloud-share", version: 1, authorization: result });
+            writeJson({ protocol: "tinycloud-share", version: 1, authorization: authorizationRequiredJson(result) });
             process.exitCode = 6;
             return;
           }
@@ -310,7 +310,7 @@ export function registerShareCommand(program: Command): void {
         });
         if ("state" in result) {
           if (options.json) {
-            writeJson({ protocol: "tinycloud-share", version: 1, authorization: result });
+            writeJson({ protocol: "tinycloud-share", version: 1, authorization: authorizationRequiredJson(result) });
             process.exitCode = 6;
             return;
           }
