@@ -1,6 +1,7 @@
 import { ed25519 } from "@noble/curves/ed25519";
 import { canonicalize, fromBase64Url, toBase64Url, type ShareEnvelopeV2 } from "@tinycloud/share-envelope";
 import type { ShareAuthorizationAdapter, ShareAuthorizedContent, ShareAuthorizationResult } from "./authorization.js";
+import { SHARE_V2_PROTOCOL } from "./protocol.js";
 
 export interface ShareNodeTrust {
   readonly invitationKid: string;
@@ -44,10 +45,10 @@ export interface SharePolicySession {
   readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
 }
 
-const DOMAIN = "xyz.tinycloud.share/policy-challenge/v2\0";
-const PRESENTATION_DOMAIN = "xyz.tinycloud.share/policy-session/v2\0";
-const SESSION_DOMAIN = "xyz.tinycloud.share/policy-session/v2\0";
-const INVOCATION_DOMAIN = "xyz.tinycloud.share/invocation/v2\0";
+const DOMAIN = SHARE_V2_PROTOCOL.challengeDomain;
+const PRESENTATION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
+const SESSION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
+const INVOCATION_DOMAIN = SHARE_V2_PROTOCOL.invocationDomain;
 
 function object(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} is invalid`);
@@ -110,7 +111,7 @@ async function verifyDetachedResponse(response: Response, trust: ShareNodeTrust)
   if (proof.alg !== "EdDSA" || proof.kid !== trust.invitationKid) throw new Error("share read detached proof is invalid");
   const unsigned = { ...record };
   delete unsigned.proof;
-  if (!ed25519.verify(bytes(proof.signature, "share read signature"), new TextEncoder().encode(`xyz.tinycloud.share/read-response/v2\0${canonicalize(unsigned)}`), trustedPublicKey(trust))) throw new Error("share read detached proof is invalid");
+  if (!ed25519.verify(bytes(proof.signature, "share read signature"), new TextEncoder().encode(`${SHARE_V2_PROTOCOL.readResponseDomain}${canonicalize(unsigned)}`), trustedPublicKey(trust))) throw new Error("share read detached proof is invalid");
 }
 
 async function post(fetchFn: typeof fetch, origin: string, path: string, body: unknown): Promise<unknown> {
@@ -296,7 +297,7 @@ export function createAddressedAuthorization(input: Omit<ShareRecipientClientOpt
         if (detached.alg !== "EdDSA" || detached.kid !== input.trustedNode.invitationKid) return false;
         const unsigned = { ...response };
         delete unsigned.proof;
-        return ed25519.verify(bytes(detached.signature, "share read signature"), new TextEncoder().encode(`xyz.tinycloud.share/read-response/v2\0${canonicalize(unsigned)}`), trustedPublicKey(input.trustedNode));
+        return ed25519.verify(bytes(detached.signature, "share read signature"), new TextEncoder().encode(`${SHARE_V2_PROTOCOL.readResponseDomain}${canonicalize(unsigned)}`), trustedPublicKey(input.trustedNode));
       } catch {
         return false;
       }

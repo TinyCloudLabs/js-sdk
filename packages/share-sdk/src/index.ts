@@ -28,5 +28,6 @@ export { normalizeShareTarget, publishTargetShare, targetAuthorizationMethod } f
 export type { ShareTarget, TargetPublishInput, TargetPublishOutcome, TargetPublishAdapter } from "./targets.js";
 export { ShareRecipientClient, createAddressedAuthorization } from "./recipient.js";
 export type { ShareNodeTrust, SharePolicyChallenge, SharePresentationMaterial, ShareRecipientClientOptions, SharePolicySession } from "./recipient.js";
+export { SHARE_V2_PROTOCOL, createShareV2HolderBindingArtifact } from "./protocol.js";
 export { publishPolicyShare, claimShare, resumeShareAuthorization } from "./policy.js";
 export type { SharePolicyPublishAdapter } from "./policy.js";
