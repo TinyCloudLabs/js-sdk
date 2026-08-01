@@ -68,6 +68,47 @@ function deriveLegacyTwoPartActionKeysFromSiwe(siwe: string): string[] {
   return out;
 }
 
+/**
+ * Derive a `permissions` array matching the effective grants encoded in the
+ * SIWE. Excludes the structurally-required `tinycloud.capabilities/read`
+ * for parity with `deriveSelectedActionKeysFromSiwe` — its Rule A coverage
+ * is not required by the SDK.
+ *
+ * Sol MAJOR-4: `signInWithOpenKeyResult` now rejects an empty permissions
+ * array whenever the signed SIWE carries non-required capabilities.
+ * Tests that previously passed `permissions: []` therefore need this helper.
+ */
+function derivePermissionsFromSiwe(
+  siwe: string,
+): Array<{ service: string; space: string; path: string; actions: string[] }> {
+  const caps = extractRecapAttenuations(siwe);
+  const out: Array<{ service: string; space: string; path: string; actions: string[] }> = [];
+  for (const [resource, actions] of Object.entries(caps)) {
+    let space = resource;
+    let path = "";
+    if (resource.startsWith("tinycloud:")) {
+      const slash = resource.indexOf("/");
+      if (slash >= 0) {
+        space = resource.slice(0, slash);
+        path = resource.slice(slash + 1);
+      }
+    }
+    const grouped = new Map<string, string[]>();
+    for (const ability of Object.keys(actions)) {
+      if (ability === "tinycloud.capabilities/read" || ability === "capabilities/read") continue;
+      const slashIdx = ability.indexOf("/");
+      const service = slashIdx > 0 ? ability.slice(0, slashIdx) : "";
+      const list = grouped.get(service) ?? [];
+      list.push(ability);
+      grouped.set(service, list);
+    }
+    for (const [service, abilities] of grouped) {
+      out.push({ service, space, path, actions: abilities });
+    }
+  }
+  return out;
+}
+
 // Route every /info and /delegate hit through a stub so signIn's follow-up
 // activation flow does not try to reach a live TinyCloud node.
 let originalFetch: typeof globalThis.fetch;
@@ -126,6 +167,7 @@ test("signInWithOpenKeyResult accepts an unmodified signed prepared SIWE", async
   const address = await signer.getAddress();
 
   const selectedActionKeys = deriveSelectedActionKeysFromSiwe(preparation.prepared.siwe);
+  const permissions = derivePermissionsFromSiwe(preparation.prepared.siwe);
 
   const clientSession = await auth.signInWithOpenKeyResult(
     {
@@ -134,7 +176,7 @@ test("signInWithOpenKeyResult accepts an unmodified signed prepared SIWE", async
       signature,
       signedMessage: preparation.prepared.siwe,
       selectedActionKeys,
-      permissions: [],
+      permissions,
     },
     {
       siwe: preparation.prepared.siwe,
@@ -462,6 +504,7 @@ test("signInWithOpenKeyResult accepts when signedMessage narrows capabilities", 
   // selectedActionKeys must cover every non-required capability in the
   // NARROWED SIWE (which is what was actually signed).
   const selectedActionKeys = deriveSelectedActionKeysFromSiwe(narrowedPrepared.siwe);
+  const permissions = derivePermissionsFromSiwe(narrowedPrepared.siwe);
 
   const clientSession = await auth.signInWithOpenKeyResult(
     {
@@ -470,7 +513,7 @@ test("signInWithOpenKeyResult accepts when signedMessage narrows capabilities", 
       signature,
       signedMessage: narrowedPrepared.siwe,
       selectedActionKeys,
-      permissions: [],
+      permissions,
     },
     {
       siwe: preparation.prepared.siwe,
@@ -555,6 +598,7 @@ test("signInWithOpenKeyResult accepts real OpenKey four-part selectedActionKeys"
   const address = await signer.getAddress();
 
   const selectedActionKeys = deriveSelectedActionKeysFromSiwe(preparation.prepared.siwe);
+  const permissions = derivePermissionsFromSiwe(preparation.prepared.siwe);
   // Sanity: the helper must have produced FOUR-part IDs.
   expect(selectedActionKeys.length).toBeGreaterThan(0);
   for (const key of selectedActionKeys) {
@@ -568,7 +612,7 @@ test("signInWithOpenKeyResult accepts real OpenKey four-part selectedActionKeys"
       signature,
       signedMessage: preparation.prepared.siwe,
       selectedActionKeys,
-      permissions: [],
+      permissions,
     },
     {
       siwe: preparation.prepared.siwe,
@@ -592,6 +636,7 @@ test("signInWithOpenKeyResult accepts legacy two-part selectedActionKeys for bac
   const address = await signer.getAddress();
 
   const selectedActionKeys = deriveLegacyTwoPartActionKeysFromSiwe(preparation.prepared.siwe);
+  const permissions = derivePermissionsFromSiwe(preparation.prepared.siwe);
   expect(selectedActionKeys.length).toBeGreaterThan(0);
   for (const key of selectedActionKeys) {
     expect(key.split("\0").length).toBe(2);
@@ -604,7 +649,7 @@ test("signInWithOpenKeyResult accepts legacy two-part selectedActionKeys for bac
       signature,
       signedMessage: preparation.prepared.siwe,
       selectedActionKeys,
-      permissions: [],
+      permissions,
     },
     {
       siwe: preparation.prepared.siwe,

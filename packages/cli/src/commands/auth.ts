@@ -307,13 +307,18 @@ export function registerAuthCommand(program: Command): void {
               noPopup: options.popup === false,
             });
             const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
-            const stored = storedAdditionalDelegation(delegation, group);
+            // Sol MAJOR-6: report EFFECTIVE grants (what the delegation
+            // actually confers) rather than the requested `group`. The
+            // user is allowed to narrow their grant in the OpenKey UI;
+            // storing the request would over-report authority.
+            const effective = permissionsFromDelegation(delegation);
+            const stored = storedAdditionalDelegation(delegation, effective);
             await appendAdditionalDelegation(ctx.profile, stored);
             await node.useRuntimeDelegation(delegation);
             delegationCids.push(delegation.cid);
             expiry = delegation.expiry.toISOString();
             await appendGrantHistory(ctx.profile, {
-              addedCaps: group,
+              addedCaps: effective,
               source: options.manifest ? "manifest" : "cli",
               delegationCid: delegation.cid,
               expiry,
@@ -986,13 +991,15 @@ export async function ensureDelegationAuthority(params: {
         expiry: params.expiryOption,
       });
       const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host);
+      // Sol MAJOR-6: report effective grants, not requested `group`.
+      const effective = permissionsFromDelegation(delegation);
       await appendAdditionalDelegation(
         params.ctx.profile,
-        storedAdditionalDelegation(delegation, group),
+        storedAdditionalDelegation(delegation, effective),
       );
       await params.node.useRuntimeDelegation(delegation);
       await appendGrantHistory(params.ctx.profile, {
-        addedCaps: group,
+        addedCaps: effective,
         source: "cli",
         delegationCid: delegation.cid,
         expiry: delegation.expiry.toISOString(),
@@ -1163,7 +1170,7 @@ export function groupPermissionsBySpace(permissions: PermissionEntry[]): Permiss
     // into one OpenKey round-trip even when one cap's address is checksummed and
     // another is lowercase. The space NAME stays case-sensitive, so genuinely
     // different names are NOT merged. Entries keep their original space string.
-    const key = normalizeSpaceForCompare(permission.space);
+    const key = normalizeSpaceForCompare(permission.space ?? "");
     const group = groups.get(key) ?? [];
     group.push(permission);
     groups.set(key, group);
@@ -1223,7 +1230,7 @@ export function portableFromOpenKeyDelegation(
   const expectedSpaces = new Set(
     permissions
       .filter((permission) => !isRawPermission(permission))
-      .map((permission) => normalizeSpaceForCompare(permission.space)),
+      .map((permission) => normalizeSpaceForCompare(permission.space ?? "")),
   );
   const matchesExpectedSpace = expectedSpaces.size === 1 &&
     returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]!);
@@ -1243,8 +1250,8 @@ export function portableFromOpenKeyDelegation(
   const requestedPairs = new Set(
     permissions.flatMap((p) =>
       isRawPermission(p)
-        ? p.actions.map((a) => `${p.service}|${p.space}|${p.path}|${a}`)
-        : p.actions.map((a) => `${p.service}|${normalizeSpaceForCompare(p.space)}|${p.path}|${a}`),
+        ? p.actions.map((a) => `${p.service}|${p.space ?? ""}|${p.path}|${a}`)
+        : p.actions.map((a) => `${p.service}|${normalizeSpaceForCompare(p.space ?? "")}|${p.path}|${a}`),
     ),
   );
   const returnedPermissions = Array.isArray(data.permissions)
@@ -1262,38 +1269,40 @@ export function portableFromOpenKeyDelegation(
     const rawService = permission.service.startsWith("tinycloud.")
       ? permission.service
       : `tinycloud.${service}`;
+    const permSpace = permission.space ?? "";
     // Cross-check: every returned (service, space, path, action) must
     // appear in the requested set (or be an inferred raw encryption entry).
     if (returnedPermissions) {
       const rawSpace = isRawPermission({
         service: rawService,
-        space: permission.space,
+        space: permSpace,
         path: permission.path,
         actions: [],
       })
-        ? permission.space
-        : normalizeSpaceForCompare(permission.space);
+        ? permSpace
+        : normalizeSpaceForCompare(permSpace);
       for (const action of permission.actions) {
         const key = `${rawService}|${rawSpace}|${permission.path}|${action}`;
         if (!requestedPairs.has(key)) {
           throw new CLIError(
             "OPENKEY_GRANT_BROADENED",
-            `OpenKey returned grant ${rawService}/${action} on ${permission.space}/${permission.path} that was not requested.`,
+            `OpenKey returned grant ${rawService}/${action} on ${permSpace}/${permission.path} that was not requested.`,
             ExitCode.PERMISSION_DENIED,
           );
         }
       }
     }
+    const resolvedSpace: string = isRawPermission({
+      service: rawService,
+      space: permSpace,
+      path: permission.path,
+      actions: [],
+    })
+      ? permSpace
+      : returnedSpace;
     return {
       service,
-      space: isRawPermission({
-        service: rawService,
-        space: permission.space,
-        path: permission.path,
-        actions: [],
-      })
-        ? permission.space
-        : returnedSpace,
+      space: resolvedSpace,
       path: permission.path,
       actions: [...permission.actions],
     };
