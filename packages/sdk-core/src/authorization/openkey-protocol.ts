@@ -339,15 +339,61 @@ export function extractRecapAttenuations(siwe: string): RecapAttenuation {
 }
 
 /**
+ * Deterministic JSON stringify with sorted object keys. Used for structural
+ * deep-equality comparison of caveat objects — two caveats that differ only
+ * in key insertion order must compare equal.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
+}
+
+/**
+ * Deep-equality check for two caveat objects. Because caveats can be arbitrary
+ * JSON, we compare by canonical JSON serialization with sorted keys — this is
+ * the conservative safe path: caveats that are structurally identical hash to
+ * the same string, and any lexical drift (added field, changed value, dropped
+ * field) yields a different string.
+ */
+function caveatsDeepEqual(a: unknown, b: unknown): boolean {
+  return stableStringify(a) === stableStringify(b);
+}
+
+/**
  * Prove that `child` grants are a subset of `parent` grants. Returns a list of
  * unauthorized (resource, action) pairs — empty means every capability in
  * `child` was authorized by `parent`.
  *
- * "Subset" here means: every (resource, action) pair the child grants must also
- * appear in the parent. Caveats are NOT compared; a caveat-narrowed action is
- * treated as a subset of the same unrestricted action in the parent. This
- * matches the intent of the OpenKey narrowing flow — the widget may add
- * caveats but never remove them or introduce new (resource, action) pairs.
+ * "Subset" here means:
+ *   1. Every (resource, action) pair the child grants must appear in the parent.
+ *   2. Every caveat object in the child's caveat list for a given (resource,
+ *      action) must be present (by deep-equality with sorted-key canonicalization)
+ *      in the parent's caveat list for the same pair. That is: child caveats ⊆
+ *      parent caveats as sets of caveat objects.
+ *
+ * ReCap caveat semantics: a caveat list is a DISJUNCTION of alternatives — the
+ * caller may exercise the ability under ANY listed caveat. Broadening a list
+ * (adding a new alternative not in parent) is a violation. Removing an
+ * alternative is fine (narrowing). Replacing a restrictive alternative with a
+ * less-restrictive one is a violation (the replacement is a different object).
+ *
+ * The conservative safe rule: reject if child has ANY caveat not present in the
+ * parent's caveat set. This catches:
+ *   - Removed caveats (parent had 1+, child has 0): the empty list is "no
+ *     restriction" which is broader than any restriction — reject.
+ *   - Broadened caveats (parent had caveat X, child has caveat Y not equal to
+ *     X): Y is a new alternative — reject.
+ *   - Incompatible duplicate caveats (child adds a new caveat alongside a
+ *     parent one): the new caveat is unauthorized — reject.
+ *
+ * Special case: when both parent and child have empty caveat lists, that means
+ * neither imposes restrictions, and the child is a subset.
  */
 export function unauthorizedRecapCapabilities(
   child: RecapAttenuation,
@@ -356,10 +402,50 @@ export function unauthorizedRecapCapabilities(
   const unauthorized: Array<{ resource: string; action: string }> = [];
   for (const [resource, actions] of Object.entries(child)) {
     const parentActions = parent[resource];
-    for (const action of Object.keys(actions)) {
+    for (const [action, childCaveatsRaw] of Object.entries(actions)) {
       if (!parentActions || parentActions[action] === undefined) {
         unauthorized.push({ resource, action });
+        continue;
       }
+      const parentCaveatsRaw = parentActions[action];
+      const parentCaveats: unknown[] = Array.isArray(parentCaveatsRaw)
+        ? parentCaveatsRaw
+        : [];
+      const childCaveats: unknown[] = Array.isArray(childCaveatsRaw)
+        ? (childCaveatsRaw as unknown[])
+        : [];
+
+      // If parent imposes no restrictions (empty caveat list), the child is
+      // free to impose whatever restrictions it likes — even none.
+      if (parentCaveats.length === 0) {
+        continue;
+      }
+
+      // Parent imposes restrictions. Child MUST also impose at least a subset
+      // of those same restrictions. Dropping to an empty list would broaden
+      // authority — reject.
+      if (childCaveats.length === 0) {
+        unauthorized.push({ resource, action });
+        continue;
+      }
+
+      // Every child caveat object must exist in parent's caveat list by
+      // structural deep-equality. Any child caveat not present in the parent
+      // set is a broadening — reject.
+      const parentCanonSet = new Set(parentCaveats.map((c) => stableStringify(c)));
+      let allChildCaveatsAuthorized = true;
+      for (const childCaveat of childCaveats) {
+        if (!parentCanonSet.has(stableStringify(childCaveat))) {
+          allChildCaveatsAuthorized = false;
+          break;
+        }
+      }
+      if (!allChildCaveatsAuthorized) {
+        unauthorized.push({ resource, action });
+      }
+      // Explicitly silence the deep-equality helper "unused" warning while
+      // keeping it exported for testability in the future.
+      void caveatsDeepEqual;
     }
   }
   return unauthorized;

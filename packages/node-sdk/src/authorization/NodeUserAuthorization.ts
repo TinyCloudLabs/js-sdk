@@ -1572,22 +1572,50 @@ export class NodeUserAuthorization implements IUserAuthorization {
       );
     }
 
-    // (5) `selectedActionKeys` must be a subset of the (resource, action)
-    // pairs actually granted by the signed SIWE. The OpenKey API produces
-    // these opaque IDs alongside the effective SIWE; any drift would mean
-    // the client is being asked to trust action-selection metadata that does
-    // not correspond to what was actually signed.
+    // (5) `selectedActionKeys` and `permissions` must EXACTLY reflect the
+    // capabilities in signedMessage — anything less is a trust boundary
+    // violation. Two rules:
     //
-    // The ID format is "resource\0action\0..." (see OPENKEY_ACTION_ID_SEPARATOR).
-    // We only inspect the first two fields — resource and action — because
-    // subsequent fields (space, path variants) are opaque presentation IDs
-    // that are not part of the recap.
+    // Rule A (selectedActionKeys covers signedCaps):
+    //   If signedMessage grants capabilities beyond the structurally-required
+    //   ones (currently `tinycloud.capabilities/read`), then `selectedActionKeys`
+    //   MUST include a coverage entry for EVERY (resource, action) pair in
+    //   signedCaps. Otherwise the client has no evidence that the SDK-visible
+    //   selection matches the ReCap it is about to trust.
+    //
+    // Rule B (each selectedActionKeys entry is grounded in signedCaps):
+    //   Every ID the widget returns must correspond to a real (resource, action)
+    //   pair in signedCaps. Broadening rejected.
+    //
+    // The action ID format is "resource\0action\0..." (see OPENKEY_ACTION_ID_SEPARATOR),
+    // but the widget historically also emitted "service\0action" style IDs, so we
+    // accept a match on either the (resource,action) exact pair OR when at least
+    // one granted pair ends with `\0action`.
     const grantedPairs = new Set<string>();
     for (const [resource, actions] of Object.entries(signedCaps)) {
       for (const action of Object.keys(actions)) {
         grantedPairs.add(`${resource}\0${action}`);
       }
     }
+
+    // Structurally-required capabilities that the widget/UI is not expected
+    // to surface as selectable (they cannot be removed). Coverage counting
+    // for Rule A ignores them.
+    const isStructurallyRequired = (action: string) =>
+      action === "tinycloud.capabilities/read" || action === "capabilities/read";
+
+    const nonRequiredGrantedPairs = new Set<string>();
+    for (const pair of grantedPairs) {
+      const idx = pair.indexOf("\0");
+      const action = idx >= 0 ? pair.slice(idx + 1) : pair;
+      if (!isStructurallyRequired(action)) {
+        nonRequiredGrantedPairs.add(pair);
+      }
+    }
+
+    // Rule B — validate each returned selectedActionKeys entry.
+    // Build a set of grounded pairs so we can also enforce Rule A.
+    const selectedResourceActionPairs = new Set<string>();
     for (const rawKey of result.selectedActionKeys) {
       const parts = rawKey.split("\0");
       if (parts.length < 2) {
@@ -1596,22 +1624,103 @@ export class NodeUserAuthorization implements IUserAuthorization {
         );
       }
       const [resource, action] = parts;
-      // The exact pair may not be present in the recap because the OpenKey
-      // action IDs occasionally encode "service\0action" instead of
-      // "resource\0action". Only fail if NEITHER the raw pair nor a suffix
-      // match against any resource shows up in the granted set — that means
-      // the ID has no corresponding grant at all.
       const pairKey = `${resource}\0${action}`;
+      let matchedPair: string | null = null;
       if (grantedPairs.has(pairKey)) {
-        continue;
+        matchedPair = pairKey;
+      } else {
+        // Fall back to suffix-on-action match for widget IDs that encode
+        // "service\0action" instead of "resource\0action".
+        for (const gp of grantedPairs) {
+          if (gp.endsWith(`\0${action}`)) {
+            matchedPair = gp;
+            break;
+          }
+        }
       }
-      const anyResourceGrantsAction = Array.from(grantedPairs).some((k) =>
-        k.endsWith(`\0${action}`),
-      );
-      if (!anyResourceGrantsAction) {
+      if (!matchedPair) {
         throw new Error(
           `OpenKey selectedActionKeys entry ${rawKey} is not covered by any granted capability`,
         );
+      }
+      selectedResourceActionPairs.add(matchedPair);
+    }
+
+    // Rule A — every non-required granted pair MUST be covered by at least
+    // one selectedActionKeys entry. If nonRequiredGrantedPairs is empty
+    // (e.g. bootstrap-only session), we do not require selectedActionKeys
+    // to be non-empty. If it is non-empty, the widget must have returned
+    // selection metadata for every non-required capability the user was
+    // shown; anything else is a UI/wire drift.
+    if (nonRequiredGrantedPairs.size > 0) {
+      const missingPairs: string[] = [];
+      for (const pair of nonRequiredGrantedPairs) {
+        if (!selectedResourceActionPairs.has(pair)) {
+          missingPairs.push(pair);
+        }
+      }
+      if (missingPairs.length > 0) {
+        const previewLimit = 5;
+        const preview = missingPairs
+          .slice(0, previewLimit)
+          .map((p) => p.replace("\0", "::"))
+          .join(", ");
+        const overflow =
+          missingPairs.length > previewLimit
+            ? ` (and ${missingPairs.length - previewLimit} more)`
+            : "";
+        throw new Error(
+          `OpenKey selectedActionKeys is missing entries for signedMessage capabilities: ${preview}${overflow}`,
+        );
+      }
+    }
+
+    // (6) permissions consistency: every returned permission entry must not
+    // claim capabilities broader than what signedCaps contains. Strict rule:
+    // each permission action MUST correspond to a signedCaps entry. We
+    // resolve the resource via candidate formats to accept legacy shapes,
+    // but the (resource, action) pair MUST be grounded.
+    for (const perm of result.permissions) {
+      const { service, space, path, actions } = perm;
+      if (actions.length === 0) continue;
+      const candidateResources = [
+        `tinycloud:${space}/${path}`,
+        `${service}:${space}/${path}`,
+        `${service}/${path}`,
+        space,
+        `${space}/${path}`,
+      ];
+      // Also accept any resource in signedCaps that matches by space substring
+      // as legacy fallback — used to prevent format-drift false positives.
+      let matchedResource: string | null = null;
+      for (const r of candidateResources) {
+        if (signedCaps[r] !== undefined) {
+          matchedResource = r;
+          break;
+        }
+      }
+      if (!matchedResource) {
+        for (const r of Object.keys(signedCaps)) {
+          if (r.includes(space)) {
+            matchedResource = r;
+            break;
+          }
+        }
+      }
+      if (!matchedResource) {
+        throw new Error(
+          `OpenKey permissions entry (${service} ${space} ${path}) claims grants not confirmed in signedMessage capabilities`,
+        );
+      }
+      const grantedActionsForResource = new Set(
+        Object.keys(signedCaps[matchedResource]),
+      );
+      for (const action of actions) {
+        if (!grantedActionsForResource.has(action)) {
+          throw new Error(
+            `OpenKey permissions entry (${service} ${space} ${path}) claims action ${action} not present in signedMessage capabilities`,
+          );
+        }
       }
     }
 

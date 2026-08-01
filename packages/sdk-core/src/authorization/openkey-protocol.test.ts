@@ -198,4 +198,113 @@ describe("unauthorizedRecapCapabilities", () => {
       { resource: "space/other/path", action: "tinycloud.kv/get" },
     ]);
   });
+
+  describe("caveat subsetting", () => {
+    it("rejects when child drops all caveats (parent has restrictions)", () => {
+      const parent = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ maxSize: 1000 }],
+        },
+      };
+      const child = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [],
+        },
+      };
+      expect(unauthorizedRecapCapabilities(child, parent)).toEqual([
+        { resource: "space/kv/data", action: "tinycloud.kv/put" },
+      ]);
+    });
+
+    it("rejects when child replaces a restrictive caveat with a different one (broadening)", () => {
+      const parent = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ maxSize: 1000 }],
+        },
+      };
+      const child = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ maxSize: 999999 }],
+        },
+      };
+      expect(unauthorizedRecapCapabilities(child, parent)).toEqual([
+        { resource: "space/kv/data", action: "tinycloud.kv/put" },
+      ]);
+    });
+
+    it("rejects when child adds a caveat alternative not in parent (incompatible duplicate)", () => {
+      const parent = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ path: "a" }],
+        },
+      };
+      const child = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ path: "a" }, { path: "b" }],
+        },
+      };
+      expect(unauthorizedRecapCapabilities(child, parent)).toEqual([
+        { resource: "space/kv/data", action: "tinycloud.kv/put" },
+      ]);
+    });
+
+    it("accepts when child selects a subset of parent's caveat alternatives", () => {
+      const parent = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ path: "a" }, { path: "b" }, { path: "c" }],
+        },
+      };
+      const child = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ path: "a" }],
+        },
+      };
+      expect(unauthorizedRecapCapabilities(child, parent)).toEqual([]);
+    });
+
+    it("accepts when parent has no caveats — child may impose any restriction", () => {
+      const parent = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [],
+        },
+      };
+      const child = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ maxSize: 500 }],
+        },
+      };
+      // Empty parent caveats = unrestricted, so child adding restrictions is fine
+      expect(unauthorizedRecapCapabilities(child, parent)).toEqual([]);
+    });
+
+    it("accepts caveats that differ only in key insertion order", () => {
+      const parent = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ a: 1, b: 2 }],
+        },
+      };
+      const child = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ b: 2, a: 1 }],
+        },
+      };
+      expect(unauthorizedRecapCapabilities(child, parent)).toEqual([]);
+    });
+
+    it("rejects nested caveat structural changes", () => {
+      const parent = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ nested: { limit: 10 } }],
+        },
+      };
+      const child = {
+        "space/kv/data": {
+          "tinycloud.kv/put": [{ nested: { limit: 100 } }],
+        },
+      };
+      expect(unauthorizedRecapCapabilities(child, parent)).toEqual([
+        { resource: "space/kv/data", action: "tinycloud.kv/put" },
+      ]);
+    });
+  });
 });

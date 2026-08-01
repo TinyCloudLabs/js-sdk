@@ -14,6 +14,25 @@ import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import { extractRecapAttenuations } from "@tinycloud/sdk-core";
+
+/**
+ * Derive the full set of (resource, action) selectedActionKeys entries that
+ * signInWithOpenKeyResult now requires (Rule A — every non-required granted
+ * capability must be covered). Structurally-required tinycloud.capabilities/read
+ * is intentionally excluded because the widget UI cannot deselect it.
+ */
+function deriveSelectedActionKeysFromSiwe(siwe: string): string[] {
+  const caps = extractRecapAttenuations(siwe);
+  const out: string[] = [];
+  for (const [resource, actions] of Object.entries(caps)) {
+    for (const action of Object.keys(actions)) {
+      if (action === "tinycloud.capabilities/read" || action === "capabilities/read") continue;
+      out.push(`${resource}\0${action}`);
+    }
+  }
+  return out;
+}
 
 // Route every /info and /delegate hit through a stub so signIn's follow-up
 // activation flow does not try to reach a live TinyCloud node.
@@ -72,13 +91,15 @@ test("signInWithOpenKeyResult accepts an unmodified signed prepared SIWE", async
   const signature = await signer.signMessage(preparation.prepared.siwe);
   const address = await signer.getAddress();
 
+  const selectedActionKeys = deriveSelectedActionKeysFromSiwe(preparation.prepared.siwe);
+
   const clientSession = await auth.signInWithOpenKeyResult(
     {
       protocolVersion: 1,
       address,
       signature,
       signedMessage: preparation.prepared.siwe,
-      selectedActionKeys: [],
+      selectedActionKeys,
       permissions: [],
     },
     {
@@ -92,6 +113,78 @@ test("signInWithOpenKeyResult accepts an unmodified signed prepared SIWE", async
   );
 
   expect(clientSession.address).toBe(address);
+});
+
+test("signInWithOpenKeyResult REJECTS empty selectedActionKeys when capabilities are present", async () => {
+  // Sol MAJOR-3: previously, an OpenKey response could return empty
+  // selectedActionKeys with a capability-bearing SIWE and be trusted. This
+  // test locks in the new behaviour that requires selectedActionKeys to
+  // cover every non-required capability in signedMessage.
+  const { auth, signer, preparation } = await buildAuthWithPreparedSession();
+  const signature = await signer.signMessage(preparation.prepared.siwe);
+  const address = await signer.getAddress();
+
+  await expect(
+    auth.signInWithOpenKeyResult(
+      {
+        protocolVersion: 1,
+        address,
+        signature,
+        signedMessage: preparation.prepared.siwe,
+        selectedActionKeys: [], // deliberately empty — capabilities not covered
+        permissions: [],
+      },
+      {
+        siwe: preparation.prepared.siwe,
+        jwk: preparation.prepared.jwk,
+        spaceId: preparation.prepared.spaceId,
+        verificationMethod: preparation.prepared.verificationMethod,
+      },
+      preparation.keyId,
+      preparation.prepared.jwk,
+    ),
+  ).rejects.toThrow(/selectedActionKeys is missing entries/);
+});
+
+test("signInWithOpenKeyResult REJECTS permissions that claim actions not in signedMessage", async () => {
+  // Sol MAJOR-3: the permissions array must not claim broader capabilities
+  // than what signedCaps actually contains. A permissions entry with an
+  // action not present in the signed SIWE is a wire-format tampering
+  // attempt and must be rejected.
+  const { auth, signer, preparation } = await buildAuthWithPreparedSession();
+  const signature = await signer.signMessage(preparation.prepared.siwe);
+  const address = await signer.getAddress();
+
+  const selectedActionKeys = deriveSelectedActionKeysFromSiwe(preparation.prepared.siwe);
+
+  await expect(
+    auth.signInWithOpenKeyResult(
+      {
+        protocolVersion: 1,
+        address,
+        signature,
+        signedMessage: preparation.prepared.siwe,
+        selectedActionKeys,
+        // Broader permission claim — a fictitious action not in the ReCap.
+        permissions: [
+          {
+            service: "tinycloud.kv",
+            space: preparation.prepared.spaceId,
+            path: "",
+            actions: ["tinycloud.kv/nuke-from-orbit"],
+          },
+        ],
+      },
+      {
+        siwe: preparation.prepared.siwe,
+        jwk: preparation.prepared.jwk,
+        spaceId: preparation.prepared.spaceId,
+        verificationMethod: preparation.prepared.verificationMethod,
+      },
+      preparation.keyId,
+      preparation.prepared.jwk,
+    ),
+  ).rejects.toThrow(/not present in signedMessage capabilities|not confirmed in signedMessage capabilities/);
 });
 
 test("signInWithOpenKeyResult rejects a signature from a different signer", async () => {
@@ -332,13 +425,17 @@ test("signInWithOpenKeyResult accepts when signedMessage narrows capabilities", 
   });
   const signature = await signer.signMessage(narrowedPrepared.siwe);
 
+  // selectedActionKeys must cover every non-required capability in the
+  // NARROWED SIWE (which is what was actually signed).
+  const selectedActionKeys = deriveSelectedActionKeysFromSiwe(narrowedPrepared.siwe);
+
   const clientSession = await auth.signInWithOpenKeyResult(
     {
       protocolVersion: 1,
       address,
       signature,
       signedMessage: narrowedPrepared.siwe,
-      selectedActionKeys: [],
+      selectedActionKeys,
       permissions: [],
     },
     {
