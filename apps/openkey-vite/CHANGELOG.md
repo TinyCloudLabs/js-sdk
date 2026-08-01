@@ -1,5 +1,12 @@
 # openkey-vite
 
+## 0.0.26-beta.5
+
+### Patch Changes
+
+- Updated dependencies [f0842d8]
+  - @tinycloud/web-sdk@2.11.0-beta.5
+
 ## 0.0.26-beta.4
 
 ### Patch Changes

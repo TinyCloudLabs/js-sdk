@@ -158,7 +158,7 @@ function stubNodeForSignIn(
  * Returns the mock for assertions.
  */
 function stubRunAccountBootstrap(node: TinyCloudNode): ReturnType<typeof mock> {
-  const bootstrapMock = mock(async () => {});
+  const bootstrapMock = mock(async () => []);
   (node as any).runAccountBootstrap = bootstrapMock;
   return bootstrapMock;
 }

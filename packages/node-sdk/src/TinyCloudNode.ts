@@ -875,6 +875,24 @@ export interface NodeDefaults {
   createSigner: (privateKey: string, chainId?: number) => ISigner;
 }
 
+/**
+ * A bootstrap step that COMPLETED but did so in a degraded way — e.g. a KV
+ * batch write that failed ambiguously and was recovered by per-space
+ * reconciliation. Structured (not prose) so callers can branch on `kind` and
+ * `code` without parsing messages (TC-361).
+ */
+export interface BootstrapWarning {
+  /** The BootstrapStep.id that degraded, e.g. "account:seed-spaces"
+   *  (BootstrapStepBase.id — packages/bootstrap/src/index.ts:642-645). */
+  stepId: string;
+  /** What kind of degradation. Additive union; one member today. */
+  kind: "batch-write-reconciled";
+  /** ServiceError.code of the underlying failure that was recovered from. */
+  code: string;
+  /** Human-readable detail. Diagnostics only — never parse this. */
+  message: string;
+}
+
 export class TinyCloudNode {
   /** @internal Registered by importing @tinycloud/node-sdk (not /core) */
   private static nodeDefaults?: NodeDefaults;
@@ -957,9 +975,12 @@ export class TinyCloudNode {
    * Outcome of the last signIn()'s account-bootstrap attempt. `skipped` is
    * true when bootstrap did not complete (interactive signer, auto-sign
    * denied, or a bootstrap step failed); `reason` carries the cause so apps
-   * can surface a "finish account setup" call-to-action.
+   * can surface a "finish account setup" call-to-action. `warnings` is
+   * present when bootstrap completed, but one or more steps recovered from
+   * an ambiguous failure (e.g. a KV batch write reconciled via per-space
+   * fallback) — clean vs. recovered runs are otherwise byte-identical.
    */
-  private _bootstrapStatus: { skipped: boolean; reason?: string } = {
+  private _bootstrapStatus: { skipped: boolean; reason?: string; warnings?: BootstrapWarning[] } = {
     skipped: false,
   };
 
@@ -970,7 +991,7 @@ export class TinyCloudNode {
   }
 
   /** Outcome of the last signIn()'s account-bootstrap attempt. */
-  get bootstrapStatus(): { skipped: boolean; reason?: string } {
+  get bootstrapStatus(): { skipped: boolean; reason?: string; warnings?: BootstrapWarning[] } {
     return this._bootstrapStatus;
   }
 
@@ -1565,7 +1586,15 @@ export class TinyCloudNode {
     }
 
     try {
-      await this.runAccountBootstrap(steps);
+      const warnings = await this.runAccountBootstrap(steps);
+      if (warnings.length > 0) {
+        this._bootstrapStatus = { skipped: false, warnings };
+        this.notificationHandler.warning(
+          `Account bootstrap completed with warnings: ${warnings
+            .map((w) => `${w.stepId} (${w.kind}: ${w.code})`)
+            .join("; ")}`,
+        );
+      }
     } catch (err) {
       // Bootstrap is provisioning, not a precondition of the session the
       // user just signed: never fail signIn() because of it. Surface the
@@ -1611,7 +1640,7 @@ export class TinyCloudNode {
     }
   }
 
-  private async runAccountBootstrap(steps: BootstrapStep[]): Promise<void> {
+  private async runAccountBootstrap(steps: BootstrapStep[]): Promise<BootstrapWarning[]> {
     if (!this.auth || !this._address) {
       throw new Error("Account bootstrap requires an active wallet session");
     }
@@ -1624,6 +1653,7 @@ export class TinyCloudNode {
     const auth = this.auth as NodeUserAuthorization;
     const sessions = new Map<BootstrapSpaceName, TinyCloudSession>();
     const rawAbilitiesBySpace = new Map<BootstrapSpaceName, Record<string, string[]>>();
+    const warnings: BootstrapWarning[] = [];
     const primarySession = auth.tinyCloudSession;
     const defaultSpaceId = this.ownedSpaceId("default");
     const canReusePrimaryBootstrapSession =
@@ -1698,20 +1728,31 @@ export class TinyCloudNode {
       }
 
       if (step.kind === "seed-spaces") {
-        for (const space of step.spaces) {
-          const registered = await this.account.spaces.register({
+        // One batched KV write + one multi-row index write instead of 5
+        // sequential register() calls (TC-373).
+        const registered = await this.account.spaces.registerBatch(
+          step.spaces.map((space) => ({
             spaceId: space.spaceId,
             name: space.name,
             ownerDid: this.did,
             type: "owned",
             permissions: ["*"],
             status: "active",
+          })),
+        );
+        if (!registered.ok) {
+          throw new Error(
+            `Failed to seed account spaces: ${registered.error.message}`,
+          );
+        }
+        const batchError = registered.data.recoveredFromBatchError;
+        if (batchError) {
+          warnings.push({
+            stepId: step.id,
+            kind: "batch-write-reconciled",
+            code: batchError.code,
+            message: batchError.message,
           });
-          if (!registered.ok) {
-            throw new Error(
-              `Failed to seed account space ${space.spaceId}: ${registered.error.message}`,
-            );
-          }
         }
       }
 
@@ -1755,6 +1796,8 @@ export class TinyCloudNode {
         }
       }
     }
+
+    return warnings;
   }
 
   private registerBootstrapRuntimeGrant(
@@ -3150,6 +3193,7 @@ export class TinyCloudNode {
     if (this._serviceContext) {
       const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
         invoke: this._serviceContext.invoke,
+        invokeAny: this._serviceContext.invokeAny,
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,

@@ -12,7 +12,7 @@ export {
   type EstablishOpenKeySessionResult,
   type EstablishOpenKeySessionStatus,
 } from "./openkey-session";
-export type { SecretReadInput, SecretReadResult } from "@tinycloud/node-sdk";
+export type { SecretReadInput, SecretReadResult, BootstrapWarning } from "@tinycloud/node-sdk";
 export type {
   CreateOwnerDelegationParams,
   OwnerDelegationPermission,
@@ -133,6 +133,7 @@ export type {
   AccountSpace,
   AccountSpaceListOptions,
   AccountStatus,
+  RegisterBatchSuccess,
   SignInOptions,
   TinyCloudDebugEvent,
   TinyCloudDebugLevel,
