@@ -272,3 +272,58 @@ test("wireOpenKeyAuthorize rejects an unsupported protocol version", async () =>
     authorize({ protocolVersion: 1, siwe: "irrelevant", jwk: {} }),
   ).rejects.toThrow(/unsupported protocolVersion 2/);
 });
+
+// Sol MAJOR-7 (continuation): production-shape SIWE round-trip through
+// signInWithOpenKeyResult. The `NodeUserAuthorization.prepareSessionForSigning()`
+// call produces a SIWE with a non-empty ReCap-derived `statement` line
+// (the "I further authorize..." prose) and a full production header set.
+// This test exercises the client's acceptance path against the CANONICAL
+// wire shape the OpenKey server emits — no shortcuts, no legacy 2-part IDs,
+// no empty permissions.
+test("signInWithOpenKeyResult accepts a narrowed production-shape response verbatim", async () => {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner(PRIVATE_KEY);
+  const auth = new NodeUserAuthorization({
+    signer,
+    wasmBindings: wasm,
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    defaultActions: {
+      kv: { "": ["tinycloud.kv/get", "tinycloud.kv/put"] },
+      capabilities: { "": ["tinycloud.capabilities/read"] },
+    },
+  });
+
+  // The simulated server narrows AND regenerates via prepareSession —
+  // mirroring the OpenKey delegate route's `narrowSiwePreservingImmutable`
+  // behaviour byte-for-byte (statement changes, immutable header fields
+  // survive).
+  const openkey = makeSimulatedOpenKey({
+    wasm,
+    signer,
+    narrow: () => ({
+      kv: { "": ["tinycloud.kv/get"] },
+      capabilities: { "": ["tinycloud.capabilities/read"] },
+    }),
+  });
+  const authorize = wireOpenKeyAuthorize(openkey);
+  const session = await auth.signInWithOpenKey(authorize);
+  // The client accepted every wire-format check:
+  //   1. Signature verifies against signedMessage
+  //   2. Immutable SIWE fields preserved between prepared + signed
+  //   3. Capabilities subset (narrowing OK, no broadening)
+  //   4. selectedActionKeys grounded in signedCaps (canonical 4-part IDs)
+  //   5. permissions grouped and non-empty for a capability-bearing SIWE
+  expect(session.address).toBe(await signer.getAddress());
+  expect(session.siwe).toBeDefined();
+  const finalCaps = extractRecapAttenuations(session.siwe!);
+  const flat = Object.values(finalCaps).flatMap((abilities) => Object.keys(abilities));
+  // The narrowing survived end to end.
+  expect(flat).toContain("tinycloud.kv/get");
+  expect(flat).not.toContain("tinycloud.kv/put");
+  // The ReCap-derived statement in the signed message reflects the narrow.
+  expect(session.siwe!).toContain("I further authorize");
+  expect(session.siwe!).not.toMatch(/tinycloud\.kv': 'put/);
+});
