@@ -25165,6 +25165,64 @@ function createShareLinkDataSchema(dataSchema) {
     path: external_exports.string()
   });
 }
+function activationFlightKey(host, delegationHeader) {
+  const entries = Object.entries(delegationHeader).sort(
+    ([a], [b]) => a < b ? -1 : a > b ? 1 : 0
+  );
+  return JSON.stringify([host, entries]);
+}
+async function activateSessionWithHost(host, delegationHeader) {
+  const key = activationFlightKey(host, delegationHeader);
+  const existing = inFlightActivations.get(key);
+  if (!existing) return startActivationFlight(key, host, delegationHeader);
+  try {
+    return await existing;
+  } catch {
+    return joinOrStartActivationFlight(key, host, delegationHeader);
+  }
+}
+function joinOrStartActivationFlight(key, host, delegationHeader) {
+  return inFlightActivations.get(key) ?? startActivationFlight(key, host, delegationHeader);
+}
+function startActivationFlight(key, host, delegationHeader) {
+  const flight = postSessionActivation(host, delegationHeader);
+  inFlightActivations.set(key, flight);
+  const evict = () => {
+    if (inFlightActivations.get(key) === flight) inFlightActivations.delete(key);
+  };
+  flight.then(evict, evict);
+  return flight;
+}
+async function postSessionActivation(host, delegationHeader) {
+  const res = await fetch(`${host}/delegate`, {
+    method: "POST",
+    headers: delegationHeader
+  });
+  if (res.ok) {
+    try {
+      const body = await res.json();
+      return {
+        success: true,
+        status: res.status,
+        activated: body.activated ?? [],
+        skipped: body.skipped ?? [],
+        commitEventCid: body.cid
+      };
+    } catch {
+      return {
+        success: true,
+        status: res.status,
+        activated: [],
+        skipped: []
+      };
+    }
+  }
+  return {
+    success: false,
+    status: res.status,
+    error: await res.text().catch(() => res.statusText)
+  };
+}
 function equals32(a, b) {
   if (a === b) {
     return true;
@@ -26079,7 +26137,7 @@ function decodeBase64Url(value) {
   }
   return Uint8Array.from(bytes22);
 }
-var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code22, name, encode42, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha25622, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
+var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code22, name, encode42, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha25622, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, inFlightActivations, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
 var init_dist4 = __esm({
   "../sdk-core/dist/index.js"() {
     "use strict";
@@ -27846,6 +27904,7 @@ var init_dist4 = __esm({
       /** Expiration for delegated access */
       expiresAt: external_exports.string().optional()
     });
+    inFlightActivations = /* @__PURE__ */ new Map();
     AutoApproveSpaceCreationHandler = class {
       /**
        * Always returns true to auto-approve space creation.
@@ -31013,6 +31072,7 @@ function canonicalize3(value) {
 var MAX_INLINE_BYTES2 = 256 * 1024;
 
 // src/share/adapters.ts
+init_dist4();
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var ShareAuthorityError = class extends Error {
   code;
@@ -31445,6 +31505,9 @@ function canonicalNodeOrigin(value) {
   }
   return parsed.origin;
 }
+function canonicalNodeAudience(origin) {
+  return `did:web:${new URL(origin).hostname}`;
+}
 function base64UrlSha256(value) {
   return createHash("sha256").update(value).digest("base64url");
 }
@@ -31458,7 +31521,8 @@ function strictUploadAttestation(value, upload, origin, sessionDid) {
   const record2 = value;
   const expectedKeys = ["type", "version", "issuer", "kid", "ownerDid", "sessionDid", "shareOrigin", "encryptedBlobCid", "encryptedBlobSha256", "byteLength", "deleteAfter", "retention", "issuedAt", "authorityExpiresAt", "expiresAt", "jti", "signature"];
   if (Object.keys(record2).sort().join("\0") !== expectedKeys.sort().join("\0")) throw new ShareAuthorityError("UNAVAILABLE", "Node returned an invalid upload attestation");
-  if (record2.type !== "TinyCloudShareUploadAttestation" || record2.version !== 1 || typeof record2.issuer !== "string" || !record2.issuer.startsWith("did:web:") || typeof record2.kid !== "string" || !record2.kid.startsWith(`${record2.issuer}#`) || typeof record2.ownerDid !== "string" || !record2.ownerDid.startsWith("did:") || record2.sessionDid !== sessionDid || typeof record2.shareOrigin !== "string" || record2.shareOrigin !== origin || record2.encryptedBlobCid !== upload.cid || record2.encryptedBlobSha256 !== base64UrlSha256(upload.blob) || record2.byteLength !== upload.contentLength || record2.deleteAfter !== upload.deleteAfter || record2.retention === null || record2.retention === void 0 || typeof record2.issuedAt !== "string" || typeof record2.authorityExpiresAt !== "string" || typeof record2.expiresAt !== "string" || typeof record2.jti !== "string" || !/^[A-Za-z0-9_-]{16,}$/.test(record2.jti) || typeof record2.signature !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(record2.signature)) throw new ShareAuthorityError("UNAVAILABLE", "Node returned an invalid upload attestation");
+  const sessionPrincipal = sessionDid.split("#", 1)[0];
+  if (record2.type !== "TinyCloudShareUploadAttestation" || record2.version !== 1 || typeof record2.issuer !== "string" || !record2.issuer.startsWith("did:web:") || typeof record2.kid !== "string" || !record2.kid.startsWith(`${record2.issuer}#`) || typeof record2.ownerDid !== "string" || !record2.ownerDid.startsWith("did:") || record2.sessionDid !== sessionDid && record2.sessionDid !== sessionPrincipal || typeof record2.shareOrigin !== "string" || record2.shareOrigin !== origin || record2.encryptedBlobCid !== upload.cid || record2.encryptedBlobSha256 !== base64UrlSha256(upload.blob) || record2.byteLength !== upload.contentLength || record2.deleteAfter !== upload.deleteAfter || record2.retention === null || record2.retention === void 0 || typeof record2.issuedAt !== "string" || typeof record2.authorityExpiresAt !== "string" || typeof record2.expiresAt !== "string" || typeof record2.jti !== "string" || !/^[A-Za-z0-9_-]{16,}$/.test(record2.jti) || typeof record2.signature !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(record2.signature)) throw new ShareAuthorityError("UNAVAILABLE", "Node returned an invalid upload attestation");
   const issuedAt = Date.parse(record2.issuedAt);
   const authorityExpiresAt = Date.parse(record2.authorityExpiresAt);
   const expiresAt = Date.parse(record2.expiresAt);
@@ -31487,11 +31551,16 @@ async function openKeyUploadAuthorization(input) {
   const requestBodyDigest = base64UrlSha256(new TextEncoder().encode(canonicalize3(requestWithoutDigest)));
   const body = canonicalize3({ ...requestWithoutDigest, requestBodyDigest });
   const entries = [{ spaceId: session.spaceId, service: "capabilities", action: "tinycloud.capabilities/read" }];
-  const authorization = input.node.invokeAny(entries, [{ requestBodyDigest }]);
   const nodeOrigin = canonicalNodeOrigin(profile.host);
+  const activation = await activateSessionWithHost(nodeOrigin, session.delegationHeader);
+  if (!activation.success) throw new ShareAuthorityError("AUTH_REQUIRED", "Node upload authorization was rejected");
+  const invocationHeaders = new Headers(input.node.invokeAny(entries, [{ requestBodyDigest }]));
+  const invocation = invocationHeaders.get("authorization");
+  if (invocation === null) throw new ShareAuthorityError("AUTH_REQUIRED", "Node upload authorization was rejected");
+  const authorization = await input.node.bindInvocationAudience(invocation, canonicalNodeAudience(nodeOrigin));
   let response;
   try {
-    const headers = new Headers(authorization);
+    const headers = new Headers({ authorization });
     headers.set("accept", "application/json");
     headers.set("content-type", "application/json");
     response = await input.fetchFn(new URL("/share/upload/attestation", nodeOrigin), { method: "POST", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", headers, body });

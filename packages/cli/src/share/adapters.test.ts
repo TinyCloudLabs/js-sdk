@@ -117,6 +117,25 @@ describe("Share upload authority adapter", () => {
     expect(requests[0]?.init?.body).toContain('"requestBodyDigest"');
   });
 
+  it("matches a Node attestation to the persisted session DID principal", async () => {
+    restore.push(spyOn(ProfileManager, "getProfile").mockResolvedValue(profile));
+    const persistedVerificationMethod = session.verificationMethod.includes("#")
+      ? session.verificationMethod
+      : `${session.verificationMethod}#${session.verificationMethod.slice("did:key:".length)}`;
+    const persisted = { ...session, verificationMethod: persistedVerificationMethod };
+    restore.push(spyOn(ProfileManager, "getSession").mockResolvedValue(persisted));
+    const response = nodeResponse();
+    response.sessionDid = persisted.verificationMethod.split("#", 1)[0];
+    const authorize = createProductionUploadAuthorizer({
+      origin: "https://share.tinycloud.xyz",
+      profileName: async () => profile.name,
+      fetchFn: (async () => new Response(JSON.stringify(response), { status: 200, headers: { "content-type": "application/json" } })) as typeof globalThis.fetch,
+    });
+    await expect(authorize(upload)).resolves.toEqual(expect.objectContaining({
+      "x-tinycloud-retention": '"until-delete"',
+    }));
+  });
+
   it("activates a complete OpenKey session before the packed invocation reaches Node", async () => {
     restore.push(spyOn(ProfileManager, "getProfile").mockResolvedValue(profile));
     restore.push(spyOn(ProfileManager, "getSession").mockResolvedValue(session));
