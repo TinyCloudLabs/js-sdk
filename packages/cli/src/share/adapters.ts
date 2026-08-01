@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createHash, createPrivateKey, sign as signBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { ProfileManager } from "../config/profiles.js";
 import {
   createRegisteredPolicyAuthority,
@@ -72,7 +72,7 @@ export function createEncryptedSessionHistory(): SenderShareRecordStorage {
   };
 }
 
-export function createEncryptedProfileHistory(profileName: () => Promise<string>): SenderShareRecordStorage {
+export function createEncryptedProfileHistory(profileName: () => Promise<string>, sessionSigner?: (bytes: Uint8Array) => Promise<Uint8Array>): SenderShareRecordStorage {
   const HISTORY_VERSION = 2;
   let profileSecretPromise: Promise<Uint8Array> | undefined;
   let operation = Promise.resolve();
@@ -80,20 +80,12 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     const profile = await profileName();
     const config = await ProfileManager.getProfile(profile);
     if (typeof config.privateKey === "string" && config.privateKey.length > 0) return new TextEncoder().encode(config.privateKey);
-    // OpenKey profiles intentionally do not persist an Ethereum private key.
-    // Their encrypted Share history is instead bound to the same private
-    // session JWK used by the node SDK. Read it only in memory and never
-    // include it in a record, error, or command result.
-    const key = await ProfileManager.getKey(profile);
-    const session = await ProfileManager.getSession(profile) as Record<string, unknown> | null;
-    const jwk = session?.jwk && typeof session.jwk === "object" ? session.jwk : key;
-    const privateParameter = jwk !== null && typeof jwk === "object" ? (jwk as Record<string, unknown>).d : undefined;
-    if (typeof privateParameter !== "string" || privateParameter.length === 0) {
+    // OpenKey profiles bind history to a signature from the established
+    // session interface. The private session key never enters this adapter.
+    if (sessionSigner === undefined) {
       throw new Error("share history requires an initialized profile");
     }
-    const jwkRecord = jwk as Record<string, unknown>;
-    const secret = { kty: jwkRecord.kty, crv: jwkRecord.crv, x: jwkRecord.x, d: privateParameter };
-    return new TextEncoder().encode(JSON.stringify(secret));
+    return sessionSigner(new TextEncoder().encode("xyz.tinycloud.share/history-key/v1"));
   })();
   const path = async (): Promise<string> => join(await ProfileManager.getCacheDir(await profileName()), "share-history-v2.json");
   const legacyPath = async (): Promise<string> => join(await ProfileManager.getCacheDir(await profileName()), "share-history-v1.bin");
@@ -231,17 +223,6 @@ export function createShareAuthorityAdapters(input: {
     const { ensureAuthenticated } = await import("../lib/sdk.js");
     return ensureAuthenticated(context);
   })();
-  const holderSignature = async (holderDid: string, bytes: Uint8Array, session?: Record<string, unknown> | null): Promise<{ readonly alg: "EdDSA"; readonly kid: string; readonly signature: string } | undefined> => {
-    const profileName = await (input.profileName?.() ?? selectedProfileName());
-    const currentSession = session ?? await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
-    const key = currentSession?.jwk;
-    if (typeof holderDid !== "string" || !holderDid.startsWith("did:key:") || typeof key !== "object" || key === null || typeof (key as Record<string, unknown>).d !== "string") return undefined;
-    try {
-      const privateKey = createPrivateKey({ key: key as never, format: "jwk" });
-      const signature = signBytes(null, Buffer.from(bytes), privateKey);
-      return { alg: "EdDSA", kid: `${holderDid}#${holderDid.slice("did:key:".length)}`, signature: toBase64Url(new Uint8Array(signature)) };
-    } catch { return undefined; }
-  };
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
@@ -296,8 +277,9 @@ export function createShareAuthorityAdapters(input: {
       throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an initialized profile");
     });
     const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
-    const holderDid = typeof session?.verificationMethod === "string" ? session.verificationMethod : profile.sessionDid ?? profile.did;
-    if (profile.authMethod !== "openkey" || session === null || typeof session.delegationHeader !== "object" || session.delegationHeader === null || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || typeof holderDid !== "string" || !holderDid.startsWith("did:key:") || typeof session.jwk !== "object" || session.jwk === null || typeof (session.jwk as Record<string, unknown>).d !== "string") {
+    const node = await authenticatedNode();
+    const holderDid = node.sessionDid;
+    if (profile.authMethod !== "openkey" || session === null || typeof holderDid !== "string" || !holderDid.startsWith("did:key:")) {
       throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an active OpenKey session");
     }
     const addressed = createAddressedAuthorization({
@@ -305,9 +287,35 @@ export function createShareAuthorityAdapters(input: {
       trustedNode: { invitationKid: config.nodeInvitationKid, invitationPublicKey: config.nodeInvitationPublicKey },
       holderDid,
       sign: async (bytes) => {
-        const signed = await holderSignature(holderDid, bytes, session);
-        if (signed === undefined) throw new Error("share holder signer is unavailable");
-        return fromBase64Url(signed.signature);
+        return node.signSessionBytes(bytes);
+      },
+      buildPresentation: async ({ challenge, envelope }) => {
+        const authority = envelope.ownerAuthority;
+        if (authority === undefined) throw new Error("addressed-owner-authority-missing");
+        const nativeAction = (action: string): string => action === "list" ? "tinycloud.kv/list" : action === "edit" ? "tinycloud.kv/put" : "tinycloud.kv/get";
+        const actions = [...new Set(envelope.actions.map(nativeAction))].sort();
+        const action = envelope.actions.includes("list") ? "tinycloud.kv/list" : envelope.actions.includes("edit") ? "tinycloud.kv/put" : "tinycloud.kv/get";
+        const policyCid = envelope.authorizationTarget.kind === "policy" ? envelope.authorizationTarget.policyCid : "";
+        const credential = "openkey-device-session";
+        const credentialDigest = base64UrlSha256(new TextEncoder().encode(credential));
+        const presentation = {
+          type: "TinyCloudSharePolicyPresentation", version: 1, challengeId: challenge.challengeId, nonce: challenge.nonce,
+          shareCid: authority.shareCid, shareId: envelope.shareId, delegationCid: envelope.delegationCid, policyCid,
+          authorityMaterialHandle: envelope.authorityMaterialHandle, authorityMaterialDigest: envelope.authorityMaterialDigest,
+          contentSource: envelope.contentSource, contentSourceDigest: envelope.contentSourceDigest, holderDid,
+          targetOrigin: envelope.target.origin, nodeAudience: envelope.target.nodeAudience,
+          ...(challenge.enforcerDid === undefined ? {} : { enforcerDid: challenge.enforcerDid }), credentialDigest,
+          action, actions, resource: envelope.resource.path.replace(/\/$/, ""), requestBodyDigest: challenge.requestBodyDigest,
+          issuedAt: new Date().toISOString(), expiresAt: challenge.expiresAt, jti: toBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+        };
+        const signature = toBase64Url(await node.signSessionBytes(new TextEncoder().encode(`xyz.tinycloud.share/policy-presentation/v1\0${canonicalize(presentation)}`)));
+        const proof = { alg: "EdDSA", kid: `${holderDid}#${holderDid.slice("did:key:".length)}`, signature };
+        return {
+          holderDid, credential, credentialDigest, presentation, presentationProof: proof,
+          proof,
+          holderBinding: { type: "TinyCloudShareOpenKeyHolderBinding", version: 1, holderDid, challengeId: challenge.challengeId, nonce: challenge.nonce, expiresAt: challenge.expiresAt },
+          sign: (bytes: Uint8Array) => node.signSessionBytes(bytes),
+        };
       },
     });
     const matchesRecipient = (envelope: Parameters<ShareAuthorizationAdapter<ShareAuthorizedContent>["begin"]>[0]["envelope"]): boolean => envelope.authorizationTarget.kind !== "recipientDid" || (envelope.authorizationTarget.did === holderDid && envelope.recipientMatcher.kind === "recipientDid" && envelope.recipientMatcher.value === holderDid);
@@ -393,7 +401,7 @@ export function createShareAuthorityAdapters(input: {
   return {
     targetAdapter,
     authorization,
-    records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName),
+    records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName, async (bytes) => (await authenticatedNode()).signSessionBytes(bytes)),
     delivery,
     revocation,
     legacyReader,
@@ -421,6 +429,12 @@ function base64UrlSha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("base64url");
 }
 
+async function authenticatedNodeForProfile(profileName: string, host: string): Promise<import("@tinycloud/node-sdk").TinyCloudNode> {
+  const context = await ProfileManager.resolveContext({ profile: profileName, host });
+  const { ensureAuthenticated } = await import("../lib/sdk.js");
+  return ensureAuthenticated(context);
+}
+
 function strictUploadAttestation(value: unknown, upload: ShareUploadInput, origin: string, sessionDid: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ShareAuthorityError("UNAVAILABLE", "Node returned an invalid upload attestation");
   const record = value as Record<string, unknown>;
@@ -434,14 +448,14 @@ function strictUploadAttestation(value: unknown, upload: ShareUploadInput, origi
   return record;
 }
 
-async function openKeyUploadAuthorization(input: { readonly fetchFn: typeof fetch; readonly origin: string; readonly profileName: string; readonly upload: ShareUploadInput }): Promise<ShareUploadAuthorization> {
+async function openKeyUploadAuthorization(input: { readonly fetchFn: typeof fetch; readonly origin: string; readonly profileName: string; readonly upload: ShareUploadInput; readonly node: import("@tinycloud/node-sdk").TinyCloudNode }): Promise<ShareUploadAuthorization> {
   const profile = await ProfileManager.getProfile(input.profileName).catch(() => {
     throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an initialized profile");
   });
   if (profile.authMethod !== "openkey") throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an OpenKey session");
   const session = await ProfileManager.getSession(input.profileName) as Record<string, unknown> | null;
   const sessionDid = session?.verificationMethod;
-  if (session === null || typeof sessionDid !== "string" || !sessionDid.startsWith("did:key:") || typeof session.delegationHeader !== "object" || session.delegationHeader === null || typeof (session.delegationHeader as Record<string, unknown>).Authorization !== "string" || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || typeof session.jwk !== "object" || session.jwk === null || typeof (session.jwk as Record<string, unknown>).d !== "string") {
+  if (session === null || typeof sessionDid !== "string" || !sessionDid.startsWith("did:key:") || typeof session.delegationHeader !== "object" || session.delegationHeader === null || typeof (session.delegationHeader as Record<string, unknown>).Authorization !== "string" || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string") {
     throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an active OpenKey session");
   }
   const requestWithoutDigest = {
@@ -454,8 +468,8 @@ async function openKeyUploadAuthorization(input: { readonly fetchFn: typeof fetc
   };
   const requestBodyDigest = base64UrlSha256(new TextEncoder().encode(canonicalize(requestWithoutDigest)));
   const body = canonicalize({ ...requestWithoutDigest, requestBodyDigest });
-  const { invokeAny } = await import("@tinycloud/node-sdk-wasm");
-  const authorization = invokeAny(session as never, [{ spaceId: session.spaceId, service: "capabilities", path: "", action: "tinycloud.capabilities/read" }], [{ requestBodyDigest }]);
+  const entries = [{ spaceId: session.spaceId, service: "capabilities", action: "tinycloud.capabilities/read" }] as unknown as Parameters<import("@tinycloud/node-sdk").TinyCloudNode["invokeAny"]>[0];
+  const authorization = input.node.invokeAny(entries, [{ requestBodyDigest }]);
   const nodeOrigin = canonicalNodeOrigin(profile.host);
   let response: Response;
   try {
@@ -471,7 +485,10 @@ async function openKeyUploadAuthorization(input: { readonly fetchFn: typeof fetc
   let value: unknown;
   try { value = await response.json(); } catch { throw new ShareAuthorityError("UNAVAILABLE", "Node returned an invalid upload attestation"); }
   const attestation = strictUploadAttestation(value, input.upload, input.origin, sessionDid);
-  return { "x-tinycloud-authorization": JSON.stringify(attestation) };
+  return {
+    "x-tinycloud-upload-attestation": JSON.stringify(attestation),
+    "x-tinycloud-retention": canonicalize(attestation.retention),
+  };
 }
 
 /**
@@ -507,7 +524,7 @@ export function createProductionUploadAuthorizer(input: {
     const profile = await ProfileManager.getProfile(profileName).catch(() => {
       throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an initialized profile");
     });
-    if (profile.authMethod === "openkey") return openKeyUploadAuthorization({ fetchFn, origin, profileName, upload });
+    if (profile.authMethod === "openkey") return openKeyUploadAuthorization({ fetchFn, origin, profileName, upload, node: await authenticatedNodeForProfile(profileName, profile.host) });
     throw new ShareAuthorityError("AUTH_REQUIRED", "share upload requires an active OpenKey session");
   };
 }

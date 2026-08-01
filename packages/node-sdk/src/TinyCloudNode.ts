@@ -808,7 +808,10 @@ async function signJwtInputWithJwk(
   signingInput: string,
   jwk: object,
 ): Promise<Uint8Array> {
-  const bytes = new TextEncoder().encode(signingInput);
+  return signBytesWithJwk(new TextEncoder().encode(signingInput), jwk);
+}
+
+async function signBytesWithJwk(bytes: Uint8Array, jwk: object): Promise<Uint8Array> {
   try {
     const subtle = globalThis.crypto?.subtle;
     if (!subtle) {
@@ -963,6 +966,7 @@ export class TinyCloudNode {
    * {@link currentTinyCloudSession} as a fallback for `auth.tinyCloudSession`.
    */
   private _restoredTcSession?: TinyCloudSession;
+  private _activeServiceSession?: ServiceSession;
 
   /**
    * True when the last signIn() detected an interactive signer and skipped
@@ -2597,6 +2601,7 @@ export class TinyCloudNode {
     this._delegationManager = stagedGraph.delegationManager;
     this._spaceService = stagedGraph.spaceService;
     this._serviceGraph = stagedGraph.graph;
+    this._activeServiceSession = serviceSession;
     this._baseSecrets = new Map();
     this._secrets = new Map();
     this._publicKV = undefined;
@@ -2964,6 +2969,27 @@ export class TinyCloudNode {
    */
   private currentTinyCloudSession(): TinyCloudSession | undefined {
     return this.auth?.tinyCloudSession ?? this._restoredTcSession;
+  }
+
+  /**
+   * Mint a multi-capability invocation through the established session key.
+   * Callers receive only the signed headers; session key material remains
+   * owned by the session manager and is never part of the caller contract.
+   */
+  invokeAny(
+    entries: Parameters<InvokeAnyFunction>[1],
+    facts?: Parameters<InvokeAnyFunction>[2],
+  ): ReturnType<InvokeAnyFunction> {
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    return this._serviceGraph.invokeAny(session, entries, facts);
+  }
+
+  /** Sign protocol bytes with the established in-memory session key. */
+  async signSessionBytes(bytes: Uint8Array): Promise<Uint8Array> {
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    return signBytesWithJwk(bytes, session.jwk);
   }
 
   /**

@@ -241,8 +241,18 @@ async function defaultUpload(options: SharePublishOptions, input: ShareUploadInp
     "if-none-match": "*",
     "x-delete-after": input.deleteAfter,
   });
-  if (typeof authorization === "string") headers.set("x-tinycloud-authorization", authorization);
-  else if (authorization !== undefined) new Headers(authorization).forEach((value, key) => headers.set(key, value));
+  if (typeof authorization === "string") {
+    headers.set("x-tinycloud-upload-attestation", authorization);
+    try {
+      const attestation = JSON.parse(authorization) as { retention?: unknown };
+      if (attestation.retention === undefined) throw new Error("retention");
+      headers.set("x-tinycloud-retention", canonicalize(attestation.retention));
+    } catch {
+      throw new SharePublishError("upload-auth-required", "share upload authorization was rejected");
+    }
+  } else if (authorization !== undefined) {
+    new Headers(authorization).forEach((value, key) => headers.set(key, value));
+  }
   let response: Response;
   try {
     response = await (options.fetchFn ?? globalThis.fetch)(`${base}/blobs`, {

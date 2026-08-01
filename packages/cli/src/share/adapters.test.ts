@@ -29,6 +29,7 @@ const session = await (async () => {
   const chainId = await signer.getChainId();
   const manager = wasm.createSessionManager();
   const jwk = JSON.parse(manager.jwk("default")!);
+  profile.sessionDid = manager.getDID("default");
   const spaceId = wasm.makeSpaceId(address, chainId, "default");
   const prepared = wasm.prepareSession({ abilities: { kv: { "": ["tinycloud.kv/get"] } }, address, chainId, domain: "localhost", issuedAt: new Date().toISOString(), expirationTime: new Date(Date.now() + 60_000).toISOString(), spaceId, jwk });
   const complete = wasm.completeSessionSetup({ ...prepared, signature: await signer.signMessage(prepared.siwe) });
@@ -86,7 +87,8 @@ describe("Share upload authority adapter", () => {
     });
 
     const authorization = await authorize(upload);
-    expect(new Headers(authorization).has("x-tinycloud-authorization")).toBe(true);
+    expect(new Headers(authorization).has("x-tinycloud-upload-attestation")).toBe(true);
+    expect(new Headers(authorization).get("x-tinycloud-retention")).toBe('"until-delete"');
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe("https://node.example/share/upload/attestation");
     expect(requests[0]?.init?.redirect).toBe("error");

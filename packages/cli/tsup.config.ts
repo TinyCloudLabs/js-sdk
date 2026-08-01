@@ -11,4 +11,5 @@ export default defineConfig({
   // Share/help without evaluating optional auth/WASM dependencies.
   splitting: false,
   external: ["siwe"],
+  noExternal: ["@tinycloud/share-sdk", "@tinycloud/share-envelope"],
 });
