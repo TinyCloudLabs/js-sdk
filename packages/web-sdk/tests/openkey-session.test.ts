@@ -47,7 +47,10 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
     makeSpaceId: (address: string, chainId: number, prefix: string) =>
       `tinycloud:pkh:eip155:${chainId}:${address}:${prefix}`,
     prepareSession: () => ({}),
-    completeSessionSetup: () => ({}),
+    completeSessionSetup: () => ({
+      delegationHeader: { Authorization: "Bearer session" },
+      delegationCid: "bafy-session",
+    }),
     invoke: async () => ({}),
     invokeAny: async () => ({}),
     createDelegation: () => ({}),
@@ -95,6 +98,7 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
           kty: "OKP",
           crv: "Ed25519",
           x: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          d: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
         });
       }
     },
@@ -182,6 +186,7 @@ let constructedConfigs: any[];
 let constructorCount: number;
 let kvOperationCount: number;
 let useRealTinyCloudWeb: boolean;
+let realPersistenceEnabled: boolean;
 let realSignerCallbackCount: number;
 let realRestoreCount: number;
 
@@ -299,6 +304,7 @@ function TinyCloudWebTestSeam(config: any): any {
   const strategy = config.signStrategy;
   const client = new RealTinyCloudWeb({
     ...config,
+    ...(realPersistenceEnabled ? {} : { persistSession: false }),
     signStrategy: {
       ...strategy,
       handler: async (request: unknown) => {
@@ -365,6 +371,7 @@ beforeEach(() => {
   constructorCount = 0;
   kvOperationCount = 0;
   useRealTinyCloudWeb = false;
+  realPersistenceEnabled = true;
   realSignerCallbackCount = 0;
   realRestoreCount = 0;
 });
@@ -703,6 +710,71 @@ test("real persisted reload restores through BrowserSessionStorage and ten KV op
       caveats: [],
     },
   ]);
+});
+
+test("real TinyCloudWeb forwards disabled auto-bootstrap into TinyCloudNode", async () => {
+  useRealTinyCloudWeb = true;
+  realPersistenceEnabled = false;
+  const originalFetch = globalThis.fetch;
+  const originalStorage = globalThis.localStorage;
+  const nodeRequests: Array<{ url: string; body: string }> = [];
+  const signerFetch = mock(async () =>
+    new Response(
+      JSON.stringify({ approved: true, signature: "0xdelegate-signature" }),
+      { status: 200 },
+    ));
+  const input = options(TOKEN, signerFetch);
+  input.tinycloud = {
+    autoDiscoverLocalNode: false,
+    tinycloudHosts: ["https://tinycloud.example.test"],
+  };
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: new MemoryStorage(),
+    writable: true,
+  });
+  globalThis.fetch = async (resource, init) => {
+    const url = String(resource);
+    nodeRequests.push({ url, body: String(init?.body ?? "") });
+    if (url.endsWith("/info")) {
+      return new Response(JSON.stringify({ protocol: 1, version: "test", features: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return new Response(JSON.stringify({ activated: [], skipped: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected TinyCloud request: ${url}`);
+  };
+
+  try {
+    const result = await establishOpenKeySession(input);
+
+    expect(result.status).toBe("established");
+    expect(result.client).toBeInstanceOf(RealTinyCloudWeb);
+    expect(result.client.bootstrapStatus).toEqual({
+      skipped: true,
+      reason: "auto-bootstrap-disabled",
+    });
+    expect(realSignerCallbackCount).toBe(1);
+    expect(signerFetch).toHaveBeenCalledTimes(1);
+    // The ordinary primary session performs its own service setup. A bootstrap
+    // probe would require another signing callback, and marker I/O would carry
+    // the dedicated marker path into an invocation body.
+    expect(nodeRequests.filter(({ body }) =>
+      body.includes("system/bootstrap/complete"))).toEqual([]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: originalStorage,
+      writable: true,
+    });
+  }
 });
 
 test.each(["missing", "corrupt", "expired"] as const)(

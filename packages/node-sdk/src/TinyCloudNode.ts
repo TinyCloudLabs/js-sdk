@@ -992,8 +992,10 @@ export class TinyCloudNode {
 
   /**
    * Outcome of the last signIn()'s account-bootstrap attempt. `skipped` is
-   * true when bootstrap did not complete (interactive signer, auto-bootstrap
-   * disabled, already provisioned, or a decision/provisioning step failed);
+   * true when bootstrap did not complete in this invocation (interactive signer,
+   * auto-bootstrap disabled, already provisioned, or a decision/provisioning
+   * step failed). `already-provisioned` means the bootstrap was not run here;
+   * it does not mean a prior provisioning attempt failed to complete.
    * `reason` carries the cause so apps can surface a "finish account setup"
    * call-to-action. `warnings` is
    * present when bootstrap completed, but one or more steps recovered from
@@ -1693,9 +1695,17 @@ export class TinyCloudNode {
       ) {
         return { action: "run", mode: "fresh" };
       }
-    } catch {
+    } catch (err) {
       // Probe and transport failures are unknown state: make one bounded,
       // idempotent repair attempt instead of treating them as provisioned.
+      // Emit this separately from the repair result: if the repair succeeds,
+      // or fails for another reason, callers must still be able to diagnose
+      // the original decision failure.
+      const reason = err instanceof Error ? err.message : String(err);
+      this.notificationHandler.warning(
+        `Account bootstrap probe failed; attempting one bounded repair: ${reason}`,
+      );
+      console.warn(`[TinyCloudNode] account bootstrap probe failed: ${reason}`);
       return { action: "run", mode: "repair" };
     }
 

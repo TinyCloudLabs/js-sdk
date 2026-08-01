@@ -147,6 +147,26 @@ test("a marker-read error runs one repair decision instead of skipping", async (
   });
 });
 
+test("a probe activation 404 runs the fresh bootstrap decision", async () => {
+  const node = makeNode();
+  Reflect.set(node, "auth", {
+    lastActivationSkippedSpaceIds: [],
+    createBootstrapSession: async () => ({
+      delegationHeader: { Authorization: "Bearer bootstrap-probe" },
+    }),
+  });
+  Reflect.set(node, "hasRuntimePermissions", () => false);
+  globalThis.fetch = async () => new Response("missing", { status: 404 });
+  const resolve = Reflect.get(node, "resolveBootstrapDecision") as (
+    steps: BootstrapStep[],
+  ) => Promise<unknown>;
+
+  await expect(resolve.call(node, bootstrapSteps(ADDRESS, 1))).resolves.toEqual({
+    action: "run",
+    mode: "fresh",
+  });
+});
+
 test("only an accepted marker version permits an already-provisioned skip", async () => {
   const node = makeNode();
   Reflect.set(node, "auth", { lastActivationSkippedSpaceIds: [] });
@@ -576,6 +596,14 @@ describe("TC-393 recovery decisions and convergence", () => {
     }
     installActivationTransport(fake);
 
+    const runner = Reflect.get(node, "runAccountBootstrap") as (
+      steps: BootstrapStep[],
+      options: { mode: "fresh" | "repair" },
+    ) => Promise<unknown>;
+    const runSpy = mock((steps: BootstrapStep[], options: { mode: "fresh" | "repair" }) =>
+      runner.call(node, steps, options));
+    Reflect.set(node, "runAccountBootstrap", runSpy);
+
     await bootstrap(node);
 
     expect(grants).toHaveLength(6); // probe plus the five ceremony sessions
@@ -584,6 +612,13 @@ describe("TC-393 recovery decisions and convergence", () => {
     expect(node.bootstrapStatus.skipped).toBe(false);
     expect(probeRequests[0]).toEqual(BOOTSTRAP_SESSION_REQUESTS.default);
     expect(events.indexOf("grant")).toBeLessThan(events.indexOf("marker:get"));
+
+    await bootstrap(node);
+
+    expect(node.bootstrapStatus).toEqual({ skipped: true, reason: "already-provisioned" });
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(fake.callCount("marker:get")).toBe(2);
+    expect(grants).toHaveLength(7); // one additional probe grant, no repair ceremony
   });
 
   for (const outcome of ["signature rejection", "transport throw", "non-404 activation"] as const) {
@@ -620,6 +655,40 @@ describe("TC-393 recovery decisions and convergence", () => {
       expect(fake.kv.has(BOOTSTRAP_COMPLETION_MARKER_KEY)).toBe(false);
     });
   }
+
+  test("emits the probe failure even when its bounded repair fails differently", async () => {
+    const fake = new FakeCloud();
+    const node = makeRecoveryHarness(fake);
+    const warnings: string[] = [];
+    const auth = Reflect.get(node, "auth") as {
+      createBootstrapSession: () => Promise<FakeSession>;
+    };
+    Reflect.set(node, "notificationHandler", {
+      warning(message: string) {
+        warnings.push(message);
+      },
+    });
+    Reflect.set(node, "hasRuntimePermissions", () => false);
+    auth.createBootstrapSession = async () => {
+      throw new Error("probe signer unavailable");
+    };
+    const runSpy = mock(async () => {
+      throw new Error("repair storage unavailable");
+    });
+    Reflect.set(node, "runAccountBootstrap", runSpy);
+
+    await bootstrap(node);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(node.bootstrapStatus).toEqual({
+      skipped: true,
+      reason: "repair storage unavailable",
+    });
+    expect(warnings).toContain(
+      "Account bootstrap probe failed; attempting one bounded repair: probe signer unavailable",
+    );
+    expect(warnings).toContain("Account bootstrap did not complete: repair storage unavailable");
+  });
 
   test("interactive signer remains skipped without reading a marker", async () => {
     const fake = new FakeCloud();
