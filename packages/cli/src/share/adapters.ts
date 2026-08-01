@@ -5,6 +5,8 @@ import { ProfileManager } from "../config/profiles.js";
 import {
   createRegisteredPolicyAuthority,
   createAddressedAuthorization,
+  createShareV2HolderBindingArtifact,
+  SHARE_V2_PROTOCOL,
   publishAddressedShare,
   type SharePolicyAuthority,
   type ShareUploadAuthorization,
@@ -282,6 +284,14 @@ export function createShareAuthorityAdapters(input: {
     if (profile.authMethod !== "openkey" || session === null || typeof holderDid !== "string" || !holderDid.startsWith("did:key:")) {
       throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an active OpenKey session");
     }
+    const delegationHeader = session.delegationHeader;
+    const credential = typeof delegationHeader === "object" && delegationHeader !== null
+      ? (delegationHeader as Record<string, unknown>).Authorization
+      : undefined;
+    const delegationCid = session.delegationCid;
+    if (typeof credential !== "string" || credential.length === 0 || typeof delegationCid !== "string" || delegationCid.length === 0) {
+      throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an active OpenKey delegation");
+    }
     const addressed = createAddressedAuthorization({
       nodeOrigin: config.nodeOrigin,
       trustedNode: { invitationKid: config.nodeInvitationKid, invitationPublicKey: config.nodeInvitationPublicKey },
@@ -296,24 +306,46 @@ export function createShareAuthorityAdapters(input: {
         const actions = [...new Set(envelope.actions.map(nativeAction))].sort();
         const action = envelope.actions.includes("list") ? "tinycloud.kv/list" : envelope.actions.includes("edit") ? "tinycloud.kv/put" : "tinycloud.kv/get";
         const policyCid = envelope.authorizationTarget.kind === "policy" ? envelope.authorizationTarget.policyCid : "";
-        const credential = "openkey-device-session";
+        const enforcerDid = challenge.enforcerDid;
+        if (typeof enforcerDid !== "string" || enforcerDid.length === 0) throw new ShareAuthorityError("UNAVAILABLE", "share authority returned an unbound challenge");
         const credentialDigest = base64UrlSha256(new TextEncoder().encode(credential));
+        const jti = toBase64Url(crypto.getRandomValues(new Uint8Array(16)));
         const presentation = {
-          type: "TinyCloudSharePolicyPresentation", version: 1, challengeId: challenge.challengeId, nonce: challenge.nonce,
+          type: "TinyCloudSharePolicyPresentation", version: 2, challengeId: challenge.challengeId, nonce: challenge.nonce,
           shareCid: authority.shareCid, shareId: envelope.shareId, delegationCid: envelope.delegationCid, policyCid,
           authorityMaterialHandle: envelope.authorityMaterialHandle, authorityMaterialDigest: envelope.authorityMaterialDigest,
           contentSource: envelope.contentSource, contentSourceDigest: envelope.contentSourceDigest, holderDid,
           targetOrigin: envelope.target.origin, nodeAudience: envelope.target.nodeAudience,
-          ...(challenge.enforcerDid === undefined ? {} : { enforcerDid: challenge.enforcerDid }), credentialDigest,
+          enforcerDid, credentialDigest,
           action, actions, resource: envelope.resource.path.replace(/\/$/, ""), requestBodyDigest: challenge.requestBodyDigest,
-          issuedAt: new Date().toISOString(), expiresAt: challenge.expiresAt, jti: toBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+          issuedAt: new Date().toISOString(), expiresAt: challenge.expiresAt, jti,
         };
-        const signature = toBase64Url(await node.signSessionBytes(new TextEncoder().encode(`xyz.tinycloud.share/policy-presentation/v1\0${canonicalize(presentation)}`)));
+        const signature = toBase64Url(await node.signSessionBytes(new TextEncoder().encode(`${SHARE_V2_PROTOCOL.sessionDomain}${canonicalize(presentation)}`)));
         const proof = { alg: "EdDSA", kid: `${holderDid}#${holderDid.slice("did:key:".length)}`, signature };
+        const holderBinding = await createShareV2HolderBindingArtifact({
+          holderDid,
+          sign: (bytes) => node.signSessionBytes(bytes),
+          message: {
+            type: SHARE_V2_PROTOCOL.holderBindingType,
+            version: SHARE_V2_PROTOCOL.holderBindingVersion,
+            holderDid,
+            challengeId: challenge.challengeId,
+            challengeNonce: challenge.nonce,
+            shareId: envelope.shareId,
+            policyCid,
+            credentialDigest,
+            delegationCid,
+            targetOrigin: envelope.target.origin,
+            nodeAudience: envelope.target.nodeAudience,
+            enforcerDid,
+            expiresAt: challenge.expiresAt,
+            jti,
+          },
+        });
         return {
           holderDid, credential, credentialDigest, presentation, presentationProof: proof,
           proof,
-          holderBinding: { type: "TinyCloudShareOpenKeyHolderBinding", version: 1, holderDid, challengeId: challenge.challengeId, nonce: challenge.nonce, expiresAt: challenge.expiresAt },
+          holderBinding,
           sign: (bytes: Uint8Array) => node.signSessionBytes(bytes),
         };
       },
