@@ -1,5 +1,5 @@
-// Sol MAJOR-1 (final): real cross-repo Hono → signInWithOpenKeyResult
-// integration test.
+// Sol MAJOR-1 (final continuation): real cross-repo Hono →
+// signInWithOpenKeyResult integration test.
 //
 // Sol's final continuation rejection: prior tests on both sides asserted
 // the wire shape by MIRRORING the consumer's checks (OpenKey side) or by
@@ -12,8 +12,33 @@
 //      Bun-test-based Hono server) in a subprocess. The harness boots the
 //      REAL OpenKey delegate router with the same mocks the OpenKey side
 //      unit tests use, listening on a real HTTP port.
-//   2. Prepare a SIWE using `NodeUserAuthorization.prepareSessionForSigning`
-//      — the exact production entry point.
+//   2. Construct a SIWE that byte-for-byte matches what the SDK would
+//      emit via `NodeUserAuthorization.prepareSessionForSigning()`, then
+//      hand it to the harness.
+//
+//      IMPORTANT — narrower evidence:
+//      This test does NOT invoke `prepareSessionForSigning()` itself.
+//      That method resolves the FULL default capability plan
+//      (defaultActions on the primary space, a separate `secrets` space,
+//      and encryption `rawAbilities` bound to a per-user network id).
+//      Two of those (secrets space, encryption raw abilities) exercise
+//      wire encodings orthogonal to the kv/sql/capabilities pathway this
+//      cross-repo test targets, and the harness does not mock the
+//      encryption-network resolution path.
+//
+//      Instead, we drive `wasm.prepareSession()` directly with the SAME
+//      shape and inputs `prepareSessionForSigning()` would use for the
+//      kv/sql/capabilities subset — same signer address, chainId, domain,
+//      spaceId construction (`makePkhSpaceId(...)`), issuedAt/expiration
+//      derived from the SDK's session expiry, and the SDK-generated
+//      session JWK obtained via the same public `NodeUserAuthorization`
+//      construction path (see `buildPreparedSession()` below). Reaching
+//      into `sessionManager` is required to obtain that JWK in a way that
+//      keeps the auth instance's session-key lifecycle consistent with
+//      what `prepareSessionForSigning()` would leave behind, so that the
+//      subsequent `signInWithOpenKeyResult()` call resolves keys through
+//      the SAME session state a production caller would present.
+//      Every other value flows through the production code paths.
 //   3. Call the harness's `/api/delegate/authorize-sign-prepare` →
 //      `/authorize-sign-preview` → `/authorize-sign` over HTTP with the
 //      prepared SIWE. Each response is parsed from real JSON — no
@@ -44,20 +69,86 @@ import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 // `result.address === signer.getAddress()` holds in the consumer.
 const PRIVATE_KEY = ("0x" + "1".padStart(64, "0")) as `0x${string}`;
 
-// Sibling worktree location of the OpenKey repo's harness test.
-const HARNESS_PATH = resolve(
-  import.meta.dirname,
-  "../../../../../../../openkey/skgbafa/openkey-authorization-consolidation/scripts/authorize-sign-harness.test.ts",
-);
+// The OpenKey harness lives in a sibling worktree. Its location is
+// resolvable in three ways, tried in order:
+//
+//   1. `OPENKEY_HARNESS` env var — an absolute path to the harness .test.ts
+//      file. Highest priority so CI or a local operator can point at any
+//      OpenKey checkout.
+//   2. `OPENKEY_WORKTREE` env var — an absolute path to the OpenKey repo
+//      root; the harness is then found at
+//      `<worktree>/scripts/authorize-sign-harness.test.ts`.
+//   3. Default sibling-worktree layout — the file laid out at
+//      `../../../../../../../openkey/skgbafa/openkey-authorization-consolidation/`
+//      relative to this test file. Present in the standard local
+//      development checkout for these two branches.
+//
+// If none of the above resolve to an existing harness AND
+// `OPENKEY_HARNESS_OPTIONAL=1` is NOT set, the test file THROWS at import
+// time. Sol's rejection called out that a silent `test.skip` here means
+// the cross-repo consumer contract is untested by default — that is now
+// a hard failure. Set `OPENKEY_HARNESS_OPTIONAL=1` only in environments
+// where the OpenKey worktree is genuinely unreachable (e.g. running just
+// the node-sdk tests inside a container that only shipped one repo), and
+// even then, the presence of the escape hatch must be a conscious opt-in.
+function resolveHarnessPath(): { harnessPath: string; openkeyWorktree: string } | null {
+  const envHarness = process.env.OPENKEY_HARNESS?.trim();
+  if (envHarness) {
+    if (!existsSync(envHarness)) {
+      throw new Error(
+        `OPENKEY_HARNESS is set to ${envHarness} but that path does not exist`,
+      );
+    }
+    // Worktree root is the parent of scripts/, but callers may pass a
+    // fully custom path; fall back to the harness dir's grandparent.
+    const openkeyWorktree = resolve(envHarness, "..", "..");
+    return { harnessPath: envHarness, openkeyWorktree };
+  }
 
-const OPENKEY_WORKTREE = resolve(
-  import.meta.dirname,
-  "../../../../../../../openkey/skgbafa/openkey-authorization-consolidation",
-);
+  const envWorktree = process.env.OPENKEY_WORKTREE?.trim();
+  if (envWorktree) {
+    const harnessPath = resolve(envWorktree, "scripts/authorize-sign-harness.test.ts");
+    if (!existsSync(harnessPath)) {
+      throw new Error(
+        `OPENKEY_WORKTREE=${envWorktree} does not contain scripts/authorize-sign-harness.test.ts`,
+      );
+    }
+    return { harnessPath, openkeyWorktree: envWorktree };
+  }
+
+  const defaultHarnessPath = resolve(
+    import.meta.dirname,
+    "../../../../../../../openkey/skgbafa/openkey-authorization-consolidation/scripts/authorize-sign-harness.test.ts",
+  );
+  const defaultWorktree = resolve(
+    import.meta.dirname,
+    "../../../../../../../openkey/skgbafa/openkey-authorization-consolidation",
+  );
+  if (existsSync(defaultHarnessPath) && existsSync(defaultWorktree)) {
+    return { harnessPath: defaultHarnessPath, openkeyWorktree: defaultWorktree };
+  }
+  return null;
+}
+
+const resolved = resolveHarnessPath();
+const OPTIONAL = process.env.OPENKEY_HARNESS_OPTIONAL === "1";
+if (!resolved && !OPTIONAL) {
+  throw new Error(
+    "OpenKey authorize-sign harness not found. This cross-repo test proves " +
+      "the js-sdk consumer accepts the REAL Hono /authorize-sign response body — " +
+      "silently skipping would leave that contract untested. Set one of:\n" +
+      "  OPENKEY_HARNESS=<absolute path to scripts/authorize-sign-harness.test.ts>\n" +
+      "  OPENKEY_WORKTREE=<absolute path to the OpenKey repo root>\n" +
+      "  OPENKEY_HARNESS_OPTIONAL=1 (explicit opt-out for isolated test runs)",
+  );
+}
+
+const HARNESS_PATH = resolved?.harnessPath ?? "";
+const OPENKEY_WORKTREE = resolved?.openkeyWorktree ?? "";
 
 let harnessProc: ReturnType<typeof Bun.spawn> | null = null;
 let harnessPort: number | null = null;
-const HARNESS_AVAILABLE = existsSync(HARNESS_PATH) && existsSync(OPENKEY_WORKTREE);
+const HARNESS_AVAILABLE = resolved !== null;
 
 // Stub `globalThis.fetch` for the tinycloud-node activation follow-ups
 // only. The harness lives on 127.0.0.1, so we pass its requests through
@@ -244,6 +335,18 @@ async function buildPreparedSession() {
   };
 }
 
+// When the harness is unavailable but the operator has explicitly opted
+// out via OPENKEY_HARNESS_OPTIONAL=1, we register the suites as skipped
+// so a bun test run still reports them as intentionally-skipped rather
+// than absent. Non-opted-out unavailability throws at import time above,
+// so this branch is only reached under an explicit opt-out.
+if (!HARNESS_AVAILABLE && OPTIONAL) {
+  console.warn(
+    "[crossRepoHono.e2e] OPENKEY_HARNESS_OPTIONAL=1 with no harness resolved — " +
+      "skipping the cross-repo consumer contract suites. This is an EXPLICIT " +
+      "opt-out; production CI must resolve the harness.",
+  );
+}
 const suite = HARNESS_AVAILABLE ? test : test.skip;
 
 suite(
