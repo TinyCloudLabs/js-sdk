@@ -15,6 +15,7 @@ import {
   isInfuraProvider,
   isPocketProvider,
   type EnsData,
+  type Networkish,
   type RPCProvider,
 } from "./types";
 import type { BrowserProvider } from "../adapters/browserProvider";
@@ -24,10 +25,9 @@ import type { BrowserProvider } from "../adapters/browserProvider";
  * @returns an EIP-1193 RPC provider based on the RPC configuration.
  */
 export const getProvider = (rpc?: RPCProvider): BrowserProvider => {
-  const network =
-    rpc && "network" in rpc && typeof rpc.network === "string"
-      ? rpc.network
-      : "homestead";
+  const network = networkName(
+    rpc && "network" in rpc ? rpc.network : undefined,
+  );
   const url = rpcUrl(rpc, network) ?? defaultRpcUrl(network);
   return {
     request: async ({ method, params }) => {
@@ -111,7 +111,9 @@ const rpcUrl = (rpc: RPCProvider | undefined, network: string): string | undefin
   if (isEtherscanProvider(rpc)) {
     return defaultRpcUrl(network);
   }
-  if (isCloudflareProvider(rpc)) return "https://cloudflare-eth.com";
+  if (isCloudflareProvider(rpc)) {
+    return network === "homestead" ? "https://cloudflare-eth.com" : undefined;
+  }
   if (isAlchemyProvider(rpc)) {
     return `https://eth-${alchemyNetwork(network)}.g.alchemy.com/v2/${rpc.apiKey ?? "demo"}`;
   }
@@ -126,6 +128,39 @@ const rpcUrl = (rpc: RPCProvider | undefined, network: string): string | undefin
     return `https://eth-${alchemyNetwork(network)}.gateway.pokt.network/v1/lb/${rpc.apiKey}`;
   }
   return undefined;
+};
+
+const networkName = (network: Networkish | undefined): string => {
+  if (network === undefined) return "homestead";
+  if (typeof network === "string") return network;
+
+  const chainId = typeof network === "number" ? network : network.chainId;
+  const numericChainId =
+    typeof chainId === "number"
+      ? chainId
+      : chainId.startsWith("0x")
+        ? Number.parseInt(chainId, 16)
+        : Number.parseInt(chainId, 10);
+
+  const knownNetwork = knownNetworkNames[numericChainId];
+  if (knownNetwork) return knownNetwork;
+  if (typeof network !== "number" && network.name) return network.name;
+  return String(chainId);
+};
+
+const knownNetworkNames: Record<number, string> = {
+  1: "homestead",
+  3: "ropsten",
+  4: "rinkeby",
+  5: "goerli",
+  10: "optimism",
+  42: "kovan",
+  69: "optimism-kovan",
+  137: "matic",
+  80001: "maticmum",
+  42161: "arbitrum",
+  421611: "arbitrum-rinkeby",
+  11155111: "sepolia",
 };
 
 const defaultRpcUrl = (network: string): string => {
