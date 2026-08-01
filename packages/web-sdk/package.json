@@ -25,10 +25,10 @@
   "license": "EGPL",
   "sideEffects": ["dist/index.cjs", "dist/index.mjs"],
   "scripts": {
-    "build": "rimraf dist && webpack --mode production --config webpack.config.cjs",
+    "build": "rimraf dist && cross-env NODE_ENV=production webpack --mode production --config webpack.config.cjs",
     "build:coordinationos-vendor": "rimraf dist/vendor && cross-env NODE_ENV=production webpack --mode production --config webpack.coordinationos-vendor.config.cjs && bun scripts/build-coordinationos-vendor.ts",
-    "dev": "webpack --watch --config webpack.config.cjs",
-    "watch": "webpack --watch --config webpack.config.cjs",
+    "dev": "cross-env NODE_ENV=development webpack --watch --config webpack.config.cjs",
+    "watch": "cross-env NODE_ENV=development webpack --watch --config webpack.config.cjs",
     "doc": "bun run doc:extractor && bun run doc:documenter",
     "doc:extractor": "api-extractor run --local --diagnostics",
     "doc:documenter": "api-documenter markdown -i temp -o ../../documentation/docs/web-sdk/api",
