@@ -13376,6 +13376,7 @@ var init_dist2 = __esm({
             }
             seen.add(path);
           }
+          let requestMayHaveDispatched = false;
           try {
             const body = new FormData();
             for (let index = 0; index < items.length; index++) {
@@ -13393,14 +13394,31 @@ var init_dist2 = __esm({
                 action: KVAction.PUT
               }))
             );
-            const response = await this.context.fetch(`${this.host}/invoke`, {
+            const url = `${this.host}/invoke`;
+            const init = {
               method: "POST",
               headers,
               body,
               signal: this.combineSignals(options?.signal)
-            });
+            };
+            const fetchFn = this.context.fetch;
+            requestMayHaveDispatched = true;
+            const response = await fetchFn(url, init);
             if (!response.ok) {
-              const errorText = await response.text();
+              let errorText;
+              try {
+                errorText = await response.text();
+              } catch (textError) {
+                const cause = textError instanceof Error ? textError : new Error(String(textError));
+                return err(
+                  serviceError(
+                    ErrorCodes.KV_WRITE_FAILED,
+                    `Failed to batch put ${items.length} key(s): ${response.status} - <response body could not be read: ${cause.message}>`,
+                    "kv",
+                    { cause, meta: { status: response.status, statusText: response.statusText } }
+                  )
+                );
+              }
               if (response.status === 401 || response.status === 403) {
                 const { resource, action } = parseAuthError(errorText);
                 return err(authUnauthorizedError("kv", errorText, {
@@ -13426,19 +13444,73 @@ var init_dist2 = __esm({
                 )
               );
             }
-            const batchResponse = this.normalizeBatchPutResponse(await response.json());
-            if (!batchResponse || batchResponse.count !== batchResponse.written.length) {
+            let rawBody;
+            try {
+              rawBody = await response.json();
+            } catch (jsonError) {
+              const cause = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  `KV batchPut response was not valid JSON: ${cause.message}`,
+                  "kv",
+                  {
+                    cause,
+                    meta: {
+                      requestMayHaveDispatched: true,
+                      responseReceived: true,
+                      status: response.status,
+                      outcome: "batch-unconfirmed"
+                    }
+                  }
+                )
+              );
+            }
+            const batchResponse = this.normalizeBatchPutResponse(rawBody);
+            if (!batchResponse) {
               return err(
                 serviceError(
                   ErrorCodes.NETWORK_ERROR,
                   "KV batchPut response did not include matching written keys and count",
-                  "kv"
+                  "kv",
+                  {
+                    meta: {
+                      requestMayHaveDispatched: true,
+                      responseReceived: true,
+                      status: response.status,
+                      outcome: "batch-unconfirmed"
+                    }
+                  }
+                )
+              );
+            }
+            const requestedPaths = new Set(paths);
+            const writtenPaths = new Set(batchResponse.written);
+            const matchesRequest = batchResponse.count === paths.length && batchResponse.written.length === paths.length && writtenPaths.size === paths.length && batchResponse.written.every((key) => requestedPaths.has(key));
+            if (!matchesRequest) {
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  `KV batchPut response did not confirm all ${paths.length} requested key(s) were written`,
+                  "kv",
+                  {
+                    meta: {
+                      requestMayHaveDispatched: true,
+                      responseReceived: true,
+                      status: response.status,
+                      outcome: "batch-unconfirmed"
+                    }
+                  }
                 )
               );
             }
             return ok(batchResponse);
           } catch (error) {
-            return err(wrapError2("kv", error));
+            const wrapped = wrapError2("kv", error);
+            return err({
+              ...wrapped,
+              meta: { ...wrapped.meta, requestMayHaveDispatched }
+            });
           }
         });
       }
@@ -18742,10 +18814,32 @@ function validEmail(value) {
 function validDomain(value) {
   return /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))+$/i.test(value);
 }
+function validRecipientDid(value) {
+  if (value.length === 0 || value.length > 2048 || /[\u0000-\u0020\u007f]/.test(value)) return false;
+  const parts = value.split(":");
+  if (parts.length < 3 || parts[0] !== "did" || !/^[a-z0-9]+$/.test(parts[1] ?? "")) return false;
+  const identifier = parts.slice(2);
+  if (identifier.some((part) => part.length === 0)) return false;
+  if (parts[1] === "web") {
+    const host = identifier[0] ?? "";
+    if (host.length > 253 || host.split(".").some((label) => !label || label.length > 63 || !/^[A-Za-z0-9-]+$/.test(label) || label.startsWith("-") || label.endsWith("-"))) return false;
+    return identifier.slice(1).every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
+  }
+  if (parts[1] === "pkh") return identifier.length >= 3 && identifier.every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
+  if (parts[1] === "key") {
+    try {
+      const bytes3 = base58btc2.decode(identifier.join(":"));
+      return bytes3.length === 34 && bytes3[0] === 237 && bytes3[1] === 1;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
 function normalizeShareTarget(target) {
   if (target.kind === "bearer") return target;
   if (target.kind === "recipientDid") {
-    if (!/^did:[a-z0-9]+:.+$/.test(target.did)) throw new TypeError("recipient DID is invalid");
+    if (!validRecipientDid(target.did)) throw new TypeError("recipient DID is invalid");
     return { kind: target.kind, did: target.did };
   }
   if (target.kind === "email") {

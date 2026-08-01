@@ -292,7 +292,7 @@ function normalizeRecipient(recipient: ShareRecipientTarget | undefined): ShareR
     return { kind: recipient.kind, value: domain };
   }
   if (recipient.kind === "recipientDid") {
-    if (!/^did:[a-z0-9]+:.+$/.test(recipient.value)) throw new ShareEnvelopeError("invalid-envelope", "recipient DID is invalid");
+    if (!isCanonicalRecipientDid(recipient.value)) throw new ShareEnvelopeError("invalid-envelope", "recipient DID is invalid");
     return { kind: recipient.kind, value: recipient.value };
   }
   // Mailbox matching is case-sensitive in the local part.  Only the DNS
@@ -306,6 +306,29 @@ function normalizeRecipient(recipient: ShareRecipientTarget | undefined): ShareR
     throw new ShareEnvelopeError("invalid-envelope", "recipient matcher is invalid");
   }
   return { kind: recipient.kind, value: normalizedExact };
+}
+
+function isCanonicalRecipientDid(value: string): boolean {
+  if (value.length === 0 || value.length > 2048 || /[\u0000-\u0020\u007f]/.test(value)) return false;
+  const parts = value.split(":");
+  if (parts.length < 3 || parts[0] !== "did" || !/^[a-z0-9]+$/.test(parts[1] ?? "")) return false;
+  const identifier = parts.slice(2);
+  if (identifier.some((part) => part.length === 0)) return false;
+  if (parts[1] === "web") {
+    const host = identifier[0] ?? "";
+    if (host.length > 253 || host.split(".").some((label) => !label || label.length > 63 || !/^[A-Za-z0-9-]+$/.test(label) || label.startsWith("-") || label.endsWith("-"))) return false;
+    return identifier.slice(1).every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
+  }
+  if (parts[1] === "pkh") return identifier.length >= 3 && identifier.every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
+  if (parts[1] === "key") {
+    try {
+      const bytes = base58btc.decode(identifier.join(":"));
+      return bytes.length === 34 && bytes[0] === 0xed && bytes[1] === 0x01;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 export function normalizeShareRecipientTarget(recipient: ShareRecipientTarget): ShareRecipientTarget {
@@ -517,7 +540,7 @@ function publishedEnvelopeSigningBytes(envelope: PublishedShareEnvelopeV2): Uint
 }
 
 interface PublishedPolicyMetadata {
-  readonly recipientKind: "exactEmail" | "emailDomain";
+  readonly recipientKind: "exactEmail" | "emailDomain" | "recipientDid";
   readonly actions: readonly ShareAction[];
   readonly resource: ShareResource;
 }
@@ -583,7 +606,7 @@ function parsePolicyMetadata(policyBytes: string, target: PublishedShareEnvelope
     assertKeys(policy, ["type", "version", "issuerDid", "recipientMatcher", "target", "delegation", "authority", "actions", "resource", "content-source", "expiresAt"], "published canonical policy material");
     if (typeof policy.issuerDid !== "string" || typeof policy.expiresAt !== "string" || policy.expiresAt !== expectedExpiry) throw new ShareEnvelopeError("invalid-envelope", "policy expiry is not bound to the envelope");
     const matcherValue = policy.recipientMatcher;
-    if (!isPlainObject(matcherValue) || (matcherValue.kind !== "exactEmail" && matcherValue.kind !== "emailDomain") || typeof matcherValue.value !== "string") throw new ShareEnvelopeError("invalid-envelope", "policy matcher is invalid");
+    if (!isPlainObject(matcherValue) || (matcherValue.kind !== "exactEmail" && matcherValue.kind !== "emailDomain" && matcherValue.kind !== "recipientDid") || typeof matcherValue.value !== "string") throw new ShareEnvelopeError("invalid-envelope", "policy matcher is invalid");
     const matcher = normalizeRecipient(matcherValue as ShareRecipientTarget);
     if (matcher === undefined || matcher.kind === "bearer") throw new ShareEnvelopeError("invalid-envelope", "policy matcher is invalid");
     if (!isPlainObject(policy.target)) throw new ShareEnvelopeError("invalid-envelope", "policy target is invalid");
@@ -601,7 +624,6 @@ function parsePolicyMetadata(policyBytes: string, target: PublishedShareEnvelope
     if (source.kind !== "kv" && source.kind !== "sql") throw new ShareEnvelopeError("invalid-envelope", "policy content source kind is invalid");
     if (typeof source.space !== "string" || typeof source.path !== "string" || typeof source.action !== "string") throw new ShareEnvelopeError("invalid-envelope", "policy content source is invalid");
     if (source.kind === "sql" && (typeof source.database !== "string" || typeof source.statement !== "string" || !isPlainObject(source.arguments) || typeof source.argumentsDigest !== "string")) throw new ShareEnvelopeError("invalid-envelope", "policy SQL content source is invalid");
-    if (matcher.kind !== "exactEmail" && matcher.kind !== "emailDomain") throw new ShareEnvelopeError("invalid-envelope", "policy matcher is invalid");
     return { recipientKind: matcher.kind, actions, resource };
   }
   const allowed = version === 1
@@ -686,7 +708,7 @@ function parseCanonicalPublishedV2(value: Record<string, unknown>, options: { re
   if (!Number.isFinite(expiry) || expiry <= (options.now ?? new Date()).getTime() || new Date(expiry).toISOString() !== value.expiry) throw new ShareEnvelopeError("expired", "published share envelope has expired");
   if (typeof delegation.cid !== "string" || typeof delegation.issuerDid !== "string" || typeof delegation.audience !== "string" || typeof delegation.expiresAt !== "string" || Date.parse(delegation.expiresAt) > expiry) throw new ShareEnvelopeError("invalid-envelope", "published v2 delegation is invalid");
   const matcher = value.recipientMatcher;
-  if (!isPlainObject(matcher) || (matcher.kind !== "exactEmail" && matcher.kind !== "emailDomain") || typeof matcher.value !== "string") throw new ShareEnvelopeError("invalid-envelope", "published v2 recipient matcher is invalid");
+  if (!isPlainObject(matcher) || (matcher.kind !== "exactEmail" && matcher.kind !== "emailDomain" && matcher.kind !== "recipientDid") || typeof matcher.value !== "string") throw new ShareEnvelopeError("invalid-envelope", "published v2 recipient matcher is invalid");
   const normalizedMatcher = normalizeRecipient(matcher as ShareRecipientTarget);
   if (normalizedMatcher === undefined || normalizedMatcher.kind === "bearer") throw new ShareEnvelopeError("invalid-envelope", "published v2 recipient matcher is invalid");
   if (!Array.isArray(value.actions)) throw new ShareEnvelopeError("invalid-envelope", "published v2 actions are invalid");

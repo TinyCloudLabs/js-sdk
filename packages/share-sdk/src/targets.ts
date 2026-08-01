@@ -2,6 +2,7 @@ import type { ShareAuthorizationRequired, ShareAuthorizationMethod } from "./aut
 import { authorizationMethodForTarget } from "./authorization.js";
 import type { AddressedSharePublishOptions } from "./addressed-publish.js";
 import { publishShare, SharePublishError, SHARE_CONTENT_LIMIT, type PublishedShare, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
+import { base58btc } from "multiformats/bases/base58";
 
 export type ShareTarget = SharePublishTarget;
 
@@ -35,10 +36,33 @@ function validDomain(value: string): boolean {
   return /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))+$/i.test(value);
 }
 
+function validRecipientDid(value: string): boolean {
+  if (value.length === 0 || value.length > 2048 || /[\u0000-\u0020\u007f]/.test(value)) return false;
+  const parts = value.split(":");
+  if (parts.length < 3 || parts[0] !== "did" || !/^[a-z0-9]+$/.test(parts[1] ?? "")) return false;
+  const identifier = parts.slice(2);
+  if (identifier.some((part) => part.length === 0)) return false;
+  if (parts[1] === "web") {
+    const host = identifier[0] ?? "";
+    if (host.length > 253 || host.split(".").some((label) => !label || label.length > 63 || !/^[A-Za-z0-9-]+$/.test(label) || label.startsWith("-") || label.endsWith("-"))) return false;
+    return identifier.slice(1).every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
+  }
+  if (parts[1] === "pkh") return identifier.length >= 3 && identifier.every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
+  if (parts[1] === "key") {
+    try {
+      const bytes = base58btc.decode(identifier.join(":"));
+      return bytes.length === 34 && bytes[0] === 0xed && bytes[1] === 0x01;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 export function normalizeShareTarget(target: ShareTarget): ShareTarget {
   if (target.kind === "bearer") return target;
   if (target.kind === "recipientDid") {
-    if (!/^did:[a-z0-9]+:.+$/.test(target.did)) throw new TypeError("recipient DID is invalid");
+    if (!validRecipientDid(target.did)) throw new TypeError("recipient DID is invalid");
     return { kind: target.kind, did: target.did };
   }
   if (target.kind === "email") {

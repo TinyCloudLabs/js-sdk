@@ -119,6 +119,8 @@ describe("Share lifecycle and authorization parity", () => {
   it("normalizes exact-email and domain policy targets and keeps claim resumable", async () => {
     expect(normalizeShareTarget({ kind: "email", address: "Alice@Example.COM" })).toEqual({ kind: "email", address: "Alice@example.com" });
     expect(normalizeShareTarget({ kind: "emailDomain", domain: "Example.COM" })).toEqual({ kind: "emailDomain", domain: "example.com" });
+    expect(normalizeShareTarget({ kind: "recipientDid", did: "did:web:recipient.example:path" })).toEqual({ kind: "recipientDid", did: "did:web:recipient.example:path" });
+    expect(() => normalizeShareTarget({ kind: "recipientDid", did: "did:key:zholder" })).toThrow(/recipient DID/);
     const called: string[] = [];
     const outcome = await publishPolicyShare({
       source: new TextEncoder().encode("# policy"),
