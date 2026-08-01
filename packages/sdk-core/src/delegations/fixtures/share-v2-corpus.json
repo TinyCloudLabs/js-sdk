@@ -2,7 +2,7 @@
   "provenance": {
     "generator": "packages/sdk-core/src/delegations/fixtures/generate-share-v2-corpus.ts",
     "generatorVersion": "1.0.0",
-    "sdkCommit": "45f79a612b942a838ce76614a673999a73cfe039",
+    "sdkCommit": "7632f6b9ff2a3d035ca3f4802bc8f31dfd86b9b6",
     "algorithm": "sha256",
     "encoding": "base64url-unpadded",
     "canonicalization": "jcs-utf8-sorted-keys",
@@ -157,10 +157,11 @@
         "shareUrl": "https://node.example.corpus/s/bafkreicorpussharecidplaceholder00000000000000000000000000#k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "documentName": "Project plan.md",
         "jti": "AQIDBAUGBwgJCgsMDQ4PEA",
+        "idempotencyKey": "invite:vector:001",
         "expiresAt": "2099-01-01T00:00:00.000Z",
         "requestBodyDigest": "hrHWeZEYUZsyxCf4qDGZVA02zfhtJl-7_gK_9Ai6nzo"
       },
-      "digest": "aQldjkeOfLioFsARlGhRKHZQKn5Heb_KIJrZQ2UGUpo"
+      "digest": "HTlMw5C_71lP5SqXWEDlR_K3FwoISX2egRBp5oGlXPs"
     },
     "deliveryReceiptResponse": {
       "description": "Exact UTF-8 response bytes accepted unchanged by the production verifier (validateShareDeliveryAuthorizationBytes).",
@@ -168,7 +169,7 @@
         "share-delivery.ts:validateShareDeliveryAuthorizationBytes"
       ],
       "value": {
-        "bodyBase64Url": "eyJhdXRob3JpemF0aW9uIjp7InR5cGUiOiJUaW55Q2xvdWRTaGFyZURlbGl2ZXJ5QXV0aG9yaXphdGlvbiIsInZlcnNpb24iOjIsImp0aSI6IkFRSURCQVVHQndnSkNnc01EUTRQRUEiLCJzaGFyZUNpZCI6ImJhZmtyZWljb3JwdXNzaGFyZWNpZHBsYWNlaG9sZGVyMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAiLCJzaGFyZUlkIjoic2hhcmUtdjItY29ycHVzLXJlZ2lzdHJhdGlvbiIsInJlZ2lzdHJhdGlvbkNpZCI6ImJhZmtyZWljejRlem9jc3k0emxvNjR0azMyaWR5cm93YmJkenZ4aTdsMmZ5d3VraHQyM2J6bmhxZHJhIiwiZGVsZWdhdGlvbkNpZCI6ImJhZnlvd25lcjRyZWdpc3RyYXRpb25jb3JwdXN2ZWN0b3IiLCJlbmZvcmNlbWVudERlbGVnYXRpb25DaWQiOiJiYWZrcmVpZWNnMmN5NG1rY3E3ZXVlb3JrdW16cGx2cWFubGZidXU2c29veGhlZHh0eXR6bDM3ZXhqNCIsImVudmVsb3BlQ2lkIjoiYmFma3JlaWNvcnB1c2VudmVsb3BlcGxhY2Vob2xkZXIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwicG9saWN5Q2lkIjoiYmFma3JlaWNvcnB1c3BvbGljeWNpZHBsYWNlaG9sZGVyMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMCIsIm5vZGVBdWRpZW5jZSI6ImRpZDp3ZWI6bm9kZS5leGFtcGxlLmNvcnB1cyIsInRhcmdldE9yaWdpbiI6Imh0dHBzOi8vbm9kZS5leGFtcGxlLmNvcnB1cyIsIm9wZW5DcmVkZW50aWFsc0F1ZGllbmNlIjoiaHR0cHM6Ly93aXRuZXNzLmNyZWRlbnRpYWxzLm9yZyIsImhvbGRlciI6ImRpZDprZXk6ejZNa0NvcnB1c0hvbGRlciIsInJlY2lwaWVudE1hdGNoZXIiOnsia2luZCI6ImVtYWlsRG9tYWluIiwidmFsdWUiOiJleGFtcGxlLmNvbSJ9LCJkZWxpdmVyeUVtYWlsIjoicmVjaXBpZW50QGV4YW1wbGUuY29tIiwic2hhcmVVcmwiOiJodHRwczovL25vZGUuZXhhbXBsZS5jb3JwdXMvcy9iYWZrcmVpY29ycHVzc2hhcmVjaWRwbGFjZWhvbGRlcjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwI2s9QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsInJldHVybk9yaWdpbiI6Imh0dHBzOi8vbm9kZS5leGFtcGxlLmNvcnB1cyIsImRvY3VtZW50TmFtZSI6IlByb2plY3QgcGxhbi5tZCIsInNlbmRlckRpZCI6ImRpZDpwa2g6ZWlwMTU1OjE6MHgxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExIiwic2VuZGVyVHJ1c3QiOiJ2ZXJpZmllZCIsImNvbnRlbnRTb3VyY2UiOnsia2luZCI6Imt2Iiwic3BhY2UiOiJ0aW55Y2xvdWQ6cGtoOmVpcDE1NToxOjB4MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTpkZWZhdWx0IiwicGF0aCI6ImRvY3VtZW50cy9wbGFuLm1kIiwiYWN0aW9uIjoidGlueWNsb3VkLmt2L2dldCJ9LCJjb250ZW50U291cmNlRGlnZXN0IjoidjI2cmRGQ3dNY0xvTGd4d3JQNEl5TUR0cEtHNFpWX2ZwejNFc3lzdnRkZyIsInNoYXJlRXhwaXJlc0F0IjoiMjA5OS0wMS0wMVQwMDowMDowMC4wMDBaIiwiaXNzdWVkQXQiOiIyMDI0LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJyZXBvcnRBYnVzZVRva2VuIjoiQVFJREJBVUdCd2dKQ2dzTURRNFBFQSIsImFjdGlvbnMiOlsidGlueWNsb3VkLmt2L2dldCIsInRpbnljbG91ZC5rdi9tZXRhZGF0YSJdLCJyZXNvdXJjZSI6ImRvY3VtZW50cy9wbGFuLm1kIiwiYXV0aG9yaXR5TWF0ZXJpYWxIYW5kbGUiOiJiYWZrcmVpY3o0ZXpvY3N5NHpsbzY0dGszMmlkeXJvd2JiZHp2eGk3bDJmeXd1a2h0MjNiem5ocWRyYSIsImF1dGhvcml0eU1hdGVyaWFsRGlnZXN0IjoiLWVIM1VVcnEwdmwxejlGTU11ZWNGTzRFQ0tlZ2ZxRHZVMmZlRktabEExdyIsInJlcXVlc3RCb2R5RGlnZXN0IjoiaHJIV2VaRVlVWnN5eENmNHFER1pWQTAyemZodEpsLTdfZ0tfOUFpNm56byIsImlkZW1wb3RlbmN5S2V5IjoiQVFJREJBVUdCd2dKQ2dzTURRNFBFQSIsImV4cGlyZXNBdCI6IjIwOTktMDEtMDFUMDA6MDA6MDAuMDAwWiIsImRhdGFBdXRob3JpdHkiOmZhbHNlfSwicHJvb2YiOnsiYWxnIjoiRWREU0EiLCJraWQiOiJkaWQ6a2V5Ono2TWtnZ3RIVldRVUdKM0ZWakpLWGViNW9aVGhRdkxtSlZNVjhoZk5VejRlemNhdiN6Nk1rZ2d0SFZXUVVHSjNGVmpKS1hlYjVvWlRoUXZMbUpWTVY4aGZOVXo0ZXpjYXYiLCJzaWduYXR1cmUiOiJkaFQ3SG1LOE9XY1NzQVJIdEx4cS1xeEdKeklZZnNOZnRTdzFsZmNDTXRISjNzakVTTmtocnpRSWs1Q2FWTHFoWno0UWVRdS1xb3hNTzc4ai1LcDBDdyJ9fQ",
+        "bodyBase64Url": "eyJhdXRob3JpemF0aW9uIjp7InR5cGUiOiJUaW55Q2xvdWRTaGFyZURlbGl2ZXJ5QXV0aG9yaXphdGlvbiIsInZlcnNpb24iOjIsImp0aSI6IkFRSURCQVVHQndnSkNnc01EUTRQRUEiLCJzaGFyZUNpZCI6ImJhZmtyZWljb3JwdXNzaGFyZWNpZHBsYWNlaG9sZGVyMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAiLCJzaGFyZUlkIjoic2hhcmUtdjItY29ycHVzLXJlZ2lzdHJhdGlvbiIsInJlZ2lzdHJhdGlvbkNpZCI6ImJhZmtyZWljejRlem9jc3k0emxvNjR0azMyaWR5cm93YmJkenZ4aTdsMmZ5d3VraHQyM2J6bmhxZHJhIiwiZGVsZWdhdGlvbkNpZCI6ImJhZnlvd25lcjRyZWdpc3RyYXRpb25jb3JwdXN2ZWN0b3IiLCJlbmZvcmNlbWVudERlbGVnYXRpb25DaWQiOiJiYWZrcmVpZWNnMmN5NG1rY3E3ZXVlb3JrdW16cGx2cWFubGZidXU2c29veGhlZHh0eXR6bDM3ZXhqNCIsImVudmVsb3BlQ2lkIjoiYmFma3JlaWNvcnB1c2VudmVsb3BlcGxhY2Vob2xkZXIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwicG9saWN5Q2lkIjoiYmFma3JlaWNvcnB1c3BvbGljeWNpZHBsYWNlaG9sZGVyMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMCIsIm5vZGVBdWRpZW5jZSI6ImRpZDp3ZWI6bm9kZS5leGFtcGxlLmNvcnB1cyIsInRhcmdldE9yaWdpbiI6Imh0dHBzOi8vbm9kZS5leGFtcGxlLmNvcnB1cyIsIm9wZW5DcmVkZW50aWFsc0F1ZGllbmNlIjoiaHR0cHM6Ly93aXRuZXNzLmNyZWRlbnRpYWxzLm9yZyIsImhvbGRlciI6ImRpZDprZXk6ejZNa0NvcnB1c0hvbGRlciIsInJlY2lwaWVudE1hdGNoZXIiOnsia2luZCI6ImVtYWlsRG9tYWluIiwidmFsdWUiOiJleGFtcGxlLmNvbSJ9LCJkZWxpdmVyeUVtYWlsIjoicmVjaXBpZW50QGV4YW1wbGUuY29tIiwic2hhcmVVcmwiOiJodHRwczovL25vZGUuZXhhbXBsZS5jb3JwdXMvcy9iYWZrcmVpY29ycHVzc2hhcmVjaWRwbGFjZWhvbGRlcjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwI2s9QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsInJldHVybk9yaWdpbiI6Imh0dHBzOi8vbm9kZS5leGFtcGxlLmNvcnB1cyIsImRvY3VtZW50TmFtZSI6IlByb2plY3QgcGxhbi5tZCIsInNlbmRlckRpZCI6ImRpZDpwa2g6ZWlwMTU1OjE6MHgxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExIiwic2VuZGVyVHJ1c3QiOiJ2ZXJpZmllZCIsImNvbnRlbnRTb3VyY2UiOnsia2luZCI6Imt2Iiwic3BhY2UiOiJ0aW55Y2xvdWQ6cGtoOmVpcDE1NToxOjB4MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTpkZWZhdWx0IiwicGF0aCI6ImRvY3VtZW50cy9wbGFuLm1kIiwiYWN0aW9uIjoidGlueWNsb3VkLmt2L2dldCJ9LCJjb250ZW50U291cmNlRGlnZXN0IjoidjI2cmRGQ3dNY0xvTGd4d3JQNEl5TUR0cEtHNFpWX2ZwejNFc3lzdnRkZyIsInNoYXJlRXhwaXJlc0F0IjoiMjA5OS0wMS0wMVQwMDowMDowMC4wMDBaIiwiaXNzdWVkQXQiOiIyMDI0LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJyZXBvcnRBYnVzZVRva2VuIjoiQVFJREJBVUdCd2dKQ2dzTURRNFBFQSIsImFjdGlvbnMiOlsidGlueWNsb3VkLmt2L2dldCIsInRpbnljbG91ZC5rdi9tZXRhZGF0YSJdLCJyZXNvdXJjZSI6ImRvY3VtZW50cy9wbGFuLm1kIiwiYXV0aG9yaXR5TWF0ZXJpYWxIYW5kbGUiOiJiYWZrcmVpY3o0ZXpvY3N5NHpsbzY0dGszMmlkeXJvd2JiZHp2eGk3bDJmeXd1a2h0MjNiem5ocWRyYSIsImF1dGhvcml0eU1hdGVyaWFsRGlnZXN0IjoiLWVIM1VVcnEwdmwxejlGTU11ZWNGTzRFQ0tlZ2ZxRHZVMmZlRktabEExdyIsInJlcXVlc3RCb2R5RGlnZXN0IjoiaHJIV2VaRVlVWnN5eENmNHFER1pWQTAyemZodEpsLTdfZ0tfOUFpNm56byIsImlkZW1wb3RlbmN5S2V5IjoiaW52aXRlOnZlY3RvcjowMDEiLCJleHBpcmVzQXQiOiIyMDk5LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJkYXRhQXV0aG9yaXR5IjpmYWxzZX0sInByb29mIjp7ImFsZyI6IkVkRFNBIiwia2lkIjoiZGlkOmtleTp6Nk1rZ2d0SFZXUVVHSjNGVmpKS1hlYjVvWlRoUXZMbUpWTVY4aGZOVXo0ZXpjYXYjejZNa2dndEhWV1FVR0ozRlZqSktYZWI1b1pUaFF2TG1KVk1WOGhmTlV6NGV6Y2F2Iiwic2lnbmF0dXJlIjoicHRpTVNjWTgwM0VnZ1VQNzNXVzRLcEcxS1FpLTNpQTRHcXhpR25JVkx4cXItVFZFRGpubl9BaHRaZmk0ZUdYbU1ZUmdXNHJLNkZETE85TEZTblZ6Q2cifX0",
         "decoded": {
           "authorization": {
             "type": "TinyCloudShareDeliveryAuthorization",
@@ -213,18 +214,18 @@
             "authorityMaterialHandle": "bafkreicz4ezocsy4zlo64tk32idyrowbbdzvxi7l2fywukht23bznhqdra",
             "authorityMaterialDigest": "-eH3UUrq0vl1z9FMMuecFO4ECKegfqDvU2feFKZlA1w",
             "requestBodyDigest": "hrHWeZEYUZsyxCf4qDGZVA02zfhtJl-7_gK_9Ai6nzo",
-            "idempotencyKey": "AQIDBAUGBwgJCgsMDQ4PEA",
+            "idempotencyKey": "invite:vector:001",
             "expiresAt": "2099-01-01T00:00:00.000Z",
             "dataAuthority": false
           },
           "proof": {
             "alg": "EdDSA",
             "kid": "did:key:z6MkggtHVWQUGJ3FVjJKXeb5oZThQvLmJVMV8hfNUz4ezcav#z6MkggtHVWQUGJ3FVjJKXeb5oZThQvLmJVMV8hfNUz4ezcav",
-            "signature": "dhT7HmK8OWcSsARHtLxq-qxGJzIYfsNftSw1lfcCMtHJ3sjESNkhrzQIk5CaVLqhZz4QeQu-qoxMO78j-Kp0Cw"
+            "signature": "ptiMScY803EggUP73WW4KpG1KQi-3iA4GqxiGnIVLxqr-TVEDjnn_AhtZfi4eGXmMYRgW4rK6FDLO9LFSnVzCg"
           }
         }
       },
-      "digest": "fRlikM5SDNX0ENv8AsoXZrc7kO8s-tLDuJAo4FGPzYc"
+      "digest": "XM9SoAaKEki3YF3dw_Ub4R2iUvjZuepoLenKXEJefqk"
     },
     "challengeRequest": {
       "description": "Exact POST body the production ShareRecipientClient sends to /share/v2/policy/challenges (ShareRecipientClient.buildChallengeRequest).",

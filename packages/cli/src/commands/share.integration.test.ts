@@ -30,14 +30,15 @@ async function runShareCaptured(args: readonly string[]): Promise<{ stdout: stri
   process.exitCode = undefined;
   process.stdout.write = ((chunk: string | Uint8Array) => { stdout += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk); return true; }) as typeof process.stdout.write;
   process.stderr.write = ((chunk: string | Uint8Array) => { stderr += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk); return true; }) as typeof process.stderr.write;
+  let exitCode = 0;
   try { await program.parseAsync(["node", "tc", ...args], { from: "node" }); }
   finally {
-    const exitCode = process.exitCode ?? 0;
+    exitCode = process.exitCode ?? 0;
     process.exitCode = previousExitCode;
     process.stdout.write = originalStdout;
     process.stderr.write = originalStderr;
-    return { stdout, stderr, exitCode };
   }
+  return { stdout, stderr, exitCode };
 }
 
 async function addressedFixture(): Promise<{ url: string; blob: Uint8Array; policy: SharePolicyEvidence }> {

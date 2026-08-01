@@ -3998,6 +3998,7 @@ export class TinyCloudNode {
     readonly recipientEmail: string;
     readonly shareUrl: string;
     readonly documentName: string;
+    readonly idempotencyKey: string;
     readonly expiresAt: string;
     /** The enrolled receipt key from the node trust bundle. */
     readonly nodeProof: { readonly kid: string; readonly publicKey: Uint8Array };
@@ -4019,6 +4020,7 @@ export class TinyCloudNode {
       shareUrl: input.shareUrl,
       documentName: input.documentName,
       jti: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
+      idempotencyKey: input.idempotencyKey,
       expiresAt: input.expiresAt,
     };
     const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));

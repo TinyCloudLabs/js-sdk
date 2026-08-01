@@ -31376,6 +31376,7 @@ function createShareAuthorityAdapters(input = {}) {
       recipientEmail: request.recipient,
       shareUrl: record2.link,
       documentName: record2.filename ?? "share.md",
+      idempotencyKey: request.idempotencyKey ?? `tinycloud-share:${record2.shareId}`,
       expiresAt: new Date(Math.min(Date.parse(record2.expiresAt), Date.now() + 5 * 60 * 1e3)).toISOString(),
       nodeProof: { kid: config.nodeInvitationKid, publicKey: config.nodeInvitationPublicKey },
       credentialsAudience: config.credentialsOrigin
@@ -31385,7 +31386,7 @@ function createShareAuthorityAdapters(input = {}) {
       credentials: "omit",
       redirect: "error",
       referrerPolicy: "no-referrer",
-      headers: { accept: "application/json", "content-type": "application/json", "idempotency-key": request.idempotencyKey ?? `tinycloud-share:${record2.shareId}` },
+      headers: { accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify({ authorization: receipt.authorization, proof: receipt.proof, shareUrl: record2.link }),
       signal: request.signal
     });
