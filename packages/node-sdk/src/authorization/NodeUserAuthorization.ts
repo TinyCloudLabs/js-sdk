@@ -1587,14 +1587,44 @@ export class NodeUserAuthorization implements IUserAuthorization {
     //   Every ID the widget returns must correspond to a real (resource, action)
     //   pair in signedCaps. Broadening rejected.
     //
-    // The action ID format is "resource\0action\0..." (see OPENKEY_ACTION_ID_SEPARATOR),
-    // but the widget historically also emitted "service\0action" style IDs, so we
-    // accept a match on either the (resource,action) exact pair OR when at least
-    // one granted pair ends with `\0action`.
+    // Sol continuation contract: the CANONICAL OpenKey action ID format is
+    // FOUR NUL-separated parts: `service\0space\0path\0ability`. The keys of
+    // `signedCaps` are the raw ReCap resource URIs — `space` for whole-space
+    // grants, or `space/path` when a path is present. The action key is
+    // `ability` (e.g. `tinycloud.kv/get`). We build a canonical index of
+    // grantedPairs keyed by the four-part tuple and only accept
+    // selectedActionKeys that parse in the four-part form OR the legacy
+    // two-part `resource\0action` form (kept for backward compatibility).
     const grantedPairs = new Set<string>();
+    // 4-part index: `${service}\0${space}\0${path}\0${ability}` → canonical
+    // OpenKey ID. `service` is derived from the ability's namespace prefix
+    // (`tinycloud.kv/get` → `tinycloud.kv`). `space` and `path` are derived
+    // from the resource URI by splitting on the first `/` after the
+    // `tinycloud:...:name` prefix.
+    const grantedFourPartIndex = new Map<string, string>();
     for (const [resource, actions] of Object.entries(signedCaps)) {
+      // Extract space/path from the resource URI.
+      let space = resource;
+      let path = "";
+      if (resource.startsWith("tinycloud:")) {
+        const slash = resource.indexOf("/");
+        if (slash >= 0) {
+          space = resource.slice(0, slash);
+          path = resource.slice(slash + 1);
+        }
+      }
       for (const action of Object.keys(actions)) {
+        // Legacy two-part index: `${resource}\0${action}`.
         grantedPairs.add(`${resource}\0${action}`);
+        // Canonical four-part: derive `service` from the ability prefix.
+        const slashIdx = action.indexOf("/");
+        const service = slashIdx > 0 ? action.slice(0, slashIdx) : "";
+        if (service) {
+          grantedFourPartIndex.set(
+            `${service}\0${space}\0${path}\0${action}`,
+            `${resource}\0${action}`,
+          );
+        }
       }
     }
 
@@ -1618,25 +1648,24 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const selectedResourceActionPairs = new Set<string>();
     for (const rawKey of result.selectedActionKeys) {
       const parts = rawKey.split("\0");
-      if (parts.length < 2) {
-        throw new Error(
-          `OpenKey selectedActionKeys entry is malformed: ${rawKey}`,
-        );
-      }
-      const [resource, action] = parts;
-      const pairKey = `${resource}\0${action}`;
       let matchedPair: string | null = null;
-      if (grantedPairs.has(pairKey)) {
-        matchedPair = pairKey;
-      } else {
-        // Fall back to suffix-on-action match for widget IDs that encode
-        // "service\0action" instead of "resource\0action".
-        for (const gp of grantedPairs) {
-          if (gp.endsWith(`\0${action}`)) {
-            matchedPair = gp;
-            break;
-          }
+      if (parts.length === 4) {
+        // Canonical four-part: `service\0space\0path\0ability`.
+        const canonical = grantedFourPartIndex.get(rawKey);
+        if (canonical) {
+          matchedPair = canonical;
         }
+      } else if (parts.length === 2) {
+        // Legacy two-part: `resource\0action`.
+        const [resource, action] = parts;
+        const pairKey = `${resource}\0${action}`;
+        if (grantedPairs.has(pairKey)) {
+          matchedPair = pairKey;
+        }
+      } else {
+        throw new Error(
+          `OpenKey selectedActionKeys entry is malformed (expected 4-part service\\0space\\0path\\0ability or legacy 2-part resource\\0action): ${rawKey}`,
+        );
       }
       if (!matchedPair) {
         throw new Error(

@@ -17,12 +17,46 @@ import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { extractRecapAttenuations } from "@tinycloud/sdk-core";
 
 /**
- * Derive the full set of (resource, action) selectedActionKeys entries that
- * signInWithOpenKeyResult now requires (Rule A — every non-required granted
- * capability must be covered). Structurally-required tinycloud.capabilities/read
- * is intentionally excluded because the widget UI cannot deselect it.
+ * Derive selectedActionKeys entries in the CANONICAL four-part OpenKey ID
+ * format (`service\0space\0path\0ability`) that signInWithOpenKeyResult now
+ * requires. This mirrors the real OpenKey `capability-review` `ids.actionId`
+ * output; OpenKey never emits the legacy two-part shape.
+ *
+ * Structurally-required `tinycloud.capabilities/read` is intentionally
+ * excluded because the widget UI cannot deselect it — the SDK does not
+ * require it to appear in `selectedActionKeys` for Rule A coverage.
  */
 function deriveSelectedActionKeysFromSiwe(siwe: string): string[] {
+  const caps = extractRecapAttenuations(siwe);
+  const out: string[] = [];
+  for (const [resource, actions] of Object.entries(caps)) {
+    // Split the resource URI into space + path the same way OpenKey does.
+    let space = resource;
+    let path = "";
+    if (resource.startsWith("tinycloud:")) {
+      const slash = resource.indexOf("/");
+      if (slash >= 0) {
+        space = resource.slice(0, slash);
+        path = resource.slice(slash + 1);
+      }
+    }
+    for (const ability of Object.keys(actions)) {
+      if (ability === "tinycloud.capabilities/read" || ability === "capabilities/read") continue;
+      const slashIdx = ability.indexOf("/");
+      const service = slashIdx > 0 ? ability.slice(0, slashIdx) : "";
+      out.push(`${service}\0${space}\0${path}\0${ability}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * Legacy two-part encoder retained for backward-compat coverage: some older
+ * OpenKey builds emitted `${resource}\0${ability}`. The SDK still accepts
+ * this format so old clients keep working while migrating to the canonical
+ * four-part IDs.
+ */
+function deriveLegacyTwoPartActionKeysFromSiwe(siwe: string): string[] {
   const caps = extractRecapAttenuations(siwe);
   const out: string[] = [];
   for (const [resource, actions] of Object.entries(caps)) {
@@ -507,4 +541,110 @@ test("signInWithOpenKeyResult rejects when prepared.siwe is missing", async () =
       preparation.prepared.jwk,
     ),
   ).rejects.toThrow(/requires prepared\.siwe/);
+});
+
+test("signInWithOpenKeyResult accepts real OpenKey four-part selectedActionKeys", async () => {
+  // Sol continuation contract: OpenKey produces action IDs in the CANONICAL
+  // four-part format `service\0space\0path\0ability`. This test proves the
+  // SDK now accepts that format directly — without the historical two-part
+  // suffix-match fallback. It is the primary regression guard against the
+  // ID-format mismatch that caused the widget to approve narrow while
+  // signing broad in the pre-consolidation code paths.
+  const { auth, signer, preparation } = await buildAuthWithPreparedSession();
+  const signature = await signer.signMessage(preparation.prepared.siwe);
+  const address = await signer.getAddress();
+
+  const selectedActionKeys = deriveSelectedActionKeysFromSiwe(preparation.prepared.siwe);
+  // Sanity: the helper must have produced FOUR-part IDs.
+  expect(selectedActionKeys.length).toBeGreaterThan(0);
+  for (const key of selectedActionKeys) {
+    expect(key.split("\0").length).toBe(4);
+  }
+
+  const clientSession = await auth.signInWithOpenKeyResult(
+    {
+      protocolVersion: 1,
+      address,
+      signature,
+      signedMessage: preparation.prepared.siwe,
+      selectedActionKeys,
+      permissions: [],
+    },
+    {
+      siwe: preparation.prepared.siwe,
+      jwk: preparation.prepared.jwk,
+      spaceId: preparation.prepared.spaceId,
+      verificationMethod: preparation.prepared.verificationMethod,
+    },
+    preparation.keyId,
+    preparation.prepared.jwk,
+  );
+
+  expect(clientSession.address).toBe(address);
+});
+
+test("signInWithOpenKeyResult accepts legacy two-part selectedActionKeys for backward compat", async () => {
+  // Backward-compat: older OpenKey builds emitted `${resource}\0${ability}`.
+  // Continue to accept them so pinned deployments keep working while
+  // migrating to canonical four-part IDs.
+  const { auth, signer, preparation } = await buildAuthWithPreparedSession();
+  const signature = await signer.signMessage(preparation.prepared.siwe);
+  const address = await signer.getAddress();
+
+  const selectedActionKeys = deriveLegacyTwoPartActionKeysFromSiwe(preparation.prepared.siwe);
+  expect(selectedActionKeys.length).toBeGreaterThan(0);
+  for (const key of selectedActionKeys) {
+    expect(key.split("\0").length).toBe(2);
+  }
+
+  const clientSession = await auth.signInWithOpenKeyResult(
+    {
+      protocolVersion: 1,
+      address,
+      signature,
+      signedMessage: preparation.prepared.siwe,
+      selectedActionKeys,
+      permissions: [],
+    },
+    {
+      siwe: preparation.prepared.siwe,
+      jwk: preparation.prepared.jwk,
+      spaceId: preparation.prepared.spaceId,
+      verificationMethod: preparation.prepared.verificationMethod,
+    },
+    preparation.keyId,
+    preparation.prepared.jwk,
+  );
+
+  expect(clientSession.address).toBe(address);
+});
+
+test("signInWithOpenKeyResult rejects a three-part malformed selectedActionKey", async () => {
+  // Sol continuation contract: neither 3-part nor 5+-part IDs are valid.
+  // The SDK must fail closed rather than silently accepting a truncated ID.
+  const { auth, signer, preparation } = await buildAuthWithPreparedSession();
+  const signature = await signer.signMessage(preparation.prepared.siwe);
+  const address = await signer.getAddress();
+
+  await expect(
+    auth.signInWithOpenKeyResult(
+      {
+        protocolVersion: 1,
+        address,
+        signature,
+        signedMessage: preparation.prepared.siwe,
+        // 3-part is neither the 4-part canonical nor 2-part legacy format.
+        selectedActionKeys: ["a\0b\0c"],
+        permissions: [],
+      },
+      {
+        siwe: preparation.prepared.siwe,
+        jwk: preparation.prepared.jwk,
+        spaceId: preparation.prepared.spaceId,
+        verificationMethod: preparation.prepared.verificationMethod,
+      },
+      preparation.keyId,
+      preparation.prepared.jwk,
+    ),
+  ).rejects.toThrow(/malformed/);
 });
