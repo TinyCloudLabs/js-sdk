@@ -1,45 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { Command } from "commander";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { configureShareCommandServices, registerShareCommand } from "./share.js";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { configureShareCommandServices } from "./share.js";
+import { runShareCaptured } from "./share.integration-harness.js";
 import { MemorySenderShareRecordStorage, type SharePolicyEvidence } from "@tinycloud/share-sdk";
 import { ed25519 } from "@noble/curves/ed25519";
 import { canonicalize, computeCid, didKeyFromEd25519PublicKey, encodeShareUrl, generateKey, seal, signEnvelopeV2, toBase64Url } from "@tinycloud/share-envelope";
-
-async function runShare(args: readonly string[]): Promise<string> {
-  const program = new Command();
-  registerShareCommand(program);
-  let output = "";
-  const original = process.stdout.write;
-  process.stdout.write = ((chunk: string | Uint8Array) => { output += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk); return true; }) as typeof process.stdout.write;
-  try { await program.parseAsync(["node", "tc", ...args], { from: "node" }); }
-  finally { process.stdout.write = original; }
-  return output;
-}
-
-async function runShareCaptured(args: readonly string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const program = new Command();
-  registerShareCommand(program);
-  let stdout = "";
-  let stderr = "";
-  const originalStdout = process.stdout.write;
-  const originalStderr = process.stderr.write;
-  const previousExitCode = process.exitCode;
-  process.exitCode = undefined;
-  process.stdout.write = ((chunk: string | Uint8Array) => { stdout += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk); return true; }) as typeof process.stdout.write;
-  process.stderr.write = ((chunk: string | Uint8Array) => { stderr += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk); return true; }) as typeof process.stderr.write;
-  let exitCode = 0;
-  try { await program.parseAsync(["node", "tc", ...args], { from: "node" }); }
-  finally {
-    exitCode = process.exitCode ?? 0;
-    process.exitCode = previousExitCode;
-    process.stdout.write = originalStdout;
-    process.stderr.write = originalStderr;
-  }
-  return { stdout, stderr, exitCode };
-}
 
 async function addressedFixture(): Promise<{ url: string; blob: Uint8Array; policy: SharePolicyEvidence }> {
   const issuerPrivateKey = new Uint8Array(32).fill(17);
@@ -98,10 +68,10 @@ describe("tc share command integration", () => {
       }, { preconnect: () => undefined }) as typeof globalThis.fetch,
     });
 
-    const link = (await runShare(["share", "publish", input, "--viewer-origin", "https://share.tinycloud.xyz"])).trim();
+    const link = (await runShareCaptured(["share", "publish", input, "--viewer-origin", "https://share.tinycloud.xyz"])).stdout.trim();
     expect(link).toMatch(/^https:\/\/share\.tinycloud\.xyz\/s\//);
-    expect((await runShare(["share", "inspect", link, "--viewer-origin", "https://share.tinycloud.xyz"])).trim()).toContain("Share ");
-    const receivedPath = (await runShare(["share", "receive", link, "--output", output, "--viewer-origin", "https://share.tinycloud.xyz"])).trim();
+    expect((await runShareCaptured(["share", "inspect", link, "--viewer-origin", "https://share.tinycloud.xyz"])).stdout.trim()).toContain("Share ");
+    const receivedPath = (await runShareCaptured(["share", "receive", link, "--output", output, "--viewer-origin", "https://share.tinycloud.xyz"])).stdout.trim();
     expect(await readFile(receivedPath, "utf8")).toBe("# command round trip\n");
     expect((await records.list()).length).toBe(1);
   });
@@ -138,5 +108,9 @@ describe("tc share command integration", () => {
       authorization: { state: "authorization-required", method: "openkey-device", next: "complete authorization through the configured authority adapter, then retry with the required proof" },
     });
     expect(`${received.stdout}${received.stderr}`).not.toContain(token);
+    const childPath = fileURLToPath(new URL("./share.integration.outer.ts", import.meta.url));
+    const child = spawn(process.execPath, [childPath], { cwd: dirname(childPath), stdio: ["ignore", "pipe", "pipe"] });
+    const [exitCode] = await once(child, "exit");
+    expect(exitCode).toBe(0);
   });
 });
