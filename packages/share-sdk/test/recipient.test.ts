@@ -69,7 +69,13 @@ function addressedTarget(): ShareEnvelopeV2 {
       shareCid: "share-cid",
       envelopeCid: "envelope-cid",
       enforcementDelegation: { cid: "enforcement-cid" },
-      outerEnvelope: {},
+      outerEnvelope: {
+        target: envelope().target,
+        resource: envelope().resource,
+        contentSource: envelope().contentSource,
+        contentSourceDigest: envelope().contentSourceDigest,
+        actions: ["tinycloud.kv/get"],
+      },
     },
   } as ShareEnvelopeV2;
 }
@@ -131,28 +137,29 @@ describe("addressed recipient response binding", () => {
     await expect(adapter.verifyResult?.({ envelope: target, value, proof: value.proof })).resolves.toBe(false);
   });
 
-  it("uses only fields emitted by the production v1 policy routes", async () => {
+  it("uses the production v2 policy route fields", async () => {
     const target = addressedTarget();
     const body = {
       shareCid: "share-cid", shareId: target.shareId, policyCid: "", delegationCid: target.delegationCid,
-      authorityMaterialHandle: target.authorityMaterialHandle, authorityMaterialDigest: target.authorityMaterialDigest,
+      envelopeCid: "envelope-cid", registrationCid: "registration", enforcementDelegationCid: "enforcement-cid",
+      enforcementDelegation: { cid: "enforcement-cid" }, outerEnvelope: target.ownerAuthority?.outerEnvelope,
       contentSource: target.contentSource, contentSourceDigest: target.contentSourceDigest, holderDid: "did:key:z6Mkholder",
       targetOrigin: target.target.origin, nodeAudience: target.target.nodeAudience, action: "tinycloud.kv/get",
       actions: ["tinycloud.kv/get"], resource: target.resource.path,
     };
-    const challenge = { type: "TinyCloudSharePolicyChallenge", version: 1, challengeId: "challenge-0123456789", nonce: "nonce-0123456789", ...body, issuedAt: "2026-07-30T12:00:00.000Z", expiresAt: "2030-01-01T00:00:00.000Z", requestBodyDigest: await digestCanonical(body) };
+    const challenge = { type: "TinyCloudSharePolicyChallenge", version: 2, challengeId: "challenge-0123456789", nonce: "nonce-0123456789", ...body, issuedAt: "2026-07-30T12:00:00.000Z", expiresAt: "2030-01-01T00:00:00.000Z", requestBodyDigest: await digestCanonical(body) };
     const calls: string[] = [];
     const fetchFn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       calls.push(String(input));
       const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      expect(request).not.toHaveProperty("envelopeCid");
-      expect(request).not.toHaveProperty("registrationCid");
-      expect(request).not.toHaveProperty("enforcementDelegation");
-      return new Response(JSON.stringify(signedArtifact("challenge", "xyz.tinycloud.share/policy-challenge/v1\0", challenge)), { status: 200 });
+      expect(request).toHaveProperty("envelopeCid", "envelope-cid");
+      expect(request).toHaveProperty("registrationCid", "registration");
+      expect(request).toHaveProperty("enforcementDelegation");
+      return new Response(JSON.stringify(signedArtifact("challenge", "xyz.tinycloud.share/policy-challenge/v2\0", challenge)), { status: 200 });
     };
     const client = new ShareRecipientClient({ nodeOrigin: "https://node.example", trustedNode: { invitationKid: nodeKid, invitationPublicKey: nodePublicKey }, holderDid: "did:key:z6Mkholder", envelope: target, fetchFn });
-    await expect(client.beginChallenge(target)).resolves.toMatchObject({ version: 1, challengeId: challenge.challengeId });
-    expect(calls).toEqual(["https://node.example/share/v1/policy/challenges"]);
+    await expect(client.beginChallenge(target)).resolves.toMatchObject({ version: 2, challengeId: challenge.challengeId });
+    expect(calls).toEqual(["https://node.example/share/v2/policy/challenges"]);
   });
 
   it("restores the presented holder proof before resuming the addressed read", async () => {
@@ -160,8 +167,8 @@ describe("addressed recipient response binding", () => {
     const holderPrivateKey = new Uint8Array(32).fill(73);
     const holderDid = "did:key:z6Mkholder";
     const session = {
-      type: "TinyCloudSharePolicySession", version: 1, sessionId: "session-resumed", shareCid: "share-cid", shareId: target.shareId,
-      policyCid: "", delegationCid: target.delegationCid, authorityMaterialHandle: target.authorityMaterialHandle, authorityMaterialDigest: target.authorityMaterialDigest,
+      type: "TinyCloudSharePolicySession", version: 2, sessionId: "session-resumed", shareCid: "share-cid", shareId: target.shareId,
+      registrationCid: "registration", envelopeCid: "envelope-cid", policyCid: "", delegationCid: target.delegationCid,
       holderDid, targetOrigin: "https://node.example", nodeAudience: "did:web:node.example", action: "tinycloud.kv/get", actions: ["tinycloud.kv/get"],
       contentSource: target.contentSource, contentSourceDigest: target.contentSourceDigest, resource: target.resource.path, expiresAt: "2030-01-01T00:00:00.000Z",
     };
@@ -169,8 +176,8 @@ describe("addressed recipient response binding", () => {
     const response = await responseFor(target);
     const fetchFn = async (input: RequestInfo | URL): Promise<Response> => {
       const url = String(input);
-      if (url.endsWith("/share/v1/policy/session")) return new Response(JSON.stringify(signedArtifact("session", "xyz.tinycloud.share/policy-session/v1\0", session)), { status: 200 });
-      if (url.endsWith("/invoke")) return new Response(JSON.stringify(response), { status: 200 });
+      if (url.endsWith("/share/v2/policy/session")) return new Response(JSON.stringify(signedArtifact("session", "xyz.tinycloud.share/policy-session/v2\0", session)), { status: 200 });
+      if (url.endsWith("/share/v2/invoke")) return new Response(JSON.stringify(response), { status: 200 });
       throw new Error(`unexpected ${url}`);
     };
     const client = new ShareRecipientClient({ nodeOrigin: "https://node.example", trustedNode: { invitationKid: nodeKid, invitationPublicKey: nodePublicKey }, holderDid, envelope: target, fetchFn, sign: async (bytes) => ed25519.sign(bytes, holderPrivateKey) });
