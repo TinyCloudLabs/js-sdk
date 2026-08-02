@@ -69,7 +69,7 @@ jobs:
       - name: Check out OpenKey at a compatible revision
         uses: actions/checkout@v4
         with:
-          repository: openkey-so/openkey
+          repository: TinyCloudLabs/openkey
           ref: main
           path: openkey
 
