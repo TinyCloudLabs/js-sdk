@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/share-envelope",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.0",
   "description": "Canonical TinyCloud Share envelope codecs and ordered verifier.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -18,7 +18,9 @@
     "./package.json": "./package.json"
   },
   "sideEffects": false,
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "test": "bun test",

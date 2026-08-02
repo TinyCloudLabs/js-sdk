@@ -1,5 +1,16 @@
 # @tinycloudlabs/web-sdk
 
+## 2.11.0-beta.7
+
+### Patch Changes
+
+- 44ecf56: Release the exact-head session invocation APIs and canonical recipient-DID policy support used by Share.
+- Updated dependencies [44ecf56]
+- Updated dependencies [9fd8752]
+- Updated dependencies [4ce36a6]
+  - @tinycloud/node-sdk@2.11.0-beta.7
+  - @tinycloud/sdk-core@2.11.0-beta.7
+
 ## 2.11.0-beta.5
 
 ### Minor Changes

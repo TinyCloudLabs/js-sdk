@@ -1,5 +1,24 @@
 # @tinycloudlabs/sdk-core
 
+## 2.11.0-beta.7
+
+### Patch Changes
+
+- 44ecf56: Release the exact-head session invocation APIs and canonical recipient-DID policy support used by Share.
+- 9fd8752: Establish the canonical browser- and Node-safe Share envelope codecs and headless SDK foundation. Tracks TC-401's receiveShare parity contract.
+- 4ce36a6: Add typed recipient-DID/device authorization, exact-email and domain policy publication/claim resume seams, idempotent notification outcomes, encrypted sender history views, target-aware revocation, and explicit read-only tc1 migration helpers to the canonical Share SDK and CLI.
+- Updated dependencies [44ecf56]
+- Updated dependencies [17d5662]
+- Updated dependencies [2a77ebc]
+- Updated dependencies [705685e]
+- Updated dependencies [d4ec80a]
+- Updated dependencies [1103359]
+- Updated dependencies [9fd8752]
+- Updated dependencies [4ce36a6]
+  - @tinycloud/sdk-services@2.11.0-beta.7
+  - @tinycloud/share-sdk@0.2.0-beta.0
+  - @tinycloud/share-envelope@0.2.0-beta.0
+
 ## 2.11.0-beta.5
 
 ### Minor Changes

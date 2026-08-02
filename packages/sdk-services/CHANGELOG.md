@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-services
 
+## 2.11.0-beta.7
+
+### Patch Changes
+
+- 44ecf56: Release the exact-head session invocation APIs and canonical recipient-DID policy support used by Share.
+
 ## 2.11.0-beta.5
 
 ### Minor Changes
