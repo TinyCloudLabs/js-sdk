@@ -719,6 +719,11 @@ export class TinyCloudWeb {
   get isSessionOnly(): boolean { return this.node.isSessionOnly; }
   get isWalletConnected(): boolean { return this.walletSigner !== undefined; }
 
+  /** Sign protocol bytes with the established session key without exposing key material. */
+  async signSessionBytes(bytes: Uint8Array): Promise<Uint8Array> {
+    return this.node.signSessionBytes(bytes);
+  }
+
   // ===========================================================================
   // Extension & Lifecycle
   // ===========================================================================

@@ -342,6 +342,7 @@ async function buildDelivery(input: {
     shareUrl: `${ORIGIN}/s/${shareCid}#k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`,
     documentName: "Project plan.md",
     jti: "AQIDBAUGBwgJCgsMDQ4PEA",
+    idempotencyKey: "invite:vector:001",
     expiresAt: "2099-01-01T00:00:00.000Z",
     requestBodyDigest: digestOf(jsonBytes({ recipientEmail: "recipient@example.com", shareId: "share-v2-corpus-registration" })),
   };
@@ -378,7 +379,7 @@ async function buildDelivery(input: {
     authorityMaterialHandle: request.registrationCid,
     authorityMaterialDigest: digestOf(jsonBytes({ registrationCid: request.registrationCid })),
     requestBodyDigest: request.requestBodyDigest,
-    idempotencyKey: request.jti,
+      idempotencyKey: request.idempotencyKey,
     expiresAt: request.expiresAt,
     dataAuthority: false,
   };

@@ -66,6 +66,10 @@ describe("ShareRecipientClient", () => {
 
   test("normalizes only the DNS side of exact email matchers and uses segment-safe resource containment", () => {
     expect(normalizeShareRecipientTarget({ kind: "exactEmail", value: "Alice+Notes@MAILINATOR.COM" })).toEqual({ kind: "exactEmail", value: "Alice+Notes@mailinator.com" });
+    const recipientDid = `did:key:${base58btc.encode(new Uint8Array([0xed, 0x01, ...ed25519.getPublicKey(Uint8Array.from({ length: 32 }, (_, index) => index + 101))]))}`;
+    expect(normalizeShareRecipientTarget({ kind: "recipientDid", value: recipientDid })).toEqual({ kind: "recipientDid", value: recipientDid });
+    expect(() => normalizeShareRecipientTarget({ kind: "recipientDid", value: "did:key:zholder" })).toThrow(/recipient DID/);
+    expect(() => normalizeShareRecipientTarget({ kind: "recipientDid", value: "did:web:-bad.example" })).toThrow(/recipient DID/);
     expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read"] }, "read", "docs/readme.md")).toBe(true);
     expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read"] }, "read", "docs2/readme.md")).toBe(false);
     expect(shareCapabilityAllows({ spaceId: SPACE, resource: { kind: "exact", path: "docs/readme.md" }, actions: ["list"] }, "list", "docs/readme.md")).toBe(false);

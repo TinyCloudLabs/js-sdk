@@ -8,8 +8,8 @@
   "scripts": {
     "setup": "./scripts/setup-rust.sh",
     "build": "bun run build:wasm:web && bun run build:wasm:node",
-    "build:wasm:web": "bash -c 'source ../../scripts/setup.sh && wasm-pack build --release --target web --out-dir web-sdk-wasm --manifest-path Cargo.toml --features browser'",
-    "build:wasm:node": "bash -c 'source ../../scripts/setup.sh && wasm-pack build --release --target nodejs --out-dir node-sdk-wasm --manifest-path Cargo.toml --features nodejs'",
+    "build:wasm:web": "bash -c 'source ../../scripts/setup.sh && wasm-pack build --release --no-opt --target web --out-dir web-sdk-wasm --manifest-path Cargo.toml --features browser'",
+    "build:wasm:node": "bash -c 'source ../../scripts/setup.sh && wasm-pack build --release --no-opt --target nodejs --out-dir node-sdk-wasm --manifest-path Cargo.toml --features nodejs'",
     "build:packages": "cd packages/web && bun run build && cd ../node && bun run build",
     "build:all": "bun run build && bun run build:packages",
     "build-dev": "wasm-pack build --dev --target web --out-dir web-sdk-wasm -- --features browser",

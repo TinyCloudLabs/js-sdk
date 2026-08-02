@@ -47,11 +47,17 @@ tc kv delete mykey                     # Delete
 ## Sharing
 
 ```bash
-tc share create --path kv/mykey --actions kv/get --expiry 7d --web-link
-tc share receive "eyJ0eXAi..."
-tc share list
-tc share revoke shr_abc123
+tc share publish ./decision.md
+cat decision.md | tc share publish - --name decision.md --expires 7d
+printf '%s' "$SHARE_URL" | tc share inspect - --json
+printf '%s' "$SHARE_URL" | tc share receive - --output .
+printf '%s' "$SHARE_URL" | tc share receive - --stdout
 ```
+
+Modern bearer links are verified through the canonical headless Share SDK.
+Keep the complete URL, including its fragment, local to the process; the
+fragment is the read authority. Publish human mode prints only the canonical
+URL, and receive writes create-exclusive output unless `--force` is explicit.
 
 For detailed command reference and all options, see [REFERENCE.md](REFERENCE.md).
 
@@ -61,8 +67,7 @@ For programmatic usage with `@tinycloud/node-sdk`, see [SDK.md](SDK.md).
 
 ```bash
 # Store and share in one shot
-tc kv put report "$(cat report.json)" && \
-tc share create --path kv/report --actions kv/get --expiry 7d --web-link
+tc kv put report "$(cat report.json)"
 
 # Pipe from curl into TinyCloud
 curl -s https://api.example.com/data | tc kv put snapshot --stdin
@@ -77,9 +82,11 @@ tc kv get snapshot --raw | jq '.results'
 |------|---------|
 | 0 | Success |
 | 1 | General error |
-| 2 | Usage error |
-| 3 | Auth required |
-| 4 | Not found |
-| 5 | Permission denied |
-| 6 | Network error |
-| 7 | Node error |
+| 2 | Usage or invalid input |
+| 3 | Share upload authority required |
+| 4 | Share unavailable or expired |
+| 5 | Share verification failed |
+| 6 | Network or registry error |
+| 7 | Share byte limit exceeded |
+| 8 | Output conflict or unsafe filename |
+| 9 | Partial share success |

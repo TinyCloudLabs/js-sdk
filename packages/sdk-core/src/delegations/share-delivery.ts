@@ -18,6 +18,7 @@ export interface ShareDeliveryAuthorizationRequest {
   readonly shareUrl: string;
   readonly documentName: string;
   readonly jti: string;
+  readonly idempotencyKey: string;
   readonly expiresAt: string;
   readonly requestBodyDigest: string;
 }
@@ -164,7 +165,7 @@ export function validateShareDeliveryAuthorizationBytes(bytesValue: Uint8Array, 
     || authorization.documentName !== request.documentName
     || authorization.requestBodyDigest !== request.requestBodyDigest
     || authorization.expiresAt !== request.expiresAt
-    || authorization.idempotencyKey !== request.jti
+    || authorization.idempotencyKey !== request.idempotencyKey
     || authorization.reportAbuseToken !== request.jti
     || authorization.authorityMaterialHandle !== request.registrationCid
   ) {

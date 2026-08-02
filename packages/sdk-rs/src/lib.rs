@@ -122,7 +122,8 @@ struct InvokeAnyEntry {
     #[serde(default)]
     space_id: Option<String>,
     service: String,
-    path: String,
+    #[serde(default)]
+    path: Option<String>,
     action: String,
     #[serde(default)]
     caveats: Vec<BTreeMap<String, serde_json::Value>>,
@@ -294,9 +295,12 @@ pub fn invokeAny(session: JsValue, entries: JsValue, facts: JsValue) -> Result<J
                 })?;
                 let space_id: SpaceId = space_id.parse().map_err(map_jserr)?;
                 let service: Service = entry.service.parse().map_err(map_jserr)?;
-                let path: Path = entry.path.parse().map_err(map_jserr)?;
+                let path = entry
+                    .path
+                    .map(|value| value.parse::<Path>().map_err(map_jserr))
+                    .transpose()?;
                 space_id
-                    .to_resource(service, Some(path), None, None)
+                    .to_resource(service, path, None, None)
                     .as_uri()
             }
         };

@@ -182,6 +182,48 @@ export {
   MemorySenderShareKeyStorage,
   SenderShareStore,
 } from "./sender-share-store";
+
+/** Lifecycle and authorization operations are delegated to the canonical
+ * headless package so sdk-core cannot grow a second Share verifier. */
+export {
+  authorizeShare,
+  authorizationMethodForTarget,
+  notifyShare,
+  revokeShare,
+  listShares,
+  showShare,
+  publishTargetShare,
+  publishPolicyShare,
+  claimShare,
+  resumeShareAuthorization,
+  isLegacyShareLink,
+  receiveLegacyShare,
+  migrateShare,
+  MemoryEncryptedShareHistoryStorage,
+  EncryptedSenderShareHistory,
+} from "@tinycloud/share-sdk";
+export type {
+  ShareAuthorizationMethod,
+  ShareAuthorizationRequired,
+  ShareAuthorizationDenied,
+  ShareAuthorizationReady,
+  ShareAuthorizationResult,
+  ShareAuthorizationAdapter,
+  ShareNotifyState,
+  ShareNotifyResult,
+  ShareDeliveryAdapter,
+  ShareRevocationResult,
+  ShareRevocationAdapter,
+  ShareHistoryView,
+  ShareTarget,
+  TargetPublishInput,
+  TargetPublishOutcome,
+  TargetPublishAdapter,
+  SharePolicyPublishAdapter,
+  LegacyShareReader,
+  LegacyMigrationResult,
+  EncryptedShareHistoryStorage,
+} from "@tinycloud/share-sdk";
 export type {
   SenderShareRecord,
   SenderShareRecordStorage,
@@ -221,6 +263,29 @@ export type {
 } from "./recipient-types";
 export type { ShareNativeResponse } from "./recipient-types.schema";
 export { ShareAccessError, ShareConflict } from "./recipient-types";
+
+/**
+ * Canonical headless Share foundation. The older SharingService and v2
+ * artifact exports above remain compatibility adapters; new consumers should
+ * use these package-owned codecs and redacted receive operations so browser
+ * and Node callers share one verifier and one result taxonomy.
+ */
+export {
+  inspectShare,
+  receiveShare,
+  ShareReceiveError,
+  toShareErrorInfo,
+  verifyBearerEnvelope,
+} from "@tinycloud/share-sdk";
+export type {
+  ShareErrorCode,
+  ShareErrorInfo,
+  ShareFetchOptions,
+  ShareInspection,
+  ShareMetadata,
+  ShareReceiveResult,
+  VerifyBearerEnvelopeOptions,
+} from "@tinycloud/share-sdk";
 export {
   ShareActionSchema,
   ShareRecipientClientOptionsSchema,
