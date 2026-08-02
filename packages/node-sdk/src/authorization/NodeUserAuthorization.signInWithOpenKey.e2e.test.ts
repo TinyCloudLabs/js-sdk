@@ -198,6 +198,62 @@ test("signInWithOpenKey completes an unmodified round trip via the bridge", asyn
   expect(auth.session).toBeDefined();
 });
 
+test("signInWithOpenKey binds the registry/fallback-resolved host before authorization", async () => {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner(PRIVATE_KEY);
+  const auth = new NodeUserAuthorization({
+    signer,
+    wasmBindings: wasm,
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    // Exercise the normal initially-unset host path without making a network
+    // request: disable local/registry discovery and let the resolver choose
+    // this deterministic fallback.
+    autoDiscoverLocalNode: false,
+    tinycloudRegistryUrl: null,
+    tinycloudFallbackHosts: ["https://resolved.tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+  });
+
+  const openkey = makeSimulatedOpenKey({ wasm, signer });
+  const authorize = wireOpenKeyAuthorize(openkey);
+  let authorizedHost: string | undefined;
+  await auth.signInWithOpenKey(async (input) => {
+    authorizedHost = input.host;
+    return authorize(input);
+  });
+
+  expect(authorizedHost).toBe("https://resolved.tinycloud.test");
+  expect(auth.hosts).toEqual(["https://resolved.tinycloud.test"]);
+});
+
+test("signInWithOpenKey uses a host override for both approval and activation", async () => {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner(PRIVATE_KEY);
+  const auth = new NodeUserAuthorization({
+    signer,
+    wasmBindings: wasm,
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://configured.tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+  });
+
+  const openkey = makeSimulatedOpenKey({ wasm, signer });
+  const authorize = wireOpenKeyAuthorize(openkey);
+  let authorizedHost: string | undefined;
+  await auth.signInWithOpenKey(
+    async (input) => {
+      authorizedHost = input.host;
+      return authorize(input);
+    },
+    { host: "https://override.tinycloud.test" },
+  );
+
+  expect(authorizedHost).toBe("https://override.tinycloud.test");
+  expect(auth.hosts).toEqual(["https://override.tinycloud.test"]);
+});
+
 test("signInWithOpenKey completes with a narrowed selection via the bridge", async () => {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(PRIVATE_KEY);

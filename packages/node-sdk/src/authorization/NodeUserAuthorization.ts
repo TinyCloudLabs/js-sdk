@@ -1521,6 +1521,25 @@ export class NodeUserAuthorization implements IUserAuthorization {
       reason?: string;
     },
   ): Promise<ClientSession> {
+    // A per-call host override is the host this session will actually use,
+    // not merely a display hint for OpenKey. Install it before preparation so
+    // the same value is bound into the authorization context and later used
+    // for activation.
+    if (options?.host !== undefined) {
+      const overrideHost = options.host.trim();
+      if (!overrideHost) {
+        throw new Error("OpenKey authorization host must not be empty");
+      }
+      this.tinycloudHosts = [overrideHost];
+    }
+
+    // OpenKey binds the target host into its authorization context. Resolve
+    // the same host activation will use before asking OpenKey to prepare or
+    // sign anything; signInWithPreparedSession is intentionally too late.
+    const signingAddress = canonicalizeAddress(await this.signer.getAddress());
+    const signingChainId = await this.signer.getChainId();
+    await this.resolveTinyCloudHostsForSignIn(signingAddress, signingChainId);
+
     // 1. Prepare — this creates a SIWE bound to a fresh session key.
     const { prepared, keyId, jwk } = await this.prepareSessionForSigning();
 
@@ -1542,7 +1561,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     //    Sol MAJOR-3: forward an OpenKey keyId when the caller supplied
     //    one so the widget/SDK routes to the specific OpenKey key rather
     //    than the SDK's connected-key default.
-    const hostHint = options?.host ?? this.tinycloudHosts?.[0];
+    const hostHint = this.primaryTinyCloudHost;
     const result = await authorizeFn({
       protocolVersion: 1,
       siwe: prepared.siwe,

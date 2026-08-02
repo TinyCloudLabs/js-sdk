@@ -33,3 +33,7 @@ authorization consolidation.
 - `node-sdk` production TypeScript build no longer includes test sources
   or test-support modules, so `tsc --noEmit -p packages/node-sdk/tsconfig.json`
   now exits 0.
+- `node-sdk.signInWithOpenKey` resolves the actual TinyCloud activation host
+  before preparing or sending the OpenKey authorization request. A per-call
+  host override is installed as the session host, so the host bound into the
+  OpenKey context and the host later used for activation cannot diverge.
