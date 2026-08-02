@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { ProfileManager } from "../config/profiles.js";
 import { NodeWasmBindings } from "../../../node-sdk/src/NodeWasmBindings.js";
 import { PrivateKeySigner } from "../../../node-sdk/src/signers/PrivateKeySigner.js";
-import { createProductionUploadAuthorizer, createShareAuthorityAdapters } from "./adapters.js";
+import { createProductionUploadAuthorizer, createShareAuthorityAdapters, postAddressedShareDelivery } from "./adapters.js";
 
 const upload = {
   blob: new Uint8Array([1, 2, 3]),
@@ -66,6 +66,41 @@ afterEach(() => {
 });
 
 describe("Share upload authority adapter", () => {
+  it("posts the exact signed delivery receipt only to OpenCredentials", async () => {
+    const credentialsOrigin = "https://credentials.example";
+    const emailOrigin = "https://email.example";
+    const authorization = { type: "TinyCloudShareDeliveryAuthorization", version: 2 };
+    const proof = { alg: "EdDSA", kid: "did:web:node.example#key", signature: "test-signature" };
+    const shareUrl = "share-url-with-private-fragment";
+    const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
+
+    const response = await postAddressedShareDelivery({
+      credentialsOrigin,
+      receipt: { authorization, proof },
+      shareUrl,
+      fetchFn: (async (input, init) => {
+        calls.push({ url: String(input), init });
+        return new Response(null, { status: 202 });
+      }) as typeof globalThis.fetch,
+    });
+
+    expect(response.status).toBe(202);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(`${credentialsOrigin}/share/v2`);
+    expect(calls[0]?.url).not.toBe(`${emailOrigin}/share/v2`);
+    expect(calls[0]?.init).toMatchObject({
+      method: "POST",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    expect(calls[0]?.init).not.toHaveProperty("referrer");
+    expect(calls[0]?.init?.headers).toEqual({ accept: "application/json", "content-type": "application/json" });
+    const body = JSON.parse(String(calls[0]?.init?.body));
+    expect(body).toEqual({ authorization, proof, shareUrl });
+    expect(Object.keys(body).sort()).toEqual(["authorization", "proof", "shareUrl"]);
+  });
+
   it("uses an explicit noninteractive acquisition hook without reading or persisting a private JWK", async () => {
     let received: string | undefined;
     const authorize = createProductionUploadAuthorizer({

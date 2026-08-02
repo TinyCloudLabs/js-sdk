@@ -31082,6 +31082,21 @@ var ShareAuthorityError = class extends Error {
     this.code = code4;
   }
 };
+async function postAddressedShareDelivery(input) {
+  return input.fetchFn(`${input.credentialsOrigin}/share/v2`, {
+    method: "POST",
+    credentials: "omit",
+    redirect: "error",
+    referrerPolicy: "no-referrer",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({
+      authorization: input.receipt.authorization,
+      proof: input.receipt.proof,
+      shareUrl: input.shareUrl
+    }),
+    signal: input.signal
+  });
+}
 function createEncryptedSessionHistory() {
   const records = /* @__PURE__ */ new Map();
   let keyPromise;
@@ -31441,13 +31456,11 @@ function createShareAuthorityAdapters(input = {}) {
       nodeProof: { kid: config.nodeInvitationKid, publicKey: config.nodeInvitationPublicKey },
       credentialsAudience: config.credentialsOrigin
     });
-    const response = await fetchFn(`${config.emailOrigin}/share/v2`, {
-      method: "POST",
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-      headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({ authorization: receipt.authorization, proof: receipt.proof, shareUrl: record2.link }),
+    const response = await postAddressedShareDelivery({
+      credentialsOrigin: config.credentialsOrigin,
+      receipt,
+      shareUrl: record2.link,
+      fetchFn,
       signal: request.signal
     });
     if (!response.ok) throw new Error("share delivery was not accepted");

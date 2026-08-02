@@ -48,6 +48,28 @@ interface SharePublicConfig {
   readonly nodeInvitationPublicKey: Uint8Array;
 }
 
+export async function postAddressedShareDelivery(input: {
+  readonly credentialsOrigin: string;
+  readonly receipt: { readonly authorization: unknown; readonly proof: unknown };
+  readonly shareUrl: string;
+  readonly fetchFn: typeof globalThis.fetch;
+  readonly signal?: AbortSignal;
+}): Promise<Response> {
+  return input.fetchFn(`${input.credentialsOrigin}/share/v2`, {
+    method: "POST",
+    credentials: "omit",
+    redirect: "error",
+    referrerPolicy: "no-referrer",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({
+      authorization: input.receipt.authorization,
+      proof: input.receipt.proof,
+      shareUrl: input.shareUrl,
+    }),
+    signal: input.signal,
+  });
+}
+
 /**
  * The CLI process keeps its history encrypted even when no durable profile
  * store is available.  A later process can replace this adapter with the
@@ -393,13 +415,11 @@ export function createShareAuthorityAdapters(input: {
       nodeProof: { kid: config.nodeInvitationKid, publicKey: config.nodeInvitationPublicKey },
       credentialsAudience: config.credentialsOrigin,
     });
-    const response = await fetchFn(`${config.emailOrigin}/share/v2`, {
-      method: "POST",
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-      headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({ authorization: receipt.authorization, proof: receipt.proof, shareUrl: record.link }),
+    const response = await postAddressedShareDelivery({
+      credentialsOrigin: config.credentialsOrigin,
+      receipt,
+      shareUrl: record.link,
+      fetchFn,
       signal: request.signal,
     });
     if (!response.ok) throw new Error("share delivery was not accepted");
