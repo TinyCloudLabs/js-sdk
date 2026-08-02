@@ -12,6 +12,12 @@ permissions:
 jobs:
   authority:
     runs-on: ubuntu-latest
+    # The isolated authority job must not fail merely because a sibling
+    # OpenKey developer worktree is absent. The cross-repo Hono contract
+    # test runs in the dedicated `cross-repo-contract` job below, which
+    # explicitly checks OpenKey out at a pinned rev.
+    env:
+      OPENKEY_HARNESS_OPTIONAL: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -45,3 +51,65 @@ jobs:
           bun run --cwd packages/sdk-core test
           bun run --cwd packages/sdk-services test
           bun test --max-concurrency=1 packages/node-sdk/src
+
+  # Real cross-repo contract: check out both js-sdk and OpenKey, spawn the
+  # real Hono authorize-sign harness, and exercise the wire shape. This is
+  # the authoritative test that the js-sdk consumer accepts the real
+  # Hono response body — it MUST NOT be a silent-skip.
+  cross-repo-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out js-sdk
+        uses: actions/checkout@v4
+        with:
+          path: js-sdk
+
+      # Pin to a compatible OpenKey revision. Bump this when the OpenKey
+      # HEAD moves to keep the cross-repo contract test in sync.
+      - name: Check out OpenKey at a compatible revision
+        uses: actions/checkout@v4
+        with:
+          repository: openkey-so/openkey
+          ref: main
+          path: openkey
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install js-sdk dependencies
+        working-directory: js-sdk
+        run: bun install --frozen-lockfile
+
+      - name: Install OpenKey dependencies
+        working-directory: openkey
+        run: bun install --frozen-lockfile
+
+      - name: Build js-sdk authority packages
+        working-directory: js-sdk
+        run: |
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/sdk-core build
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/node-sdk build
+
+      - name: Run cross-repo Hono contract test
+        working-directory: js-sdk
+        env:
+          # Point the js-sdk test at the sibling OpenKey checkout so the
+          # harness is discovered without any developer worktree layout.
+          OPENKEY_WORKTREE: ${{ github.workspace }}/openkey
+          # The harness itself refuses to run without this belt-and-
+          # suspenders env being set (see scripts/authorize-sign-harness.test.ts).
+          OPENKEY_RUN_HARNESS: "1"
+         run: |
+           bun test packages/node-sdk/src/authorization/NodeUserAuthorization.crossRepoHono.e2e.test.ts

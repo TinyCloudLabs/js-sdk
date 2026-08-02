@@ -14,6 +14,8 @@
 // by hand — the wire shape it enforces exactly mirrors what OpenKey
 // emits and what `signInWithOpenKeyResult` accepts.
 
+import type { CapabilityPresentationEnvelopeV1 } from "@tinycloud/sdk-core";
+
 /**
  * Structural shape of the OpenKey SDK's `authorizeTinyCloud()` method.
  * Callers pass any object that conforms to this shape — typically an
@@ -27,6 +29,13 @@ export interface OpenKeyAuthorizeTinyCloud {
     keyId?: string;
     jwk?: Record<string, unknown>;
     host?: string;
+    /**
+     * Display-only presentation envelope. Forwarded to the OpenKey
+     * widget review UI. The envelope MUST NEVER expand authority — the
+     * ReCap payload remains the sole gate — and the widget/server
+     * validates and size-bounds it before use.
+     */
+    presentation?: CapabilityPresentationEnvelopeV1;
   }): Promise<{
     protocolVersion: 1;
     address: string;
@@ -49,6 +58,14 @@ export interface OpenKeyBridgeInput {
   host?: string;
   /** Optional keyId hint the caller wants OpenKey to bind to. */
   keyId?: string;
+  /**
+   * Optional presentation envelope built by `NodeUserAuthorization`
+   * from its `_manifest`. Passed through to `authorizeTinyCloud` so the
+   * widget can render honest provenance labels and the OpenKey server
+   * can origin-bind the browser origin against the app's well-known
+   * manifest. Display-only.
+   */
+  presentation?: CapabilityPresentationEnvelopeV1;
 }
 
 export type NodeUserAuthorizationAuthorizeFn = (
@@ -94,6 +111,9 @@ export function wireOpenKeyAuthorize(
       keyId: input.keyId,
       jwk: input.jwk,
       host: input.host,
+      // Forward the presentation envelope verbatim — the OpenKey SDK
+      // validates and size-bounds it before use.
+      presentation: input.presentation,
     });
     if (result.protocolVersion !== 1) {
       throw new Error(

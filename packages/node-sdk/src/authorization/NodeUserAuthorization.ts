@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { createHash } from "node:crypto";
 import { SiweMessage } from "siwe";
 import {
   IUserAuthorization,
@@ -46,6 +47,7 @@ import {
   CAPABILITIES,
   HOOKS,
   ENCRYPTION,
+  type CapabilityPresentationEnvelopeV1,
 } from "@tinycloud/sdk-core";
 import {
   SignStrategy,
@@ -57,6 +59,30 @@ import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
+
+/**
+ * Canonical (sorted-key) JSON stringify. Ensures the digest is stable
+ * across insertion orders — the server compares this digest against the
+ * SHA-256 of the well-known manifest bytes, so both sides must produce
+ * the same string for structurally identical objects.
+ */
+function canonicalStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalStringify).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  return `{${entries
+    .map(([k, v]) => `${JSON.stringify(k)}:${canonicalStringify(v)}`)
+    .join(",")}}`;
+}
+
+/** SHA-256 hex of the canonical JSON form of `value`. */
+function canonicalSha256Hex(value: unknown): string {
+  return createHash("sha256").update(canonicalStringify(value)).digest("hex");
+}
 
 function didPrincipalMatches(actual: string, expected: string): boolean {
   try {
@@ -1447,6 +1473,15 @@ export class NodeUserAuthorization implements IUserAuthorization {
        * bridge relies on the SDK's connected-key state.
        */
       keyId?: string;
+      /**
+       * Optional presentation envelope forwarded to the OpenKey widget.
+       * Built from this instance's `_manifest` when set. Display-only —
+       * the widget/server MUST NOT let it expand authority. The envelope
+       * carries `manifests` payloads plus a stable SHA-256 digest so the
+       * OpenKey server can origin-bind the browser origin against the
+       * app's well-known manifest.
+       */
+      presentation?: CapabilityPresentationEnvelopeV1;
     }) => Promise<{
       protocolVersion: 1;
       address: string;
@@ -1455,12 +1490,27 @@ export class NodeUserAuthorization implements IUserAuthorization {
       selectedActionKeys: string[];
       permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
     }>,
-    options?: { host?: string; openkeyKeyId?: string },
+    options?: {
+      host?: string;
+      openkeyKeyId?: string;
+      /**
+       * Optional caller-supplied reason string forwarded in the
+       * presentation envelope. Rendered as caller-supplied (never
+       * verified) in the widget.
+       */
+      reason?: string;
+    },
   ): Promise<ClientSession> {
     // 1. Prepare — this creates a SIWE bound to a fresh session key.
     const { prepared, keyId, jwk } = await this.prepareSessionForSigning();
 
-    // 2. Delegate signing to OpenKey via the caller-supplied bridge.
+    // 2. Build the presentation envelope from the instance manifest (if
+    //    any). This is the SUPPORTED production path for surfacing an
+    //    honest app identity in the OpenKey review UI — we NEVER
+    //    fabricate manifest fields, and the envelope is display-only.
+    const presentation = this.buildPresentationEnvelope(options?.reason);
+
+    // 3. Delegate signing to OpenKey via the caller-supplied bridge.
     //    We forward the JWK so the OpenKey server can regenerate a
     //    narrowed SIWE bound to the same session key when the user
     //    edits the review — and never a caller-echoed JWK.
@@ -1479,14 +1529,76 @@ export class NodeUserAuthorization implements IUserAuthorization {
       jwk,
       host: hostHint,
       keyId: options?.openkeyKeyId,
+      presentation,
     });
 
-    // 3. Complete with the EXACT bytes OpenKey signed. Every subset
+    // 4. Complete with the EXACT bytes OpenKey signed. Every subset
     //    invariant (immutable fields preserved, capabilities ⊆ prepared,
     //    selectedActionKeys grounded in signedMessage, permissions
     //    consistent) is enforced by signInWithOpenKeyResult before any
     //    session state is created.
     return this.signInWithOpenKeyResult(result, prepared, keyId, jwk);
+  }
+
+  /**
+   * Build a `CapabilityPresentationEnvelopeV1` from `this._manifest`. The
+   * envelope is display-only — the OpenKey widget renders it under an
+   * honest trust label, and the server /authorize-sign-prepare route
+   * decides whether to upgrade the label to `origin-bound` by fetching
+   * the well-known manifest and comparing its digest to
+   * `manifestDigest`.
+   *
+   * Returns `undefined` when no manifest is set — the widget renders as
+   * "no manifest supplied" (unsigned).
+   *
+   * The digest is a deterministic SHA-256 over canonical JSON of the
+   * first manifest payload; this matches what the server compares
+   * against the fetched `.well-known/openkey-manifest.json` bytes.
+   */
+  private buildPresentationEnvelope(
+    reason?: string,
+  ): CapabilityPresentationEnvelopeV1 | undefined {
+    const manifests = Array.isArray(this._manifest)
+      ? this._manifest
+      : this._manifest
+        ? [this._manifest]
+        : [];
+    if (manifests.length === 0 && !reason) {
+      return undefined;
+    }
+    // Canonical JSON: sort keys so the digest is stable across process
+    // invocations and matches whatever the server hashes on the
+    // fetched manifest bytes when the app publishes the same object
+    // shape. Apps that want their manifest to origin-bind MUST publish
+    // the same JSON at the well-known path.
+    const primary = manifests[0];
+    let displayName: string | undefined;
+    let manifestId: string | undefined;
+    let manifestDigest: string | undefined;
+    const envelopeManifests: NonNullable<
+      CapabilityPresentationEnvelopeV1["manifests"]
+    > = [];
+    for (const m of manifests) {
+      envelopeManifests.push({
+        name: m.name,
+        appId: m.app_id,
+        // Deep-copy to prevent later mutations from affecting the digest.
+        payload: JSON.parse(JSON.stringify(m)) as Record<string, unknown>,
+      });
+    }
+    if (primary) {
+      displayName = primary.name;
+      manifestId = primary.app_id;
+      manifestDigest = canonicalSha256Hex(primary);
+    }
+    return {
+      protocolVersion: 1,
+      displayName,
+      reason: reason && reason.length > 0 ? reason : undefined,
+      manifestId,
+      manifestDigest,
+      manifests: envelopeManifests.length > 0 ? envelopeManifests : undefined,
+    };
   }
 
   /**

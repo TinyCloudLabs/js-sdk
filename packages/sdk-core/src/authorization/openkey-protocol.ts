@@ -53,9 +53,32 @@ export interface TinyCloudEffectiveGrantV1 {
 export interface CapabilityPresentationEnvelopeV1 {
   protocolVersion: 1;
   displayName?: string;
+  /**
+   * Reason string the caller supplied for the delegation. Rendered as
+   * caller-supplied context — NEVER treated as verified metadata unless
+   * the receiving side origin-binds a manifest that carries the same
+   * text. The OpenKey widget marks this as "reason provided by caller".
+   */
   reason?: string;
   manifestId?: string;
   manifestDigest?: string;
+  /**
+   * Full manifest payload(s) the SDK forwards so the OpenKey review UI
+   * can render honest provenance labels. Display-only:
+   *   - The envelope MUST NEVER expand authority; the ReCap payload is
+   *     the sole gate for what the user can approve.
+   *   - The widget transport size-bounds and validates the envelope
+   *     before use; oversized/malformed envelopes are dropped.
+   *   - The OpenKey server's /authorize-sign-prepare route decides trust
+   *     — even a well-formed envelope stays `unsigned` unless the
+   *     browser origin is verifiable and its well-known manifest
+   *     content-digest matches `manifestDigest`.
+   */
+  manifests?: Array<{
+    name?: string;
+    appId?: string;
+    payload?: Record<string, unknown>;
+  }>;
 }
 
 /**

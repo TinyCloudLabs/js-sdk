@@ -195,6 +195,13 @@ if (HARNESS_AVAILABLE) {
           ...process.env,
           HARNESS_PORT: "0",
           HARNESS_SIGNER_PRIVATE_KEY: PRIVATE_KEY,
+          // The harness carries a top-of-file guard that refuses to run
+          // unless `OPENKEY_RUN_HARNESS=1` is set (defence-in-depth so a
+          // broad `bun test` walk in the OpenKey repo doesn't
+          // accidentally boot a stuck Hono process). Set it explicitly
+          // here so this cross-repo contract test is the ONLY path that
+          // starts the harness.
+          OPENKEY_RUN_HARNESS: "1",
         },
       },
     );
