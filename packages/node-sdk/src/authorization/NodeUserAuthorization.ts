@@ -60,28 +60,48 @@ import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 
+type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
 /**
- * Canonical (sorted-key) JSON stringify. Ensures the digest is stable
- * across insertion orders — the server compares this digest against the
- * SHA-256 of the well-known manifest bytes, so both sides must produce
- * the same string for structurally identical objects.
+ * Canonical sorted-key JSON used by the OpenKey manifest-digest protocol.
+ * Ordinary JSON semantics are applied first so undefined object fields are
+ * omitted identically to a published JSON file.
  */
-function canonicalStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalStringify).join(",")}]`;
+export function canonicalizeOpenKeyManifestJson(value: unknown): string {
+  const json = JSON.stringify(value);
+  if (json === undefined) {
+    throw new TypeError("manifest is not JSON-serializable");
   }
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
-    a.localeCompare(b),
-  );
-  return `{${entries
-    .map(([k, v]) => `${JSON.stringify(k)}:${canonicalStringify(v)}`)
+  return canonicalizeJsonValue(JSON.parse(json) as JsonValue);
+}
+
+function canonicalizeJsonValue(value: JsonValue): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalizeJsonValue).join(",")}]`;
+  }
+  return `{${Object.keys(value)
+    .sort()
+    .map(
+      (key) =>
+        `${JSON.stringify(key)}:${canonicalizeJsonValue(value[key]!)}`,
+    )
     .join(",")}}`;
 }
 
-/** SHA-256 hex of the canonical JSON form of `value`. */
-function canonicalSha256Hex(value: unknown): string {
-  return createHash("sha256").update(canonicalStringify(value)).digest("hex");
+/** SHA-256 hex of the canonical JSON form of a published manifest. */
+export function canonicalOpenKeyManifestSha256Hex(value: unknown): string {
+  return createHash("sha256")
+    .update(canonicalizeOpenKeyManifestJson(value))
+    .digest("hex");
 }
 
 function didPrincipalMatches(actual: string, expected: string): boolean {
@@ -1552,8 +1572,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * "no manifest supplied" (unsigned).
    *
    * The digest is a deterministic SHA-256 over canonical JSON of the
-   * first manifest payload; this matches what the server compares
-   * against the fetched `.well-known/openkey-manifest.json` bytes.
+   * first manifest payload; OpenKey parses the fetched well-known manifest
+   * and applies the same canonicalization before comparing digests.
    */
   private buildPresentationEnvelope(
     reason?: string,
@@ -1567,10 +1587,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
       return undefined;
     }
     // Canonical JSON: sort keys so the digest is stable across process
-    // invocations and matches whatever the server hashes on the
-    // fetched manifest bytes when the app publishes the same object
-    // shape. Apps that want their manifest to origin-bind MUST publish
-    // the same JSON at the well-known path.
+    // invocations and formatting/key-order changes in the published
+    // well-known manifest.
     const primary = manifests[0];
     let displayName: string | undefined;
     let manifestId: string | undefined;
@@ -1589,7 +1607,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     if (primary) {
       displayName = primary.name;
       manifestId = primary.app_id;
-      manifestDigest = canonicalSha256Hex(primary);
+      manifestDigest = canonicalOpenKeyManifestSha256Hex(primary);
     }
     return {
       protocolVersion: 1,

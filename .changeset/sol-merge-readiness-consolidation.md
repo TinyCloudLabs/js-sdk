@@ -7,6 +7,11 @@
 
 Merge-readiness consolidation for the OpenKey authorization protocol.
 
+The manifest digest now uses a shared sorted-key canonical JSON protocol with
+OpenKey, so whitespace and object-key order in a published well-known manifest
+do not break origin binding. The mandatory cross-repository CI job is pinned to
+the immutable compatible OpenKey revision containing the real Hono harness.
+
 `sdk-core` (`packages/sdk-core/src/authorization/openkey-protocol.ts`):
 
 - Extend `CapabilityPresentationEnvelopeV1` with an optional
