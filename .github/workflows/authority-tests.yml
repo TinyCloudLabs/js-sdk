@@ -73,7 +73,7 @@ jobs:
           # Immutable OpenKey PR #160 revision containing the real Hono
           # authorize-sign harness and the matching v1 wire contract.
           # After OpenKey merges, bump this to the resulting main SHA.
-          ref: 64d8a3041c7c47efcf60eb833217883a4398f787
+          ref: 96bf370fbc0ff2b5dd6e830b3a5ed6b81ee717b1
           path: openkey
 
       - uses: oven-sh/setup-bun@v2
