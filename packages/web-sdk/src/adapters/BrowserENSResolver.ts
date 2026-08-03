@@ -1,16 +1,12 @@
 import { IENSResolver } from "@tinycloud/sdk-core";
 import { type Address } from "viem";
 import { getEnsAddress, getEnsAvatar, getEnsName, normalize } from "viem/ens";
-import {
-  toEip1193Provider,
-  type BrowserWalletProvider,
-} from "./browserProvider";
+import type { BrowserWalletProvider } from "./browserProvider";
 
 export class BrowserENSResolver implements IENSResolver {
   private readonly provider: Parameters<typeof getEnsName>[0];
 
   constructor(provider: BrowserWalletProvider) {
-    const eip1193 = toEip1193Provider(provider);
     this.provider = {
       chain: {
         id: 1,
@@ -23,7 +19,7 @@ export class BrowserENSResolver implements IENSResolver {
           },
         },
       },
-      request: eip1193.request.bind(eip1193),
+      request: provider.request.bind(provider),
     } as Parameters<typeof getEnsName>[0];
   }
 

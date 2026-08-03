@@ -77,10 +77,8 @@ import {
 } from "./browserSessionPersistence";
 import { WebSecretsService } from "./WebSecretsService";
 import {
-  toLegacyWeb3Provider,
   type BrowserProvider,
   type BrowserWalletProvider,
-  type LegacyWeb3Provider,
 } from "../adapters/browserProvider";
 
 import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
@@ -287,11 +285,8 @@ export interface ShareReceiveResult<T = unknown> {
 // TinyCloudWeb
 
 export class TinyCloudWeb {
-  /**
-   * The legacy Web3 provider facade retained for public API compatibility.
-   * New code should use eip1193Provider.
-   */
-  public provider!: LegacyWeb3Provider;
+  /** The connected wallet's raw EIP-1193 provider. */
+  public provider!: BrowserProvider;
 
   /** The normalized EIP-1193 provider used by the SDK. */
   public eip1193Provider!: BrowserProvider;
@@ -382,8 +377,8 @@ export class TinyCloudWeb {
     const providerDriver = config.provider ?? config.providers?.web3?.driver;
     if (providerDriver) {
       this.walletSigner = new BrowserWalletSigner(providerDriver);
-      this.eip1193Provider = this.walletSigner.getProvider();
-      this.provider = toLegacyWeb3Provider(this.eip1193Provider);
+      this.provider = this.walletSigner.getProvider();
+      this.eip1193Provider = this.provider;
     }
 
     // Start async initialization (WASM + TinyCloudNode creation)
@@ -433,7 +428,7 @@ export class TinyCloudWeb {
     // Wire up signer if available
     if (this.walletSigner) {
       nodeConfig.signer = this.walletSigner;
-      nodeConfig.ensResolver = new BrowserENSResolver(this.eip1193Provider);
+      nodeConfig.ensResolver = new BrowserENSResolver(this.provider);
     }
 
     // Space creation handler.
@@ -753,8 +748,8 @@ export class TinyCloudWeb {
     options?: { spacePrefix?: string }
   ): void {
     this.walletSigner = new BrowserWalletSigner(provider);
-    this.eip1193Provider = this.walletSigner.getProvider();
-    this.provider = toLegacyWeb3Provider(this.eip1193Provider);
+    this.provider = this.walletSigner.getProvider();
+    this.eip1193Provider = this.provider;
     if (this._node) {
       this._node.connectSigner(this.walletSigner, {
         prefix: options?.spacePrefix,

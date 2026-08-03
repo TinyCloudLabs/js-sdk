@@ -1,7 +1,6 @@
 import { ISigner, Bytes } from "@tinycloud/sdk-core";
 import { bytesToHex, stringToHex, type Address } from "viem";
 import {
-  toEip1193Provider,
   type BrowserProvider,
   type BrowserWalletProvider,
 } from "./browserProvider";
@@ -18,8 +17,8 @@ export class BrowserWalletSigner implements ISigner {
   private cachedAddress?: string;
   private cachedChainId?: number;
 
-  constructor(externalProvider: BrowserWalletProvider) {
-    this.provider = toEip1193Provider(externalProvider);
+  constructor(provider: BrowserWalletProvider) {
+    this.provider = provider;
   }
 
   async getAddress(): Promise<string> {
