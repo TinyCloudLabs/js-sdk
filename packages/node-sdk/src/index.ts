@@ -110,6 +110,18 @@ export {
   type NodeUserAuthorizationConfig,
 } from "./authorization/NodeUserAuthorization";
 
+// OpenKey integration adapter — Sol continuation contract requires a
+// production entry point that wires OpenKey's authorizeTinyCloud into
+// NodeUserAuthorization.signInWithOpenKey. Callers pass a concrete
+// OpenKey (or any structurally compatible) instance and get back the
+// authorizeFn callback shape the node-sdk consumes.
+export {
+  wireOpenKeyAuthorize,
+  type OpenKeyAuthorizeTinyCloud,
+  type OpenKeyBridgeInput,
+  type NodeUserAuthorizationAuthorizeFn,
+} from "./authorization/openKeyBridge";
+
 // Sign strategies — value exports
 export {
   createOpenKeyCallbackSigningStrategy,

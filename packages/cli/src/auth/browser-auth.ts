@@ -118,8 +118,67 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
   if (options.expiry !== undefined) {
     params.set("expiry", String(options.expiry));
   }
+  // Announce the negotiated authorization protocol so OpenKey can pick the
+  // right widget copy. Older OpenKey builds ignore unknown params.
+  params.set("protocolVersion", "1");
   const base = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
   return `${base}/delegate?${params.toString()}`;
+}
+
+/**
+ * Runtime validator for a delegation callback payload. Returns null when
+ * the payload looks well-formed; otherwise a human-readable reason. Called
+ * before the delegation is persisted so a tampered response cannot install
+ * a session with unexpected fields.
+ *
+ * The `permissions` field is optional (older OpenKey builds omit it). When
+ * present it must be a strict `{ service, space, path, actions[] }` shape.
+ * The stronger subset-vs-requested check lives in
+ * `portableFromOpenKeyDelegation` (which has access to the original request);
+ * this validator's job is only to refuse a structurally-malformed response
+ * before any subset comparison can be made.
+ */
+export function validateDelegationCallbackPayload(value: unknown): string | null {
+  if (!value || typeof value !== "object") return "expected an object";
+  const v = value as Record<string, unknown>;
+  if (!v.delegationHeader || typeof v.delegationHeader !== "object") {
+    return "delegationHeader must be an object";
+  }
+  const auth = (v.delegationHeader as Record<string, unknown>).Authorization;
+  if (typeof auth !== "string" || !auth) {
+    return "delegationHeader.Authorization must be a non-empty string";
+  }
+  if (typeof v.delegationCid !== "string" || !v.delegationCid) {
+    return "delegationCid must be a non-empty string";
+  }
+  if (typeof v.spaceId !== "string" || !v.spaceId) {
+    return "spaceId must be a non-empty string";
+  }
+  if (v.permissions !== undefined) {
+    if (!Array.isArray(v.permissions)) {
+      return "permissions, when present, must be an array";
+    }
+    for (let i = 0; i < v.permissions.length; i++) {
+      const entry = v.permissions[i];
+      if (!entry || typeof entry !== "object") {
+        return `permissions[${i}] must be an object`;
+      }
+      const e = entry as Record<string, unknown>;
+      if (typeof e.service !== "string" || !e.service) {
+        return `permissions[${i}].service must be a non-empty string`;
+      }
+      if (typeof e.space !== "string") {
+        return `permissions[${i}].space must be a string`;
+      }
+      if (typeof e.path !== "string") {
+        return `permissions[${i}].path must be a string`;
+      }
+      if (!Array.isArray(e.actions) || e.actions.some((a) => typeof a !== "string" || !a)) {
+        return `permissions[${i}].actions must be a non-empty string[]`;
+      }
+    }
+  }
+  return null;
 }
 
 function shouldOpenBrowser(options: AuthFlowOptions): boolean {
@@ -151,14 +210,20 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
 
     function parsePasteInput(input: string): DelegationData {
       const trimmed = input.trim();
+      let parsed: unknown;
       // Try parsing as JSON directly
       try {
-        return JSON.parse(trimmed) as DelegationData;
+        parsed = JSON.parse(trimmed);
       } catch {
         // Try base64 decoding first
         const decoded = Buffer.from(trimmed, "base64").toString("utf-8");
-        return JSON.parse(decoded) as DelegationData;
+        parsed = JSON.parse(decoded);
       }
+      const invalid = validateDelegationCallbackPayload(parsed);
+      if (invalid) {
+        throw new Error(`Invalid delegation code: ${invalid}`);
+      }
+      return parsed as DelegationData;
     }
 
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -168,6 +233,13 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
         req.on("end", () => {
           try {
             const data = JSON.parse(body) as DelegationData;
+            const invalid = validateDelegationCallbackPayload(data);
+            if (invalid) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: invalid }));
+              settle({ error: new Error(`Invalid delegation payload: ${invalid}`) });
+              return;
+            }
             // Send CORS headers and success response
             res.writeHead(200, {
               "Content-Type": "application/json",
@@ -263,20 +335,24 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
   return new Promise((resolve, reject) => {
     rl.question("Paste delegation code: ", (input) => {
       rl.close();
+      let parsed: unknown;
       try {
-        // Try parsing as JSON directly
-        const data = JSON.parse(input.trim()) as DelegationData;
-        resolve(data);
+        parsed = JSON.parse(input.trim());
       } catch {
-        // Try base64 decoding first
         try {
           const decoded = Buffer.from(input.trim(), "base64").toString("utf-8");
-          const data = JSON.parse(decoded) as DelegationData;
-          resolve(data);
+          parsed = JSON.parse(decoded);
         } catch {
           reject(new Error("Invalid delegation code. Expected JSON or base64-encoded JSON."));
+          return;
         }
       }
+      const invalid = validateDelegationCallbackPayload(parsed);
+      if (invalid) {
+        reject(new Error(`Invalid delegation code: ${invalid}`));
+        return;
+      }
+      resolve(parsed as DelegationData);
     });
   });
 }

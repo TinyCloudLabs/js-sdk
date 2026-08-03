@@ -8,8 +8,46 @@ import {
   type TinyCloudSession,
   BOOTSTRAP_SESSION_REQUESTS,
 } from "@tinycloud/sdk-core";
-import { NodeUserAuthorization } from "./NodeUserAuthorization";
+import {
+  canonicalizeOpenKeyManifestJson,
+  canonicalOpenKeyManifestSha256Hex,
+  NodeUserAuthorization,
+} from "./NodeUserAuthorization";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+
+test("OpenKey manifest digest is stable across JSON formatting and key order", () => {
+  const inMemory = {
+    manifest_version: 1,
+    app_id: "xyz.tinycloud.listen",
+    name: "Listen",
+    secrets: {
+      GOOGLE_MEET_TOKENS: {
+        scope: "listen",
+        actions: ["read", "write", "delete"],
+      },
+      READ_ONLY_TOKEN: { scope: "listen" },
+    },
+  };
+  const published = JSON.parse(`{
+    "secrets": {
+      "READ_ONLY_TOKEN": { "scope": "listen" },
+      "GOOGLE_MEET_TOKENS": {
+        "actions": ["read", "write", "delete"],
+        "scope": "listen"
+      }
+    },
+    "name": "Listen",
+    "app_id": "xyz.tinycloud.listen",
+    "manifest_version": 1
+  }`);
+
+  expect(canonicalizeOpenKeyManifestJson(published)).toBe(
+    canonicalizeOpenKeyManifestJson(inMemory),
+  );
+  expect(canonicalOpenKeyManifestSha256Hex(published)).toBe(
+    "9811eb387770f1c0a26f36755a6604741be995692dc97561e2de924bb2ac9c3a",
+  );
+});
 
 function createSessionManager(): ISessionManager {
   const keys = new Map<string, string>();
