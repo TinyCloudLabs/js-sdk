@@ -1,5 +1,62 @@
 # @tinycloud/cli
 
+## 0.9.0-beta.9
+
+### Minor Changes
+
+- b38dd12: Add versioned OpenKey authorization protocol (v1) types and consumer wiring.
+  - `sdk-core` exports `TinyCloudAuthorizationRequestV1`, `TinyCloudAuthorizationResultV1`, `CapabilityPresentationEnvelopeV1`, `validateAuthorizationResultV1`, `isPlausibleOpenKeyActionId`, `OPENKEY_ACTION_ID_SEPARATOR`.
+  - `sdk-core` also exports narrowing-verification helpers `extractImmutableSiweFields`, `diffImmutableSiweFields`, `extractRecapAttenuations`, `unauthorizedRecapCapabilities` (with `ImmutableSiweFields` and `RecapAttenuation` types) so consumers can prove that a widget-signed SIWE is a strict narrowing of the SDK's original prepared SIWE.
+  - `node-sdk` adds `NodeUserAuthorization.signInWithOpenKeyResult()` which completes the session with the exact `signedMessage` the OpenKey widget returned (not the caller's original prepared SIWE). Its `prepared` argument now REQUIRES `siwe` (the SDK-generated reference SIWE). Validates that the signature verifies against the returned bytes, that the recovered signer matches the local signer, that every immutable SIWE header field (domain, address, URI, version, chainId, nonce, issuedAt) is preserved byte-for-byte, that the ReCap capability set is a subset of the original request, and that `selectedActionKeys` are covered by that set. Note: `statement` handling was refined in `sol-final-continuation-fixes.md` — earlier drafts of this changeset incorrectly implied statement drift was always allowed; the delivered rule is that statement is byte-immutable for plain SIWEs and validated via the ReCap subset check for ReCap-bearing SIWEs.
+  - `cli` browser-auth advertises `protocolVersion=1` on the /delegate URL, validates every callback payload before persisting (including structural checks on the optional `permissions[]` array), and (when the response includes effective `permissions`) refuses any grant that broadens the requested set.
+  - `sdk-core.unauthorizedRecapCapabilities` now enforces EXACT MULTISET EQUALITY on the caveat list for every surviving (resource, ability) pair. Removing an entire ability or resource from the child is still permitted (that is genuine narrowing), but for any (resource, ability) that survives, the child's caveat list must equal the parent's caveat list as a multiset — i.e. same set of canonicalized caveat objects with the SAME duplicate counts. Concretely: (a) adding a caveat not present in the parent is rejected, (b) removing an alternative from a non-empty parent caveat list is rejected (removing all caveats to broaden from "restricted" to "unrestricted" is the special case of this), (c) replacing a caveat with a different one is rejected, (d) changing the number of times a duplicated caveat appears is rejected, and (e) the empty-parent case requires the child to also be empty on that ability (both sides carry zero caveats — neither imposes a restriction). Order within a caveat object's own keys is normalized via canonical JSON serialization before counting, so key reordering inside a single caveat is not itself a difference; only differences in the multiset of caveat objects matter.
+  - `node-sdk.signInWithOpenKeyResult` now enforces stricter selectedActionKeys/permissions consistency: `selectedActionKeys` must cover every non-required capability in `signedMessage`; every returned `permissions` entry action must appear in `signedMessage`; broader `permissions` entries are rejected; empty `permissions[]` with a capability-bearing SIWE is rejected; duplicate `selectedActionKeys` entries are rejected; and the resource-substring fallback used to resolve permission entries has been replaced with a canonical two-form resolver (space or space+path) that fails on ambiguity.
+  - `node-sdk` adds `NodeUserAuthorization.signInWithOpenKey(authorizeFn, opts)` — the production entry point that wires `prepareSessionForSigning` → OpenKey `authorizeTinyCloud()` → `signInWithOpenKeyResult` into one call. Callers provide a thin `authorizeFn` bridge to the OpenKey SDK; the node-sdk enforces every subset/immutable-field invariant before creating any session state.
+  - `cli.parseDelegationExpiryField` numeric-seconds test fixture corrected (was passing `4_071_849_600` = Jan 11 2099, but expected Jan 1 2099 = `4_070_908_800`).
+  - `node-sdk.signInWithOpenKeyResult` REJECTS legacy two-part `resource\0action` selectedActionKeys — Sol continuation contract requires the CANONICAL four-part `service\0space\0path\0ability` shape. The prior suffix-match fallback silently accepted IDs that did not carry a validated service namespace; four-part canonical IDs are the only accepted format.
+  - `node-sdk` adds `wireOpenKeyAuthorize(openkey)` — a production adapter that translates any structurally-OpenKey object (typically `@openkey/sdk`'s `OpenKey` instance) into the `authorizeFn` callback `signInWithOpenKey` expects. The bridge does not fabricate protocol fields — every value flows through unchanged, and wire drift (missing `signedMessage`, unsupported `protocolVersion`, malformed selection) throws at the boundary. Enables real production consumers to wire OpenKey into `NodeUserAuthorization` without either package taking a direct build dependency on the other.
+
+### Patch Changes
+
+- e525137: Address Sol continuation-review rejection blockers on the OpenKey
+  authorization consolidation.
+  - `sdk-core.ImmutableSiweFields` now covers the full immutable header set:
+    `expirationTime`, `notBefore`, `requestId`, `statement`, and
+    `nonRecapResources`. `extractImmutableSiweFields` parses them and
+    `diffImmutableSiweFields` includes them so a widget swapping any
+    of these fields fails the SDK's byte-for-byte immutable check.
+  - `sdk-core.unauthorizedRecapCapabilities` now enforces STRICT normalized
+    caveat-multiset equality. Dropping alternatives from a disjunction,
+    adding restrictions to an unrestricted parent, and any lexical caveat
+    change all reject. Formal attenuation may relax this later.
+  - `node-sdk.signInWithOpenKeyResult` requires the returned `permissions`
+    array to equal the signed authority for EVERY resource/action pair,
+    including structurally-required capabilities (e.g.
+    `tinycloud.capabilities/read`). Missing entries and extras both fail
+    hard (was: only non-required coverage was required).
+  - `node-sdk.signInWithOpenKey` accepts an optional `openkeyKeyId` option
+    and forwards it to the `authorizeFn` bridge so callers can pin the
+    OpenKey key ID used by the widget.
+  - `cli.auth request --grant` reports EFFECTIVE grants (from the signed
+    delegation) rather than the originally-requested set — the previous
+    behaviour over-reported authority when the user narrowed the request
+    in the OpenKey UI. Applies to both OpenKey-backed and local-key flows.
+  - `node-sdk` production TypeScript build no longer includes test sources
+    or test-support modules, so `tsc --noEmit -p packages/node-sdk/tsconfig.json`
+    now exits 0.
+  - `node-sdk.signInWithOpenKey` resolves the actual TinyCloud activation host
+    before preparing or sending the OpenKey authorization request. A per-call
+    host override is installed as the session host, so the host bound into the
+    OpenKey context and the host later used for activation cannot diverge.
+
+- Updated dependencies [b38dd12]
+- Updated dependencies [cc75957]
+- Updated dependencies [a7e3668]
+- Updated dependencies [e525137]
+- Updated dependencies [ba9c983]
+  - @tinycloud/node-sdk@2.11.0-beta.10
+  - @tinycloud/operations@0.3.2-beta.9
+
 ## 0.9.0-beta.8
 
 ### Patch Changes

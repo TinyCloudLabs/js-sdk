@@ -29979,8 +29979,51 @@ function buildAuthUrl(did, options = {}) {
   if (options.expiry !== void 0) {
     params.set("expiry", String(options.expiry));
   }
+  params.set("protocolVersion", "1");
   const base4 = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
   return `${base4}/delegate?${params.toString()}`;
+}
+function validateDelegationCallbackPayload(value) {
+  if (!value || typeof value !== "object") return "expected an object";
+  const v = value;
+  if (!v.delegationHeader || typeof v.delegationHeader !== "object") {
+    return "delegationHeader must be an object";
+  }
+  const auth = v.delegationHeader.Authorization;
+  if (typeof auth !== "string" || !auth) {
+    return "delegationHeader.Authorization must be a non-empty string";
+  }
+  if (typeof v.delegationCid !== "string" || !v.delegationCid) {
+    return "delegationCid must be a non-empty string";
+  }
+  if (typeof v.spaceId !== "string" || !v.spaceId) {
+    return "spaceId must be a non-empty string";
+  }
+  if (v.permissions !== void 0) {
+    if (!Array.isArray(v.permissions)) {
+      return "permissions, when present, must be an array";
+    }
+    for (let i = 0; i < v.permissions.length; i++) {
+      const entry = v.permissions[i];
+      if (!entry || typeof entry !== "object") {
+        return `permissions[${i}] must be an object`;
+      }
+      const e = entry;
+      if (typeof e.service !== "string" || !e.service) {
+        return `permissions[${i}].service must be a non-empty string`;
+      }
+      if (typeof e.space !== "string") {
+        return `permissions[${i}].space must be a string`;
+      }
+      if (typeof e.path !== "string") {
+        return `permissions[${i}].path must be a string`;
+      }
+      if (!Array.isArray(e.actions) || e.actions.some((a) => typeof a !== "string" || !a)) {
+        return `permissions[${i}].actions must be a non-empty string[]`;
+      }
+    }
+  }
+  return null;
 }
 function shouldOpenBrowser(options) {
   if (options.noPopup) return false;
@@ -30008,12 +30051,18 @@ async function callbackFlow(did, options = {}) {
     }
     function parsePasteInput(input) {
       const trimmed = input.trim();
+      let parsed;
       try {
-        return JSON.parse(trimmed);
+        parsed = JSON.parse(trimmed);
       } catch {
         const decoded = Buffer.from(trimmed, "base64").toString("utf-8");
-        return JSON.parse(decoded);
+        parsed = JSON.parse(decoded);
       }
+      const invalid = validateDelegationCallbackPayload(parsed);
+      if (invalid) {
+        throw new Error(`Invalid delegation code: ${invalid}`);
+      }
+      return parsed;
     }
     const server = createServer((req, res) => {
       if (req.method === "POST" && req.url === "/callback") {
@@ -30024,6 +30073,13 @@ async function callbackFlow(did, options = {}) {
         req.on("end", () => {
           try {
             const data = JSON.parse(body);
+            const invalid = validateDelegationCallbackPayload(data);
+            if (invalid) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: invalid }));
+              settle({ error: new Error(`Invalid delegation payload: ${invalid}`) });
+              return;
+            }
             res.writeHead(200, {
               "Content-Type": "application/json",
               "Access-Control-Allow-Origin": "*"
@@ -30110,18 +30166,24 @@ Open this URL in a browser to authenticate:
   return new Promise((resolve4, reject) => {
     rl.question("Paste delegation code: ", (input) => {
       rl.close();
+      let parsed;
       try {
-        const data = JSON.parse(input.trim());
-        resolve4(data);
+        parsed = JSON.parse(input.trim());
       } catch {
         try {
           const decoded = Buffer.from(input.trim(), "base64").toString("utf-8");
-          const data = JSON.parse(decoded);
-          resolve4(data);
+          parsed = JSON.parse(decoded);
         } catch {
           reject(new Error("Invalid delegation code. Expected JSON or base64-encoded JSON."));
+          return;
         }
       }
+      const invalid = validateDelegationCallbackPayload(parsed);
+      if (invalid) {
+        reject(new Error(`Invalid delegation code: ${invalid}`));
+        return;
+      }
+      resolve4(parsed);
     });
   });
 }
@@ -30376,6 +30438,7 @@ function registerAuthCommand(program) {
         const delegationCids2 = [];
         let expiry2;
         const openkeyHost = resolveOpenKeyHost(profile);
+        const openkeyEffective = [];
         for (const group of groupPermissionsBySpace(requested)) {
           const delegationData = await startAuthFlow(profile.did, {
             jwk: key,
@@ -30390,13 +30453,15 @@ function registerAuthCommand(program) {
             noPopup: options.popup === false
           });
           const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
-          const stored = storedAdditionalDelegation(delegation, group);
+          const effective = permissionsFromDelegation(delegation);
+          openkeyEffective.push(...effective);
+          const stored = storedAdditionalDelegation(delegation, effective);
           await appendAdditionalDelegation(ctx.profile, stored);
           await node.useRuntimeDelegation(delegation);
           delegationCids2.push(delegation.cid);
           expiry2 = delegation.expiry.toISOString();
           await appendGrantHistory(ctx.profile, {
-            addedCaps: group,
+            addedCaps: effective,
             source: options.manifest ? "manifest" : "cli",
             delegationCid: delegation.cid,
             expiry: expiry2
@@ -30404,7 +30469,7 @@ function registerAuthCommand(program) {
         }
         outputJson({
           changed: delegationCids2.length > 0,
-          added: requested,
+          added: openkeyEffective,
           delegationCid: delegationCids2[0],
           delegationCids: delegationCids2,
           expiry: expiry2
@@ -30429,8 +30494,10 @@ function registerAuthCommand(program) {
       await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession);
       const delegationCids = [];
       let expiry;
+      const localEffective = [];
       for (const delegation of delegations) {
         const covering = permissionsFromDelegation(delegation);
+        localEffective.push(...covering);
         const stored = storedAdditionalDelegation(delegation, covering);
         await appendAdditionalDelegation(ctx.profile, stored);
         delegationCids.push(delegation.cid);
@@ -30448,7 +30515,7 @@ function registerAuthCommand(program) {
       }
       outputJson({
         changed: true,
-        added: requested,
+        added: localEffective,
         delegationCid: delegationCids[0],
         delegationCids,
         expiry
@@ -30907,13 +30974,14 @@ async function ensureDelegationAuthority(params) {
         expiry: params.expiryOption
       });
       const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host);
+      const effective = permissionsFromDelegation(delegation);
       await appendAdditionalDelegation(
         params.ctx.profile,
-        storedAdditionalDelegation(delegation, group)
+        storedAdditionalDelegation(delegation, effective)
       );
       await params.node.useRuntimeDelegation(delegation);
       await appendGrantHistory(params.ctx.profile, {
-        addedCaps: group,
+        addedCaps: effective,
         source: "cli",
         delegationCid: delegation.cid,
         expiry: delegation.expiry.toISOString()
@@ -31045,7 +31113,7 @@ function groupPermissionsBySpace(permissions) {
       rawEntries.push(permission);
       continue;
     }
-    const key = normalizeSpaceForCompare(permission.space);
+    const key = normalizeSpaceForCompare(permission.space ?? "");
     const group = groups.get(key) ?? [];
     group.push(permission);
     groups.set(key, group);
@@ -31078,7 +31146,7 @@ function portableFromOpenKeyDelegation(data, permissions, host) {
   const primary = permissions.find((permission) => !isRawPermission(permission)) ?? permissions[0];
   const returnedSpace = String(data.spaceId ?? primary.space ?? "encryption");
   const expectedSpaces = new Set(
-    permissions.filter((permission) => !isRawPermission(permission)).map((permission) => normalizeSpaceForCompare(permission.space))
+    permissions.filter((permission) => !isRawPermission(permission)).map((permission) => normalizeSpaceForCompare(permission.space ?? ""))
   );
   const matchesExpectedSpace = expectedSpaces.size === 1 && returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]);
   if (expectedSpaces.size > 0 && !matchesExpectedSpace) {
@@ -31089,18 +31157,54 @@ function portableFromOpenKeyDelegation(data, permissions, host) {
     );
   }
   const expiry = inferDelegationExpiry(data);
+  const requestedPairs = new Set(
+    permissions.flatMap(
+      (p) => isRawPermission(p) ? p.actions.map((a) => `${p.service}|${p.space ?? ""}|${p.path}|${a}`) : p.actions.map((a) => `${p.service}|${normalizeSpaceForCompare(p.space ?? "")}|${p.path}|${a}`)
+    )
+  );
+  const returnedPermissions = Array.isArray(data.permissions) ? data.permissions : null;
+  const resources = (returnedPermissions ?? permissions).map((permission) => {
+    const service = permission.service.startsWith("tinycloud.") ? permission.service.slice("tinycloud.".length) : permission.service;
+    const rawService = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${service}`;
+    const permSpace = permission.space ?? "";
+    if (returnedPermissions) {
+      const rawSpace = isRawPermission({
+        service: rawService,
+        space: permSpace,
+        path: permission.path,
+        actions: []
+      }) ? permSpace : normalizeSpaceForCompare(permSpace);
+      for (const action of permission.actions) {
+        const key = `${rawService}|${rawSpace}|${permission.path}|${action}`;
+        if (!requestedPairs.has(key)) {
+          throw new CLIError(
+            "OPENKEY_GRANT_BROADENED",
+            `OpenKey returned grant ${rawService}/${action} on ${permSpace}/${permission.path} that was not requested.`,
+            ExitCode.PERMISSION_DENIED
+          );
+        }
+      }
+    }
+    const resolvedSpace = isRawPermission({
+      service: rawService,
+      space: permSpace,
+      path: permission.path,
+      actions: []
+    }) ? permSpace : returnedSpace;
+    return {
+      service,
+      space: resolvedSpace,
+      path: permission.path,
+      actions: [...permission.actions]
+    };
+  });
   return {
     cid: String(data.delegationCid),
     delegationHeader: data.delegationHeader,
     spaceId: returnedSpace,
     path: primary.path,
     actions: primary.actions,
-    resources: permissions.map((permission) => ({
-      service: permission.service.startsWith("tinycloud.") ? permission.service.slice("tinycloud.".length) : permission.service,
-      space: isRawPermission(permission) ? permission.space : returnedSpace,
-      path: permission.path,
-      actions: [...permission.actions]
-    })),
+    resources,
     expiry,
     delegateDID: String(data.verificationMethod),
     ownerAddress: String(data.address ?? ""),
