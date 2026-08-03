@@ -178,6 +178,9 @@ test("hosted redirect journey resumes an initialized SDK once and durably stores
     expect(stats.signedInvocation).toBe(true);
     expect(stats.kvWrites).toBeGreaterThanOrEqual(2);
     expect(stats.kvReads).toBeGreaterThanOrEqual(2);
+    const unrelated = await fetch(`${driverUrl}/unrelated-invocation-status`)
+      .then((response) => response.json()) as { status: number };
+    expect(unrelated.status).toBe(403);
   } finally {
     await page.unrouteAll({ behavior: "ignoreErrors" });
   }

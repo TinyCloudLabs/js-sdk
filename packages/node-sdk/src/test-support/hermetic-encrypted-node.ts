@@ -2,12 +2,16 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { Cbor } from "ox";
+import { SiweMessage } from "siwe";
 import {
   canonicalHashHex,
   canonicalizeEncryptionJson,
   canonicalSignedResponse,
+  parsePkhDid,
   principalDidEquals,
   verifyDidKeyEd25519Signature,
+  verifyEip191MessageSignature,
   type DecryptRequestBody,
   type DecryptResponseBody,
   type InlineEncryptedEnvelope,
@@ -20,7 +24,7 @@ import {
 import { type ValidatedRuntimeDelegation } from "../delegation";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
-import { TinyCloudNode } from "../TinyCloudNode";
+import { decodeAuthorizationBytes, TinyCloudNode } from "../TinyCloudNode";
 
 const OWNER_PRIVATE_KEY = "1".padStart(64, "0");
 const DELEGATE_PRIVATE_KEY = "2".padStart(64, "0");
@@ -33,6 +37,24 @@ type CompactPayload = {
   iss?: string;
   att?: Record<string, Record<string, unknown>>;
   prf?: string[];
+};
+
+type CacaoActivation = {
+  h?: { t?: unknown };
+  p?: {
+    aud?: unknown;
+    domain?: unknown;
+    exp?: unknown;
+    iat?: unknown;
+    iss?: unknown;
+    nbf?: unknown;
+    nonce?: unknown;
+    requestId?: unknown;
+    resources?: unknown;
+    statement?: unknown;
+    version?: unknown;
+  };
+  s?: { s?: unknown; t?: unknown };
 };
 
 function verifiedCompactPayload(authorization: string): CompactPayload {
@@ -119,7 +141,11 @@ class LoopbackEncryptedNode {
   private readonly delegationCids = new Set<string>();
   private readonly kvData = new Map<string, Map<string, unknown>>();
   private secretPresent = true;
-  private acceptVerifiedBrowserInvocations = false;
+  private browserCredentialBoundary?: {
+    ownerDid: string;
+    credentialsSpaceId: string;
+    session?: { audience: string; authorization: string; proofCid: string };
+  };
 
   constructor() {
     this.server = createServer(async (incoming, outgoing) => {
@@ -190,8 +216,11 @@ class LoopbackEncryptedNode {
     this.delegationCids.add(cid);
   }
 
-  allowVerifiedBrowserInvocations(): void {
-    this.acceptVerifiedBrowserInvocations = true;
+  configureBrowserCredentialBoundary(ownerDid: string, credentialsSpaceId: string): void {
+    this.browserCredentialBoundary = {
+      ownerDid,
+      credentialsSpaceId: credentialsSpaceId.toLowerCase(),
+    };
   }
 
   setSecretPresent(value: boolean): void {
@@ -209,7 +238,116 @@ class LoopbackEncryptedNode {
 
   private cidForAuthorization(authorization: string): string {
     const compact = authorization.replace(/^Bearer /i, "");
-    return this.wasm.computeCid(new TextEncoder().encode(compact), 0x55n);
+    return this.wasm.computeCid(
+      compact.split(".").length === 3
+        ? new TextEncoder().encode(compact)
+        : decodeAuthorizationBytes(authorization),
+      0x55n,
+    );
+  }
+
+  private async activateBrowserSession(authorization: string): Promise<void> {
+    const boundary = this.browserCredentialBoundary;
+    if (!boundary) return;
+
+    const cacao = Cbor.decode<CacaoActivation>(decodeAuthorizationBytes(authorization));
+    const payload = cacao.p;
+    const signature = cacao.s?.s;
+    if (
+      cacao.h?.t !== "eip4361" || cacao.s?.t !== "eip191" ||
+      !payload || typeof payload.aud !== "string" ||
+      typeof payload.domain !== "string" || typeof payload.iat !== "string" ||
+      typeof payload.iss !== "string" || typeof payload.nonce !== "string" ||
+      typeof payload.version !== "number" || !(signature instanceof Uint8Array) ||
+      !payload.aud.startsWith("did:key:") ||
+      !principalDidEquals(payload.iss, boundary.ownerDid)
+    ) {
+      throw new Error("loopback rejected an invalid browser Cacao activation");
+    }
+    const owner = parsePkhDid(payload.iss);
+    if (!owner) throw new Error("loopback expected a did:pkh browser owner");
+    const resources = payload.resources;
+    if (!Array.isArray(resources) || resources.some((resource) => typeof resource !== "string")) {
+      throw new Error("loopback rejected malformed browser Cacao resources");
+    }
+    const siwe = new SiweMessage({
+      domain: payload.domain,
+      address: owner.address,
+      uri: payload.aud,
+      version: String(payload.version),
+      chainId: owner.chainId,
+      nonce: payload.nonce,
+      issuedAt: payload.iat,
+      ...(typeof payload.exp === "string" ? { expirationTime: payload.exp } : {}),
+      ...(typeof payload.nbf === "string" ? { notBefore: payload.nbf } : {}),
+      ...(typeof payload.requestId === "string" ? { requestId: payload.requestId } : {}),
+      ...(typeof payload.statement === "string" ? { statement: payload.statement } : {}),
+      resources: resources as string[],
+    });
+    const signatureHex = `0x${Buffer.from(signature).toString("hex")}`;
+    if (!await verifyEip191MessageSignature(siwe.prepareMessage(), signatureHex, owner.address)) {
+      throw new Error("loopback rejected an invalid browser Cacao signature");
+    }
+    if (payload.exp !== undefined && Date.parse(String(payload.exp)) <= Date.now()) {
+      throw new Error("loopback rejected an expired browser Cacao activation");
+    }
+    const recap = this.wasm.parseVerifiedRecapFromSiwe(siwe.prepareMessage());
+    if (!recap.some((entry: { space: string }) =>
+      entry.space.toLowerCase() === boundary.credentialsSpaceId
+    )) {
+      throw new Error("loopback rejected a browser activation without credentials authority");
+    }
+    boundary.session = {
+      audience: payload.aud,
+      authorization,
+      proofCid: this.cidForAuthorization(authorization),
+    };
+  }
+
+  private targetsBrowserCredentials(payload: CompactPayload): boolean {
+    const credentialsSpaceId = this.browserCredentialBoundary?.credentialsSpaceId;
+    if (!credentialsSpaceId) return false;
+    return Object.entries(payload.att ?? {}).some(([resource, actions]) =>
+      (resource.toLowerCase() === `${credentialsSpaceId}/kv` ||
+        resource.toLowerCase().startsWith(`${credentialsSpaceId}/kv/`)) &&
+      Object.keys(actions).some((action) => action.startsWith("tinycloud.kv/"))
+    );
+  }
+
+  private matchesBrowserSession(payload: CompactPayload): boolean {
+    const session = this.browserCredentialBoundary?.session;
+    return session !== undefined && typeof payload.iss === "string" &&
+      principalDidEquals(payload.iss, session.audience) &&
+      payload.prf?.includes(session.proofCid) === true;
+  }
+
+  async unrelatedBrowserInvocationStatus(): Promise<number> {
+    const boundary = this.browserCredentialBoundary;
+    const session = boundary?.session;
+    if (!boundary || !session) throw new Error("browser session is not activated");
+    const manager = this.wasm.createSessionManager();
+    const keyId = manager.createSessionKey("unrelated-browser-invocation");
+    const headers = this.wasm.invokeAny({
+      delegationHeader: { Authorization: session.authorization },
+      delegationCid: session.proofCid,
+      jwk: JSON.parse(manager.jwk(keyId)!),
+      spaceId: boundary.credentialsSpaceId,
+      verificationMethod: manager.getDID(keyId),
+    }, [{
+      spaceId: boundary.credentialsSpaceId,
+      service: "kv",
+      path: "v1/unrelated",
+      action: "tinycloud.kv/get",
+    }], undefined);
+    const payload = verifiedCompactPayload(headers.Authorization);
+    if (
+      typeof payload.iss !== "string" ||
+      principalDidEquals(payload.iss, session.audience) ||
+      payload.prf?.includes(session.proofCid) !== true
+    ) {
+      throw new Error("failed to construct the unrelated proof-bound invocation");
+    }
+    return (await fetch(`${this.host}/invoke`, { method: "POST", headers })).status;
   }
 
   private json(body: unknown, status = 200): Response {
@@ -297,6 +435,7 @@ class LoopbackEncryptedNode {
       const payload = authorization.replace(/^Bearer /i, "").split(".").length === 3
         ? verifiedCompactPayload(authorization)
         : {};
+      if (!payload.iss) await this.activateBrowserSession(authorization);
       if (payload.iss) this.observed.signingIssuers.push(payload.iss);
       const cid = this.cidForAuthorization(authorization);
       if (this.rejectedActivationCids.has(cid)) {
@@ -322,10 +461,8 @@ class LoopbackEncryptedNode {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
       const payload = verifiedCompactPayload(authorization);
-      if (this.acceptVerifiedBrowserInvocations && payload.iss) {
-        const verifiedBrowserProof = "hermetic-browser-session";
-        this.delegationCids.add(verifiedBrowserProof);
-        payload.prf = [...(payload.prf ?? []), verifiedBrowserProof];
+      if (this.targetsBrowserCredentials(payload) && !this.matchesBrowserSession(payload)) {
+        return new Response("activated browser session proof required", { status: 403 });
       }
       if (payload.iss) this.observed.signingIssuers.push(payload.iss);
       const writes = Object.entries(payload.att ?? {}).flatMap(([resource, actions]) =>
@@ -497,6 +634,7 @@ export interface HermeticBrowserCredentialBoundary {
     kvReads: number;
     kvWrites: number;
   }>;
+  unrelatedInvocationStatus(): Promise<number>;
   stop(): void;
 }
 
@@ -525,7 +663,7 @@ export async function createHermeticBrowserCredentialBoundary(
     },
   });
   transport.provisionKv(credentialsSpaceId);
-  transport.allowVerifiedBrowserInvocations();
+  transport.configureBrowserCredentialBoundary(ownerDid, credentialsSpaceId);
   return {
     host: transport.host,
     ownerDid,
@@ -535,6 +673,7 @@ export async function createHermeticBrowserCredentialBoundary(
       kvReads: transport.observed.kvReads,
       kvWrites: transport.observed.kvWrites,
     }),
+    unrelatedInvocationStatus: () => transport.unrelatedBrowserInvocationStatus(),
     stop: () => transport.stop(),
   };
 }

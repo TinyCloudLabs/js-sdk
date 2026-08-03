@@ -66,7 +66,7 @@ function json(value: unknown, status = 200): Response {
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 4175,
-  fetch(request) {
+  async fetch(request) {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") return json({ ready: true });
     if (request.method === "GET" && url.pathname === "/config") {
@@ -80,6 +80,9 @@ const server = Bun.serve({
       });
     }
     if (request.method === "GET" && url.pathname === "/stats") return json(boundary.stats());
+    if (request.method === "GET" && url.pathname === "/unrelated-invocation-status") {
+      return json({ status: await boundary.unrelatedInvocationStatus() });
+    }
     if (request.method === "POST" && url.pathname === "/stop") {
       queueMicrotask(() => {
         boundary.stop();
