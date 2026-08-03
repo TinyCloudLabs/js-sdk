@@ -76,6 +76,45 @@ function bytes(value: unknown, label: string): Uint8Array {
   return decoded;
 }
 
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function toBase64(bytes: Uint8Array): string {
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i]!;
+    const b1 = i + 1 < bytes.length ? bytes[i + 1]! : 0;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2]! : 0;
+    out += BASE64_ALPHABET[(b0 >> 2) & 0x3f];
+    out += BASE64_ALPHABET[((b0 << 4) | (b1 >> 4)) & 0x3f];
+    out += i + 1 < bytes.length ? BASE64_ALPHABET[((b1 << 2) | (b2 >> 6)) & 0x3f] : "=";
+    out += i + 2 < bytes.length ? BASE64_ALPHABET[b2 & 0x3f] : "=";
+  }
+  return out;
+}
+
+function fromBase64(value: string, label: string): Uint8Array {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new Error(`${label} is invalid`);
+  }
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const out = new Uint8Array((value.length / 4) * 3 - padding);
+  let outIdx = 0;
+  for (let i = 0; i < value.length; i += 4) {
+    const v0 = BASE64_ALPHABET.indexOf(value[i]!);
+    const v1 = BASE64_ALPHABET.indexOf(value[i + 1]!);
+    const v2 = value[i + 2] === "=" ? 0 : BASE64_ALPHABET.indexOf(value[i + 2]!);
+    const v3 = value[i + 3] === "=" ? 0 : BASE64_ALPHABET.indexOf(value[i + 3]!);
+    const b0 = (v0 << 2) | (v1 >> 4);
+    const b1 = ((v1 & 0x0f) << 4) | (v2 >> 2);
+    const b2 = ((v2 & 0x03) << 6) | v3;
+    if (outIdx < out.length) out[outIdx++] = b0;
+    if (outIdx < out.length) out[outIdx++] = b1;
+    if (outIdx < out.length) out[outIdx++] = b2;
+  }
+  if (toBase64(out) !== value) throw new Error(`${label} is invalid`);
+  return out;
+}
+
 async function digest(value: unknown): Promise<string> {
   return toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalize(value)))));
 }
@@ -371,9 +410,9 @@ export class ShareRecipientClient {
         || typeof value.wrappedKey !== "string" || typeof value.nodeSignature !== "string") throw new Error("v3 decrypt response binding is invalid");
       const unsigned = { ...value };
       delete unsigned.nodeSignature;
-      const signature = fromBase64Url(value.nodeSignature);
+      const signature = fromBase64(value.nodeSignature, "v3 decrypt response signature");
       if (signature.length !== 64 || !ed25519.verify(signature, new TextEncoder().encode(canonicalize(unsigned)), ed25519PublicKeyFromDidKey(body.targetNode), { zip215: false })) throw new Error("v3 decrypt response signature is invalid");
-      const wrapped = fromBase64Url(value.wrappedKey);
+      const wrapped = fromBase64(value.wrappedKey, "v3 wrapped content key");
       if (wrapped.length < 60) throw new Error("v3 wrapped content key is malformed");
       const shared = x25519.getSharedSecret(receiverPrivateKey, wrapped.slice(0, 32));
       const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(32));
