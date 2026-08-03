@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
 import { base58btc } from "multiformats/bases/base58";
 import { sha256 } from "@noble/hashes/sha256";
+import type { InvokeFunction, ServiceSession } from "@tinycloud/sdk-services";
 import {
   createShareArtifact,
   encodeInlineShareUrl,
@@ -432,6 +433,118 @@ describe("ShareRecipientClient", () => {
     }).open(encodeShareUrl({ origin: ORIGIN, cid: created.cid }));
     await expect(access.get()).rejects.toMatchObject({ code: "SHARE_NOT_FOUND" });
     await expect(access.get()).rejects.not.toHaveProperty("cause");
+  });
+
+  test("never imports or invokes a policy-session S0 without its recipient signer", async () => {
+    const created = await (await import("./share-envelope")).createShareArtifactAsync({
+      origin: ORIGIN,
+      spaceId: SPACE,
+      recipient: { kind: "emailDomain", value: "example.com" },
+      resource: { kind: "exact", path: "docs/readme.md" },
+      actions: ["read"],
+      mimeType: "text/markdown",
+      bytes: new TextEncoder().encode("policy"),
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      signerDid: NODE_DID,
+      signerPrivateKey: NODE_PRIVATE_KEY,
+      encryptionKey: PRIVATE_KEY,
+    });
+    const authorization = "eyJhbGciOiJFZERTQSJ9.s0.signature";
+    const portable = {
+      cid: "bafy-s0",
+      delegationHeader: { Authorization: authorization },
+      ownerAddress: "0x0000000000000000000000000000000000000001",
+      chainId: 1,
+      host: ORIGIN,
+      spaceId: SPACE,
+      path: "docs/readme.md",
+      actions: ["tinycloud.kv/get"],
+      expiry: "2098-01-01T00:00:00.000Z",
+      delegateDID: "did:key:recipient",
+      resources: [{ service: "kv", space: SPACE, path: "docs/readme.md", actions: ["tinycloud.kv/get"] }],
+    };
+    const urls: string[] = [];
+    const opening = new ShareRecipientClient({
+      trustedOrigins: [ORIGIN],
+      fetch: (async (url: string) => {
+        urls.push(url);
+        if (url.endsWith("/delegate")) return new Response(JSON.stringify({ activated: [SPACE], skipped: [] }), { status: 200 });
+        return new Response(created.bytes, { status: 200 });
+      }) as never,
+      establishPolicySession: async () => ({
+        sessionId: "s0",
+        holderDid: "did:key:recipient",
+        expiresAt: "2098-01-01T00:00:00.000Z",
+        resource: { kind: "exact", path: "docs/readme.md" },
+        actions: ["read"],
+        runtimeDelegation: portable,
+      }),
+      createKVService: (() => ({
+        get: async () => ({ ok: true, data: { data: new TextEncoder().encode("ordinary"), headers: { etag: "etag-1", contentType: "text/plain" } } }),
+      })) as never,
+    }).open(encodeShareUrl({ origin: ORIGIN, cid: created.cid, key: created.key }));
+    await expect(opening).rejects.toMatchObject({ code: "SHARE_SESSION_SIGNER_REQUIRED" });
+    expect(urls).not.toContain(`${ORIGIN}/delegate`);
+  });
+
+  test("imports S0 but sends only a fresh recipient-signed one-parent invocation", async () => {
+    const vector = await Bun.file(`${import.meta.dir}/../../test-fixtures/policy-engine-vectors/unified-policy/compact-authorization.json`).json() as any;
+    const { parseCompactUcanAuthorization } = await import("../policy/unified");
+    const s0 = parseCompactUcanAuthorization(vector.s0.authorization);
+    const path = vector.policy.value.contentSource.kvResource.split("/kv/")[1] as string;
+    const created = await (await import("./share-envelope")).createShareArtifactAsync({
+      origin: ORIGIN,
+      spaceId: "applications",
+      recipient: { kind: "emailDomain", value: "example.com" },
+      resource: { kind: "exact", path },
+      actions: ["read"],
+      mimeType: "text/plain",
+      bytes: new TextEncoder().encode("policy"),
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      signerDid: NODE_DID,
+      signerPrivateKey: NODE_PRIVATE_KEY,
+      encryptionKey: PRIVATE_KEY,
+    });
+    let invocationAuthorization = "";
+    const access = await new ShareRecipientClient({
+      trustedOrigins: [ORIGIN],
+      now: () => new Date((s0.payload.nbf + 1) * 1000),
+      policySessionPrivateKey: new Uint8Array(32).fill(9),
+      fetch: (async (url: string) => url.endsWith("/delegate")
+        ? Response.json({ activated: [vector.s0.cid] })
+        : new Response(created.bytes)) as never,
+      establishPolicySession: async () => ({
+        sessionId: vector.s0.cid,
+        holderDid: vector.principals.recipientDid,
+        expiresAt: new Date(s0.payload.exp * 1000).toISOString(),
+        resource: { kind: "exact", path },
+        actions: ["read"],
+        runtimeDelegation: {
+          cid: vector.s0.cid,
+          delegationHeader: { Authorization: vector.s0.authorization },
+          ownerAddress: "0x0000000000000000000000000000000000000001",
+          chainId: 1,
+          host: ORIGIN,
+          spaceId: "untrusted-projection",
+          path: "untrusted-projection",
+          actions: ["tinycloud.kv/get"],
+          expiry: new Date(s0.payload.exp * 1000),
+          delegateDID: vector.principals.recipientDid,
+        },
+      }),
+      createKVService: ((config: { invoke: InvokeFunction; session: ServiceSession }) => ({
+        get: async () => {
+          const headers = config.invoke(config.session, "kv", path, "tinycloud.kv/get");
+          invocationAuthorization = new Headers(headers as HeadersInit).get("Authorization") ?? "";
+          return { ok: true, data: { data: new TextEncoder().encode("ordinary"), headers: { etag: "etag-1", contentType: "text/plain" } } };
+        },
+      })) as never,
+    }).open(encodeShareUrl({ origin: ORIGIN, cid: created.cid, key: created.key }));
+    await access.get(path);
+    expect(invocationAuthorization).not.toBe(vector.s0.authorization);
+    const invocation = parseCompactUcanAuthorization(invocationAuthorization);
+    expect(invocation.payload.prf).toEqual([vector.s0.cid]);
+    expect(invocation.payload.iss.split("#", 1)[0]).toBe(vector.principals.recipientDid);
   });
 
   test("accepts exactly 100 MiB plaintext with encryption overhead and rejects one byte before encryption", async () => {

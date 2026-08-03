@@ -1,5 +1,6 @@
 import type { FetchFunction, IKVService, InvokeFunction, Result, ServiceError, ServiceHeaders, ServiceSession } from "@tinycloud/sdk-services";
 import type { ShareAction, ShareCapabilityLike, ShareEnvelopeV2, ShareLinkLocation, ShareResource, ShareRecipientTarget } from "./share-envelope";
+import type { PortableDelegation } from "./portable";
 
 export type { ShareAction, ShareEnvelopeV2, ShareLinkLocation, ShareResource, ShareRecipientTarget };
 
@@ -170,6 +171,10 @@ export interface ShareRecipientClientOptions {
    * generic KV bearer session.
    */
   readonly nativeInvoke?: (input: ShareNativeInvokeInput) => Promise<ShareNativeInvokeResult>;
+  /** Import a normal policy-session UCAN through the caller's delegation manager. */
+  readonly importDelegation?: (delegation: PortableDelegation) => Promise<void | PortableDelegation>;
+  /** Extractable Ed25519 recipient seed used only to sign fresh S0 descendants/invocations. */
+  readonly policySessionPrivateKey?: Uint8Array;
   /** Optional holder signer for the built-in addressed /invoke transport. */
   readonly signNativeInvoke?: (input: {
     readonly envelope: ShareEnvelopeV2;
@@ -382,6 +387,8 @@ export interface ShareAccessV2 {
   readonly resource: ShareResource;
   readonly actions: readonly ShareAction[];
   readonly expiresAt: Date;
+  /** The normal UCAN admitted for this recipient, when the link is v3. */
+  readonly portableDelegation?: PortableDelegation;
   readonly kv?: IKVService;
   readonly get: (path?: string) => Promise<ShareReadResult>;
   readonly listChildren: (options?: { readonly path?: string; readonly limit?: number; readonly cursor?: string }) => Promise<ShareListResult>;
