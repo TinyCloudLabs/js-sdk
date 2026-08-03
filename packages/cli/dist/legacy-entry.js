@@ -8447,28 +8447,6 @@ function withCapabilitiesReadForSpaces(resources) {
     }))
   ]);
 }
-function accountRegistryPermissions() {
-  return [
-    {
-      service: "tinycloud.kv",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: ACCOUNT_REGISTRY_PATH,
-      actions: [KV.GET, KV.PUT, KV.LIST]
-    },
-    {
-      service: "tinycloud.kv",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "spaces/",
-      actions: [KV.GET, KV.PUT, KV.LIST]
-    },
-    {
-      service: "tinycloud.sql",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "account",
-      actions: [SQL.READ, SQL.WRITE, SQL.SCHEMA]
-    }
-  ];
-}
 function composeManifestRequest(inputs, options = {}) {
   if (!Array.isArray(inputs) || inputs.length === 0) {
     throw new Error("composeManifestRequest requires at least one manifest");
@@ -8482,7 +8460,12 @@ function composeManifestRequest(inputs, options = {}) {
     return explicit.flatMap((entry) => expandPermissionEntry(entry, prefix, space));
   });
   if (includeAccountRegistryPermissions) {
-    resources.push(...accountRegistryPermissions());
+    resources.push(
+      ...ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+        ...resource,
+        actions: [...resource.actions]
+      }))
+    );
   }
   const manifestsByAppId = /* @__PURE__ */ new Map();
   for (const manifest of manifests) {
@@ -8510,7 +8493,7 @@ function composeBootstrapSpaceManifest(space) {
     includeAccountRegistryPermissions: false
   });
 }
-var CAPABILITIES, KV, SQL, DUCKDB, CAPABILITIES2, HOOKS, ENCRYPTION, SPACE, CAPABILITY_REGISTRY, DEFAULT_MANIFEST_SPACE, ACCOUNT_REGISTRY_SPACE, ACCOUNT_REGISTRY_PATH, SECRETS_SPACE, BOOTSTRAP_DEFAULT_SPACE, BOOTSTRAP_PUBLIC_SPACE, BOOTSTRAP_ENCRYPTION_NETWORK_NAME, BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE, DEFAULT_EXPIRY_MS, VAULT_PERMISSION_SERVICE, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, NETWORK_CREATE_ACTION, BOOTSTRAP_SPACE_NAMES, TINYCLOUD_DEFAULT_SPACE_MANIFEST, TINYCLOUD_APPLICATIONS_SPACE_MANIFEST, TINYCLOUD_ACCOUNT_SPACE_MANIFEST, TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST, TINYCLOUD_PUBLIC_SPACE_MANIFEST, BOOTSTRAP_SPACE_MANIFESTS, BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS, ACCOUNT_INDEX_SCHEMA, SECRET_RECORDS_SCHEMA, BOOTSTRAP_MANIFEST, BOOTSTRAP_SESSION_REQUESTS, ACCOUNT_SESSION_RAW_ALLOWLIST, BOOTSTRAP_ALLOWLIST;
+var CAPABILITIES, KV, SQL, DUCKDB, CAPABILITIES2, HOOKS, ENCRYPTION, SPACE, CAPABILITY_REGISTRY, DEFAULT_MANIFEST_SPACE, ACCOUNT_REGISTRY_SPACE, ACCOUNT_REGISTRY_PATH, SECRETS_SPACE, BOOTSTRAP_DEFAULT_SPACE, BOOTSTRAP_PUBLIC_SPACE, BOOTSTRAP_ENCRYPTION_NETWORK_NAME, BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE, DEFAULT_EXPIRY_MS, VAULT_PERMISSION_SERVICE, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, NETWORK_CREATE_ACTION, BOOTSTRAP_SPACE_NAMES, TINYCLOUD_DEFAULT_SPACE_MANIFEST, TINYCLOUD_APPLICATIONS_SPACE_MANIFEST, TINYCLOUD_ACCOUNT_SPACE_MANIFEST, TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST, TINYCLOUD_PUBLIC_SPACE_MANIFEST, BOOTSTRAP_SPACE_MANIFESTS, BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS, ACCOUNT_INDEX_SCHEMA, SECRET_RECORDS_SCHEMA, BOOTSTRAP_MANIFEST, ACCOUNT_MANIFEST_PERMISSIONS, BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST, BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST, BOOTSTRAP_SESSION_REQUESTS, ACCOUNT_SESSION_RAW_ALLOWLIST, BOOTSTRAP_ALLOWLIST;
 var init_dist = __esm({
   "../bootstrap/dist/index.js"() {
     "use strict";
@@ -8816,11 +8799,60 @@ var init_dist = __esm({
         name: BOOTSTRAP_ENCRYPTION_NETWORK_NAME
       }
     };
+    ACCOUNT_MANIFEST_PERMISSIONS = Object.freeze([
+      {
+        service: "tinycloud.kv",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: ACCOUNT_REGISTRY_PATH,
+        actions: [KV.GET, KV.PUT, KV.LIST]
+      },
+      {
+        service: "tinycloud.kv",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "spaces/",
+        actions: [KV.GET, KV.PUT, KV.LIST]
+      },
+      {
+        service: "tinycloud.kv",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "system/bootstrap/complete",
+        actions: [KV.GET, KV.PUT]
+      },
+      {
+        service: "tinycloud.delegation",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "",
+        actions: ["tinycloud.delegation/list"]
+      },
+      {
+        service: "tinycloud.sql",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "account",
+        actions: [SQL.READ, SQL.WRITE, SQL.SCHEMA]
+      },
+      {
+        service: "tinycloud.capabilities",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "",
+        actions: [CAPABILITIES2.READ]
+      }
+    ]);
+    BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST = composeBootstrapSpaceManifest(BOOTSTRAP_DEFAULT_SPACE);
+    BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST = {
+      ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
+      resources: [
+        ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST.resources,
+        ...ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+          ...resource,
+          actions: [...resource.actions]
+        }))
+      ]
+    };
     BOOTSTRAP_SESSION_REQUESTS = Object.freeze(
       Object.fromEntries(
         BOOTSTRAP_SPACE_NAMES.map((space) => [
           space,
-          composeBootstrapSpaceManifest(space)
+          space === BOOTSTRAP_DEFAULT_SPACE ? BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST : composeBootstrapSpaceManifest(space)
         ])
       )
     );

@@ -48,6 +48,7 @@
     "sol-merge-readiness-consolidation",
     "tc-291-crypto-browserify",
     "tc-362-space-modal-timeout",
-    "tc-373-batch-seed-spaces-classifier"
+    "tc-373-batch-seed-spaces-classifier",
+    "tc-393-bootstrap-recovery"
   ]
 }

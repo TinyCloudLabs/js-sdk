@@ -1,5 +1,21 @@
 # @tinycloudlabs/web-sdk
 
+## 2.11.0-beta.11
+
+### Minor Changes
+
+- d894c57: TC-393: recover incomplete account bootstrap with a durable account-space
+  completion marker, canonical account registry read/create-update/list, delegation,
+  capabilities-read, marker, and SQL coverage, and an idempotent
+  repair pass. One-shot CoordinationOS OpenKey sessions now explicitly disable
+  client-side bootstrap.
+
+### Patch Changes
+
+- Updated dependencies [d894c57]
+  - @tinycloud/sdk-core@2.11.0-beta.11
+  - @tinycloud/node-sdk@2.11.0-beta.11
+
 ## 2.11.0-beta.10
 
 ### Minor Changes

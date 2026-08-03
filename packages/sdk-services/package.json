@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-services",
-  "version": "2.11.0-beta.10",
+  "version": "2.11.0-beta.11",
   "description": "TinyCloud SDK Services - Platform-agnostic service implementations",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -51,7 +51,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@tinycloud/bootstrap": "2.6.1-beta.0",
+    "@tinycloud/bootstrap": "2.7.0-beta.1",
     "zod": "^3.23.0"
   },
   "devDependencies": {

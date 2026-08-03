@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-core",
-  "version": "2.11.0-beta.10",
+  "version": "2.11.0-beta.11",
   "description": "Core TinyCloud SDK - shared interfaces and TinyCloud class",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -55,8 +55,8 @@
     "@noble/curves": "^1.9.7",
     "@tinycloud/share-envelope": "0.2.0-beta.0",
     "@tinycloud/share-sdk": "0.2.0-beta.1",
-    "@tinycloud/bootstrap": "2.6.1-beta.0",
-    "@tinycloud/sdk-services": "2.11.0-beta.10",
+    "@tinycloud/bootstrap": "2.7.0-beta.1",
+    "@tinycloud/sdk-services": "2.11.0-beta.11",
     "multiformats": "^13.4.1",
     "ms": "^2.1.3",
     "siwe": "^3.0.0",
