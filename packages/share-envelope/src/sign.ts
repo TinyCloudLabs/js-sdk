@@ -36,6 +36,7 @@ export const ENVELOPE_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v1\0";
 export const ENVELOPE_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v2\0";
 export const ENVELOPE_V3_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
 const POLICY_V1_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v1\0";
+const POLICY_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v2\0";
 const CONTENT_SOURCE_V1_DOMAIN = "xyz.tinycloud.policy/ContentSource/v1\0";
 const POLICY_CAPABILITY_V1_DOMAIN = "xyz.tinycloud.policy/PolicyCapability/v1\0";
 const NATIVE_PROJECTION_V1_DOMAIN = "xyz.tinycloud.policy/NativeProjection/v1\0";
@@ -204,7 +205,10 @@ export async function verifyEnvelopeV3(envelope: ShareEnvelopeV3, options: Verif
   const unsignedPolicy = { ...policy } as Record<string, unknown>;
   delete unsignedPolicy.policyId;
   delete unsignedPolicy.signature;
-  const policyDigest = sha256(new TextEncoder().encode(`${POLICY_V1_SIGNATURE_DOMAIN}${canonicalize(unsignedPolicy)}`));
+  const policySignatureDomain = policy.schema === "xyz.tinycloud.policy/policy/v2"
+    ? POLICY_V2_SIGNATURE_DOMAIN
+    : POLICY_V1_SIGNATURE_DOMAIN;
+  const policyDigest = sha256(new TextEncoder().encode(`${policySignatureDomain}${canonicalize(unsignedPolicy)}`));
   const policySignature = policy.signature;
   if (policySignature.suite !== "Ed25519" || policySignature.signerDid !== policy.ownerDid) return false;
   let policyPublicKey: Uint8Array;
@@ -216,7 +220,7 @@ export async function verifyEnvelopeV3(envelope: ShareEnvelopeV3, options: Verif
     return false;
   }
   if (policySignatureBytes.length !== 64 || !ed25519.verify(policySignatureBytes, policyDigest, policyPublicKey, ED25519_VERIFY_OPTS)) return false;
-  const policyIdDigest = sha256(new TextEncoder().encode(`${POLICY_V1_SIGNATURE_DOMAIN}${canonicalize(unsignedPolicy)}`));
+  const policyIdDigest = policyDigest;
   if (policy.policyId !== `pol_${base32Lower(policyIdDigest)}`) return false;
   const policyBytes = new TextEncoder().encode(canonicalize(policy));
   if ((await computeCid(policyBytes)) !== parsed.policyCid) return false;
