@@ -1381,6 +1381,17 @@ export class TinyCloudNode {
     return this.sessionManager.getDID(this.sessionKeyId);
   }
 
+  /** Bare did:key principal used as the credential subject and holder binding. */
+  get credentialHolderDid(): string {
+    return this.sessionDid.split("#", 1)[0];
+  }
+
+  /** Canonical verification method for the active credential holder key. */
+  get credentialHolderKid(): string {
+    const holder = this.credentialHolderDid;
+    return `${holder}#${holder.slice("did:key:".length)}`;
+  }
+
   /**
    * Return the current session's signed ReCap capabilities after the session
    * has been authenticated or restored. This is intentionally distinct from
@@ -2418,6 +2429,15 @@ export class TinyCloudNode {
     }
 
     return hosted;
+  }
+
+  /** Resolve and authenticate the owner encoded by an owned-space URI. */
+  credentialSpaceOwnerDid(spaceId: string): string {
+    const ownerDid = this.ownerDidFromSpaceId(spaceId);
+    if (ownerDid === undefined || !didPrincipalMatches(ownerDid, this.did)) {
+      throw new Error("Credential space owner does not match the active TinyCloud owner");
+    }
+    return ownerDid;
   }
 
   /**

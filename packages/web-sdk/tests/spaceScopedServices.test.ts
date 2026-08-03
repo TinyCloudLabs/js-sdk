@@ -2,6 +2,13 @@ const { TextEncoder: TE, TextDecoder: TD } = require('util');
 
 global.TextEncoder = TE;
 global.TextDecoder = TD;
+(globalThis as any).HTMLElement = class {};
+(globalThis as any).customElements = { get: () => undefined, define: () => undefined };
+(globalThis as any).window = { addEventListener: () => undefined, removeEventListener: () => undefined, setTimeout, location: { hostname: "localhost" } };
+(globalThis as any).document = {
+  createElement: () => ({ setAttribute: () => undefined }),
+  body: { appendChild: () => undefined },
+};
 
 const { TinyCloudWeb } = require('../src');
 

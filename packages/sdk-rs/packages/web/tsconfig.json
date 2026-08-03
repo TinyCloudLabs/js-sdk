@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
-    "declaration": true
+    "allowJs": true,
+    "declaration": true,
+    "moduleResolution": "node"
   }
 }

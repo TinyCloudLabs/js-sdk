@@ -14,11 +14,14 @@ import type {
 
 export interface CredentialClient {
   readonly sessionDid: string;
+  readonly credentialHolderDid: string;
+  readonly credentialHolderKid: string;
   session(): ClientSession | undefined;
   signSessionBytes(bytes: Uint8Array): Promise<Uint8Array>;
   autoSignCredentialBytes?(bytes: Uint8Array): Promise<Uint8Array | undefined>;
   approveCredentialBytes?(bytes: Uint8Array): Promise<Uint8Array>;
   ensureOwnedSpaceHosted(name: string): Promise<string>;
+  credentialSpaceOwnerDid(spaceId: string): string;
   kvForSpace(spaceId: string): IKVService;
 }
 

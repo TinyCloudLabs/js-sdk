@@ -31,7 +31,7 @@ export async function verifyIssuedCredential(input: {
   if (envelope.status.method !== "none" || envelope.status.freshnessSeconds !== descriptor.status.freshnessSeconds) throw new CredentialError("VERIFICATION_FAILED", "Credential status contract is invalid");
   const parts = envelope.credential.split("~"); const jwt = parts.shift() ?? ""; const jwtParts = jwt.split("."); if (jwtParts.length !== 3) throw new CredentialError("VERIFICATION_FAILED", "SD-JWT is invalid");
   const header = jsonPart(jwtParts[0]!, "SD-JWT header"); const payload = jsonPart(jwtParts[1]!, "SD-JWT payload");
-  if (header.alg !== "EdDSA" || header.typ !== "vc+sd-jwt" || header.kid !== envelope.issuerKid) throw new CredentialError("VERIFICATION_FAILED", "SD-JWT header is unsupported");
+  if (header.alg !== "EdDSA" || (header.typ !== undefined && header.typ !== "vc+sd-jwt") || (header.kid !== undefined && header.kid !== envelope.issuerKid)) throw new CredentialError("VERIFICATION_FAILED", "SD-JWT header is unsupported");
   const signature = decodeBase64Url(jwtParts[2]!); const key = metadataKey(input.issuerMetadata, descriptor, now, envelope.issuerKid);
   if (signature.length !== 64 || !ed25519.verify(signature, new TextEncoder().encode(`${jwtParts[0]}.${jwtParts[1]}`), key)) throw new CredentialError("VERIFICATION_FAILED", "Issuer signature is invalid");
   if (payload._sd_alg !== "sha-256" || !Array.isArray(payload._sd) || payload._sd.some((value) => typeof value !== "string")) throw new CredentialError("VERIFICATION_FAILED", "SD-JWT disclosure registry is invalid");

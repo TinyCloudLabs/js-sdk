@@ -741,6 +741,8 @@ export class TinyCloudWeb {
 
   get did(): string { return this.node.did; }
   get sessionDid(): string { return this.node.sessionDid; }
+  get credentialHolderDid(): string { return this.node.credentialHolderDid; }
+  get credentialHolderKid(): string { return this.node.credentialHolderKid; }
   get isSessionOnly(): boolean { return this.node.isSessionOnly; }
   get isWalletConnected(): boolean { return this.walletSigner !== undefined; }
 
@@ -755,6 +757,10 @@ export class TinyCloudWeb {
 
   async approveCredentialBytes(bytes: Uint8Array): Promise<Uint8Array> {
     return this.node.approveCredentialBytes(bytes);
+  }
+
+  credentialSpaceOwnerDid(spaceId: string): string {
+    return this.node.credentialSpaceOwnerDid(spaceId);
   }
 
   // ===========================================================================

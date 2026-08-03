@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://witness.credentials.org/schemas/credential-step-registry-v1.json",
+  "$id": "https://witness.credentials.org/schemas/step-registry.schema.json",
   "$defs": {
     "stepRef": {
       "oneOf": [
@@ -17,7 +17,31 @@
     "type": { "const": "tinycloud.credentials/steps/v1" },
     "version": { "const": 1 },
     "unknownStepBehavior": { "const": "fail_closed" },
-    "steps": { "type": "array", "minItems": 3, "maxItems": 3 },
-    "registeredEndpoints": { "type": "object" }
+    "steps": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "object", "additionalProperties": false, "required": ["type", "version", "network"], "properties": { "type": { "const": "collect_input" }, "version": { "const": 1 }, "network": { "const": false } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "version", "network", "endpoint"], "properties": { "type": { "const": "mailbox_otp" }, "version": { "const": 1 }, "network": { "const": true }, "endpoint": { "const": "challenge" } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "version", "network", "endpoint"], "properties": { "type": { "const": "holder_signature" }, "version": { "const": 1 }, "network": { "const": true }, "endpoint": { "const": "holder_signature" } } }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "registeredEndpoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request", "state", "challenge", "proof", "holder_binding", "holder_signature", "issue", "result"],
+      "properties": {
+        "request": { "const": "/v1/acquisitions" },
+        "state": { "const": "/v1/acquisitions/{requestId}/state" },
+        "challenge": { "const": "/v1/acquisitions/{requestId}/challenge" },
+        "proof": { "const": "/v1/acquisitions/{requestId}/proof" },
+        "holder_binding": { "const": "/v1/acquisitions/{requestId}/holder-binding" },
+        "holder_signature": { "const": "/v1/acquisitions/{requestId}/holder-signature" },
+        "issue": { "const": "/v1/acquisitions/{requestId}/issue" },
+        "result": { "const": "/v1/acquisitions/{requestId}/result" }
+      }
+    }
   }
 }

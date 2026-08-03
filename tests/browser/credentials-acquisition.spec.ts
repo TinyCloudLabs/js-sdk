@@ -52,7 +52,24 @@ test("popup closure is observable and popup blocking is typed", async () => {
   await expect(new BrowserCredentialInteraction("popup", blocked.browser).start({ issuerOrigin: ORIGIN, locator: LOCATOR })).rejects.toEqual(expect.objectContaining<Partial<CredentialError>>({ code: "POPUP_BLOCKED", recoverable: true }));
 });
 
-test("redirect fallback preserves the authority model and locator-only URL", async () => {
+test("redirect fallback returns to the exact origin and consumes resume state once", async ({ page }) => {
   const fake = surface(); await new BrowserCredentialInteraction("redirect", fake.browser).start({ issuerOrigin: ORIGIN, locator: LOCATOR });
   const url = new URL(fake.redirected()); expect(url.search).toBe(""); expect(url.hash).toBe(""); expect(url.pathname).toContain(LOCATOR);
+
+  const appUrl = "http://localhost:4173/test-page.html";
+  const mountedIssuerUrl = `http://127.0.0.1:4173/v1/acquisitions/${LOCATOR}/interact`;
+  const resumeKey = "tinycloud.credentials.redirect.v1";
+  await page.goto(appUrl);
+  await page.evaluate(({ key, locator }) => sessionStorage.setItem(key, JSON.stringify({ type: "TinyCloudCredentialRedirectResume", version: 1, locator })), { key: resumeKey, locator: LOCATOR });
+  await page.goto(mountedIssuerUrl);
+  expect(new URL(page.url()).origin).toBe("http://127.0.0.1:4173");
+  expect(new URL(page.url()).search).toBe("");
+  expect(new URL(page.url()).hash).toBe("");
+  await page.goto(appUrl);
+  const resumed = await page.evaluate((key) => sessionStorage.getItem(key), resumeKey);
+  expect(JSON.parse(resumed!)).toEqual({ type: "TinyCloudCredentialRedirectResume", version: 1, locator: LOCATOR });
+  await page.evaluate((key) => sessionStorage.removeItem(key), resumeKey);
+  await page.goto(mountedIssuerUrl);
+  await page.goto(appUrl);
+  expect(await page.evaluate((key) => sessionStorage.getItem(key), resumeKey)).toBeNull();
 });

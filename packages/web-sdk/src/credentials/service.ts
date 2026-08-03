@@ -25,8 +25,16 @@ import type { CredentialClient, CredentialsAcquireOptions, CredentialsEnsureOpti
 function randomVerifier(): string { return encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))); }
 
 function active(client: CredentialClient): string {
-  if (client.session() === undefined || typeof client.sessionDid !== "string" || !client.sessionDid.startsWith("did:")) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "credentials requires an active TinyCloud/OpenKey session");
-  return client.sessionDid;
+  if (client.session() === undefined || typeof client.credentialHolderDid !== "string" || !/^did:key:z6Mk[^#]+$/.test(client.credentialHolderDid)) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "credentials requires an active TinyCloud/OpenKey session");
+  if (client.credentialHolderKid !== `${client.credentialHolderDid}#${client.credentialHolderDid.slice("did:key:".length)}`) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "credentials requires a canonical active holder key");
+  return client.credentialHolderDid;
+}
+
+async function credentialSpace(client: CredentialClient): Promise<{ spaceId: string; ownerDid: string }> {
+  const spaceId = await client.ensureOwnedSpaceHosted("credentials");
+  const ownerDid = client.credentialSpaceOwnerDid(spaceId);
+  if (typeof ownerDid !== "string" || !ownerDid.startsWith("did:")) throw new CredentialError("VERIFIED_NOT_SAVED", "Credential space owner could not be authenticated");
+  return { spaceId, ownerDid };
 }
 
 function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; clear: () => void } {
@@ -66,8 +74,8 @@ export class CredentialsService {
   async find(requirementValue: CredentialRequirement, options: CredentialsOperationOptions = {}): Promise<StoredCredentialRecord | undefined> {
     const holderDid = active(this.client); const requirement = validateCredentialRequirement(requirementValue);
     options.onProgress?.({ state: "checking" });
-    const space = await this.client.ensureOwnedSpaceHosted("credentials");
-    return findStoredCredential({ kv: this.client.kvForSpace(space), requirement, holderDid, now: options.now?.() });
+    const space = await credentialSpace(this.client);
+    return findStoredCredential({ kv: this.client.kvForSpace(space.spaceId), requirement, holderDid, ownerDid: space.ownerDid, now: options.now?.() });
   }
 
   async verify(envelope: IssuedCredentialEnvelope, input: { readonly descriptor: CredentialFlowDescriptor; readonly requirement: CredentialRequirement; readonly transport?: OpenCredentialsHttpTransport; readonly issuerMetadata?: CredentialIssuerMetadata; readonly fetch?: typeof fetch; readonly signal?: AbortSignal; readonly now?: Date }): Promise<VerifiedCredential> {
@@ -78,8 +86,8 @@ export class CredentialsService {
 
   async store(verified: VerifiedCredential, requirementValue: CredentialRequirement, options: CredentialsOperationOptions = {}) {
     const holderDid = active(this.client); const requirement = validateCredentialRequirement(requirementValue);
-    const space = await this.client.ensureOwnedSpaceHosted("credentials");
-    return storeCredential({ kv: this.client.kvForSpace(space), verified, requirement, requirementDigest: await credentialRequirementDigest(requirement), activeOwnerDid: holderDid, now: options.now?.() });
+    const space = await credentialSpace(this.client);
+    return storeCredential({ kv: this.client.kvForSpace(space.spaceId), verified, requirement, requirementDigest: await credentialRequirementDigest(requirement), activeHolderDid: holderDid, activeOwnerDid: space.ownerDid, now: options.now?.() });
   }
 
   async acquire(requirementValue: CredentialRequirement, options: CredentialsAcquireOptions): Promise<VerifiedCredential> {
@@ -101,8 +109,8 @@ export class CredentialsService {
       const verifier = resume?.verifier ?? randomVerifier();
       const created = resume ?? await transport.create({ descriptor, descriptorDigest, requirement, requirementDigest, holderDid, openerOrigin, completionVerifierChallenge: await sha256Base64Url(verifier), signal: timed.signal });
       if (!resume && redirectStore) await redirectStore.save({ type: "TinyCloudCredentialRedirectResume", version: 1, requestId: created.requestId, locator: created.locator, verifier, expiresAt: created.expiresAt, correlationId: created.correlationId, holderDid, descriptorDigest, requirementDigest, openerOrigin });
-      const interaction = options.browser ?? (options.interaction === "headless" ? undefined : new BrowserCredentialInteraction(options.interaction ?? "popup"));
-      if (interaction && !resume) surface = await interaction.start({ issuerOrigin: descriptor.issuer.origin, locator: created.locator, signal: timed.signal });
+      const interaction = resume ? undefined : options.browser ?? (options.interaction === "headless" ? undefined : new BrowserCredentialInteraction(options.interaction ?? "popup"));
+      if (interaction) surface = await interaction.start({ issuerOrigin: descriptor.issuer.origin, locator: created.locator, signal: timed.signal });
       const signing = options.signing ?? {
         autoSign: async (_binding: unknown, bytes: Uint8Array) => this.client.autoSignCredentialBytes?.(bytes),
         requestApproval: async (_binding: unknown, bytes: Uint8Array) => {

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://witness.credentials.org/schemas/credential-catalog-v1.json",
+  "$id": "https://witness.credentials.org/schemas/catalog.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["type", "protocol", "catalogVersion", "canonicalization", "digest", "stepRegistry", "issuerMetadata", "cache", "profiles"],
@@ -11,16 +11,67 @@
     "canonicalization": { "const": "RFC8785" },
     "digest": { "const": "sha-256-base64url-nopad" },
     "stepRegistry": { "$ref": "step-registry.schema.json" },
-    "issuerMetadata": { "type": "object" },
-    "cache": { "type": "object" },
+    "issuerMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "issuer", "origin", "formats", "keys", "rotation", "trust", "cache"],
+      "properties": {
+        "type": { "const": "tinycloud.credentials/issuer-metadata/v1" },
+        "issuer": { "type": "string", "pattern": "^did:web:[A-Za-z0-9._:%-]+$", "maxLength": 256 },
+        "origin": { "type": "string", "format": "uri", "pattern": "^https://[^/?#]+$", "maxLength": 256 },
+        "formats": { "type": "array", "prefixItems": [{ "const": "vc+sd-jwt" }], "items": false, "minItems": 1, "maxItems": 1 },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kid", "version", "state"],
+            "properties": {
+              "kid": { "type": "string", "pattern": "^did:web:[A-Za-z0-9._:%-]+#[A-Za-z0-9._:-]+$", "maxLength": 320 },
+              "version": { "const": 1 },
+              "state": { "enum": ["active", "overlap", "retired"] }
+            }
+          }
+        },
+        "rotation": {
+          "type": "object", "additionalProperties": false,
+          "required": ["overlapSeconds", "retiredKeysFailClosed"],
+          "properties": { "overlapSeconds": { "type": "integer", "minimum": 0, "maximum": 604800 }, "retiredKeysFailClosed": { "const": true } }
+        },
+        "trust": {
+          "type": "object", "additionalProperties": false,
+          "required": ["httpsOriginRequired", "didDocumentRequired", "unknownKeysFailClosed"],
+          "properties": { "httpsOriginRequired": { "const": true }, "didDocumentRequired": { "const": true }, "unknownKeysFailClosed": { "const": true } }
+        },
+        "cache": {
+          "type": "object", "additionalProperties": false,
+          "required": ["maxAgeSeconds", "revalidateWith", "invalidateOnUnknownKid"],
+          "properties": { "maxAgeSeconds": { "type": "integer", "minimum": 0, "maximum": 3600 }, "revalidateWith": { "const": "ETag" }, "invalidateOnUnknownKid": { "const": true } }
+        }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxAgeSeconds", "staleIfErrorSeconds", "revalidateWith"],
+      "properties": {
+        "maxAgeSeconds": { "type": "integer", "minimum": 0, "maximum": 3600 },
+        "staleIfErrorSeconds": { "type": "integer", "minimum": 0, "maximum": 86400 },
+        "revalidateWith": { "const": "ETag" }
+      }
+    },
     "profiles": {
       "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["profile", "profileVersion", "descriptorDigest", "supported", "enabled", "readiness", "descriptor"],
         "properties": {
-          "profile": { "type": "string", "minLength": 1 },
+          "profile": { "type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*(?:/[a-z0-9][a-z0-9.-]*)?/v1$", "maxLength": 128 },
           "profileVersion": { "const": 1 },
           "descriptorDigest": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
           "supported": { "type": "boolean" },

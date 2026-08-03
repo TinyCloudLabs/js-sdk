@@ -14,6 +14,6 @@ export async function createStorageReceipt(record: StoredCredentialRecord, etag?
   return Object.freeze({ type: "TinyCloudCredentialStorageReceipt", version: 1, ownerDid: record.ownerDid, recordId: record.recordId, recordDigest: await canonicalDigest(record), storedAt: record.storedAt, ...(etag === undefined ? {} : { etag }) });
 }
 
-export async function verifyStorageReceipt(record: StoredCredentialRecord, receipt: CredentialStorageReceipt, activeOwnerDid: string): Promise<boolean> {
-  return receipt.type === "TinyCloudCredentialStorageReceipt" && receipt.version === 1 && receipt.ownerDid === activeOwnerDid && record.ownerDid === activeOwnerDid && record.holderDid === activeOwnerDid && receipt.recordId === record.recordId && receipt.storedAt === record.storedAt && receipt.recordDigest === await canonicalDigest(record);
+export async function verifyStorageReceipt(record: StoredCredentialRecord, receipt: CredentialStorageReceipt, activeOwnerDid: string, activeHolderDid: string): Promise<boolean> {
+  return receipt.type === "TinyCloudCredentialStorageReceipt" && receipt.version === 1 && receipt.ownerDid === activeOwnerDid && record.ownerDid === activeOwnerDid && record.holderDid === activeHolderDid && receipt.recordId === record.recordId && receipt.storedAt === record.storedAt && receipt.recordDigest === await canonicalDigest(record);
 }
