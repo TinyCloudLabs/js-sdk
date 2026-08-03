@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-core
 
+## 2.11.0-beta.12
+
+### Patch Changes
+
+- Updated dependencies [7805213]
+  - @tinycloud/share-envelope@0.2.0-beta.1
+  - @tinycloud/share-sdk@0.2.0-beta.2
+
 ## 2.11.0-beta.11
 
 ### Minor Changes

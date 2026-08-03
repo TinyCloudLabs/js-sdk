@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/node-sdk",
-  "version": "2.11.0-beta.11",
+  "version": "2.11.0-beta.12",
   "description": "TinyCloud SDK for Node.js with configurable authorization strategies",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "@tinycloud/sdk-services": "2.11.0-beta.11",
-    "@tinycloud/sdk-core": "2.11.0-beta.11",
+    "@tinycloud/sdk-core": "2.11.0-beta.12",
     "@tinycloud/node-sdk-wasm": "1.7.6-beta.0",
     "siwe": "^3.0.0"
   },
