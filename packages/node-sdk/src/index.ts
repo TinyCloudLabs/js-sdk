@@ -231,6 +231,7 @@ export {
   serializeDelegation,
   deserializeDelegation,
   grantAuthRequest,
+  activateCompactRuntimeDelegation,
   activateValidatedRuntimeDelegation,
 } from "./delegation";
 export type {
@@ -238,6 +239,7 @@ export type {
   AuthRequestArtifact,
   AuthDelegationArtifact,
   DelegationAuthority,
+  CompactRuntimeDelegationInput,
   RuntimeDelegationActivator,
   ValidatedRuntimeDelegation,
 } from "./delegation";

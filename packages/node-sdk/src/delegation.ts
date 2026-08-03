@@ -131,6 +131,14 @@ export interface ValidatedRuntimeDelegation {
   readonly host: string;
 }
 
+export interface CompactRuntimeDelegationInput {
+  readonly authorization: string;
+  readonly cid: string;
+  readonly host: string;
+  readonly ownerAddress: string;
+  readonly chainId: number;
+}
+
 interface SignedRuntimeAuthority {
   readonly issuer: string;
   readonly audience: string;
@@ -302,7 +310,9 @@ function signedAuthorityFromCompactUcan(
       continue;
     }
 
-    const match = /^(tinycloud:[^/]+)\/(kv|sql|duckdb|hooks)\/(.*)$/.exec(resource);
+    const nativeMatch = /^(tinycloud:[^/]+)\/(kv|sql|duckdb|hooks)\/(.*)$/.exec(resource);
+    const policyMatch = /^tinycloud:\/\/([^/]+)\/(kv|sql|duckdb|hooks)\/(.*)$/.exec(resource);
+    const match = nativeMatch ?? policyMatch;
     if (!match) {
       throw new Error(
         `Validated runtime delegation has an unsupported signed resource '${resource}'.`,
@@ -537,6 +547,49 @@ export async function activateValidatedRuntimeDelegation(
     audience: signed.audience,
     host: normalizedHost(installed.host ?? host),
   };
+}
+
+/**
+ * Import compact UCAN bytes returned by an authority ceremony through the
+ * ordinary runtime-delegation activation path. All transport projections are
+ * derived from signed bytes before `/delegate` is called.
+ */
+export async function activateCompactRuntimeDelegation(
+  node: RuntimeDelegationActivator,
+  input: CompactRuntimeDelegationInput,
+): Promise<ValidatedRuntimeDelegation> {
+  const authorization = input.authorization;
+  const cid = node.computeDelegationCid(authorization);
+  if (cid !== input.cid) {
+    throw new Error("Compact runtime delegation CID does not match authorization bytes.");
+  }
+  const signed = signedAuthorityFromCompactUcan(authorization);
+  const primary = signed.resources[0]!;
+  const signedSpace = signed.permissions.find(
+    (permission) => permission.service !== "tinycloud.encryption",
+  )?.space;
+  const delegation: PortableDelegation = {
+    cid,
+    delegationHeader: { Authorization: authorization },
+    ownerAddress: input.ownerAddress,
+    chainId: input.chainId,
+    delegatorDID: signed.issuer,
+    authHeader: authorization,
+    spaceId: signedSpace ?? primary.space,
+    path: primary.path,
+    actions: [...primary.actions],
+    ...(primary.caveats === undefined ? {} : { caveats: primary.caveats }),
+    resources: signed.resources.map((resource) => ({
+      ...resource,
+      actions: [...resource.actions],
+    })),
+    expiry: new Date(signed.expiry),
+    delegateDID: signed.audience,
+    host: normalizedHost(input.host),
+  };
+  return activateValidatedRuntimeDelegation(node, delegation, {
+    host: input.host,
+  });
 }
 
 /**

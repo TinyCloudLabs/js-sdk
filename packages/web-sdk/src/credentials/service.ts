@@ -1,5 +1,6 @@
 import {
   CredentialError,
+  admitPolicyCredentialV3,
   canonicalDigest,
   credentialError,
   credentialRequirementDigest,
@@ -8,6 +9,7 @@ import {
   sha256Base64Url,
   validateCredentialFlowDescriptor,
   validateCredentialRequirement,
+  verifyStorageReceipt,
   verifyIssuedCredential,
   type CredentialFlowDescriptor,
   type CredentialIssuerMetadata,
@@ -20,7 +22,7 @@ import { BrowserCredentialInteraction, BrowserCredentialRedirectStore } from "./
 import { interpretCredentialFlow } from "./interpreter";
 import { findStoredCredential, storeCredential } from "./storage";
 import { OpenCredentialsHttpTransport } from "./transport";
-import type { CredentialClient, CredentialsAcquireOptions, CredentialsEnsureOptions, CredentialsEnsureResult, CredentialsOperationOptions } from "./types";
+import type { CredentialClient, CredentialsAcquireOptions, CredentialsEnsureOptions, CredentialsEnsureResult, CredentialsOperationOptions, CredentialsPolicyAdmissionOptions, CredentialsPolicyAdmissionResult } from "./types";
 
 function randomVerifier(): string { return encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))); }
 
@@ -143,5 +145,73 @@ export class CredentialsService {
     const saved = await this.store(verified, requirement, options);
     options.onProgress?.({ state: "success" });
     return { status: "acquired", credential: verified, record: saved.record, receipt: saved.receipt };
+  }
+
+  async admitPolicy(
+    options: CredentialsPolicyAdmissionOptions,
+  ): Promise<CredentialsPolicyAdmissionResult> {
+    const holderDid = active(this.client);
+    const requirement = validateCredentialRequirement(options.requirement);
+    const requirementDigest = await credentialRequirementDigest(requirement);
+    const { credential, record, receipt } = options.ensured;
+    const space = await credentialSpace(this.client);
+    if (
+      credential.holderDid !== holderDid ||
+      credential.subjectDid !== holderDid ||
+      record.holderDid !== holderDid ||
+      record.ownerDid !== space.ownerDid ||
+      record.requirementDigest !== requirementDigest ||
+      record.credential !== credential.credential ||
+      record.credentialDigest !== credential.credentialDigest ||
+      record.descriptorDigest !== credential.descriptorDigest ||
+      record.issuerDid !== credential.issuerDid ||
+      record.issuerKid !== credential.issuerKid
+    ) {
+      throw new CredentialError(
+        "HOLDER_MISMATCH",
+        "Stored credential provenance does not match the active TinyCloud session",
+      );
+    }
+    if (
+      receipt !== undefined &&
+      !(await verifyStorageReceipt(
+        record,
+        receipt,
+        space.ownerDid,
+        holderDid,
+      ))
+    ) {
+      throw new CredentialError(
+        "VERIFIED_NOT_SAVED",
+        "Credential storage receipt is invalid",
+      );
+    }
+    const admission = await admitPolicyCredentialV3({
+      policy: options.policy,
+      policyCid: options.policyCid,
+      policyRootCid: options.policyRootCid,
+      enforcementRootCid: options.enforcementRootCid,
+      nodeOrigin: options.nodeOrigin,
+      requirement,
+      credential,
+      credentialSpaceOwnerDid: space.ownerDid,
+      requestedCapabilities: options.requestedCapabilities,
+      sign: (digest) => this.client.signSessionBytes(digest),
+      fetch: options.fetch,
+      now: options.now,
+      jti: options.jti,
+    });
+    if (this.client.activateCompactRuntimeDelegation === undefined) {
+      throw new CredentialError(
+        "ACTIVE_SESSION_REQUIRED",
+        "Active TinyCloud delegation activation is unavailable",
+      );
+    }
+    const installed = await this.client.activateCompactRuntimeDelegation({
+      authorization: admission.session.authorization,
+      cid: admission.session.cid,
+      host: options.nodeOrigin,
+    });
+    return Object.freeze({ ...admission, installed });
   }
 }

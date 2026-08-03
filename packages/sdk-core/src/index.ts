@@ -252,6 +252,25 @@ export {
   type UnifiedPolicyV1,
   type UnifiedResourceSelector,
 } from "./policy/unified";
+export {
+  POLICY_CREDENTIAL_REQUIREMENT_V1_TYPE,
+  POLICY_PRESENTATION_V3_DOMAIN,
+  POLICY_PRESENTATION_V3_SCHEMA,
+  POLICY_V2_DOMAIN,
+  POLICY_V2_SCHEMA,
+  admitPolicyCredentialV3,
+  buildPolicyCredentialPresentationV3,
+  policyV2DigestHex,
+  validatePolicyCredentialRequirementV1,
+  validateUnifiedPolicyV2,
+  type AdmitPolicyCredentialV3Input,
+  type BuildPolicyCredentialPresentationV3Input,
+  type PolicyCredentialAdmissionV3,
+  type PolicyCredentialPresentationV3,
+  type PolicyCredentialRequirementV1,
+  type UnsignedUnifiedPolicyV2,
+  type UnifiedPolicyV2,
+} from "./policy/credential-admission";
 export type {
   ShareAccessV2,
   ShareAction,

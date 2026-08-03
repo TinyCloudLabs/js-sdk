@@ -114,6 +114,8 @@ export interface PolicyChallengeV3 {
   readonly nonce: string;
   readonly policyCid: string;
   readonly recipientDid: string;
+  readonly expiresAt?: string;
+  readonly nodeAudience?: string;
   readonly [key: string]: unknown;
 }
 
@@ -179,7 +181,7 @@ export async function mintPolicySessionV3(input: {
   return session;
 }
 
-function compactAttenuationForPolicyCapabilities(
+export function compactAttenuationForPolicyCapabilities(
   input: readonly UnifiedPolicyCapability[],
 ): Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>> {
   const attenuation: Record<string, Record<string, readonly unknown[]>> = {};

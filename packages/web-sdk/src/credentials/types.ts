@@ -10,7 +10,11 @@ import type {
   IKVService,
   StoredCredentialRecord,
   VerifiedCredential,
+  PolicyCredentialAdmissionV3,
+  UnifiedPolicyCapability,
+  UnifiedPolicyV2,
 } from "@tinycloud/sdk-core";
+import type { ValidatedRuntimeDelegation } from "@tinycloud/node-sdk/core";
 
 export interface CredentialClient {
   readonly sessionDid: string;
@@ -20,6 +24,11 @@ export interface CredentialClient {
   signSessionBytes(bytes: Uint8Array): Promise<Uint8Array>;
   autoSignCredentialBytes?(bytes: Uint8Array): Promise<Uint8Array | undefined>;
   approveCredentialBytes?(bytes: Uint8Array): Promise<Uint8Array>;
+  activateCompactRuntimeDelegation?(input: {
+    readonly authorization: string;
+    readonly cid: string;
+    readonly host: string;
+  }): Promise<ValidatedRuntimeDelegation>;
   ensureOwnedSpaceHosted(name: string): Promise<string>;
   credentialSpaceOwnerDid(spaceId: string): string;
   kvForSpace(spaceId: string): IKVService;
@@ -118,4 +127,23 @@ export interface CredentialsEnsureResult {
   readonly credential: VerifiedCredential;
   readonly record: StoredCredentialRecord;
   readonly receipt?: CredentialStorageReceipt;
+}
+
+export interface CredentialsPolicyAdmissionOptions {
+  readonly ensured: CredentialsEnsureResult;
+  readonly policy: UnifiedPolicyV2;
+  readonly policyCid: string;
+  readonly policyRootCid: string;
+  readonly enforcementRootCid: string;
+  readonly requirement: CredentialRequirement;
+  readonly requestedCapabilities: readonly UnifiedPolicyCapability[];
+  readonly nodeOrigin: string;
+  readonly fetch?: typeof fetch;
+  readonly now?: Date;
+  readonly jti?: string;
+}
+
+export interface CredentialsPolicyAdmissionResult
+  extends PolicyCredentialAdmissionV3 {
+  readonly installed: ValidatedRuntimeDelegation;
 }

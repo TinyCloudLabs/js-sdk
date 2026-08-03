@@ -11,6 +11,7 @@
  */
 
 import {
+  activateCompactRuntimeDelegation as activateCompactRuntimeDelegationOnNode,
   TinyCloudNode,
   TinyCloudNodeConfig,
   type BootstrapWarning,
@@ -19,6 +20,7 @@ import {
   type ISessionStorage,
   type PersistedSessionData,
   type SignStrategy,
+  type ValidatedRuntimeDelegation,
 } from "@tinycloud/node-sdk/core";
 import {
   IKVService,
@@ -757,6 +759,20 @@ export class TinyCloudWeb {
 
   async approveCredentialBytes(bytes: Uint8Array): Promise<Uint8Array> {
     return this.node.approveCredentialBytes(bytes);
+  }
+
+  async activateCompactRuntimeDelegation(input: {
+    readonly authorization: string;
+    readonly cid: string;
+    readonly host: string;
+  }): Promise<ValidatedRuntimeDelegation> {
+    const session = this.session();
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    return activateCompactRuntimeDelegationOnNode(this.node, {
+      ...input,
+      ownerAddress: session.address,
+      chainId: session.chainId,
+    });
   }
 
   credentialSpaceOwnerDid(spaceId: string): string {
