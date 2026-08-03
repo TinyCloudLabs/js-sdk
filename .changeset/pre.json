@@ -41,6 +41,7 @@
     "share-sdk-foundation",
     "share-target-lifecycle",
     "smart-clouds-unite",
+    "tc-291-crypto-browserify",
     "tc-362-space-modal-timeout",
     "tc-373-batch-seed-spaces-classifier"
   ]
