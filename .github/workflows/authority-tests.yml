@@ -64,24 +64,20 @@ jobs:
         with:
           path: js-sdk
 
-      # Check out the OpenKey PR branch that this js-sdk PR is paired with.
-      # We use the branch ref (not a pinned SHA) so a clean GitHub runner can
-      # always resolve it via `git ls-remote origin`. Pinning a SHA that has
-      # not yet been pushed to origin makes CI unreproducible.
-      #
-      # When OpenKey PR #160 merges to `main`, change this ref to `main` (or
-      # to the resulting squash/merge SHA on `main` for maximum determinism).
-      # The paired OpenKey branch head contains:
+      # Pin the exact OpenKey PR #160 revision reviewed with this js-sdk
+      # change so reruns always exercise the same cross-repository contract.
+      # When OpenKey merges, update both pins to the resulting main SHA.
+      # This revision contains:
       #   - production canonicalization of permissions[].service in
       #     /authorize-sign-preview and /authorize-sign response bodies
       #     (apps/api/src/routes/delegate.ts)
       #   - scripts/vertical-happy-path-harness.test.ts with no
       #     test-only response rewriting
-      - name: Check out OpenKey at the paired PR branch
+      - name: Check out OpenKey at the reviewed revision
         uses: actions/checkout@v4
         with:
           repository: TinyCloudLabs/openkey
-          ref: skgbafa/openkey-authorization-consolidation
+          ref: c791afff4769067ffa444366f6278063bfbda6a8
           path: openkey
 
       - uses: oven-sh/setup-bun@v2
@@ -141,14 +137,12 @@ jobs:
         with:
           path: js-sdk
 
-      - name: Check out OpenKey at the paired PR branch
+      - name: Check out OpenKey at the reviewed revision
         uses: actions/checkout@v4
         with:
           repository: TinyCloudLabs/openkey
-          # Same branch ref as the cross-repo-contract job above —
-          # keeps the vertical browser journey in lockstep with the
-          # wire-shape contract test. Update both when OpenKey merges.
-          ref: skgbafa/openkey-authorization-consolidation
+          # Same immutable revision as the cross-repo-contract job above.
+          ref: c791afff4769067ffa444366f6278063bfbda6a8
           path: openkey
 
       - uses: oven-sh/setup-bun@v2
