@@ -2,8 +2,7 @@
 const path = require("path");
 const webpack = require("webpack");
 
-const isProduction = process.env.NODE_ENV === "production" ||
-  process.argv.some(arg => arg.includes('--mode') && arg.includes('production'));
+const isProduction = process.env.NODE_ENV === "production";
 
 const rules = [
   {
@@ -99,7 +98,6 @@ const baseConfig = {
     // Disable HMR and development optimizations in production
     ...(isProduction && {
       minimize: true,
-      sideEffects: false,
     }),
   },
   plugins: [

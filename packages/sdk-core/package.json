@@ -4,6 +4,7 @@
   "description": "Core TinyCloud SDK - shared interfaces and TinyCloud class",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
+  "sideEffects": false,
   "engines": {
     "node": ">=20"
   },

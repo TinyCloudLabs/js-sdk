@@ -4,6 +4,7 @@
   "description": "Canonical TinyCloud account bootstrap manifest and allowlist",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
+  "sideEffects": false,
   "engines": {
     "node": ">=20"
   },
