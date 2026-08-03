@@ -284,6 +284,7 @@ export interface UnifiedOwnerRootInput {
   readonly contentSourceDigestHex: string;
   readonly capabilityCeilingHashHex: string;
   readonly nativeProjectionHashHex: string;
+  readonly notBefore: Date;
   readonly expiresAt: Date;
   readonly nodeAudience: string;
   readonly capabilities: readonly UnifiedPolicyCapability[];
@@ -3236,7 +3237,7 @@ export class TinyCloudNode {
       audienceDid: input.audienceDid,
       attenuation: unifiedRootAttenuation(input.capabilities),
       facts: [facts],
-      notBefore: Math.floor(Date.now() / 1000),
+      notBefore: Math.floor(input.notBefore.getTime() / 1000),
       expiresAt: Math.floor(input.expiresAt.getTime() / 1000),
       nonce: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
       sign: (bytes) => this.signSessionBytes(bytes),
