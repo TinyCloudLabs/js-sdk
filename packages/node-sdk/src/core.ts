@@ -121,6 +121,8 @@ export {
   type OwnerDelegationReceipt,
   type RegisterOwnerSharePolicyParams,
   type OwnerSharePolicyRegistrationReceipt,
+  type UnifiedOwnerRootInput,
+  type UnifiedOwnerRootReceipt,
   type BootstrapWarning,
 } from "./TinyCloudNode";
 

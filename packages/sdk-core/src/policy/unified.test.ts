@@ -16,6 +16,7 @@ import {
   policyIdForDigestHex,
   ROOT_STATUS_V1_DOMAIN,
   signCompactUcanAuthorization,
+  signCompactUcanRootAuthorization,
   projectUnifiedPolicyCapability,
   unifiedNativeProjectionHashHex,
   unifiedPolicyCapabilityContains,
@@ -33,6 +34,34 @@ const kv = {
 };
 
 describe("TC-405 unified policy contracts", () => {
+  test("authors long-lived proofless roots without widening invocation TTL", async () => {
+    const privateKey = new Uint8Array(32).fill(17);
+    const publicKey = ed25519.getPublicKey(privateKey);
+    const ownerDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...publicKey]))}`;
+    const root = await signCompactUcanRootAuthorization({
+      issuerDid: ownerDid,
+      audienceDid: "did:tinycloud:policy:root",
+      attenuation: { "tinycloud://space/kv/docs/a": { "tinycloud.kv/get": [{}] } },
+      facts: [{ role: "policy-authority" }],
+      notBefore: 1_800_000_000,
+      expiresAt: 1_800_086_400,
+      nonce: "root-authorization",
+      sign: async (bytes) => ed25519.sign(bytes, privateKey),
+    });
+    expect(root.payload.prf).toEqual([]);
+    expect(root.payload.exp - root.payload.nbf).toBe(86_400);
+    await expect(signCompactUcanAuthorization({
+      issuerDid: ownerDid,
+      audienceDid: root.payload.aud,
+      attenuation: root.payload.att,
+      facts: [root.payload.fct[0]],
+      proofs: [],
+      notBefore: root.payload.nbf,
+      expiresAt: root.payload.exp,
+      nonce: root.payload.nnc,
+      sign: async (bytes) => ed25519.sign(bytes, privateKey),
+    })).rejects.toThrow("60 seconds");
+  });
   test("matches the Rust canonicalization and content-source vectors", async () => {
     const vector = (await Bun.file(
       `${import.meta.dir}/../../test-fixtures/policy-engine-vectors/unified-policy/canonicalization.json`,

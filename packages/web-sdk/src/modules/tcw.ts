@@ -21,6 +21,8 @@ import {
   type PersistedSessionData,
   type SignStrategy,
   type ValidatedRuntimeDelegation,
+  type UnifiedOwnerRootInput,
+  type UnifiedOwnerRootReceipt,
 } from "@tinycloud/node-sdk/core";
 import {
   IKVService,
@@ -751,6 +753,10 @@ export class TinyCloudWeb {
   /** Sign protocol bytes with the established session key without exposing key material. */
   async signSessionBytes(bytes: Uint8Array): Promise<Uint8Array> {
     return this.node.signSessionBytes(bytes);
+  }
+
+  async createUnifiedOwnerRoot(input: UnifiedOwnerRootInput): Promise<UnifiedOwnerRootReceipt> {
+    return this.node.createUnifiedOwnerRoot(input);
   }
 
   async autoSignCredentialBytes(bytes: Uint8Array): Promise<Uint8Array | undefined> {

@@ -157,6 +157,8 @@ export {
   type OwnerDelegationReceipt,
   type RegisterOwnerSharePolicyParams,
   type OwnerSharePolicyRegistrationReceipt,
+  type UnifiedOwnerRootInput,
+  type UnifiedOwnerRootReceipt,
   type SecretReadInput,
   type SecretPermissionHint,
   type SecretReadResult,

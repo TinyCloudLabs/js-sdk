@@ -152,6 +152,8 @@ import {
   type ShareDeliveryAuthorizationReceipt,
   validateShareDeliveryAuthorizationBytes,
   verifyEip191MessageSignature,
+  signCompactUcanRootAuthorization,
+  type UnifiedPolicyCapability,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -271,6 +273,48 @@ const ROOT_DELEGATION_ACTIONS: string[] = [
 const DEFAULT_SESSION_EXPIRATION_MS = EXPIRY.SESSION_MS;
 
 export type CreateOwnerDelegationParams = CoreCreateOwnerDelegationParams;
+
+export interface UnifiedOwnerRootInput {
+  readonly ownerDid: string;
+  readonly role: "policy-authority" | "policy-enforcement";
+  readonly audienceDid: string;
+  readonly policyId: string;
+  readonly policyDigestHex: string;
+  readonly policyCid: string;
+  readonly contentSourceDigestHex: string;
+  readonly capabilityCeilingHashHex: string;
+  readonly nativeProjectionHashHex: string;
+  readonly expiresAt: Date;
+  readonly nodeAudience: string;
+  readonly capabilities: readonly UnifiedPolicyCapability[];
+}
+
+export interface UnifiedOwnerRootReceipt {
+  readonly cid: string;
+  readonly delegationHeader: { readonly Authorization: string };
+  readonly delegateDID: string;
+  readonly spaceId: string;
+  readonly path: string;
+  readonly actions: readonly string[];
+  readonly expiry: Date;
+}
+
+function unifiedRootAttenuation(
+  capabilities: readonly UnifiedPolicyCapability[],
+): Record<string, Record<string, readonly Record<string, unknown>[]>> {
+  const attenuation: Record<string, Record<string, readonly Record<string, unknown>[]>> = {};
+  for (const capability of capabilities) {
+    if (attenuation[capability.resource] !== undefined) throw new Error("unified owner root contains a duplicate resource");
+    attenuation[capability.resource] = capability.kind === "encryption"
+      ? { [capability.action]: [{}] }
+      : Object.fromEntries(capability.actions.map((action) => [action, [{
+          type: "xyz.tinycloud.resource/selector",
+          kind: capability.selector,
+          value: capability.resource,
+        }]]));
+  }
+  return attenuation;
+}
 
 export function decodeAuthorizationBytes(authorization: string): Uint8Array {
   const encoded = authorization.replace(/^Bearer /i, "");
@@ -3168,6 +3212,47 @@ export class TinyCloudNode {
     const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
     if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
     return signBytesWithJwk(bytes, session.jwk);
+  }
+
+  /** Author a proofless Policy/v3 owner root with the authenticated holder key. */
+  async createUnifiedOwnerRoot(input: UnifiedOwnerRootInput): Promise<UnifiedOwnerRootReceipt> {
+    const ownerDid = this.credentialHolderDid;
+    if (input.ownerDid !== ownerDid) throw new Error("unified owner root signer does not match owner DID");
+    const facts = {
+      role: input.role,
+      mode: input.role === "policy-authority" ? "policy-source" : "conditional-mint",
+      ownerDid,
+      policyId: input.policyId,
+      policyDigestHex: input.policyDigestHex,
+      policyCid: input.policyCid,
+      contentSourceDigestHex: input.contentSourceDigestHex,
+      capabilityCeilingHashHex: input.capabilityCeilingHashHex,
+      nativeProjectionHashHex: input.nativeProjectionHashHex,
+      nodeAudience: input.nodeAudience,
+      ...(input.role === "policy-enforcement" ? { enforcerDid: input.audienceDid } : {}),
+    };
+    const root = await signCompactUcanRootAuthorization({
+      issuerDid: ownerDid,
+      audienceDid: input.audienceDid,
+      attenuation: unifiedRootAttenuation(input.capabilities),
+      facts: [facts],
+      notBefore: Math.floor(Date.now() / 1000),
+      expiresAt: Math.floor(input.expiresAt.getTime() / 1000),
+      nonce: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
+      sign: (bytes) => this.signSessionBytes(bytes),
+    });
+    const kv = input.capabilities.find((capability) => capability.kind === "kv");
+    const resource = kv?.resource ?? "";
+    const marker = resource.indexOf("/kv/");
+    return {
+      cid: root.cid,
+      delegationHeader: { Authorization: root.authorization },
+      delegateDID: input.audienceDid,
+      spaceId: marker === -1 ? "" : resource.slice("tinycloud://".length, marker),
+      path: marker === -1 ? resource : resource.slice(marker + 4),
+      actions: kv?.actions ?? [],
+      expiry: input.expiresAt,
+    };
   }
 
   /** Apply only an already-enabled signing policy to the exact credential request. */

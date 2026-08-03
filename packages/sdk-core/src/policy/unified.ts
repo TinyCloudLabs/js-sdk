@@ -756,12 +756,20 @@ export interface SignCompactUcanAuthorizationInput {
   readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>;
 }
 
-/** Sign exact compact-UCAN bytes with a caller-owned, potentially non-extractable key. */
-export async function signCompactUcanAuthorization(
+export interface SignCompactUcanRootAuthorizationInput {
+  readonly issuerDid: string;
+  readonly audienceDid: string;
+  readonly attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>;
+  readonly facts: readonly [Readonly<Record<string, unknown>>];
+  readonly notBefore: number;
+  readonly expiresAt: number;
+  readonly nonce: string;
+  readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>;
+}
+
+async function signCompactUcan(
   input: SignCompactUcanAuthorizationInput,
 ): Promise<CompactUcanAuthorizationV1> {
-  if (input.notBefore >= input.expiresAt || input.expiresAt - input.notBefore > 60)
-    throw new Error("compact invocation lifetime must be between one and 60 seconds");
   const principal = input.issuerDid.split("#", 1)[0]!;
   const didMaterial = principal.startsWith("did:key:")
     ? base58btc.decode(principal.slice("did:key:".length))
@@ -784,6 +792,24 @@ export async function signCompactUcanAuthorization(
   const signature = await input.sign(new TextEncoder().encode(`${protectedSegment}.${payloadSegment}`));
   if (signature.length !== 64) throw new Error("compact Authorization signature must be Ed25519");
   return parseCompactUcanAuthorization(`${protectedSegment}.${payloadSegment}.${encodeBase64Url(signature)}`);
+}
+
+/** Sign exact compact-UCAN bytes with a caller-owned, potentially non-extractable key. */
+export async function signCompactUcanAuthorization(
+  input: SignCompactUcanAuthorizationInput,
+): Promise<CompactUcanAuthorizationV1> {
+  if (input.notBefore >= input.expiresAt || input.expiresAt - input.notBefore > 60)
+    throw new Error("compact invocation lifetime must be between one and 60 seconds");
+  return signCompactUcan(input);
+}
+
+/** Sign a proofless policy root without weakening the 60-second invocation profile. */
+export async function signCompactUcanRootAuthorization(
+  input: SignCompactUcanRootAuthorizationInput,
+): Promise<CompactUcanAuthorizationV1> {
+  if (input.notBefore >= input.expiresAt || input.expiresAt - input.notBefore > 31 * 24 * 60 * 60)
+    throw new Error("compact policy root lifetime must be between one second and 31 days");
+  return signCompactUcan({ ...input, proofs: [] });
 }
 
 export interface CompactPolicyInvocationInput {
