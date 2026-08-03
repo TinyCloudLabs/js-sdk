@@ -42,6 +42,7 @@ import {
   unauthorizedRecapCapabilities,
   parseCanonicalRecapResource,
   ACCOUNT_REGISTRY_SPACE,
+  ACCOUNT_MANIFEST_PERMISSIONS,
   KV,
   SQL,
   DUCKDB,
@@ -204,7 +205,7 @@ export interface NodeUserAuthorizationConfig {
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
   capabilityRequest?: ComposedManifestRequest;
-  /** Include implicit account registry permissions when composing `manifest`. Default true. */
+  /** Include canonical account registry read/create-update/list permissions when composing `manifest` and plain sign-in. Default true. */
   includeAccountRegistryPermissions?: boolean;
 }
 
@@ -633,21 +634,29 @@ export class NodeUserAuthorization implements IUserAuthorization {
           },
         },
       };
-      // Plain sessions need only the exact completion marker and the account
-      // index's productive SQL actions. Do not duplicate this map when the
-      // primary space itself is `account`.
+      // Plain sessions receive the canonical account-manifest permissions in
+      // the signer-derived account space. Do not duplicate the space object
+      // when the primary space itself is `account`; merge into its existing
+      // defaultActions map instead.
       if (
         this.includeAccountRegistryPermissions &&
         this.spacePrefix !== ACCOUNT_REGISTRY_SPACE
       ) {
-        spaceAbilities[makePkhSpaceId(address, chainId, ACCOUNT_REGISTRY_SPACE)] = {
-          kv: {
-            "system/bootstrap/complete": [KV.GET, KV.PUT],
-          },
-          sql: {
-            account: [SQL.READ, SQL.WRITE, SQL.SCHEMA],
-          },
-        };
+        spaceAbilities[makePkhSpaceId(address, chainId, ACCOUNT_REGISTRY_SPACE)] =
+          resourceCapabilitiesToAbilitiesMap(ACCOUNT_MANIFEST_PERMISSIONS);
+      } else if (this.includeAccountRegistryPermissions) {
+        const accountAbilities = resourceCapabilitiesToAbilitiesMap(
+          ACCOUNT_MANIFEST_PERMISSIONS,
+        );
+        for (const [service, paths] of Object.entries(accountAbilities)) {
+          const existingPaths = this.defaultActions[service] ?? (this.defaultActions[service] = {});
+          for (const [path, actions] of Object.entries(paths)) {
+            const existingActions = existingPaths[path] ?? (existingPaths[path] = []);
+            for (const action of actions) {
+              if (!existingActions.includes(action)) existingActions.push(action);
+            }
+          }
+        }
       }
       return {
         abilities: this.defaultActions,

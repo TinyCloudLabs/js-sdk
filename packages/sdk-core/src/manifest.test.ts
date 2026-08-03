@@ -990,6 +990,41 @@ describe("resolveManifest — end-to-end composition", () => {
     expect(request.registryRecords).toEqual([]);
   });
 
+  it("preserves explicit account resources when implicit permissions are disabled", () => {
+    const request = composeManifestRequest(
+      [{
+        app_id: "com.listen.app",
+        name: "Listen",
+        defaults: false,
+        prefix: "",
+        space: "account",
+        permissions: [{
+          service: "tinycloud.kv",
+          path: "caller-owned",
+          actions: ["get"],
+        }],
+      }],
+      { includeAccountRegistryPermissions: false },
+    );
+
+    expect(request.resources).toContainEqual({
+      service: "tinycloud.kv",
+      space: "account",
+      path: "caller-owned",
+      actions: ["tinycloud.kv/get"],
+    });
+    expect(request.resources.some((resource) =>
+      resource.space === "account" &&
+      ["applications/", "spaces/", "system/bootstrap/complete", "account"].includes(resource.path)
+    )).toBe(false);
+    expect(request.resources).toContainEqual({
+      service: "tinycloud.capabilities",
+      space: "account",
+      path: "",
+      actions: ["tinycloud.capabilities/read"],
+    });
+  });
+
   it("includes delegation revocation in the consolidated session request", () => {
     const resolved = resolveManifest({
       app_id: "com.feed.app",

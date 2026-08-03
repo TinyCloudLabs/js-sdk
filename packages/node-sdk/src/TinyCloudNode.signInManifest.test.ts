@@ -515,7 +515,20 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     expect(accountSpaceId).toBeDefined();
     expect(cfg.spaceAbilities[accountSpaceId!]).toEqual({
       kv: {
+        "applications/": [
+          "tinycloud.kv/get",
+          "tinycloud.kv/put",
+          "tinycloud.kv/list",
+        ],
+        "spaces/": [
+          "tinycloud.kv/get",
+          "tinycloud.kv/put",
+          "tinycloud.kv/list",
+        ],
         "system/bootstrap/complete": ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+      delegation: {
+        "": ["tinycloud.delegation/list"],
       },
       sql: {
         account: [
@@ -523,6 +536,9 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
           "tinycloud.sql/write",
           "tinycloud.sql/schema",
         ],
+      },
+      capabilities: {
+        "": ["tinycloud.capabilities/read"],
       },
     });
   });
@@ -649,6 +665,54 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
             "tinycloud.sql/schema",
           ],
         },
+      },
+    });
+  });
+
+  test("explicit false preserves caller-supplied account capabilityRequest resources", async () => {
+    const prepareSessionSpy = mock((cfg: any) => ({
+      siwe: "fake-siwe",
+      jwk: cfg.jwk,
+      spaceId: cfg.spaceId,
+      verificationMethod: "did:key:z6MkTestSession",
+    }));
+    const wasm = makeFakeWasmBindings({
+      prepareSession: prepareSessionSpy as any,
+    });
+
+    const node = makeNodeWithSigner(wasm, {
+      includeAccountRegistryPermissions: false,
+      capabilityRequest: {
+        manifests: [],
+        resources: [{
+          service: "tinycloud.kv",
+          space: "account",
+          path: "caller-owned",
+          actions: ["tinycloud.kv/get"],
+        }],
+        delegationTargets: [],
+        registryRecords: [],
+        expiryMs: 60_000,
+        includePublicSpace: false,
+      },
+    });
+    stubAuthNetworkCalls(node);
+
+    const auth = (node as any).auth;
+    try {
+      await auth.signIn();
+    } catch {
+      /* network failure expected */
+    }
+
+    const cfg = (prepareSessionSpy as any).mock.calls[0][0];
+    const accountSpaceId = Object.keys(cfg.spaceAbilities).find((spaceId) =>
+      spaceId.endsWith(":account"),
+    );
+    expect(accountSpaceId).toBeDefined();
+    expect(cfg.spaceAbilities[accountSpaceId!]).toEqual({
+      kv: {
+        "caller-owned": ["tinycloud.kv/get"],
       },
     });
   });

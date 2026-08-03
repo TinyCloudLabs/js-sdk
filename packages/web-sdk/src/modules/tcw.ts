@@ -52,6 +52,7 @@ import {
   type AccountService,
   type ResolvedDelegate,
   type PermissionEntry,
+  type ResourceCapability,
   type NetworkDescriptor,
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
@@ -59,6 +60,7 @@ import {
   type OwnerSharePolicyRegistrationReceipt,
   type LocalNodeIdentityStore,
   SignInOptions,
+  ACCOUNT_MANIFEST_PERMISSIONS,
   composeManifestRequest,
   createLocalStorageLocalNodeIdentityStore,
 } from "@tinycloud/sdk-core";
@@ -92,8 +94,6 @@ import type { NotificationConfig } from "../notifications/types";
 import { WasmInitializer } from "./WasmInitializer";
 import { invoke } from "./Storage/tinycloud/module";
 import type { PortableDelegation, DelegatedAccess } from "@tinycloud/node-sdk/core";
-
-const BOOTSTRAP_COMPLETION_MARKER_KEY = "system/bootstrap/complete";
 
 declare global {
   interface Window {
@@ -198,7 +198,7 @@ export interface Config extends ClientConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Strategy for TinyCloud root signature requests. */
   signStrategy?: SignStrategy;
-  /** Include account bootstrap support in plain sessions and implicit manifest permissions. Default true. */
+  /** Include canonical account registry read/create-update/list permissions in plain sessions and composed manifests. Default true. */
   includeAccountRegistryPermissions?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
@@ -649,7 +649,7 @@ export class TinyCloudWeb {
     }
   }
 
-  private configuredManifestPermissions(node: TinyCloudNode): PermissionEntry[] {
+  private configuredManifestPermissions(node: TinyCloudNode): ResourceCapability[] {
     if (this._capabilityRequest !== undefined) {
       return this._capabilityRequest.resources;
     }
@@ -669,20 +669,11 @@ export class TinyCloudWeb {
       throw new Error("Cannot check restored account permissions before account space resolution");
     }
     const accountSpaceId = node.accountSpaceId;
-    return [
-      {
-        service: "tinycloud.kv",
-        space: accountSpaceId,
-        path: BOOTSTRAP_COMPLETION_MARKER_KEY,
-        actions: ["get", "put"],
-      },
-      {
-        service: "tinycloud.sql",
-        space: accountSpaceId,
-        path: "account",
-        actions: ["read", "write", "schema"],
-      },
-    ];
+    return ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+      ...resource,
+      space: accountSpaceId,
+      actions: [...resource.actions],
+    }));
   }
 
   private restoredSessionCoversConfiguredManifest(node: TinyCloudNode): boolean {

@@ -6,6 +6,7 @@ import {
   BOOTSTRAP_MANIFEST,
   BOOTSTRAP_SESSION_REQUESTS,
   BOOTSTRAP_SPACE_NAMES,
+  ACCOUNT_MANIFEST_PERMISSIONS,
   TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
   bootstrapSteps,
   ACCOUNT_REGISTRY_SPACE,
@@ -35,27 +36,18 @@ test("per-space descriptors compose to single-space recaps", () => {
   }
 });
 
-test("default bootstrap request widens only the exact marker and account SQL", () => {
+test("default bootstrap request includes the canonical six-row account bundle", () => {
   expect(new Set(BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST.resources.map((resource) => resource.space)))
     .toEqual(new Set(["default"]));
 
   const widened = BOOTSTRAP_SESSION_REQUESTS.default.resources;
   expect(widened.filter((resource) => resource.space === ACCOUNT_REGISTRY_SPACE)).toEqual([
-    {
-      service: "tinycloud.kv",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "system/bootstrap/complete",
-      actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
-    },
-    {
-      service: "tinycloud.sql",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "account",
-      actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"],
-    },
+    ...ACCOUNT_MANIFEST_PERMISSIONS,
   ]);
   expect(widened.some((resource) => resource.path === "system/bootstrap/")).toBe(false);
-  expect(widened.some((resource) => resource.service === "tinycloud.capabilities" && resource.space === ACCOUNT_REGISTRY_SPACE)).toBe(false);
+  expect(BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST.resources.some(
+    (resource) => resource.space === ACCOUNT_REGISTRY_SPACE,
+  )).toBe(false);
 });
 
 test("allowlist contains bootstrap session and host targets plus account network create", () => {

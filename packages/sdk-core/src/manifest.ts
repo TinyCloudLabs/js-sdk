@@ -16,6 +16,7 @@
  */
 
 import ms from "ms";
+import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
 import { resolveSecretPath, SECRET_NAME_RE } from "@tinycloud/sdk-services";
 
 // ---------------------------------------------------------------------------
@@ -1252,49 +1253,6 @@ function withCapabilitiesReadForSpaces(
   ]);
 }
 
-function accountRegistryPermissions(): ResourceCapability[] {
-  return [
-    ...[ACCOUNT_REGISTRY_PATH, "spaces/"].map((path) => ({
-      service: "tinycloud.kv",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path,
-      actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
-    })),
-    {
-      service: "tinycloud.delegation",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "",
-      actions: ["tinycloud.delegation/list"],
-    },
-  ];
-}
-
-function accountRegistryIndexPermission(): ResourceCapability {
-  return {
-    service: "tinycloud.sql",
-    space: ACCOUNT_REGISTRY_SPACE,
-    path: "account",
-    actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"],
-  };
-}
-
-/**
- * Native node containment treats a path as covering slash-delimited
- * descendants (tinycloud-auth/src/resource.rs:193-209), while sdk-core's
- * subset model treats a no-slash path as exact. This exact marker cannot reach
- * registry records in sdk-core; native containment may still cover
- * `system/bootstrap/complete/...`, which does not make a broader grant
- * representable here.
- */
-function accountBootstrapMarkerPermission(): ResourceCapability {
-  return {
-    service: "tinycloud.kv",
-    space: ACCOUNT_REGISTRY_SPACE,
-    path: "system/bootstrap/complete",
-    actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
-  };
-}
-
 /**
  * Compose one or more manifests into the single capability request that should
  * be signed. Fetching manifests is intentionally out of band; callers pass the
@@ -1323,9 +1281,12 @@ export function composeManifestRequest(
   );
 
   if (includeAccountRegistryPermissions) {
-    resources.push(...accountRegistryPermissions());
-    resources.push(accountRegistryIndexPermission());
-    resources.push(accountBootstrapMarkerPermission());
+    resources.push(
+      ...ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+        ...resource,
+        actions: [...resource.actions],
+      })),
+    );
   }
   const resourcesWithImplicitCapabilities =
     withCapabilitiesReadForSpaces(resources);
