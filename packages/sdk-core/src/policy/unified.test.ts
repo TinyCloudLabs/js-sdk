@@ -15,6 +15,7 @@ import {
   policyDigestHex,
   policyIdForDigestHex,
   ROOT_STATUS_V1_DOMAIN,
+  signCompactUcanAuthorization,
   projectUnifiedPolicyCapability,
   unifiedNativeProjectionHashHex,
   unifiedPolicyCapabilityContains,
@@ -241,5 +242,19 @@ describe("TC-405 unified policy contracts", () => {
     });
     expect(invocation.payload.prf).toEqual([vector.s0.cid]);
     expect(invocation.authorization).not.toBe(vector.s0.authorization);
+
+    const callbackSigned = await signCompactUcanAuthorization({
+      issuerDid: vector.principals.recipientDid,
+      audienceDid: vector.principals.nodeDid,
+      attenuation: invocation.payload.att,
+      facts: [invocation.payload.fct[0]],
+      proofs: [vector.s0.cid],
+      notBefore: invocation.payload.nbf,
+      expiresAt: invocation.payload.exp,
+      nonce: invocation.payload.nnc,
+      sign: async (bytes) => ed25519.sign(bytes, new Uint8Array(32).fill(9)),
+    });
+    expect(callbackSigned.authorization).toBe(invocation.authorization);
+    expect(callbackSigned.cid).toBe(invocation.cid);
   });
 });

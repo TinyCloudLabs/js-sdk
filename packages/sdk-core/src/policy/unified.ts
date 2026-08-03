@@ -742,6 +742,48 @@ export interface CompactUcanAuthorizationV1 {
   readonly payload: z.infer<typeof CompactPayloadSchema>;
 }
 
+export interface SignCompactUcanAuthorizationInput {
+  readonly issuerDid: string;
+  readonly audienceDid: string;
+  readonly attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>;
+  readonly facts: readonly [Readonly<Record<string, unknown>>];
+  readonly proofs: readonly string[];
+  readonly notBefore: number;
+  readonly expiresAt: number;
+  readonly nonce: string;
+  readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>;
+}
+
+/** Sign exact compact-UCAN bytes with a caller-owned, potentially non-extractable key. */
+export async function signCompactUcanAuthorization(
+  input: SignCompactUcanAuthorizationInput,
+): Promise<CompactUcanAuthorizationV1> {
+  if (input.notBefore >= input.expiresAt || input.expiresAt - input.notBefore > 60)
+    throw new Error("compact invocation lifetime must be between one and 60 seconds");
+  const principal = input.issuerDid.split("#", 1)[0]!;
+  const didMaterial = principal.startsWith("did:key:")
+    ? base58btc.decode(principal.slice("did:key:".length))
+    : new Uint8Array();
+  if (didMaterial.length !== 34 || didMaterial[0] !== 0xed || didMaterial[1] !== 0x01)
+    throw new Error("compact UCAN signer must be did:key Ed25519");
+  const header = { alg: "EdDSA", jwk: { alg: "EdDSA", crv: "Ed25519", kty: "OKP", x: encodeBase64Url(didMaterial.slice(2)) }, typ: "JWT", ucv: "0.10.0" };
+  const payload = {
+    att: input.attenuation,
+    aud: input.audienceDid,
+    exp: input.expiresAt,
+    fct: input.facts,
+    iss: input.issuerDid.includes("#") ? input.issuerDid : `${principal}#${principal.slice("did:key:".length)}`,
+    nbf: input.notBefore,
+    nnc: input.nonce,
+    prf: input.proofs,
+  };
+  const protectedSegment = encodeBase64Url(new TextEncoder().encode(jcsCanonicalize(header)));
+  const payloadSegment = encodeBase64Url(new TextEncoder().encode(jcsCanonicalize(payload)));
+  const signature = await input.sign(new TextEncoder().encode(`${protectedSegment}.${payloadSegment}`));
+  if (signature.length !== 64) throw new Error("compact Authorization signature must be Ed25519");
+  return parseCompactUcanAuthorization(`${protectedSegment}.${payloadSegment}.${encodeBase64Url(signature)}`);
+}
+
 export interface CompactPolicyInvocationInput {
   readonly sessionAuthorization: string;
   readonly sessionCid: string;

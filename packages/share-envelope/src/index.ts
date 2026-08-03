@@ -24,6 +24,12 @@ export {
 } from "./aead.js";
 export { canonicalize } from "./jcs.js";
 export {
+  signCompactUcanAuthorization,
+  verifyCompactUcanAuthorization,
+  type CompactUcanAuthorization,
+  type SignCompactUcanInput,
+} from "./compact-ucan.js";
+export {
   authorizationTargetSchema,
   bearerKeyTargetSchema,
   contentPointerSchema,
@@ -40,12 +46,14 @@ export {
   sessionJwkSchema,
   shareActionSchema,
   shareEnvelopeV2Schema,
+  shareEnvelopeV3Schema,
   shareEnvelopeSchema,
   signatureSchema,
   targetSchema,
   v2TargetSchema,
   unsignedShareEnvelopeSchema,
   unsignedShareEnvelopeV2Schema,
+  unsignedShareEnvelopeV3Schema,
   type AuthorizationTarget,
   type BearerKeyTarget,
   type ContentPointer,
@@ -64,17 +72,27 @@ export {
   type UnsignedShareEnvelope,
   type ShareEnvelopeV2,
   type UnsignedShareEnvelopeV2,
+  type UnifiedContentSource,
+  type UnifiedPolicy,
+  type UnifiedPolicyCapability,
+  type UnifiedRoot,
+  type ShareEnvelopeV3,
+  type UnsignedShareEnvelopeV3,
 } from "./schema.js";
 export { didKeyFromEd25519PublicKey, ed25519PublicKeyFromDidKey } from "./didkey.js";
 export {
   ENVELOPE_SIGNATURE_DOMAIN,
   ENVELOPE_V2_SIGNATURE_DOMAIN,
+  ENVELOPE_V3_SIGNATURE_DOMAIN,
   signEnvelope,
   signEnvelopeV2,
+  signEnvelopeV3,
   verifyEnvelope,
   verifyEnvelopeV2,
   verifyEnvelopeSignatureOnly,
   verifyEnvelopeV2SignatureOnly,
+  verifyEnvelopeV3,
+  verifyEnvelopeV3SignatureOnly,
   type VerifyEnvelopeOptions,
 } from "./sign.js";
 export {
