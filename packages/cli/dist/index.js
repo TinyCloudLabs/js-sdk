@@ -10398,41 +10398,41 @@ var require_ms = __commonJS({
           return void 0;
       }
     }
-    function fmtShort(ms3) {
-      var msAbs = Math.abs(ms3);
+    function fmtShort(ms2) {
+      var msAbs = Math.abs(ms2);
       if (msAbs >= d) {
-        return Math.round(ms3 / d) + "d";
+        return Math.round(ms2 / d) + "d";
       }
       if (msAbs >= h) {
-        return Math.round(ms3 / h) + "h";
+        return Math.round(ms2 / h) + "h";
       }
       if (msAbs >= m) {
-        return Math.round(ms3 / m) + "m";
+        return Math.round(ms2 / m) + "m";
       }
       if (msAbs >= s) {
-        return Math.round(ms3 / s) + "s";
+        return Math.round(ms2 / s) + "s";
       }
-      return ms3 + "ms";
+      return ms2 + "ms";
     }
-    function fmtLong(ms3) {
-      var msAbs = Math.abs(ms3);
+    function fmtLong(ms2) {
+      var msAbs = Math.abs(ms2);
       if (msAbs >= d) {
-        return plural(ms3, msAbs, d, "day");
+        return plural(ms2, msAbs, d, "day");
       }
       if (msAbs >= h) {
-        return plural(ms3, msAbs, h, "hour");
+        return plural(ms2, msAbs, h, "hour");
       }
       if (msAbs >= m) {
-        return plural(ms3, msAbs, m, "minute");
+        return plural(ms2, msAbs, m, "minute");
       }
       if (msAbs >= s) {
-        return plural(ms3, msAbs, s, "second");
+        return plural(ms2, msAbs, s, "second");
       }
-      return ms3 + " ms";
+      return ms2 + " ms";
     }
-    function plural(ms3, msAbs, n, name2) {
+    function plural(ms2, msAbs, n, name2) {
       var isPlural = msAbs >= n * 1.5;
-      return Math.round(ms3 / n) + " " + name2 + (isPlural ? "s" : "");
+      return Math.round(ms2 / n) + " " + name2 + (isPlural ? "s" : "");
     }
   }
 });
@@ -10460,10 +10460,10 @@ var require_decrypt_transport_response_error = __commonJS({
     var __toCommonJS = (mod3) => __copyProps2(__defProp4({}, "__esModule", { value: true }), mod3);
     var DecryptTransportResponseError_exports = {};
     __export4(DecryptTransportResponseError_exports, {
-      DecryptTransportResponseError: () => DecryptTransportResponseError4
+      DecryptTransportResponseError: () => DecryptTransportResponseError2
     });
     module.exports = __toCommonJS(DecryptTransportResponseError_exports);
-    var DecryptTransportResponseError4 = class extends Error {
+    var DecryptTransportResponseError2 = class extends Error {
       constructor(status, permissionHint) {
         super("Node decrypt request failed");
         this.status = status;
@@ -12095,7 +12095,7 @@ function encOk(data) {
 function encErr(error) {
   return { ok: false, error };
 }
-var import_decrypt_transport_response_error, import_decrypt_transport_response_error2, import_decrypt_transport_response_error3, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HooksService, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, HEX, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
+var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HooksService, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, HEX, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
 var init_dist2 = __esm({
   "../sdk-services/dist/index.js"() {
     "use strict";
@@ -12103,8 +12103,6 @@ var init_dist2 = __esm({
     init_dist();
     init_dist();
     import_decrypt_transport_response_error = __toESM(require_decrypt_transport_response_error(), 1);
-    import_decrypt_transport_response_error2 = __toESM(require_decrypt_transport_response_error(), 1);
-    import_decrypt_transport_response_error3 = __toESM(require_decrypt_transport_response_error(), 1);
     ErrorCodes = {
       // Common errors
       NOT_FOUND: "NOT_FOUND",
@@ -26156,10 +26154,8 @@ var init_dist4 = __esm({
     init_dist2();
     init_zod();
     init_dist2();
-    init_dist();
     init_dist2();
     init_dist2();
-    init_dist();
     init_ed25519();
     init_esm();
     __defProp3 = Object.defineProperty;
@@ -29009,38 +29005,6 @@ var init_profiles = __esm({
   }
 });
 
-// ../sdk-core/src/manifest.ts
-var import_ms2, SERVICE_SHORT_TO_LONG2, SERVICE_LONG_TO_SHORT2;
-var init_manifest = __esm({
-  "../sdk-core/src/manifest.ts"() {
-    "use strict";
-    import_ms2 = __toESM(require_ms(), 1);
-    init_dist2();
-    SERVICE_SHORT_TO_LONG2 = Object.freeze({
-      kv: "tinycloud.kv",
-      sql: "tinycloud.sql",
-      duckdb: "tinycloud.duckdb",
-      capabilities: "tinycloud.capabilities",
-      hooks: "tinycloud.hooks",
-      encryption: "tinycloud.encryption",
-      delegation: "tinycloud.delegation"
-    });
-    SERVICE_LONG_TO_SHORT2 = Object.freeze(
-      Object.fromEntries(
-        Object.entries(SERVICE_SHORT_TO_LONG2).map(([s, l]) => [l, s])
-      )
-    );
-  }
-});
-
-// ../sdk-core/src/capabilities.ts
-var init_capabilities = __esm({
-  "../sdk-core/src/capabilities.ts"() {
-    "use strict";
-    init_manifest();
-  }
-});
-
 // src/lib/permissions.ts
 import { appendFile, readFile as readFile4 } from "fs/promises";
 import { join as join5 } from "path";
@@ -29079,8 +29043,6 @@ async function replayAdditionalDelegations(node, profile) {
 var init_permissions = __esm({
   "src/lib/permissions.ts"() {
     "use strict";
-    init_manifest();
-    init_capabilities();
     init_constants();
     init_storage();
     init_profiles();
@@ -29370,11 +29332,11 @@ function parseDuration(input) {
   }
   const date = new Date(input);
   if (!isNaN(date.getTime())) {
-    const ms3 = date.getTime() - Date.now();
-    if (ms3 <= 0) {
+    const ms2 = date.getTime() - Date.now();
+    if (ms2 <= 0) {
       throw new Error(`Expiry date "${input}" is in the past`);
     }
-    return ms3;
+    return ms2;
   }
   throw new Error(`Invalid duration: "${input}". Use format like "1h", "7d", or an ISO date.`);
 }

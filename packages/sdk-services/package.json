@@ -1,10 +1,13 @@
 {
   "name": "@tinycloud/sdk-services",
-  "version": "2.11.0-beta.7",
+  "version": "2.11.0-beta.8",
   "description": "TinyCloud SDK Services - Platform-agnostic service implementations",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
-  "sideEffects": ["dist/index.js", "dist/index.cjs"],
+  "sideEffects": [
+    "dist/index.js",
+    "dist/index.cjs"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -48,12 +51,12 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@tinycloud/bootstrap": "2.6.0",
+    "@tinycloud/bootstrap": "2.6.1-beta.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^20",
-    "@tinycloud/node-sdk-wasm": "1.7.5",
+    "@tinycloud/node-sdk-wasm": "1.7.6-beta.0",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"
   },

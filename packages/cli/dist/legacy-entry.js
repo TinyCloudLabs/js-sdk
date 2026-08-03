@@ -10512,10 +10512,10 @@ var require_decrypt_transport_response_error = __commonJS({
     var __toCommonJS = (mod3) => __copyProps2(__defProp4({}, "__esModule", { value: true }), mod3);
     var DecryptTransportResponseError_exports = {};
     __export4(DecryptTransportResponseError_exports, {
-      DecryptTransportResponseError: () => DecryptTransportResponseError4
+      DecryptTransportResponseError: () => DecryptTransportResponseError2
     });
     module.exports = __toCommonJS(DecryptTransportResponseError_exports);
-    var DecryptTransportResponseError4 = class extends Error {
+    var DecryptTransportResponseError2 = class extends Error {
       constructor(status, permissionHint) {
         super("Node decrypt request failed");
         this.status = status;
@@ -12184,7 +12184,7 @@ function encOk(data) {
 function encErr(error) {
   return { ok: false, error };
 }
-var import_decrypt_transport_response_error, import_decrypt_transport_response_error2, import_decrypt_transport_response_error3, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HooksService, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, HEX, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
+var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HooksService, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, HEX, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
 var init_dist2 = __esm({
   "../sdk-services/dist/index.js"() {
     "use strict";
@@ -12192,8 +12192,6 @@ var init_dist2 = __esm({
     init_dist();
     init_dist();
     import_decrypt_transport_response_error = __toESM(require_decrypt_transport_response_error(), 1);
-    import_decrypt_transport_response_error2 = __toESM(require_decrypt_transport_response_error(), 1);
-    import_decrypt_transport_response_error3 = __toESM(require_decrypt_transport_response_error(), 1);
     ErrorCodes = {
       // Common errors
       NOT_FOUND: "NOT_FOUND",
@@ -25386,10 +25384,8 @@ var init_dist4 = __esm({
     init_dist2();
     init_zod();
     init_dist2();
-    init_dist();
     init_dist2();
     init_dist2();
-    init_dist();
     init_ed25519();
     init_esm();
     __defProp3 = Object.defineProperty;
