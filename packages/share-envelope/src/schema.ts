@@ -394,9 +394,12 @@ export type ShareEnvelopeV2 = z.infer<typeof shareEnvelopeV2Schema>;
  * artifact as an ordinary delegation claim.
  */
 const unifiedResourceSchema = z.string().refine((value) => {
-  const match = /^tinycloud:\/\/([^/]+)\/kv\/(.+)$/.exec(value);
-  if (match === null || /[:?#%]/.test(match[1]!)) return false;
-  const path = match[2]!;
+  const marker = value.indexOf("/kv/");
+  if (marker < 1) return false;
+  const space = value.slice(0, marker);
+  const legacy = space.startsWith("tinycloud://");
+  if (legacy ? /[:/?#%]/.test(space.slice("tinycloud://".length)) : !space.startsWith("tinycloud:") || /[/?#%]/.test(space)) return false;
+  const path = value.slice(marker + 4);
   return !path.startsWith("/") && !path.endsWith("/") && !path.includes("//") && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }, { message: "expected canonical TinyCloud KV resource" });
 const unifiedEncryptionNetworkSchema = z.string().refine((value) => {

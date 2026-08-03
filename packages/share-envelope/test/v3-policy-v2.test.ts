@@ -22,9 +22,10 @@ describe("ShareEnvelopeV3 Policy/v2", () => {
     ).json()) as { policyProjection: Record<string, unknown> };
     const privateKey = new Uint8Array(32).fill(47);
     const ownerDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(privateKey));
+    const spaceId = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:share";
     const contentSource = {
       shareId: "share-policy-v2",
-      kvResource: "tinycloud://space-policy-v2/kv/shares/report.txt",
+      kvResource: `${spaceId}/kv/shares/report.txt`,
       selector: "exact" as const,
       encryptionNetwork: `urn:tinycloud:encryption:${ownerDid}:default`,
       encryptedSymmetricKeyDigestHex: "a".repeat(64),
@@ -76,7 +77,7 @@ describe("ShareEnvelopeV3 Policy/v2", () => {
       target: {
         origin: "https://node.example.test",
         nodeAudience: ownerDid,
-        spaceId: "space-policy-v2",
+        spaceId,
       },
       policy,
       policyCid,
