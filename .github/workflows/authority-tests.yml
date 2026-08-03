@@ -64,23 +64,24 @@ jobs:
         with:
           path: js-sdk
 
-      # Pin to the exact immutable OpenKey revision that this js-sdk
-      # PR was reviewed against. This MUST be a full 40-char SHA committed
-      # here (not a mutable branch / repo variable) so a re-run always
-      # tests the same OpenKey bytes.
-      - name: Check out OpenKey at a compatible revision
+      # Check out the OpenKey PR branch that this js-sdk PR is paired with.
+      # We use the branch ref (not a pinned SHA) so a clean GitHub runner can
+      # always resolve it via `git ls-remote origin`. Pinning a SHA that has
+      # not yet been pushed to origin makes CI unreproducible.
+      #
+      # When OpenKey PR #160 merges to `main`, change this ref to `main` (or
+      # to the resulting squash/merge SHA on `main` for maximum determinism).
+      # The paired OpenKey branch head contains:
+      #   - production canonicalization of permissions[].service in
+      #     /authorize-sign-preview and /authorize-sign response bodies
+      #     (apps/api/src/routes/delegate.ts)
+      #   - scripts/vertical-happy-path-harness.test.ts with no
+      #     test-only response rewriting
+      - name: Check out OpenKey at the paired PR branch
         uses: actions/checkout@v4
         with:
           repository: TinyCloudLabs/openkey
-          # OpenKey PR #160 head — contains:
-          #   - production canonicalization of permissions[].service in
-          #     /authorize-sign-preview and /authorize-sign response bodies
-          #     (apps/api/src/routes/delegate.ts)
-          #   - scripts/vertical-happy-path-harness.test.ts with no
-          #     test-only response rewriting
-          # When OpenKey PR #160 merges, bump this to the resulting
-          # squash/merge SHA on `main`.
-          ref: c791afff4769067ffa444366f6278063bfbda6a8
+          ref: skgbafa/openkey-authorization-consolidation
           path: openkey
 
       - uses: oven-sh/setup-bun@v2
@@ -140,14 +141,14 @@ jobs:
         with:
           path: js-sdk
 
-      - name: Check out OpenKey at a compatible revision
+      - name: Check out OpenKey at the paired PR branch
         uses: actions/checkout@v4
         with:
           repository: TinyCloudLabs/openkey
-          # Same immutable SHA as the cross-repo-contract job above —
+          # Same branch ref as the cross-repo-contract job above —
           # keeps the vertical browser journey in lockstep with the
-          # wire-shape contract test. Bump both when OpenKey merges.
-          ref: c791afff4769067ffa444366f6278063bfbda6a8
+          # wire-shape contract test. Update both when OpenKey merges.
+          ref: skgbafa/openkey-authorization-consolidation
           path: openkey
 
       - uses: oven-sh/setup-bun@v2
@@ -182,11 +183,20 @@ jobs:
           bun run --cwd packages/node-sdk build
 
       # The vertical browser test loads OpenKey `packages/sdk/dist/index.mjs`
-      # and `packages/core/dist/index.js` from disk. Both are ignored by
-      # git, so a clean checkout must build them first.
-      - name: Build OpenKey SDK/core dist inputs
+      # and `packages/core/dist/index.js` from disk, and mounts the real
+      # SvelteKit widget from `apps/web`, which imports
+      # `@openkey/capability-review`. All three `dist` directories are
+      # gitignored and no install lifecycle builds them, so a clean checkout
+      # must build them explicitly before the browser journey runs.
+      #
+      # Order matters: `apps/web` resolves `@openkey/capability-review` via
+      # its `exports` field, which points at `dist/index.js`. If that file
+      # is missing, Vite's dev server fails to load the widget and the
+      # journey aborts before the approval UI can render.
+      - name: Build OpenKey dist inputs (capability-review, core, sdk)
         working-directory: openkey
         run: |
+          bun run --cwd packages/capability-review build
           bun run --cwd packages/core build
           bun run --cwd packages/sdk build
 
