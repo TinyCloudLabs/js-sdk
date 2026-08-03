@@ -1,0 +1,22 @@
+{
+  "profile": "tc-405-policy-engine-v1",
+  "vectors": [
+    {
+      "name": "kv-exact-canonical",
+      "input": {"kind": "kv", "resource": "tinycloud://space/kv/docs/a", "selector": "exact", "actions": ["tinycloud.kv/put", "tinycloud.kv/get"]},
+      "canonicalJcsUtf8Hex": "7b22616374696f6e73223a5b2274696e79636c6f75642e6b762f676574222c2274696e79636c6f75642e6b762f707574225d2c226b696e64223a226b76222c227265736f75726365223a2274696e79636c6f75643a2f2f73706163652f6b762f646f63732f61222c2273656c6563746f72223a226578616374227d",
+      "policyCapabilityDigestHex": "1c75376fbfcf59f968fb274ebeea2da7d21561e8479bdb7b8ee5b388ba3679ee"
+    }
+  ],
+  "contentSource": {
+    "shareId": "share-1",
+    "kvResource": "tinycloud://space/kv/docs/a",
+    "selector": "exact",
+    "encryptionNetwork": "urn:tinycloud:encryption:did:key:zowner:default",
+    "encryptedSymmetricKeyDigestHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "keyVersion": 1,
+    "mode": "immutable",
+    "initialCiphertextDigestHex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "contentSourceDigestHex": "c8016794c2b187834bd046e599de02d4d0fd500cd193639d43184ff2df07e72d"
+}

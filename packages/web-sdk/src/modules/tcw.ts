@@ -969,6 +969,12 @@ export class TinyCloudWeb {
       delegateDID: string;
       disableSubDelegation?: boolean;
       expiryMs?: number;
+      resources?: Array<{
+        service: string;
+        space?: string;
+        path: string;
+        actions: string[];
+      }>;
     }
   ): Promise<PortableDelegation> {
     const node = await this.ensureNode();

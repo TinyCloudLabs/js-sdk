@@ -6642,6 +6642,13 @@ export class TinyCloudNode {
       disableSubDelegation?: boolean;
       /** Expiration time in milliseconds from now (must be before parent's expiry) */
       expiryMs?: number;
+      /** Explicit multi-resource projection, including encryption networks. */
+      resources?: Array<{
+        service: string;
+        space?: string;
+        path: string;
+        actions: string[];
+      }>;
     }
   ): Promise<PortableDelegation> {
     this.assertPortableDelegationCaveatsPreservable(parentDelegation);
@@ -6658,21 +6665,29 @@ export class TinyCloudNode {
       throw new Error("Parent delegation does not allow sub-delegation");
     }
 
-    // Validate path is within parent's path
-    if (!params.path.startsWith(parentDelegation.path)) {
+    const parentResources = parentDelegation.resources ?? [{
+      service: parentDelegation.actions[0]?.split("/", 1)[0]?.replace(/^tinycloud\./, "") ?? "kv",
+      space: parentDelegation.spaceId,
+      path: parentDelegation.path,
+      actions: parentDelegation.actions,
+    }];
+    const requestedResources = params.resources ?? [{
+      service: params.actions[0]?.split("/", 1)[0]?.replace(/^tinycloud\./, "") ?? "kv",
+      space: parentDelegation.spaceId,
+      path: params.path,
+      actions: params.actions,
+    }];
+    const resourceIsContained = (parent: typeof parentResources[number], child: typeof requestedResources[number]): boolean => {
+      const parentEncryption = parent.service === "encryption" || parent.service === "tinycloud.encryption";
+      const childEncryption = child.service === "encryption" || child.service === "tinycloud.encryption";
+      if (parentEncryption || childEncryption) return parentEncryption && childEncryption && parent.path === child.path && child.actions.every((action) => parent.actions.includes(action));
+      const pathContained = parent.path === child.path || parent.path.endsWith("/") && child.path.startsWith(parent.path) || child.path.startsWith(`${parent.path}/`);
+      return pathContained && child.actions.every((action) => parent.actions.includes(action));
+    };
+    if (requestedResources.length === 0 || requestedResources.some((child) => !parentResources.some((parent) => resourceIsContained(parent, child)))) {
       throw new Error(
-        `Sub-delegation path "${params.path}" must be within parent path "${parentDelegation.path}"`
+        "Sub-delegation resources exceed the received delegation"
       );
-    }
-
-    // Validate actions are subset of parent's actions
-    const parentActions = new Set(parentDelegation.actions);
-    for (const action of params.actions) {
-      if (!parentActions.has(action)) {
-        throw new Error(
-          `Sub-delegation action "${action}" is not in parent's actions: ${parentDelegation.actions.join(", ")}`
-        );
-      }
     }
 
     // Calculate expiry - cap at parent's expiry
@@ -6685,17 +6700,15 @@ export class TinyCloudNode {
 
     // Build abilities for the sub-delegation
     const abilities: Record<string, Record<string, string[]>> = {};
-    const kvActions = params.actions.filter(a => a.startsWith("tinycloud.kv/"));
-    const sqlActions = params.actions.filter(a => a.startsWith("tinycloud.sql/"));
-    const duckdbActions = params.actions.filter(a => a.startsWith("tinycloud.duckdb/"));
-    if (kvActions.length > 0) {
-      abilities.kv = { [params.path]: kvActions };
-    }
-    if (sqlActions.length > 0) {
-      abilities.sql = { [params.path]: sqlActions };
-    }
-    if (duckdbActions.length > 0) {
-      abilities.duckdb = { [params.path]: duckdbActions };
+    const rawAbilities: Record<string, string[]> = {};
+    for (const resource of requestedResources) {
+      const service = resource.service.replace(/^tinycloud\./, "");
+      if (service === "encryption") {
+        rawAbilities[resource.path] = [...resource.actions];
+        continue;
+      }
+      abilities[service] ??= {};
+      abilities[service][resource.path] = [...resource.actions];
     }
 
     // Use parent's host or fall back to config
@@ -6715,6 +6728,7 @@ export class TinyCloudNode {
       spaceId: parentDelegation.spaceId,
       delegateUri: params.delegateDID,
       parents: [parentDelegation.cid],
+      ...(Object.keys(rawAbilities).length > 0 ? { rawAbilities } : {}),
     });
 
     // Sign with THIS user's signer
@@ -6741,14 +6755,22 @@ export class TinyCloudNode {
       cid: subDelegationSession.delegationCid,
       delegationHeader: subDelegationSession.delegationHeader,
       spaceId: parentDelegation.spaceId,
-      path: params.path,
-      actions: params.actions,
+      path: requestedResources[0]!.path,
+      actions: requestedResources[0]!.actions,
       disableSubDelegation: params.disableSubDelegation ?? false,
       expiry: actualExpiry,
       delegateDID: params.delegateDID,
       ownerAddress: parentDelegation.ownerAddress!,
       chainId: parentDelegation.chainId!,
       host: targetHost,
+      resources: requestedResources.map((resource) => ({
+        service: resource.service.replace(/^tinycloud\./, ""),
+        space: resource.service.replace(/^tinycloud\./, "") === "encryption"
+          ? "encryption"
+          : resource.space ?? parentDelegation.spaceId,
+        path: resource.path,
+        actions: [...resource.actions],
+      })),
     };
   }
 }

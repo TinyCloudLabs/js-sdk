@@ -96,6 +96,8 @@ export {
 } from "./SharingService";
 
 export { ShareRecipientClient } from "./ShareRecipientClient";
+export { delegatePortablePolicySession, importPortableDelegation, parsePortableDelegation, serializePortableDelegation } from "./portable";
+export type { PortableDelegation as SharePortableDelegation, PortableDelegationImportReceipt } from "./portable";
 export { MemoryShareCache } from "./ShareCache";
 export type { ShareCache, ShareCacheEntry, ShareCacheKey, ShareCacheMetadata } from "./ShareCache";
 export {
