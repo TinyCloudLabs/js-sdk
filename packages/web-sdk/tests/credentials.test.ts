@@ -38,6 +38,23 @@ test("HTTP transport emits the Rust-owned request, challenge, and proof wire sha
   await transport.submitStep(REQUEST, verifier, "mailbox_otp", { otp: "redacted" }); expect(JSON.parse(calls[3]!.init.body as string)).toEqual({ step: "mailbox_otp", stepVersion: 1, challengeNonce: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", proof: { otp: "redacted" } });
 });
 
+for (const [code, status] of [["REQUEST_EXPIRED", 410], ["ISSUER_UNREADY", 503], ["UNSUPPORTED_PROFILE", 400], ["SIGNATURE_REJECTED", 400]] as const) {
+  test(`HTTP transport preserves typed recoverable server error ${code}`, async () => {
+    const transport = new OpenCredentialsHttpTransport(email, async () => new Response(JSON.stringify({
+      type: "tinycloud.credentials/error/v1", code, recoverable: true,
+      state: code.toLowerCase(), correlationId: REQUEST,
+    }), { status, headers: { "content-type": "application/json" } }));
+    await expect(transport.state(REQUEST, "V".repeat(43))).rejects.toMatchObject({ code, recoverable: true, details: { correlationId: REQUEST } });
+  });
+}
+
+test("HTTP transport classifies offline and caller cancellation as recoverable", async () => {
+  const offline = new OpenCredentialsHttpTransport(email, async () => { throw new TypeError("offline"); });
+  await expect(offline.state(REQUEST, "V".repeat(43))).rejects.toMatchObject({ code: "OFFLINE", recoverable: true });
+  const canceled = new OpenCredentialsHttpTransport(email, async () => { throw new DOMException("aborted", "AbortError"); });
+  await expect(canceled.state(REQUEST, "V".repeat(43))).rejects.toMatchObject({ code: "CANCELED", recoverable: true });
+});
+
 for (const descriptor of [email, synthetic]) test(`unchanged interpreter executes ${descriptor.profile} only by primitive`, async () => {
   const req = requirement(descriptor); const descriptorDigest = await canonicalDigest(descriptor); const requirementDigest = await canonicalDigest(req); const proofType = descriptor.steps.some((step) => step.type === "mailbox_otp") ? "mailbox_otp" : "collect_input";
   const states: CredentialRequestState[] = [

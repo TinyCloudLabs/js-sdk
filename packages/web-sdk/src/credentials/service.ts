@@ -103,7 +103,13 @@ export class CredentialsService {
       if (!resume && redirectStore) await redirectStore.save({ type: "TinyCloudCredentialRedirectResume", version: 1, requestId: created.requestId, locator: created.locator, verifier, expiresAt: created.expiresAt, correlationId: created.correlationId, holderDid, descriptorDigest, requirementDigest, openerOrigin });
       const interaction = options.browser ?? (options.interaction === "headless" ? undefined : new BrowserCredentialInteraction(options.interaction ?? "popup"));
       if (interaction && !resume) surface = await interaction.start({ issuerOrigin: descriptor.issuer.origin, locator: created.locator, signal: timed.signal });
-      const signing = options.signing ?? { autoSign: async (_binding: unknown, bytes: Uint8Array) => this.client.signSessionBytes(bytes) };
+      const signing = options.signing ?? {
+        autoSign: async (_binding: unknown, bytes: Uint8Array) => this.client.autoSignCredentialBytes?.(bytes),
+        requestApproval: async (_binding: unknown, bytes: Uint8Array) => {
+          if (!this.client.approveCredentialBytes) throw new CredentialError("SIGNATURE_REJECTED", "OpenKey approval is required");
+          return this.client.approveCredentialBytes(bytes);
+        },
+      };
       await interpretCredentialFlow({ descriptor, requirement, requestId: created.requestId, verifier, holderDid, descriptorDigest, requirementDigest, openerOrigin, transport, signing, handlers: options.stepHandlers, signal: timed.signal, onProgress: options.onProgress, onWait: surface ? async () => { if (surface!.closed()) throw new CredentialError("CANCELED", "Credential popup was closed"); await surface!.wake(); } : undefined });
       options.onProgress?.({ state: "verifying", correlationId: created.correlationId });
       const envelope = await transport.result(created.requestId, verifier, timed.signal);

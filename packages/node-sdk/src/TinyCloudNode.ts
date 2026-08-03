@@ -3100,6 +3100,48 @@ export class TinyCloudNode {
     return signBytesWithJwk(bytes, session.jwk);
   }
 
+  /** Apply only an already-enabled signing policy to the exact credential request. */
+  async autoSignCredentialBytes(bytes: Uint8Array): Promise<Uint8Array | undefined> {
+    const strategy = this.config.signStrategy;
+    if (strategy?.type === "auto-sign") return this.signSessionBytes(bytes);
+    if (strategy?.type !== "callback" || !isOpenKeyAutoSignStrategy(strategy)) return undefined;
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    const decision = await strategy.handler({
+      address: this.address ?? "",
+      chainId: this.session?.chainId ?? this._chainId,
+      message: new TextDecoder().decode(bytes),
+      type: "message",
+      purpose: "message",
+    });
+    return decision.approved ? this.signSessionBytes(bytes) : undefined;
+  }
+
+  /** Invoke the configured interactive approval strategy before session signing. */
+  async approveCredentialBytes(bytes: Uint8Array): Promise<Uint8Array> {
+    const strategy = this.config.signStrategy;
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    const request = {
+      address: this.address ?? "",
+      chainId: this.session?.chainId ?? this._chainId,
+      message: new TextDecoder().decode(bytes),
+      type: "message" as const,
+      purpose: "message" as const,
+    };
+    if (strategy?.type === "callback" && !isOpenKeyAutoSignStrategy(strategy)) {
+      const decision = await strategy.handler(request);
+      if (!decision.approved) throw new Error(decision.reason ?? "Credential signing was rejected");
+      return this.signSessionBytes(bytes);
+    }
+    if (strategy?.type === "auto-reject") throw new Error("Credential signing was rejected");
+    if (this.config.signer) {
+      await this.config.signer.signMessage(request.message);
+      return this.signSessionBytes(bytes);
+    }
+    throw new Error("Interactive OpenKey approval is not configured");
+  }
+
   /** Bind a session-signed invocation to the canonical service audience. */
   async bindInvocationAudience(authorization: string, audience: string): Promise<string> {
     const session = this.currentTinyCloudSession() ?? this._activeServiceSession;

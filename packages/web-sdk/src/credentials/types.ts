@@ -16,6 +16,8 @@ export interface CredentialClient {
   readonly sessionDid: string;
   session(): ClientSession | undefined;
   signSessionBytes(bytes: Uint8Array): Promise<Uint8Array>;
+  autoSignCredentialBytes?(bytes: Uint8Array): Promise<Uint8Array | undefined>;
+  approveCredentialBytes?(bytes: Uint8Array): Promise<Uint8Array>;
   ensureOwnedSpaceHosted(name: string): Promise<string>;
   kvForSpace(spaceId: string): IKVService;
 }

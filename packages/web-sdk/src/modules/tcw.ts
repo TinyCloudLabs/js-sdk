@@ -749,6 +749,14 @@ export class TinyCloudWeb {
     return this.node.signSessionBytes(bytes);
   }
 
+  async autoSignCredentialBytes(bytes: Uint8Array): Promise<Uint8Array | undefined> {
+    return this.node.autoSignCredentialBytes(bytes);
+  }
+
+  async approveCredentialBytes(bytes: Uint8Array): Promise<Uint8Array> {
+    return this.node.approveCredentialBytes(bytes);
+  }
+
   // ===========================================================================
   // Extension & Lifecycle
   // ===========================================================================
