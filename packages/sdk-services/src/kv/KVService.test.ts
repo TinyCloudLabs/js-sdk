@@ -374,6 +374,369 @@ describe("KVService.batchPut", () => {
     }
     expect(fetchCalls).toBe(0);
   });
+
+  // TC-373 point 6: validate against the EXACT requested path set and count,
+  // not just internal self-consistency (count === written.length would
+  // accept a malformed response reporting the right count for wrong keys).
+  const FIVE_KEYS = ["default", "applications", "account", "secrets", "public"].map(
+    (name) => `spaces/tinycloud:pkh:eip155:1:0xabc:${name}`
+  );
+  function fiveItems() {
+    return FIVE_KEYS.map((key, i) => ({ key, value: { spaceId: key, index: i } }));
+  }
+
+  test("accepts a response confirming all 5 requested keys were written", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        response(true, 200, { written: [...FIVE_KEYS], count: 5 }), [], []
+      )
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(true);
+  });
+
+  test("rejects a response reporting the right count but the wrong keys", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        // Internally consistent (count === written.length === 5) but one
+        // requested key was swapped for an unrelated one.
+        response(true, 200, {
+          written: [...FIVE_KEYS.slice(0, 4), "spaces/not-what-was-requested"],
+          count: 5,
+        }), [], []
+      )
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.message).toContain("5 requested key(s)");
+      // TC-373 §2a: the node DID answer 2xx, so the ambiguity is carried in
+      // meta rather than a new error code (Sol B4).
+      expect(result.error.meta).toEqual({
+        requestMayHaveDispatched: true,
+        responseReceived: true,
+        status: 200,
+        outcome: "batch-unconfirmed",
+      });
+    }
+  });
+
+  test("rejects a response with fewer written keys than requested, even if internally consistent", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        // count === written.length (4 === 4), but only 4 of the 5 requested
+        // keys are reported written — a partial write must not look like success.
+        response(true, 200, { written: FIVE_KEYS.slice(0, 4), count: 4 }), [], []
+      )
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta).toEqual({
+        requestMayHaveDispatched: true,
+        responseReceived: true,
+        status: 200,
+        outcome: "batch-unconfirmed",
+      });
+    }
+  });
+
+  test("rejects a response with duplicate written keys padding the count to look complete", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        // count (5) === written.length (5), and every written key IS one of
+        // the requested keys — but one key is duplicated and another is
+        // missing entirely. The exact-SET check catches this; a naive
+        // count-only check would not.
+        response(true, 200, {
+          written: [...FIVE_KEYS.slice(0, 4), FIVE_KEYS[0]],
+          count: 5,
+        }), [], []
+      )
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    // Sol B6d: this test asserted only result.ok === false before; give it
+    // the same explicit code + meta assertions as its siblings.
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta).toEqual({
+        requestMayHaveDispatched: true,
+        responseReceived: true,
+        status: 200,
+        outcome: "batch-unconfirmed",
+      });
+    }
+  });
+
+  test("rejects a 2xx response whose body cannot be normalized at all (missing written/count)", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => response(true, 200, {}), [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta).toEqual({
+        requestMayHaveDispatched: true,
+        responseReceived: true,
+        status: 200,
+        outcome: "batch-unconfirmed",
+      });
+    }
+  });
+
+  test("a fetch-level throw (post-dispatch) is NETWORK_ERROR with requestMayHaveDispatched: true", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        throw new Error("connection reset");
+      }, [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta?.requestMayHaveDispatched).toBe(true);
+    }
+  });
+
+  test("a fetch-level TimeoutError throw is TIMEOUT with requestMayHaveDispatched: true", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        const timeoutError = new Error("the operation timed out");
+        timeoutError.name = "TimeoutError";
+        throw timeoutError;
+      }, [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.TIMEOUT);
+      expect(result.error.meta?.requestMayHaveDispatched).toBe(true);
+    }
+  });
+
+  test("a pre-fetch invokeAny throw (plain Error) is NETWORK_ERROR with requestMayHaveDispatched: false and never reaches fetch", async () => {
+    let fetchCalls = 0;
+    const service = new KVService({});
+    const baseContext = createContext(async () => {
+      fetchCalls++;
+      return response(true, 200, { written: [...FIVE_KEYS], count: 5 });
+    }, [], []);
+    service.initialize({
+      ...baseContext,
+      invokeAny: () => {
+        throw new Error("signing failed");
+      },
+    });
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta?.requestMayHaveDispatched).toBe(false);
+    }
+    expect(fetchCalls).toBe(0);
+  });
+
+  // Sol B1/B6c: a pre-fetch throw whose name/message says "timeout" must NOT
+  // be reconciled by AccountService — it is deterministic (nothing was
+  // dispatched), even though wrapError labels it TIMEOUT.
+  test("a pre-fetch invokeAny TimeoutError throw is TIMEOUT with requestMayHaveDispatched: false and never reaches fetch", async () => {
+    let fetchCalls = 0;
+    const service = new KVService({});
+    const baseContext = createContext(async () => {
+      fetchCalls++;
+      return response(true, 200, { written: [...FIVE_KEYS], count: 5 });
+    }, [], []);
+    service.initialize({
+      ...baseContext,
+      invokeAny: () => {
+        const timeoutError = new Error("the operation timed out");
+        timeoutError.name = "TimeoutError";
+        throw timeoutError;
+      },
+    });
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.TIMEOUT);
+      expect(result.error.meta?.requestMayHaveDispatched).toBe(false);
+    }
+    expect(fetchCalls).toBe(0);
+  });
+
+  // Sol B2: `this.context.fetch` is a getter (context.ts:154-156) that can
+  // itself throw (assertActive()) before any request is constructed or
+  // handed to a transport. The flag must only be set AFTER that getter has
+  // been evaluated, so this throw is deterministic — never reconciled.
+  test("a context.fetch getter throw is NETWORK_ERROR with requestMayHaveDispatched: false and never dispatches", async () => {
+    const service = new KVService({});
+    const baseContext = createContext(async () => {
+      throw new Error("fetch should never be invoked");
+    }, [], []);
+    const contextWithThrowingFetchGetter: IServiceContext = {
+      ...baseContext,
+      get fetch(): IServiceContext["fetch"] {
+        throw new Error("context is no longer active");
+      },
+    };
+    service.initialize(contextWithThrowingFetchGetter);
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta?.requestMayHaveDispatched).toBe(false);
+    }
+  });
+
+  // Sol B3: a 2xx response whose body is not valid JSON must be classified
+  // as the unconfirmed-2xx case with the FULL metadata block, not lose it by
+  // falling through to the generic catch.
+  test("a 2xx response whose body is not valid JSON is unconfirmed-2xx with full metadata", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        const res = response(true, 200, {});
+        res.json = async () => {
+          throw new SyntaxError("Unexpected end of JSON input");
+        };
+        return res;
+      }, [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      expect(result.error.meta).toEqual({
+        requestMayHaveDispatched: true,
+        responseReceived: true,
+        status: 200,
+        outcome: "batch-unconfirmed",
+      });
+    }
+  });
+
+  // Sol B4: a deterministic 4xx whose body read rejects must stay
+  // deterministic — it must NOT be relabeled NETWORK_ERROR with
+  // requestMayHaveDispatched: true (which would make AccountService
+  // reconcile a write that the node definitively rejected).
+  test("a 400 response whose body read rejects stays a deterministic KV_WRITE_FAILED", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        const res = response(false, 400, "Bad Request");
+        res.text = async () => {
+          throw new Error("body stream already consumed");
+        };
+        return res;
+      }, [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.KV_WRITE_FAILED);
+      expect(result.error.meta).toEqual({ status: 400, statusText: "Error" });
+      // Must not be misclassified into the ambiguous transport-failure shape.
+      expect(result.error.meta?.requestMayHaveDispatched).toBeUndefined();
+    }
+  });
+
+  // Non-blocking coverage gap noted in the TC-373 round-2 review: only the
+  // deterministic-400 body-read-rejects branch was directly tested above.
+  // An AMBIGUOUS 5xx (503 is a member of AccountService's
+  // AMBIGUOUS_WRITE_STATUSES) whose body read also rejects must stay
+  // KV_WRITE_FAILED with its real status, exactly like the 400 case — the
+  // production code path is identical for both, but only the status
+  // determines whether AccountService.registerBatch later reconciles it via
+  // per-space puts.
+  test("a 503 response whose body read rejects stays KV_WRITE_FAILED with its real status (ambiguous, DOES trigger reconciliation)", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () => {
+        const res = response(false, 503, "Service Unavailable");
+        res.text = async () => {
+          throw new Error("body stream already consumed");
+        };
+        return res;
+      }, [], [])
+    );
+
+    const result = await service.batchPut(fiveItems());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.KV_WRITE_FAILED);
+      expect(result.error.meta).toEqual({ status: 503, statusText: "Error" });
+      expect(result.error.meta?.requestMayHaveDispatched).toBeUndefined();
+      // 503 is in AMBIGUOUS_WRITE_STATUSES (AccountService.ts), unlike 400 in
+      // the sibling test above — this is the status that governs whether
+      // AccountService.registerBatch reconciles via per-space puts.
+    }
+  });
+
+  test("JSON values written via batchPut round-trip through get() as parsed objects (canonical read)", async () => {
+    let batchPartType: string | undefined;
+    const service = new KVService({ prefix: "app" });
+    let calls = 0;
+    service.initialize(
+      createContext(async (_url, init) => {
+        calls++;
+        if (calls === 1) {
+          // The batchPut call: capture the content-type actually assigned to
+          // a plain JS object value.
+          const form = init!.body as FormData;
+          const part = form.get("app%2Fsettings.json") as Blob;
+          batchPartType = part.type;
+          return response(true, 200, { written: ["app/settings.json"], count: 1 });
+        }
+        // The subsequent get() call: the node echoes back the content-type it
+        // stored for that blob — application/json for a JSON value, per
+        // serializeBatchPutValue. Ordinary put() does not set this
+        // explicitly, so this is the divergence TC-373 flagged as worth
+        // testing explicitly rather than assuming byte-for-byte equivalence.
+        const result = response(true, 200, { theme: "dark", version: 2 });
+        result.headers = {
+          get: (name: string) =>
+            name.toLowerCase() === "content-type" ? "application/json" : null,
+        };
+        return result;
+      }, [], [])
+    );
+
+    const written = await service.batchPut([
+      { key: "settings.json", value: { theme: "dark", version: 2 } },
+    ]);
+    expect(written.ok).toBe(true);
+    expect(batchPartType).toStartWith("application/json");
+
+    const read = await service.get<{ theme: string; version: number }>("settings.json");
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      // Canonical read: a parsed object, not the raw JSON text.
+      expect(read.data.data).toEqual({ theme: "dark", version: 2 });
+      expect(typeof read.data.data).toBe("object");
+    }
+  });
 });
 
 describe("KVService.createSignedReadUrl", () => {

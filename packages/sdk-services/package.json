@@ -1,10 +1,10 @@
 {
   "name": "@tinycloud/sdk-services",
-  "version": "2.10.0",
+  "version": "2.11.0-beta.7",
   "description": "TinyCloud SDK Services - Platform-agnostic service implementations",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
-  "sideEffects": ["**/debug.ts"],
+  "sideEffects": ["dist/index.js", "dist/index.cjs"],
   "engines": {
     "node": ">=20"
   },

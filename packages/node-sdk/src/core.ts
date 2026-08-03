@@ -121,6 +121,7 @@ export {
   type OwnerDelegationReceipt,
   type RegisterOwnerSharePolicyParams,
   type OwnerSharePolicyRegistrationReceipt,
+  type BootstrapWarning,
 } from "./TinyCloudNode";
 
 export { AccountService } from "./account/AccountService";
@@ -139,6 +140,7 @@ export type {
   AccountSpace,
   AccountSpaceListOptions,
   AccountStatus,
+  RegisterBatchSuccess,
 } from "./account/AccountService";
 
 // Capability-chain primitives (spec: .claude/specs/capability-chain.md).

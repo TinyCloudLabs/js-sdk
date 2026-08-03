@@ -2,8 +2,10 @@ import {
   err,
   ok,
   serviceError,
+  ErrorCodes,
   type IDatabaseHandle,
   type IKVService,
+  type KVBatchPutItem,
   type QueryResponse,
   type Result,
   type ServiceError,
@@ -49,6 +51,14 @@ export interface AccountSpace {
   registeredAt?: string;
   updatedAt?: string;
   expiresAt?: Date;
+}
+
+export interface RegisterBatchSuccess {
+  spaces: AccountSpace[];
+  /** Present iff the batch write failed ambiguously and per-space
+   *  reconciliation recovered it. The original batch error verbatim, so
+   *  callers can record the degradation structurally (TC-361). */
+  recoveredFromBatchError?: ServiceError;
 }
 
 export interface AccountDelegation {
@@ -336,6 +346,84 @@ export class AccountService {
       const registered = spaceFromRecord(spaceKey(stored.space_id), stored);
       await this.upsertSpaceIndexQuietly(registered);
       return ok(registered);
+    },
+
+    /**
+     * Register multiple spaces in one KV batch write + one multi-row index
+     * write, instead of one `register()` round trip per space (TC-373).
+     *
+     * The stored records are computed exactly once and reused for both the
+     * batch attempt and any reconciliation below, so a fallback never mints a
+     * fresh timestamp for a space that already has a written record — a
+     * second `spaceRecordFromInput` call would produce a new content hash and
+     * leave the first attempt's blocks orphaned.
+     */
+    registerBatch: async (
+      spaces: readonly (SpaceInfo | AccountSpace)[],
+    ): Promise<Result<RegisterBatchSuccess>> => {
+      if (spaces.length === 0) return ok({ spaces: [] });
+
+      await this.config.ensureAccountSpaceHosted?.();
+
+      const kvResult = this.accountKV();
+      if (!kvResult.ok) return kvResult;
+
+      const stored = spaces.map((space) => spaceRecordFromInput(space));
+      const registered = stored.map((record) =>
+        spaceFromRecord(spaceKey(record.space_id), record),
+      );
+      const items: KVBatchPutItem[] = stored.map((record) => ({
+        key: spaceKey(record.space_id),
+        value: record,
+      }));
+
+      const batchResult = await kvResult.data.batchPut(items);
+
+      if (batchResult.ok) {
+        // Index write is derived/best-effort: its failure must never cause a
+        // KV rewrite, so it stays on the existing "quietly" path.
+        await this.upsertSpacesIndexQuietly(registered);
+        return ok({ spaces: registered });
+      }
+
+      if (!isAmbiguousBatchFailure(batchResult.error)) {
+        return accountErr(batchResult.error);
+      }
+
+      // Ambiguous transport failure: the node's content-addressed block store
+      // can persist writes before (or independently of) the response that
+      // reports success, so "the batch errored" does not mean "nothing was
+      // written". Reconcile with per-space puts using the SAME precomputed
+      // bytes: anything that already landed is an idempotent overwrite, not a
+      // new differently-timestamped blob.
+      const reconcileFailures: string[] = [];
+      for (const record of stored) {
+        const written = await kvResult.data.put(spaceKey(record.space_id), record);
+        if (!written.ok) {
+          reconcileFailures.push(`${record.space_id}: ${written.error.message}`);
+        }
+      }
+
+      if (reconcileFailures.length > 0) {
+        return err(
+          serviceError(
+            "KV_BATCH_RECONCILE_FAILED",
+            `KV batch write for ${items.length} space(s) failed ambiguously (${batchResult.error.message}) and per-space reconciliation also failed for: ${reconcileFailures.join("; ")}`,
+            SERVICE_NAME,
+            { cause: batchResult.error.cause, meta: { originalError: batchResult.error } },
+          ),
+        );
+      }
+
+      // Reconciliation succeeded, but the batch's own error must not vanish
+      // silently — that exact swallow is what turns an ambiguous transport
+      // failure into an undiagnosable half-provisioned account later.
+      console.warn(
+        `[AccountService] KV batch write for ${items.length} space(s) returned an ambiguous error and was reconciled via per-space fallback. Original error: ${batchResult.error.message}`,
+      );
+
+      await this.upsertSpacesIndexQuietly(registered);
+      return ok({ spaces: registered, recoveredFromBatchError: batchResult.error });
     },
 
     syncAccessible: async (): Promise<Result<AccountSpace[]>> => {
@@ -783,6 +871,53 @@ export class AccountService {
     return ok(undefined);
   }
 
+  private async upsertSpacesIndexQuietly(spaces: AccountSpace[]): Promise<void> {
+    await ignoreIndexFailure(() => this.upsertSpacesIndex(spaces));
+  }
+
+  /**
+   * Upsert multiple space index rows in ONE multi-row `INSERT OR REPLACE`
+   * statement (TC-373), rather than one statement per space. This matters
+   * because `IDatabaseHandle.batch()` executes its statement list as a plain
+   * loop, not a single database transaction — an N-statement batch is not
+   * atomic. A single multi-row INSERT is one SQLite statement, so it applies
+   * atomically: all rows or none.
+   */
+  private async upsertSpacesIndex(spaces: AccountSpace[]): Promise<Result<void>> {
+    if (spaces.length === 0) return ok(undefined);
+
+    const dbResult = this.accountDb();
+    if (!dbResult.ok) return ok(undefined);
+    const schema = await this.ensureAccountIndex(dbResult.data);
+    if (!schema.ok) return schema;
+
+    const placeholders = spaces.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+    const params = spaces.flatMap((space) => {
+      const updatedAt = space.updatedAt ?? new Date().toISOString();
+      return [
+        space.spaceId,
+        space.name,
+        space.ownerDid,
+        space.type,
+        JSON.stringify(space.permissions),
+        space.status,
+        space.registeredAt ?? updatedAt,
+        updatedAt,
+        space.expiresAt?.toISOString() ?? null,
+      ];
+    });
+
+    const written = await dbResult.data.batch([
+      {
+        sql:
+          `INSERT OR REPLACE INTO spaces (space_id, name, owner_did, type, permissions_json, status, registered_at, updated_at, expires_at) VALUES ${placeholders}`,
+        params,
+      },
+    ]);
+    if (!written.ok) return accountErr(written.error);
+    return ok(undefined);
+  }
+
   private async deleteSpaceIndexQuietly(spaceId: string): Promise<void> {
     await ignoreIndexFailure(() => this.deleteSpaceIndex(spaceId));
   }
@@ -1224,6 +1359,82 @@ function accountErr(error: ServiceError): Result<never> {
 
 function isMissingIndexError(error: ServiceError): boolean {
   return /no such table:/i.test(error.message);
+}
+
+/** Server/gateway statuses where the write may have committed before the
+ *  failure. 500 is included on node-side evidence: the KV invoke route can
+ *  complete `invoke_with_options` — i.e. COMMIT the batch — and only then
+ *  return 500 while validating the committed outcomes
+ *  (tinycloud-node-server/src/routes/mod.rs:1631-1641, "KV batch put
+ *  committed unexpected invocation outcomes"). 501/505 (protocol
+ *  rejections), 408, 429 and every other 4xx are definitive: nothing was
+ *  written.
+ *
+ *  Cloudflare's edge-specific 52x family (production is Cloudflare-proxied)
+ *  is evaluated by the same test — did the request reach the origin? — and
+ *  cross-checked against `packages/sdk-services/src/responseErrors.ts:26-30`,
+ *  which already special-cases 524 as an upstream timeout:
+ *    - 520 (unknown origin error) — INCLUDED. Cloudflare received *some*
+ *      response from the origin, just not a well-formed HTTP one, so the
+ *      origin was reached and may have already committed the write.
+ *    - 521 (web server is down) — EXCLUDED. Cloudflare could not open a
+ *      connection to the origin at all; the request never arrived.
+ *    - 522 (connection timed out) — INCLUDED. Cloudflare documents two
+ *      distinct 522 modes: in one, the TCP handshake to the origin itself
+ *      times out and nothing is ever delivered; in the other, the TCP
+ *      connection IS established and the request is sent, but the origin
+ *      never ACKs the response. That second mode means the request can
+ *      have reached the origin and been processed before the timeout
+ *      fired, so a committed write cannot be ruled out
+ *      (https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-522/).
+ *    - 523 (origin unreachable) — EXCLUDED. Routing/DNS failure reaching the
+ *      origin; unlike 522's post-connection mode, the request never
+ *      arrived.
+ *    - 524 (a timeout occurred) — INCLUDED. Cloudflare connected to the
+ *      origin and forwarded the request, but the origin did not answer
+ *      within the timeout; the origin may have processed (and committed)
+ *      the write before the response was dropped. This was excluded by the
+ *      old deny-list only by omission, not by intent — that was a
+ *      regression this allow-list must not repeat. */
+const AMBIGUOUS_WRITE_STATUSES = new Set([500, 502, 503, 504, 520, 522, 524]);
+
+/**
+ * Classify a KV batch write failure for the seed-spaces reconciliation
+ * fallback (TC-373).
+ *
+ * Only AMBIGUOUS transport failures are safe to retry: the node's
+ * content-addressed block store can persist a write before (or independently
+ * of) the response that would report success, so an errored batch does not
+ * imply nothing was written. Failures the node reports unambiguously must
+ * never be retried — retrying would either repeat a definite rejection for
+ * no benefit (auth, quota, a space that doesn't exist) or ignore an explicit
+ * caller cancellation.
+ *
+ * This is an ALLOW-LIST: default `false`. Only the states enumerated below
+ * are treated as ambiguous; everything else — including every unknown or
+ * future error code — is deterministic and must surface immediately rather
+ * than trigger five pointless per-space reconcile puts.
+ */
+function isAmbiguousBatchFailure(error: ServiceError): boolean {
+  // Transport-layer failures: ambiguous ONLY if a fully-constructed request
+  // was actually handed to fetch. A pre-dispatch throw (serialization, WASM
+  // signing — including one wrapError labels TIMEOUT) is deterministic.
+  if (
+    error.code === ErrorCodes.NETWORK_ERROR ||
+    error.code === ErrorCodes.TIMEOUT
+  ) {
+    return error.meta?.requestMayHaveDispatched === true;
+  }
+
+  // The server responded, but the outcome is unstated.
+  if (error.code === ErrorCodes.KV_WRITE_FAILED) {
+    const status = error.meta?.status;
+    return typeof status === "number" && AMBIGUOUS_WRITE_STATUSES.has(status);
+  }
+
+  // Everything else — including every unknown/future code — is treated as
+  // deterministic. Unknown ≠ ambiguous: fail fast and surface.
+  return false;
 }
 
 async function ignoreIndexFailure(task: () => Promise<unknown>): Promise<void> {

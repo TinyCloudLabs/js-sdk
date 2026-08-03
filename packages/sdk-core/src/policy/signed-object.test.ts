@@ -25,6 +25,8 @@ import {
   type SignedPolicyObject,
 } from "./index";
 
+const fixture = (path: string) => new URL(`../../${path}`, import.meta.url);
+
 interface VectorObject {
   object_type: string;
   id_field: string;
@@ -41,18 +43,18 @@ interface VectorObject {
 }
 
 const objectsFixture = (await Bun.file(
-  "test-fixtures/policy-engine-vectors/signed-object-profile/objects.json",
+  fixture("test-fixtures/policy-engine-vectors/signed-object-profile/objects.json"),
 ).json()) as { objects: VectorObject[] };
 
 const suitesFixture = (await Bun.file(
-  "test-fixtures/policy-engine-vectors/signed-object-profile/signature-suites.json",
+  fixture("test-fixtures/policy-engine-vectors/signed-object-profile/signature-suites.json"),
 ).json()) as {
   ed25519: Record<string, { seed_hex: string; did: string }>;
   secp256k1: Record<string, { private_key_hex: string; did: string }>;
 };
 
 const negativeFixture = (await Bun.file(
-  "test-fixtures/policy-engine-vectors/signed-object-profile/negative.json",
+  fixture("test-fixtures/policy-engine-vectors/signed-object-profile/negative.json"),
 ).json()) as { cases: Array<Record<string, unknown>> };
 
 const coveredKinds = new Set(["Policy", "PolicyStatus", "PolicyEngineRecord"]);

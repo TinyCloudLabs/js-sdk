@@ -7,7 +7,10 @@ if (testFiles.length === 0) {
 }
 
 for (const testFile of testFiles) {
-  const child = Bun.spawn([process.execPath, "test", testFile], {
+  // The operations fixtures intentionally bind TC_HOME to a per-test
+  // temporary state root. Keep tests within one file serial so Bun cannot
+  // race those process-global fixture hooks and make the release gate flaky.
+  const child = Bun.spawn([process.execPath, "test", "--max-concurrency=1", testFile], {
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",

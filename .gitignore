@@ -15,6 +15,8 @@ build
 packages/node-sdk/dist/
 packages/bootstrap/dist/
 packages/sdk-core/dist/
+packages/share-envelope/dist/
+packages/share-sdk/dist/
 packages/sdk-rs/packages/web/dist/
 packages/sdk-rs/packages/node/dist/
 packages/sdk-rs/.profile

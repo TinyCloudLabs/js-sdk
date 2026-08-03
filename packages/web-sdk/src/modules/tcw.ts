@@ -13,6 +13,7 @@
 import {
   TinyCloudNode,
   TinyCloudNodeConfig,
+  type BootstrapWarning,
   type DelegateToOptions,
   type DelegateToResult,
   type ISessionStorage,
@@ -492,7 +493,7 @@ export class TinyCloudWeb {
   /** Whether the last signIn() skipped client-side account bootstrap. */
   get bootstrapSkipped(): boolean { return this.node.bootstrapSkipped; }
   /** Outcome of the last signIn()'s account-bootstrap attempt. */
-  get bootstrapStatus(): { skipped: boolean; reason?: string } { return this.node.bootstrapStatus; }
+  get bootstrapStatus(): { skipped: boolean; reason?: string; warnings?: BootstrapWarning[] } { return this.node.bootstrapStatus; }
 
   /** Space-scoped SQL service for a non-primary space (e.g. the owner's `applications` space). */
   sqlForSpace(spaceId: string): ISQLService { return this.node.sqlForSpace(spaceId); }
@@ -729,6 +730,11 @@ export class TinyCloudWeb {
   get sessionDid(): string { return this.node.sessionDid; }
   get isSessionOnly(): boolean { return this.node.isSessionOnly; }
   get isWalletConnected(): boolean { return this.walletSigner !== undefined; }
+
+  /** Sign protocol bytes with the established session key without exposing key material. */
+  async signSessionBytes(bytes: Uint8Array): Promise<Uint8Array> {
+    return this.node.signSessionBytes(bytes);
+  }
 
   // ===========================================================================
   // Extension & Lifecycle

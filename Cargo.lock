@@ -4994,6 +4994,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "sha2 0.10.9",
  "sha3",
  "time",
  "tinycloud-sdk-rs",

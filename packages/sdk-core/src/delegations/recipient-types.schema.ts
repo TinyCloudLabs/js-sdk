@@ -3,6 +3,7 @@ import { z } from "zod";
 export const ShareRecipientTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("exactEmail"), value: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("emailDomain"), value: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("recipientDid"), value: z.string().regex(/^did:[a-z0-9]+:.+$/) }).strict(),
   z.object({ kind: z.literal("bearer") }).strict(),
 ]);
 
@@ -52,6 +53,7 @@ const ShareContentSourceSchema = z.discriminatedUnion("kind", [
 const ShareAddressedRecipientSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("exactEmail"), value: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("emailDomain"), value: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("recipientDid"), value: z.string().regex(/^did:[a-z0-9]+:.+$/) }).strict(),
 ]);
 
 export const ShareAddressedDelegationRequestV2Schema = z.object({

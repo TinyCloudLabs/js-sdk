@@ -14,6 +14,10 @@ jobs:
     name: I0 compatibility and MCP contract
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # npm pack is part of the offline contract tests. Keep its cache inside
+      # the runner workspace so a pre-existing user cache cannot make I0 fail.
+      NPM_CONFIG_CACHE: ${{ github.workspace }}/.npm-cache
     steps:
       - uses: actions/checkout@v4
 
@@ -47,6 +51,8 @@ jobs:
         run: |
           bun run --cwd packages/bootstrap build
           bun run --cwd packages/sdk-services build
+          bun run --cwd packages/share-envelope build
+          bun run --cwd packages/share-sdk build
           bun run --cwd packages/sdk-core build
 
       - name: Build SDK WASM runtime dependencies

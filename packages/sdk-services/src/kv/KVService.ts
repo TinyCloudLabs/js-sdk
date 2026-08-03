@@ -962,6 +962,14 @@ export class KVService extends BaseService implements IKVService {
         seen.add(path);
       }
 
+      // Conservative: `true` means we handed a fully-constructed request to
+      // fetch(). It does NOT prove bytes reached the node — DNS/connect
+      // failures and synchronous fetch rejections are included. Proving
+      // actual dispatch requires lower-level transport instrumentation (out
+      // of scope). The over-approximation is intentional and bounded: it can
+      // only cause a reconciliation of at most N idempotent, byte-identical
+      // overwrites — never a corrupted or differently-timestamped record.
+      let requestMayHaveDispatched = false;
       try {
         const body = new FormData();
         for (let index = 0; index < items.length; index++) {
@@ -981,15 +989,53 @@ export class KVService extends BaseService implements IKVService {
           }))
         );
 
-        const response = await this.context.fetch(`${this.host}/invoke`, {
+        const url = `${this.host}/invoke`;
+        const init = {
           method: "POST",
           headers,
           body,
           signal: this.combineSignals(options?.signal),
-        });
+        };
+
+        // Resolve the fetch function to a local BEFORE flipping the flag.
+        // `this.context.fetch` is a getter (context.ts:154-156) that can
+        // itself throw (assertActive()) — if the flag were set first, that
+        // throw would be mislabeled as "may have dispatched" even though no
+        // request was ever handed to a transport (Sol B2).
+        const fetchFn = this.context.fetch;
+        requestMayHaveDispatched = true;
+        const response = await fetchFn(url, init);
 
         if (!response.ok) {
-          const errorText = await response.text();
+          let errorText: string;
+          try {
+            errorText = await response.text();
+          } catch (textError) {
+            // A response was received — the status is known and
+            // authoritative — but its body could not be read. Falling
+            // through to the generic catch below would report
+            // NETWORK_ERROR + requestMayHaveDispatched: true, which the
+            // allow-list treats as ambiguous regardless of status. That
+            // would turn a deterministic 4xx (nothing written) into a false
+            // ambiguity (Sol B4). Classify by status alone instead; whether
+            // this is later reconciled is still governed solely by
+            // AMBIGUOUS_WRITE_STATUSES, exactly like the body-readable path.
+            //
+            // Sol B2 (round 2): preserve the underlying rejection instead of
+            // discarding it — a bare `catch {}` here would make a
+            // body-read failure silently invisible, which is exactly the
+            // debugging trap the no-swallowed-errors rule exists to
+            // prevent.
+            const cause = textError instanceof Error ? textError : new Error(String(textError));
+            return err(
+              serviceError(
+                ErrorCodes.KV_WRITE_FAILED,
+                `Failed to batch put ${items.length} key(s): ${response.status} - <response body could not be read: ${cause.message}>`,
+                "kv",
+                { cause, meta: { status: response.status, statusText: response.statusText } }
+              )
+            );
+          }
 
           if (response.status === 401 || response.status === 403) {
             const { resource, action } = parseAuthError(errorText);
@@ -1019,20 +1065,106 @@ export class KVService extends BaseService implements IKVService {
           );
         }
 
-        const batchResponse = this.normalizeBatchPutResponse(await response.json());
-        if (!batchResponse || batchResponse.count !== batchResponse.written.length) {
+        let rawBody: unknown;
+        try {
+          rawBody = await response.json();
+        } catch (jsonError) {
+          // A 2xx response whose body isn't valid JSON is precisely the
+          // unconfirmed-2xx case — the node answered success but the write
+          // set can't be confirmed. Falling through to the generic catch
+          // below would carry only `requestMayHaveDispatched`, omitting
+          // `responseReceived`/`status`/`outcome`, so this must be classified
+          // here with the identical metadata block used by the two sibling
+          // unconfirmed branches (Sol B3).
+          //
+          // Sol B2 (round 2): preserve the underlying rejection instead of
+          // discarding it — a bare `catch {}` here would make a
+          // JSON-parse failure silently invisible, which is exactly the
+          // debugging trap the no-swallowed-errors rule exists to
+          // prevent.
+          const cause = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
+          return err(
+            serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              `KV batchPut response was not valid JSON: ${cause.message}`,
+              "kv",
+              {
+                cause,
+                meta: {
+                  requestMayHaveDispatched: true,
+                  responseReceived: true,
+                  status: response.status,
+                  outcome: "batch-unconfirmed",
+                },
+              }
+            )
+          );
+        }
+
+        const batchResponse = this.normalizeBatchPutResponse(rawBody);
+        if (!batchResponse) {
+          // The code stays NETWORK_ERROR deliberately: adding a member to
+          // ErrorCodes (types.ts:73-115) widens the exported ErrorCode union
+          // (:117) and would break consumers with exhaustive switches. The
+          // node answered 2xx (the write very likely landed) but the body
+          // could not confirm it, so the ambiguity is carried in metadata
+          // instead of a dedicated code.
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
               "KV batchPut response did not include matching written keys and count",
-              "kv"
+              "kv",
+              {
+                meta: {
+                  requestMayHaveDispatched: true,
+                  responseReceived: true,
+                  status: response.status,
+                  outcome: "batch-unconfirmed",
+                },
+              }
+            )
+          );
+        }
+
+        // Validate against the exact requested path set, not just internal
+        // self-consistency (count === written.length would accept a
+        // malformed response that reports the right count for the wrong
+        // keys, e.g. a partial write padded to look complete).
+        const requestedPaths = new Set(paths);
+        const writtenPaths = new Set(batchResponse.written);
+        const matchesRequest =
+          batchResponse.count === paths.length &&
+          batchResponse.written.length === paths.length &&
+          writtenPaths.size === paths.length &&
+          batchResponse.written.every((key) => requestedPaths.has(key));
+
+        if (!matchesRequest) {
+          // Same rationale as above: NETWORK_ERROR is kept and the
+          // ambiguity is carried in meta rather than a new ErrorCodes member.
+          return err(
+            serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              `KV batchPut response did not confirm all ${paths.length} requested key(s) were written`,
+              "kv",
+              {
+                meta: {
+                  requestMayHaveDispatched: true,
+                  responseReceived: true,
+                  status: response.status,
+                  outcome: "batch-unconfirmed",
+                },
+              }
             )
           );
         }
 
         return ok(batchResponse);
       } catch (error) {
-        return err(wrapError("kv", error));
+        const wrapped = wrapError("kv", error);
+        return err({
+          ...wrapped,
+          meta: { ...wrapped.meta, requestMayHaveDispatched },
+        });
       }
     });
   }
