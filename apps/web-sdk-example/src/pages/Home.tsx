@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { TinyCloudWeb } from "@tinycloud/web-sdk";
+import { TinyCloudWeb, type BrowserWalletProvider } from "@tinycloud/web-sdk";
 import Title from "../components/Title";
 import RadioGroup from "../components/RadioGroup";
 import Input from "../components/Input";
 import Button from "../components/Button";
 import AccountInfo from "../components/AccountInfo";
 import { lazy } from "react";
-import { useAccount, useWalletClient } from "wagmi";
+import { useAccount } from "wagmi";
 import { useModal } from "connectkit";
 import {
   Accordion,
@@ -43,8 +43,7 @@ type SignStrategyOption = "wallet-popup" | "callback" | "auto-approve";
 
 function Home() {
   const location = useLocation();
-  const { address, isConnected } = useAccount();
-  const { data: walletClient } = useWalletClient();
+  const { address, isConnected, connector } = useAccount();
   const { setOpen } = useModal();
 
   const [loading, setLoading] = useState(false);
@@ -78,6 +77,22 @@ function Home() {
   const [tinyCloudHost, setTinyCloudHost] = useState<string>(
     window.__DEV_MODE__ ? "http://localhost:8000" : ""
   );
+
+  const getWalletProvider = async (): Promise<BrowserWalletProvider> => {
+    if (!connector) {
+      throw new Error("No connected wallet connector is available");
+    }
+
+    const provider = await connector.getProvider();
+    if (
+      !provider ||
+      typeof (provider as { request?: unknown }).request !== "function"
+    ) {
+      throw new Error("Connected wallet did not provide an EIP-1193 request method");
+    }
+
+    return provider as BrowserWalletProvider;
+  };
 
   // Parse URL parameters on component mount
   useEffect(() => {
@@ -196,17 +211,14 @@ function Home() {
   };
 
   const signInWithWallet = async () => {
-    if (!walletClient || tcw) return;
+    if (!connector || tcw) return;
 
     setLoading(true);
 
     try {
+      const provider = await getWalletProvider();
       const tcwConfig = getTinyCloudWebConfig({
-        providers: {
-          web3: {
-            driver: (walletClient as any).transport,
-          },
-        },
+        provider,
       });
 
       const tcwProvider = new TinyCloudWeb(tcwConfig);
@@ -261,14 +273,14 @@ function Home() {
    * This demonstrates the connectWallet() upgrade pattern.
    */
   const connectWalletAndSignIn = async () => {
-    if (!walletClient || !tcw) return;
+    if (!connector || !tcw) return;
 
     setLoading(true);
 
     try {
-      // Connect the wallet using the transport (ExternalProvider) from walletClient
-      // This upgrades from session-only mode to wallet mode
-      tcw.connectWallet((walletClient as any).transport);
+      const provider = await getWalletProvider();
+      // Upgrade from session-only mode using the connector's EIP-1193 provider.
+      tcw.connectWallet(provider);
 
       console.log("Wallet connected! Now signing in...");
       console.log("  - Is Session Only:", tcw.isSessionOnly);
@@ -308,7 +320,7 @@ function Home() {
 
       // If we have a tcw in session-only mode but no wallet, prompt to connect
       if (tcw.isSessionOnly) {
-        if (!isConnected || !walletClient) {
+        if (!isConnected || !connector) {
           setOpen(true);
           return;
         }
@@ -319,7 +331,7 @@ function Home() {
     }
 
     // Standard flow (wallet mode)
-    if (!isConnected || !walletClient) {
+    if (!isConnected || !connector) {
       // User wants to sign in, so first connect the wallet
       setOpen(true);
       return;
