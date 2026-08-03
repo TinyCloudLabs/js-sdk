@@ -51,7 +51,7 @@ export async function runCredentialCliHandoff(input: {
   await open(hosted.href);
   try { await completed; } finally { server.close(); }
 
-  const recheck = await fetchFn(new URL(`/v1/credentials/requests/${requestId}`, input.issuerOrigin), { credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer" });
+  const recheck = await fetchFn(new URL(`/v1/credentials/requests/${requestId}`, input.issuerOrigin), { credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", headers: { "cache-control": "no-cache" } });
   if (!recheck.ok) throw new Error("credential handoff recheck failed");
   const result = await recheck.json() as Record<string, unknown>;
   if (result.type !== "TinyCloudCredentialRequestStatus" || result.version !== 1 || result.state !== "complete" || typeof result.credentialDigest !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(result.credentialDigest)) throw new Error("credential handoff status is invalid");
