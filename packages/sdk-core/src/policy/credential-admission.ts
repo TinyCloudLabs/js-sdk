@@ -439,6 +439,10 @@ export interface AdmitPolicyCredentialV3Input
   readonly policyRootCid: string;
   readonly enforcementRootCid: string;
   readonly nodeOrigin: string;
+  /** Root authorization CID of the recipient's active TinyCloud account session. */
+  readonly accountAuthorizationCid: string;
+  /** Recipient-owned `credentials` space covered by the account authorization. */
+  readonly credentialSpaceId: string;
   readonly fetch?: typeof fetch;
 }
 
@@ -457,6 +461,14 @@ export async function admitPolicyCredentialV3(
 ): Promise<PolicyCredentialAdmissionV3> {
   const policy = validateUnifiedPolicyV2(input.policy, input.policyCid);
   const nodeOrigin = policyNodeOrigin(input.nodeOrigin);
+  const accountAuthorizationCid = nonEmpty(
+    input.accountAuthorizationCid,
+    "account authorization CID",
+  );
+  const credentialSpaceId = nonEmpty(
+    input.credentialSpaceId,
+    "credential space ID",
+  );
   const fetchFn = input.fetch ?? globalThis.fetch.bind(globalThis);
   const challenge = await requestPolicyChallengeV3({
     nodeOrigin,
@@ -482,6 +494,8 @@ export async function admitPolicyCredentialV3(
         nonce: challenge.nonce,
         requirement: validateCredentialRequirement(input.requirement),
         credential: envelopeFromVerified(input.credential),
+        accountAuthorizationCid,
+        credentialSpaceId,
         presentation,
       }),
     },

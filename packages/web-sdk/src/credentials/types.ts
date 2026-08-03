@@ -32,6 +32,11 @@ export interface CredentialClient {
   ensureOwnedSpaceHosted(name: string): Promise<string>;
   credentialSpaceOwnerDid(spaceId: string): string;
   kvForSpace(spaceId: string): IKVService;
+  /**
+   * Root authorization CID of the active account session. Exposed here rather
+   * than on {@link ClientSession} so the CID stays out of the public session.
+   */
+  accountAuthorizationCid(): string;
 }
 
 export interface CredentialSigningAdapter {

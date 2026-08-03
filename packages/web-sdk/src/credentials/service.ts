@@ -195,6 +195,8 @@ export class CredentialsService {
       requirement,
       credential,
       credentialSpaceOwnerDid: space.ownerDid,
+      accountAuthorizationCid: this.client.accountAuthorizationCid(),
+      credentialSpaceId: space.spaceId,
       requestedCapabilities: options.requestedCapabilities,
       sign: (digest) => this.client.signSessionBytes(digest),
       fetch: options.fetch,

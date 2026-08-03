@@ -49,6 +49,9 @@ const POLICY_ROOT_CID = "bafy-policy-root-470";
 const ENFORCEMENT_ROOT_CID = "bafy-enforcement-root-470";
 const NODE_ORIGIN = "https://node.example.test";
 const RESOURCE = "tinycloud://owner-space/kv/docs/report.md";
+const CREDENTIAL_SPACE_ID =
+  "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:credentials";
+const ACCOUNT_AUTHORIZATION_CID = "bafy-account-authorization-470";
 const CAPABILITY = {
   kind: "kv" as const,
   resource: RESOURCE,
@@ -233,16 +236,17 @@ describe("TC-470 credential policy admission", () => {
       audience: HOLDER_DID,
       host: NODE_ORIGIN,
     }));
+    const ensureOwnedSpaceHosted = mock(async (_name: string) => CREDENTIAL_SPACE_ID);
     const client: CredentialClient = {
       sessionDid: `${HOLDER_DID}#${HOLDER_DID.slice("did:key:".length)}`,
       credentialHolderDid: HOLDER_DID,
       credentialHolderKid: `${HOLDER_DID}#${HOLDER_DID.slice("did:key:".length)}`,
       session: () => ({ address: "0x1", walletAddress: "0x1", chainId: 1 }) as any,
       signSessionBytes: async (bytes) => ed25519.sign(bytes, HOLDER_KEY),
-      ensureOwnedSpaceHosted: async () =>
-        "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:credentials",
+      ensureOwnedSpaceHosted,
       credentialSpaceOwnerDid: () => ACCOUNT_OWNER_DID,
       kvForSpace: () => ({}) as any,
+      accountAuthorizationCid: () => ACCOUNT_AUTHORIZATION_CID,
       activateCompactRuntimeDelegation: activate,
     };
     const fetchFn = mock(async (resource: RequestInfo | URL, init?: RequestInit) => {
@@ -302,8 +306,22 @@ describe("TC-470 credential policy admission", () => {
     expect(requests).toHaveLength(2);
     const mint = requests[1]!.body as any;
     expect(Object.keys(mint).sort()).toEqual(
-      ["policyCid", "challengeId", "nonce", "requirement", "credential", "presentation"].sort(),
+      [
+        "policyCid",
+        "challengeId",
+        "nonce",
+        "requirement",
+        "credential",
+        "accountAuthorizationCid",
+        "credentialSpaceId",
+        "presentation",
+      ].sort(),
     );
+    expect(ensureOwnedSpaceHosted).toHaveBeenCalledWith("credentials");
+    expect(mint.accountAuthorizationCid).toBe(ACCOUNT_AUTHORIZATION_CID);
+    expect(mint.credentialSpaceId).toBe(CREDENTIAL_SPACE_ID);
+    expect(mint.credentialSpaceId).not.toBe(values.policy.contentSource.kvResource);
+    expect(mint.credentialSpaceId).not.toBe(RESOURCE);
     expect(mint.credential.credential).toBe(values.credential.credential);
     expect(mint.credential.verifiedAt).toBeUndefined();
     expect(mint.presentation.credentialSpaceOwnerDid).toBe(ACCOUNT_OWNER_DID);
