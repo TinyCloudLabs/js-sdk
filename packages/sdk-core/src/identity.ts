@@ -1,4 +1,4 @@
-import { getAddress, isAddress } from "viem";
+import { getAddress, isAddress, recoverMessageAddress, type Hex } from "viem";
 
 export type CanonicalAddress = `0x${string}`;
 
@@ -53,6 +53,24 @@ export function canonicalizeAddress(address: string): CanonicalAddress {
     throw new IdentityParseError(`Invalid EVM address: ${address}`);
   }
   return getAddress(address) as CanonicalAddress;
+}
+
+/** Verify EIP-191 evidence over the exact UTF-8 message and recover its signer. */
+export async function verifyEip191MessageSignature(
+  message: string,
+  signature: string,
+  expectedAddress: string,
+): Promise<boolean> {
+  if (!/^0x[0-9a-fA-F]{130}$/.test(signature)) return false;
+  try {
+    const recovered = await recoverMessageAddress({
+      message,
+      signature: signature as Hex,
+    });
+    return canonicalizeAddress(recovered) === canonicalizeAddress(expectedAddress);
+  } catch {
+    return false;
+  }
 }
 
 export function addressStorageKey(address: string): CanonicalAddress {

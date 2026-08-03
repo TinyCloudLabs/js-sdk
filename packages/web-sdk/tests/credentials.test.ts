@@ -75,6 +75,22 @@ test("uses normal approval only when the exact-request auto-sign policy declines
   await interpretCredentialFlow({ descriptor: synthetic, requirement: req, requestId: REQUEST, verifier: "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV", holderDid: HOLDER, descriptorDigest, requirementDigest, openerOrigin: "https://app.test", transport: new InterpreterTransport(states, binding(synthetic, descriptorDigest, requirementDigest)), signing: { autoSign: async () => undefined, requestApproval: async () => { approvals += 1; return new Uint8Array([2]); } } }); expect(approvals).toBe(1);
 });
 
+test.each(["CANCELED", "POPUP_BLOCKED"] as const)(
+  "preserves existing %s identity from credential approval",
+  async (code) => {
+    const req = requirement(synthetic); const descriptorDigest = await canonicalDigest(synthetic); const requirementDigest = await canonicalDigest(req);
+    const states: CredentialRequestState[] = [{ type: "OpenCredentialsAcquisitionState", version: 1, requestId: REQUEST, transitionId: "sign", state: "pending", nextStep: { id: "holder_signature", type: "holder_signature", version: 1, constraints: {} }, correlationId: REQUEST }];
+    const error = new CredentialError(code, "approval surface ended");
+    await expect(interpretCredentialFlow({ descriptor: synthetic, requirement: req, requestId: REQUEST, verifier: "V".repeat(32), holderDid: HOLDER, descriptorDigest, requirementDigest, openerOrigin: "https://app.test", transport: new InterpreterTransport(states, binding(synthetic, descriptorDigest, requirementDigest)), signing: { autoSign: async () => undefined, requestApproval: async () => { throw error; } } })).rejects.toBe(error);
+  },
+);
+
+test("maps ordinary credential approval failure to SIGNATURE_REJECTED", async () => {
+  const req = requirement(synthetic); const descriptorDigest = await canonicalDigest(synthetic); const requirementDigest = await canonicalDigest(req);
+  const states: CredentialRequestState[] = [{ type: "OpenCredentialsAcquisitionState", version: 1, requestId: REQUEST, transitionId: "sign", state: "pending", nextStep: { id: "holder_signature", type: "holder_signature", version: 1, constraints: {} }, correlationId: REQUEST }];
+  await expect(interpretCredentialFlow({ descriptor: synthetic, requirement: req, requestId: REQUEST, verifier: "V".repeat(32), holderDid: HOLDER, descriptorDigest, requirementDigest, openerOrigin: "https://app.test", transport: new InterpreterTransport(states, binding(synthetic, descriptorDigest, requirementDigest)), signing: { autoSign: async () => undefined, requestApproval: async () => { throw new Error("declined"); } } })).rejects.toMatchObject({ code: "SIGNATURE_REJECTED" });
+});
+
 test("popup uses a locator-only URL and exact-origin allowlisted wake messages", async () => {
   const listeners = new Set<(event: any) => void>(); const popup = { closed: false, close: () => undefined } as any; let opened = ""; const opener = { addEventListener: (_: string, listener: any) => listeners.add(listener), removeEventListener: (_: string, listener: any) => listeners.delete(listener) } as any;
   const interaction = await new BrowserCredentialInteraction("popup", { opener, open: (url) => { opened = url; return popup; }, redirect: () => undefined }).start({ interaction: email.interaction, locator: REQUEST }); expect(new URL(opened).origin).toBe(email.interaction.origin); expect(new URL(opened).search).toBe(""); expect(new URL(opened).hash).toBe("");

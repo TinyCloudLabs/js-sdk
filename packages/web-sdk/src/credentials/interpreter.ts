@@ -60,7 +60,7 @@ export async function interpretCredentialFlow(input: {
       let signature = await input.signing.autoSign?.(binding, bytes, input.signal);
       if (signature === undefined) {
         if (!input.signing.requestApproval) throw new CredentialError("SIGNATURE_REJECTED", "OpenKey approval is required");
-        try { signature = await input.signing.requestApproval(binding, bytes, input.signal); } catch (cause) { throw new CredentialError("SIGNATURE_REJECTED", "OpenKey approval was rejected", { cause }); }
+        try { signature = await input.signing.requestApproval(binding, bytes, input.signal); } catch (cause) { if (cause instanceof CredentialError) throw cause; throw new CredentialError("SIGNATURE_REJECTED", "OpenKey approval was rejected", { cause }); }
       }
       if (!(signature instanceof Uint8Array) || signature.length === 0) throw new CredentialError("SIGNATURE_REJECTED", "OpenKey signature is invalid");
       await input.transport.submitHolderSignature(input.requestId, input.verifier, encodeBase64Url(signature), input.signal);

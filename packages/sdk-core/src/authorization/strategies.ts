@@ -39,6 +39,8 @@ export interface SignResponse {
   signature?: string;
   /** Reason for rejection if not approved */
   reason?: string;
+  /** The policy declined automatic signing and requires normal user consent. */
+  needsApproval?: boolean;
 }
 
 /**
@@ -178,6 +180,7 @@ export function createOpenKeyCallbackSigningStrategy(
         return {
           approved: false,
           reason: openKeyApprovalReason(parsed),
+          ...(parsed.needsApproval ? { needsApproval: true } : {}),
         };
       }
 

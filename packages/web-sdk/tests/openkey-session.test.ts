@@ -1,5 +1,6 @@
 import { beforeEach, expect, mock, test } from "bun:test";
 import type { PersistedSessionData } from "@tinycloud/sdk-core";
+import { Wallet } from "ethers";
 import type {
   EstablishOpenKeySessionOptions,
   EstablishOpenKeySessionResult,
@@ -109,7 +110,13 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
 const { TinyCloudWeb: RealTinyCloudWeb } = require("../src/modules/tcw");
 const { BrowserSessionStorage } = require("../src/adapters/BrowserSessionStorage");
 
-const ADDRESS = "0x31d40B62C395B9418C4198363619B11c65cD406F";
+const OPENKEY_WALLET = new Wallet(
+  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+);
+const WRONG_OPENKEY_WALLET = new Wallet(
+  "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+);
+const ADDRESS = OPENKEY_WALLET.address;
 const KEY_ID = "key_personal_1";
 const TOKEN = "ok_provider_once_fixture";
 const ENDPOINT = "https://openkey.example.test/api/delegate/sign";
@@ -783,42 +790,65 @@ test("real TinyCloudWeb forwards disabled auto-bootstrap into TinyCloudNode", as
   }
 });
 
-test("real initialized OpenKey session separates auto-sign policy from normal approval", async () => {
+test("real initialized OpenKey session validates exact EIP-191 auto-sign evidence", async () => {
   await seedRealBrowserPersistence("valid");
+  const message = "canonical credential holder binding";
   const automaticDecisions = [
-    { approved: true, signature: "0xpolicy-approved" },
-    { approved: false, needsApproval: true, reason: "approval required" },
+    { approved: true, signature: await OPENKEY_WALLET.signMessage(message) },
+    { approved: true, signature: await OPENKEY_WALLET.signMessage(`${message} substituted`) },
+    { approved: true, signature: await WRONG_OPENKEY_WALLET.signMessage(message) },
+    { approved: true },
   ];
   const signerFetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
     expect(new Headers(init?.headers).get("authorization")).toBeNull();
     expect(init?.credentials).toBe("include");
     return new Response(JSON.stringify(automaticDecisions.shift()), { status: 200 });
   });
-  const approvalDecisions = [
-    { approved: true },
-    { approved: false, reason: "user rejected credential signing" },
-  ];
-  const requestCredentialApproval = mock(async () => approvalDecisions.shift()!);
   const input = options(undefined, signerFetch);
-  input.requestCredentialApproval = requestCredentialApproval;
 
   const result = await establishOpenKeySession(input);
   const activeNode = (result.client as any)._node;
   expect(activeNode.config.signStrategy.openKeyAutoSign).toBe(true);
-  expect(activeNode.config.signStrategy.openKeyRequestApproval).toBe(
-    requestCredentialApproval,
-  );
-  const bytes = new TextEncoder().encode("canonical credential holder binding");
+  const bytes = new TextEncoder().encode(message);
   const automaticallySigned = await activeNode.autoSignCredentialBytes(bytes);
   expect(automaticallySigned).toBeInstanceOf(Uint8Array);
-  expect(await activeNode.autoSignCredentialBytes(bytes)).toBeUndefined();
+  await expect(activeNode.autoSignCredentialBytes(bytes)).rejects.toThrow(
+    "signature evidence is invalid",
+  );
+  await expect(activeNode.autoSignCredentialBytes(bytes)).rejects.toThrow(
+    "signature evidence is invalid",
+  );
+  await expect(activeNode.autoSignCredentialBytes(bytes)).rejects.toThrow(
+    "did not include a signature",
+  );
+  expect(result.status).toBe("restored");
+  expect(signerFetch).toHaveBeenCalledTimes(4);
+});
+
+test("real initialized OpenKey session accepts approval-only and optional exact evidence, then preserves denial", async () => {
+  await seedRealBrowserPersistence("valid");
+  const message = "canonical credential holder binding";
+  const approvalDecisions = [
+    { approved: true },
+    { approved: true, signature: await OPENKEY_WALLET.signMessage(message) },
+    { approved: false, reason: "user rejected credential signing" },
+  ];
+  const requestCredentialApproval = mock(async () => approvalDecisions.shift()!);
+  const input = options(undefined, mock(async () => {
+    throw new Error("automatic policy must not run during manual approval");
+  }));
+  input.requestCredentialApproval = requestCredentialApproval;
+
+  const result = await establishOpenKeySession(input);
+  const activeNode = (result.client as any)._node;
+  const bytes = new TextEncoder().encode(message);
+  expect(await activeNode.approveCredentialBytes(bytes)).toBeInstanceOf(Uint8Array);
   expect(await activeNode.approveCredentialBytes(bytes)).toBeInstanceOf(Uint8Array);
   await expect(activeNode.approveCredentialBytes(bytes)).rejects.toThrow(
     "user rejected credential signing",
   );
   expect(result.status).toBe("restored");
-  expect(signerFetch).toHaveBeenCalledTimes(2);
-  expect(requestCredentialApproval).toHaveBeenCalledTimes(2);
+  expect(requestCredentialApproval).toHaveBeenCalledTimes(3);
 });
 
 test.each(["missing", "corrupt", "expired"] as const)(

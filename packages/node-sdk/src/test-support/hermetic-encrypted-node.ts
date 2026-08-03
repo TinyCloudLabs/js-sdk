@@ -107,6 +107,8 @@ class LoopbackEncryptedNode {
     delegatedKvRead: false,
     delegatedDecrypt: false,
     delegatedKvResources: [] as string[],
+    kvReads: 0,
+    kvWrites: 0,
   };
 
   private readonly server: Server;
@@ -117,6 +119,7 @@ class LoopbackEncryptedNode {
   private readonly delegationCids = new Set<string>();
   private readonly kvData = new Map<string, Map<string, unknown>>();
   private secretPresent = true;
+  private acceptVerifiedBrowserInvocations = false;
 
   constructor() {
     this.server = createServer(async (incoming, outgoing) => {
@@ -185,6 +188,10 @@ class LoopbackEncryptedNode {
 
   allowInvocationProof(cid: string): void {
     this.delegationCids.add(cid);
+  }
+
+  allowVerifiedBrowserInvocations(): void {
+    this.acceptVerifiedBrowserInvocations = true;
   }
 
   setSecretPresent(value: boolean): void {
@@ -269,6 +276,19 @@ class LoopbackEncryptedNode {
 
   private async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/info" && request.method === "GET") {
+      return this.json({
+        protocol: this.wasm.protocolVersion(),
+        version: "hermetic-browser-fixture",
+        features: [],
+        nodeId: this.nodeId,
+      });
+    }
+    if (url.pathname.startsWith("/peer/generate/") && request.method === "GET") {
+      return new Response(this.nodeId, {
+        headers: { "content-type": "text/plain" },
+      });
+    }
     if (url.pathname === "/delegate" && request.method === "POST") {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
@@ -302,6 +322,11 @@ class LoopbackEncryptedNode {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
       const payload = verifiedCompactPayload(authorization);
+      if (this.acceptVerifiedBrowserInvocations && payload.iss) {
+        const verifiedBrowserProof = "hermetic-browser-session";
+        this.delegationCids.add(verifiedBrowserProof);
+        payload.prf = [...(payload.prf ?? []), verifiedBrowserProof];
+      }
       if (payload.iss) this.observed.signingIssuers.push(payload.iss);
       const writes = Object.entries(payload.att ?? {}).flatMap(([resource, actions]) =>
         Object.keys(actions).map((action) => ({ resource, action }))
@@ -333,6 +358,7 @@ class LoopbackEncryptedNode {
           written.push(path);
         }
         this.observed.signedInvocation = true;
+        this.observed.kvWrites += written.length;
         return this.json({ written, count: written.length });
       }
       const capability = Object.entries(payload.att ?? {}).flatMap(([resource, actions]) =>
@@ -362,6 +388,7 @@ class LoopbackEncryptedNode {
         if (entries) {
           this.observed.signedInvocation = true;
           this.observed.delegatedKvRead = true;
+          this.observed.kvReads += 1;
           this.observed.delegatedKvResources.push(`${capability.action}:${capability.resource.toLowerCase()}`);
           if (capability.action === "tinycloud.kv/list") {
             return this.json([...entries.keys()].filter((key) => key.startsWith(path)).sort());
@@ -459,6 +486,57 @@ class LoopbackEncryptedNode {
 
     return new Response("not found", { status: 404 });
   }
+}
+
+export interface HermeticBrowserCredentialBoundary {
+  readonly host: string;
+  readonly ownerDid: string;
+  readonly credentialsSpaceId: string;
+  stats(): Readonly<{
+    signedInvocation: boolean;
+    kvReads: number;
+    kvWrites: number;
+  }>;
+  stop(): void;
+}
+
+/** Host-only boundary for browser-owned credential integration tests. */
+export async function createHermeticBrowserCredentialBoundary(
+  ownerAddress: string,
+): Promise<HermeticBrowserCredentialBoundary> {
+  const transport = new LoopbackEncryptedNode();
+  await transport.ready();
+  const checksummed = transport.wasm.ensureEip55(ownerAddress);
+  const ownerDid = `did:pkh:eip155:${OWNER_CHAIN_ID}:${checksummed}`;
+  const accountSpaceId = transport.wasm
+    .makeSpaceId(checksummed, OWNER_CHAIN_ID, "account")
+    .toLowerCase();
+  const credentialsSpaceId = transport.wasm
+    .makeSpaceId(checksummed, OWNER_CHAIN_ID, "credentials")
+    .toLowerCase();
+  transport.configureKv(accountSpaceId, {
+    [`spaces/${credentialsSpaceId}`]: {
+      spaceId: credentialsSpaceId,
+      name: "credentials",
+      ownerDid,
+      type: "owned",
+      permissions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
+      status: "active",
+    },
+  });
+  transport.provisionKv(credentialsSpaceId);
+  transport.allowVerifiedBrowserInvocations();
+  return {
+    host: transport.host,
+    ownerDid,
+    credentialsSpaceId,
+    stats: () => ({
+      signedInvocation: transport.observed.signedInvocation,
+      kvReads: transport.observed.kvReads,
+      kvWrites: transport.observed.kvWrites,
+    }),
+    stop: () => transport.stop(),
+  };
 }
 
 function makeNode(

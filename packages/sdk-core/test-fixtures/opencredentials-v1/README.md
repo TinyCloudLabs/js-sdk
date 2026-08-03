@@ -24,6 +24,13 @@ creation. Popup and redirect URLs carry only the locator. Cross-window messages
 may carry only `{type, version, requestId, state}` wake/progress fields; they
 never carry identifiers, proof material, credentials, or authorization.
 
+In protocol v1, authenticated result retrieval is retry-safe. The first read
+records `RESULT_READ` and makes `resultPreviouslyRead` true. Later reads with
+the same bound completion verifier return byte-for-byte equivalent result JSON
+without another state revision or event. A different verifier remains
+unauthorized. Proof challenges, proof acceptance, and holder signatures remain
+strictly one-time transitions.
+
 TC-452 compatibility is strict: `/v1/share-email/*`, `/share/v2`, the
 `tinycloud.share-email-claim/v1` signing domain, and migrations 0001–0006 are
 unchanged. Generic acquisition uses migration 0007 and has no share CID,

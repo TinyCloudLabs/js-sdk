@@ -33,6 +33,7 @@ paths:
   /v1/acquisitions/{requestId}/state:
     get:
       operationId: getAcquisitionState
+      description: In v1, resultPreviouslyRead becomes true after the first authenticated result read and remains true on retry.
       security: [{ completionVerifier: [] }]
       parameters: [{ $ref: "#/components/parameters/RequestId" }]
       responses: { "200": { description: Privacy-preserving state }, "401": { $ref: "#/components/responses/TypedError" } }
@@ -69,6 +70,7 @@ paths:
   /v1/acquisitions/{requestId}/result:
     get:
       operationId: getCredentialResult
+      description: Protocol v1 is idempotent for the same bound completion verifier; retries return the identical result without another state or event mutation. Other verifiers are unauthorized.
       security: [{ completionVerifier: [] }]
       parameters: [{ $ref: "#/components/parameters/RequestId" }]
       responses: { "200": { description: Independently verifiable credential and metadata } }

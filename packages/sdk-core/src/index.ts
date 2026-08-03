@@ -108,6 +108,7 @@ export {
   pkhDid,
   principalDid,
   principalDidEquals,
+  verifyEip191MessageSignature,
   type CanonicalAddress,
   type DidCacheKeyOptions,
   type DidEqualsOptions,

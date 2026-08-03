@@ -151,6 +151,7 @@ import {
   validateOwnerSharePolicyRegistrationBytes,
   type ShareDeliveryAuthorizationReceipt,
   validateShareDeliveryAuthorizationBytes,
+  verifyEip191MessageSignature,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -3136,14 +3137,29 @@ export class TinyCloudNode {
     if (strategy?.type !== "callback" || !isOpenKeyAutoSignStrategy(strategy)) return undefined;
     const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
     if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
-    const decision = await strategy.handler({
+    const request = {
       address: this.address ?? "",
       chainId: this.session?.chainId ?? this._chainId,
       message: new TextDecoder().decode(bytes),
-      type: "message",
-      purpose: "message",
-    });
-    return decision.approved ? this.signSessionBytes(bytes) : undefined;
+      type: "message" as const,
+      purpose: "message" as const,
+    };
+    const decision = await strategy.handler(request);
+    if (!decision.approved) {
+      if (decision.needsApproval) return undefined;
+      throw new Error(decision.reason ?? "OpenKey automatic credential signing was rejected");
+    }
+    if (
+      typeof decision.signature !== "string" ||
+      !(await verifyEip191MessageSignature(
+        request.message,
+        decision.signature,
+        request.address,
+      ))
+    ) {
+      throw new Error("OpenKey credential signature evidence is invalid");
+    }
+    return this.signSessionBytes(bytes);
   }
 
   /** Invoke the configured interactive approval strategy before session signing. */
@@ -3166,6 +3182,16 @@ export class TinyCloudNode {
     if (approval) {
       const decision = await approval(request);
       if (!decision.approved) throw new Error(decision.reason ?? "Credential signing was rejected");
+      if (
+        decision.signature !== undefined &&
+        !(await verifyEip191MessageSignature(
+          request.message,
+          decision.signature,
+          request.address,
+        ))
+      ) {
+        throw new Error("OpenKey credential signature evidence is invalid");
+      }
       return this.signSessionBytes(bytes);
     }
     if (strategy?.type === "auto-reject") throw new Error("Credential signing was rejected");

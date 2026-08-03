@@ -1,13 +1,13 @@
 {
   "algorithm": "sha256",
   "files": {
-    "README.md": "c970eac67f8a4114f0bf781ecf89534f5a7b00938601548de113ec45d3af3d07",
+    "README.md": "c4c8faff24de6ca5272f14f1da1c0ed0f4fafe7280ffef047be139dd944111b5",
     "acquisition.schema.json": "a67d5f9eabb7e8391f3a7327a6bb27cfed241a62f907e4453404d681057f76a3",
     "catalog.schema.json": "957c01ef3ff0b8e8fa72568ca0946f2b2ab139b520bd4d5a8be440a1fb8397a1",
     "descriptor.schema.json": "203236ebb2ad1c0971d2959488b41eafa506979658f9b8221ddb92f87214a0ae",
     "golden-holder-binding.json": "ae4bd1a09e781e8c58ed5353c79b6d5c3b0863925a398797d26efb60356aa49f",
     "golden-descriptor-digests.json": "63f7fa5ec0374270012fdb697f0c5748ef3bc7f86d4d61632e6209f5872201a5",
-    "openapi.yaml": "7707b12d554da93ce0f9f450cdaa7e915347157d15ce5640127e19926efa7453",
+    "openapi.yaml": "b5a46f6d56d9dfbdb3ab29b653a131aac453c2e51a5d9eda84c539c63b65f3bf",
     "step-registry.schema.json": "f31d48291a6131a7775b522c99a2505f36ba4a8e40a8d0fd297e6ec12a7073c1"
   }
 }

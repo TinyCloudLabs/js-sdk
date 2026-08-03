@@ -55,82 +55,129 @@ test("popup closure is observable and popup blocking is typed", async () => {
 
 test("hosted redirect journey resumes an initialized SDK once and durably stores the verified credential", async ({ page }) => {
   const driverUrl = "http://127.0.0.1:4175";
-  try {
-    const openerOrigin = "https://app.example";
-    const startResponse = await fetch(`${driverUrl}/start`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ openerOrigin }) });
-    expect(startResponse.ok).toBe(true);
-    const started = await startResponse.json() as { navigation: string; resumeState: unknown; browserCookie: string; fixtureUrl: string; interactionOrigin: string };
+  const config = await fetch(`${driverUrl}/config`).then(async (response) => {
+    expect(response.ok).toBe(true);
+    return response.json() as Promise<{
+      descriptor: CredentialFlowDescriptor;
+      fixtureBackendUrl: string;
+      hostedBackendUrl: string;
+      tinycloudBackendUrl: string;
+      ownerDid: string;
+      credentialsSpaceId: string;
+    }>;
+  });
+  let creates = 0;
+  let resultReads = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.origin !== "https://witness.credentials.org") return;
+    if (request.method() === "POST" && url.pathname === "/v1/acquisitions") creates += 1;
+    if (request.method() === "GET" && url.pathname.endsWith("/result")) resultReads += 1;
+  });
 
+  const corsRoute = async (route: any, backend: string) => {
+    const requested = new URL(route.request().url());
+    const requestOrigin = await route.request().headerValue("origin");
+    const allowOrigin = requestOrigin === "https://credentials.org"
+      ? "https://credentials.org"
+      : "https://app.example";
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({
+        status: 204,
+        headers: {
+          "access-control-allow-origin": allowOrigin,
+          "access-control-allow-credentials": "true",
+          "access-control-allow-methods": "GET,POST,OPTIONS",
+          "access-control-allow-headers": "authorization,content-type",
+        },
+      });
+      return;
+    }
+    const response = await route.fetch({
+      url: new URL(`${requested.pathname}${requested.search}`, backend).href,
+    });
+    await route.fulfill({
+      response,
+      headers: {
+        ...response.headers(),
+        "access-control-allow-origin": allowOrigin,
+        "access-control-allow-credentials": "true",
+      },
+    });
+  };
+
+  try {
     await page.route("https://app.example/**", async (route) => {
       const requested = new URL(route.request().url());
-      const response = await route.fetch({ url: new URL(`${requested.pathname}${requested.search}`, "http://localhost:4173").href });
+      const path = requested.pathname === "/" ? "/test-page.html" : requested.pathname;
+      const response = await route.fetch({ url: new URL(`${path}${requested.search}`, "http://localhost:4173").href });
       await route.fulfill({ response });
     });
     await page.route("https://credentials.org/**", async (route) => {
       const requested = new URL(route.request().url());
-      const response = await route.fetch({ url: new URL(`${requested.pathname}${requested.search}`, "http://127.0.0.1:4174").href });
+      const response = await route.fetch({ url: new URL(`${requested.pathname}${requested.search}`, config.hostedBackendUrl).href });
       await route.fulfill({ response });
     });
-    await page.route("https://witness.credentials.org/**", async (route) => {
-      const requested = new URL(route.request().url());
-      const response = await route.fetch({
-        url: new URL(`${requested.pathname}${requested.search}`, started.fixtureUrl).href,
-        headers: { ...route.request().headers(), cookie: started.browserCookie },
-      });
+    await page.route("https://witness.credentials.org/**", (route) => corsRoute(route, config.fixtureBackendUrl));
+    await page.route("https://tinycloud.test/**", (route) => corsRoute(route, config.tinycloudBackendUrl));
+    await page.route("https://ethers.test/ethers.esm.min.js", async (route) => {
       await route.fulfill({
-        response,
-        headers: {
-          ...response.headers(),
-          "access-control-allow-origin": "https://credentials.org",
-          "access-control-allow-credentials": "true",
-        },
+        path: "node_modules/ethers/dist/ethers.esm.min.js",
+        contentType: "text/javascript",
       });
     });
 
     const appUrl = "https://app.example/test-page.html";
     await page.goto(appUrl);
     await page.waitForFunction(() => (window as any).__SDK_LOADED === true);
-    const redirectStore = {
-      load: () => page.evaluate(async () => new (window as any).__TinyCloudSDK.BrowserCredentialRedirectStore().load()),
-      save: (state: unknown) => page.evaluate(async (value) => new (window as any).__TinyCloudSDK.BrowserCredentialRedirectStore().save(value), state),
-      clear: () => page.evaluate(async () => new (window as any).__TinyCloudSDK.BrowserCredentialRedirectStore().clear()),
-    };
-    await redirectStore.save(started.resumeState);
-    const interaction = new URL(started.navigation);
-    expect(interaction.origin).toBe(started.interactionOrigin);
-    expect(interaction.search).toBe("");
-    expect(interaction.hash).toBe("");
-    await page.goto(started.navigation);
+    const start = await page.evaluate((descriptor) => (window as any).startCredentialEnsure(descriptor), config.descriptor);
+    expect(start).toEqual({ initialized: true, sessionActive: true, publicEnsure: true });
+    await Promise.race([
+      page.waitForURL((next) => next.origin === "https://credentials.org"),
+      page.waitForFunction(() => (window as any).__credentialEnsureFailure !== undefined).then(async () => {
+        throw new Error(JSON.stringify(await page.evaluate(() => (window as any).__credentialEnsureFailure)));
+      }),
+    ]);
+    expect(page.url()).toMatch(/^https:\/\/credentials\.org\/credentials\/acquire\/[A-Za-z0-9_-]{32}$/);
     await page.getByLabel("Verification code").fill("246810");
     await Promise.all([
-      page.waitForURL((next) => next.origin === openerOrigin && next.pathname === "/"),
+      page.waitForURL((next) => next.origin === "https://app.example" && next.pathname === "/"),
       page.getByRole("button", { name: "Verify code" }).click(),
     ]);
 
-    await page.goto(appUrl);
     await page.waitForFunction(() => (window as any).__SDK_LOADED === true);
-    const resumeState = await redirectStore.load();
-    expect(resumeState).toBeDefined();
-    const resumeResponse = await fetch(`${driverUrl}/resume`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ openerOrigin, resumeState }) });
-    expect(resumeResponse.ok).toBe(true);
-    const resumed = await resumeResponse.json() as { status: string; claims: Record<string, unknown>; holderDid: string; activeHolderDid: string; recordOwnerDid: string; receiptOwnerDid: string; ownerDid: string; cleared: boolean };
-    expect(resumed.status).toBe("acquired");
-    expect(resumed.claims.email).toBe("fixture@example.com");
-    expect(resumed.holderDid).toBe(resumed.activeHolderDid);
-    expect(resumed.recordOwnerDid).toBe(resumed.ownerDid);
-    expect(resumed.receiptOwnerDid).toBe(resumed.ownerDid);
-    expect(resumed.cleared).toBe(true);
-    await redirectStore.clear();
-    expect(await redirectStore.load()).toBeUndefined();
-    expect(await redirectStore.load()).toBeUndefined();
-    const durableResponse = await fetch(`${driverUrl}/durable`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ openerOrigin }) });
-    expect(durableResponse.ok).toBe(true);
-    const durable = await durableResponse.json() as { status: string; creates: number; resultReads: number; autoSignAttempts: number; approvalCount: number };
-    expect(durable.status).toBe("reused");
-    expect(durable.creates).toBe(1);
-    expect(durable.resultReads).toBe(1);
-    expect(durable.autoSignAttempts).toBe(1);
-    expect(durable.approvalCount).toBe(1);
+    const resumed = await page.evaluate(
+      ({ descriptor, ownerDid }) => (window as any).resumeCredentialEnsure(descriptor, ownerDid),
+      { descriptor: config.descriptor, ownerDid: config.ownerDid },
+    );
+    expect(resumed).toMatchObject({
+      initialized: true,
+      sessionActive: true,
+      publicEnsure: true,
+      redirectStoreType: "BrowserCredentialRedirectStore",
+      continuationPresent: true,
+      firstClear: true,
+      secondClear: true,
+      acquiredStatus: "acquired",
+      reusedStatus: "reused",
+      claimVerified: true,
+      holderVerified: true,
+      ownerVerified: true,
+      receiptVerified: true,
+      readbackVerified: true,
+    });
+    expect(resumed.walletSignCount).toBeGreaterThanOrEqual(1);
+    expect(resumed.progress).toEqual(expect.arrayContaining(["checking", "signing", "verifying", "saving", "success"]));
+    expect(creates).toBe(1);
+    expect(resultReads).toBe(1);
+    const stats = await fetch(`${driverUrl}/stats`).then((response) => response.json()) as {
+      signedInvocation: boolean;
+      kvReads: number;
+      kvWrites: number;
+    };
+    expect(stats.signedInvocation).toBe(true);
+    expect(stats.kvWrites).toBeGreaterThanOrEqual(2);
+    expect(stats.kvReads).toBeGreaterThanOrEqual(2);
   } finally {
     await page.unrouteAll({ behavior: "ignoreErrors" });
   }

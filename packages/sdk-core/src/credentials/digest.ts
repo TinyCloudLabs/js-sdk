@@ -1,17 +1,19 @@
 import { jcsCanonicalize } from "../policy/jcs";
 
 export function encodeBase64Url(bytes: Uint8Array): string {
-  if (typeof Buffer !== "undefined") return Buffer.from(bytes).toString("base64url");
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  if (typeof btoa === "function") {
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+  return Buffer.from(bytes).toString("base64url");
 }
 
 export function decodeBase64Url(value: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]*$/.test(value) || value.length % 4 === 1) throw new TypeError("value is not canonical base64url");
-  const bytes = typeof Buffer !== "undefined"
-    ? new Uint8Array(Buffer.from(value, "base64url"))
-    : Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
+  const bytes = typeof atob === "function"
+    ? Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=")), (c) => c.charCodeAt(0))
+    : new Uint8Array(Buffer.from(value, "base64url"));
   if (encodeBase64Url(bytes) !== value) throw new TypeError("value is not canonical base64url");
   return bytes;
 }
