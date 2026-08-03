@@ -24,7 +24,7 @@ test("uses the connector's EIP-1193 provider as the TinyCloud driver", async () 
   expect(driver).not.toBe(walletClient.transport);
   expect(typeof driver.request).toBe("function");
   await expect(
-    driver.request({ method: "eth_chainId", params: [] }),
+    driver.request({ method: "eth_chainId" }),
   ).resolves.toBe("0x1");
 });
 
