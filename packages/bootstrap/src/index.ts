@@ -587,13 +587,44 @@ export function composeBootstrapSpaceManifest(
   });
 }
 
+const ACCOUNT_BOOTSTRAP_SUPPORT_RESOURCES: readonly ResourceCapability[] = [
+  {
+    service: "tinycloud.kv",
+    space: ACCOUNT_REGISTRY_SPACE,
+    path: "system/bootstrap/complete",
+    actions: [KV.GET, KV.PUT],
+  },
+  {
+    service: "tinycloud.sql",
+    space: ACCOUNT_REGISTRY_SPACE,
+    path: "account",
+    actions: [SQL.READ, SQL.WRITE, SQL.SCHEMA],
+  },
+];
+
+export const BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST =
+  composeBootstrapSpaceManifest(BOOTSTRAP_DEFAULT_SPACE);
+
+const BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST: ComposedManifestRequest = {
+  ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
+  resources: [
+    ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST.resources,
+    ...ACCOUNT_BOOTSTRAP_SUPPORT_RESOURCES.map((resource) => ({
+      ...resource,
+      actions: [...resource.actions],
+    })),
+  ],
+};
+
 export const BOOTSTRAP_SESSION_REQUESTS: Readonly<
   Record<BootstrapSpaceName, ComposedManifestRequest>
 > = Object.freeze(
   Object.fromEntries(
     BOOTSTRAP_SPACE_NAMES.map((space) => [
       space,
-      composeBootstrapSpaceManifest(space),
+      space === BOOTSTRAP_DEFAULT_SPACE
+        ? BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST
+        : composeBootstrapSpaceManifest(space),
     ]),
   ) as Record<BootstrapSpaceName, ComposedManifestRequest>,
 );

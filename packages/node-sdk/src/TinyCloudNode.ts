@@ -91,6 +91,7 @@ import {
   UnsupportedFeatureError,
   makePublicSpaceId,
   ACCOUNT_REGISTRY_SPACE,
+  BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
   BOOTSTRAP_SESSION_REQUESTS,
   SECRET_RECORDS_SCHEMA,
   SECRETS_SPACE,
@@ -680,7 +681,7 @@ export interface TinyCloudNodeConfig {
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
   capabilityRequest?: ComposedManifestRequest;
-  /** Include implicit account registry permissions when composing `manifest`. Default true. */
+  /** Include account bootstrap support in plain sessions and implicit manifest permissions. Default true. */
   includeAccountRegistryPermissions?: boolean;
   /** Run canonical first-account bootstrap when fresh account state is detected. Default true. */
   autoBootstrapAccount?: boolean;
@@ -1264,7 +1265,9 @@ export class TinyCloudNode {
       siweConfig: config.siweConfig,
       manifest: useBootstrapSignInRequest ? undefined : config.manifest,
       capabilityRequest: useBootstrapSignInRequest
-        ? BOOTSTRAP_SESSION_REQUESTS.default
+        ? config.includeAccountRegistryPermissions === false
+          ? BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST
+          : BOOTSTRAP_SESSION_REQUESTS.default
         : config.capabilityRequest,
       includeAccountRegistryPermissions: useBootstrapSignInRequest
         ? false
@@ -1654,31 +1657,16 @@ export class TinyCloudNode {
     }
 
     try {
-      const defaultSpaceId = this.ownedSpaceId("default");
+      const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
       const markerPermission: PermissionEntry = {
         service: "tinycloud.kv",
-        space: defaultSpaceId,
+        space: accountSpaceId,
         path: BOOTSTRAP_COMPLETION_MARKER_KEY,
         actions: ["get"],
       };
 
       if (!this.hasRuntimePermissions([markerPermission])) {
-        const session = await auth.createBootstrapSession({
-          spaceId: defaultSpaceId,
-          capabilityRequest: BOOTSTRAP_SESSION_REQUESTS.default,
-        });
-        const host = this.hosts[0] ?? this.config.host;
-        if (!host) {
-          throw new Error("Account bootstrap requires a TinyCloud host");
-        }
-        const activated = await activateSessionWithHost(host, session.delegationHeader);
-        if (!activated.success) {
-          if (activated.status === 404) {
-            return { action: "run", mode: "fresh" };
-          }
-          throw new Error(`Failed to activate bootstrap probe session: ${activated.error ?? "unknown error"}`);
-        }
-        this.registerBootstrapRuntimeGrant(session, BOOTSTRAP_SESSION_REQUESTS.default);
+        return { action: "run", mode: "repair" };
       }
 
       const marker = await this.readBootstrapCompletionMarker();
@@ -1696,16 +1684,15 @@ export class TinyCloudNode {
         return { action: "run", mode: "fresh" };
       }
     } catch (err) {
-      // Probe and transport failures are unknown state: make one bounded,
-      // idempotent repair attempt instead of treating them as provisioned.
-      // Emit this separately from the repair result: if the repair succeeds,
-      // or fails for another reason, callers must still be able to diagnose
-      // the original decision failure.
+      // Marker decision and transport failures are unknown state: make one
+      // bounded, idempotent repair attempt instead of treating them as
+      // provisioned. Emit this separately from the repair result so callers
+      // can diagnose the original decision failure.
       const reason = err instanceof Error ? err.message : String(err);
       this.notificationHandler.warning(
-        `Account bootstrap probe failed; attempting one bounded repair: ${reason}`,
+        `Account bootstrap decision failed; attempting one bounded repair: ${reason}`,
       );
-      console.warn(`[TinyCloudNode] account bootstrap probe failed: ${reason}`);
+      console.warn(`[TinyCloudNode] account bootstrap decision failed: ${reason}`);
       return { action: "run", mode: "repair" };
     }
 
@@ -1713,7 +1700,7 @@ export class TinyCloudNode {
   }
 
   private async readBootstrapCompletionMarker() {
-    return this.kvForSpace(this.ownedSpaceId("default")).get<unknown>(
+    return this.kvForSpace(this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE)).get<unknown>(
       BOOTSTRAP_COMPLETION_MARKER_KEY,
     );
   }
@@ -1738,7 +1725,7 @@ export class TinyCloudNode {
       stepIds: [...canonicalStepIds],
       completedAt: new Date().toISOString(),
     };
-    const written = await this.kvForSpace(this.ownedSpaceId("default")).put(
+    const written = await this.kvForSpace(this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE)).put(
       BOOTSTRAP_COMPLETION_MARKER_KEY,
       marker,
     );
@@ -3190,7 +3177,9 @@ export class TinyCloudNode {
       siweConfig: this.config.siweConfig,
       manifest: useBootstrapSignInRequest ? undefined : this.config.manifest,
       capabilityRequest: useBootstrapSignInRequest
-        ? BOOTSTRAP_SESSION_REQUESTS.default
+        ? this.config.includeAccountRegistryPermissions === false
+          ? BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST
+          : BOOTSTRAP_SESSION_REQUESTS.default
         : this.config.capabilityRequest,
       includeAccountRegistryPermissions: useBootstrapSignInRequest
         ? false
@@ -3257,7 +3246,9 @@ export class TinyCloudNode {
       siweConfig: this.config.siweConfig,
       manifest: useBootstrapSignInRequest ? undefined : this.config.manifest,
       capabilityRequest: useBootstrapSignInRequest
-        ? BOOTSTRAP_SESSION_REQUESTS.default
+        ? this.config.includeAccountRegistryPermissions === false
+          ? BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST
+          : BOOTSTRAP_SESSION_REQUESTS.default
         : this.config.capabilityRequest,
       includeAccountRegistryPermissions: useBootstrapSignInRequest
         ? false

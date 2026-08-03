@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
-  BOOTSTRAP_SESSION_REQUESTS,
   ErrorCodes,
   KVService,
   bootstrapSteps,
@@ -44,6 +43,7 @@ class FakeCloud {
   readonly sessions = new Set<string>();
   readonly activatedSpaces = new Set<string>();
   readonly kv = new Map<string, unknown>();
+  readonly markerKey = `tinycloud:pkh:eip155:1:${ADDRESS}:account/${BOOTSTRAP_COMPLETION_MARKER_KEY}`;
   readonly registry = new Map<string, object>();
   readonly appRecords = new Map<string, object>();
   readonly schemasApplied = new Set<string>();
@@ -144,26 +144,6 @@ test("a marker-read error runs one repair decision instead of skipping", async (
   await expect(resolve.call(node, bootstrapSteps(ADDRESS, 1))).resolves.toEqual({
     action: "run",
     mode: "repair",
-  });
-});
-
-test("a probe activation 404 runs the fresh bootstrap decision", async () => {
-  const node = makeNode();
-  Reflect.set(node, "auth", {
-    lastActivationSkippedSpaceIds: [],
-    createBootstrapSession: async () => ({
-      delegationHeader: { Authorization: "Bearer bootstrap-probe" },
-    }),
-  });
-  Reflect.set(node, "hasRuntimePermissions", () => false);
-  globalThis.fetch = async () => new Response("missing", { status: 404 });
-  const resolve = Reflect.get(node, "resolveBootstrapDecision") as (
-    steps: BootstrapStep[],
-  ) => Promise<unknown>;
-
-  await expect(resolve.call(node, bootstrapSteps(ADDRESS, 1))).resolves.toEqual({
-    action: "run",
-    mode: "fresh",
   });
 });
 
@@ -293,15 +273,15 @@ function makeRecoveryHarness(fake: FakeCloud): TinyCloudNode {
         { meta: { status: 404 } },
       ));
     }
-    if (!fake.kv.has(BOOTSTRAP_COMPLETION_MARKER_KEY)) {
+    if (!fake.kv.has(fake.markerKey)) {
       return err(serviceError(ErrorCodes.KV_NOT_FOUND, "Key not found", "kv"));
     }
-    return { ok: true as const, data: { data: fake.kv.get(BOOTSTRAP_COMPLETION_MARKER_KEY) } };
+    return { ok: true, data: { data: fake.kv.get(fake.markerKey) } };
   });
   Reflect.set(node, "writeBootstrapCompletionMarker", async (steps: BootstrapStep[]) => {
     const ids = steps.map((step) => step.id);
     fake.at(MARKER_STEP, () => {
-      fake.kv.set(BOOTSTRAP_COMPLETION_MARKER_KEY, {
+      fake.kv.set(fake.markerKey, {
         v: BOOTSTRAP_COMPLETION_MARKER_VERSION,
         stepIds: ids,
         completedAt: "2000-01-01T00:00:00.000Z",
@@ -381,7 +361,7 @@ describe("TC-393 bootstrap recovery matrix", () => {
 
       await node.signIn();
       expect(node.bootstrapStatus.skipped).toBe(true);
-      expect(fake.kv.has(BOOTSTRAP_COMPLETION_MARKER_KEY)).toBe(false);
+      expect(fake.kv.has(fake.markerKey)).toBe(false);
 
       fake.fault = undefined;
       const callsBeforeRepair = fake.ceremonyCallCount();
@@ -389,7 +369,7 @@ describe("TC-393 bootstrap recovery matrix", () => {
       expect(node.bootstrapStatus).toEqual({ skipped: false });
       expect(fake.ceremonyCallCount()).toBeGreaterThan(callsBeforeRepair);
       fake.completeArtifacts(bootstrapSteps(ADDRESS, 1));
-      expect(fake.kv.get(BOOTSTRAP_COMPLETION_MARKER_KEY)).toEqual(expect.objectContaining({
+      expect(fake.kv.get(fake.markerKey)).toEqual(expect.objectContaining({
         v: 1,
         stepIds: canonicalStepIds(),
       }));
@@ -412,7 +392,7 @@ describe("TC-393 bootstrap recovery matrix", () => {
       makePublicSignIn(node);
 
       await node.signIn();
-      expect(fake.kv.has(BOOTSTRAP_COMPLETION_MARKER_KEY)).toBe(false);
+      expect(fake.kv.has(fake.markerKey)).toBe(false);
       fake.fault = undefined;
       await node.signIn();
       fake.completeArtifacts(bootstrapSteps(ADDRESS, 1));
@@ -428,7 +408,7 @@ describe("TC-393 bootstrap recovery matrix", () => {
 
     await node.signIn();
     expect(node.bootstrapStatus.skipped).toBe(true);
-    expect(fake.kv.has(BOOTSTRAP_COMPLETION_MARKER_KEY)).toBe(false);
+    expect(fake.kv.has(fake.markerKey)).toBe(false);
     fake.fault = undefined;
     await node.signIn();
     expect(node.bootstrapStatus).toEqual({ skipped: false });
@@ -444,7 +424,7 @@ describe("TC-393 bootstrap recovery matrix", () => {
 
     await node.signIn();
     expect(node.bootstrapStatus.skipped).toBe(true);
-    expect(fake.kv.has(BOOTSTRAP_COMPLETION_MARKER_KEY)).toBe(true);
+    expect(fake.kv.has(fake.markerKey)).toBe(true);
     fake.fault = undefined;
     const calls = fake.ceremonyCallCount();
     await node.signIn();
@@ -502,7 +482,7 @@ describe("TC-393 recovery decisions and convergence", () => {
         kind: "batch-write-reconciled",
       })],
     });
-    expect(fake.kv.has(BOOTSTRAP_COMPLETION_MARKER_KEY)).toBe(true);
+    expect(fake.kv.has(fake.markerKey)).toBe(true);
   });
 
   test("an ambiguous seed batch which surfaces as a failure converges on the next run", async () => {
@@ -513,7 +493,7 @@ describe("TC-393 recovery decisions and convergence", () => {
 
     await bootstrap(node);
     expect(node.bootstrapStatus.skipped).toBe(true);
-    expect(fake.kv.has(BOOTSTRAP_COMPLETION_MARKER_KEY)).toBe(false);
+    expect(fake.kv.has(fake.markerKey)).toBe(false);
     fake.fault = undefined;
     await bootstrap(node);
     fake.completeArtifacts(bootstrapSteps(ADDRESS, 1));
@@ -530,7 +510,7 @@ describe("TC-393 recovery decisions and convergence", () => {
       applications: [...fake.appRecords.entries()],
       schemas: [...fake.schemasApplied].sort(),
     };
-    fake.kv.delete(BOOTSTRAP_COMPLETION_MARKER_KEY);
+    fake.kv.delete(fake.markerKey);
     await bootstrap(node);
 
     expect([...fake.registry.entries()]).toEqual(first.registry);
@@ -550,7 +530,7 @@ describe("TC-393 recovery decisions and convergence", () => {
       const fake = new FakeCloud();
       const node = makeRecoveryHarness(fake);
       fake.hostedSpaces.add(bootstrapSpaceId("default"));
-      fake.kv.set(BOOTSTRAP_COMPLETION_MARKER_KEY, marker);
+      fake.kv.set(fake.markerKey, marker);
       installActivationTransport(fake);
       await bootstrap(node);
       expect(node.bootstrapStatus.skipped).toBe(false);
@@ -559,135 +539,9 @@ describe("TC-393 recovery decisions and convergence", () => {
     const fake = new FakeCloud();
     const node = makeRecoveryHarness(fake);
     fake.hostedSpaces.add(bootstrapSpaceId("default"));
-    fake.kv.set(BOOTSTRAP_COMPLETION_MARKER_KEY, { v: 1, stepIds: ["future:renamed"] });
+    fake.kv.set(fake.markerKey, { v: 1, stepIds: ["future:renamed"] });
     await bootstrap(node);
     expect(node.bootstrapStatus).toEqual({ skipped: true, reason: "already-provisioned" });
-  });
-
-  test("a custom-prefix session probes before marker get and repairs a missing tail", async () => {
-    const fake = new FakeCloud();
-    const node = makeRecoveryHarness(fake);
-    const grants: FakeSession[] = [];
-    const events: string[] = [];
-    const probeRequests: unknown[] = [];
-    const auth = Reflect.get(node, "auth") as {
-      createBootstrapSession: (input: { spaceId: string; capabilityRequest: unknown }) => Promise<FakeSession>;
-    };
-    const createSession = auth.createBootstrapSession;
-    auth.createBootstrapSession = async (input) => {
-      probeRequests.push(input.capabilityRequest);
-      return createSession(input);
-    };
-    const readMarker = Reflect.get(node, "readBootstrapCompletionMarker") as () => Promise<unknown>;
-    Reflect.set(node, "readBootstrapCompletionMarker", async () => {
-      events.push("marker:get");
-      return readMarker.call(node);
-    });
-    Reflect.set(node, "hasRuntimePermissions", () => false);
-    Reflect.set(node, "registerBootstrapRuntimeGrant", (session: FakeSession) => {
-      grants.push(session);
-      events.push("grant");
-    });
-    for (const step of bootstrapSteps(ADDRESS, 1)) {
-      if (step.kind === "host") fake.hostedSpaces.add(step.spaceId);
-      if (step.kind === "seed-spaces") {
-        for (const space of step.spaces) fake.registry.set(space.spaceId, { ...space });
-      }
-    }
-    installActivationTransport(fake);
-
-    const runner = Reflect.get(node, "runAccountBootstrap") as (
-      steps: BootstrapStep[],
-      options: { mode: "fresh" | "repair" },
-    ) => Promise<unknown>;
-    const runSpy = mock((steps: BootstrapStep[], options: { mode: "fresh" | "repair" }) =>
-      runner.call(node, steps, options));
-    Reflect.set(node, "runAccountBootstrap", runSpy);
-
-    await bootstrap(node);
-
-    expect(grants).toHaveLength(6); // probe plus the five ceremony sessions
-    expect(fake.callCount("marker:get")).toBe(1);
-    expect(fake.callCount("account:seed-applications")).toBe(1);
-    expect(node.bootstrapStatus.skipped).toBe(false);
-    expect(probeRequests[0]).toEqual(BOOTSTRAP_SESSION_REQUESTS.default);
-    expect(events.indexOf("grant")).toBeLessThan(events.indexOf("marker:get"));
-
-    await bootstrap(node);
-
-    expect(node.bootstrapStatus).toEqual({ skipped: true, reason: "already-provisioned" });
-    expect(runSpy).toHaveBeenCalledTimes(1);
-    expect(fake.callCount("marker:get")).toBe(2);
-    expect(grants).toHaveLength(7); // one additional probe grant, no repair ceremony
-  });
-
-  for (const outcome of ["signature rejection", "transport throw", "non-404 activation"] as const) {
-    test(`probe ${outcome} resolves sign-in bootstrap as one repair attempt`, async () => {
-      const fake = new FakeCloud();
-      const node = makeRecoveryHarness(fake);
-      const auth = Reflect.get(node, "auth") as {
-        createBootstrapSession: (input: { spaceId: string }) => Promise<FakeSession>;
-      };
-      Reflect.set(node, "hasRuntimePermissions", () => false);
-      if (outcome === "signature rejection") {
-        auth.createBootstrapSession = async () => { throw new Error("signature rejected"); };
-      } else {
-        globalThis.fetch = async () => {
-          if (outcome === "transport throw") throw new Error("transport down");
-          return new Response("nope", { status: 500 });
-        };
-      }
-      const runner = Reflect.get(node, "runAccountBootstrap") as (
-        steps: BootstrapStep[],
-        options: { mode: "fresh" | "repair" },
-      ) => Promise<unknown>;
-      const runSpy = mock((steps: BootstrapStep[], options: { mode: "fresh" | "repair" }) =>
-        runner.call(node, steps, options));
-      Reflect.set(node, "runAccountBootstrap", runSpy);
-
-      makePublicSignIn(node);
-      await expect(node.signIn()).resolves.toBeUndefined();
-
-      expect(runSpy).toHaveBeenCalledTimes(1);
-      expect(runSpy.mock.calls[0]![1]).toEqual({ mode: "repair" });
-      expect(node.bootstrapStatus.skipped).toBe(true);
-      expect(node.bootstrapStatus.reason).not.toBe("already-provisioned");
-      expect(fake.kv.has(BOOTSTRAP_COMPLETION_MARKER_KEY)).toBe(false);
-    });
-  }
-
-  test("emits the probe failure even when its bounded repair fails differently", async () => {
-    const fake = new FakeCloud();
-    const node = makeRecoveryHarness(fake);
-    const warnings: string[] = [];
-    const auth = Reflect.get(node, "auth") as {
-      createBootstrapSession: () => Promise<FakeSession>;
-    };
-    Reflect.set(node, "notificationHandler", {
-      warning(message: string) {
-        warnings.push(message);
-      },
-    });
-    Reflect.set(node, "hasRuntimePermissions", () => false);
-    auth.createBootstrapSession = async () => {
-      throw new Error("probe signer unavailable");
-    };
-    const runSpy = mock(async () => {
-      throw new Error("repair storage unavailable");
-    });
-    Reflect.set(node, "runAccountBootstrap", runSpy);
-
-    await bootstrap(node);
-
-    expect(runSpy).toHaveBeenCalledTimes(1);
-    expect(node.bootstrapStatus).toEqual({
-      skipped: true,
-      reason: "repair storage unavailable",
-    });
-    expect(warnings).toContain(
-      "Account bootstrap probe failed; attempting one bounded repair: probe signer unavailable",
-    );
-    expect(warnings).toContain("Account bootstrap did not complete: repair storage unavailable");
   });
 
   test("interactive signer remains skipped without reading a marker", async () => {
@@ -704,11 +558,11 @@ describe("TC-393 recovery decisions and convergence", () => {
     expect(signMessage).not.toHaveBeenCalled();
   });
 
-  test("generic OpenKey auto-sign uses the marked fast path without a probe", async () => {
+  test("generic OpenKey auto-sign uses the marked fast path", async () => {
     const fake = new FakeCloud();
     const node = makeRecoveryHarness(fake);
     fake.hostedSpaces.add(bootstrapSpaceId("default"));
-    fake.kv.set(BOOTSTRAP_COMPLETION_MARKER_KEY, { v: 1, stepIds: canonicalStepIds() });
+    fake.kv.set(fake.markerKey, { v: 1, stepIds: canonicalStepIds() });
     const config = Reflect.get(node, "config") as { signStrategy?: { openKeyAutoSign: boolean } };
     config.signStrategy = { openKeyAutoSign: true };
 

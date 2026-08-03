@@ -24,7 +24,12 @@ import type {
   ServiceSession,
 } from "@tinycloud/sdk-core";
 import { TinyCloudNode } from "./TinyCloudNode";
-import { createOpenKeyCallbackSigningStrategy, ServiceContext } from "@tinycloud/sdk-core";
+import {
+  BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
+  BOOTSTRAP_SESSION_REQUESTS,
+  createOpenKeyCallbackSigningStrategy,
+  ServiceContext,
+} from "@tinycloud/sdk-core";
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -262,6 +267,27 @@ describe("bootstrap gate — non-interactive config (autoBootstrapAccount=false)
 // ---------------------------------------------------------------------------
 
 describe("bootstrap gate — OpenKey auto-sign strategy", () => {
+  test("selects the widened request unless account permissions are explicitly disabled", () => {
+    const openKeyStrategy = createOpenKeyCallbackSigningStrategy({
+      endpoint: "https://openkey.test/api/delegate/sign",
+    });
+    const makeNode = (includeAccountRegistryPermissions?: boolean) => new TinyCloudNode({
+      wasmBindings: makeFakeWasmBindings(),
+      signer: makeExternalSigner(),
+      signStrategy: openKeyStrategy,
+      host: "https://tinycloud.test",
+      ...(includeAccountRegistryPermissions === undefined
+        ? {}
+        : { includeAccountRegistryPermissions }),
+    });
+
+    expect(Reflect.get(Reflect.get(makeNode(), "auth"), "capabilityRequest")).toBe(BOOTSTRAP_SESSION_REQUESTS.default);
+    expect(Reflect.get(Reflect.get(makeNode(true), "auth"), "capabilityRequest")).toBe(BOOTSTRAP_SESSION_REQUESTS.default);
+    expect(Reflect.get(Reflect.get(makeNode(false), "auth"), "capabilityRequest")).toBe(
+      BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
+    );
+  });
+
   test("does not skip bootstrap on fresh account", async () => {
     const wasm = makeFakeWasmBindings();
 

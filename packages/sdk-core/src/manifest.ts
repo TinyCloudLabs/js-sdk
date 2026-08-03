@@ -1279,6 +1279,23 @@ function accountRegistryIndexPermission(): ResourceCapability {
 }
 
 /**
+ * Native node containment treats a path as covering slash-delimited
+ * descendants (tinycloud-auth/src/resource.rs:193-209), while sdk-core's
+ * subset model treats a no-slash path as exact. This exact marker cannot reach
+ * registry records in sdk-core; native containment may still cover
+ * `system/bootstrap/complete/...`, which does not make a broader grant
+ * representable here.
+ */
+function accountBootstrapMarkerPermission(): ResourceCapability {
+  return {
+    service: "tinycloud.kv",
+    space: ACCOUNT_REGISTRY_SPACE,
+    path: "system/bootstrap/complete",
+    actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+  };
+}
+
+/**
  * Compose one or more manifests into the single capability request that should
  * be signed. Fetching manifests is intentionally out of band; callers pass the
  * already-loaded manifest objects.
@@ -1308,6 +1325,7 @@ export function composeManifestRequest(
   if (includeAccountRegistryPermissions) {
     resources.push(...accountRegistryPermissions());
     resources.push(accountRegistryIndexPermission());
+    resources.push(accountBootstrapMarkerPermission());
   }
   const resourcesWithImplicitCapabilities =
     withCapabilitiesReadForSpaces(resources);

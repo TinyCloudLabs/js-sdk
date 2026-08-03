@@ -41,6 +41,7 @@ import {
   extractRecapAttenuations,
   unauthorizedRecapCapabilities,
   parseCanonicalRecapResource,
+  ACCOUNT_REGISTRY_SPACE,
   KV,
   SQL,
   DUCKDB,
@@ -618,23 +619,40 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const defaultNetworkId = this.defaultEncryptionNetworkId(address, chainId);
       const primarySpaceId = makePkhSpaceId(address, chainId, this.spacePrefix);
       const secretsSpaceId = makePkhSpaceId(address, chainId, "secrets");
+      const spaceAbilities: Record<string, AbilitiesMap> = {
+        [primarySpaceId]: this.defaultActions,
+        [secretsSpaceId]: {
+          kv: {
+            "vault/secrets/": [
+              KV.GET,
+              KV.PUT,
+              KV.DEL,
+              KV.LIST,
+              KV.METADATA,
+            ],
+          },
+        },
+      };
+      // Plain sessions need only the exact completion marker and the account
+      // index's productive SQL actions. Do not duplicate this map when the
+      // primary space itself is `account`.
+      if (
+        this.includeAccountRegistryPermissions &&
+        this.spacePrefix !== ACCOUNT_REGISTRY_SPACE
+      ) {
+        spaceAbilities[makePkhSpaceId(address, chainId, ACCOUNT_REGISTRY_SPACE)] = {
+          kv: {
+            "system/bootstrap/complete": [KV.GET, KV.PUT],
+          },
+          sql: {
+            account: [SQL.READ, SQL.WRITE, SQL.SCHEMA],
+          },
+        };
+      }
       return {
         abilities: this.defaultActions,
         spaceId: primarySpaceId,
-        spaceAbilities: {
-          [primarySpaceId]: this.defaultActions,
-          [secretsSpaceId]: {
-            kv: {
-              "vault/secrets/": [
-                KV.GET,
-                KV.PUT,
-                KV.DEL,
-                KV.LIST,
-                KV.METADATA,
-              ],
-            },
-          },
-        },
+        spaceAbilities,
         rawAbilities: {
           [defaultNetworkId]: [DECRYPT_ACTION, NETWORK_CREATE_ACTION],
         },

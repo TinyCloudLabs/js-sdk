@@ -509,6 +509,22 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     expect(cfg.spaceAbilities[secretsSpaceId!].kv["vault/secrets/"]).toContain(
       "tinycloud.kv/get",
     );
+    const accountSpaceId = Object.keys(cfg.spaceAbilities).find((spaceId) =>
+      spaceId.endsWith(":account"),
+    );
+    expect(accountSpaceId).toBeDefined();
+    expect(cfg.spaceAbilities[accountSpaceId!]).toEqual({
+      kv: {
+        "system/bootstrap/complete": ["tinycloud.kv/get", "tinycloud.kv/put"],
+      },
+      sql: {
+        account: [
+          "tinycloud.sql/read",
+          "tinycloud.sql/write",
+          "tinycloud.sql/schema",
+        ],
+      },
+    });
   });
 
   test("manifest with app permissions → recap reflects manifest", async () => {
@@ -620,6 +636,10 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
             "tinycloud.kv/get",
             "tinycloud.kv/put",
             "tinycloud.kv/list",
+          ],
+          "system/bootstrap/complete": [
+            "tinycloud.kv/get",
+            "tinycloud.kv/put",
           ],
         },
         sql: {

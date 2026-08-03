@@ -966,6 +966,20 @@ describe("resolveManifest — end-to-end composition", () => {
     ]);
   });
 
+  it("adds exact bootstrap marker coverage to implicit account permissions", () => {
+    const request = composeManifestRequest([
+      { app_id: "com.listen.app", name: "Listen", defaults: false },
+    ]);
+
+    expect(request.resources).toContainEqual({
+      service: "tinycloud.kv",
+      space: "account",
+      path: "system/bootstrap/complete",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+    });
+    expect(request.resources.some((resource) => resource.path === "system/bootstrap/")).toBe(false);
+  });
+
   it("can omit implicit account registry permissions", () => {
     const request = composeManifestRequest(
       [{ app_id: "com.listen.app", name: "Listen", defaults: false }],
