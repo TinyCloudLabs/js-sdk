@@ -34,6 +34,7 @@ const FORBIDDEN_TINYCLOUD_OPTIONS = [
   "sessionStorageKeyPrefix",
   "includeAccountRegistryPermissions",
   "autoCreateSpace",
+  "autoBootstrapAccount",
   "spaceCreationHandler",
   "spacePrefix",
   "kvPrefix",
@@ -54,6 +55,7 @@ type CoordinationOsControlledConfig =
   | "sessionStorageKeyPrefix"
   | "includeAccountRegistryPermissions"
   | "autoCreateSpace"
+  | "autoBootstrapAccount"
   | "spaceCreationHandler"
   | "spacePrefix"
   | "kvPrefix";
@@ -437,6 +439,7 @@ export async function establishOpenKeySession(
     ),
     includeAccountRegistryPermissions: false,
     autoCreateSpace: false,
+    autoBootstrapAccount: false,
     persistSession: true,
     sessionStorageKeyPrefix: SESSION_STORAGE_KEY_PREFIX,
     domain,
