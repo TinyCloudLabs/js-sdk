@@ -10512,10 +10512,10 @@ var require_decrypt_transport_response_error = __commonJS({
     var __toCommonJS = (mod3) => __copyProps2(__defProp4({}, "__esModule", { value: true }), mod3);
     var DecryptTransportResponseError_exports = {};
     __export4(DecryptTransportResponseError_exports, {
-      DecryptTransportResponseError: () => DecryptTransportResponseError4
+      DecryptTransportResponseError: () => DecryptTransportResponseError2
     });
     module.exports = __toCommonJS(DecryptTransportResponseError_exports);
-    var DecryptTransportResponseError4 = class extends Error {
+    var DecryptTransportResponseError2 = class extends Error {
       constructor(status, permissionHint) {
         super("Node decrypt request failed");
         this.status = status;
@@ -11764,16 +11764,16 @@ function ensureNetworkUsableForDecrypt(descriptor) {
     })
   };
 }
-function encryptToNetwork(crypto23, input) {
+function encryptToNetwork(crypto22, input) {
   parseNetworkId(input.networkId);
   const alg = input.alg ?? DEFAULT_ENCRYPTION_ALG;
   const keyVersion = input.keyVersion ?? DEFAULT_KEY_VERSION;
-  const symmetricKey = crypto23.randomBytes(32);
-  const ciphertext = crypto23.authEncrypt(symmetricKey, input.plaintext, input.aad);
-  const wrapped = crypto23.sealToNetworkKey(input.networkPublicKey, symmetricKey);
+  const symmetricKey = crypto22.randomBytes(32);
+  const ciphertext = crypto22.authEncrypt(symmetricKey, input.plaintext, input.aad);
+  const wrapped = crypto22.sealToNetworkKey(input.networkPublicKey, symmetricKey);
   const encryptedSymmetricKey = base64Encode2(wrapped);
   const encryptedSymmetricKeyHash = canonicalHashHex(
-    crypto23.sha256,
+    crypto22.sha256,
     encryptedSymmetricKey
   );
   const envelope = {
@@ -11789,7 +11789,7 @@ function encryptToNetwork(crypto23, input) {
   };
   return { envelope, symmetricKey };
 }
-function validateEnvelope(crypto23, envelope) {
+function validateEnvelope(crypto22, envelope) {
   if (envelope === null || typeof envelope !== "object") {
     return {
       ok: false,
@@ -11845,7 +11845,7 @@ function validateEnvelope(crypto23, envelope) {
       })
     };
   }
-  const expectedHash = canonicalHashHex(crypto23.sha256, e.encryptedSymmetricKey);
+  const expectedHash = canonicalHashHex(crypto22.sha256, e.encryptedSymmetricKey);
   if (expectedHash !== e.encryptedSymmetricKeyHash) {
     return {
       ok: false,
@@ -11857,10 +11857,10 @@ function validateEnvelope(crypto23, envelope) {
   }
   return { ok: true, data: e };
 }
-function decryptEnvelopeWithKey(crypto23, envelope, symmetricKey) {
+function decryptEnvelopeWithKey(crypto22, envelope, symmetricKey) {
   const ciphertext = base64Decode2(envelope.ciphertext);
   const aad = envelope.aad !== void 0 ? base64Decode2(envelope.aad) : void 0;
-  return crypto23.authDecrypt(symmetricKey, ciphertext, aad);
+  return crypto22.authDecrypt(symmetricKey, ciphertext, aad);
 }
 function buildCanonicalDecryptRequest(input) {
   const canonicalBody = canonicalize(input.body);
@@ -11894,7 +11894,7 @@ function buildDecryptFacts(input) {
     keyVersion: input.body.keyVersion
   };
 }
-function checkDecryptInvocationInput(crypto23, input) {
+function checkDecryptInvocationInput(crypto22, input) {
   if (input.body.type !== DECRYPT_FACT_TYPE) {
     return {
       ok: false,
@@ -11999,7 +11999,7 @@ function checkDecryptInvocationInput(crypto23, input) {
   const canonicalBody = canonicalize(
     input.body
   );
-  const expectedBodyHash = canonicalHashHex(crypto23.sha256, input.body);
+  const expectedBodyHash = canonicalHashHex(crypto22.sha256, input.body);
   if (expectedBodyHash !== input.facts.bodyHash) {
     return {
       ok: false,
@@ -12011,8 +12011,8 @@ function checkDecryptInvocationInput(crypto23, input) {
   }
   return { ok: true, data: input, canonicalBody };
 }
-async function buildDecryptInvocation(crypto23, signer, input) {
-  const checked = checkDecryptInvocationInput(crypto23, input);
+async function buildDecryptInvocation(crypto22, signer, input) {
+  const checked = checkDecryptInvocationInput(crypto22, input);
   if (!checked.ok) {
     return checked;
   }
@@ -12057,7 +12057,7 @@ function canonicalSignedResponse(response) {
   return canonicalize(rest);
 }
 function verifyDecryptResponse(input) {
-  const { crypto: crypto23, request, facts, invocationCid, requestBodyHash, response } = input;
+  const { crypto: crypto22, request, facts, invocationCid, requestBodyHash, response } = input;
   if (response.type !== DECRYPT_RESULT_TYPE) {
     return {
       ok: false,
@@ -12140,7 +12140,7 @@ function verifyDecryptResponse(input) {
     };
   }
   const expectedRequestHash = hexEncode2(
-    crypto23.sha256(utf8Encode(`${invocationCid}${requestBodyHash}`))
+    crypto22.sha256(utf8Encode(`${invocationCid}${requestBodyHash}`))
   );
   if (response.requestHash !== expectedRequestHash) {
     return {
@@ -12164,7 +12164,7 @@ function verifyDecryptResponse(input) {
     canonicalSignedResponse(response)
   );
   const signatureBytes = base64Decode2(response.nodeSignature);
-  if (!crypto23.verifyNodeSignature(response.nodeId, signedBytes, signatureBytes)) {
+  if (!crypto22.verifyNodeSignature(response.nodeId, signedBytes, signatureBytes)) {
     return {
       ok: false,
       error: encryptionError({
@@ -12174,9 +12174,9 @@ function verifyDecryptResponse(input) {
   }
   return { ok: true, data: response };
 }
-function openWrappedKey(crypto23, receiverPrivateKey, response) {
+function openWrappedKey(crypto22, receiverPrivateKey, response) {
   const wrapped = base64Decode2(response.wrappedKey);
-  return crypto23.openWithReceiverKey(receiverPrivateKey, wrapped);
+  return crypto22.openWithReceiverKey(receiverPrivateKey, wrapped);
 }
 function encOk(data) {
   return { ok: true, data };
@@ -12184,7 +12184,7 @@ function encOk(data) {
 function encErr(error) {
   return { ok: false, error };
 }
-var import_decrypt_transport_response_error, import_decrypt_transport_response_error2, import_decrypt_transport_response_error3, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HooksService, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, HEX, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
+var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HooksService, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, HEX, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
 var init_dist2 = __esm({
   "../sdk-services/dist/index.js"() {
     "use strict";
@@ -12192,8 +12192,6 @@ var init_dist2 = __esm({
     init_dist();
     init_dist();
     import_decrypt_transport_response_error = __toESM(require_decrypt_transport_response_error(), 1);
-    import_decrypt_transport_response_error2 = __toESM(require_decrypt_transport_response_error(), 1);
-    import_decrypt_transport_response_error3 = __toESM(require_decrypt_transport_response_error(), 1);
     ErrorCodes = {
       // Common errors
       NOT_FOUND: "NOT_FOUND",
@@ -23958,12 +23956,6 @@ var init_dist3 = __esm({
 
 // ../sdk-core/dist/index.js
 import { SiweMessage } from "siwe";
-import crypto22 from "crypto";
-import { Buffer as Buffer2 } from "buffer";
-import { Buffer as Buffer3 } from "buffer";
-import { Buffer as Buffer4 } from "buffer";
-import { Buffer as Buffer5 } from "buffer";
-import { isIPv4, isIPv6, isIP as ipVersion } from "net";
 function equals5(aa, bb) {
   if (aa === bb) {
     return true;
@@ -24408,6 +24400,9 @@ function createDigest(digest4, code3, truncate) {
   }
   return create3(code3, digest4);
 }
+function sha(name2) {
+  return async (data) => new Uint8Array(await crypto.subtle.digest(name2, data));
+}
 function parseStrictRfc33392(value) {
   if (!/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(
     value
@@ -24467,11 +24462,8 @@ function equals32(a, b) {
   }
   return true;
 }
-function asUint8Array(buf) {
-  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-}
 function allocUnsafe(size2 = 0) {
-  return asUint8Array(Buffer2.allocUnsafe(size2));
+  return new Uint8Array(size2);
 }
 function encodingLength22(value) {
   if (value < N122) {
@@ -24635,8 +24627,20 @@ function decode62(buf, offset = 0) {
     return decodeUint8ArrayList(buf, offset);
   }
 }
+function asUint8Array(buf) {
+  return buf;
+}
 function concat2(arrays, length22) {
-  return asUint8Array(Buffer3.concat(arrays, length22));
+  if (length22 == null) {
+    length22 = arrays.reduce((acc, curr) => acc + curr.length, 0);
+  }
+  const output = allocUnsafe(length22);
+  let offset = 0;
+  for (const arr of arrays) {
+    output.set(arr, offset);
+    offset += arr.length;
+  }
+  return asUint8Array(output);
 }
 function createCodec(name2, prefix, encode52, decode72) {
   return {
@@ -24657,9 +24661,6 @@ function fromString2(string2, encoding = "utf8") {
   if (base33 == null) {
     throw new Error(`Unsupported encoding "${encoding}"`);
   }
-  if (encoding === "utf8" || encoding === "utf-8") {
-    return asUint8Array(Buffer4.from(string2, "utf-8"));
-  }
   return base33.decoder.decode(`${base33.prefix}${string2}`);
 }
 function toString2(array, encoding = "utf8") {
@@ -24667,10 +24668,28 @@ function toString2(array, encoding = "utf8") {
   if (base33 == null) {
     throw new Error(`Unsupported encoding "${encoding}"`);
   }
-  if (encoding === "utf8" || encoding === "utf-8") {
-    return Buffer5.from(array.buffer, array.byteOffset, array.byteLength).toString("utf8");
-  }
   return base33.encoder.encode(array).substring(1);
+}
+function parseIPv4(input) {
+  if (input.length > MAX_IPV4_LENGTH) {
+    return void 0;
+  }
+  return parser.new(input).parseWith(() => parser.readIPv4Addr());
+}
+function parseIPv6(input) {
+  if (input.includes("%")) {
+    input = input.split("%")[0];
+  }
+  if (input.length > MAX_IPV6_LENGTH) {
+    return void 0;
+  }
+  return parser.new(input).parseWith(() => parser.readIPv6Addr());
+}
+function isIPv4(input) {
+  return Boolean(parseIPv4(input));
+}
+function isIPv6(input) {
+  return Boolean(parseIPv6(input));
 }
 function bytesToString(base33) {
   return (buf) => {
@@ -25367,7 +25386,7 @@ function decodeBase64Url(value) {
   }
   return Uint8Array.from(bytes2);
 }
-var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode42, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
+var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode42, identity2, sha2_browser_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, Parser, MAX_IPV6_LENGTH, MAX_IPV4_LENGTH, parser, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
 var init_dist4 = __esm({
   "../sdk-core/dist/index.js"() {
     "use strict";
@@ -25386,10 +25405,8 @@ var init_dist4 = __esm({
     init_dist2();
     init_zod();
     init_dist2();
-    init_dist();
     init_dist2();
     init_dist2();
-    init_dist();
     init_ed25519();
     init_esm();
     __defProp3 = Object.defineProperty;
@@ -26053,8 +26070,8 @@ var init_dist4 = __esm({
     name = "identity";
     encode42 = coerce4;
     identity2 = { code: code2, name, encode: encode42, digest };
-    sha2_exports = {};
-    __export3(sha2_exports, {
+    sha2_browser_exports = {};
+    __export3(sha2_browser_exports, {
       sha256: () => sha2562,
       sha512: () => sha5122
     });
@@ -26095,15 +26112,15 @@ var init_dist4 = __esm({
     sha2562 = from22({
       name: "sha2-256",
       code: 18,
-      encode: (input) => coerce4(crypto22.createHash("sha256").update(input).digest())
+      encode: sha("SHA-256")
     });
     sha5122 = from22({
       name: "sha2-512",
       code: 19,
-      encode: (input) => coerce4(crypto22.createHash("sha512").update(input).digest())
+      encode: sha("SHA-512")
     });
     bases = { ...identity_exports, ...base2_exports, ...base8_exports, ...base10_exports, ...base16_exports, ...base32_exports, ...base36_exports, ...base58_exports, ...base64_exports, ...base256emoji_exports };
-    hashes = { ...sha2_exports, ...identity_exports2 };
+    hashes = { ...sha2_browser_exports, ...identity_exports2 };
     textEncoder3 = new TextEncoder();
     objectHasOwn3 = Object.hasOwn ?? Object.prototype.hasOwnProperty.call.bind(
       Object.prototype.hasOwnProperty
@@ -27218,6 +27235,192 @@ var init_dist4 = __esm({
       }
     };
     __publicField(UnknownProtocolError, "name", "UnknownProtocolError");
+    Parser = class {
+      constructor() {
+        __publicField(this, "index", 0);
+        __publicField(this, "input", "");
+      }
+      new(input) {
+        this.index = 0;
+        this.input = input;
+        return this;
+      }
+      /** Run a parser, and restore the pre-parse state if it fails. */
+      readAtomically(fn) {
+        const index = this.index;
+        const result = fn();
+        if (result === void 0) {
+          this.index = index;
+        }
+        return result;
+      }
+      /** Run a parser, but fail if the entire input wasn't consumed. Doesn't run atomically. */
+      parseWith(fn) {
+        const result = fn();
+        if (this.index !== this.input.length) {
+          return void 0;
+        }
+        return result;
+      }
+      /** Peek the next character from the input */
+      peekChar() {
+        if (this.index >= this.input.length) {
+          return void 0;
+        }
+        return this.input[this.index];
+      }
+      /** Read the next character from the input */
+      readChar() {
+        if (this.index >= this.input.length) {
+          return void 0;
+        }
+        return this.input[this.index++];
+      }
+      /** Read the next character from the input if it matches the target. */
+      readGivenChar(target) {
+        return this.readAtomically(() => {
+          const char = this.readChar();
+          if (char !== target) {
+            return void 0;
+          }
+          return char;
+        });
+      }
+      /**
+       * Helper for reading separators in an indexed loop. Reads the separator
+       * character iff index > 0, then runs the parser. When used in a loop,
+       * the separator character will only be read on index > 0 (see
+       * readIPv4Addr for an example)
+       */
+      readSeparator(sep2, index, inner) {
+        return this.readAtomically(() => {
+          if (index > 0) {
+            if (this.readGivenChar(sep2) === void 0) {
+              return void 0;
+            }
+          }
+          return inner();
+        });
+      }
+      /**
+       * Read a number off the front of the input in the given radix, stopping
+       * at the first non-digit character or eof. Fails if the number has more
+       * digits than max_digits or if there is no number.
+       */
+      readNumber(radix, maxDigits, allowZeroPrefix, maxBytes) {
+        return this.readAtomically(() => {
+          let result = 0;
+          let digitCount = 0;
+          const leadingChar = this.peekChar();
+          if (leadingChar === void 0) {
+            return void 0;
+          }
+          const hasLeadingZero = leadingChar === "0";
+          const maxValue2 = 2 ** (8 * maxBytes) - 1;
+          while (true) {
+            const digit = this.readAtomically(() => {
+              const char = this.readChar();
+              if (char === void 0) {
+                return void 0;
+              }
+              const num2 = Number.parseInt(char, radix);
+              if (Number.isNaN(num2)) {
+                return void 0;
+              }
+              return num2;
+            });
+            if (digit === void 0) {
+              break;
+            }
+            result *= radix;
+            result += digit;
+            if (result > maxValue2) {
+              return void 0;
+            }
+            digitCount += 1;
+            if (maxDigits !== void 0) {
+              if (digitCount > maxDigits) {
+                return void 0;
+              }
+            }
+          }
+          if (digitCount === 0) {
+            return void 0;
+          } else if (!allowZeroPrefix && hasLeadingZero && digitCount > 1) {
+            return void 0;
+          } else {
+            return result;
+          }
+        });
+      }
+      /** Read an IPv4 address. */
+      readIPv4Addr() {
+        return this.readAtomically(() => {
+          const out = new Uint8Array(4);
+          for (let i = 0; i < out.length; i++) {
+            const ix = this.readSeparator(".", i, () => this.readNumber(10, 3, false, 1));
+            if (ix === void 0) {
+              return void 0;
+            }
+            out[i] = ix;
+          }
+          return out;
+        });
+      }
+      /** Read an IPv6 Address. */
+      readIPv6Addr() {
+        const readGroups = (groups) => {
+          for (let i = 0; i < groups.length / 2; i++) {
+            const ix = i * 2;
+            if (i < groups.length - 3) {
+              const ipv4 = this.readSeparator(":", i, () => this.readIPv4Addr());
+              if (ipv4 !== void 0) {
+                groups[ix] = ipv4[0];
+                groups[ix + 1] = ipv4[1];
+                groups[ix + 2] = ipv4[2];
+                groups[ix + 3] = ipv4[3];
+                return [ix + 4, true];
+              }
+            }
+            const group = this.readSeparator(":", i, () => this.readNumber(16, 4, true, 2));
+            if (group === void 0) {
+              return [ix, false];
+            }
+            groups[ix] = group >> 8;
+            groups[ix + 1] = group & 255;
+          }
+          return [groups.length, false];
+        };
+        return this.readAtomically(() => {
+          const head = new Uint8Array(16);
+          const [headSize, headIp4] = readGroups(head);
+          if (headSize === 16) {
+            return head;
+          }
+          if (headIp4) {
+            return void 0;
+          }
+          if (this.readGivenChar(":") === void 0) {
+            return void 0;
+          }
+          if (this.readGivenChar(":") === void 0) {
+            return void 0;
+          }
+          const tail = new Uint8Array(14);
+          const limit = 16 - (headSize + 2);
+          const [tailSize] = readGroups(tail.subarray(0, limit));
+          head.set(tail.subarray(0, tailSize), 16 - tailSize);
+          return head;
+        });
+      }
+      /** Read an IP Address, either IPv4 or IPv6. */
+      readIPAddr() {
+        return this.readIPv4Addr() ?? this.readIPv6Addr();
+      }
+    };
+    MAX_IPV6_LENGTH = 45;
+    MAX_IPV4_LENGTH = 15;
+    parser = new Parser();
     CODE_IP4 = 4;
     CODE_TCP = 6;
     CODE_UDP = 273;
@@ -29776,8 +29979,51 @@ function buildAuthUrl(did, options = {}) {
   if (options.expiry !== void 0) {
     params.set("expiry", String(options.expiry));
   }
+  params.set("protocolVersion", "1");
   const base4 = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
   return `${base4}/delegate?${params.toString()}`;
+}
+function validateDelegationCallbackPayload(value) {
+  if (!value || typeof value !== "object") return "expected an object";
+  const v = value;
+  if (!v.delegationHeader || typeof v.delegationHeader !== "object") {
+    return "delegationHeader must be an object";
+  }
+  const auth = v.delegationHeader.Authorization;
+  if (typeof auth !== "string" || !auth) {
+    return "delegationHeader.Authorization must be a non-empty string";
+  }
+  if (typeof v.delegationCid !== "string" || !v.delegationCid) {
+    return "delegationCid must be a non-empty string";
+  }
+  if (typeof v.spaceId !== "string" || !v.spaceId) {
+    return "spaceId must be a non-empty string";
+  }
+  if (v.permissions !== void 0) {
+    if (!Array.isArray(v.permissions)) {
+      return "permissions, when present, must be an array";
+    }
+    for (let i = 0; i < v.permissions.length; i++) {
+      const entry = v.permissions[i];
+      if (!entry || typeof entry !== "object") {
+        return `permissions[${i}] must be an object`;
+      }
+      const e = entry;
+      if (typeof e.service !== "string" || !e.service) {
+        return `permissions[${i}].service must be a non-empty string`;
+      }
+      if (typeof e.space !== "string") {
+        return `permissions[${i}].space must be a string`;
+      }
+      if (typeof e.path !== "string") {
+        return `permissions[${i}].path must be a string`;
+      }
+      if (!Array.isArray(e.actions) || e.actions.some((a) => typeof a !== "string" || !a)) {
+        return `permissions[${i}].actions must be a non-empty string[]`;
+      }
+    }
+  }
+  return null;
 }
 function shouldOpenBrowser(options) {
   if (options.noPopup) return false;
@@ -29805,12 +30051,18 @@ async function callbackFlow(did, options = {}) {
     }
     function parsePasteInput(input) {
       const trimmed = input.trim();
+      let parsed;
       try {
-        return JSON.parse(trimmed);
+        parsed = JSON.parse(trimmed);
       } catch {
         const decoded = Buffer.from(trimmed, "base64").toString("utf-8");
-        return JSON.parse(decoded);
+        parsed = JSON.parse(decoded);
       }
+      const invalid = validateDelegationCallbackPayload(parsed);
+      if (invalid) {
+        throw new Error(`Invalid delegation code: ${invalid}`);
+      }
+      return parsed;
     }
     const server = createServer((req, res) => {
       if (req.method === "POST" && req.url === "/callback") {
@@ -29821,6 +30073,13 @@ async function callbackFlow(did, options = {}) {
         req.on("end", () => {
           try {
             const data = JSON.parse(body);
+            const invalid = validateDelegationCallbackPayload(data);
+            if (invalid) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: invalid }));
+              settle({ error: new Error(`Invalid delegation payload: ${invalid}`) });
+              return;
+            }
             res.writeHead(200, {
               "Content-Type": "application/json",
               "Access-Control-Allow-Origin": "*"
@@ -29907,18 +30166,24 @@ Open this URL in a browser to authenticate:
   return new Promise((resolve4, reject) => {
     rl.question("Paste delegation code: ", (input) => {
       rl.close();
+      let parsed;
       try {
-        const data = JSON.parse(input.trim());
-        resolve4(data);
+        parsed = JSON.parse(input.trim());
       } catch {
         try {
           const decoded = Buffer.from(input.trim(), "base64").toString("utf-8");
-          const data = JSON.parse(decoded);
-          resolve4(data);
+          parsed = JSON.parse(decoded);
         } catch {
           reject(new Error("Invalid delegation code. Expected JSON or base64-encoded JSON."));
+          return;
         }
       }
+      const invalid = validateDelegationCallbackPayload(parsed);
+      if (invalid) {
+        reject(new Error(`Invalid delegation code: ${invalid}`));
+        return;
+      }
+      resolve4(parsed);
     });
   });
 }
@@ -30173,6 +30438,7 @@ function registerAuthCommand(program) {
         const delegationCids2 = [];
         let expiry2;
         const openkeyHost = resolveOpenKeyHost(profile);
+        const openkeyEffective = [];
         for (const group of groupPermissionsBySpace(requested)) {
           const delegationData = await startAuthFlow(profile.did, {
             jwk: key,
@@ -30187,13 +30453,15 @@ function registerAuthCommand(program) {
             noPopup: options.popup === false
           });
           const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
-          const stored = storedAdditionalDelegation(delegation, group);
+          const effective = permissionsFromDelegation(delegation);
+          openkeyEffective.push(...effective);
+          const stored = storedAdditionalDelegation(delegation, effective);
           await appendAdditionalDelegation(ctx.profile, stored);
           await node.useRuntimeDelegation(delegation);
           delegationCids2.push(delegation.cid);
           expiry2 = delegation.expiry.toISOString();
           await appendGrantHistory(ctx.profile, {
-            addedCaps: group,
+            addedCaps: effective,
             source: options.manifest ? "manifest" : "cli",
             delegationCid: delegation.cid,
             expiry: expiry2
@@ -30201,7 +30469,7 @@ function registerAuthCommand(program) {
         }
         outputJson({
           changed: delegationCids2.length > 0,
-          added: requested,
+          added: openkeyEffective,
           delegationCid: delegationCids2[0],
           delegationCids: delegationCids2,
           expiry: expiry2
@@ -30226,8 +30494,10 @@ function registerAuthCommand(program) {
       await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession);
       const delegationCids = [];
       let expiry;
+      const localEffective = [];
       for (const delegation of delegations) {
         const covering = permissionsFromDelegation(delegation);
+        localEffective.push(...covering);
         const stored = storedAdditionalDelegation(delegation, covering);
         await appendAdditionalDelegation(ctx.profile, stored);
         delegationCids.push(delegation.cid);
@@ -30245,7 +30515,7 @@ function registerAuthCommand(program) {
       }
       outputJson({
         changed: true,
-        added: requested,
+        added: localEffective,
         delegationCid: delegationCids[0],
         delegationCids,
         expiry
@@ -30704,13 +30974,14 @@ async function ensureDelegationAuthority(params) {
         expiry: params.expiryOption
       });
       const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host);
+      const effective = permissionsFromDelegation(delegation);
       await appendAdditionalDelegation(
         params.ctx.profile,
-        storedAdditionalDelegation(delegation, group)
+        storedAdditionalDelegation(delegation, effective)
       );
       await params.node.useRuntimeDelegation(delegation);
       await appendGrantHistory(params.ctx.profile, {
-        addedCaps: group,
+        addedCaps: effective,
         source: "cli",
         delegationCid: delegation.cid,
         expiry: delegation.expiry.toISOString()
@@ -30842,7 +31113,7 @@ function groupPermissionsBySpace(permissions) {
       rawEntries.push(permission);
       continue;
     }
-    const key = normalizeSpaceForCompare(permission.space);
+    const key = normalizeSpaceForCompare(permission.space ?? "");
     const group = groups.get(key) ?? [];
     group.push(permission);
     groups.set(key, group);
@@ -30875,7 +31146,7 @@ function portableFromOpenKeyDelegation(data, permissions, host) {
   const primary = permissions.find((permission) => !isRawPermission(permission)) ?? permissions[0];
   const returnedSpace = String(data.spaceId ?? primary.space ?? "encryption");
   const expectedSpaces = new Set(
-    permissions.filter((permission) => !isRawPermission(permission)).map((permission) => normalizeSpaceForCompare(permission.space))
+    permissions.filter((permission) => !isRawPermission(permission)).map((permission) => normalizeSpaceForCompare(permission.space ?? ""))
   );
   const matchesExpectedSpace = expectedSpaces.size === 1 && returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]);
   if (expectedSpaces.size > 0 && !matchesExpectedSpace) {
@@ -30886,18 +31157,54 @@ function portableFromOpenKeyDelegation(data, permissions, host) {
     );
   }
   const expiry = inferDelegationExpiry(data);
+  const requestedPairs = new Set(
+    permissions.flatMap(
+      (p) => isRawPermission(p) ? p.actions.map((a) => `${p.service}|${p.space ?? ""}|${p.path}|${a}`) : p.actions.map((a) => `${p.service}|${normalizeSpaceForCompare(p.space ?? "")}|${p.path}|${a}`)
+    )
+  );
+  const returnedPermissions = Array.isArray(data.permissions) ? data.permissions : null;
+  const resources = (returnedPermissions ?? permissions).map((permission) => {
+    const service = permission.service.startsWith("tinycloud.") ? permission.service.slice("tinycloud.".length) : permission.service;
+    const rawService = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${service}`;
+    const permSpace = permission.space ?? "";
+    if (returnedPermissions) {
+      const rawSpace = isRawPermission({
+        service: rawService,
+        space: permSpace,
+        path: permission.path,
+        actions: []
+      }) ? permSpace : normalizeSpaceForCompare(permSpace);
+      for (const action of permission.actions) {
+        const key = `${rawService}|${rawSpace}|${permission.path}|${action}`;
+        if (!requestedPairs.has(key)) {
+          throw new CLIError(
+            "OPENKEY_GRANT_BROADENED",
+            `OpenKey returned grant ${rawService}/${action} on ${permSpace}/${permission.path} that was not requested.`,
+            ExitCode.PERMISSION_DENIED
+          );
+        }
+      }
+    }
+    const resolvedSpace = isRawPermission({
+      service: rawService,
+      space: permSpace,
+      path: permission.path,
+      actions: []
+    }) ? permSpace : returnedSpace;
+    return {
+      service,
+      space: resolvedSpace,
+      path: permission.path,
+      actions: [...permission.actions]
+    };
+  });
   return {
     cid: String(data.delegationCid),
     delegationHeader: data.delegationHeader,
     spaceId: returnedSpace,
     path: primary.path,
     actions: primary.actions,
-    resources: permissions.map((permission) => ({
-      service: permission.service.startsWith("tinycloud.") ? permission.service.slice("tinycloud.".length) : permission.service,
-      space: isRawPermission(permission) ? permission.space : returnedSpace,
-      path: permission.path,
-      actions: [...permission.actions]
-    })),
+    resources,
     expiry,
     delegateDID: String(data.verificationMethod),
     ownerAddress: String(data.address ?? ""),

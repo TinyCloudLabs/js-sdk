@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/web-sdk",
-  "version": "2.11.0-beta.7",
+  "version": "2.11.0-beta.10",
   "description": "A set of tools and utilities to help you build your app with TinyCloud.",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
@@ -23,11 +23,15 @@
   "type": "module",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
+  "sideEffects": [
+    "dist/index.cjs",
+    "dist/index.mjs"
+  ],
   "scripts": {
-    "build": "rimraf dist && webpack --mode production --config webpack.config.cjs",
+    "build": "rimraf dist && cross-env NODE_ENV=production webpack --mode production --config webpack.config.cjs",
     "build:coordinationos-vendor": "rimraf dist/vendor && cross-env NODE_ENV=production webpack --mode production --config webpack.coordinationos-vendor.config.cjs && bun scripts/build-coordinationos-vendor.ts",
-    "dev": "webpack --watch --config webpack.config.cjs",
-    "watch": "webpack --watch --config webpack.config.cjs",
+    "dev": "cross-env NODE_ENV=development webpack --watch --config webpack.config.cjs",
+    "watch": "cross-env NODE_ENV=development webpack --watch --config webpack.config.cjs",
     "doc": "bun run doc:extractor && bun run doc:documenter",
     "doc:extractor": "api-extractor run --local --diagnostics",
     "doc:documenter": "api-documenter markdown -i temp -o ../../documentation/docs/web-sdk/api",
@@ -40,9 +44,9 @@
     "@metamask/detect-provider": "^1.2.0",
     "@multiformats/multiaddr": "^13.0.1",
     "@multiformats/multiaddr-to-uri": "^12.0.0",
-    "@tinycloud/node-sdk": "2.11.0-beta.7",
-    "@tinycloud/sdk-core": "2.11.0-beta.7",
-    "@tinycloud/web-sdk-wasm": "1.7.5",
+    "@tinycloud/node-sdk": "2.11.0-beta.10",
+    "@tinycloud/sdk-core": "2.11.0-beta.10",
+    "@tinycloud/web-sdk-wasm": "1.7.6-beta.0",
     "axios": "^1.7.9",
     "ethers": "^5.7.2",
     "lodash.merge": "^4.6.2",
@@ -91,6 +95,10 @@
     "webpack-cli": "^7.0.0"
   },
   "files": [
-    "dist"
+    "dist/**/*.cjs",
+    "dist/**/*.js",
+    "dist/**/*.mjs",
+    "dist/**/*.d.ts",
+    "dist/**/*.LICENSE.txt"
   ]
 }

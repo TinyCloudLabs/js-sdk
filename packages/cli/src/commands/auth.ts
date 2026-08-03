@@ -293,6 +293,10 @@ export function registerAuthCommand(program: Command): void {
           const delegationCids: string[] = [];
           let expiry: string | undefined;
           const openkeyHost = resolveOpenKeyHost(profile);
+          // Sol MAJOR-9: accumulate EFFECTIVE grants from each signed
+          // delegation so the CLI output reports what was actually
+          // conferred (never over-reports the originally-requested set).
+          const openkeyEffective: typeof requested = [];
           for (const group of groupPermissionsBySpace(requested)) {
             const delegationData = await startAuthFlow(profile.did, {
               jwk: key,
@@ -307,13 +311,19 @@ export function registerAuthCommand(program: Command): void {
               noPopup: options.popup === false,
             });
             const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
-            const stored = storedAdditionalDelegation(delegation, group);
+            // Sol MAJOR-6: report EFFECTIVE grants (what the delegation
+            // actually confers) rather than the requested `group`. The
+            // user is allowed to narrow their grant in the OpenKey UI;
+            // storing the request would over-report authority.
+            const effective = permissionsFromDelegation(delegation);
+            openkeyEffective.push(...effective);
+            const stored = storedAdditionalDelegation(delegation, effective);
             await appendAdditionalDelegation(ctx.profile, stored);
             await node.useRuntimeDelegation(delegation);
             delegationCids.push(delegation.cid);
             expiry = delegation.expiry.toISOString();
             await appendGrantHistory(ctx.profile, {
-              addedCaps: group,
+              addedCaps: effective,
               source: options.manifest ? "manifest" : "cli",
               delegationCid: delegation.cid,
               expiry,
@@ -321,7 +331,7 @@ export function registerAuthCommand(program: Command): void {
           }
           outputJson({
             changed: delegationCids.length > 0,
-            added: requested,
+            added: openkeyEffective,
             delegationCid: delegationCids[0],
             delegationCids,
             expiry,
@@ -351,8 +361,13 @@ export function registerAuthCommand(program: Command): void {
         await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession);
         const delegationCids: string[] = [];
         let expiry: string | undefined;
+        // Sol MAJOR-9: accumulate EFFECTIVE grants across every signed
+        // local delegation so the CLI's `added` output matches what was
+        // actually granted, never the originally-requested set.
+        const localEffective: typeof requested = [];
         for (const delegation of delegations) {
           const covering = permissionsFromDelegation(delegation);
+          localEffective.push(...covering);
           const stored = storedAdditionalDelegation(delegation, covering);
           await appendAdditionalDelegation(ctx.profile, stored);
           delegationCids.push(delegation.cid);
@@ -372,7 +387,7 @@ export function registerAuthCommand(program: Command): void {
 
         outputJson({
           changed: true,
-          added: requested,
+          added: localEffective,
           delegationCid: delegationCids[0],
           delegationCids,
           expiry,
@@ -986,13 +1001,15 @@ export async function ensureDelegationAuthority(params: {
         expiry: params.expiryOption,
       });
       const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host);
+      // Sol MAJOR-6: report effective grants, not requested `group`.
+      const effective = permissionsFromDelegation(delegation);
       await appendAdditionalDelegation(
         params.ctx.profile,
-        storedAdditionalDelegation(delegation, group),
+        storedAdditionalDelegation(delegation, effective),
       );
       await params.node.useRuntimeDelegation(delegation);
       await appendGrantHistory(params.ctx.profile, {
-        addedCaps: group,
+        addedCaps: effective,
         source: "cli",
         delegationCid: delegation.cid,
         expiry: delegation.expiry.toISOString(),
@@ -1163,7 +1180,7 @@ export function groupPermissionsBySpace(permissions: PermissionEntry[]): Permiss
     // into one OpenKey round-trip even when one cap's address is checksummed and
     // another is lowercase. The space NAME stays case-sensitive, so genuinely
     // different names are NOT merged. Entries keep their original space string.
-    const key = normalizeSpaceForCompare(permission.space);
+    const key = normalizeSpaceForCompare(permission.space ?? "");
     const group = groups.get(key) ?? [];
     group.push(permission);
     groups.set(key, group);
@@ -1223,7 +1240,7 @@ export function portableFromOpenKeyDelegation(
   const expectedSpaces = new Set(
     permissions
       .filter((permission) => !isRawPermission(permission))
-      .map((permission) => normalizeSpaceForCompare(permission.space)),
+      .map((permission) => normalizeSpaceForCompare(permission.space ?? "")),
   );
   const matchesExpectedSpace = expectedSpaces.size === 1 &&
     returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]!);
@@ -1235,20 +1252,79 @@ export function portableFromOpenKeyDelegation(
     );
   }
   const expiry = inferDelegationExpiry(data);
+  // Prefer the effective permissions the server returned. They are the
+  // grants the user actually signed for, which may be a narrowing of the
+  // requested set. If the server returned a broader grant than requested,
+  // refuse the delegation — the CLI should never store more authority
+  // than the caller asked for.
+  const requestedPairs = new Set(
+    permissions.flatMap((p) =>
+      isRawPermission(p)
+        ? p.actions.map((a) => `${p.service}|${p.space ?? ""}|${p.path}|${a}`)
+        : p.actions.map((a) => `${p.service}|${normalizeSpaceForCompare(p.space ?? "")}|${p.path}|${a}`),
+    ),
+  );
+  const returnedPermissions = Array.isArray(data.permissions)
+    ? (data.permissions as Array<{
+        service: string;
+        space: string;
+        path: string;
+        actions: string[];
+      }>)
+    : null;
+  const resources = (returnedPermissions ?? permissions).map((permission) => {
+    const service = permission.service.startsWith("tinycloud.")
+      ? permission.service.slice("tinycloud.".length)
+      : permission.service;
+    const rawService = permission.service.startsWith("tinycloud.")
+      ? permission.service
+      : `tinycloud.${service}`;
+    const permSpace = permission.space ?? "";
+    // Cross-check: every returned (service, space, path, action) must
+    // appear in the requested set (or be an inferred raw encryption entry).
+    if (returnedPermissions) {
+      const rawSpace = isRawPermission({
+        service: rawService,
+        space: permSpace,
+        path: permission.path,
+        actions: [],
+      })
+        ? permSpace
+        : normalizeSpaceForCompare(permSpace);
+      for (const action of permission.actions) {
+        const key = `${rawService}|${rawSpace}|${permission.path}|${action}`;
+        if (!requestedPairs.has(key)) {
+          throw new CLIError(
+            "OPENKEY_GRANT_BROADENED",
+            `OpenKey returned grant ${rawService}/${action} on ${permSpace}/${permission.path} that was not requested.`,
+            ExitCode.PERMISSION_DENIED,
+          );
+        }
+      }
+    }
+    const resolvedSpace: string = isRawPermission({
+      service: rawService,
+      space: permSpace,
+      path: permission.path,
+      actions: [],
+    })
+      ? permSpace
+      : returnedSpace;
+    return {
+      service,
+      space: resolvedSpace,
+      path: permission.path,
+      actions: [...permission.actions],
+    };
+  });
+
   return {
     cid: String(data.delegationCid),
     delegationHeader: data.delegationHeader as { Authorization: string },
     spaceId: returnedSpace,
     path: primary.path,
     actions: primary.actions,
-    resources: permissions.map((permission) => ({
-      service: permission.service.startsWith("tinycloud.")
-        ? permission.service.slice("tinycloud.".length)
-        : permission.service,
-      space: isRawPermission(permission) ? permission.space : returnedSpace,
-      path: permission.path,
-      actions: [...permission.actions],
-    })),
+    resources,
     expiry,
     delegateDID: String(data.verificationMethod),
     ownerAddress: String(data.address ?? ""),

@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 browser = ["web-sys", "getrandom/js"]
-nodejs = ["k256", "sha3", "base64"]
+nodejs = ["k256", "sha3", "base64", "rsa"]
 
 [dependencies]
 console_error_panic_hook = "0.1"
@@ -61,11 +61,11 @@ web-sys = { version = "0.3.59", features = ["console"], optional = true }
 k256 = { version = "0.13", features = ["ecdsa", "std"], optional = true }
 sha3 = { version = "0.10", optional = true }
 base64 = { version = "0.21", optional = true }
-rsa = "0.9.10"
+rsa = { version = "0.9.10", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.52", features = ["full"] }
 rsa = "0.9.10"
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O4", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
