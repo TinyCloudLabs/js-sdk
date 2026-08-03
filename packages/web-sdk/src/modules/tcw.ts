@@ -94,6 +94,7 @@ import type { NotificationConfig } from "../notifications/types";
 import { WasmInitializer } from "./WasmInitializer";
 import { invoke } from "./Storage/tinycloud/module";
 import type { PortableDelegation, DelegatedAccess } from "@tinycloud/node-sdk/core";
+import { CredentialsService } from "../credentials";
 
 declare global {
   interface Window {
@@ -306,6 +307,7 @@ export class TinyCloudWeb {
   private sessionStorage?: ISessionStorage;
   private _sessionRestoreStatus: SessionRestoreStatus = "idle";
   private _secrets = new Map<string, ISecretsService>();
+  private _credentialsService?: CredentialsService;
 
   /** Promise that resolves when WASM + node are ready */
   private _initPromise: Promise<void>;
@@ -526,6 +528,12 @@ export class TinyCloudWeb {
   get account(): AccountService { return this.node.account; }
   get hosts(): string[] { return this.node.hosts; }
   get sessionRestoreStatus(): SessionRestoreStatus { return this._sessionRestoreStatus; }
+
+  /** Holder-bound OpenCredentials issuance using the active TinyCloud session. */
+  get credentials(): CredentialsService {
+    this._credentialsService ??= new CredentialsService(this);
+    return this._credentialsService;
+  }
 
   space(nameOrUri: string): ISpace { return this.spaces.get(nameOrUri); }
   get kvPrefix(): string { return this.config.kvPrefix || ""; }

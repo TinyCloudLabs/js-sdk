@@ -32,6 +32,18 @@ export {
 // ENS resolver
 export { IENSResolver } from "./ens";
 
+export {
+  CREDENTIAL_PROTOCOL,
+  EMAIL_PROOF_PROFILE,
+  EMAIL_PROOF_DESCRIPTOR,
+  credentialDescriptorDigest,
+  credentialStorageKey,
+  validateCredentialDescriptor,
+  type CredentialDescriptor,
+  type CredentialFieldDescriptor,
+  type StoredCredential,
+} from "./credentials";
+
 // WASM bindings abstraction
 export {
   IWasmBindings,
