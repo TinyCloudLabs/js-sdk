@@ -32,32 +32,34 @@ import {
   type SignedObjectSigner,
 } from "../policy";
 
+const fixturePath = (path: string) => new URL(`../../${path}`, import.meta.url);
+
 const suitesFixture = (await Bun.file(
-  "test-fixtures/policy-engine-vectors/signed-object-profile/signature-suites.json",
+  fixturePath("test-fixtures/policy-engine-vectors/signed-object-profile/signature-suites.json"),
 ).json()) as {
   ed25519: Record<string, { seed_hex: string; did: string }>;
   secp256k1: Record<string, { private_key_hex: string; did: string }>;
 };
 
 const listenCatalogFixture = (await Bun.file(
-  "test-fixtures/listen-catalog/listen-transcript-sql-statement-catalog.json",
+  fixturePath("test-fixtures/listen-catalog/listen-transcript-sql-statement-catalog.json"),
 ).json()) as { catalog: typeof LISTEN_SQL_STATEMENT_CATALOG };
 
 const wireManifest = (await Bun.file(
-  "test-fixtures/policy-engine-wire/manifest.json",
+  fixturePath("test-fixtures/policy-engine-wire/manifest.json"),
 ).json()) as {
   cases: Array<{ file: string; name: string; sha256: string }>;
   label: string;
 };
 
 const grantOutputVector = (await Bun.file(
-  "test-vectors/grant-output-vendored/accept.json",
+  fixturePath("test-vectors/grant-output-vendored/accept.json"),
 ).json()) as {
   cases: Array<Record<string, any>>;
 };
 
 const denialWireManifest = (await Bun.file(
-  "test-fixtures/policy-engine-denial-wire/wire-denials/manifest.json",
+  fixturePath("test-fixtures/policy-engine-denial-wire/wire-denials/manifest.json"),
 ).json()) as {
   fixtures: Record<string, { code: string; sha256: string; testRef: string }>;
   label: string;
@@ -73,11 +75,11 @@ type DenialMatrixRow = {
 };
 
 const denialMatrix = (await Bun.file(
-  "test-fixtures/policy-engine-denial-wire/denial-matrix-v0.json",
+  fixturePath("test-fixtures/policy-engine-denial-wire/denial-matrix-v0.json"),
 ).json()) as DenialMatrixRow[];
 
 const credentialDenialManifest = (await Bun.file(
-  "test-fixtures/launch-credential-denials/manifest.json",
+  fixturePath("test-fixtures/launch-credential-denials/manifest.json"),
 ).json()) as {
   files: Array<{ path: string; sha256: string }>;
   fixedInvalidClasses: string[];
@@ -107,7 +109,7 @@ for (const item of wireManifest.cases) {
   wireFixtures.set(
     item.name,
     (await Bun.file(
-      `test-fixtures/policy-engine-wire/${item.file}`,
+      fixturePath(`test-fixtures/policy-engine-wire/${item.file}`),
     ).json()) as WireFixture,
   );
 }
@@ -117,7 +119,7 @@ for (const file of Object.keys(denialWireManifest.fixtures)) {
   denialWireFixtures.set(
     file,
     (await Bun.file(
-      `test-fixtures/policy-engine-denial-wire/wire-denials/${file}`,
+      fixturePath(`test-fixtures/policy-engine-denial-wire/wire-denials/${file}`),
     ).json()) as DenialWireFixture,
   );
 }
@@ -130,7 +132,7 @@ for (const item of credentialDenialManifest.files) {
   credentialDenialFixtures.set(
     item.path,
     (await Bun.file(
-      `test-fixtures/launch-credential-denials/${item.path}`,
+      fixturePath(`test-fixtures/launch-credential-denials/${item.path}`),
     ).json()) as CredentialDenialFixture,
   );
 }
@@ -2192,7 +2194,7 @@ describe("TranscriptRequester fixture conformance", () => {
     for (const item of wireManifest.cases) {
       expect(consumed.has(item.name)).toBe(true);
       const bytes = await Bun.file(
-        `test-fixtures/policy-engine-wire/${item.file}`,
+        fixturePath(`test-fixtures/policy-engine-wire/${item.file}`),
       ).arrayBuffer();
       expect(
         createHash("sha256").update(Buffer.from(bytes)).digest("hex"),
@@ -2205,7 +2207,7 @@ describe("TranscriptRequester fixture conformance", () => {
       "8c4cabbf56e51c7e37484c060ffd4a6d51521101",
     );
     const actualFiles = (
-      await readdir("test-fixtures/policy-engine-denial-wire/wire-denials")
+      await readdir(fixturePath("test-fixtures/policy-engine-denial-wire/wire-denials"))
     )
       .filter((file) => file.endsWith(".json") && file !== "manifest.json")
       .sort();
@@ -2215,7 +2217,7 @@ describe("TranscriptRequester fixture conformance", () => {
 
     for (const [file, fixture] of Object.entries(denialWireManifest.fixtures)) {
       const bytes = await Bun.file(
-        `test-fixtures/policy-engine-denial-wire/wire-denials/${file}`,
+        fixturePath(`test-fixtures/policy-engine-denial-wire/wire-denials/${file}`),
       ).arrayBuffer();
       expect(
         createHash("sha256").update(Buffer.from(bytes)).digest("hex"),
@@ -2232,7 +2234,7 @@ describe("TranscriptRequester fixture conformance", () => {
       "xyz.tinycloud.opencredentials/m1-denial-credential-manifest/v0",
     );
     const actualFiles = (
-      await readdir("test-fixtures/launch-credential-denials")
+      await readdir(fixturePath("test-fixtures/launch-credential-denials"))
     )
       .filter((file) => file !== "manifest.json" && file !== "PROVENANCE.md")
       .sort();
@@ -2242,7 +2244,7 @@ describe("TranscriptRequester fixture conformance", () => {
 
     for (const item of credentialDenialManifest.files) {
       const bytes = await Bun.file(
-        `test-fixtures/launch-credential-denials/${item.path}`,
+        fixturePath(`test-fixtures/launch-credential-denials/${item.path}`),
       ).arrayBuffer();
       expect(
         createHash("sha256").update(Buffer.from(bytes)).digest("hex"),

@@ -141,3 +141,30 @@ test("real WASM invokeAny preserves constrained-statement caveats", async () => 
   );
   expect(uncaveatedPayload.att[resource]["tinycloud.sql/read"]).toEqual([{}]);
 });
+
+test("real WASM invokeAny omits the path for a service-wide capabilities route", async () => {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner("3".padStart(64, "0"));
+  const address = await signer.getAddress();
+  const chainId = await signer.getChainId();
+  const manager = wasm.createSessionManager();
+  const keyId = "service-wide-capabilities";
+  manager.renameSessionKeyId("default", keyId);
+  const jwk = JSON.parse(manager.jwk(keyId)!);
+  const spaceId = makePkhSpaceId(address, chainId, keyId);
+  const prepared = wasm.prepareSession({
+    abilities: { capabilities: { "": ["tinycloud.capabilities/read"] } },
+    address,
+    chainId,
+    domain: "localhost",
+    issuedAt: new Date().toISOString(),
+    expirationTime: new Date(Date.now() + 60_000).toISOString(),
+    spaceId,
+    jwk,
+  });
+  const session = wasm.completeSessionSetup({ ...prepared, signature: await signer.signMessage(prepared.siwe) });
+  const headers = wasm.invokeAny(session, [{ spaceId, service: "capabilities", action: "tinycloud.capabilities/read" }]);
+  const payload = JSON.parse(Buffer.from((headers.Authorization as string).split(".")[1]!, "base64url").toString()) as { att: Record<string, unknown> };
+  expect(payload.att[`${spaceId}/capabilities`]).toBeDefined();
+  expect(payload.att[`${spaceId}/capabilities/`]).toBeUndefined();
+});

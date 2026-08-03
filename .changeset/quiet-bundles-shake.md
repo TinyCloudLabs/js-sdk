@@ -7,42 +7,44 @@
 "@tinycloud/node-sdk-wasm": patch
 ---
 
-Reduce published SDK bundle and WASM artifact sizes by enabling safe package tree-shaking, using ES2020 output, removing release source maps, and optimizing WASM for size. `@tinycloud/sdk-services` keeps `src/debug.ts` in its `sideEffects` allowlist because it installs debug globals at module scope.
+Reduce published SDK bundle and WASM artifact sizes by enabling safe package tree-shaking, using ES2020 output, removing release source maps, and optimizing WASM for size. `@tinycloud/sdk-services` keeps its published root entries in the `sideEffects` allowlist because they install debug globals at module scope.
 
-Measured from `origin/master` (`959b428`) to this release tree. Values are raw bytes / gzip level 9 bytes:
+Measured by rebuilding the `origin/master` baseline (`9d4866f`) and this release tree in this worktree. Values are raw bytes / gzip level 9 bytes (`gzip -9 -c`):
 
 | Package entry | Before | After |
 | --- | ---: | ---: |
-| `@tinycloud/bootstrap` `capabilities.cjs` | 6062 / 1393 | 6062 / 1393 |
-| `@tinycloud/bootstrap` `capabilities.js` | 4834 / 947 | 4834 / 947 |
-| `@tinycloud/bootstrap` `generated/capabilities.cjs` | 7399 / 1529 | 7399 / 1529 |
-| `@tinycloud/bootstrap` `generated/capabilities.js` | 5971 / 1036 | 5971 / 1036 |
-| `@tinycloud/bootstrap` `index.cjs` | 24918 / 5327 | 24918 / 5327 |
-| `@tinycloud/bootstrap` `index.js` | 21996 / 4688 | 21996 / 4688 |
-| `@tinycloud/sdk-core` `bootstrap/index.cjs` | 1164 / 538 | 1164 / 538 |
-| `@tinycloud/sdk-core` `bootstrap/index.js` | 97 / 105 | 97 / 105 |
-| `@tinycloud/sdk-core` `index.cjs` | 455201 / 92069 | 454895 / 92061 |
-| `@tinycloud/sdk-core` `index.js` | 431236 / 89180 | 430930 / 89175 |
-| `@tinycloud/sdk-core` `policy/index.cjs` | 109484 / 22755 | 109334 / 22748 |
-| `@tinycloud/sdk-core` `policy/index.js` | 104631 / 21643 | 104481 / 21630 |
-| `@tinycloud/sdk-core` `requester/index.cjs` | 139395 / 30112 | 139251 / 30107 |
-| `@tinycloud/sdk-core` `requester/index.js` | 135649 / 29179 | 135505 / 29178 |
-| `@tinycloud/sdk-services` `encryption/index.cjs` | 44198 / 9647 | 44198 / 9647 |
-| `@tinycloud/sdk-services` `encryption/index.js` | 41192 / 8918 | 41192 / 8918 |
-| `@tinycloud/sdk-services` `index.cjs` | 215989 / 40916 | 215989 / 40916 |
-| `@tinycloud/sdk-services` `index.js` | 208450 / 39344 | 208450 / 39344 |
-| `@tinycloud/sdk-services` `internal/decrypt-transport-response-error.cjs` | 1540 / 643 | 1540 / 643 |
-| `@tinycloud/sdk-services` `internal/decrypt-transport-response-error.js` | 419 / 231 | 419 / 231 |
-| `@tinycloud/sdk-services` `kv/index.cjs` | 50733 / 10639 | 50733 / 10639 |
-| `@tinycloud/sdk-services` `kv/index.js` | 49561 / 10214 | 49561 / 10214 |
-| `@tinycloud/sdk-services` `sql/index.cjs` | 26895 / 6944 | 26895 / 6944 |
-| `@tinycloud/sdk-services` `sql/index.js` | 25613 / 6536 | 25613 / 6536 |
-| `@tinycloud/web-sdk` `index.cjs` | 3535517 / 1200787 | 3527155 / 1199803 |
-| `@tinycloud/web-sdk` `index.mjs` | 3691280 / 1229359 | 3681809 / 1227903 |
-| `@tinycloud/web-sdk-wasm` `index.js` | 1794903 / 691501 | 1752919 / 684335 |
-| `@tinycloud/node-sdk-wasm` `index.cjs` | 61 / 81 | 61 / 81 |
-| `@tinycloud/node-sdk-wasm` `index.js` | 1451 / 790 | 1451 / 790 |
-| `@tinycloud/node-sdk-wasm` `wasm/index.cjs` | 68817 / 10483 | 68817 / 10483 |
-| `@tinycloud/node-sdk-wasm` `wasm/tinycloud_web_sdk_rs_bg.wasm` | 1322615 / 518174 | 1290495 / 516585 |
+| `@tinycloud/bootstrap` `capabilities.cjs` | 6062 / 1408 | 6062 / 1408 |
+| `@tinycloud/bootstrap` `capabilities.js` | 4834 / 964 | 4834 / 964 |
+| `@tinycloud/bootstrap` `generated/capabilities.cjs` | 7399 / 1546 | 7399 / 1546 |
+| `@tinycloud/bootstrap` `generated/capabilities.js` | 5971 / 1051 | 5971 / 1051 |
+| `@tinycloud/bootstrap` `index.cjs` | 24918 / 5318 | 24918 / 5318 |
+| `@tinycloud/bootstrap` `index.js` | 21996 / 4684 | 21996 / 4684 |
+| `@tinycloud/sdk-core` `bootstrap/index.cjs` | 1164 / 548 | 1164 / 548 |
+| `@tinycloud/sdk-core` `bootstrap/index.js` | 97 / 114 | 97 / 114 |
+| `@tinycloud/sdk-core` `delegations/index.cjs` | 310660 / 61313 | 309759 / 61082 |
+| `@tinycloud/sdk-core` `delegations/index.js` | 301141 / 59881 | 300220 / 59637 |
+| `@tinycloud/sdk-core` `index.cjs` | 636247 / 125252 | 636247 / 125252 |
+| `@tinycloud/sdk-core` `index.js` | 607698 / 121703 | 607698 / 121703 |
+| `@tinycloud/sdk-core` `policy/index.cjs` | 109334 / 22646 | 109334 / 22646 |
+| `@tinycloud/sdk-core` `policy/index.js` | 104481 / 21537 | 104481 / 21537 |
+| `@tinycloud/sdk-core` `requester/index.cjs` | 139251 / 29949 | 139251 / 29949 |
+| `@tinycloud/sdk-core` `requester/index.js` | 135505 / 29028 | 135505 / 29028 |
+| `@tinycloud/sdk-services` `encryption/index.cjs` | 44198 / 9624 | 44198 / 9624 |
+| `@tinycloud/sdk-services` `encryption/index.js` | 41192 / 8904 | 41192 / 8904 |
+| `@tinycloud/sdk-services` `index.cjs` | 216891 / 41034 | 216891 / 41034 |
+| `@tinycloud/sdk-services` `index.js` | 209330 / 39470 | 209330 / 39470 |
+| `@tinycloud/sdk-services` `internal/decrypt-transport-response-error.cjs` | 1540 / 681 | 1540 / 681 |
+| `@tinycloud/sdk-services` `internal/decrypt-transport-response-error.js` | 419 / 268 | 419 / 268 |
+| `@tinycloud/sdk-services` `kv/index.cjs` | 51068 / 10676 | 51068 / 10676 |
+| `@tinycloud/sdk-services` `kv/index.js` | 49896 / 10259 | 49896 / 10259 |
+| `@tinycloud/sdk-services` `sql/index.cjs` | 26895 / 6935 | 26895 / 6935 |
+| `@tinycloud/sdk-services` `sql/index.js` | 25613 / 6530 | 25613 / 6530 |
+| `@tinycloud/web-sdk` `index.cjs` | 3701304 / 1240268 | 3637285 / 1229488 |
+| `@tinycloud/web-sdk` `index.mjs` | 3887911 / 1272304 | 3822218 / 1261105 |
+| `@tinycloud/web-sdk-wasm` `index.js` | 1794903 / 695262 | 1752919 / 687800 |
+| `@tinycloud/node-sdk-wasm` `index.cjs` | 61 / 91 | 61 / 91 |
+| `@tinycloud/node-sdk-wasm` `index.js` | 1451 / 801 | 1451 / 801 |
+| `@tinycloud/node-sdk-wasm` `wasm/index.cjs` | 68817 / 10479 | 68817 / 10479 |
+| `@tinycloud/node-sdk-wasm` `wasm/tinycloud_web_sdk_rs_bg.wasm` | 1322615 / 514215 | 1290495 / 512421 |
 
-The corrected `@tinycloud/web-sdk` pack is 2457738 bytes versus 7212375 bytes before; its package contents contain no `.map` files. The `apps/openkey-vite` consumer build succeeded, and `packages/web-sdk/tests/signInManifestRestore.test.ts` passed 8/8 with mocked auth. Live-wallet E2E was not run.
+The corrected `@tinycloud/web-sdk` dry-run pack contains 52 files and no `.map` files. `packages/web-sdk/tests/signInManifestRestore.test.ts` passed 8/8 with mocked auth under Bun. Live-wallet E2E was not run.

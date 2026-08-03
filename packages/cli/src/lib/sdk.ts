@@ -42,7 +42,7 @@ function signerJwkForProfile(
 ): object {
   const jwk = selectSignerJwk(sessionJwk, key);
   if (jwkHasPrivateParameter(jwk)) {
-    return jwk;
+    return jwk as object;
   }
 
   throw new CLIError(
@@ -78,7 +78,7 @@ export async function createSDKInstance(
   // For local auth, use the stored private key
   const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
 
-  if (!key && !effectivePrivateKey) {
+  if (!key && !effectivePrivateKey && !(profile?.authMethod === "openkey" && session !== null)) {
     throw new CLIError(
       "AUTH_REQUIRED",
       `No key found for profile "${ctx.profile}". Run \`tc init\` first.`,

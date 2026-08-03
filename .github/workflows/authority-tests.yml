@@ -33,6 +33,8 @@ jobs:
         run: |
           bun run --cwd packages/bootstrap build
           bun run --cwd packages/sdk-services build
+          bun run --cwd packages/share-envelope build
+          bun run --cwd packages/share-sdk build
           bun run --cwd packages/sdk-core build
           bun run --cwd packages/sdk-rs build:wasm:node
           bun run --cwd packages/sdk-rs/packages/node build
@@ -42,4 +44,4 @@ jobs:
         run: |
           bun run --cwd packages/sdk-core test
           bun run --cwd packages/sdk-services test
-          bun run --cwd packages/node-sdk test
+          bun test --max-concurrency=1 packages/node-sdk/src

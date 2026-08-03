@@ -265,6 +265,7 @@ export type {
   AccountSpace,
   AccountSpaceListOptions,
   AccountStatus,
+  RegisterBatchSuccess,
 } from "./account/AccountService";
 
 // Re-export service types from sdk-services for convenience

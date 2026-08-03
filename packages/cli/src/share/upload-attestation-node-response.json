@@ -1,0 +1,19 @@
+{
+  "type": "TinyCloudShareUploadAttestation",
+  "version": 1,
+  "issuer": "did:web:node.example",
+  "kid": "did:web:node.example#invitation",
+  "ownerDid": "did:key:owner",
+  "sessionDid": "did:key:session",
+  "shareOrigin": "https://share.tinycloud.xyz",
+  "encryptedBlobCid": "bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "encryptedBlobSha256": "GmP4R8s0JXr3m8xv8hQ8dJgHqVvP8F4nJm2wQ5dYw3I",
+  "byteLength": 3,
+  "deleteAfter": "2030-01-01T00:00:00.000Z",
+  "retention": "until-delete",
+  "issuedAt": "2026-08-01T00:00:00.000Z",
+  "authorityExpiresAt": "2026-08-01T00:02:00.000Z",
+  "expiresAt": "2026-08-01T00:01:00.000Z",
+  "jti": "jti-for-test-012345",
+  "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+}

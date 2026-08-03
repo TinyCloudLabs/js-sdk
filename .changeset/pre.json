@@ -21,14 +21,26 @@
     "@tinycloud/web-sdk": "2.10.0",
     "@tinycloud/mcp-sdk-contract": "0.0.0",
     "@tinycloud/operations-mcp-conformance": "0.0.0",
-    "@tinycloud/sdk-services-test": "14.0.0"
+    "@tinycloud/sdk-services-test": "14.0.0",
+    "@tinycloud/share-envelope": "0.1.0",
+    "@tinycloud/share-sdk": "0.1.0"
   },
   "changesets": [
     "calm-sites-stay-local",
     "coordinationos-openkey-session",
     "fair-clouds-delegate",
+    "green-dids-sign",
     "quiet-guests-store",
+    "share-cli-authority-hardening",
+    "share-cli-bearer",
+    "share-cli-lifecycle-repair",
+    "share-cli-migrate",
+    "share-cli-review-repair",
+    "share-cli-runtime-repair",
+    "share-sdk-foundation",
+    "share-target-lifecycle",
     "smart-clouds-unite",
-    "tc-362-space-modal-timeout"
+    "tc-362-space-modal-timeout",
+    "tc-373-batch-seed-spaces-classifier"
   ]
 }

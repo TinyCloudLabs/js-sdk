@@ -62,7 +62,8 @@ export interface OwnerShareDecryption {
 }
 export type OwnerShareMatcher =
   | { readonly kind: "exactEmail"; readonly value: string }
-  | { readonly kind: "emailDomain"; readonly value: string };
+  | { readonly kind: "emailDomain"; readonly value: string }
+  | { readonly kind: "recipientDid"; readonly value: string };
 
 export interface OwnerSharePolicyV2 {
   readonly type: "TinyCloudSharePolicy";

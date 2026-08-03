@@ -26,6 +26,8 @@ import {
   type SignedObjectSigner,
 } from "./index";
 
+const fixture = (path: string) => new URL(`../../${path}`, import.meta.url);
+
 interface CapabilityVector {
   name: string;
   input: unknown;
@@ -39,22 +41,22 @@ interface CapabilityVector {
 }
 
 const canonicalizationVectors = (await Bun.file(
-  "test-fixtures/policy-engine-vectors/policy-capability/canonicalization-vectors.json",
+  fixture("test-fixtures/policy-engine-vectors/policy-capability/canonicalization-vectors.json"),
 ).json()) as { vectors: CapabilityVector[] };
 const rejectionVectors = (await Bun.file(
-  "test-fixtures/policy-engine-vectors/policy-capability/rejection-vectors.json",
+  fixture("test-fixtures/policy-engine-vectors/policy-capability/rejection-vectors.json"),
 ).json()) as { vectors: CapabilityVector[] };
 const containmentVectors = (await Bun.file(
-  "test-fixtures/policy-engine-vectors/policy-capability/containment-vectors.json",
+  fixture("test-fixtures/policy-engine-vectors/policy-capability/containment-vectors.json"),
 ).json()) as { vectors: CapabilityVector[] };
 const suitesFixture = (await Bun.file(
-  "test-fixtures/policy-engine-vectors/signed-object-profile/signature-suites.json",
+  fixture("test-fixtures/policy-engine-vectors/signed-object-profile/signature-suites.json"),
 ).json()) as {
   ed25519: Record<string, { seed_hex: string; did: string }>;
   secp256k1: Record<string, { private_key_hex: string; did: string }>;
 };
 const objectsFixture = (await Bun.file(
-  "test-fixtures/policy-engine-vectors/signed-object-profile/objects.json",
+  fixture("test-fixtures/policy-engine-vectors/signed-object-profile/objects.json"),
 ).json()) as {
   objects: Array<{ object_type: string; unsigned: Record<string, unknown> }>;
 };

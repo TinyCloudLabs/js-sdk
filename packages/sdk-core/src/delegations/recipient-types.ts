@@ -137,6 +137,11 @@ export interface ShareRecipientClientOptions {
     readonly envelope: ShareEnvelopeV2;
     readonly presentation?: unknown;
   }) => Promise<SharePolicySession>;
+  /** Direct DID authorization is explicit and may return a resumable device step. */
+  readonly establishRecipientDidSession?: (input: {
+    readonly envelope: ShareEnvelopeV2;
+    readonly recipientDid: string;
+  }) => Promise<SharePolicySession | { readonly state: "authorization-required"; readonly method: "openkey-device"; readonly continueUrl?: string; readonly resumeToken: string } | { readonly state: "denied"; readonly reason: string }>;
   /**
    * Builds the holder presentation/session request after Node returns a
    * fresh challenge.  The callback is deliberately invoked only after the
@@ -360,11 +365,13 @@ export class ShareConflict extends Error {
 
 export class ShareAccessError extends Error {
   readonly code: string;
+  readonly details?: unknown;
 
-  constructor(code: string, message?: string) {
+  constructor(code: string, message?: string, details?: unknown) {
     super(message ?? "shared access could not be completed");
     this.name = "ShareAccessError";
     this.code = code;
+    this.details = details;
   }
 }
 

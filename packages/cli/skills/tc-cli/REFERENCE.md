@@ -5,7 +5,7 @@ This release has **Commander coverage tracked, not complete parity**:
 
 - 1 migrated registration(s).
 - 1 partially migrated registration(s).
-- 111 legacy registration(s) remain Commander-owned.
+- 115 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
@@ -101,14 +101,32 @@ eval "$(tc completion zsh)"
 tc completion fish | source
 ```
 
-## Share Create Options
+## Share Publish, Inspect, and Receive
+
+```bash
+tc share publish ./decision.md
+cat decision.md | tc share publish - --name decision.md --expires 7d
+printf '%s' "$SHARE_URL" | tc share inspect - --json
+printf '%s' "$SHARE_URL" | tc share receive - --output .
+printf '%s' "$SHARE_URL" | tc share receive - --stdout
+```
+
+Human publish output is exactly one canonical URL. Inspect never prints
+plaintext or secret-bearing fields. Receive verifies the link before writing,
+uses a sanitized single-segment filename, and refuses overwrite unless
+`--force` is explicit. Modern commands accept compact-v1 and inline-v2 links;
+legacy `tc1:` links are not accepted by these commands.
+
+### Share Publish Options
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--path <path>` | KV path scope (required) | — |
-| `--actions <actions>` | Comma-separated actions | `kv/get` |
-| `--expiry <duration>` | Duration: `1h`, `7d`, `1w`, or ISO date | `7d` |
-| `--web-link` | Generate browser-friendly URL | off |
+| `file` | Markdown file or `-` for bounded stdin | required |
+| `--name <filename>` | Safe filename for stdin | `stdin.md` |
+| `--to <target>` | Bearer target (`anyone`) | `anyone` |
+| `--expires <duration>` | Duration: `1h`, `7d`, `1w`, or ISO date | `7d` |
+| `--inline` | Use the explicit inline-v2 link | off |
+| `--json` | Emit versioned redacted JSON | off |
 
 ## KV Put Input Sources (mutually exclusive)
 

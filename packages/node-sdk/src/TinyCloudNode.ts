@@ -808,7 +808,10 @@ async function signJwtInputWithJwk(
   signingInput: string,
   jwk: object,
 ): Promise<Uint8Array> {
-  const bytes = new TextEncoder().encode(signingInput);
+  return signBytesWithJwk(new TextEncoder().encode(signingInput), jwk);
+}
+
+async function signBytesWithJwk(bytes: Uint8Array, jwk: object): Promise<Uint8Array> {
   try {
     const subtle = globalThis.crypto?.subtle;
     if (!subtle) {
@@ -873,6 +876,24 @@ function authorizationHeader(headers: Record<string, string> | [string, string][
 export interface NodeDefaults {
   createWasmBindings: () => IWasmBindings;
   createSigner: (privateKey: string, chainId?: number) => ISigner;
+}
+
+/**
+ * A bootstrap step that COMPLETED but did so in a degraded way — e.g. a KV
+ * batch write that failed ambiguously and was recovered by per-space
+ * reconciliation. Structured (not prose) so callers can branch on `kind` and
+ * `code` without parsing messages (TC-361).
+ */
+export interface BootstrapWarning {
+  /** The BootstrapStep.id that degraded, e.g. "account:seed-spaces"
+   *  (BootstrapStepBase.id — packages/bootstrap/src/index.ts:642-645). */
+  stepId: string;
+  /** What kind of degradation. Additive union; one member today. */
+  kind: "batch-write-reconciled";
+  /** ServiceError.code of the underlying failure that was recovered from. */
+  code: string;
+  /** Human-readable detail. Diagnostics only — never parse this. */
+  message: string;
 }
 
 export class TinyCloudNode {
@@ -945,6 +966,7 @@ export class TinyCloudNode {
    * {@link currentTinyCloudSession} as a fallback for `auth.tinyCloudSession`.
    */
   private _restoredTcSession?: TinyCloudSession;
+  private _activeServiceSession?: ServiceSession;
 
   /**
    * True when the last signIn() detected an interactive signer and skipped
@@ -957,9 +979,12 @@ export class TinyCloudNode {
    * Outcome of the last signIn()'s account-bootstrap attempt. `skipped` is
    * true when bootstrap did not complete (interactive signer, auto-sign
    * denied, or a bootstrap step failed); `reason` carries the cause so apps
-   * can surface a "finish account setup" call-to-action.
+   * can surface a "finish account setup" call-to-action. `warnings` is
+   * present when bootstrap completed, but one or more steps recovered from
+   * an ambiguous failure (e.g. a KV batch write reconciled via per-space
+   * fallback) — clean vs. recovered runs are otherwise byte-identical.
    */
-  private _bootstrapStatus: { skipped: boolean; reason?: string } = {
+  private _bootstrapStatus: { skipped: boolean; reason?: string; warnings?: BootstrapWarning[] } = {
     skipped: false,
   };
 
@@ -970,7 +995,7 @@ export class TinyCloudNode {
   }
 
   /** Outcome of the last signIn()'s account-bootstrap attempt. */
-  get bootstrapStatus(): { skipped: boolean; reason?: string } {
+  get bootstrapStatus(): { skipped: boolean; reason?: string; warnings?: BootstrapWarning[] } {
     return this._bootstrapStatus;
   }
 
@@ -1565,7 +1590,15 @@ export class TinyCloudNode {
     }
 
     try {
-      await this.runAccountBootstrap(steps);
+      const warnings = await this.runAccountBootstrap(steps);
+      if (warnings.length > 0) {
+        this._bootstrapStatus = { skipped: false, warnings };
+        this.notificationHandler.warning(
+          `Account bootstrap completed with warnings: ${warnings
+            .map((w) => `${w.stepId} (${w.kind}: ${w.code})`)
+            .join("; ")}`,
+        );
+      }
     } catch (err) {
       // Bootstrap is provisioning, not a precondition of the session the
       // user just signed: never fail signIn() because of it. Surface the
@@ -1611,7 +1644,7 @@ export class TinyCloudNode {
     }
   }
 
-  private async runAccountBootstrap(steps: BootstrapStep[]): Promise<void> {
+  private async runAccountBootstrap(steps: BootstrapStep[]): Promise<BootstrapWarning[]> {
     if (!this.auth || !this._address) {
       throw new Error("Account bootstrap requires an active wallet session");
     }
@@ -1624,6 +1657,7 @@ export class TinyCloudNode {
     const auth = this.auth as NodeUserAuthorization;
     const sessions = new Map<BootstrapSpaceName, TinyCloudSession>();
     const rawAbilitiesBySpace = new Map<BootstrapSpaceName, Record<string, string[]>>();
+    const warnings: BootstrapWarning[] = [];
     const primarySession = auth.tinyCloudSession;
     const defaultSpaceId = this.ownedSpaceId("default");
     const canReusePrimaryBootstrapSession =
@@ -1698,20 +1732,31 @@ export class TinyCloudNode {
       }
 
       if (step.kind === "seed-spaces") {
-        for (const space of step.spaces) {
-          const registered = await this.account.spaces.register({
+        // One batched KV write + one multi-row index write instead of 5
+        // sequential register() calls (TC-373).
+        const registered = await this.account.spaces.registerBatch(
+          step.spaces.map((space) => ({
             spaceId: space.spaceId,
             name: space.name,
             ownerDid: this.did,
             type: "owned",
             permissions: ["*"],
             status: "active",
+          })),
+        );
+        if (!registered.ok) {
+          throw new Error(
+            `Failed to seed account spaces: ${registered.error.message}`,
+          );
+        }
+        const batchError = registered.data.recoveredFromBatchError;
+        if (batchError) {
+          warnings.push({
+            stepId: step.id,
+            kind: "batch-write-reconciled",
+            code: batchError.code,
+            message: batchError.message,
           });
-          if (!registered.ok) {
-            throw new Error(
-              `Failed to seed account space ${space.spaceId}: ${registered.error.message}`,
-            );
-          }
         }
       }
 
@@ -1755,6 +1800,8 @@ export class TinyCloudNode {
         }
       }
     }
+
+    return warnings;
   }
 
   private registerBootstrapRuntimeGrant(
@@ -2554,6 +2601,7 @@ export class TinyCloudNode {
     this._delegationManager = stagedGraph.delegationManager;
     this._spaceService = stagedGraph.spaceService;
     this._serviceGraph = stagedGraph.graph;
+    this._activeServiceSession = serviceSession;
     this._baseSecrets = new Map();
     this._secrets = new Map();
     this._publicKV = undefined;
@@ -2924,6 +2972,34 @@ export class TinyCloudNode {
   }
 
   /**
+   * Mint a multi-capability invocation through the established session key.
+   * Callers receive only the signed headers; session key material remains
+   * owned by the session manager and is never part of the caller contract.
+   */
+  invokeAny(
+    entries: Parameters<InvokeAnyFunction>[1],
+    facts?: Parameters<InvokeAnyFunction>[2],
+  ): ReturnType<InvokeAnyFunction> {
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    return this._serviceGraph.invokeAny(session, entries, facts);
+  }
+
+  /** Sign protocol bytes with the established in-memory session key. */
+  async signSessionBytes(bytes: Uint8Array): Promise<Uint8Array> {
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    return signBytesWithJwk(bytes, session.jwk);
+  }
+
+  /** Bind a session-signed invocation to the canonical service audience. */
+  async bindInvocationAudience(authorization: string, audience: string): Promise<string> {
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    return rewriteInvocationAudience(authorization, audience, session.jwk);
+  }
+
+  /**
    * Connect a wallet to upgrade from session-only mode to wallet mode.
    *
    * This allows a user who started in session-only mode to later connect
@@ -3150,6 +3226,7 @@ export class TinyCloudNode {
     if (this._serviceContext) {
       const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
         invoke: this._serviceContext.invoke,
+        invokeAny: this._serviceContext.invokeAny,
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
@@ -3928,6 +4005,7 @@ export class TinyCloudNode {
     readonly recipientEmail: string;
     readonly shareUrl: string;
     readonly documentName: string;
+    readonly idempotencyKey: string;
     readonly expiresAt: string;
     /** The enrolled receipt key from the node trust bundle. */
     readonly nodeProof: { readonly kid: string; readonly publicKey: Uint8Array };
@@ -3949,6 +4027,7 @@ export class TinyCloudNode {
       shareUrl: input.shareUrl,
       documentName: input.documentName,
       jti: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
+      idempotencyKey: input.idempotencyKey,
       expiresAt: input.expiresAt,
     };
     const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));

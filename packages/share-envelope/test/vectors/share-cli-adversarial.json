@@ -1,0 +1,26 @@
+{
+  "description": "Cross-consumer Share CLI/viewer negative cases. Every implementation must reject these without fetching plaintext or normalizing the input.",
+  "linkCases": [
+    {
+      "id": "query-before-fragment",
+      "url": "https://share.tinycloud.xyz/s/bafkreig2z7mbp6v7qhtubpxlylzjtovuxsnt5nop72x5orhkda2udgwaru?key=secret#k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "expected": "invalid-link"
+    },
+    {
+      "id": "http-origin",
+      "url": "http://share.tinycloud.xyz/s/bafkreig2z7mbp6v7qhtubpxlylzjtovuxsnt5nop72x5orhkda2udgwaru#k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "expected": "invalid-link"
+    },
+    {
+      "id": "non-canonical-key-padding",
+      "url": "https://share.tinycloud.xyz/s/bafkreig2z7mbp6v7qhtubpxlylzjtovuxsnt5nop72x5orhkda2udgwaru#k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "expected": "invalid-link"
+    }
+  ],
+  "resourceCases": [
+    { "id": "traversal", "path": "docs/../secret.md", "expected": false },
+    { "id": "encoded-separator", "path": "docs%2fsecret.md", "expected": false },
+    { "id": "empty-segment", "path": "docs//secret.md", "expected": false },
+    { "id": "canonical", "path": "docs/secret.md", "expected": true }
+  ]
+}
