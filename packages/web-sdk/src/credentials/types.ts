@@ -80,6 +80,7 @@ export interface CredentialRequestState {
 export interface CredentialAcquisitionTransport {
   create(input: { readonly descriptor: CredentialFlowDescriptor; readonly descriptorDigest: string; readonly requirement: CredentialRequirement; readonly requirementDigest: string; readonly holderDid: string; readonly openerOrigin: string; readonly completionVerifierChallenge: string; readonly signal?: AbortSignal }): Promise<{ readonly requestId: string; readonly locator: string; readonly expiresAt: string; readonly correlationId: string }>;
   state(requestId: string, verifier: string, signal?: AbortSignal): Promise<CredentialRequestState>;
+  beginStep(requestId: string, verifier: string, stepId: "collect_input" | "mailbox_otp", signal?: AbortSignal): Promise<void>;
   submitStep(requestId: string, verifier: string, stepId: string, proof: PrimitiveStepResult, signal?: AbortSignal): Promise<void>;
   holderBinding(requestId: string, verifier: string, signal?: AbortSignal): Promise<CredentialHolderBinding>;
   submitHolderSignature(requestId: string, verifier: string, signature: string, signal?: AbortSignal): Promise<void>;

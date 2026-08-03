@@ -68,6 +68,7 @@ export async function interpretCredentialFlow(input: {
       input.onProgress?.({ state: next.type === "collect_input" ? "collecting" : "proving", stepId: next.id, correlationId: state.correlationId });
       const handler = input.handlers?.[next.type];
       if (!handler) { await (input.onWait?.() ?? delay(state.retryAfterMs ?? 50, input.signal)); continue; }
+      if (next.constraints.challengeRequired === true) await input.transport.beginStep(input.requestId, input.verifier, next.type, input.signal);
       const proof = await handler({ descriptor: input.descriptor, requirement: input.requirement, stepId: next.id, constraints: next.constraints, signal: input.signal });
       await input.transport.submitStep(input.requestId, input.verifier, next.id, proof, input.signal);
     }

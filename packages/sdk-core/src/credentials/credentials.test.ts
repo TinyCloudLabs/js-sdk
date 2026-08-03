@@ -29,7 +29,7 @@ describe("OpenCredentials canonical contract", () => {
   });
 });
 
-test("independently verifies the Rust server SD-JWT shape and rejects retired keys", async () => {
+test("verifies an overlapping prior issuer key after rotation and rejects it once retired", async () => {
   const descriptor = validateCredentialFlowDescriptor(descriptors.vectors[1]!.descriptor) as CredentialFlowDescriptor;
   const now = new Date("2030-01-01T00:00:00.000Z"); const holderDid = "did:key:z6MkActive"; const claims = { handle: "alice" };
   const requirement: CredentialRequirement = { type: "TinyCloudCredentialRequirement", version: 1, profile: { id: descriptor.profile, version: 1 }, credentialType: { id: descriptor.format.vct, version: 1 }, claims };
@@ -39,7 +39,10 @@ test("independently verifies the Rust server SD-JWT shape and rejects retired ke
   const header = encodeBase64Url(new TextEncoder().encode(JSON.stringify({ alg: "EdDSA", typ: "vc+sd-jwt", kid: descriptor.issuer.kid }))); const body = encodeBase64Url(new TextEncoder().encode(JSON.stringify(payload))); const signingInput = `${header}.${body}`;
   const credential = `${signingInput}.${encodeBase64Url(ed25519.sign(new TextEncoder().encode(signingInput), seed))}~${disclosure}~`;
   const envelope: IssuedCredentialEnvelope = { type: "OpenCredentialsIssuedCredential", version: 1, protocol: descriptor.protocol, profile: { id: descriptor.profile, version: 1 }, credentialType: { id: descriptor.format.vct, version: 1 }, schema: descriptor.format.vct, format: "vc+sd-jwt", issuerDid: descriptor.issuer.did, issuerKid: descriptor.issuer.kid, subjectDid: holderDid, holderDid, claims, claimsDigest: await canonicalDigest(claims), descriptorDigest, credentialId: payload.jti, issuedAt: new Date(payload.iat * 1000).toISOString(), notBefore: new Date(payload.nbf * 1000).toISOString(), expiresAt: new Date(payload.exp * 1000).toISOString(), status: { method: "none", freshnessSeconds: 300 }, credential };
-  const metadata: CredentialIssuerMetadata = { type: "OpenCredentialsIssuerMetadata", version: 1, origin: descriptor.issuer.origin, issuerDid: descriptor.issuer.did, keys: [{ kid: descriptor.issuer.kid, alg: "EdDSA", jwk: { kty: "OKP", crv: "Ed25519", x: encodeBase64Url(publicKey) }, validFrom: "2029-01-01T00:00:00Z", validUntil: "2031-01-01T00:00:00Z" }], cache: { maxAgeSeconds: 300, etag: "\"key-1\"" } };
+  const rotatedPublicKey = ed25519.getPublicKey(Uint8Array.from({ length: 32 }, (_, index) => index + 33));
+  const rotated = { kid: `${descriptor.issuer.did}#rotated-2`, alg: "EdDSA" as const, jwk: { kty: "OKP" as const, crv: "Ed25519" as const, x: encodeBase64Url(rotatedPublicKey) }, validFrom: "2029-12-01T00:00:00Z", validUntil: "2031-01-01T00:00:00Z" };
+  const overlapping = { kid: descriptor.issuer.kid, alg: "EdDSA" as const, jwk: { kty: "OKP" as const, crv: "Ed25519" as const, x: encodeBase64Url(publicKey) }, validFrom: "2029-01-01T00:00:00Z", validUntil: "2031-01-01T00:00:00Z" };
+  const metadata: CredentialIssuerMetadata = { type: "OpenCredentialsIssuerMetadata", version: 1, origin: descriptor.issuer.origin, issuerDid: descriptor.issuer.did, keys: [rotated, overlapping], cache: { maxAgeSeconds: 300, etag: "\"key-2\"" } };
   expect((await verifyIssuedCredential({ envelope, descriptor, descriptorDigest, requirement, holderDid, issuerMetadata: metadata, now, checkStatus: async () => true })).claims).toEqual(claims);
-  await expect(verifyIssuedCredential({ envelope, descriptor, descriptorDigest, requirement, holderDid, issuerMetadata: { ...metadata, keys: [{ ...metadata.keys[0]!, retiredAt: "2029-12-01T00:00:00Z" }] }, now, checkStatus: async () => true })).rejects.toMatchObject({ code: "VERIFICATION_FAILED" });
+  await expect(verifyIssuedCredential({ envelope, descriptor, descriptorDigest, requirement, holderDid, issuerMetadata: { ...metadata, keys: [rotated, { ...overlapping, retiredAt: "2029-12-31T00:00:00Z" }] }, now, checkStatus: async () => true })).rejects.toMatchObject({ code: "VERIFICATION_FAILED" });
 });

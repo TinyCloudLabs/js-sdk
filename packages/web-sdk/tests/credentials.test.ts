@@ -17,6 +17,7 @@ class InterpreterTransport implements CredentialAcquisitionTransport {
   index = 0; submitted: string[] = []; signatures = 0; issued = 0;
   constructor(readonly states: readonly CredentialRequestState[], readonly holder: any) {}
   async create(): Promise<any> { throw new Error("unused"); } async state() { return this.states[Math.min(this.index, this.states.length - 1)]!; }
+  async beginStep() {}
   async submitStep(_id: string, _verifier: string, step: string) { this.submitted.push(step); this.index += 1; }
   async holderBinding() { return this.holder; } async submitHolderSignature() { this.signatures += 1; this.index += 1; }
   async issue() { this.issued += 1; this.index += 1; } async result(): Promise<any> { throw new Error("unused"); } async issuerMetadata(): Promise<any> { throw new Error("unused"); } async checkStatus() { return true; }
@@ -34,7 +35,8 @@ test("HTTP transport emits the Rust-owned request, challenge, and proof wire sha
   const req = requirement(email); const descriptorDigest = await canonicalDigest(email); const requirementDigest = await canonicalDigest(req);
   expect((await transport.create({ descriptor: email, descriptorDigest, requirement: req, requirementDigest, holderDid: HOLDER, openerOrigin: "https://app.test", completionVerifierChallenge: "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD" })).requestId).toBe(REQUEST);
   expect(new URL(calls[0]!.url).pathname).toBe("/v1/acquisitions"); expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ protocol: email.protocol, profile: email.profile, profileVersion: 1, descriptorDigest, requirementDigest, holderDid: HOLDER, inputs: req.claims, audience: "tinycloud://credentials", openerOrigin: "https://app.test", completionOrigin: "https://app.test", completionContext: "sdk-acquisition", completionVerifierChallenge: "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD" });
-  expect((await transport.state(REQUEST, verifier)).nextStep?.type).toBe("mailbox_otp"); expect(new URL(calls[2]!.url).pathname).toBe(`/v1/acquisitions/${REQUEST}/challenge`); expect((calls[2]!.init.headers as Record<string, string>).authorization).toBe(`Bearer ${verifier}`);
+  const pending = await transport.state(REQUEST, verifier); expect(pending.nextStep?.type).toBe("mailbox_otp"); expect(pending.nextStep?.constraints.challengeRequired).toBe(true); expect(calls).toHaveLength(2);
+  await transport.beginStep(REQUEST, verifier, "mailbox_otp"); expect(new URL(calls[2]!.url).pathname).toBe(`/v1/acquisitions/${REQUEST}/challenge`); expect((calls[2]!.init.headers as Record<string, string>).authorization).toBe(`Bearer ${verifier}`);
   await transport.submitStep(REQUEST, verifier, "mailbox_otp", { otp: "redacted" }); expect(JSON.parse(calls[3]!.init.body as string)).toEqual({ step: "mailbox_otp", stepVersion: 1, challengeNonce: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", proof: { otp: "redacted" } });
 });
 

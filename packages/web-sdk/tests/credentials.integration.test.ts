@@ -1,8 +1,8 @@
 import { afterAll, expect, test } from "bun:test";
 import { basename, dirname, join, resolve } from "node:path";
 import { createHermeticEncryptedNode } from "../../node-sdk/src/test-support/hermetic-encrypted-node";
-import { canonicalDigest, credentialRequirementDigest, encodeBase64Url, sha256Base64Url, type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
-import { BrowserCredentialRedirectStore } from "../src/credentials/browser";
+import { type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
+import { BrowserCredentialInteraction, BrowserCredentialRedirectStore } from "../src/credentials/browser";
 import { CredentialsService } from "../src/credentials/service";
 import { OpenCredentialsHttpTransport } from "../src/credentials/transport";
 
@@ -97,42 +97,44 @@ test("an initialized active session ensures mounted email and catalog-added synt
   const service = new CredentialsService(client);
   let creates = 0;
   let resultReads = 0;
+  let browserCookie = "";
   const transportFor = (descriptor: CredentialFlowDescriptor) => new OpenCredentialsHttpTransport(descriptor, async (input, init) => {
     const requested = new URL(String(input));
     if (requested.pathname === "/v1/acquisitions" && init?.method === "POST") creates += 1;
     if (requested.pathname.endsWith("/result")) resultReads += 1;
-    return fetch(new URL(`${requested.pathname}`, acquisition.url), init);
+    const response = await fetch(new URL(`${requested.pathname}`, acquisition.url), init);
+    if (requested.pathname === "/v1/acquisitions" && init?.method === "POST") browserCookie = response.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
+    return response;
   });
 
-  const emailRequirement = requirement(email);
+  const hostedEmailInteraction = {
+    kind: "popup" as const,
+    start: async ({ locator }: { locator: string }) => {
+      const hosted = async (suffix: string, init: RequestInit = {}) => {
+        const response = await fetch(new URL(`/v1/acquisitions/${locator}${suffix}`, acquisition.url), {
+          ...init,
+          headers: { ...(init.headers as Record<string, string> | undefined), cookie: browserCookie, "content-type": "application/json" },
+        });
+        expect(response.ok).toBe(true);
+        return response.json() as Promise<any>;
+      };
+      const state = await hosted("/state");
+      expect(state.state).toBe("challenge_required");
+      const challenge = await hosted("/challenge", { method: "POST", body: JSON.stringify({ step: "mailbox_otp", stepVersion: 1 }) });
+      await hosted("/proof", { method: "POST", body: JSON.stringify({ step: "mailbox_otp", stepVersion: 1, challengeNonce: challenge.challengeNonce, proof: { otp: "246810" } }) });
+      return { wake: async () => undefined, close: () => undefined, closed: () => false };
+    },
+  };
+
   const emailTransport = transportFor(email);
-  const verifier = encodeBase64Url(crypto.getRandomValues(new Uint8Array(32)));
-  const descriptorDigest = await canonicalDigest(email);
-  const requirementDigest = await credentialRequirementDigest(emailRequirement);
-  const created = await emailTransport.create({
-    descriptor: email, descriptorDigest, requirement: emailRequirement, requirementDigest,
-    holderDid, openerOrigin: "https://app.test", completionVerifierChallenge: await sha256Base64Url(verifier),
-  });
-  const pending = await emailTransport.state(created.requestId, verifier);
-  expect(pending.nextStep?.type).toBe("mailbox_otp");
-  await emailTransport.submitStep(created.requestId, verifier, "mailbox_otp", { otp: "246810" });
-  const redirectStorage = memoryStorage();
-  const redirectStore = new BrowserCredentialRedirectStore(redirectStorage);
-  await redirectStore.save({
-    type: "TinyCloudCredentialRedirectResume", version: 1, requestId: created.requestId,
-    locator: created.locator, verifier, expiresAt: created.expiresAt, correlationId: created.correlationId,
-    holderDid, descriptorDigest, requirementDigest, openerOrigin: "https://app.test",
-  });
-
   const emailResult = await service.ensure(requirement(email), {
-    descriptor: email, interaction: "redirect", transport: emailTransport, redirectStore, openerOrigin: "https://app.test",
+    descriptor: email, interaction: "popup", browser: hostedEmailInteraction, transport: emailTransport, openerOrigin: "https://app.test",
   });
   expect(emailResult.status).toBe("acquired");
   expect(emailResult.credential.holderDid).toBe(holderDid);
   expect(emailResult.record.holderDid).toBe(holderDid);
   expect(emailResult.record.ownerDid).toBe(ownerDid);
   expect(emailResult.receipt?.ownerDid).toBe(ownerDid);
-  expect(await redirectStore.load()).toBeUndefined();
   expect(resultReads).toBe(1);
 
   const syntheticResult = await service.ensure(requirement(synthetic), {
@@ -145,4 +147,80 @@ test("an initialized active session ensures mounted email and catalog-added synt
   expect(reused.status).toBe("reused");
   expect(creates).toBe(2);
   expect(resultReads).toBe(2);
+}, 120_000);
+
+test("a locator-only redirect returns after hosted proof and a restored SDK session completes acquisition", async () => {
+  const kv = memoryKv();
+  const holderDid = initialized.delegate.credentialHolderDid;
+  const ownerDid = initialized.delegate.did;
+  const spaceId = `${ownerDid.replace(/^did:/, "tinycloud:")}:credentials`;
+  const client = {
+    get credentialHolderDid() { return initialized.delegate.credentialHolderDid; },
+    get credentialHolderKid() { return initialized.delegate.credentialHolderKid; },
+    session: () => initialized.delegate.session as any,
+    autoSignCredentialBytes: (bytes: Uint8Array) => initialized.delegate.autoSignCredentialBytes(bytes),
+    approveCredentialBytes: (bytes: Uint8Array) => initialized.delegate.approveCredentialBytes(bytes),
+    ensureOwnedSpaceHosted: async () => spaceId,
+    credentialSpaceOwnerDid: (space: string) => initialized.delegate.credentialSpaceOwnerDid(space),
+    kvForSpace: () => kv,
+  };
+  const service = new CredentialsService(client);
+  let browserCookie = "";
+  const transport = new OpenCredentialsHttpTransport(email, async (input, init) => {
+    const requested = new URL(String(input));
+    const response = await fetch(new URL(requested.pathname, acquisition.url), init);
+    if (requested.pathname === "/v1/acquisitions" && init?.method === "POST") browserCookie = response.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
+    return response;
+  });
+  const redirectStore = new BrowserCredentialRedirectStore(memoryStorage());
+  const unload = new AbortController();
+  let navigation = "";
+  let returnedTo = "";
+  const navigationAdapter = new BrowserCredentialInteraction("redirect", {
+    opener: {} as Window,
+    open: () => null,
+    redirect: (url) => { navigation = url; },
+  });
+  const browser = {
+    kind: "redirect" as const,
+    start: async (input: { issuerOrigin: string; locator: string; signal?: AbortSignal }) => {
+      const surface = await navigationAdapter.start(input);
+      const hosted = async (suffix: string, init: RequestInit = {}) => {
+        const response = await fetch(new URL(`/v1/acquisitions/${input.locator}${suffix}`, acquisition.url), {
+          ...init,
+          headers: { ...(init.headers as Record<string, string> | undefined), cookie: browserCookie, "content-type": "application/json" },
+        });
+        expect(response.ok).toBe(true);
+        return response.json() as Promise<any>;
+      };
+      const initial = await hosted("/state");
+      const challenge = await hosted("/challenge", { method: "POST", body: JSON.stringify({ step: "mailbox_otp", stepVersion: 1 }) });
+      await hosted("/proof", { method: "POST", body: JSON.stringify({ step: "mailbox_otp", stepVersion: 1, challengeNonce: challenge.challengeNonce, proof: { otp: "246810" } }) });
+      const afterProof = await hosted("/state");
+      expect(initial.state).toBe("challenge_required");
+      expect(afterProof.state).toBe("holder_binding_required");
+      returnedTo = afterProof.openerOrigin;
+      unload.abort();
+      return surface;
+    },
+  };
+
+  await expect(service.ensure(requirement(email), {
+    descriptor: email, interaction: "redirect", browser, transport, redirectStore,
+    openerOrigin: "https://app.test", signal: unload.signal,
+  })).rejects.toMatchObject({ code: "CANCELED" });
+  const interactionUrl = new URL(navigation);
+  expect(interactionUrl.pathname).toMatch(/^\/credentials\/acquire\/[A-Za-z0-9_-]{32}$/);
+  expect(interactionUrl.search).toBe("");
+  expect(interactionUrl.hash).toBe("");
+  expect(returnedTo).toBe("https://app.test");
+  expect(await redirectStore.load()).toBeDefined();
+
+  const resumed = await service.ensure(requirement(email), {
+    descriptor: email, interaction: "redirect", transport, redirectStore, openerOrigin: "https://app.test",
+  });
+  expect(resumed.status).toBe("acquired");
+  expect(resumed.credential.holderDid).toBe(holderDid);
+  expect(resumed.record.ownerDid).toBe(ownerDid);
+  expect(await redirectStore.load()).toBeUndefined();
 }, 120_000);
