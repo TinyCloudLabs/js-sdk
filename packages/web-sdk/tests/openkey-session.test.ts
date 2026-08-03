@@ -1,5 +1,6 @@
 import { beforeEach, expect, mock, test } from "bun:test";
 import type { PersistedSessionData } from "@tinycloud/sdk-core";
+import { Wallet } from "ethers";
 import type {
   EstablishOpenKeySessionOptions,
   EstablishOpenKeySessionResult,
@@ -88,13 +89,14 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
   },
   tcwSession: {
     TCWSessionManager: class {
+      private restoredJwk?: object;
       createSessionKey(id: string) { return id; }
-      replaceSessionKey(_jwk: object, keyId: string) { return keyId; }
+      replaceSessionKey(jwk: object, keyId: string) { this.restoredJwk = jwk; return keyId; }
       listSessionKeys() { return ["default", "share-recipient"]; }
       renameSessionKeyId() {}
       getDID(keyId: string) { return `did:key:${keyId}`; }
       jwk() {
-        return JSON.stringify({
+        return JSON.stringify(this.restoredJwk ?? {
           kty: "OKP",
           crv: "Ed25519",
           x: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -108,7 +110,13 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
 const { TinyCloudWeb: RealTinyCloudWeb } = require("../src/modules/tcw");
 const { BrowserSessionStorage } = require("../src/adapters/BrowserSessionStorage");
 
-const ADDRESS = "0x31d40B62C395B9418C4198363619B11c65cD406F";
+const OPENKEY_WALLET = new Wallet(
+  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+);
+const WRONG_OPENKEY_WALLET = new Wallet(
+  "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+);
+const ADDRESS = OPENKEY_WALLET.address;
 const KEY_ID = "key_personal_1";
 const TOKEN = "ok_provider_once_fixture";
 const ENDPOINT = "https://openkey.example.test/api/delegate/sign";
@@ -357,10 +365,15 @@ function options(
   };
 }
 
-async function expectStrategyTokenEmpty(fetchImpl: ReturnType<typeof mock>) {
+async function expectStrategyTokenEmpty(
+  fetchImpl: ReturnType<typeof mock>,
+  sessionEstablished = false,
+) {
   const strategy = constructedConfigs.at(-1).signStrategy;
   await expect(strategy.handler(VALID_REQUEST)).rejects.toThrow(
-    "OpenKey provider token is unavailable",
+    sessionEstablished
+      ? "OpenKey callback request is not a credential approval decision"
+      : "OpenKey provider token is unavailable",
   );
   expect(fetchImpl).not.toHaveBeenCalled();
 }
@@ -389,7 +402,7 @@ test("fresh sign-in sends one unchanged SIWE sign-in body with one Bearer token"
   expect(signerFetch).toHaveBeenCalledTimes(1);
   const [url, init] = signerFetch.mock.calls[0];
   expect(url).toBe(ENDPOINT);
-  expect((init?.headers as Record<string, string>).authorization).toBe(
+  expect(new Headers(init?.headers).get("authorization")).toBe(
     `Bearer ${TOKEN}`,
   );
   expect(JSON.parse(String(init?.body))).toEqual({
@@ -455,7 +468,7 @@ test("a simulated second callback rejects locally after one signer fetch", async
 
   await expect(
     constructedConfigs[0].signStrategy.handler(VALID_REQUEST),
-  ).rejects.toThrow("OpenKey provider token is unavailable");
+  ).rejects.toThrow("OpenKey callback request is not a credential approval decision");
   expect(signerFetch).toHaveBeenCalledTimes(1);
 });
 
@@ -534,12 +547,12 @@ const typeFixture: EstablishOpenKeySessionOptions = {
 };
 void typeFixture;
 
-test("success clears the helper token source", async () => {
+test("success prevents the one-shot bearer token from being reused", async () => {
   const signerFetch = mock(async () =>
     new Response(JSON.stringify({ signature: "0xdelegate-signature" })));
   await establishOpenKeySession(options(TOKEN, signerFetch));
   signerFetch.mockClear();
-  await expectStrategyTokenEmpty(signerFetch);
+  await expectStrategyTokenEmpty(signerFetch, true);
 });
 
 const failureCases = [
@@ -775,6 +788,67 @@ test("real TinyCloudWeb forwards disabled auto-bootstrap into TinyCloudNode", as
       writable: true,
     });
   }
+});
+
+test("real initialized OpenKey session validates exact EIP-191 auto-sign evidence", async () => {
+  await seedRealBrowserPersistence("valid");
+  const message = "canonical credential holder binding";
+  const automaticDecisions = [
+    { approved: true, signature: await OPENKEY_WALLET.signMessage(message) },
+    { approved: true, signature: await OPENKEY_WALLET.signMessage(`${message} substituted`) },
+    { approved: true, signature: await WRONG_OPENKEY_WALLET.signMessage(message) },
+    { approved: true },
+  ];
+  const signerFetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("authorization")).toBeNull();
+    expect(init?.credentials).toBe("include");
+    return new Response(JSON.stringify(automaticDecisions.shift()), { status: 200 });
+  });
+  const input = options(undefined, signerFetch);
+
+  const result = await establishOpenKeySession(input);
+  const activeNode = (result.client as any)._node;
+  expect(activeNode.config.signStrategy.openKeyAutoSign).toBe(true);
+  const bytes = new TextEncoder().encode(message);
+  const automaticallySigned = await activeNode.autoSignCredentialBytes(bytes);
+  expect(automaticallySigned).toBeInstanceOf(Uint8Array);
+  await expect(activeNode.autoSignCredentialBytes(bytes)).rejects.toThrow(
+    "signature evidence is invalid",
+  );
+  await expect(activeNode.autoSignCredentialBytes(bytes)).rejects.toThrow(
+    "signature evidence is invalid",
+  );
+  await expect(activeNode.autoSignCredentialBytes(bytes)).rejects.toThrow(
+    "did not include a signature",
+  );
+  expect(result.status).toBe("restored");
+  expect(signerFetch).toHaveBeenCalledTimes(4);
+});
+
+test("real initialized OpenKey session accepts approval-only and optional exact evidence, then preserves denial", async () => {
+  await seedRealBrowserPersistence("valid");
+  const message = "canonical credential holder binding";
+  const approvalDecisions = [
+    { approved: true },
+    { approved: true, signature: await OPENKEY_WALLET.signMessage(message) },
+    { approved: false, reason: "user rejected credential signing" },
+  ];
+  const requestCredentialApproval = mock(async () => approvalDecisions.shift()!);
+  const input = options(undefined, mock(async () => {
+    throw new Error("automatic policy must not run during manual approval");
+  }));
+  input.requestCredentialApproval = requestCredentialApproval;
+
+  const result = await establishOpenKeySession(input);
+  const activeNode = (result.client as any)._node;
+  const bytes = new TextEncoder().encode(message);
+  expect(await activeNode.approveCredentialBytes(bytes)).toBeInstanceOf(Uint8Array);
+  expect(await activeNode.approveCredentialBytes(bytes)).toBeInstanceOf(Uint8Array);
+  await expect(activeNode.approveCredentialBytes(bytes)).rejects.toThrow(
+    "user rejected credential signing",
+  );
+  expect(result.status).toBe("restored");
+  expect(requestCredentialApproval).toHaveBeenCalledTimes(3);
 });
 
 test.each(["missing", "corrupt", "expired"] as const)(

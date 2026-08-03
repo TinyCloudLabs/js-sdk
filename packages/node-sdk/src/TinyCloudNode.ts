@@ -59,6 +59,8 @@ import {
   type InvokeAnyFunction,
   type InvokeFunction,
   type FetchFunction,
+  type SignRequest,
+  type SignResponse,
   INotificationHandler,
   SilentNotificationHandler,
   IENSResolver,
@@ -149,6 +151,7 @@ import {
   validateOwnerSharePolicyRegistrationBytes,
   type ShareDeliveryAuthorizationReceipt,
   validateShareDeliveryAuthorizationBytes,
+  verifyEip191MessageSignature,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -302,6 +305,13 @@ export interface OwnerDelegationReceipt extends CoreOwnerDelegationReceipt {
 
 function isOpenKeyAutoSignStrategy(strategy: SignStrategy | undefined): boolean {
   return (strategy as { openKeyAutoSign?: unknown } | undefined)?.openKeyAutoSign === true;
+}
+
+function openKeyApproval(
+  strategy: SignStrategy | undefined,
+): ((request: SignRequest) => Promise<SignResponse>) | undefined {
+  return (strategy as { openKeyRequestApproval?: unknown } | undefined)
+    ?.openKeyRequestApproval as ((request: SignRequest) => Promise<SignResponse>) | undefined;
 }
 
 /**
@@ -1381,6 +1391,17 @@ export class TinyCloudNode {
     return this.sessionManager.getDID(this.sessionKeyId);
   }
 
+  /** Bare did:key principal used as the credential subject and holder binding. */
+  get credentialHolderDid(): string {
+    return this.sessionDid.split("#", 1)[0];
+  }
+
+  /** Canonical verification method for the active credential holder key. */
+  get credentialHolderKid(): string {
+    const holder = this.credentialHolderDid;
+    return `${holder}#${holder.slice("did:key:".length)}`;
+  }
+
   /**
    * Return the current session's signed ReCap capabilities after the session
    * has been authenticated or restored. This is intentionally distinct from
@@ -2420,6 +2441,15 @@ export class TinyCloudNode {
     return hosted;
   }
 
+  /** Resolve and authenticate the owner encoded by an owned-space URI. */
+  credentialSpaceOwnerDid(spaceId: string): string {
+    const ownerDid = this.ownerDidFromSpaceId(spaceId);
+    if (ownerDid === undefined || !didPrincipalMatches(ownerDid, this.did)) {
+      throw new Error("Credential space owner does not match the active TinyCloud owner");
+    }
+    return ownerDid;
+  }
+
   /**
    * Check whether an owned space is already registered/hosted by consulting the
    * account spaces registry.
@@ -3098,6 +3128,78 @@ export class TinyCloudNode {
     const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
     if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
     return signBytesWithJwk(bytes, session.jwk);
+  }
+
+  /** Apply only an already-enabled signing policy to the exact credential request. */
+  async autoSignCredentialBytes(bytes: Uint8Array): Promise<Uint8Array | undefined> {
+    const strategy = this.config.signStrategy;
+    if (strategy?.type === "auto-sign") return this.signSessionBytes(bytes);
+    if (strategy?.type !== "callback" || !isOpenKeyAutoSignStrategy(strategy)) return undefined;
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    const request = {
+      address: this.address ?? "",
+      chainId: this.session?.chainId ?? this._chainId,
+      message: new TextDecoder().decode(bytes),
+      type: "message" as const,
+      purpose: "message" as const,
+    };
+    const decision = await strategy.handler(request);
+    if (!decision.approved) {
+      if (decision.needsApproval) return undefined;
+      throw new Error(decision.reason ?? "OpenKey automatic credential signing was rejected");
+    }
+    if (
+      typeof decision.signature !== "string" ||
+      !(await verifyEip191MessageSignature(
+        request.message,
+        decision.signature,
+        request.address,
+      ))
+    ) {
+      throw new Error("OpenKey credential signature evidence is invalid");
+    }
+    return this.signSessionBytes(bytes);
+  }
+
+  /** Invoke the configured interactive approval strategy before session signing. */
+  async approveCredentialBytes(bytes: Uint8Array): Promise<Uint8Array> {
+    const strategy = this.config.signStrategy;
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    const request = {
+      address: this.address ?? "",
+      chainId: this.session?.chainId ?? this._chainId,
+      message: new TextDecoder().decode(bytes),
+      type: "message" as const,
+      purpose: "message" as const,
+    };
+    const approval = isOpenKeyAutoSignStrategy(strategy)
+      ? openKeyApproval(strategy)
+      : strategy?.type === "callback"
+      ? strategy.handler
+      : undefined;
+    if (approval) {
+      const decision = await approval(request);
+      if (!decision.approved) throw new Error(decision.reason ?? "Credential signing was rejected");
+      if (
+        decision.signature !== undefined &&
+        !(await verifyEip191MessageSignature(
+          request.message,
+          decision.signature,
+          request.address,
+        ))
+      ) {
+        throw new Error("OpenKey credential signature evidence is invalid");
+      }
+      return this.signSessionBytes(bytes);
+    }
+    if (strategy?.type === "auto-reject") throw new Error("Credential signing was rejected");
+    if (this.config.signer) {
+      await this.config.signer.signMessage(request.message);
+      return this.signSessionBytes(bytes);
+    }
+    throw new Error("Interactive OpenKey approval is not configured");
   }
 
   /** Bind a session-signed invocation to the canonical service audience. */

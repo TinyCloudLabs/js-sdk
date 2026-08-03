@@ -39,6 +39,8 @@ export interface SignResponse {
   signature?: string;
   /** Reason for rejection if not approved */
   reason?: string;
+  /** The policy declined automatic signing and requires normal user consent. */
+  needsApproval?: boolean;
 }
 
 /**
@@ -71,6 +73,8 @@ export interface OpenKeySigningStrategyOptions {
   fetch?: typeof fetch;
   /** Request credentials mode for browser integrations. */
   credentials?: "include" | "omit" | "same-origin";
+  /** Normal user-visible approval for a request that is outside Auto-Sign policy. */
+  requestApproval?: SignCallback;
 }
 
 export interface OpenKeySigningRequestBody extends SignRequest {
@@ -89,6 +93,8 @@ export interface OpenKeySigningResponseBody {
 export interface OpenKeyCallbackStrategy extends CallbackStrategy {
   /** Marker used by SDK runtimes to choose the bootstrap-safe initial SIWE. */
   openKeyAutoSign: true;
+  /** Separate interactive approval path; never treated as an Auto-Sign grant. */
+  openKeyRequestApproval?: SignCallback;
 }
 
 async function resolveOpenKeyToken(
@@ -126,6 +132,9 @@ export function createOpenKeyCallbackSigningStrategy(
   return {
     type: "callback",
     openKeyAutoSign: true,
+    ...(options.requestApproval
+      ? { openKeyRequestApproval: options.requestApproval }
+      : {}),
     handler: async (request) => {
       const fetchImpl = options.fetch ?? globalThis.fetch;
       if (!fetchImpl) {
@@ -171,6 +180,7 @@ export function createOpenKeyCallbackSigningStrategy(
         return {
           approved: false,
           reason: openKeyApprovalReason(parsed),
+          ...(parsed.needsApproval ? { needsApproval: true } : {}),
         };
       }
 

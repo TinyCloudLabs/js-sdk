@@ -1,23 +1,30 @@
 import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { Cbor } from "ox";
+import { SiweMessage } from "siwe";
 import {
   canonicalHashHex,
   canonicalizeEncryptionJson,
   canonicalSignedResponse,
+  parsePkhDid,
   principalDidEquals,
   verifyDidKeyEd25519Signature,
+  verifyEip191MessageSignature,
   type DecryptRequestBody,
   type DecryptResponseBody,
   type InlineEncryptedEnvelope,
   type NetworkDescriptor,
   type PermissionEntry,
+  type SignStrategy,
   type TinyCloudSession,
 } from "@tinycloud/sdk-core";
 
 import { type ValidatedRuntimeDelegation } from "../delegation";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
-import { TinyCloudNode } from "../TinyCloudNode";
+import { decodeAuthorizationBytes, TinyCloudNode } from "../TinyCloudNode";
 
 const OWNER_PRIVATE_KEY = "1".padStart(64, "0");
 const DELEGATE_PRIVATE_KEY = "2".padStart(64, "0");
@@ -30,6 +37,24 @@ type CompactPayload = {
   iss?: string;
   att?: Record<string, Record<string, unknown>>;
   prf?: string[];
+};
+
+type CacaoActivation = {
+  h?: { t?: unknown };
+  p?: {
+    aud?: unknown;
+    domain?: unknown;
+    exp?: unknown;
+    iat?: unknown;
+    iss?: unknown;
+    nbf?: unknown;
+    nonce?: unknown;
+    requestId?: unknown;
+    resources?: unknown;
+    statement?: unknown;
+    version?: unknown;
+  };
+  s?: { s?: unknown; t?: unknown };
 };
 
 function verifiedCompactPayload(authorization: string): CompactPayload {
@@ -104,26 +129,62 @@ class LoopbackEncryptedNode {
     delegatedKvRead: false,
     delegatedDecrypt: false,
     delegatedKvResources: [] as string[],
+    kvReads: 0,
+    kvWrites: 0,
   };
 
-  private readonly server: ReturnType<typeof Bun.serve>;
+  private readonly server: Server;
+  private readonly listening: Promise<void>;
   private envelope?: InlineEncryptedEnvelope;
   private spaceId?: string;
   private networkId?: string;
   private readonly delegationCids = new Set<string>();
   private readonly kvData = new Map<string, Map<string, unknown>>();
   private secretPresent = true;
+  private browserCredentialBoundary?: {
+    ownerDid: string;
+    credentialsSpaceId: string;
+    session?: { audience: string; authorization: string; proofCid: string };
+  };
 
   constructor() {
-    this.server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch: (request) => this.handle(request),
+    this.server = createServer(async (incoming, outgoing) => {
+      try {
+        const chunks: Buffer[] = [];
+        for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+        const body = Buffer.concat(chunks);
+        const request = new Request(
+          new URL(incoming.url ?? "/", this.host),
+          {
+            method: incoming.method,
+            headers: incoming.headers as HeadersInit,
+            ...(body.length > 0 ? { body } : {}),
+          },
+        );
+        const response = await this.handle(request);
+        outgoing.statusCode = response.status;
+        response.headers.forEach((value, name) => outgoing.setHeader(name, value));
+        outgoing.end(Buffer.from(await response.arrayBuffer()));
+      } catch (cause) {
+        outgoing.statusCode = 500;
+        outgoing.end(cause instanceof Error ? cause.message : "loopback failure");
+      }
     });
+    this.listening = new Promise((resolve, reject) => {
+      this.server.once("listening", resolve);
+      this.server.once("error", reject);
+    });
+    this.server.listen(0, "127.0.0.1");
   }
 
   get host(): string {
-    return `http://127.0.0.1:${this.server.port}`;
+    const address = this.server.address() as AddressInfo | null;
+    if (address === null) throw new Error("loopback encrypted node is not listening");
+    return `http://127.0.0.1:${address.port}`;
+  }
+
+  async ready(): Promise<void> {
+    await this.listening;
   }
 
   configure(input: {
@@ -147,6 +208,21 @@ class LoopbackEncryptedNode {
     this.kvData.set(spaceId.toLowerCase(), new Map(Object.entries(entries)));
   }
 
+  provisionKv(spaceId: string): void {
+    this.kvData.set(spaceId.toLowerCase(), new Map());
+  }
+
+  allowInvocationProof(cid: string): void {
+    this.delegationCids.add(cid);
+  }
+
+  configureBrowserCredentialBoundary(ownerDid: string, credentialsSpaceId: string): void {
+    this.browserCredentialBoundary = {
+      ownerDid,
+      credentialsSpaceId: credentialsSpaceId.toLowerCase(),
+    };
+  }
+
   setSecretPresent(value: boolean): void {
     this.secretPresent = value;
   }
@@ -156,12 +232,122 @@ class LoopbackEncryptedNode {
   }
 
   stop(): void {
-    this.server.stop(true);
+    this.server.closeAllConnections();
+    this.server.close();
   }
 
   private cidForAuthorization(authorization: string): string {
     const compact = authorization.replace(/^Bearer /i, "");
-    return this.wasm.computeCid(new TextEncoder().encode(compact), 0x55n);
+    return this.wasm.computeCid(
+      compact.split(".").length === 3
+        ? new TextEncoder().encode(compact)
+        : decodeAuthorizationBytes(authorization),
+      0x55n,
+    );
+  }
+
+  private async activateBrowserSession(authorization: string): Promise<void> {
+    const boundary = this.browserCredentialBoundary;
+    if (!boundary) return;
+
+    const cacao = Cbor.decode<CacaoActivation>(decodeAuthorizationBytes(authorization));
+    const payload = cacao.p;
+    const signature = cacao.s?.s;
+    if (
+      cacao.h?.t !== "eip4361" || cacao.s?.t !== "eip191" ||
+      !payload || typeof payload.aud !== "string" ||
+      typeof payload.domain !== "string" || typeof payload.iat !== "string" ||
+      typeof payload.iss !== "string" || typeof payload.nonce !== "string" ||
+      typeof payload.version !== "number" || !(signature instanceof Uint8Array) ||
+      !payload.aud.startsWith("did:key:") ||
+      !principalDidEquals(payload.iss, boundary.ownerDid)
+    ) {
+      throw new Error("loopback rejected an invalid browser Cacao activation");
+    }
+    const owner = parsePkhDid(payload.iss);
+    if (!owner) throw new Error("loopback expected a did:pkh browser owner");
+    const resources = payload.resources;
+    if (!Array.isArray(resources) || resources.some((resource) => typeof resource !== "string")) {
+      throw new Error("loopback rejected malformed browser Cacao resources");
+    }
+    const siwe = new SiweMessage({
+      domain: payload.domain,
+      address: owner.address,
+      uri: payload.aud,
+      version: String(payload.version),
+      chainId: owner.chainId,
+      nonce: payload.nonce,
+      issuedAt: payload.iat,
+      ...(typeof payload.exp === "string" ? { expirationTime: payload.exp } : {}),
+      ...(typeof payload.nbf === "string" ? { notBefore: payload.nbf } : {}),
+      ...(typeof payload.requestId === "string" ? { requestId: payload.requestId } : {}),
+      ...(typeof payload.statement === "string" ? { statement: payload.statement } : {}),
+      resources: resources as string[],
+    });
+    const signatureHex = `0x${Buffer.from(signature).toString("hex")}`;
+    if (!await verifyEip191MessageSignature(siwe.prepareMessage(), signatureHex, owner.address)) {
+      throw new Error("loopback rejected an invalid browser Cacao signature");
+    }
+    if (payload.exp !== undefined && Date.parse(String(payload.exp)) <= Date.now()) {
+      throw new Error("loopback rejected an expired browser Cacao activation");
+    }
+    const recap = this.wasm.parseVerifiedRecapFromSiwe(siwe.prepareMessage());
+    if (!recap.some((entry: { space: string }) =>
+      entry.space.toLowerCase() === boundary.credentialsSpaceId
+    )) {
+      throw new Error("loopback rejected a browser activation without credentials authority");
+    }
+    boundary.session = {
+      audience: payload.aud,
+      authorization,
+      proofCid: this.cidForAuthorization(authorization),
+    };
+  }
+
+  private targetsBrowserCredentials(payload: CompactPayload): boolean {
+    const credentialsSpaceId = this.browserCredentialBoundary?.credentialsSpaceId;
+    if (!credentialsSpaceId) return false;
+    return Object.entries(payload.att ?? {}).some(([resource, actions]) =>
+      (resource.toLowerCase() === `${credentialsSpaceId}/kv` ||
+        resource.toLowerCase().startsWith(`${credentialsSpaceId}/kv/`)) &&
+      Object.keys(actions).some((action) => action.startsWith("tinycloud.kv/"))
+    );
+  }
+
+  private matchesBrowserSession(payload: CompactPayload): boolean {
+    const session = this.browserCredentialBoundary?.session;
+    return session !== undefined && typeof payload.iss === "string" &&
+      principalDidEquals(payload.iss, session.audience) &&
+      payload.prf?.includes(session.proofCid) === true;
+  }
+
+  async unrelatedBrowserInvocationStatus(): Promise<number> {
+    const boundary = this.browserCredentialBoundary;
+    const session = boundary?.session;
+    if (!boundary || !session) throw new Error("browser session is not activated");
+    const manager = this.wasm.createSessionManager();
+    const keyId = manager.createSessionKey("unrelated-browser-invocation");
+    const headers = this.wasm.invokeAny({
+      delegationHeader: { Authorization: session.authorization },
+      delegationCid: session.proofCid,
+      jwk: JSON.parse(manager.jwk(keyId)!),
+      spaceId: boundary.credentialsSpaceId,
+      verificationMethod: manager.getDID(keyId),
+    }, [{
+      spaceId: boundary.credentialsSpaceId,
+      service: "kv",
+      path: "v1/unrelated",
+      action: "tinycloud.kv/get",
+    }], undefined);
+    const payload = verifiedCompactPayload(headers.Authorization);
+    if (
+      typeof payload.iss !== "string" ||
+      principalDidEquals(payload.iss, session.audience) ||
+      payload.prf?.includes(session.proofCid) !== true
+    ) {
+      throw new Error("failed to construct the unrelated proof-bound invocation");
+    }
+    return (await fetch(`${this.host}/invoke`, { method: "POST", headers })).status;
   }
 
   private json(body: unknown, status = 200): Response {
@@ -228,6 +414,19 @@ class LoopbackEncryptedNode {
 
   private async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/info" && request.method === "GET") {
+      return this.json({
+        protocol: this.wasm.protocolVersion(),
+        version: "hermetic-browser-fixture",
+        features: [],
+        nodeId: this.nodeId,
+      });
+    }
+    if (url.pathname.startsWith("/peer/generate/") && request.method === "GET") {
+      return new Response(this.nodeId, {
+        headers: { "content-type": "text/plain" },
+      });
+    }
     if (url.pathname === "/delegate" && request.method === "POST") {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
@@ -236,6 +435,7 @@ class LoopbackEncryptedNode {
       const payload = authorization.replace(/^Bearer /i, "").split(".").length === 3
         ? verifiedCompactPayload(authorization)
         : {};
+      if (!payload.iss) await this.activateBrowserSession(authorization);
       if (payload.iss) this.observed.signingIssuers.push(payload.iss);
       const cid = this.cidForAuthorization(authorization);
       if (this.rejectedActivationCids.has(cid)) {
@@ -261,7 +461,43 @@ class LoopbackEncryptedNode {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
       const payload = verifiedCompactPayload(authorization);
+      if (this.targetsBrowserCredentials(payload) && !this.matchesBrowserSession(payload)) {
+        return new Response("activated browser session proof required", { status: 403 });
+      }
       if (payload.iss) this.observed.signingIssuers.push(payload.iss);
+      const writes = Object.entries(payload.att ?? {}).flatMap(([resource, actions]) =>
+        Object.keys(actions).map((action) => ({ resource, action }))
+      ).filter(({ resource, action }) => {
+        if (action !== "tinycloud.kv/put") return false;
+        const separator = resource.lastIndexOf("/kv/");
+        if (separator < 0) return false;
+        const space = resource.slice(0, separator).toLowerCase();
+        return this.kvData.has(space) &&
+          hasExactCapability(payload, resource, action, this.delegationCids);
+      });
+      if (writes.length > 0) {
+        const form = await request.formData();
+        const written: string[] = [];
+        for (const write of writes) {
+          const separator = write.resource.lastIndexOf("/kv/");
+          const targetSpace = write.resource.slice(0, separator).toLowerCase();
+          const path = write.resource.slice(separator + 4);
+          const encodedPath = encodeURIComponent(path).replace(/[!'()*]/g, (character) =>
+            `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+          );
+          const part = form.get(path) ?? form.get(encodedPath);
+          if (!(part instanceof Blob)) return new Response("missing batch value", { status: 400 });
+          const text = await part.text();
+          const value = part.type.includes("application/json") || /^(?:\{|\[)/.test(text.trimStart())
+            ? JSON.parse(text)
+            : text;
+          this.kvData.get(targetSpace)!.set(path, value);
+          written.push(path);
+        }
+        this.observed.signedInvocation = true;
+        this.observed.kvWrites += written.length;
+        return this.json({ written, count: written.length });
+      }
       const capability = Object.entries(payload.att ?? {}).flatMap(([resource, actions]) =>
         Object.keys(actions).map((action) => ({ resource, action }))
       ).filter(({ action }) => action === "tinycloud.kv/get" || action === "tinycloud.kv/list")
@@ -272,7 +508,9 @@ class LoopbackEncryptedNode {
             : resource.endsWith("/kv")
             ? resource.length - 3
             : -1;
-          return boundary >= 0 && this.kvData.has(resource.slice(0, boundary).toLowerCase()) &&
+          if (boundary < 0) return false;
+          const space = resource.slice(0, boundary).toLowerCase();
+          return this.kvData.has(space) &&
             hasExactCapability(payload, resource, action, this.delegationCids);
         });
       if (capability) {
@@ -287,6 +525,7 @@ class LoopbackEncryptedNode {
         if (entries) {
           this.observed.signedInvocation = true;
           this.observed.delegatedKvRead = true;
+          this.observed.kvReads += 1;
           this.observed.delegatedKvResources.push(`${capability.action}:${capability.resource.toLowerCase()}`);
           if (capability.action === "tinycloud.kv/list") {
             return this.json([...entries.keys()].filter((key) => key.startsWith(path)).sort());
@@ -386,14 +625,72 @@ class LoopbackEncryptedNode {
   }
 }
 
-function makeNode(host: string, privateKey: string, wasmBindings: NodeWasmBindings): {
+export interface HermeticBrowserCredentialBoundary {
+  readonly host: string;
+  readonly ownerDid: string;
+  readonly credentialsSpaceId: string;
+  stats(): Readonly<{
+    signedInvocation: boolean;
+    kvReads: number;
+    kvWrites: number;
+  }>;
+  unrelatedInvocationStatus(): Promise<number>;
+  stop(): void;
+}
+
+/** Host-only boundary for browser-owned credential integration tests. */
+export async function createHermeticBrowserCredentialBoundary(
+  ownerAddress: string,
+): Promise<HermeticBrowserCredentialBoundary> {
+  const transport = new LoopbackEncryptedNode();
+  await transport.ready();
+  const checksummed = transport.wasm.ensureEip55(ownerAddress);
+  const ownerDid = `did:pkh:eip155:${OWNER_CHAIN_ID}:${checksummed}`;
+  const accountSpaceId = transport.wasm
+    .makeSpaceId(checksummed, OWNER_CHAIN_ID, "account")
+    .toLowerCase();
+  const credentialsSpaceId = transport.wasm
+    .makeSpaceId(checksummed, OWNER_CHAIN_ID, "credentials")
+    .toLowerCase();
+  transport.configureKv(accountSpaceId, {
+    [`spaces/${credentialsSpaceId}`]: {
+      spaceId: credentialsSpaceId,
+      name: "credentials",
+      ownerDid,
+      type: "owned",
+      permissions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
+      status: "active",
+    },
+  });
+  transport.provisionKv(credentialsSpaceId);
+  transport.configureBrowserCredentialBoundary(ownerDid, credentialsSpaceId);
+  return {
+    host: transport.host,
+    ownerDid,
+    credentialsSpaceId,
+    stats: () => ({
+      signedInvocation: transport.observed.signedInvocation,
+      kvReads: transport.observed.kvReads,
+      kvWrites: transport.observed.kvWrites,
+    }),
+    unrelatedInvocationStatus: () => transport.unrelatedBrowserInvocationStatus(),
+    stop: () => transport.stop(),
+  };
+}
+
+function makeNode(
+  host: string,
+  privateKey: string,
+  wasmBindings: NodeWasmBindings,
+  signStrategy?: SignStrategy,
+): {
   node: TinyCloudNode;
   signer: PrivateKeySigner;
 } {
   const signer = new PrivateKeySigner(privateKey, OWNER_CHAIN_ID);
   return {
     signer,
-    node: new TinyCloudNode({ host, signer, wasmBindings }),
+    node: new TinyCloudNode({ host, signer, wasmBindings, signStrategy }),
   };
 }
 
@@ -472,6 +769,7 @@ export interface HermeticEncryptedNode {
   readonly applicationsSpaceId: string;
   readonly permissions: readonly PermissionEntry[];
   readonly unrelatedAudience: string;
+  provisionKvSpace(spaceId: string): void;
   createRestoredDelegate(): TinyCloudNode;
   createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
   mintDelegation(): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
@@ -504,13 +802,20 @@ export interface HermeticEncryptedNode {
 export async function createHermeticEncryptedNode(
   options: Readonly<{
     delegateBasePermissions?: boolean;
+    delegateSignStrategy?: SignStrategy;
     secretPayloadValue?: string;
     secretPresent?: boolean;
   }> = {},
 ): Promise<HermeticEncryptedNode> {
   const transport = new LoopbackEncryptedNode();
+  await transport.ready();
   const ownerRuntime = makeNode(transport.host, OWNER_PRIVATE_KEY, transport.wasm);
-  const delegateRuntime = makeNode(transport.host, DELEGATE_PRIVATE_KEY, transport.wasm);
+  const delegateRuntime = makeNode(
+    transport.host,
+    DELEGATE_PRIVATE_KEY,
+    transport.wasm,
+    options.delegateSignStrategy,
+  );
   const ownerAddress = await ownerRuntime.signer.getAddress();
   const spaceId = transport.wasm.makeSpaceId(ownerAddress, OWNER_CHAIN_ID, "secrets");
   const ownerDid = `did:pkh:eip155:${OWNER_CHAIN_ID}:${transport.wasm.ensureEip55(ownerAddress)}`;
@@ -577,6 +882,7 @@ export async function createHermeticEncryptedNode(
       : {}),
   });
   installSession(delegateRuntime.node, delegateSession);
+  transport.allowInvocationProof(delegateSession.delegationCid);
 
   const descriptor: NetworkDescriptor = {
     networkId,
@@ -658,6 +964,7 @@ export async function createHermeticEncryptedNode(
     applicationsSpaceId,
     permissions,
     unrelatedAudience,
+    provisionKvSpace: (spaceId) => transport.provisionKv(spaceId),
     createRestoredDelegate: () =>
       new TinyCloudNode({ host: transport.host, wasmBindings: transport.wasm }),
     async createRotatedRestorableSession() {

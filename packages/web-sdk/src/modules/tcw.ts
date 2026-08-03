@@ -94,6 +94,7 @@ import type { NotificationConfig } from "../notifications/types";
 import { WasmInitializer } from "./WasmInitializer";
 import { invoke } from "./Storage/tinycloud/module";
 import type { PortableDelegation, DelegatedAccess } from "@tinycloud/node-sdk/core";
+import { CredentialsService } from "../credentials";
 
 declare global {
   interface Window {
@@ -306,6 +307,7 @@ export class TinyCloudWeb {
   private sessionStorage?: ISessionStorage;
   private _sessionRestoreStatus: SessionRestoreStatus = "idle";
   private _secrets = new Map<string, ISecretsService>();
+  private _credentialsService?: CredentialsService;
 
   /** Promise that resolves when WASM + node are ready */
   private _initPromise: Promise<void>;
@@ -527,6 +529,12 @@ export class TinyCloudWeb {
   get hosts(): string[] { return this.node.hosts; }
   get sessionRestoreStatus(): SessionRestoreStatus { return this._sessionRestoreStatus; }
 
+  /** Holder-bound OpenCredentials issuance using the active TinyCloud session. */
+  get credentials(): CredentialsService {
+    this._credentialsService ??= new CredentialsService(this);
+    return this._credentialsService;
+  }
+
   space(nameOrUri: string): ISpace { return this.spaces.get(nameOrUri); }
   get kvPrefix(): string { return this.config.kvPrefix || ""; }
 
@@ -733,12 +741,26 @@ export class TinyCloudWeb {
 
   get did(): string { return this.node.did; }
   get sessionDid(): string { return this.node.sessionDid; }
+  get credentialHolderDid(): string { return this.node.credentialHolderDid; }
+  get credentialHolderKid(): string { return this.node.credentialHolderKid; }
   get isSessionOnly(): boolean { return this.node.isSessionOnly; }
   get isWalletConnected(): boolean { return this.walletSigner !== undefined; }
 
   /** Sign protocol bytes with the established session key without exposing key material. */
   async signSessionBytes(bytes: Uint8Array): Promise<Uint8Array> {
     return this.node.signSessionBytes(bytes);
+  }
+
+  async autoSignCredentialBytes(bytes: Uint8Array): Promise<Uint8Array | undefined> {
+    return this.node.autoSignCredentialBytes(bytes);
+  }
+
+  async approveCredentialBytes(bytes: Uint8Array): Promise<Uint8Array> {
+    return this.node.approveCredentialBytes(bytes);
+  }
+
+  credentialSpaceOwnerDid(spaceId: string): string {
+    return this.node.credentialSpaceOwnerDid(spaceId);
   }
 
   // ===========================================================================

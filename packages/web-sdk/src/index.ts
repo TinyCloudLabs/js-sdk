@@ -12,6 +12,7 @@ export {
   type EstablishOpenKeySessionResult,
   type EstablishOpenKeySessionStatus,
 } from "./openkey-session";
+export * from "./credentials";
 export type { SecretReadInput, SecretReadResult, BootstrapWarning } from "@tinycloud/node-sdk";
 export type {
   CreateOwnerDelegationParams,

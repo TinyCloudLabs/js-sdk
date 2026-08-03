@@ -33,12 +33,20 @@ export default defineConfig({
   ],
 
   // Serve the test page and SDK bundle from this directory
-  webServer: {
-    command: 'python3 -m http.server 4173',
-    url: 'http://localhost:4173/test-page.html',
-    reuseExistingServer: !process.env.CI,
-    timeout: 30000,
-  },
+  webServer: [
+    {
+      command: 'python3 -m http.server 4173',
+      url: 'http://localhost:4173/test-page.html',
+      reuseExistingServer: !process.env.CI,
+      timeout: 30000,
+    },
+    {
+      command: 'bun ./credential-journey-driver.ts',
+      url: 'http://127.0.0.1:4175/health',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120000,
+    },
+  ],
 
   timeout: 120000,
 

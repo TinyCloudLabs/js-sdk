@@ -8,29 +8,138 @@
 <body>
   <h1>TinyCloud SDK Browser Test Page</h1>
   <p id="status">Loading SDK...</p>
-
-  <!--
-    Load the web-sdk webpack bundle directly.
-    The bundle is self-contained with all dependencies (ethers, WASM, etc).
-    Served from the symlinked sdk-bundle directory.
-  -->
   <script type="module">
-    try {
-      const sdk = await import('./sdk-bundle/index.mjs');
+    const TEST_PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    const SIGN_COUNT_KEY = "tinycloud.test.wallet-sign-count";
+    const FIXTURE_EMAIL = "fixture@example.com";
 
-      // Expose key exports to window for page.evaluate() access
-      window.TinyCloudWeb = sdk.TinyCloudWeb;
-      window.TinyCloudNode = sdk.TinyCloudNode;
-      window.__SDK_LOADED = true;
-      window.__SDK_EXPORTS = Object.keys(sdk);
-
-      document.getElementById('status').textContent = 'SDK loaded successfully';
-      console.log('[TestPage] SDK loaded. Exports:', Object.keys(sdk).length);
-    } catch (err) {
-      document.getElementById('status').textContent = 'SDK load failed: ' + err.message;
-      window.__SDK_ERROR = err.message;
-      console.error('[TestPage] SDK load error:', err);
+    function requirement(descriptor) {
+      return {
+        type: "TinyCloudCredentialRequirement",
+        version: 1,
+        profile: { id: descriptor.profile, version: 1 },
+        credentialType: { id: descriptor.format.vct, version: 1 },
+        claims: { email: FIXTURE_EMAIL },
+      };
     }
+
+    function walletProvider(ethers) {
+      const wallet = new ethers.Wallet(TEST_PRIVATE_KEY);
+      return {
+        request: async ({ method, params = [] }) => {
+          if (method === "eth_accounts" || method === "eth_requestAccounts") return [wallet.address];
+          if (method === "eth_chainId") return "0x1";
+          if (method === "net_version") return "1";
+          if (method === "personal_sign" || method === "eth_sign") {
+            const candidate = params.find((value) => typeof value === "string" && value.toLowerCase() !== wallet.address.toLowerCase());
+            const message = ethers.utils.isHexString(candidate)
+              ? ethers.utils.arrayify(candidate)
+              : String(candidate ?? "");
+            const count = Number(sessionStorage.getItem(SIGN_COUNT_KEY) ?? "0");
+            sessionStorage.setItem(SIGN_COUNT_KEY, String(count + 1));
+            return wallet.signMessage(message);
+          }
+          throw new Error(`Unsupported fixture provider method: ${method}`);
+        },
+      };
+    }
+
+    const sdk = await import("./sdk-bundle/index.mjs");
+
+    async function initialize() {
+      const ethers = await import("https://ethers.test/ethers.esm.min.js");
+      const client = await sdk.TinyCloudWeb.create({
+        provider: walletProvider(ethers),
+        tinycloudHosts: ["https://tinycloud.test"],
+        tinycloudRegistryUrl: null,
+        tinycloudFallbackHosts: null,
+        autoDiscoverLocalNode: false,
+        autoCreateSpace: false,
+        domain: "app.example",
+        persistSession: true,
+        manifest: {
+          manifest_version: 1,
+          app_id: "dev.tinycloud.credentials-browser-fixture",
+          name: "Credential browser fixture",
+          space: "credentials",
+          prefix: "",
+          defaults: false,
+          permissions: [{
+            service: "tinycloud.kv",
+            space: "credentials",
+            path: "v1/",
+            actions: ["get", "put", "list"],
+          }],
+        },
+      });
+      await client.signIn();
+      window.__credentialClient = client;
+      return client;
+    }
+
+    window.startCredentialEnsure = async (descriptor) => {
+      const client = await initialize();
+      window.__credentialEnsurePromise = client.credentials.ensure(requirement(descriptor), {
+        descriptor,
+        interaction: "redirect",
+        openerOrigin: window.location.origin,
+      });
+      window.__credentialEnsurePromise.catch((error) => {
+        window.__credentialEnsureFailure = {
+          name: error?.name,
+          code: error?.code,
+          message: error?.message,
+        };
+      });
+      return {
+        initialized: client instanceof sdk.TinyCloudWeb,
+        sessionActive: client.session() !== undefined,
+        publicEnsure: typeof client.credentials.ensure === "function",
+      };
+    };
+
+    window.resumeCredentialEnsure = async (descriptor, expectedOwnerDid) => {
+      const client = await initialize();
+      const redirectStore = new sdk.BrowserCredentialRedirectStore();
+      const continuationPresent = (await redirectStore.load()) !== undefined;
+      const progress = [];
+      const acquired = await client.credentials.ensure(requirement(descriptor), {
+        descriptor,
+        interaction: "redirect",
+        openerOrigin: window.location.origin,
+        onProgress: (event) => progress.push(event.state),
+      });
+      const firstClear = (await redirectStore.load()) === undefined;
+      const secondClear = (await redirectStore.load()) === undefined;
+      const found = await client.credentials.find(requirement(descriptor), { descriptor });
+      const reused = await client.credentials.ensure(requirement(descriptor), {
+        descriptor,
+        interaction: "redirect",
+        openerOrigin: window.location.origin,
+      });
+      return {
+        initialized: client instanceof sdk.TinyCloudWeb,
+        sessionActive: client.session() !== undefined,
+        publicEnsure: typeof client.credentials.ensure === "function",
+        redirectStoreType: redirectStore.constructor.name,
+        continuationPresent,
+        firstClear,
+        secondClear,
+        acquiredStatus: acquired.status,
+        reusedStatus: reused.status,
+        progress,
+        claimVerified: acquired.credential.claims.email === FIXTURE_EMAIL,
+        holderVerified: acquired.credential.holderDid === client.credentialHolderDid,
+        ownerVerified: acquired.record.ownerDid === expectedOwnerDid,
+        receiptVerified: acquired.receipt?.ownerDid === expectedOwnerDid,
+        readbackVerified: found?.recordId === acquired.record.recordId,
+        walletSignCount: Number(sessionStorage.getItem(SIGN_COUNT_KEY) ?? "0"),
+      };
+    };
+
+    window.__TinyCloudSDK = sdk;
+    window.__SDK_LOADED = true;
+    document.getElementById("status").textContent = "SDK loaded successfully";
   </script>
 </body>
 </html>
