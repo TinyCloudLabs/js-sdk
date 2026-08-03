@@ -9,7 +9,6 @@ import AccountInfo from "../components/AccountInfo";
 import { lazy } from "react";
 import { useAccount, useWalletClient } from "wagmi";
 import { useModal } from "connectkit";
-import { walletClientToEthers5Signer } from "../utils/web3modalV2Settings";
 import {
   Accordion,
   AccordionContent,
@@ -202,11 +201,10 @@ function Home() {
     setLoading(true);
 
     try {
-      const signer = walletClientToEthers5Signer(walletClient as any);
       const tcwConfig = getTinyCloudWebConfig({
         providers: {
           web3: {
-            driver: signer.provider,
+            driver: (walletClient as any).transport,
           },
         },
       });
