@@ -985,6 +985,13 @@ export class TinyCloudNode {
    */
   private readonly confirmedHostedSpaceIds = new Set<string>();
 
+  /** Serializes account-registry writes for the active node instance. */
+  private accountRegistryTail: Promise<void> = Promise.resolve();
+  private pendingAccountRegistrySync?: {
+    session: TinyCloudSession;
+    promise: Promise<void>;
+  };
+
   /**
    * TinyCloudSession captured by {@link restoreSession} when there's no
    * auth-layer signer available (session-only mode used by OpenKey-backed
@@ -1516,6 +1523,10 @@ export class TinyCloudNode {
         "Cannot signIn() in session-only mode. Provide a privateKey in config to create your own space."
       );
     }
+
+    // Do not replace the active session while its best-effort registry sync is
+    // still issuing writes with that session's authority.
+    await this.accountRegistryTail;
 
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
@@ -2128,26 +2139,66 @@ export class TinyCloudNode {
   }
 
   private scheduleAccountRegistrySync(): void {
-    void this.withAccountRegistryRetry(async () => {
-      void this.account.index.ensure();
-      await this.writeManifestRegistryRecords();
+    const session = this.currentTinyCloudSession();
+    if (!session || this.pendingAccountRegistrySync?.session === session) {
+      return;
+    }
 
-      if (this.currentSessionCanListSpaces()) {
-        const spaces = await this.account.spaces.syncAccessible();
-        if (!spaces.ok) {
-          throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+    const promise = this.enqueueAccountRegistryOperation(session, async () => {
+      await this.withAccountRegistryRetry(async () => {
+        if (this.currentTinyCloudSession() !== session) {
+          return;
         }
-      }
-      // Else: the current session carries a recap that does not grant
-      // `tinycloud.space/list` (every manifest/recap session, and the default
-      // non-manifest recap alike — its abilities table has no `space` service).
-      // `syncAccessible()` depends on `tinycloud.space/list`, which such a
-      // session does not hold — see {@link isOwnedSpaceRegistered} — so the
-      // owned-space listing is a doomed request that 401s on the wire
-      // (`Unauthorized Action: …/space/ tinycloud.space/list`). The account
-      // spaces registry is instead maintained by bootstrap seeding +
-      // `spaces.register()`, so we skip the invoke entirely rather than emit it.
+
+        await this.account.index.ensure();
+        if (this.currentTinyCloudSession() !== session) {
+          return;
+        }
+
+        await this.writeManifestRegistryRecords();
+
+        if (this.currentTinyCloudSession() !== session) {
+          return;
+        }
+
+        if (this.currentSessionCanListSpaces()) {
+          const spaces = await this.account.spaces.syncAccessible();
+          if (!spaces.ok) {
+            throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+          }
+        }
+        // Else: the current session carries a recap that does not grant
+        // `tinycloud.space/list` (every manifest/recap session, and the default
+        // non-manifest recap alike — its abilities table has no `space` service).
+        // `syncAccessible()` depends on `tinycloud.space/list`, which such a
+        // session does not hold — see {@link isOwnedSpaceRegistered} — so the
+        // owned-space listing is a doomed request that 401s on the wire
+        // (`Unauthorized Action: …/space/ tinycloud.space/list`). The account
+        // spaces registry is instead maintained by bootstrap seeding +
+        // `spaces.register()`, so we skip the invoke entirely rather than emit it.
+      });
     });
+
+    this.pendingAccountRegistrySync = { session, promise };
+    const clearPendingSync = () => {
+      if (this.pendingAccountRegistrySync?.promise === promise) {
+        this.pendingAccountRegistrySync = undefined;
+      }
+    };
+    void promise.then(clearPendingSync, clearPendingSync);
+  }
+
+  private enqueueAccountRegistryOperation(
+    session: TinyCloudSession,
+    task: () => Promise<void>,
+  ): Promise<void> {
+    const operation = this.accountRegistryTail.then(async () => {
+      if (this.currentTinyCloudSession() === session) {
+        await task();
+      }
+    });
+    this.accountRegistryTail = operation.catch(() => {});
+    return operation;
   }
 
   /**
@@ -2331,7 +2382,8 @@ export class TinyCloudNode {
    * @returns The hosted space URI.
    */
   async hostOwnedSpace(name: string): Promise<string> {
-    if (!this.auth || !this.auth.tinyCloudSession) {
+    const session = this.auth?.tinyCloudSession;
+    if (!this.auth || !session) {
       throw new Error("Not signed in. Call signIn() first.");
     }
 
@@ -2355,7 +2407,7 @@ export class TinyCloudNode {
     // hosted for this session.
     const activation = await activateSessionWithHost(
       host,
-      this.auth.tinyCloudSession.delegationHeader,
+      session.delegationHeader,
     );
     if (!activation.success || activation.skipped?.includes(spaceId)) {
       throw new Error(
@@ -2365,16 +2417,20 @@ export class TinyCloudNode {
       );
     }
 
-    void this.account.spaces
-      .register({
-        spaceId,
-        name,
-        ownerDid: this.did,
-        type: "owned",
-        permissions: ["*"],
-        status: "active",
-      })
-      .catch(() => {});
+    try {
+      await this.enqueueAccountRegistryOperation(session, async () => {
+        await this.account.spaces.register({
+          spaceId,
+          name,
+          ownerDid: this.did,
+          type: "owned",
+          permissions: ["*"],
+          status: "active",
+        });
+      });
+    } catch {
+      // Registry write is best-effort; the space is hosted regardless.
+    }
 
     return spaceId;
   }
@@ -2412,33 +2468,17 @@ export class TinyCloudNode {
       throw new Error("Not signed in. Call signIn() first.");
     }
 
+    // signIn schedules its registry sync before returning. Let that operation
+    // finish before this explicit read/host/write sequence begins.
+    await this.accountRegistryTail;
+
     const spaceId = this.ownedSpaceId(name);
 
     if (await this.isOwnedSpaceRegistered(spaceId)) {
       return spaceId;
     }
 
-    const hosted = await this.hostOwnedSpace(name);
-
-    // hostOwnedSpace registers best-effort and fire-and-forget; await an
-    // explicit registry write here so the canonical `account/spaces/{id}`
-    // record is durably present and a subsequent ensure short-circuits on the
-    // registry instead of re-hosting. The host already succeeded, so a failed
-    // registry write must not fail this call.
-    try {
-      await this.account.spaces.register({
-        spaceId,
-        name,
-        ownerDid: this.did,
-        type: "owned",
-        permissions: ["*"],
-        status: "active",
-      });
-    } catch {
-      // Registry write is best-effort; the space is hosted regardless.
-    }
-
-    return hosted;
+    return this.hostOwnedSpace(name);
   }
 
   /** Resolve and authenticate the owner encoded by an owned-space URI. */
