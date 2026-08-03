@@ -6,8 +6,8 @@
 const requirement = {
   type: "TinyCloudCredentialRequirement",
   version: 1,
-  profile: { id: "tinycloud.email-proof", version: 1 },
-  credentialType: { id: "opencredentials.email", version: 1 },
+  profile: { id: "tinycloud.email-proof/v1", version: 1 },
+  credentialType: { id: "opencredentials.email/v1", version: 1 },
   claims: { email: "reader@example.test" },
 } as const;
 

@@ -1,140 +1,47 @@
 import { CredentialError } from "./errors";
-import {
-  CREDENTIAL_ACQUISITION_PROTOCOL,
-  CREDENTIAL_FORMAT,
-  CREDENTIAL_STEP_REGISTRY_VERSION,
-  HOLDER_BINDING_DOMAIN,
-  type CredentialEndpointId,
-  type CredentialFlowDescriptor,
-  type CredentialInputDescriptor,
-  type CredentialStepDescriptor,
-} from "./types";
+import { CREDENTIAL_ACQUISITION_PROTOCOL, CREDENTIAL_FORMAT, HOLDER_BINDING_DOMAIN, type CredentialFlowDescriptor } from "./types";
 
-const ENDPOINT_IDS: readonly CredentialEndpointId[] = [
-  "create_request", "request_state", "create_challenge", "submit_proof", "holder_binding",
-  "submit_holder_signature", "issue", "result", "issuer_metadata", "credential_status", "interaction",
-];
+const ID = /^[a-z0-9][a-z0-9._-]{0,127}(?:\/v1)?$/;
 const STEP_TYPES = new Set(["collect_input", "mailbox_otp", "holder_signature"]);
-const ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const ENDPOINTS = {
+  request: "request", state: "state", challenge: "challenge", proof: "proof",
+  holderBinding: "holder_binding", holderSignature: "holder_signature", issue: "issue", result: "result",
+} as const;
+const STATES = ["collecting", "challenging", "proving", "signing", "issuing", "verifying", "saving", "success", "recovery"] as const;
 
-function object(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) fail(`${label} must be an object`);
-  return value as Record<string, unknown>;
-}
+function fail(message: string): never { throw new CredentialError("DESCRIPTOR_INVALID", message); }
+function unsupported(message: string): never { throw new CredentialError("UNSUPPORTED_PROFILE", message); }
+function object(value: unknown, label: string): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) fail(`${label} must be an object`); return value as Record<string, unknown>; }
+function exact(value: Record<string, unknown>, fields: readonly string[], label: string): void { const a = Object.keys(value).sort(); const b = [...fields].sort(); if (a.length !== b.length || a.some((key, index) => key !== b[index])) fail(`${label} has unknown or missing fields`); }
+function text(value: unknown, label: string, pattern?: RegExp): string { if (typeof value !== "string" || value.length === 0 || value.length > 512 || (pattern && !pattern.test(value))) fail(`${label} is invalid`); return value; }
+function integer(value: unknown, label: string, max = 31_536_000): number { if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > max) fail(`${label} is invalid`); return value as number; }
+function origin(value: unknown): string { const candidate = text(value, "issuer.origin"); let url: URL; try { url = new URL(candidate); } catch { fail("issuer.origin is invalid"); } if (url!.protocol !== "https:" || url!.origin !== candidate || url!.username || url!.password) fail("issuer.origin is invalid"); return candidate; }
 
-function keys(value: Record<string, unknown>, expected: readonly string[], label: string): void {
-  const actual = Object.keys(value).sort();
-  const wanted = [...expected].sort();
-  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) fail(`${label} has unknown or missing fields`);
-}
-
-function text(value: unknown, label: string, pattern?: RegExp): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 512 || (pattern && !pattern.test(value))) fail(`${label} is invalid`);
-  return value as string;
-}
-
-function positiveInteger(value: unknown, label: string, max = 86400): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > max) fail(`${label} is invalid`);
-  return value as number;
-}
-
-function origin(value: unknown): string {
-  const candidate = text(value, "issuer.origin");
-  let url: URL;
-  try { url = new URL(candidate); } catch { fail("issuer.origin is invalid"); }
-  if (url!.protocol !== "https:" || url!.origin !== candidate || url!.username || url!.password) fail("issuer.origin is invalid");
-  return candidate;
-}
-
-function fail(message: string): never {
-  throw new CredentialError("DESCRIPTOR_INVALID", message);
-}
-
-function input(value: unknown, seen: Set<string>): CredentialInputDescriptor {
-  const raw = object(value, "input");
-  keys(raw, ["id", "label", "required", "prefill", "schema", "accessibility"], "input");
-  const id = text(raw.id, "input.id", ID);
-  if (seen.has(id)) fail("input ids must be unique");
-  seen.add(id);
-  if (typeof raw.required !== "boolean" || (raw.prefill !== "allowed" && raw.prefill !== "forbidden")) fail("input flags are invalid");
-  const schema = object(raw.schema, "input.schema");
-  const schemaKeys = Object.keys(schema);
-  if (schemaKeys.some((key) => !["type", "minLength", "maxLength", "pattern", "format"].includes(key)) || schema.type !== "string") fail("input.schema is unsupported");
-  const minLength = schema.minLength === undefined ? undefined : positiveInteger(schema.minLength, "input.schema.minLength", 4096);
-  const maxLength = schema.maxLength === undefined ? undefined : positiveInteger(schema.maxLength, "input.schema.maxLength", 4096);
-  if (minLength !== undefined && maxLength !== undefined && minLength > maxLength) fail("input.schema length is invalid");
-  if (schema.pattern !== undefined) {
-    const pattern = text(schema.pattern, "input.schema.pattern");
-    try { new RegExp(pattern, "u"); } catch { fail("input.schema.pattern is invalid"); }
-  }
-  if (schema.format !== undefined && schema.format !== "email") fail("input.schema.format is unsupported");
-  const accessibility = object(raw.accessibility, "input.accessibility");
-  if (Object.keys(accessibility).some((key) => !["label", "description"].includes(key)) || !Object.prototype.hasOwnProperty.call(accessibility, "label")) fail("input.accessibility is invalid");
-  return {
-    id, label: text(raw.label, "input.label"), required: raw.required as boolean,
-    prefill: raw.prefill as "allowed" | "forbidden",
-    schema: { type: "string", ...(minLength === undefined ? {} : { minLength }), ...(maxLength === undefined ? {} : { maxLength }), ...(schema.pattern === undefined ? {} : { pattern: schema.pattern as string }), ...(schema.format === undefined ? {} : { format: schema.format as "email" }) },
-    accessibility: { label: text(accessibility.label, "input.accessibility.label"), ...(accessibility.description === undefined ? {} : { description: text(accessibility.description, "input.accessibility.description") }) },
-  };
-}
-
-function step(value: unknown, seen: Set<string>): CredentialStepDescriptor {
-  const raw = object(value, "step");
-  keys(raw, ["id", "type", "version", "endpoint", "title", "description"], "step");
-  const id = text(raw.id, "step.id", ID);
-  if (seen.has(id)) fail("step ids must be unique");
-  seen.add(id);
-  if (!STEP_TYPES.has(raw.type as string) || raw.version !== 1 || !ENDPOINT_IDS.includes(raw.endpoint as CredentialEndpointId)) {
-    throw new CredentialError("UNSUPPORTED_PROFILE", "Credential step type or version is unsupported");
-  }
-  return { id, type: raw.type as CredentialStepDescriptor["type"], version: 1, endpoint: raw.endpoint as CredentialEndpointId, title: text(raw.title, "step.title"), description: text(raw.description, "step.description") };
-}
-
-/** Strictly validates the finite, non-executable acquisition descriptor vocabulary. */
+/** Strictly validates and preserves the Rust-owned canonical descriptor bytes. */
 export function validateCredentialFlowDescriptor(value: unknown): CredentialFlowDescriptor {
   const raw = object(value, "descriptor");
-  keys(raw, ["type", "protocol", "version", "stepRegistryVersion", "profile", "issuer", "credential", "claims", "inputs", "steps", "holderBinding", "endpoints", "ttlSeconds", "freshnessSeconds", "presentation"], "descriptor");
-  if (raw.type !== "OpenCredentialsFlowDescriptor" || raw.protocol !== CREDENTIAL_ACQUISITION_PROTOCOL || raw.version !== 1 || raw.stepRegistryVersion !== CREDENTIAL_STEP_REGISTRY_VERSION) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential protocol or registry version is unsupported");
-  const profile = object(raw.profile, "profile"); keys(profile, ["id", "version"], "profile");
-  if (profile.version !== 1) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential profile version is unsupported");
-  const issuer = object(raw.issuer, "issuer"); keys(issuer, ["origin", "did"], "issuer");
-  const credential = object(raw.credential, "credential"); keys(credential, ["type", "version", "schema", "format"], "credential");
-  if (credential.version !== 1 || credential.format !== CREDENTIAL_FORMAT) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential format or type version is unsupported");
-  if (!Array.isArray(raw.claims) || raw.claims.length === 0 || raw.claims.length > 64) fail("claims are invalid");
-  const claimIds = new Set<string>();
-  const claims: CredentialFlowDescriptor["claims"][number][] = raw.claims.map((value: unknown) => {
-    const claim = object(value, "claim"); keys(claim, ["id", "matching", "required"], "claim");
-    const id = text(claim.id, "claim.id", ID);
-    if (claimIds.has(id) || claim.matching !== "exact" || typeof claim.required !== "boolean") fail("claim is invalid");
-    claimIds.add(id); return { id, matching: "exact" as const, required: claim.required as boolean };
-  });
-  if (!Array.isArray(raw.inputs) || raw.inputs.length > 64) fail("inputs are invalid");
-  const inputIds = new Set<string>(); const inputs = raw.inputs.map((value) => input(value, inputIds));
-  if (!Array.isArray(raw.steps) || raw.steps.length === 0 || raw.steps.length > 32) fail("steps are invalid");
-  const stepIds = new Set<string>(); const steps = raw.steps.map((value) => step(value, stepIds));
-  if (!steps.some((candidate) => candidate.type === "holder_signature")) fail("holder_signature is required");
-  const binding = object(raw.holderBinding, "holderBinding"); keys(binding, ["required", "domain", "version"], "holderBinding");
-  if (binding.required !== true || binding.domain !== HOLDER_BINDING_DOMAIN || binding.version !== 1) throw new CredentialError("UNSUPPORTED_PROFILE", "Holder binding version is unsupported");
-  const endpoints = object(raw.endpoints, "endpoints"); keys(endpoints, ENDPOINT_IDS, "endpoints");
-  for (const endpoint of ENDPOINT_IDS) if (endpoints[endpoint] !== endpoint) fail("endpoint identifiers must use the registered vocabulary");
-  const presentation = object(raw.presentation, "presentation"); keys(presentation, ["title", "description", "consent", "progressLabel", "successLabel", "recoveryLabel"], "presentation");
-  return Object.freeze({
-    type: "OpenCredentialsFlowDescriptor", protocol: CREDENTIAL_ACQUISITION_PROTOCOL, version: 1, stepRegistryVersion: 1,
-    profile: Object.freeze({ id: text(profile.id, "profile.id", ID), version: 1 }),
-    issuer: Object.freeze({ origin: origin(issuer.origin), did: text(issuer.did, "issuer.did", /^did:[a-z0-9]+:.+$/) }),
-    credential: Object.freeze({ type: text(credential.type, "credential.type", ID), version: 1, schema: text(credential.schema, "credential.schema"), format: CREDENTIAL_FORMAT }),
-    claims: Object.freeze(claims.map((claim) => Object.freeze(claim))), inputs: Object.freeze(inputs.map((item) => Object.freeze(item))), steps: Object.freeze(steps.map((item) => Object.freeze(item))),
-    holderBinding: Object.freeze({ required: true, domain: HOLDER_BINDING_DOMAIN, version: 1 }),
-    endpoints: Object.freeze(Object.fromEntries(ENDPOINT_IDS.map((id) => [id, id])) as Record<CredentialEndpointId, CredentialEndpointId>),
-    ttlSeconds: positiveInteger(raw.ttlSeconds, "ttlSeconds"), freshnessSeconds: positiveInteger(raw.freshnessSeconds, "freshnessSeconds", 31_536_000),
-    presentation: Object.freeze({ title: text(presentation.title, "presentation.title"), description: text(presentation.description, "presentation.description"), consent: text(presentation.consent, "presentation.consent"), progressLabel: text(presentation.progressLabel, "presentation.progressLabel"), successLabel: text(presentation.successLabel, "presentation.successLabel"), recoveryLabel: text(presentation.recoveryLabel, "presentation.recoveryLabel") }),
-  });
+  exact(raw, ["type", "contractVersion", "protocol", "profile", "profileVersion", "display", "accessibility", "theme", "issuer", "format", "claims", "subjectRelationship", "inputs", "steps", "holderBinding", "endpoints", "lifecycle", "status", "revocation", "presentation"], "descriptor");
+  if (raw.type !== "tinycloud.credentials/descriptor/v1" || raw.contractVersion !== 1 || raw.protocol !== CREDENTIAL_ACQUISITION_PROTOCOL || raw.profileVersion !== 1) unsupported("Credential protocol or profile version is unsupported");
+  text(raw.profile, "profile", ID);
+  const display = object(raw.display, "display"); exact(display, ["title", "description", "consent", "securityTextLocked"], "display"); if (display.securityTextLocked !== true) fail("security text must be locked"); for (const key of ["title", "description", "consent"]) text(display[key], `display.${key}`);
+  const accessibility = object(raw.accessibility, "accessibility"); exact(accessibility, ["progressLabel", "errorLiveRegion"], "accessibility"); text(accessibility.progressLabel, "accessibility.progressLabel"); if (accessibility.errorLiveRegion !== "assertive") fail("accessibility live region is invalid");
+  const theme = object(raw.theme, "theme"); exact(theme, ["tokenVersion", "allowed"], "theme"); if (theme.tokenVersion !== "tinycloud.credentials/tokens/v1" || !Array.isArray(theme.allowed) || theme.allowed.join("\0") !== "accentColor\0fontFamily\0borderRadius") unsupported("Theme token version is unsupported");
+  const issuer = object(raw.issuer, "issuer"); exact(issuer, ["did", "origin", "kid"], "issuer"); origin(issuer.origin); const did = text(issuer.did, "issuer.did", /^did:[a-z0-9]+:.+$/); const kid = text(issuer.kid, "issuer.kid"); if (!kid.startsWith(`${did}#`)) fail("issuer.kid is invalid");
+  const format = object(raw.format, "format"); exact(format, ["id", "vct"], "format"); if (format.id !== CREDENTIAL_FORMAT) unsupported("Credential format is unsupported"); text(format.vct, "format.vct", ID);
+  if (!Array.isArray(raw.claims) || raw.claims.length === 0 || raw.claims.length > 64) fail("claims are invalid"); const claimNames = new Set<string>(); for (const value of raw.claims) { const claim = object(value, "claim"); exact(claim, ["name", "matching", "selectiveDisclosure"], "claim"); const name = text(claim.name, "claim.name", ID); if (claimNames.has(name) || claim.matching !== "normalized_exact" || typeof claim.selectiveDisclosure !== "boolean") fail("claim is invalid"); claimNames.add(name); }
+  if (raw.subjectRelationship !== "holder_is_subject") unsupported("Subject relationship is unsupported");
+  if (!Array.isArray(raw.inputs) || raw.inputs.length === 0 || raw.inputs.length > 64) fail("inputs are invalid"); const inputIds = new Set<string>(); for (const value of raw.inputs) { const input = object(value, "input"); exact(input, ["id", "label", "schema", "prefill", "autocomplete"], "input"); const id = text(input.id, "input.id", ID); if (inputIds.has(id)) fail("input ids must be unique"); inputIds.add(id); text(input.label, "input.label"); if (input.prefill !== "privacy_hint_only" || input.autocomplete !== "off") fail("input privacy metadata is invalid"); const schema = object(input.schema, "input.schema"); if (Object.keys(schema).some((key) => !["type", "minLength", "maxLength", "pattern", "format"].includes(key)) || schema.type !== "string") unsupported("Input schema is unsupported"); if (schema.minLength !== undefined) integer(schema.minLength, "input.schema.minLength", 4096); if (schema.maxLength !== undefined) integer(schema.maxLength, "input.schema.maxLength", 4096); if (schema.pattern !== undefined) { const pattern = text(schema.pattern, "input.schema.pattern"); try { new RegExp(pattern, "u"); } catch { fail("input.schema.pattern is invalid"); } } if (schema.format !== undefined && schema.format !== "email") unsupported("Input format is unsupported"); }
+  if (!Array.isArray(raw.steps) || raw.steps.length < 2 || raw.steps.length > 32) fail("steps are invalid"); for (const value of raw.steps) { const step = object(value, "step"); exact(step, ["type", "version"], "step"); if (!STEP_TYPES.has(step.type as string) || step.version !== 1) unsupported("Credential step type or version is unsupported"); } if (!(raw.steps as Record<string, unknown>[]).some((step) => step.type === "holder_signature")) fail("holder_signature is required");
+  const binding = object(raw.holderBinding, "holderBinding"); exact(binding, ["required", "alg", "domain", "version"], "holderBinding"); if (binding.required !== true || binding.alg !== "EdDSA" || binding.domain !== HOLDER_BINDING_DOMAIN || binding.version !== 1) unsupported("Holder binding is unsupported");
+  const endpoints = object(raw.endpoints, "endpoints"); exact(endpoints, Object.keys(ENDPOINTS), "endpoints"); for (const [name, id] of Object.entries(ENDPOINTS)) if (endpoints[name] !== id) fail("endpoint identifiers must use the registered vocabulary");
+  const lifecycle = object(raw.lifecycle, "lifecycle"); exact(lifecycle, ["requestTtlSeconds", "challengeTtlSeconds", "maxProofAttempts", "challengeConsumption", "retry"], "lifecycle"); integer(lifecycle.requestTtlSeconds, "requestTtlSeconds"); integer(lifecycle.challengeTtlSeconds, "challengeTtlSeconds"); integer(lifecycle.maxProofAttempts, "maxProofAttempts", 100); if (lifecycle.challengeConsumption !== "atomic_once" || lifecycle.retry !== "bounded") fail("lifecycle semantics are invalid");
+  const status = object(raw.status, "status"); exact(status, ["type", "freshnessSeconds"], "status"); if (status.type !== "none") unsupported("Credential status method is unsupported"); integer(status.freshnessSeconds, "status.freshnessSeconds");
+  const revocation = object(raw.revocation, "revocation"); exact(revocation, ["supported"], "revocation"); if (revocation.supported !== false) unsupported("Credential revocation method is unsupported");
+  const presentation = object(raw.presentation, "presentation"); exact(presentation, ["stateVersion", "states"], "presentation"); if (presentation.stateVersion !== "tinycloud.credentials/ux-states/v1" || !Array.isArray(presentation.states) || presentation.states.join("\0") !== STATES.join("\0")) unsupported("Presentation state version is unsupported");
+  return Object.freeze(raw as unknown as CredentialFlowDescriptor);
 }
 
-export function credentialEndpointPath(id: CredentialEndpointId, requestId?: string): string {
+export function credentialEndpointPath(id: "request" | "state" | "challenge" | "proof" | "holder_binding" | "holder_signature" | "issue" | "result" | "issuer_metadata" | "interaction", requestId?: string): string {
   const encoded = requestId === undefined ? "" : `/${encodeURIComponent(requestId)}`;
-  const paths: Record<CredentialEndpointId, string> = {
-    create_request: "/v1/credential-acquisitions", request_state: `/v1/credential-acquisitions${encoded}/status`, create_challenge: `/v1/credential-acquisitions${encoded}/challenge`, submit_proof: `/v1/credential-acquisitions${encoded}/proof`, holder_binding: `/v1/credential-acquisitions${encoded}/holder-binding`, submit_holder_signature: `/v1/credential-acquisitions${encoded}/holder-signature`, issue: `/v1/credential-acquisitions${encoded}/issue`, result: `/v1/credential-acquisitions${encoded}/result`, issuer_metadata: "/.well-known/opencredentials/issuer", credential_status: "/v1/credential-status", interaction: `/credential-acquisition${encoded}`,
-  };
-  return paths[id];
+  return ({ request: "/v1/acquisitions", state: `/v1/acquisitions${encoded}/state`, challenge: `/v1/acquisitions${encoded}/challenge`, proof: `/v1/acquisitions${encoded}/proof`, holder_binding: `/v1/acquisitions${encoded}/holder-binding`, holder_signature: `/v1/acquisitions${encoded}/holder-signature`, issue: `/v1/acquisitions${encoded}/issue`, result: `/v1/acquisitions${encoded}/result`, issuer_metadata: "/.well-known/opencredentials/issuer", interaction: `/credential-acquisition${encoded}` } as const)[id];
 }

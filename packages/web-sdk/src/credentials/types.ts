@@ -27,7 +27,7 @@ export interface CredentialSigningAdapter {
   readonly requestApproval?: (binding: CredentialHolderBinding, bytes: Uint8Array, signal?: AbortSignal) => Promise<Uint8Array>;
 }
 
-export type PrimitiveStepResult = Readonly<Record<string, string>>;
+export type PrimitiveStepResult = Readonly<Record<string, string | boolean>>;
 export type PrimitiveStepHandler = (input: {
   readonly descriptor: CredentialFlowDescriptor;
   readonly requirement: CredentialRequirement;

@@ -1,0 +1,81 @@
+openapi: 3.1.0
+info:
+  title: OpenCredentials generic acquisition API
+  version: 1.0.0
+servers:
+  - url: https://witness.credentials.org
+paths:
+  /.well-known/opencredentials:
+    get:
+      operationId: discoverCredentialProfiles
+      security: []
+      responses:
+        "200": { description: Canonical catalog }
+  /.well-known/opencredentials/issuer:
+    get:
+      operationId: getAcquisitionIssuerMetadata
+      security: []
+      responses:
+        "200": { description: HTTPS-origin-bound issuer keys, validity, and cache metadata }
+  /v1/credential-types:
+    get:
+      operationId: discoverCredentialProfilesAlias
+      security: []
+      responses:
+        "200": { description: Canonical catalog alias }
+  /v1/acquisitions:
+    post:
+      operationId: createAcquisition
+      requestBody: { required: true, content: { application/json: { schema: { $ref: ./acquisition.schema.json } } } }
+      responses:
+        "201": { description: Opaque acquisition locator }
+        "400": { $ref: "#/components/responses/TypedError" }
+  /v1/acquisitions/{requestId}/state:
+    get:
+      operationId: getAcquisitionState
+      security: [{ completionVerifier: [] }]
+      parameters: [{ $ref: "#/components/parameters/RequestId" }]
+      responses: { "200": { description: Privacy-preserving state }, "401": { $ref: "#/components/responses/TypedError" } }
+  /v1/acquisitions/{requestId}/challenge:
+    post:
+      operationId: createProofChallenge
+      security: [{ completionVerifier: [] }]
+      parameters: [{ $ref: "#/components/parameters/RequestId" }]
+      responses: { "200": { description: One-time bounded challenge }, "409": { $ref: "#/components/responses/TypedError" } }
+  /v1/acquisitions/{requestId}/proof:
+    post:
+      operationId: submitProof
+      security: [{ completionVerifier: [] }]
+      parameters: [{ $ref: "#/components/parameters/RequestId" }]
+      responses: { "200": { description: Proof accepted }, "422": { $ref: "#/components/responses/TypedError" } }
+  /v1/acquisitions/{requestId}/holder-binding:
+    get:
+      operationId: getHolderBinding
+      security: [{ completionVerifier: [] }]
+      parameters: [{ $ref: "#/components/parameters/RequestId" }]
+      responses: { "200": { description: Canonical holder-binding bytes } }
+  /v1/acquisitions/{requestId}/holder-signature:
+    post:
+      operationId: submitHolderSignature
+      security: [{ completionVerifier: [] }]
+      parameters: [{ $ref: "#/components/parameters/RequestId" }]
+      responses: { "200": { description: Holder signature accepted } }
+  /v1/acquisitions/{requestId}/issue:
+    post:
+      operationId: issueCredential
+      security: [{ completionVerifier: [] }]
+      parameters: [{ $ref: "#/components/parameters/RequestId" }]
+      responses: { "200": { description: Issuance evidence without raw credential bytes } }
+  /v1/acquisitions/{requestId}/result:
+    get:
+      operationId: getCredentialResult
+      security: [{ completionVerifier: [] }]
+      parameters: [{ $ref: "#/components/parameters/RequestId" }]
+      responses: { "200": { description: Independently verifiable credential and metadata } }
+components:
+  securitySchemes:
+    completionVerifier: { type: http, scheme: bearer, bearerFormat: high-entropy verifier }
+  parameters:
+    RequestId: { name: requestId, in: path, required: true, schema: { type: string, pattern: "^[A-Za-z0-9_-]{32}$" } }
+  responses:
+    TypedError: { description: Versioned redacted typed error }

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://witness.credentials.org/schemas/credential-step-registry-v1.json",
+  "$defs": {
+    "stepRef": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["type", "version"], "properties": { "type": { "const": "collect_input" }, "version": { "const": 1 } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "version"], "properties": { "type": { "const": "mailbox_otp" }, "version": { "const": 1 } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "version"], "properties": { "type": { "const": "holder_signature" }, "version": { "const": 1 } } }
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "version", "unknownStepBehavior", "steps", "registeredEndpoints"],
+  "properties": {
+    "type": { "const": "tinycloud.credentials/steps/v1" },
+    "version": { "const": 1 },
+    "unknownStepBehavior": { "const": "fail_closed" },
+    "steps": { "type": "array", "minItems": 3, "maxItems": 3 },
+    "registeredEndpoints": { "type": "object" }
+  }
+}

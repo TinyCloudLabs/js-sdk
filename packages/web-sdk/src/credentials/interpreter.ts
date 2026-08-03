@@ -31,7 +31,7 @@ export async function interpretCredentialFlow(input: {
   readonly onProgress?: (event: CredentialProgressEvent) => void;
   readonly onWait?: () => Promise<void>;
 }): Promise<void> {
-  const steps = new Map(input.descriptor.steps.map((step) => [step.id, step]));
+  const steps = new Map(input.descriptor.steps.map((step) => [step.type, step]));
   const completed = new Set<string>(); let lastTransition = "";
   for (;;) {
     input.signal?.throwIfAborted();
@@ -48,14 +48,14 @@ export async function interpretCredentialFlow(input: {
     }
     const next = state.nextStep;
     if (!next) { await (input.onWait?.() ?? delay(state.retryAfterMs ?? 50, input.signal)); continue; }
-    const declared = steps.get(next.id);
-    if (!declared || declared.type !== next.type || declared.version !== next.version) throw new CredentialError("REQUEST_SUBSTITUTED", "Server selected an undeclared credential step");
+    const declared = steps.get(next.type);
+    if (next.id !== next.type || !declared || declared.type !== next.type || declared.version !== next.version) throw new CredentialError("REQUEST_SUBSTITUTED", "Server selected an undeclared credential step");
     if (completed.has(next.id) || state.transitionId === lastTransition) { await (input.onWait?.() ?? delay(state.retryAfterMs ?? 50, input.signal)); continue; }
     lastTransition = state.transitionId;
     if (next.type === "holder_signature") {
       input.onProgress?.({ state: "signing", stepId: next.id, correlationId: state.correlationId });
       const binding = validateCredentialHolderBinding(await input.transport.holderBinding(input.requestId, input.verifier, input.signal));
-      if (binding.requestId !== input.requestId || binding.descriptorDigest !== input.descriptorDigest || binding.requirementDigest !== input.requirementDigest || binding.holderDid !== input.holderDid || binding.issuerDid !== input.descriptor.issuer.did || binding.profile.id !== input.descriptor.profile.id || binding.openerOrigin !== input.openerOrigin || binding.audience !== input.descriptor.issuer.origin) throw new CredentialError("REQUEST_SUBSTITUTED", "Holder binding was substituted");
+      if (binding.requestId !== input.requestId || binding.descriptorDigest !== input.descriptorDigest || binding.requirementDigest !== input.requirementDigest || binding.holderDid !== input.holderDid || binding.issuer !== input.descriptor.issuer.did || binding.issuerKid !== input.descriptor.issuer.kid || binding.profile !== input.descriptor.profile || binding.openerOrigin !== input.openerOrigin || binding.completionOrigin !== input.openerOrigin || binding.audience !== "tinycloud://credentials") throw new CredentialError("REQUEST_SUBSTITUTED", "Holder binding was substituted");
       const bytes = holderBindingSigningBytes(binding);
       let signature = await input.signing.autoSign?.(binding, bytes, input.signal);
       if (signature === undefined) {

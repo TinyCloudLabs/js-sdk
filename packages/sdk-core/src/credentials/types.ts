@@ -5,30 +5,17 @@ export const CREDENTIAL_STEP_REGISTRY_VERSION = 1 as const;
 export const CREDENTIAL_FORMAT = "vc+sd-jwt" as const;
 
 export type CredentialStepType = "collect_input" | "mailbox_otp" | "holder_signature";
-export type CredentialEndpointId =
-  | "create_request"
-  | "request_state"
-  | "create_challenge"
-  | "submit_proof"
-  | "holder_binding"
-  | "submit_holder_signature"
-  | "issue"
-  | "result"
-  | "issuer_metadata"
-  | "credential_status"
-  | "interaction";
+export type CredentialEndpointId = "request" | "state" | "challenge" | "proof" | "holder_binding" | "holder_signature" | "issue" | "result";
 
 export interface CredentialClaimDescriptor {
-  readonly id: string;
-  readonly matching: "exact";
-  readonly required: boolean;
+  readonly name: string;
+  readonly matching: "normalized_exact";
+  readonly selectiveDisclosure: boolean;
 }
 
 export interface CredentialInputDescriptor {
   readonly id: string;
   readonly label: string;
-  readonly required: boolean;
-  readonly prefill: "allowed" | "forbidden";
   readonly schema: {
     readonly type: "string";
     readonly minLength?: number;
@@ -36,53 +23,37 @@ export interface CredentialInputDescriptor {
     readonly pattern?: string;
     readonly format?: "email";
   };
-  readonly accessibility: {
-    readonly label: string;
-    readonly description?: string;
-  };
+  readonly prefill: "privacy_hint_only";
+  readonly autocomplete: "off";
 }
 
 export interface CredentialStepDescriptor {
-  readonly id: string;
   readonly type: CredentialStepType;
   readonly version: 1;
-  readonly endpoint: CredentialEndpointId;
-  readonly title: string;
-  readonly description: string;
 }
 
+/** The canonical TC-462 descriptor. Its bytes are hashed without normalization. */
 export interface CredentialFlowDescriptor {
-  readonly type: "OpenCredentialsFlowDescriptor";
+  readonly type: "tinycloud.credentials/descriptor/v1";
+  readonly contractVersion: 1;
   readonly protocol: typeof CREDENTIAL_ACQUISITION_PROTOCOL;
-  readonly version: 1;
-  readonly stepRegistryVersion: 1;
-  readonly profile: { readonly id: string; readonly version: 1 };
-  readonly issuer: { readonly origin: string; readonly did: string };
-  readonly credential: {
-    readonly type: string;
-    readonly version: 1;
-    readonly schema: string;
-    readonly format: typeof CREDENTIAL_FORMAT;
-  };
+  readonly profile: string;
+  readonly profileVersion: 1;
+  readonly display: { readonly title: string; readonly description: string; readonly consent: string; readonly securityTextLocked: true };
+  readonly accessibility: { readonly progressLabel: string; readonly errorLiveRegion: "assertive" };
+  readonly theme: { readonly tokenVersion: "tinycloud.credentials/tokens/v1"; readonly allowed: readonly ("accentColor" | "fontFamily" | "borderRadius")[] };
+  readonly issuer: { readonly origin: string; readonly did: string; readonly kid: string };
+  readonly format: { readonly id: typeof CREDENTIAL_FORMAT; readonly vct: string };
   readonly claims: readonly CredentialClaimDescriptor[];
+  readonly subjectRelationship: "holder_is_subject";
   readonly inputs: readonly CredentialInputDescriptor[];
   readonly steps: readonly CredentialStepDescriptor[];
-  readonly holderBinding: {
-    readonly required: true;
-    readonly domain: typeof HOLDER_BINDING_DOMAIN;
-    readonly version: 1;
-  };
-  readonly endpoints: Readonly<Record<CredentialEndpointId, CredentialEndpointId>>;
-  readonly ttlSeconds: number;
-  readonly freshnessSeconds: number;
-  readonly presentation: {
-    readonly title: string;
-    readonly description: string;
-    readonly consent: string;
-    readonly progressLabel: string;
-    readonly successLabel: string;
-    readonly recoveryLabel: string;
-  };
+  readonly holderBinding: { readonly required: true; readonly alg: "EdDSA"; readonly domain: typeof HOLDER_BINDING_DOMAIN; readonly version: 1 };
+  readonly endpoints: Readonly<Record<"request" | "state" | "challenge" | "proof" | "holderBinding" | "holderSignature" | "issue" | "result", CredentialEndpointId>>;
+  readonly lifecycle: { readonly requestTtlSeconds: number; readonly challengeTtlSeconds: number; readonly maxProofAttempts: number; readonly challengeConsumption: "atomic_once"; readonly retry: "bounded" };
+  readonly status: { readonly type: "none"; readonly freshnessSeconds: number };
+  readonly revocation: { readonly supported: false };
+  readonly presentation: { readonly stateVersion: "tinycloud.credentials/ux-states/v1"; readonly states: readonly CredentialUxState[] };
 }
 
 export interface CredentialRequirement {
@@ -95,23 +66,22 @@ export interface CredentialRequirement {
 }
 
 export interface CredentialHolderBinding {
-  readonly type: "TinyCloudCredentialHolderBinding";
+  readonly type: typeof HOLDER_BINDING_DOMAIN;
   readonly protocol: typeof CREDENTIAL_ACQUISITION_PROTOCOL;
-  readonly version: 1;
-  readonly signingDomain: typeof HOLDER_BINDING_DOMAIN;
-  readonly signingDomainVersion: 1;
   readonly requestId: string;
+  readonly profile: string;
+  readonly profileVersion: 1;
   readonly descriptorDigest: string;
   readonly requirementDigest: string;
-  readonly profile: { readonly id: string; readonly version: 1 };
-  readonly issuerDid: string;
+  readonly issuer: string;
   readonly issuerKid: string;
   readonly holderDid: string;
-  readonly claimsDigest: string;
+  readonly normalizedClaimsDigest: string;
   readonly challengeNonce: string;
-  readonly openerOrigin: string;
   readonly audience: string;
-  readonly completionContextDigest: string;
+  readonly openerOrigin: string;
+  readonly completionOrigin: string;
+  readonly completionContext: string;
   readonly jti: string;
   readonly issuedAt: string;
   readonly expiresAt: string;
@@ -154,7 +124,7 @@ export interface IssuedCredentialEnvelope {
   readonly issuedAt: string;
   readonly notBefore: string;
   readonly expiresAt: string;
-  readonly status: { readonly method: "issuer"; readonly reference: string };
+  readonly status: { readonly method: "none"; readonly freshnessSeconds: number };
   readonly credential: string;
 }
 
@@ -185,7 +155,7 @@ export interface StoredCredentialRecord {
   readonly issuedAt: string;
   readonly notBefore: string;
   readonly expiresAt: string;
-  readonly status: { readonly method: "issuer"; readonly reference: string };
+  readonly status: { readonly method: "none"; readonly freshnessSeconds: number };
   readonly verifiedAt: string;
   readonly storedAt: string;
 }
@@ -200,20 +170,10 @@ export interface CredentialStorageReceipt {
   readonly etag?: string;
 }
 
-export type CredentialUxState =
-  | "idle"
-  | "checking"
-  | "collecting"
-  | "proving"
-  | "signing"
-  | "verifying"
-  | "saving"
-  | "success"
-  | "recovery"
-  | "canceled";
+export type CredentialUxState = "collecting" | "challenging" | "proving" | "signing" | "issuing" | "verifying" | "saving" | "success" | "recovery";
 
 export interface CredentialProgressEvent {
-  readonly state: CredentialUxState;
+  readonly state: CredentialUxState | "checking";
   readonly stepId?: string;
   readonly correlationId?: string;
 }

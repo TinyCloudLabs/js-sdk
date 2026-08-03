@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://witness.credentials.org/schemas/credential-catalog-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "protocol", "catalogVersion", "canonicalization", "digest", "stepRegistry", "issuerMetadata", "cache", "profiles"],
+  "properties": {
+    "type": { "const": "tinycloud.credentials/catalog/v1" },
+    "protocol": { "const": "tinycloud.credentials/acquisition/v1" },
+    "catalogVersion": { "const": 1 },
+    "canonicalization": { "const": "RFC8785" },
+    "digest": { "const": "sha-256-base64url-nopad" },
+    "stepRegistry": { "$ref": "step-registry.schema.json" },
+    "issuerMetadata": { "type": "object" },
+    "cache": { "type": "object" },
+    "profiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["profile", "profileVersion", "descriptorDigest", "supported", "enabled", "readiness", "descriptor"],
+        "properties": {
+          "profile": { "type": "string", "minLength": 1 },
+          "profileVersion": { "const": 1 },
+          "descriptorDigest": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+          "supported": { "type": "boolean" },
+          "enabled": { "type": "boolean" },
+          "readiness": { "enum": ["ready", "degraded", "disabled"] },
+          "descriptor": { "$ref": "descriptor.schema.json" }
+        }
+      }
+    }
+  }
+}

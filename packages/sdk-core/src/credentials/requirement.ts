@@ -2,7 +2,7 @@ import { canonicalDigest } from "./digest";
 import { CredentialError } from "./errors";
 import type { CredentialFlowDescriptor, CredentialRequirement, StoredCredentialRecord, VerifiedCredential } from "./types";
 
-const ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const ID = /^[a-z0-9][a-z0-9._-]{0,127}(?:\/v1)?$/;
 
 export function validateCredentialRequirement(value: unknown): CredentialRequirement {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential requirement is invalid");
@@ -30,9 +30,9 @@ export async function credentialRequirementDigest(requirement: CredentialRequire
 
 export function descriptorSatisfiesRequirement(descriptor: CredentialFlowDescriptor, requirement: CredentialRequirement): boolean {
   const requested = validateCredentialRequirement(requirement);
-  if (descriptor.profile.id !== requested.profile.id || descriptor.profile.version !== requested.profile.version || descriptor.credential.type !== requested.credentialType.id || descriptor.credential.version !== requested.credentialType.version) return false;
-  const declared = new Map(descriptor.claims.map((claim) => [claim.id, claim]));
-  return Object.keys(requested.claims).every((id) => declared.get(id)?.matching === "exact") && descriptor.claims.filter((claim) => claim.required).every((claim) => requested.claims[claim.id] !== undefined);
+  if (descriptor.profile !== requested.profile.id || descriptor.profileVersion !== requested.profile.version || descriptor.format.vct !== requested.credentialType.id || requested.credentialType.version !== 1) return false;
+  const declared = new Map(descriptor.claims.map((claim) => [claim.name, claim]));
+  return Object.keys(requested.claims).every((id) => declared.get(id)?.matching === "normalized_exact");
 }
 
 function matches(requirement: CredentialRequirement, candidate: Pick<StoredCredentialRecord | VerifiedCredential, "profile" | "credentialType" | "claims" | "holderDid" | "expiresAt" | "issuedAt">, holderDid: string, now: Date): boolean {

@@ -53,7 +53,7 @@ export class CredentialsService {
     try { response = await (options.fetch ?? globalThis.fetch.bind(globalThis))(url, { credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal: options.signal }); } catch (cause) { throw new CredentialError("OFFLINE", "Credential discovery is unavailable", { cause }); }
     if (!response.ok) throw new CredentialError(response.status === 503 ? "ISSUER_UNREADY" : "OFFLINE", "Credential discovery is unavailable");
     const catalog = await response.json() as Record<string, unknown>;
-    if (catalog.type !== "OpenCredentialsCatalog" || catalog.version !== 1 || !Array.isArray(catalog.profiles)) throw new CredentialError("DESCRIPTOR_INVALID", "Credential catalog is invalid");
+    if (catalog.type !== "tinycloud.credentials/catalog/v1" || catalog.protocol !== "tinycloud.credentials/acquisition/v1" || catalog.catalogVersion !== 1 || !Array.isArray(catalog.profiles)) throw new CredentialError("DESCRIPTOR_INVALID", "Credential catalog is invalid");
     for (const entryValue of catalog.profiles) {
       if (typeof entryValue !== "object" || entryValue === null || Array.isArray(entryValue)) continue;
       const entry = entryValue as Record<string, unknown>;
@@ -86,7 +86,7 @@ export class CredentialsService {
     const holderDid = active(this.client); const requirement = validateCredentialRequirement(requirementValue); const descriptor = await this.descriptor(requirement, options);
     const descriptorDigest = await canonicalDigest(descriptor); const requirementDigest = await credentialRequirementDigest(requirement);
     const transport = options.transport ?? new OpenCredentialsHttpTransport(descriptor, options.fetch);
-    const openerOrigin = options.openerOrigin ?? (typeof window === "undefined" ? "http://localhost" : window.location.origin);
+    const openerOrigin = options.openerOrigin ?? (typeof window === "undefined" ? "https://localhost" : window.location.origin);
     const redirectStore = options.redirectStore ?? (options.interaction === "redirect" && typeof window !== "undefined" ? new BrowserCredentialRedirectStore() : undefined);
     const timed = withTimeout(options.signal, options.timeoutMs ?? 120_000);
     let surface: Awaited<ReturnType<NonNullable<CredentialsAcquireOptions["browser"]>["start"]>> | undefined;
@@ -119,7 +119,7 @@ export class CredentialsService {
     const holderDid = active(this.client); const requirement = validateCredentialRequirement(requirementValue); const descriptor = await this.descriptor(requirement, options);
     const existing = await this.find(requirement, options);
     if (existing) {
-      const envelope: IssuedCredentialEnvelope = { type: "OpenCredentialsIssuedCredential", version: 1, protocol: "tinycloud.credentials/acquisition/v1", profile: existing.profile, credentialType: existing.credentialType, schema: descriptor.credential.schema, format: "vc+sd-jwt", issuerDid: existing.issuerDid, issuerKid: existing.issuerKid, subjectDid: existing.holderDid, holderDid: existing.holderDid, claims: existing.claims, claimsDigest: existing.claimsDigest, descriptorDigest: existing.descriptorDigest, credentialId: existing.credentialId, issuedAt: existing.issuedAt, notBefore: existing.notBefore, expiresAt: existing.expiresAt, status: existing.status, credential: existing.credential };
+      const envelope: IssuedCredentialEnvelope = { type: "OpenCredentialsIssuedCredential", version: 1, protocol: "tinycloud.credentials/acquisition/v1", profile: existing.profile, credentialType: existing.credentialType, schema: descriptor.format.vct, format: "vc+sd-jwt", issuerDid: existing.issuerDid, issuerKid: existing.issuerKid, subjectDid: existing.holderDid, holderDid: existing.holderDid, claims: existing.claims, claimsDigest: existing.claimsDigest, descriptorDigest: existing.descriptorDigest, credentialId: existing.credentialId, issuedAt: existing.issuedAt, notBefore: existing.notBefore, expiresAt: existing.expiresAt, status: existing.status, credential: existing.credential };
       const transport = options.transport ?? new OpenCredentialsHttpTransport(descriptor, options.fetch);
       const verified = await verifyIssuedCredential({ envelope, descriptor, descriptorDigest: await canonicalDigest(descriptor), requirement, holderDid, issuerMetadata: await transport.issuerMetadata(options.signal), now: options.now?.(), checkStatus: (status, signal) => transport.checkStatus(status, signal), signal: options.signal });
       return { status: "reused", credential: verified, record: existing };

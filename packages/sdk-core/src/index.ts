@@ -54,6 +54,7 @@ export {
   decodeBase64Url,
   descriptorSatisfiesRequirement,
   encodeBase64Url,
+  holderBindingCanonicalBytes,
   holderBindingSigningBytes,
   isDigest,
   sha256Base64Url,

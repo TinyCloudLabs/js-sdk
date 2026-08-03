@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://witness.credentials.org/schemas/credential-acquisition-request-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "profile", "profileVersion", "descriptorDigest", "requirementDigest", "holderDid", "inputs", "audience", "openerOrigin", "completionOrigin", "completionContext", "completionVerifierChallenge"],
+  "properties": {
+    "protocol": { "const": "tinycloud.credentials/acquisition/v1" },
+    "profile": { "type": "string" },
+    "profileVersion": { "const": 1 },
+    "descriptorDigest": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "requirementDigest": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "holderDid": { "type": "string", "pattern": "^did:key:z6Mk" },
+    "inputs": { "type": "object", "minProperties": 1 },
+    "audience": { "type": "string", "minLength": 1 },
+    "openerOrigin": { "type": "string", "format": "uri", "pattern": "^https://" },
+    "completionOrigin": { "type": "string", "format": "uri", "pattern": "^https://" },
+    "completionContext": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "completionVerifierChallenge": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
+  }
+}

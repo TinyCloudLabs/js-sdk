@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://witness.credentials.org/schemas/credential-descriptor-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "contractVersion", "protocol", "profile", "profileVersion", "display", "accessibility", "theme", "issuer", "format", "claims", "subjectRelationship", "inputs", "steps", "holderBinding", "endpoints", "lifecycle", "status", "revocation", "presentation"],
+  "properties": {
+    "type": { "const": "tinycloud.credentials/descriptor/v1" },
+    "contractVersion": { "const": 1 },
+    "protocol": { "const": "tinycloud.credentials/acquisition/v1" },
+    "profile": { "type": "string", "pattern": "^[a-z0-9.-]+/v1$" },
+    "profileVersion": { "const": 1 },
+    "display": { "type": "object" },
+    "accessibility": { "type": "object" },
+    "theme": { "type": "object" },
+    "issuer": { "type": "object" },
+    "format": { "type": "object", "properties": { "id": { "const": "vc+sd-jwt" } }, "required": ["id", "vct"], "additionalProperties": false },
+    "claims": { "type": "array", "minItems": 1 },
+    "subjectRelationship": { "const": "holder_is_subject" },
+    "inputs": { "type": "array", "minItems": 1 },
+    "steps": { "type": "array", "minItems": 2, "items": { "$ref": "step-registry.schema.json#/$defs/stepRef" } },
+    "holderBinding": { "type": "object" },
+    "endpoints": { "type": "object", "additionalProperties": { "enum": ["request", "state", "challenge", "proof", "holder_binding", "holder_signature", "issue", "result"] } },
+    "lifecycle": { "type": "object" },
+    "status": { "type": "object" },
+    "revocation": { "type": "object" },
+    "presentation": { "type": "object" }
+  }
+}
