@@ -16,6 +16,7 @@
  */
 
 import ms from "ms";
+import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
 import { resolveSecretPath, SECRET_NAME_RE } from "@tinycloud/sdk-services";
 
 // ---------------------------------------------------------------------------
@@ -1252,32 +1253,6 @@ function withCapabilitiesReadForSpaces(
   ]);
 }
 
-function accountRegistryPermissions(): ResourceCapability[] {
-  return [
-    ...[ACCOUNT_REGISTRY_PATH, "spaces/"].map((path) => ({
-      service: "tinycloud.kv",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path,
-      actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
-    })),
-    {
-      service: "tinycloud.delegation",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "",
-      actions: ["tinycloud.delegation/list"],
-    },
-  ];
-}
-
-function accountRegistryIndexPermission(): ResourceCapability {
-  return {
-    service: "tinycloud.sql",
-    space: ACCOUNT_REGISTRY_SPACE,
-    path: "account",
-    actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"],
-  };
-}
-
 /**
  * Compose one or more manifests into the single capability request that should
  * be signed. Fetching manifests is intentionally out of band; callers pass the
@@ -1306,8 +1281,12 @@ export function composeManifestRequest(
   );
 
   if (includeAccountRegistryPermissions) {
-    resources.push(...accountRegistryPermissions());
-    resources.push(accountRegistryIndexPermission());
+    resources.push(
+      ...ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+        ...resource,
+        actions: [...resource.actions],
+      })),
+    );
   }
   const resourcesWithImplicitCapabilities =
     withCapabilitiesReadForSpaces(resources);

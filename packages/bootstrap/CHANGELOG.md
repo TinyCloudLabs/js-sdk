@@ -1,5 +1,15 @@
 # @tinycloud/bootstrap
 
+## 2.7.0-beta.1
+
+### Minor Changes
+
+- d894c57: TC-393: recover incomplete account bootstrap with a durable account-space
+  completion marker, canonical account registry read/create-update/list, delegation,
+  capabilities-read, marker, and SQL coverage, and an idempotent
+  repair pass. One-shot CoordinationOS OpenKey sessions now explicitly disable
+  client-side bootstrap.
+
 ## 2.6.1-beta.0
 
 ### Patch Changes

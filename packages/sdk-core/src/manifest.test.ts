@@ -966,6 +966,20 @@ describe("resolveManifest — end-to-end composition", () => {
     ]);
   });
 
+  it("adds exact bootstrap marker coverage to implicit account permissions", () => {
+    const request = composeManifestRequest([
+      { app_id: "com.listen.app", name: "Listen", defaults: false },
+    ]);
+
+    expect(request.resources).toContainEqual({
+      service: "tinycloud.kv",
+      space: "account",
+      path: "system/bootstrap/complete",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+    });
+    expect(request.resources.some((resource) => resource.path === "system/bootstrap/")).toBe(false);
+  });
+
   it("can omit implicit account registry permissions", () => {
     const request = composeManifestRequest(
       [{ app_id: "com.listen.app", name: "Listen", defaults: false }],
@@ -974,6 +988,41 @@ describe("resolveManifest — end-to-end composition", () => {
 
     expect(request.resources.some((r) => r.space === "account")).toBe(false);
     expect(request.registryRecords).toEqual([]);
+  });
+
+  it("preserves explicit account resources when implicit permissions are disabled", () => {
+    const request = composeManifestRequest(
+      [{
+        app_id: "com.listen.app",
+        name: "Listen",
+        defaults: false,
+        prefix: "",
+        space: "account",
+        permissions: [{
+          service: "tinycloud.kv",
+          path: "caller-owned",
+          actions: ["get"],
+        }],
+      }],
+      { includeAccountRegistryPermissions: false },
+    );
+
+    expect(request.resources).toContainEqual({
+      service: "tinycloud.kv",
+      space: "account",
+      path: "caller-owned",
+      actions: ["tinycloud.kv/get"],
+    });
+    expect(request.resources.some((resource) =>
+      resource.space === "account" &&
+      ["applications/", "spaces/", "system/bootstrap/complete", "account"].includes(resource.path)
+    )).toBe(false);
+    expect(request.resources).toContainEqual({
+      service: "tinycloud.capabilities",
+      space: "account",
+      path: "",
+      actions: ["tinycloud.capabilities/read"],
+    });
   });
 
   it("includes delegation revocation in the consolidated session request", () => {

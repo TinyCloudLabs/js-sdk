@@ -80,11 +80,14 @@ describe("seed-spaces bootstrap step batches all 5 spaces in ONE call (TC-373)",
     }));
     const register = mock(async () => ({ ok: true, data: {} }));
     (node as any)._account = { spaces: { registerBatch, register } };
+    const markerWrite = mock(async () => {});
+    (node as any).writeBootstrapCompletionMarker = markerWrite;
 
     await (node as any).runAccountBootstrap([seedSpacesStep()]);
 
     expect(registerBatch).toHaveBeenCalledTimes(1);
     expect(register).not.toHaveBeenCalled();
+    expect(markerWrite).not.toHaveBeenCalled();
 
     const [passedSpaces] = registerBatch.mock.calls[0] as [Array<{ spaceId: string; ownerDid: string }>];
     expect(passedSpaces).toHaveLength(5);

@@ -52,6 +52,7 @@ import {
   type AccountService,
   type ResolvedDelegate,
   type PermissionEntry,
+  type ResourceCapability,
   type NetworkDescriptor,
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
@@ -59,6 +60,7 @@ import {
   type OwnerSharePolicyRegistrationReceipt,
   type LocalNodeIdentityStore,
   SignInOptions,
+  ACCOUNT_MANIFEST_PERMISSIONS,
   composeManifestRequest,
   createLocalStorageLocalNodeIdentityStore,
 } from "@tinycloud/sdk-core";
@@ -167,6 +169,8 @@ export interface Config extends ClientConfig {
   persistSession?: boolean;
   /** Custom session storage implementation. */
   sessionStorage?: ISessionStorage;
+  /** Whether to run node-sdk's canonical first-account bootstrap after sign-in. */
+  autoBootstrapAccount?: boolean;
   /** Browser storage key prefix for isolating apps/environments. */
   sessionStorageKeyPrefix?: string;
 
@@ -194,7 +198,7 @@ export interface Config extends ClientConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Strategy for TinyCloud root signature requests. */
   signStrategy?: SignStrategy;
-  /** Include implicit account registry permissions when composing `manifest`. Default true. */
+  /** Include canonical account registry read/create-update/list permissions in plain sessions and composed manifests. Default true. */
   includeAccountRegistryPermissions?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
@@ -415,6 +419,7 @@ export class TinyCloudWeb {
       signStrategy: this.config.signStrategy,
       includeAccountRegistryPermissions:
         this.config.includeAccountRegistryPermissions,
+      autoBootstrapAccount: this.config.autoBootstrapAccount,
       telemetry: this.config.telemetry,
     };
 
@@ -644,23 +649,35 @@ export class TinyCloudWeb {
     }
   }
 
-  private configuredManifestPermissions(): PermissionEntry[] {
-    const request =
-      this._capabilityRequest ??
-      (this._manifest === undefined
-        ? undefined
-        : composeManifestRequest(
-            Array.isArray(this._manifest) ? this._manifest : [this._manifest],
-            {
-              includeAccountRegistryPermissions:
-                this.config.includeAccountRegistryPermissions,
-            },
-          ));
-    return (request?.resources as PermissionEntry[] | undefined) ?? [];
+  private configuredManifestPermissions(node: TinyCloudNode): ResourceCapability[] {
+    if (this._capabilityRequest !== undefined) {
+      return this._capabilityRequest.resources;
+    }
+    if (this._manifest !== undefined) {
+      return composeManifestRequest(
+        Array.isArray(this._manifest) ? this._manifest : [this._manifest],
+        {
+          includeAccountRegistryPermissions:
+            this.config.includeAccountRegistryPermissions,
+        },
+      ).resources;
+    }
+    if (this.config.includeAccountRegistryPermissions === false) {
+      return [];
+    }
+    if (node.accountSpaceId === undefined) {
+      throw new Error("Cannot check restored account permissions before account space resolution");
+    }
+    const accountSpaceId = node.accountSpaceId;
+    return ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+      ...resource,
+      space: accountSpaceId,
+      actions: [...resource.actions],
+    }));
   }
 
   private restoredSessionCoversConfiguredManifest(node: TinyCloudNode): boolean {
-    const permissions = this.configuredManifestPermissions();
+    const permissions = this.configuredManifestPermissions(node);
     return permissions.length === 0 || node.hasRuntimePermissions(permissions);
   }
 

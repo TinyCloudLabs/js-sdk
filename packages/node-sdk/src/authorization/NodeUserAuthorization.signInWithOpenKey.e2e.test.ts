@@ -18,6 +18,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   extractRecapAttenuations,
+  makePkhSpaceId,
   parseCanonicalRecapResource,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
@@ -70,6 +71,8 @@ const PRIVATE_KEY = "1".padStart(64, "0");
 function makeSimulatedOpenKey(opts: {
   wasm: NodeWasmBindings;
   signer: PrivateKeySigner;
+  /** Primary space bound by the authorization context. */
+  spacePrefix?: string;
   /** Optional narrowing: return an abilities map to override the caller's SIWE. */
   narrow?: (originalSiwe: string) => Record<string, Record<string, string[]>> | null;
 }): OpenKeyAuthorizeTinyCloud {
@@ -92,21 +95,26 @@ function makeSimulatedOpenKey(opts: {
       const addressMatch = request.siwe.match(/^0x[a-fA-F0-9]{40}$/m);
       const uriMatch = request.siwe.match(/URI:\s*(.+)/);
       const uri = uriMatch?.[1]?.trim() ?? "";
-      // spaceId is inside the ReCap — for a bootstrap SIWE that references
-      // one space, we can extract it from the resource lines.
-      const attn = extractRecapAttenuations(request.siwe);
-      const firstResource = Object.keys(attn)[0] ?? "";
-      const spaceId = firstResource.startsWith("tinycloud:")
-        ? firstResource.split("/")[0] ?? firstResource
-        : firstResource;
+      // The authorization context binds the primary space separately. It
+      // cannot be inferred from the first ReCap entry once the request also
+      // carries the canonical account bundle: WASM orders that account space
+      // before the caller's primary space. Keep the regenerated SIWE bound to
+      // the same primary space as the prepared request.
+      const parsedAddress = addressMatch![0]!;
+      const chainId = Number(chainMatch![1]);
+      const spaceId = makePkhSpaceId(
+        parsedAddress,
+        chainId,
+        opts.spacePrefix ?? "default",
+      );
 
       const narrowed = opts.narrow?.(request.siwe) ?? null;
       let signedMessage: string;
       if (narrowed) {
         const regenerated = opts.wasm.prepareSession({
           abilities: narrowed,
-          address: addressMatch![0],
-          chainId: Number(chainMatch![1]),
+          address: parsedAddress,
+          chainId,
           domain: domainMatch![1]!,
           issuedAt: issuedMatch![1]!,
           expirationTime: expireMatch![1]!,
