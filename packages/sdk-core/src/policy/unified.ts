@@ -1022,21 +1022,21 @@ function decodeBase64Url(value: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1)
     throw new Error("value is not canonical base64url");
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const binary = typeof Buffer !== "undefined"
-    ? Buffer.from(normalized, "base64").toString("binary")
-    : atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="));
+  const binary = typeof atob === "function"
+    ? atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="))
+    : Buffer.from(normalized, "base64").toString("binary");
   const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-  const encoded = typeof Buffer !== "undefined"
-    ? Buffer.from(bytes).toString("base64url")
-    : btoa(String.fromCharCode(...bytes)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const encoded = typeof btoa === "function"
+    ? btoa(String.fromCharCode(...bytes)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_")
+    : Buffer.from(bytes).toString("base64url");
   if (encoded !== value) throw new Error("value is not canonical base64url");
   return bytes;
 }
 
 function encodeBase64Url(value: Uint8Array): string {
-  return typeof Buffer !== "undefined"
-    ? Buffer.from(value).toString("base64url")
-    : btoa(String.fromCharCode(...value)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return typeof btoa === "function"
+    ? btoa(String.fromCharCode(...value)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_")
+    : Buffer.from(value).toString("base64url");
 }
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
