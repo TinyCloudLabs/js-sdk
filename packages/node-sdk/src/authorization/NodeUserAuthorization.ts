@@ -129,6 +129,17 @@ function addRawAbility(
   }
 }
 
+function cloneAbilitiesMap(actions: AbilitiesMap): AbilitiesMap {
+  return Object.fromEntries(
+    Object.entries(actions).map(([service, paths]) => [
+      service,
+      Object.fromEntries(
+        Object.entries(paths).map(([path, pathActions]) => [path, [...pathActions]]),
+      ),
+    ]),
+  );
+}
+
 /**
  * Configuration for NodeUserAuthorization.
  */
@@ -620,8 +631,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const defaultNetworkId = this.defaultEncryptionNetworkId(address, chainId);
       const primarySpaceId = makePkhSpaceId(address, chainId, this.spacePrefix);
       const secretsSpaceId = makePkhSpaceId(address, chainId, "secrets");
+      const primaryActions =
+        this.includeAccountRegistryPermissions && this.spacePrefix === ACCOUNT_REGISTRY_SPACE
+          ? cloneAbilitiesMap(this.defaultActions)
+          : this.defaultActions;
       const spaceAbilities: Record<string, AbilitiesMap> = {
-        [primarySpaceId]: this.defaultActions,
+        [primarySpaceId]: primaryActions,
         [secretsSpaceId]: {
           kv: {
             "vault/secrets/": [
@@ -649,7 +664,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
           ACCOUNT_MANIFEST_PERMISSIONS,
         );
         for (const [service, paths] of Object.entries(accountAbilities)) {
-          const existingPaths = this.defaultActions[service] ?? (this.defaultActions[service] = {});
+          const existingPaths = primaryActions[service] ?? (primaryActions[service] = {});
           for (const [path, actions] of Object.entries(paths)) {
             const existingActions = existingPaths[path] ?? (existingPaths[path] = []);
             for (const action of actions) {
@@ -659,7 +674,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         }
       }
       return {
-        abilities: this.defaultActions,
+        abilities: primaryActions,
         spaceId: primarySpaceId,
         spaceAbilities,
         rawAbilities: {
