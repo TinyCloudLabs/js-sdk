@@ -5,6 +5,7 @@ import { canonicalize, didKeyFromEd25519PublicKey, signCompactUcanAuthorization,
 import { ShareRecipientClient } from "../src/recipient.js";
 
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString("hex");
+const base64 = (bytes: Uint8Array): string => Buffer.from(bytes).toString("base64");
 const canonicalHash = (value: unknown): string => hex(sha256(new TextEncoder().encode(canonicalize(value))));
 
 async function aesEncrypt(key: Uint8Array, plaintext: Uint8Array): Promise<Uint8Array> {
@@ -37,8 +38,8 @@ describe("v3 recipient content", () => {
       const wrapped = await aesEncrypt(shared, symmetricKey);
       const invocation = verifyCompactUcanAuthorization(new Headers(init?.headers).get("Authorization")!);
       const bodyHash = canonicalHash(body);
-      const unsigned = { type: "tinycloud.encryption.decrypt-result/v1", targetNode: nodeDid, networkId, invocationCid: invocation.cid, encryptedSymmetricKeyHash, receiverPublicKeyHash: body.receiverPublicKeyHash, wrappedKey: toBase64Url(Uint8Array.from([...ephemeralPublic, ...wrapped])), alg: "x25519-aes256gcm/v1", keyVersion: 1, requestHash: hex(sha256(new TextEncoder().encode(`${invocation.cid}${bodyHash}`))), nodeId: nodeDid };
-      return Response.json({ ...unsigned, nodeSignature: toBase64Url(ed25519.sign(new TextEncoder().encode(canonicalize(unsigned)), nodeKey)) });
+      const unsigned = { type: "tinycloud.encryption.decrypt-result/v1", targetNode: nodeDid, networkId, invocationCid: invocation.cid, encryptedSymmetricKeyHash, receiverPublicKeyHash: body.receiverPublicKeyHash, wrappedKey: base64(Uint8Array.from([...ephemeralPublic, ...wrapped])), alg: "x25519-aes256gcm/v1", keyVersion: 1, requestHash: hex(sha256(new TextEncoder().encode(`${invocation.cid}${bodyHash}`))), nodeId: nodeDid };
+      return Response.json({ ...unsigned, nodeSignature: base64(ed25519.sign(new TextEncoder().encode(canonicalize(unsigned)), nodeKey)) });
     };
     const envelope = { version: 3, target: { nodeAudience: nodeDid }, encryptionNetwork: networkId, contentSource: { keyVersion: 1, encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash }, metadata: { mediaType: "text/plain" } } as any;
     const client = new ShareRecipientClient({ nodeOrigin: "https://node.example.com", envelope, holderDid: recipientDid, trustedNode: {} as any, fetchFn, buildPresentation: async () => ({ holderDid: recipientDid, credential: "fixture", holderBinding: {}, proof: {} }) });
