@@ -43,29 +43,23 @@ class MockUserAuthorization {
 
     // Apply extension capabilities
     for (const extension of this.extensions) {
-      if (!extension.namespace) continue;
-      try {
-        if (extension.defaultActions) {
-          const defaultActions = await extension.defaultActions();
-          mockSessionManager.addTargetedActions(
-            extension.namespace,
-            defaultActions
-          );
-        }
-        if (extension.targetedActions) {
+      if (extension.targetedActions) {
+        try {
           const targetedActions = await extension.targetedActions();
           for (const target in targetedActions) {
             mockSessionManager.addTargetedActions(
-              `${extension.namespace}:${target}`,
+              target,
               targetedActions[target]
             );
           }
+        } catch (error) {
+          console.warn(
+            `Failed to apply targeted actions for ${
+              extension.namespace || "unknown TinyCloud extension"
+            }:`,
+            error
+          );
         }
-      } catch (error) {
-        console.warn(
-          `Failed to apply actions for ${extension.namespace}:`,
-          error
-        );
       }
     }
 

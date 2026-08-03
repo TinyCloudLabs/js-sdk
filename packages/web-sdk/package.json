@@ -28,7 +28,6 @@
     "dist/index.mjs"
   ],
   "scripts": {
-    "prebuild": "bun scripts/prepare-build.ts",
     "build": "rimraf dist && cross-env NODE_ENV=production webpack --mode production --config webpack.config.cjs",
     "build:coordinationos-vendor": "rimraf dist/vendor && cross-env NODE_ENV=production webpack --mode production --config webpack.coordinationos-vendor.config.cjs && bun scripts/build-coordinationos-vendor.ts",
     "dev": "cross-env NODE_ENV=development webpack --watch --config webpack.config.cjs",
@@ -39,8 +38,7 @@
     "lint": "eslint --ext .ts src/",
     "lint:fix": "eslint --ext .ts src/ --fix",
     "clean": "rimraf dist && rimraf temp",
-    "pretest": "bun run build && bun run build:coordinationos-vendor",
-    "test": "bun scripts/run-tests.ts"
+    "test": "jest"
   },
   "dependencies": {
     "@metamask/detect-provider": "^1.2.0",

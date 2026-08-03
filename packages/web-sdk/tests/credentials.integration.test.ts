@@ -1,7 +1,7 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, mock, test } from "bun:test";
 import { basename, dirname, join, resolve } from "node:path";
 import { createHermeticEncryptedNode } from "../../node-sdk/src/test-support/hermetic-encrypted-node";
-import { type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
+import { createOpenKeyCallbackSigningStrategy, type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
 import { BrowserCredentialInteraction, BrowserCredentialRedirectStore } from "../src/credentials/browser";
 import { CredentialsService } from "../src/credentials/service";
 import { OpenCredentialsHttpTransport } from "../src/credentials/transport";
@@ -22,20 +22,6 @@ function requirement(descriptor: CredentialFlowDescriptor): CredentialRequiremen
     profile: { id: descriptor.profile, version: 1 }, credentialType: { id: descriptor.format.vct, version: 1 },
     claims: { [name]: name === "email" ? "fixture@example.com" : "fixture_handle" },
   };
-}
-
-function memoryKv() {
-  const values = new Map<string, unknown>();
-  return {
-    batchPut: async (items: { key: string; value: unknown }[]) => {
-      for (const item of items) values.set(item.key, structuredClone(item.value));
-      return { ok: true, data: { keys: items.map((item) => item.key), count: items.length } } as const;
-    },
-    get: async (key: string) => values.has(key)
-      ? { ok: true, data: { data: structuredClone(values.get(key)), headers: { etag: `"${key}"`, get: () => null } } } as const
-      : { ok: false, error: { code: "not-found", message: "not found", service: "kv" } } as const,
-    list: async ({ prefix }: { prefix: string }) => ({ ok: true, data: { keys: [...values.keys()].filter((key) => key.startsWith(prefix)) } }) as const,
-  } as any;
 }
 
 function memoryStorage() {
@@ -71,14 +57,15 @@ async function startFixture(): Promise<{ url: string; stop(): void }> {
 
 const acquisition = await startFixture();
 const initialized = await createHermeticEncryptedNode();
-afterAll(() => { acquisition.stop(); initialized.stop(); });
+const redirectInitialized = await createHermeticEncryptedNode();
+afterAll(() => { acquisition.stop(); initialized.stop(); redirectInitialized.stop(); });
 
 test("an initialized active session ensures mounted email and catalog-added synthetic credentials", async () => {
-  const kv = memoryKv();
   const holderDid = initialized.delegate.credentialHolderDid;
   const holderKid = initialized.delegate.credentialHolderKid;
   const ownerDid = initialized.delegate.did;
   const spaceId = `${ownerDid.replace(/^did:/, "tinycloud:")}:credentials`;
+  initialized.provisionKvSpace(spaceId);
   const client = {
     get sessionDid() { return initialized.delegate.sessionDid; },
     get credentialHolderDid() { return initialized.delegate.credentialHolderDid; },
@@ -89,7 +76,7 @@ test("an initialized active session ensures mounted email and catalog-added synt
     approveCredentialBytes: (bytes: Uint8Array) => initialized.delegate.approveCredentialBytes(bytes),
     ensureOwnedSpaceHosted: async (name: string) => { expect(name).toBe("credentials"); return spaceId; },
     credentialSpaceOwnerDid: (space: string) => initialized.delegate.credentialSpaceOwnerDid(space),
-    kvForSpace: (space: string) => { expect(space).toBe(spaceId); return kv; },
+    kvForSpace: (space: string) => { expect(space).toBe(spaceId); return initialized.delegate.kvForSpace(space); },
   };
   expect(client.sessionDid).toBe(holderKid);
   expect(holderDid).not.toContain("#");
@@ -150,19 +137,19 @@ test("an initialized active session ensures mounted email and catalog-added synt
 }, 120_000);
 
 test("a locator-only redirect returns after hosted proof and a restored SDK session completes acquisition", async () => {
-  const kv = memoryKv();
-  const holderDid = initialized.delegate.credentialHolderDid;
-  const ownerDid = initialized.delegate.did;
+  const holderDid = redirectInitialized.delegate.credentialHolderDid;
+  const ownerDid = redirectInitialized.delegate.did;
   const spaceId = `${ownerDid.replace(/^did:/, "tinycloud:")}:credentials`;
+  redirectInitialized.provisionKvSpace(spaceId);
   const client = {
-    get credentialHolderDid() { return initialized.delegate.credentialHolderDid; },
-    get credentialHolderKid() { return initialized.delegate.credentialHolderKid; },
-    session: () => initialized.delegate.session as any,
-    autoSignCredentialBytes: (bytes: Uint8Array) => initialized.delegate.autoSignCredentialBytes(bytes),
-    approveCredentialBytes: (bytes: Uint8Array) => initialized.delegate.approveCredentialBytes(bytes),
+    get credentialHolderDid() { return redirectInitialized.delegate.credentialHolderDid; },
+    get credentialHolderKid() { return redirectInitialized.delegate.credentialHolderKid; },
+    session: () => redirectInitialized.delegate.session as any,
+    autoSignCredentialBytes: (bytes: Uint8Array) => redirectInitialized.delegate.autoSignCredentialBytes(bytes),
+    approveCredentialBytes: (bytes: Uint8Array) => redirectInitialized.delegate.approveCredentialBytes(bytes),
     ensureOwnedSpaceHosted: async () => spaceId,
-    credentialSpaceOwnerDid: (space: string) => initialized.delegate.credentialSpaceOwnerDid(space),
-    kvForSpace: () => kv,
+    credentialSpaceOwnerDid: (space: string) => redirectInitialized.delegate.credentialSpaceOwnerDid(space),
+    kvForSpace: () => redirectInitialized.delegate.kvForSpace(spaceId),
   };
   const service = new CredentialsService(client);
   let browserCookie = "";
@@ -183,7 +170,7 @@ test("a locator-only redirect returns after hosted proof and a restored SDK sess
   });
   const browser = {
     kind: "redirect" as const,
-    start: async (input: { issuerOrigin: string; locator: string; signal?: AbortSignal }) => {
+    start: async (input: { interaction: CredentialFlowDescriptor["interaction"]; locator: string; signal?: AbortSignal }) => {
       const surface = await navigationAdapter.start(input);
       const hosted = async (suffix: string, init: RequestInit = {}) => {
         const response = await fetch(new URL(`/v1/acquisitions/${input.locator}${suffix}`, acquisition.url), {
@@ -223,4 +210,51 @@ test("a locator-only redirect returns after hosted proof and a restored SDK sess
   expect(resumed.credential.holderDid).toBe(holderDid);
   expect(resumed.record.ownerDid).toBe(ownerDid);
   expect(await redirectStore.load()).toBeUndefined();
+}, 120_000);
+
+test("an initialized OpenKey session reports normal approval rejection as recoverable", async () => {
+  const automaticDecision = mock(async () => new Response(JSON.stringify({
+    approved: false,
+    needsApproval: true,
+    reason: "normal approval required",
+  }), { status: 200 }));
+  const requestApproval = mock(async () => ({
+    approved: false,
+    reason: "user rejected credential signing",
+  }));
+  const openKey = await createHermeticEncryptedNode({
+    delegateSignStrategy: createOpenKeyCallbackSigningStrategy({
+      endpoint: "https://openkey.example.test/api/delegate/sign",
+      fetch: automaticDecision,
+      requestApproval,
+    }),
+  });
+  try {
+    const service = new CredentialsService({
+      get credentialHolderDid() { return openKey.delegate.credentialHolderDid; },
+      get credentialHolderKid() { return openKey.delegate.credentialHolderKid; },
+      session: () => openKey.delegate.session as any,
+      autoSignCredentialBytes: (bytes: Uint8Array) => openKey.delegate.autoSignCredentialBytes(bytes),
+      approveCredentialBytes: (bytes: Uint8Array) => openKey.delegate.approveCredentialBytes(bytes),
+      ensureOwnedSpaceHosted: async () => { throw new Error("rejected credentials must not be stored"); },
+      credentialSpaceOwnerDid: () => openKey.delegate.did,
+      kvForSpace: () => { throw new Error("rejected credentials must not be stored"); },
+    });
+    const transport = new OpenCredentialsHttpTransport(synthetic, async (input, init) => {
+      const requested = new URL(String(input));
+      return fetch(new URL(requested.pathname, acquisition.url), init);
+    });
+
+    await expect(service.acquire(requirement(synthetic), {
+      descriptor: synthetic,
+      interaction: "headless",
+      transport,
+      openerOrigin: "https://app.test",
+      stepHandlers: { collect_input: async () => ({ acknowledged: true }) },
+    })).rejects.toMatchObject({ code: "SIGNATURE_REJECTED", recoverable: true });
+    expect(automaticDecision).toHaveBeenCalledTimes(1);
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+  } finally {
+    openKey.stop();
+  }
 }, 120_000);

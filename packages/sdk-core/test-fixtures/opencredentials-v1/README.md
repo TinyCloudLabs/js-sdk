@@ -11,9 +11,12 @@ base64url without padding. Availability is outside descriptor bytes, so health
 changes do not change a pinned descriptor digest. A client may execute a pinned
 descriptor without discovery.
 
-All descriptor endpoints are identifiers from the registry. They resolve
-against the descriptor's exact trusted HTTPS issuer origin. Descriptors cannot
-specify URLs, methods, headers, scripts, markup, or executable expressions.
+All API endpoints are identifiers from the registry. They resolve against the
+descriptor's exact trusted HTTPS issuer origin. The browser interaction surface
+has its own exact trusted HTTPS origin and a fixed path template in the
+descriptor; clients reject any other origin or template. Descriptors cannot
+specify arbitrary URLs, methods, headers, scripts, markup, redirects, callbacks,
+or executable expressions.
 
 The request locator is opaque but not authorizing. Status and result access
 require the high-entropy completion verifier whose S256 challenge was bound at

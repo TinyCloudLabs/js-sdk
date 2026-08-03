@@ -33,6 +33,10 @@
           "origin": "https://witness.credentials.org",
           "kid": "did:web:issuer.credentials.org#controller"
         },
+        "interaction": {
+          "origin": "https://credentials.org",
+          "pathTemplate": "/credentials/acquire/{requestId}"
+        },
         "format": {
           "id": "vc+sd-jwt",
           "vct": "opencredentials.email/v1"
@@ -118,7 +122,7 @@
           ]
         }
       },
-      "digest": "THC9Q7iLxCMLUQNFJBDDJ-BqNkksj5WEn_zy0QEhqkc"
+      "digest": "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0"
     },
     {
       "name": "synthetic-handle",
@@ -150,6 +154,10 @@
           "did": "did:web:issuer.credentials.org",
           "origin": "https://witness.credentials.org",
           "kid": "did:web:issuer.credentials.org#controller"
+        },
+        "interaction": {
+          "origin": "https://credentials.org",
+          "pathTemplate": "/credentials/acquire/{requestId}"
         },
         "format": {
           "id": "vc+sd-jwt",
@@ -232,7 +240,7 @@
           ]
         }
       },
-      "digest": "VlE4Ns1V7Q738j6mMeMoZMzIf3tDEpKtUXQNOF3gtcU"
+      "digest": "7UoA6-MTjKThr4wbNdsjasZ6Pxk8XT4Kz-9aN-Uhn9I"
     }
   ]
 }

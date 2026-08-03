@@ -21,6 +21,7 @@
       // Expose key exports to window for page.evaluate() access
       window.TinyCloudWeb = sdk.TinyCloudWeb;
       window.TinyCloudNode = sdk.TinyCloudNode;
+      window.__TinyCloudSDK = sdk;
       window.__SDK_LOADED = true;
       window.__SDK_EXPORTS = Object.keys(sdk);
 

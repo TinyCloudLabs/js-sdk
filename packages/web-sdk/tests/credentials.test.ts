@@ -77,8 +77,20 @@ test("uses normal approval only when the exact-request auto-sign policy declines
 
 test("popup uses a locator-only URL and exact-origin allowlisted wake messages", async () => {
   const listeners = new Set<(event: any) => void>(); const popup = { closed: false, close: () => undefined } as any; let opened = ""; const opener = { addEventListener: (_: string, listener: any) => listeners.add(listener), removeEventListener: (_: string, listener: any) => listeners.delete(listener) } as any;
-  const interaction = await new BrowserCredentialInteraction("popup", { opener, open: (url) => { opened = url; return popup; }, redirect: () => undefined }).start({ issuerOrigin: ORIGIN, locator: REQUEST }); expect(new URL(opened).search).toBe(""); expect(new URL(opened).hash).toBe("");
-  let woke = false; const waiting = interaction.wake().then(() => { woke = true; }); for (const listener of listeners) listener({ origin: "https://evil.test", source: popup, data: { type: "opencredentials-wake", version: 1, locator: REQUEST } }); await Promise.resolve(); expect(woke).toBe(false); for (const listener of listeners) listener({ origin: ORIGIN, source: popup, data: { type: "opencredentials-wake", version: 1, locator: REQUEST } }); await waiting; expect(woke).toBe(true);
+  const interaction = await new BrowserCredentialInteraction("popup", { opener, open: (url) => { opened = url; return popup; }, redirect: () => undefined }).start({ interaction: email.interaction, locator: REQUEST }); expect(new URL(opened).origin).toBe(email.interaction.origin); expect(new URL(opened).search).toBe(""); expect(new URL(opened).hash).toBe("");
+  let woke = false; const waiting = interaction.wake().then(() => { woke = true; }); for (const listener of listeners) listener({ origin: "https://evil.test", source: popup, data: { type: "opencredentials-wake", version: 1, locator: REQUEST } }); await Promise.resolve(); expect(woke).toBe(false); for (const listener of listeners) listener({ origin: email.interaction.origin, source: popup, data: { type: "opencredentials-wake", version: 1, locator: REQUEST } }); await waiting; expect(woke).toBe(true);
+});
+
+test("browser interaction rejects descriptor-substituted origins", async () => {
+  const interaction = new BrowserCredentialInteraction("redirect", {
+    opener: {} as Window,
+    open: () => null,
+    redirect: () => undefined,
+  });
+  await expect(interaction.start({
+    interaction: { ...email.interaction, origin: "https://evil.test" } as typeof email.interaction,
+    locator: REQUEST,
+  })).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
 });
 
 function kvMemory(failReadback = false) { const values = new Map<string, unknown>(); const headers = { etag: "\"etag\"", get: () => null }; return { service: { batchPut: async (items: any[]) => { for (const item of items) values.set(item.key, item.value); return { ok: true, data: { keys: items.map((item) => item.key), count: items.length } }; }, get: async (key: string) => failReadback ? { ok: false, error: {} } : values.has(key) ? { ok: true, data: { data: values.get(key), headers } } : { ok: false, error: {} }, list: async ({ prefix }: any) => ({ ok: true, data: { keys: [...values.keys()].filter((key) => key.startsWith(prefix)) } }) } as any }; }

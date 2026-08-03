@@ -59,6 +59,8 @@ import {
   type InvokeAnyFunction,
   type InvokeFunction,
   type FetchFunction,
+  type SignRequest,
+  type SignResponse,
   INotificationHandler,
   SilentNotificationHandler,
   IENSResolver,
@@ -302,6 +304,13 @@ export interface OwnerDelegationReceipt extends CoreOwnerDelegationReceipt {
 
 function isOpenKeyAutoSignStrategy(strategy: SignStrategy | undefined): boolean {
   return (strategy as { openKeyAutoSign?: unknown } | undefined)?.openKeyAutoSign === true;
+}
+
+function openKeyApproval(
+  strategy: SignStrategy | undefined,
+): ((request: SignRequest) => Promise<SignResponse>) | undefined {
+  return (strategy as { openKeyRequestApproval?: unknown } | undefined)
+    ?.openKeyRequestApproval as ((request: SignRequest) => Promise<SignResponse>) | undefined;
 }
 
 /**
@@ -3149,8 +3158,13 @@ export class TinyCloudNode {
       type: "message" as const,
       purpose: "message" as const,
     };
-    if (strategy?.type === "callback" && !isOpenKeyAutoSignStrategy(strategy)) {
-      const decision = await strategy.handler(request);
+    const approval = isOpenKeyAutoSignStrategy(strategy)
+      ? openKeyApproval(strategy)
+      : strategy?.type === "callback"
+      ? strategy.handler
+      : undefined;
+    if (approval) {
+      const decision = await approval(request);
       if (!decision.approved) throw new Error(decision.reason ?? "Credential signing was rejected");
       return this.signSessionBytes(bytes);
     }

@@ -1,5 +1,7 @@
 import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import {
   canonicalHashHex,
   canonicalizeEncryptionJson,
@@ -11,6 +13,7 @@ import {
   type InlineEncryptedEnvelope,
   type NetworkDescriptor,
   type PermissionEntry,
+  type SignStrategy,
   type TinyCloudSession,
 } from "@tinycloud/sdk-core";
 
@@ -106,7 +109,8 @@ class LoopbackEncryptedNode {
     delegatedKvResources: [] as string[],
   };
 
-  private readonly server: ReturnType<typeof Bun.serve>;
+  private readonly server: Server;
+  private readonly listening: Promise<void>;
   private envelope?: InlineEncryptedEnvelope;
   private spaceId?: string;
   private networkId?: string;
@@ -115,15 +119,43 @@ class LoopbackEncryptedNode {
   private secretPresent = true;
 
   constructor() {
-    this.server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch: (request) => this.handle(request),
+    this.server = createServer(async (incoming, outgoing) => {
+      try {
+        const chunks: Buffer[] = [];
+        for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+        const body = Buffer.concat(chunks);
+        const request = new Request(
+          new URL(incoming.url ?? "/", this.host),
+          {
+            method: incoming.method,
+            headers: incoming.headers as HeadersInit,
+            ...(body.length > 0 ? { body } : {}),
+          },
+        );
+        const response = await this.handle(request);
+        outgoing.statusCode = response.status;
+        response.headers.forEach((value, name) => outgoing.setHeader(name, value));
+        outgoing.end(Buffer.from(await response.arrayBuffer()));
+      } catch (cause) {
+        outgoing.statusCode = 500;
+        outgoing.end(cause instanceof Error ? cause.message : "loopback failure");
+      }
     });
+    this.listening = new Promise((resolve, reject) => {
+      this.server.once("listening", resolve);
+      this.server.once("error", reject);
+    });
+    this.server.listen(0, "127.0.0.1");
   }
 
   get host(): string {
-    return `http://127.0.0.1:${this.server.port}`;
+    const address = this.server.address() as AddressInfo | null;
+    if (address === null) throw new Error("loopback encrypted node is not listening");
+    return `http://127.0.0.1:${address.port}`;
+  }
+
+  async ready(): Promise<void> {
+    await this.listening;
   }
 
   configure(input: {
@@ -147,6 +179,14 @@ class LoopbackEncryptedNode {
     this.kvData.set(spaceId.toLowerCase(), new Map(Object.entries(entries)));
   }
 
+  provisionKv(spaceId: string): void {
+    this.kvData.set(spaceId.toLowerCase(), new Map());
+  }
+
+  allowInvocationProof(cid: string): void {
+    this.delegationCids.add(cid);
+  }
+
   setSecretPresent(value: boolean): void {
     this.secretPresent = value;
   }
@@ -156,7 +196,8 @@ class LoopbackEncryptedNode {
   }
 
   stop(): void {
-    this.server.stop(true);
+    this.server.closeAllConnections();
+    this.server.close();
   }
 
   private cidForAuthorization(authorization: string): string {
@@ -262,6 +303,38 @@ class LoopbackEncryptedNode {
       if (!authorization) return new Response("missing authorization", { status: 401 });
       const payload = verifiedCompactPayload(authorization);
       if (payload.iss) this.observed.signingIssuers.push(payload.iss);
+      const writes = Object.entries(payload.att ?? {}).flatMap(([resource, actions]) =>
+        Object.keys(actions).map((action) => ({ resource, action }))
+      ).filter(({ resource, action }) => {
+        if (action !== "tinycloud.kv/put") return false;
+        const separator = resource.lastIndexOf("/kv/");
+        if (separator < 0) return false;
+        const space = resource.slice(0, separator).toLowerCase();
+        return this.kvData.has(space) &&
+          hasExactCapability(payload, resource, action, this.delegationCids);
+      });
+      if (writes.length > 0) {
+        const form = await request.formData();
+        const written: string[] = [];
+        for (const write of writes) {
+          const separator = write.resource.lastIndexOf("/kv/");
+          const targetSpace = write.resource.slice(0, separator).toLowerCase();
+          const path = write.resource.slice(separator + 4);
+          const encodedPath = encodeURIComponent(path).replace(/[!'()*]/g, (character) =>
+            `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+          );
+          const part = form.get(path) ?? form.get(encodedPath);
+          if (!(part instanceof Blob)) return new Response("missing batch value", { status: 400 });
+          const text = await part.text();
+          const value = part.type.includes("application/json") || /^(?:\{|\[)/.test(text.trimStart())
+            ? JSON.parse(text)
+            : text;
+          this.kvData.get(targetSpace)!.set(path, value);
+          written.push(path);
+        }
+        this.observed.signedInvocation = true;
+        return this.json({ written, count: written.length });
+      }
       const capability = Object.entries(payload.att ?? {}).flatMap(([resource, actions]) =>
         Object.keys(actions).map((action) => ({ resource, action }))
       ).filter(({ action }) => action === "tinycloud.kv/get" || action === "tinycloud.kv/list")
@@ -272,7 +345,9 @@ class LoopbackEncryptedNode {
             : resource.endsWith("/kv")
             ? resource.length - 3
             : -1;
-          return boundary >= 0 && this.kvData.has(resource.slice(0, boundary).toLowerCase()) &&
+          if (boundary < 0) return false;
+          const space = resource.slice(0, boundary).toLowerCase();
+          return this.kvData.has(space) &&
             hasExactCapability(payload, resource, action, this.delegationCids);
         });
       if (capability) {
@@ -386,14 +461,19 @@ class LoopbackEncryptedNode {
   }
 }
 
-function makeNode(host: string, privateKey: string, wasmBindings: NodeWasmBindings): {
+function makeNode(
+  host: string,
+  privateKey: string,
+  wasmBindings: NodeWasmBindings,
+  signStrategy?: SignStrategy,
+): {
   node: TinyCloudNode;
   signer: PrivateKeySigner;
 } {
   const signer = new PrivateKeySigner(privateKey, OWNER_CHAIN_ID);
   return {
     signer,
-    node: new TinyCloudNode({ host, signer, wasmBindings }),
+    node: new TinyCloudNode({ host, signer, wasmBindings, signStrategy }),
   };
 }
 
@@ -472,6 +552,7 @@ export interface HermeticEncryptedNode {
   readonly applicationsSpaceId: string;
   readonly permissions: readonly PermissionEntry[];
   readonly unrelatedAudience: string;
+  provisionKvSpace(spaceId: string): void;
   createRestoredDelegate(): TinyCloudNode;
   createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
   mintDelegation(): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
@@ -504,13 +585,20 @@ export interface HermeticEncryptedNode {
 export async function createHermeticEncryptedNode(
   options: Readonly<{
     delegateBasePermissions?: boolean;
+    delegateSignStrategy?: SignStrategy;
     secretPayloadValue?: string;
     secretPresent?: boolean;
   }> = {},
 ): Promise<HermeticEncryptedNode> {
   const transport = new LoopbackEncryptedNode();
+  await transport.ready();
   const ownerRuntime = makeNode(transport.host, OWNER_PRIVATE_KEY, transport.wasm);
-  const delegateRuntime = makeNode(transport.host, DELEGATE_PRIVATE_KEY, transport.wasm);
+  const delegateRuntime = makeNode(
+    transport.host,
+    DELEGATE_PRIVATE_KEY,
+    transport.wasm,
+    options.delegateSignStrategy,
+  );
   const ownerAddress = await ownerRuntime.signer.getAddress();
   const spaceId = transport.wasm.makeSpaceId(ownerAddress, OWNER_CHAIN_ID, "secrets");
   const ownerDid = `did:pkh:eip155:${OWNER_CHAIN_ID}:${transport.wasm.ensureEip55(ownerAddress)}`;
@@ -577,6 +665,7 @@ export async function createHermeticEncryptedNode(
       : {}),
   });
   installSession(delegateRuntime.node, delegateSession);
+  transport.allowInvocationProof(delegateSession.delegationCid);
 
   const descriptor: NetworkDescriptor = {
     networkId,
@@ -658,6 +747,7 @@ export async function createHermeticEncryptedNode(
     applicationsSpaceId,
     permissions,
     unrelatedAudience,
+    provisionKvSpace: (spaceId) => transport.provisionKv(spaceId),
     createRestoredDelegate: () =>
       new TinyCloudNode({ host: transport.host, wasmBindings: transport.wasm }),
     async createRotatedRestorableSession() {

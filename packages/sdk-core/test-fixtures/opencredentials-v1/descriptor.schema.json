@@ -21,7 +21,7 @@
   },
   "type": "object",
   "additionalProperties": false,
-  "required": ["type", "contractVersion", "protocol", "profile", "profileVersion", "display", "accessibility", "theme", "issuer", "format", "claims", "subjectRelationship", "inputs", "steps", "holderBinding", "endpoints", "lifecycle", "status", "revocation", "presentation"],
+  "required": ["type", "contractVersion", "protocol", "profile", "profileVersion", "display", "accessibility", "theme", "issuer", "interaction", "format", "claims", "subjectRelationship", "inputs", "steps", "holderBinding", "endpoints", "lifecycle", "status", "revocation", "presentation"],
   "properties": {
     "type": { "const": "tinycloud.credentials/descriptor/v1" },
     "contractVersion": { "const": 1 },
@@ -71,6 +71,15 @@
         "did": { "type": "string", "pattern": "^did:web:[A-Za-z0-9._:%-]+$", "maxLength": 256 },
         "origin": { "type": "string", "format": "uri", "pattern": "^https://[^/?#]+$", "maxLength": 256 },
         "kid": { "type": "string", "pattern": "^did:web:[A-Za-z0-9._:%-]+#[A-Za-z0-9._:-]+$", "maxLength": 320 }
+      }
+    },
+    "interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "pathTemplate"],
+      "properties": {
+        "origin": { "const": "https://credentials.org" },
+        "pathTemplate": { "const": "/credentials/acquire/{requestId}" }
       }
     },
     "format": {

@@ -43,6 +43,7 @@ export interface CredentialFlowDescriptor {
   readonly accessibility: { readonly progressLabel: string; readonly errorLiveRegion: "assertive" };
   readonly theme: { readonly tokenVersion: "tinycloud.credentials/tokens/v1"; readonly allowed: readonly ("accentColor" | "fontFamily" | "borderRadius")[] };
   readonly issuer: { readonly origin: string; readonly did: string; readonly kid: string };
+  readonly interaction: { readonly origin: "https://credentials.org"; readonly pathTemplate: "/credentials/acquire/{requestId}" };
   readonly format: { readonly id: typeof CREDENTIAL_FORMAT; readonly vct: string };
   readonly claims: readonly CredentialClaimDescriptor[];
   readonly subjectRelationship: "holder_is_subject";

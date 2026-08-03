@@ -88,13 +88,14 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
   },
   tcwSession: {
     TCWSessionManager: class {
+      private restoredJwk?: object;
       createSessionKey(id: string) { return id; }
-      replaceSessionKey(_jwk: object, keyId: string) { return keyId; }
+      replaceSessionKey(jwk: object, keyId: string) { this.restoredJwk = jwk; return keyId; }
       listSessionKeys() { return ["default", "share-recipient"]; }
       renameSessionKeyId() {}
       getDID(keyId: string) { return `did:key:${keyId}`; }
       jwk() {
-        return JSON.stringify({
+        return JSON.stringify(this.restoredJwk ?? {
           kty: "OKP",
           crv: "Ed25519",
           x: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -357,10 +358,15 @@ function options(
   };
 }
 
-async function expectStrategyTokenEmpty(fetchImpl: ReturnType<typeof mock>) {
+async function expectStrategyTokenEmpty(
+  fetchImpl: ReturnType<typeof mock>,
+  sessionEstablished = false,
+) {
   const strategy = constructedConfigs.at(-1).signStrategy;
   await expect(strategy.handler(VALID_REQUEST)).rejects.toThrow(
-    "OpenKey provider token is unavailable",
+    sessionEstablished
+      ? "OpenKey callback request is not a credential approval decision"
+      : "OpenKey provider token is unavailable",
   );
   expect(fetchImpl).not.toHaveBeenCalled();
 }
@@ -389,7 +395,7 @@ test("fresh sign-in sends one unchanged SIWE sign-in body with one Bearer token"
   expect(signerFetch).toHaveBeenCalledTimes(1);
   const [url, init] = signerFetch.mock.calls[0];
   expect(url).toBe(ENDPOINT);
-  expect((init?.headers as Record<string, string>).authorization).toBe(
+  expect(new Headers(init?.headers).get("authorization")).toBe(
     `Bearer ${TOKEN}`,
   );
   expect(JSON.parse(String(init?.body))).toEqual({
@@ -455,7 +461,7 @@ test("a simulated second callback rejects locally after one signer fetch", async
 
   await expect(
     constructedConfigs[0].signStrategy.handler(VALID_REQUEST),
-  ).rejects.toThrow("OpenKey provider token is unavailable");
+  ).rejects.toThrow("OpenKey callback request is not a credential approval decision");
   expect(signerFetch).toHaveBeenCalledTimes(1);
 });
 
@@ -534,12 +540,12 @@ const typeFixture: EstablishOpenKeySessionOptions = {
 };
 void typeFixture;
 
-test("success clears the helper token source", async () => {
+test("success prevents the one-shot bearer token from being reused", async () => {
   const signerFetch = mock(async () =>
     new Response(JSON.stringify({ signature: "0xdelegate-signature" })));
   await establishOpenKeySession(options(TOKEN, signerFetch));
   signerFetch.mockClear();
-  await expectStrategyTokenEmpty(signerFetch);
+  await expectStrategyTokenEmpty(signerFetch, true);
 });
 
 const failureCases = [
@@ -775,6 +781,44 @@ test("real TinyCloudWeb forwards disabled auto-bootstrap into TinyCloudNode", as
       writable: true,
     });
   }
+});
+
+test("real initialized OpenKey session separates auto-sign policy from normal approval", async () => {
+  await seedRealBrowserPersistence("valid");
+  const automaticDecisions = [
+    { approved: true, signature: "0xpolicy-approved" },
+    { approved: false, needsApproval: true, reason: "approval required" },
+  ];
+  const signerFetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("authorization")).toBeNull();
+    expect(init?.credentials).toBe("include");
+    return new Response(JSON.stringify(automaticDecisions.shift()), { status: 200 });
+  });
+  const approvalDecisions = [
+    { approved: true },
+    { approved: false, reason: "user rejected credential signing" },
+  ];
+  const requestCredentialApproval = mock(async () => approvalDecisions.shift()!);
+  const input = options(undefined, signerFetch);
+  input.requestCredentialApproval = requestCredentialApproval;
+
+  const result = await establishOpenKeySession(input);
+  const activeNode = (result.client as any)._node;
+  expect(activeNode.config.signStrategy.openKeyAutoSign).toBe(true);
+  expect(activeNode.config.signStrategy.openKeyRequestApproval).toBe(
+    requestCredentialApproval,
+  );
+  const bytes = new TextEncoder().encode("canonical credential holder binding");
+  const automaticallySigned = await activeNode.autoSignCredentialBytes(bytes);
+  expect(automaticallySigned).toBeInstanceOf(Uint8Array);
+  expect(await activeNode.autoSignCredentialBytes(bytes)).toBeUndefined();
+  expect(await activeNode.approveCredentialBytes(bytes)).toBeInstanceOf(Uint8Array);
+  await expect(activeNode.approveCredentialBytes(bytes)).rejects.toThrow(
+    "user rejected credential signing",
+  );
+  expect(result.status).toBe("restored");
+  expect(signerFetch).toHaveBeenCalledTimes(2);
+  expect(requestCredentialApproval).toHaveBeenCalledTimes(2);
 });
 
 test.each(["missing", "corrupt", "expired"] as const)(

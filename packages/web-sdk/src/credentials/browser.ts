@@ -1,4 +1,5 @@
-import { CredentialError, credentialEndpointPath } from "@tinycloud/sdk-core";
+import { CredentialError } from "@tinycloud/sdk-core";
+import type { CredentialFlowDescriptor } from "@tinycloud/sdk-core";
 import type { CredentialInteractionAdapter, CredentialRedirectResumeState, CredentialRedirectStore } from "./types";
 
 interface BrowserSurface {
@@ -7,9 +8,11 @@ interface BrowserSurface {
   redirect(url: string): void;
 }
 
-function interactionUrl(origin: string, locator: string): string {
-  const url = new URL(credentialEndpointPath("interaction", locator), origin);
-  if (url.origin !== origin || url.search || url.hash) throw new CredentialError("REQUEST_SUBSTITUTED", "Credential interaction URL is invalid");
+function interactionUrl(interaction: CredentialFlowDescriptor["interaction"], locator: string): string {
+  if (!/^[A-Za-z0-9_-]{32}$/.test(locator) || interaction.origin !== "https://credentials.org" || interaction.pathTemplate !== "/credentials/acquire/{requestId}") throw new CredentialError("REQUEST_SUBSTITUTED", "Credential interaction URL is invalid");
+  const path = interaction.pathTemplate.replace("{requestId}", locator);
+  const url = new URL(path, interaction.origin);
+  if (url.origin !== interaction.origin || url.pathname !== path || url.search || url.hash) throw new CredentialError("REQUEST_SUBSTITUTED", "Credential interaction URL is invalid");
   return url.href;
 }
 
@@ -18,8 +21,8 @@ export class BrowserCredentialInteraction implements CredentialInteractionAdapte
   readonly kind: "popup" | "redirect";
   constructor(kind: "popup" | "redirect" = "popup", private readonly surface: BrowserSurface = { opener: window, open: (url) => window.open(url, "tinycloud-credential", "popup,width=460,height=720"), redirect: (url) => window.location.assign(url) }) { this.kind = kind; }
 
-  async start(input: { issuerOrigin: string; locator: string; signal?: AbortSignal }) {
-    const url = interactionUrl(input.issuerOrigin, input.locator);
+  async start(input: { interaction: CredentialFlowDescriptor["interaction"]; locator: string; signal?: AbortSignal }) {
+    const url = interactionUrl(input.interaction, input.locator);
     if (this.kind === "redirect") {
       this.surface.redirect(url);
       return { wake: async () => undefined, close: () => undefined, closed: () => false };
@@ -28,7 +31,7 @@ export class BrowserCredentialInteraction implements CredentialInteractionAdapte
     if (!popup) throw new CredentialError("POPUP_BLOCKED", "Credential popup was blocked");
     let wakeResolve: (() => void) | undefined;
     const onMessage = (event: MessageEvent<unknown>) => {
-      if (event.origin !== input.issuerOrigin || event.source !== popup || typeof event.data !== "object" || event.data === null || Array.isArray(event.data)) return;
+      if (event.origin !== input.interaction.origin || event.source !== popup || typeof event.data !== "object" || event.data === null || Array.isArray(event.data)) return;
       const message = event.data as Record<string, unknown>;
       if (Object.keys(message).length !== 3 || message.type !== "opencredentials-wake" || message.version !== 1 || message.locator !== input.locator) return;
       wakeResolve?.(); wakeResolve = undefined;

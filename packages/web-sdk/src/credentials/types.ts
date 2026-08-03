@@ -43,7 +43,7 @@ export type PrimitiveStepHandler = (input: {
 
 export interface CredentialInteractionAdapter {
   readonly kind: "popup" | "redirect" | "headless";
-  start(input: { readonly issuerOrigin: string; readonly locator: string; readonly signal?: AbortSignal }): Promise<{ readonly wake: () => Promise<void>; readonly close: () => void; readonly closed: () => boolean }>;
+  start(input: { readonly interaction: CredentialFlowDescriptor["interaction"]; readonly locator: string; readonly signal?: AbortSignal }): Promise<{ readonly wake: () => Promise<void>; readonly close: () => void; readonly closed: () => boolean }>;
 }
 
 export interface CredentialRedirectResumeState {
