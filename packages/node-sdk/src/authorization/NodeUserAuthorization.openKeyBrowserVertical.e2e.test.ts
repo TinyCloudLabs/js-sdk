@@ -24,6 +24,25 @@
 //     intercepted finalize response body, the returned OpenKey result, and
 //     the completed js-sdk `ClientSession.siwe` — proving the operator
 //     reviewed EXACTLY the bytes that flow into the resulting session.
+//   - The test also asserts the manifest-driven review UI: the manifest
+//     name is stamped with honest `caller` provenance (no signed manifest,
+//     no https origin available on localhost); the trust badge is
+//     exactly `No signed manifest`; the App ID row does NOT render
+//     (fail-closed — the widget only surfaces server-verified App IDs);
+//     the manifest digest row does render (caller-supplied fallback so
+//     the operator has something to compare); the exact sensitive
+//     callout copy is present with a positive count; the ordinary
+//     application-storage grant renders at `attention` severity on the
+//     applications space under the manifest's `app_id` path prefix
+//     (classifier lifts to `attention` because defaults include
+//     mutation verbs); and the exact app-scoped secret grant renders
+//     at `attention` severity (fail-closed — no origin-bind, so the
+//     sensitive→standard lowering path in `annotateAppScopedGrants`
+//     cannot fire) at the exact vault path with `read`/`get` action.
+//     The scoped secret is also cross-checked against the real Hono
+//     preview and finalize response bodies with the exact
+//     `tinycloud.kv` service, exact vault path, and canonical
+//     `tinycloud.kv/get` action.
 //
 // This is the missing link between the wire-shape test
 // (`NodeUserAuthorization.crossRepoHono.e2e.test.ts`) and the UI. It proves
@@ -550,9 +569,26 @@ test(
     // The mandatory manifest-driven UI observations. Captured BEFORE final
     // approval so they represent what the operator actually reviewed.
     let manifestNameRendered: string | null = null;
+    let manifestNameProvenance: string | null = null;
     let sensitiveCalloutRendered: string | null = null;
     let secretGrantVisible = false;
     let trustBadgeText: string | null = null;
+    let appIdRendered: string | null = null;
+    let manifestDigestRendered: string | null = null;
+    // Details for the exact ordinary-storage grant and the exact
+    // app-scoped secret grant — captured directly from the rendered
+    // `.grant` elements so the assertions can prove the widget rendered
+    // BOTH surfaces at the correct severity, not just that some grant
+    // path contains a substring.
+    let ordinaryStorageGrant: {
+      path: string | null;
+      severity: string | null;
+    } | null = null;
+    let scopedSecretGrant: {
+      path: string | null;
+      severity: string | null;
+      actions: string[];
+    } | null = null;
 
     const authorizeFn = wireOpenKeyAuthorize({
       async authorizeTinyCloud(request) {
@@ -646,25 +682,104 @@ test(
           '.identity .row:has(span.label:has-text("Manifest name")) span.value',
           (el) => el.textContent?.trim() ?? null,
         ).catch(() => null);
+        // The manifest-name row also carries a `.provenance-tag` with a
+        // `data-provenance` attribute (verified / origin-bound / caller).
+        // The contract requires this to be honest: for this test, the
+        // manifest is caller-supplied over localhost (no signed manifest,
+        // no https origin) so it MUST be `caller`.
+        manifestNameProvenance = await widgetFrame.$eval(
+          '.identity .row:has(span.label:has-text("Manifest name")) .provenance-tag',
+          (el) => el.getAttribute("data-provenance"),
+        ).catch(() => null);
         trustBadgeText = await widgetFrame.$eval(
           '.identity .trust-value',
+          (el) => el.textContent?.trim() ?? null,
+        ).catch(() => null);
+        appIdRendered = await widgetFrame.$eval(
+          '.identity .row:has(span.label:has-text("App ID")) code.value',
+          (el) => el.textContent?.trim() ?? null,
+        ).catch(() => null);
+        // Manifest digest row — present when the review model exposes a
+        // digest for the (unsigned, caller-supplied) manifest. The test
+        // asserts presence + non-empty; the exact bytes are opaque here.
+        manifestDigestRendered = await widgetFrame.$eval(
+          '.identity .row:has(span.label:has-text("Manifest digest")) code.value',
           (el) => el.textContent?.trim() ?? null,
         ).catch(() => null);
         sensitiveCalloutRendered = await widgetFrame.$eval(
           'p.sensitive-callout',
           (el) => el.textContent?.trim() ?? null,
         ).catch(() => null);
-        // The secret vault grant is one of the entries under `.permissions`.
-        // Its `grant-path` code element contains the vault path with the
-        // secret name; assert visibility by scanning the rendered permissions
-        // for the exact secret name.
-        secretGrantVisible = await widgetFrame.evaluate(
-          (name) => {
-            const paths = Array.from(document.querySelectorAll(".grant-path"));
-            return paths.some((el) => (el.textContent ?? "").includes(name));
-          },
-          SECRET_NAME,
+        // Enumerate every rendered `.grant` inside the exact-grants section.
+        // Each grant carries the service · space/path text in
+        // `code.grant-path`, a `data-severity` attribute on
+        // `.grant-severity`, and a `.verb` per action. Capture the two
+        // structural grants we care about: the ordinary app-storage KV
+        // grant on the applications space (classifier: `attention`
+        // because defaults carry mutation verbs), and the exact
+        // app-scoped secret grant at
+        // `vault/secrets/scoped/authorization-review/VERTICAL_TEST_TOKEN`
+        // (classifier: `attention` fail-closed — no origin-bind, so the
+        // sensitive→standard lowering in `annotateAppScopedGrants`
+        // cannot fire).
+        const grantsSnapshot = await widgetFrame.evaluate(() => {
+          const grants = Array.from(document.querySelectorAll(".grant"));
+          return grants.map((g) => {
+            const pathEl = g.querySelector("code.grant-path");
+            const sevEl = g.querySelector(".grant-severity");
+            const verbEls = Array.from(g.querySelectorAll(".verb"));
+            return {
+              path: pathEl?.textContent?.trim() ?? null,
+              severity: sevEl?.getAttribute("data-severity") ?? null,
+              actions: verbEls.map(
+                (v) => v.textContent?.trim() ?? "",
+              ),
+            };
+          });
+        });
+        // The ordinary storage grant renders as
+        // `tinycloud.kv · tinycloud:pkh:eip155:1:0x...:applications/<app_id>/`
+        // — the KV grant on the applications space, path prefixed by
+        // the manifest's `app_id`. The svelte template joins
+        // `{space}/{path}` with a literal `/`, so the space (which
+        // ends with `applications` for the applications space) and the
+        // path (`<app_id>/` for the defaults) combine into
+        // `...:applications/<app_id>/`. Because the default expansion
+        // includes mutation verbs (`put`, `del`), the widget
+        // classifier lifts severity to `attention` — the correct
+        // structural severity for a mutable app-storage grant. We
+        // assert on the exact `applications/<app_id>/` fragment so a
+        // broken manifest expansion (a grant that never landed on the
+        // applications space, or landed under the wrong app_id) is
+        // caught, and we assert the exact severity so any lowering to
+        // `standard` (which would only happen via a caller-supplied
+        // fake origin-bind) would fail this test.
+        const ordinary = grantsSnapshot.find(
+          (g) =>
+            typeof g.path === "string" &&
+            g.path.startsWith("tinycloud.kv ") &&
+            g.path.includes(`applications/${APP_ID}/`),
         );
+        if (ordinary) {
+          ordinaryStorageGrant = { path: ordinary.path, severity: ordinary.severity };
+        }
+        // The exact app-scoped secret grant must land at
+        // `vault/secrets/scoped/<scope>/<NAME>` under the signer's
+        // secrets space.
+        const exactSecretPath = `vault/secrets/scoped/${SECRET_SCOPE}/${SECRET_NAME}`;
+        const secretGrant = grantsSnapshot.find(
+          (g) =>
+            typeof g.path === "string" &&
+            g.path.includes(exactSecretPath),
+        );
+        if (secretGrant) {
+          scopedSecretGrant = {
+            path: secretGrant.path,
+            severity: secretGrant.severity,
+            actions: secretGrant.actions,
+          };
+        }
+        secretGrantVisible = scopedSecretGrant !== null;
 
         // Second click: final approve. Widget POSTs /authorize-sign and posts
         // the result back to the SDK via the shared transport.
@@ -746,33 +861,143 @@ test(
     //    secret name, the honest manifest trust label, and the exact
     //    sensitive callout copy from the contract.
     expect(manifestNameRendered).toBe(APP_NAME);
-    // `unsigned` is the honest trust state for this test: no https origin
-    // is available (localhost) so origin-bound cannot be established, and
-    // no signed manifest was published. The contract requires honesty
-    // rather than any specific status, but we assert one of the recognized
-    // honest labels rather than allowing arbitrary text.
-    expect(trustBadgeText).not.toBeNull();
-    const RECOGNIZED_TRUST = new Set([
-      "Manifest signature verified",
-      "Manifest served by verified https origin",
-      "No signed manifest",
-      "Manifest signature is stale",
-      "Manifest signed by an unknown key",
-      "Manifest digest does not match declared content",
-    ]);
-    expect(RECOGNIZED_TRUST.has(trustBadgeText!)).toBe(true);
+    // Manifest-name provenance MUST be honest. The fixture provides no
+    // signed manifest and runs over localhost (no https origin), so the
+    // manifest name comes from a caller-supplied envelope. The widget
+    // MUST stamp `data-provenance="caller"` on the name so the operator
+    // cannot mistake it for a trusted label. Allowing `verified` or
+    // `origin-bound` here would let a dishonest transport slip through
+    // the vertical gate.
+    expect(manifestNameProvenance).toBe("caller");
+    // App ID row MUST NOT render. `apps/web/src/routes/widget/embed/sign/+page.svelte`
+    // sets `appId: serverVerifiedManifest?.appId ?? null` — fail-closed
+    // when the server did NOT origin-bind the manifest. This fixture
+    // publishes no signed manifest and runs over localhost so origin-
+    // bind cannot succeed. Any rendered App ID here would mean the widget
+    // fell back to caller-supplied bytes for a field the operator would
+    // read as "the app this SIWE is bound to", which the contract
+    // forbids. Assert row absence to lock the fail-closed behavior in.
+    expect(appIdRendered).toBeNull();
+    // Manifest digest row MUST render. Unlike appId, the widget's
+    // `displayManifestDigest` falls back to the caller-supplied envelope
+    // digest so the operator can compare it against a source they trust.
+    // `NodeUserAuthorization.buildPresentationEnvelope` computes a
+    // canonical SHA-256 of the manifest and forwards it in the envelope;
+    // the exact bytes are opaque to this assertion, but the row must be
+    // present and non-empty so the operator has something to compare.
+    expect(manifestDigestRendered).not.toBeNull();
+    expect((manifestDigestRendered ?? "").length).toBeGreaterThan(0);
+    // Trust label MUST be EXACTLY "No signed manifest" (the widget's
+    // literal string for `metadataTrust.status === "unsigned"`). This
+    // fixture publishes no signed manifest and runs over localhost so
+    // origin-bound cannot be established — any other label here would
+    // overstate what the widget can prove and would allow a dishonest
+    // provenance to pass the vertical gate.
+    expect(trustBadgeText).toBe("No signed manifest");
     // Sensitive callout MUST render — the manifest secret produces a
     // secrets-space grant that satisfies `grantReachesSecretDataOrDecryption`.
-    // Copy must match the contract exactly (`N exact grants ...`).
+    // Copy must match the contract exactly: `N exact grants reach secret
+    // data or decryption. You can review them below.` with a concrete
+    // positive integer count. A wildcard count would let a broken model
+    // that reports "0 exact grants ..." pass silently.
     expect(sensitiveCalloutRendered).not.toBeNull();
+    const calloutMatch = /^(\d+) exact grants reach secret data or decryption\. You can review them below\.$/.exec(
+      sensitiveCalloutRendered!,
+    );
+    expect(calloutMatch).not.toBeNull();
+    expect(Number(calloutMatch![1])).toBeGreaterThan(0);
+    // Ordinary application-storage grant MUST render. The
+    // `defaults: true` manifest field expands into `tinycloud.kv/*`
+    // grants on the applications space under the manifest's `app_id`
+    // path prefix. The classifier lifts severity to `attention` because
+    // the default expansion includes mutation verbs (`put`, `del`) —
+    // that is the correct structural severity for a mutable app-storage
+    // grant (see capability-review/src/classify.ts
+    // `classifySeverityFromActions`). Assert BOTH the exact severity
+    // and the exact path shape so a broken manifest expansion (e.g. a
+    // grant that never landed on the applications space, or a fake
+    // origin-bind that lowered severity to `standard`) is caught.
+    expect(ordinaryStorageGrant).not.toBeNull();
+    expect(ordinaryStorageGrant!.severity).toBe("attention");
+    expect(ordinaryStorageGrant!.path?.startsWith("tinycloud.kv ")).toBe(true);
     expect(
-      /^\d+ exact grants reach secret data or decryption\. You can review them below\.$/.test(
-        sensitiveCalloutRendered!,
-      ),
+      ordinaryStorageGrant!.path?.includes(`applications/${APP_ID}/`),
     ).toBe(true);
-    // The exact secret name from the manifest must appear in the rendered
-    // permission list.
-    expect(secretGrantVisible).toBe(true);
+    // Exact app-scoped secret grant: EXACT service, path, action, and
+    // severity. Substring / any-match assertions would let a subtly-
+    // wrong grant (wrong service, wrong action, wrong severity) pass.
+    expect(scopedSecretGrant).not.toBeNull();
+    const EXACT_SECRET_PATH = `vault/secrets/scoped/${SECRET_SCOPE}/${SECRET_NAME}`;
+    // grant-path text is `${service} · ${space}/${path}` — assert the
+    // service is `tinycloud.kv` (the KV secret service, per the
+    // capability-review app-scope proof) and the path segment ends with
+    // the exact vault path.
+    expect(scopedSecretGrant!.path?.startsWith("tinycloud.kv ")).toBe(true);
+    expect(scopedSecretGrant!.path?.endsWith(`/${EXACT_SECRET_PATH}`)).toBe(true);
+    // The secret grant MUST render at `attention` severity. Rationale:
+    //   * The classifier's baseline for `secret-read` is `attention`
+    //     (fail-closed elevation from `standard` — the vault contains
+    //     the operator's own secret bytes).
+    //   * The one place severity can move down to `standard` is
+    //     `annotateAppScopedGrants`, which requires the server to have
+    //     ORIGIN-BOUND the manifest (see app-scope.ts:645-659). This
+    //     fixture publishes no signed manifest and runs over localhost,
+    //     so origin-bind cannot succeed and the grant must remain at
+    //     `attention`. A rendered `standard` here would mean the widget
+    //     accepted a caller-supplied fake origin-bind for a scoped
+    //     secret — the exact security regression this test guards.
+    expect(scopedSecretGrant!.severity).toBe("attention");
+    // Cross-check: the grant is also counted by the sensitive callout
+    // (via `grantReachesSecretDataOrDecryption` — see
+    // capability-review/src/statements.ts:270-297) because it lands on
+    // a secrets-shaped space. That is why the exact-copy callout above
+    // rendered with a non-zero count.
+    // The manifest only requested the `read` action; only that verb
+    // must be rendered for this grant. `read` maps through the KV
+    // secret-read normalizer to the canonical `get` alias below at the
+    // wire level, but the DOM verb rendering preserves the manifest
+    // verb as `read` (see the widget's action rendering).
+    expect(scopedSecretGrant!.actions.length).toBe(1);
+    // The DOM verb is either the manifest verb (`read`) or the
+    // classifier's normalized alias (`get`) — assert against the exact
+    // registered `RECOGNIZED_APP_SCOPE_SECRET_VERBS` set so a novel /
+    // unrecognized verb here would fail this assertion.
+    expect(["read", "get"]).toContain(scopedSecretGrant!.actions[0]);
+
+    // 5. Cross-check the exact scoped secret grant is also present in the
+    //    real Hono preview and finalize response bodies with the EXACT
+    //    service, space (signer secrets space), path, and canonical
+    //    fully-qualified action ability `tinycloud.kv/get` (the KV
+    //    canonical alias for the manifest-declared `read` verb). This
+    //    proves the wire bodies themselves carry the exact grant, not
+    //    just that the widget happened to render something.
+    function findExactSecretGrantOnWire(
+      body: any,
+    ): { service: string; space: string; path: string; actions: string[] } | null {
+      const perms = Array.isArray(body?.permissions) ? body.permissions : [];
+      return (
+        perms.find(
+          (p: any) =>
+            p?.service === "tinycloud.kv" &&
+            p?.path === EXACT_SECRET_PATH &&
+            Array.isArray(p?.actions) &&
+            p.actions.length === 1 &&
+            p.actions[0] === "tinycloud.kv/get",
+        ) ?? null
+      );
+    }
+    const previewWireSecret = findExactSecretGrantOnWire(observed.previewBody);
+    const finalizeWireSecret = findExactSecretGrantOnWire(observed.finalizeBody);
+    expect(previewWireSecret).not.toBeNull();
+    expect(finalizeWireSecret).not.toBeNull();
+    // Both wire bodies must carry the SAME space for the secret grant
+    // (the signer's own secrets space — `<pkh>:secrets`).
+    expect(previewWireSecret!.space).toBe(finalizeWireSecret!.space);
+    expect(previewWireSecret!.space.endsWith(":secrets")).toBe(true);
+    // Preview and finalize must agree on the exact action verb too —
+    // any drift here would mean the preview and final signed grants
+    // differ on this scoped secret.
+    expect(previewWireSecret!.actions).toEqual(finalizeWireSecret!.actions);
 
     await page.close();
   },

@@ -64,19 +64,23 @@ jobs:
         with:
           path: js-sdk
 
-      # Pin to a compatible OpenKey revision. Bump this when the OpenKey
-      # HEAD moves to keep the cross-repo contract test in sync.
+      # Pin to the exact immutable OpenKey revision that this js-sdk
+      # PR was reviewed against. This MUST be a full 40-char SHA committed
+      # here (not a mutable branch / repo variable) so a re-run always
+      # tests the same OpenKey bytes.
       - name: Check out OpenKey at a compatible revision
         uses: actions/checkout@v4
         with:
           repository: TinyCloudLabs/openkey
-          # Immutable OpenKey PR #160 revision with:
+          # OpenKey PR #160 head — contains:
           #   - production canonicalization of permissions[].service in
           #     /authorize-sign-preview and /authorize-sign response bodies
-          #   - the vertical-happy-path-harness with no test-only response
-          #     rewriting
-          # After OpenKey merges, bump this to the resulting main SHA.
-          ref: ${{ vars.OPENKEY_VERTICAL_PIN || 'main' }}
+          #     (apps/api/src/routes/delegate.ts)
+          #   - scripts/vertical-happy-path-harness.test.ts with no
+          #     test-only response rewriting
+          # When OpenKey PR #160 merges, bump this to the resulting
+          # squash/merge SHA on `main`.
+          ref: c791afff4769067ffa444366f6278063bfbda6a8
           path: openkey
 
       - uses: oven-sh/setup-bun@v2
@@ -140,7 +144,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: TinyCloudLabs/openkey
-          ref: ${{ vars.OPENKEY_VERTICAL_PIN || 'main' }}
+          # Same immutable SHA as the cross-repo-contract job above —
+          # keeps the vertical browser journey in lockstep with the
+          # wire-shape contract test. Bump both when OpenKey merges.
+          ref: c791afff4769067ffa444366f6278063bfbda6a8
           path: openkey
 
       - uses: oven-sh/setup-bun@v2
