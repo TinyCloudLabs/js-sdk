@@ -55,9 +55,22 @@ export type PrimitiveStepHandler = (input: {
   readonly signal?: AbortSignal;
 }) => Promise<PrimitiveStepResult>;
 
+export type CredentialInteractionKind = "popup" | "redirect" | "headless" | "inline";
+
+export interface CredentialInteractionSurface {
+  readonly wake: () => Promise<void>;
+  readonly close: () => void;
+  readonly closed: () => boolean;
+}
+
+/**
+ * A host-owned acquisition surface. Inline implementations receive only the
+ * OpenCredentials interaction locator; they never receive tenant input or a
+ * webhook authorization decision from the SDK.
+ */
 export interface CredentialInteractionAdapter {
-  readonly kind: "popup" | "redirect" | "headless";
-  start(input: { readonly interaction: CredentialFlowDescriptor["interaction"]; readonly locator: string; readonly signal?: AbortSignal }): Promise<{ readonly wake: () => Promise<void>; readonly close: () => void; readonly closed: () => boolean }>;
+  readonly kind: CredentialInteractionKind;
+  start(input: { readonly interaction: CredentialFlowDescriptor["interaction"]; readonly locator: string; readonly signal?: AbortSignal }): Promise<CredentialInteractionSurface>;
 }
 
 export interface CredentialRedirectResumeState {
@@ -115,7 +128,11 @@ export interface CredentialsOperationOptions {
 }
 
 export interface CredentialsAcquireOptions extends CredentialsOperationOptions {
-  readonly interaction?: "popup" | "redirect" | "headless";
+  /**
+   * `inline` requires a host-provided `browser` adapter. The SDK deliberately
+   * has no default inline renderer, so it cannot embed or call tenant systems.
+   */
+  readonly interaction?: CredentialInteractionKind;
   readonly browser?: CredentialInteractionAdapter;
   readonly transport?: CredentialAcquisitionTransport;
   readonly signing?: CredentialSigningAdapter;

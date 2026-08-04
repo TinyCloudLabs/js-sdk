@@ -1,6 +1,6 @@
 import { CredentialError } from "@tinycloud/sdk-core";
 import type { CredentialFlowDescriptor } from "@tinycloud/sdk-core";
-import type { CredentialInteractionAdapter, CredentialRedirectResumeState, CredentialRedirectStore } from "./types";
+import type { CredentialInteractionAdapter, CredentialInteractionSurface, CredentialRedirectResumeState, CredentialRedirectStore } from "./types";
 
 interface BrowserSurface {
   readonly opener: Window;
@@ -43,6 +43,22 @@ export class BrowserCredentialInteraction implements CredentialInteractionAdapte
       close: () => { this.surface.opener.removeEventListener("message", onMessage); try { popup.close(); } catch { /* no authority is derived from popup lifecycle */ } },
       closed: () => popup.closed,
     };
+  }
+}
+
+/**
+ * Adapter for a host application's in-page OpenCredentials acquisition view.
+ * It intentionally delegates rendering to the host and exposes only the
+ * locator already safe for the credentials.org route; no tenant secret or
+ * authorization decision crosses this SDK boundary.
+ */
+export class InlineCredentialInteraction implements CredentialInteractionAdapter {
+  readonly kind = "inline" as const;
+
+  constructor(private readonly present: (input: { readonly interaction: CredentialFlowDescriptor["interaction"]; readonly locator: string; readonly signal?: AbortSignal }) => Promise<CredentialInteractionSurface>) {}
+
+  start(input: { interaction: CredentialFlowDescriptor["interaction"]; locator: string; signal?: AbortSignal }): Promise<CredentialInteractionSurface> {
+    return this.present(input);
   }
 }
 

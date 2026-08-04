@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { CredentialError, canonicalDigest, createHolderBinding, type CredentialFlowDescriptor, type CredentialRequirement, type VerifiedCredential } from "@tinycloud/sdk-core";
-import { BrowserCredentialInteraction } from "../src/credentials/browser";
+import { BrowserCredentialInteraction, InlineCredentialInteraction } from "../src/credentials/browser";
 import { interpretCredentialFlow } from "../src/credentials/interpreter";
 import { renderCredentialDescriptor } from "../src/credentials/renderer";
 import { findStoredCredential, storeCredential } from "../src/credentials/storage";
@@ -107,6 +107,18 @@ test("browser interaction rejects descriptor-substituted origins", async () => {
     interaction: { ...email.interaction, origin: "https://evil.test" } as typeof email.interaction,
     locator: REQUEST,
   })).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
+});
+
+test("inline interaction exposes only the OpenCredentials locator to the host", async () => {
+  let presented: { interaction: CredentialFlowDescriptor["interaction"]; locator: string } | undefined;
+  const inline = new InlineCredentialInteraction(async (input) => {
+    presented = { interaction: input.interaction, locator: input.locator };
+    return { wake: async () => undefined, close: () => undefined, closed: () => false };
+  });
+  const surface = await inline.start({ interaction: email.interaction, locator: REQUEST });
+  expect(inline.kind).toBe("inline");
+  expect(presented).toEqual({ interaction: email.interaction, locator: REQUEST });
+  expect(await surface.wake()).toBeUndefined();
 });
 
 function kvMemory(failReadback = false) { const values = new Map<string, unknown>(); const headers = { etag: "\"etag\"", get: () => null }; return { service: { batchPut: async (items: any[]) => { for (const item of items) values.set(item.key, item.value); return { ok: true, data: { keys: items.map((item) => item.key), count: items.length } }; }, get: async (key: string) => failReadback ? { ok: false, error: {} } : values.has(key) ? { ok: true, data: { data: values.get(key), headers } } : { ok: false, error: {} }, list: async ({ prefix }: any) => ({ ok: true, data: { keys: [...values.keys()].filter((key) => key.startsWith(prefix)) } }) } as any }; }
