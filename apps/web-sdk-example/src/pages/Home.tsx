@@ -76,7 +76,11 @@ function Home() {
   const [vaultEnabled, setVaultEnabled] = useState<string>("On");
   const [prefix, setPrefix] = useState<string>("demo-app");
   const [tinyCloudHost, setTinyCloudHost] = useState<string>(
-    window.__DEV_MODE__ ? "http://localhost:8000" : ""
+    // Allow the dev host to be overridden so the e2e suite can target a known
+    // node instead of whatever happens to be on :8000. Defaults unchanged.
+    window.__DEV_MODE__
+      ? process.env.REACT_APP_TINYCLOUD_HOST || "http://localhost:8000"
+      : ""
   );
 
   // Parse URL parameters on component mount
