@@ -454,23 +454,26 @@ function nonEmptyString(value: unknown, label: string): string {
 }
 
 function parseKvResource(resource: string): { space: string; path: string } {
-  const match = /^tinycloud:\/\/([^/]+)\/kv\/(.+)$/.exec(resource);
+  const marker = resource.indexOf("/kv/");
+  const encodedSpace = marker < 1 ? "" : resource.slice(0, marker);
+  const legacy = encodedSpace.startsWith("tinycloud://");
+  const space = legacy ? encodedSpace.slice("tinycloud://".length) : encodedSpace;
+  const path = marker < 1 ? "" : resource.slice(marker + 4);
   if (
-    !match ||
-    match[1]!.includes(":") ||
-    match[1]!.includes("?") ||
-    match[1]!.includes("#") ||
-    match[1]!.includes("%") ||
-    match[2]!.startsWith("/") ||
-    match[2]!.endsWith("/") ||
-    match[2]!.includes("//") ||
-    match[2]!
+    marker < 1 ||
+    (legacy
+      ? /[:/?#%]/.test(space)
+      : !encodedSpace.startsWith("tinycloud:") || /[/?#%]/.test(encodedSpace)) ||
+    path.startsWith("/") ||
+    path.endsWith("/") ||
+    path.includes("//") ||
+    path
       .split("/")
       .some((part) => part === "." || part === ".." || part.length === 0)
   ) {
     throw new Error("KV resource is not canonical");
   }
-  return { space: match[1]!, path: match[2]! };
+  return { space, path };
 }
 
 function parseEncryptionResource(resource: string): void {
@@ -669,7 +672,7 @@ export function unifiedPolicyCapabilityFromNative(
   if (
     caveat.type !== "xyz.tinycloud.resource/selector" ||
     (caveat.kind !== "exact" && caveat.kind !== "prefix") ||
-    caveat.value !== `tinycloud://${value.space}/kv/${value.path}`
+    caveat.value !== `${value.space.startsWith("tinycloud:") ? value.space : `tinycloud://${value.space}`}/kv/${value.path}`
   )
     throw new Error("native selector caveat does not match capability");
   return normalizeUnifiedPolicyCapability({

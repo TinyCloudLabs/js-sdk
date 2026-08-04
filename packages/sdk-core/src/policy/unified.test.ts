@@ -113,6 +113,20 @@ describe("TC-405 unified policy contracts", () => {
     ).toBe(false);
   });
 
+  test("preserves native TinyCloud KV resources through policy projection", () => {
+    const resource = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:applications/kv/shares/report.md";
+    const capability = { kind: "kv" as const, resource, selector: "exact" as const, actions: ["tinycloud.kv/get"] as const };
+    const projected = projectUnifiedPolicyCapability(capability);
+    expect(projected).toEqual({
+      service: "tinycloud.kv",
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:applications",
+      path: "shares/report.md",
+      actions: ["tinycloud.kv/get"],
+      caveat: { type: "xyz.tinycloud.resource/selector", kind: "exact", value: resource },
+    });
+    expect(unifiedPolicyCapabilityFromNative(projected)).toEqual(capability);
+  });
+
   test("uses one segment-bounded selector containment rule for descendants", () => {
     const root = "tinycloud://space/kv/shares/root";
     const caveat = (kind: "exact" | "prefix", value: string) => [{
