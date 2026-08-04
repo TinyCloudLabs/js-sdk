@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  activateValidatedRuntimeDelegation,
   grantAuthRequest,
   type AuthRequestArtifact,
   type DelegationAuthority,
+  type RuntimeDelegationActivator,
   type PortableDelegation,
 } from "./delegation";
 
@@ -115,5 +117,96 @@ describe("grantAuthRequest", () => {
       grantAuthRequest(authority, makeRequest({ requested: [] })),
     ).rejects.toThrow(/no requested capabilities/);
     expect(authority.calls).toHaveLength(0);
+  });
+});
+
+describe("activateValidatedRuntimeDelegation", () => {
+  test("preserves provenance metadata on the installed delegation", async () => {
+    const authorizationPayload = {
+      iss: "did:key:signed-delegator",
+      aud: REQUESTER_DID,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      prf: ["bafy-signed-parent"],
+      fct: [{ remainingRedelegationDepth: 0 }],
+      att: {
+        "tinycloud:pkh:eip155:1:0xowner:applications/sql/docs": {
+          "tinycloud.sql/read": [{}],
+        },
+      },
+    };
+    const authorization = `header.${Buffer.from(
+      JSON.stringify(authorizationPayload),
+    ).toString("base64url")}.signature`;
+    const delegation: PortableDelegation = {
+      cid: `cid:${authorization}`,
+      delegationHeader: { Authorization: authorization },
+      ownerAddress: "0xowner",
+      chainId: 1,
+      delegatorDID: "did:key:spoofed-delegator",
+      parentCid: "bafy-spoofed-parent",
+      allowSubDelegation: true,
+      disableSubDelegation: false,
+      authHeader: "spoofed-authorization",
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:applications",
+      path: "docs",
+      actions: ["tinycloud.sql/read"],
+      expiry: new Date(authorizationPayload.exp * 1000),
+      delegateDID: REQUESTER_DID,
+      resources: [
+        {
+          service: "sql",
+          space: "tinycloud:pkh:eip155:1:0xowner:applications",
+          path: "docs",
+          actions: ["tinycloud.sql/read"],
+        },
+      ],
+    };
+
+    const installed: PortableDelegation[] = [];
+    const node: RuntimeDelegationActivator = {
+      sessionDid: REQUESTER_DID,
+      computeDelegationCid: (value) => `cid:${value}`,
+      async useRuntimeDelegation(candidate) {
+        installed.push(candidate);
+      },
+      getRuntimePermissionDelegations() {
+        return installed;
+      },
+    };
+
+    const activated = await activateValidatedRuntimeDelegation(node, delegation, {
+      host: "https://node.example",
+    });
+
+    expect(activated.delegation).toMatchObject({
+      delegatorDID: "did:key:signed-delegator",
+      parentCid: "bafy-signed-parent",
+      allowSubDelegation: false,
+      disableSubDelegation: true,
+      authHeader: authorization,
+    });
+    expect(installed).toHaveLength(1);
+    expect(installed[0]).toMatchObject({
+      delegatorDID: "did:key:signed-delegator",
+      parentCid: "bafy-signed-parent",
+      allowSubDelegation: false,
+      disableSubDelegation: true,
+      authHeader: authorization,
+    });
+
+    const excessiveDepthPayload = {
+      ...authorizationPayload,
+      fct: [{ remainingRedelegationDepth: 9 }],
+    };
+    const excessiveDepthAuthorization = `header.${Buffer.from(
+      JSON.stringify(excessiveDepthPayload),
+    ).toString("base64url")}.signature`;
+    await expect(activateValidatedRuntimeDelegation(node, {
+      ...delegation,
+      cid: `cid:${excessiveDepthAuthorization}`,
+      delegationHeader: { Authorization: excessiveDepthAuthorization },
+    }, {
+      host: "https://node.example",
+    })).rejects.toThrow("invalid signed redelegation depth");
   });
 });

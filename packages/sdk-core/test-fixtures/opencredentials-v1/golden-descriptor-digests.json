@@ -1,0 +1,246 @@
+{
+  "canonicalization": "RFC8785",
+  "hash": "sha-256-base64url-nopad",
+  "vectors": [
+    {
+      "name": "email",
+      "descriptor": {
+        "type": "tinycloud.credentials/descriptor/v1",
+        "contractVersion": 1,
+        "protocol": "tinycloud.credentials/acquisition/v1",
+        "profile": "tinycloud.email-proof/v1",
+        "profileVersion": 1,
+        "display": {
+          "title": "Email address",
+          "description": "Prove control of your mailbox",
+          "consent": "Prove control of your mailbox",
+          "securityTextLocked": true
+        },
+        "accessibility": {
+          "progressLabel": "Credential acquisition progress",
+          "errorLiveRegion": "assertive"
+        },
+        "theme": {
+          "tokenVersion": "tinycloud.credentials/tokens/v1",
+          "allowed": [
+            "accentColor",
+            "fontFamily",
+            "borderRadius"
+          ]
+        },
+        "issuer": {
+          "did": "did:web:issuer.credentials.org",
+          "origin": "https://witness.credentials.org",
+          "kid": "did:web:issuer.credentials.org#controller"
+        },
+        "interaction": {
+          "origin": "https://credentials.org",
+          "pathTemplate": "/credentials/acquire/{requestId}"
+        },
+        "format": {
+          "id": "vc+sd-jwt",
+          "vct": "opencredentials.email/v1"
+        },
+        "claims": [
+          {
+            "name": "email",
+            "matching": "normalized_exact",
+            "selectiveDisclosure": true
+          }
+        ],
+        "subjectRelationship": "holder_is_subject",
+        "inputs": [
+          {
+            "id": "email",
+            "label": "Email address",
+            "schema": {
+              "type": "string",
+              "format": "email",
+              "minLength": 3,
+              "maxLength": 320
+            },
+            "prefill": "privacy_hint_only",
+            "autocomplete": "off"
+          }
+        ],
+        "steps": [
+          {
+            "type": "collect_input",
+            "version": 1
+          },
+          {
+            "type": "mailbox_otp",
+            "version": 1
+          },
+          {
+            "type": "holder_signature",
+            "version": 1
+          }
+        ],
+        "holderBinding": {
+          "required": true,
+          "alg": "EdDSA",
+          "domain": "tinycloud.credentials/holder-binding/v1",
+          "version": 1
+        },
+        "endpoints": {
+          "request": "request",
+          "state": "state",
+          "challenge": "challenge",
+          "proof": "proof",
+          "holderBinding": "holder_binding",
+          "holderSignature": "holder_signature",
+          "issue": "issue",
+          "result": "result"
+        },
+        "lifecycle": {
+          "requestTtlSeconds": 600,
+          "challengeTtlSeconds": 300,
+          "maxProofAttempts": 5,
+          "challengeConsumption": "atomic_once",
+          "retry": "bounded"
+        },
+        "status": {
+          "type": "none",
+          "freshnessSeconds": 300
+        },
+        "revocation": {
+          "supported": false
+        },
+        "presentation": {
+          "stateVersion": "tinycloud.credentials/ux-states/v1",
+          "states": [
+            "collecting",
+            "challenging",
+            "proving",
+            "signing",
+            "issuing",
+            "verifying",
+            "saving",
+            "success",
+            "recovery"
+          ]
+        }
+      },
+      "digest": "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0"
+    },
+    {
+      "name": "synthetic-handle",
+      "descriptor": {
+        "type": "tinycloud.credentials/descriptor/v1",
+        "contractVersion": 1,
+        "protocol": "tinycloud.credentials/acquisition/v1",
+        "profile": "tinycloud.dev.synthetic-handle/v1",
+        "profileVersion": 1,
+        "display": {
+          "title": "Synthetic handle",
+          "description": "Issue a development-only holder-bound handle",
+          "consent": "Issue a development-only holder-bound handle",
+          "securityTextLocked": true
+        },
+        "accessibility": {
+          "progressLabel": "Credential acquisition progress",
+          "errorLiveRegion": "assertive"
+        },
+        "theme": {
+          "tokenVersion": "tinycloud.credentials/tokens/v1",
+          "allowed": [
+            "accentColor",
+            "fontFamily",
+            "borderRadius"
+          ]
+        },
+        "issuer": {
+          "did": "did:web:issuer.credentials.org",
+          "origin": "https://witness.credentials.org",
+          "kid": "did:web:issuer.credentials.org#controller"
+        },
+        "interaction": {
+          "origin": "https://credentials.org",
+          "pathTemplate": "/credentials/acquire/{requestId}"
+        },
+        "format": {
+          "id": "vc+sd-jwt",
+          "vct": "opencredentials.synthetic-handle/v1"
+        },
+        "claims": [
+          {
+            "name": "handle",
+            "matching": "normalized_exact",
+            "selectiveDisclosure": true
+          }
+        ],
+        "subjectRelationship": "holder_is_subject",
+        "inputs": [
+          {
+            "id": "handle",
+            "label": "Synthetic handle",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,31}$",
+              "minLength": 3,
+              "maxLength": 32
+            },
+            "prefill": "privacy_hint_only",
+            "autocomplete": "off"
+          }
+        ],
+        "steps": [
+          {
+            "type": "collect_input",
+            "version": 1
+          },
+          {
+            "type": "holder_signature",
+            "version": 1
+          }
+        ],
+        "holderBinding": {
+          "required": true,
+          "alg": "EdDSA",
+          "domain": "tinycloud.credentials/holder-binding/v1",
+          "version": 1
+        },
+        "endpoints": {
+          "request": "request",
+          "state": "state",
+          "challenge": "challenge",
+          "proof": "proof",
+          "holderBinding": "holder_binding",
+          "holderSignature": "holder_signature",
+          "issue": "issue",
+          "result": "result"
+        },
+        "lifecycle": {
+          "requestTtlSeconds": 600,
+          "challengeTtlSeconds": 300,
+          "maxProofAttempts": 5,
+          "challengeConsumption": "atomic_once",
+          "retry": "bounded"
+        },
+        "status": {
+          "type": "none",
+          "freshnessSeconds": 300
+        },
+        "revocation": {
+          "supported": false
+        },
+        "presentation": {
+          "stateVersion": "tinycloud.credentials/ux-states/v1",
+          "states": [
+            "collecting",
+            "challenging",
+            "proving",
+            "signing",
+            "issuing",
+            "verifying",
+            "saving",
+            "success",
+            "recovery"
+          ]
+        }
+      },
+      "digest": "7UoA6-MTjKThr4wbNdsjasZ6Pxk8XT4Kz-9aN-Uhn9I"
+    }
+  ]
+}

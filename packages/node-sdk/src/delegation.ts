@@ -132,8 +132,11 @@ export interface ValidatedRuntimeDelegation {
 }
 
 interface SignedRuntimeAuthority {
+  readonly issuer: string;
   readonly audience: string;
   readonly expiry: Date;
+  readonly proofs: readonly string[];
+  readonly remainingRedelegationDepth?: number;
   readonly permissions: readonly PermissionEntry[];
   readonly resources: readonly DelegatedResource[];
 }
@@ -246,6 +249,14 @@ function signedAuthorityFromCompactUcan(
   if (typeof payload.aud !== "string" || payload.aud.length === 0) {
     throw new Error("Validated runtime delegation is missing a signed audience.");
   }
+  if (typeof payload.iss !== "string" || payload.iss.length === 0) {
+    throw new Error("Validated runtime delegation is missing a signed issuer.");
+  }
+  if (!Array.isArray(payload.prf) || payload.prf.some((proof) =>
+    typeof proof !== "string" || proof.length === 0
+  )) {
+    throw new Error("Validated runtime delegation has malformed signed proofs.");
+  }
   if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) {
     throw new Error("Validated runtime delegation is missing a signed expiry.");
   }
@@ -255,6 +266,20 @@ function signedAuthorityFromCompactUcan(
   }
   if (payload.att === null || typeof payload.att !== "object" || Array.isArray(payload.att)) {
     throw new Error("Validated runtime delegation is missing a signed attenuation.");
+  }
+  const fact = Array.isArray(payload.fct) && payload.fct.length > 0 &&
+      payload.fct[0] !== null && typeof payload.fct[0] === "object" &&
+      !Array.isArray(payload.fct[0])
+    ? payload.fct[0] as Record<string, unknown>
+    : undefined;
+  const remainingRedelegationDepth = fact?.remainingRedelegationDepth;
+  if (
+    remainingRedelegationDepth !== undefined &&
+    (!Number.isInteger(remainingRedelegationDepth) ||
+      (remainingRedelegationDepth as number) < 0 ||
+      (remainingRedelegationDepth as number) > 8)
+  ) {
+    throw new Error("Validated runtime delegation has invalid signed redelegation depth.");
   }
 
   const permissions: PermissionEntry[] = [];
@@ -316,8 +341,13 @@ function signedAuthorityFromCompactUcan(
     ...(permission.caveats === undefined ? {} : { caveats: permission.caveats }),
   }));
   return {
+    issuer: payload.iss,
     audience: payload.aud,
     expiry,
+    proofs: [...payload.prf],
+    ...(remainingRedelegationDepth === undefined
+      ? {}
+      : { remainingRedelegationDepth: remainingRedelegationDepth as number }),
     permissions: canonicalPermissions,
     resources: canonicalResources,
   };
@@ -446,6 +476,15 @@ export async function activateValidatedRuntimeDelegation(
     delegationHeader: { Authorization: authorization },
     ownerAddress: delegation.ownerAddress,
     chainId: delegation.chainId,
+    delegatorDID: signed.issuer,
+    ...(signed.proofs.length === 1 ? { parentCid: signed.proofs[0] } : {}),
+    ...(signed.remainingRedelegationDepth === undefined
+      ? {}
+      : {
+          allowSubDelegation: signed.remainingRedelegationDepth > 0,
+          disableSubDelegation: signed.remainingRedelegationDepth === 0,
+        }),
+    authHeader: authorization,
     spaceId: signedSpace ?? delegation.spaceId,
     path: primary.path,
     actions: [...primary.actions],

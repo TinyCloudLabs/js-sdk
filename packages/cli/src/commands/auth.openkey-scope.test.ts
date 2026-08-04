@@ -128,6 +128,8 @@ describe("portableFromOpenKeyDelegation (scope mismatch)", () => {
     const permissions = [
       cap("tinycloud.sql", SPACE_LOWER, "xyz.tinycloud.listen/conversations", ["read"]),
     ];
+    // 4_070_908_800 seconds = 2099-01-01T00:00:00.000Z (Date.UTC(2099,0,1)/1000).
+    // Any value below 10^10 is treated as seconds (per parseDelegationExpiryField).
     const data = {
       spaceId: SPACE_CHECKSUM,
       delegationCid: "bafyTEST-numeric-expiry",
@@ -135,7 +137,7 @@ describe("portableFromOpenKeyDelegation (scope mismatch)", () => {
       verificationMethod: "did:key:zTest",
       address: ADDR_CHECKSUM,
       chainId: 1,
-      expirationTime: 4_071_849_600,
+      expirationTime: 4_070_908_800,
     };
 
     const portable = portableFromOpenKeyDelegation(data, permissions, "https://host");

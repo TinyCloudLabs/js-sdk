@@ -111,7 +111,8 @@ function stubNodeForSignIn(node: TinyCloudNode): void {
 
   (node as any).syncResolvedHostFromAuth = () => {};
   (node as any).initializeServices = () => {};
-  (node as any).isFreshBootstrapAccount = async () => true;
+  (node as any).resolveBootstrapDecision = async () => ({ action: "run", mode: "fresh" });
+  (node as any).writeBootstrapCompletionMarker = async () => {};
   (node as any).ensureRequestedEncryptionNetworks = async () => {};
   (node as any).ensureOwnedSpaceHostedById = async () => {};
   (node as any).scheduleAccountRegistrySync = () => {};

@@ -2,6 +2,7 @@ import type {
   ClientSession,
   ComposedManifestRequest,
   Manifest,
+  SignCallback,
 } from "@tinycloud/sdk-core";
 import { getAddress } from "viem";
 import {
@@ -34,6 +35,7 @@ const FORBIDDEN_TINYCLOUD_OPTIONS = [
   "sessionStorageKeyPrefix",
   "includeAccountRegistryPermissions",
   "autoCreateSpace",
+  "autoBootstrapAccount",
   "spaceCreationHandler",
   "spacePrefix",
   "kvPrefix",
@@ -54,6 +56,7 @@ type CoordinationOsControlledConfig =
   | "sessionStorageKeyPrefix"
   | "includeAccountRegistryPermissions"
   | "autoCreateSpace"
+  | "autoBootstrapAccount"
   | "spaceCreationHandler"
   | "spacePrefix"
   | "kvPrefix";
@@ -83,6 +86,8 @@ export interface EstablishOpenKeySessionOptions {
   sessionStorageKeyPrefix: typeof SESSION_STORAGE_KEY_PREFIX;
   tinycloud?: Omit<Config, CoordinationOsControlledConfig>;
   fetch?: typeof fetch;
+  /** Normal OpenKey consent surface for credential bindings outside Auto-Sign policy. */
+  requestCredentialApproval?: SignCallback;
 }
 
 export interface EstablishOpenKeySessionResult {
@@ -403,28 +408,39 @@ export async function establishOpenKeySession(
     return current;
   };
 
-  const oneShotFetch: typeof fetch = async (input, init) => {
+  let sessionReady = false;
+  const sessionSigningFetch: typeof fetch = async (input, init) => {
     let body: OpenKeySigningRequestBody;
     try {
       body = JSON.parse(String(init?.body)) as OpenKeySigningRequestBody;
     } catch {
       throw new Error("OpenKey callback request must be valid JSON");
     }
+    if (sessionReady) {
+      if (body.type !== "message" || body.purpose !== "message") {
+        throw new Error("OpenKey callback request is not a credential approval decision");
+      }
+      const headers = new Headers(init?.headers);
+      headers.delete("authorization");
+      return fetchImpl(input, { ...init, headers, credentials: "include" });
+    }
+    const currentToken = takeToken();
     if (body.type !== "siwe" || body.purpose !== "sign-in") {
       throw new Error("OpenKey callback request is not an approved sign-in");
     }
-    if (signerFetchCount !== 0) {
-      throw new Error("OpenKey signing endpoint may be called only once");
-    }
+    if (signerFetchCount !== 0) throw new Error("OpenKey signing endpoint may be called only once");
     signerFetchCount += 1;
-    return fetchImpl(input, init);
+    const headers = new Headers(init?.headers);
+    headers.set("authorization", `Bearer ${currentToken}`);
+    return fetchImpl(input, { ...init, headers });
   };
 
   const signStrategy = createOpenKeyCallbackSigningStrategy({
     endpoint: signingEndpoint,
     keyId: options.key.keyId,
-    token: takeToken,
-    fetch: oneShotFetch,
+    fetch: sessionSigningFetch,
+    credentials: "include",
+    requestApproval: options.requestCredentialApproval,
   });
   const client = new TinyCloudWeb({
     ...options.tinycloud,
@@ -437,6 +453,7 @@ export async function establishOpenKeySession(
     ),
     includeAccountRegistryPermissions: false,
     autoCreateSpace: false,
+    autoBootstrapAccount: false,
     persistSession: true,
     sessionStorageKeyPrefix: SESSION_STORAGE_KEY_PREFIX,
     domain,
@@ -456,6 +473,7 @@ export async function establishOpenKeySession(
 
     try {
       const session = await client.signIn();
+      sessionReady = true;
       return {
         client,
         session,

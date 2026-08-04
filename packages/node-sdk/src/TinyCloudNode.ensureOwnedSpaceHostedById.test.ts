@@ -203,7 +203,7 @@ test("signIn clears the memo so the next session re-confirms hosting", async () 
   }));
   (node as any).syncResolvedHostFromAuth = () => {};
   (node as any).initializeServices = () => {};
-  (node as any).isFreshBootstrapAccount = async () => false;
+  (node as any).resolveBootstrapDecision = async () => ({ action: "skip" });
   (node as any).ensureRequestedEncryptionNetworks = async () => {};
   (node as any).scheduleAccountRegistrySync = () => {};
 

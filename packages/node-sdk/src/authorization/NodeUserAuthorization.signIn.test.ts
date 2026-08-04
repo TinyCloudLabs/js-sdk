@@ -8,8 +8,46 @@ import {
   type TinyCloudSession,
   BOOTSTRAP_SESSION_REQUESTS,
 } from "@tinycloud/sdk-core";
-import { NodeUserAuthorization } from "./NodeUserAuthorization";
+import {
+  canonicalizeOpenKeyManifestJson,
+  canonicalOpenKeyManifestSha256Hex,
+  NodeUserAuthorization,
+} from "./NodeUserAuthorization";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+
+test("OpenKey manifest digest is stable across JSON formatting and key order", () => {
+  const inMemory = {
+    manifest_version: 1,
+    app_id: "xyz.tinycloud.listen",
+    name: "Listen",
+    secrets: {
+      GOOGLE_MEET_TOKENS: {
+        scope: "listen",
+        actions: ["read", "write", "delete"],
+      },
+      READ_ONLY_TOKEN: { scope: "listen" },
+    },
+  };
+  const published = JSON.parse(`{
+    "secrets": {
+      "READ_ONLY_TOKEN": { "scope": "listen" },
+      "GOOGLE_MEET_TOKENS": {
+        "actions": ["read", "write", "delete"],
+        "scope": "listen"
+      }
+    },
+    "name": "Listen",
+    "app_id": "xyz.tinycloud.listen",
+    "manifest_version": 1
+  }`);
+
+  expect(canonicalizeOpenKeyManifestJson(published)).toBe(
+    canonicalizeOpenKeyManifestJson(inMemory),
+  );
+  expect(canonicalOpenKeyManifestSha256Hex(published)).toBe(
+    "9811eb387770f1c0a26f36755a6604741be995692dc97561e2de924bb2ac9c3a",
+  );
+});
 
 function createSessionManager(): ISessionManager {
   const keys = new Map<string, string>();
@@ -149,6 +187,62 @@ test("NodeUserAuthorization.signIn keeps constructor siweConfig.nonce when no pe
 
   expect(captured[0]?.nonce).toBe("constructor-nonce");
   expect(signedMessages[0]).toContain("Nonce: constructor-nonce");
+});
+
+test("NodeUserAuthorization.signIn preserves caller defaultActions when merging account parity", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const signedMessages: string[] = [];
+  const defaultActions = {
+    kv: { "": ["tinycloud.kv/get"] },
+  };
+  const originalDefaultActions = structuredClone(defaultActions);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/info")) {
+      return new Response(
+        JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return new Response(JSON.stringify({ activated: ["space"], skipped: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const auth = new NodeUserAuthorization({
+    signer: createSigner(signedMessages),
+    wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    spacePrefix: "account",
+    defaultActions,
+  });
+
+  try {
+    await auth.signIn();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  expect(defaultActions).toEqual(originalDefaultActions);
+  expect(captured[0]?.abilities).toMatchObject({
+    kv: {
+      "": ["tinycloud.kv/get"],
+      "applications/": ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
+      "spaces/": ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
+      "system/bootstrap/complete": ["tinycloud.kv/get", "tinycloud.kv/put"],
+    },
+    delegation: { "": ["tinycloud.delegation/list"] },
+    sql: { account: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] },
+    capabilities: { "": ["tinycloud.capabilities/read"] },
+  });
 });
 
 test("NodeUserAuthorization.signIn lets a per-call nonce override siweConfig.nonce", async () => {

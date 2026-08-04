@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { blake3 } from "@noble/hashes/blake3";
-import { makePkhSpaceId } from "@tinycloud/sdk-core";
+import {
+  ACCOUNT_MANIFEST_PERMISSIONS,
+  BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
+  makePkhSpaceId,
+  resourceCapabilitiesToSpaceAbilitiesMap,
+} from "@tinycloud/sdk-core";
 import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
 
@@ -69,6 +74,56 @@ test("real WASM Authorization bytes round-trip to the delegation CID", async () 
     authorization.replace(/^Bearer /i, "").replace(/=+$/, ""),
   );
   expect(independentlyDerivedCid).toBe(delegationSession.delegationCid);
+});
+
+test("real WASM canonical account parity pins the SIWE/ReCap size increase", async () => {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner("4".padStart(64, "0"));
+  const address = await signer.getAddress();
+  const chainId = await signer.getChainId();
+  const sessionManager = wasm.createSessionManager();
+  const keyId = "account-parity-size-regression";
+  sessionManager.renameSessionKeyId("default", keyId);
+  const jwk = JSON.parse(sessionManager.jwk(keyId)!);
+  const issuedAt = new Date("2026-01-01T00:00:00.000Z");
+
+  const prepare = (resources: typeof ACCOUNT_MANIFEST_PERMISSIONS) => {
+    const shortSpaceAbilities = resourceCapabilitiesToSpaceAbilitiesMap(resources);
+    const spaceAbilities = Object.fromEntries(
+      Object.entries(shortSpaceAbilities).map(([space, abilities]) => [
+        makePkhSpaceId(address, chainId, space),
+        abilities,
+      ]),
+    );
+    const spaceId = makePkhSpaceId(address, chainId, "default");
+    return wasm.prepareSession({
+      abilities: spaceAbilities[spaceId] ?? {},
+      spaceAbilities,
+      address,
+      chainId,
+      domain: "localhost",
+      issuedAt: issuedAt.toISOString(),
+      expirationTime: new Date(issuedAt.getTime() + 60_000).toISOString(),
+      spaceId,
+      jwk,
+    });
+  };
+
+  const narrowResources = [
+    ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST.resources,
+    ...ACCOUNT_MANIFEST_PERMISSIONS.filter((resource) =>
+      resource.path === "system/bootstrap/complete" || resource.path === "account"
+    ),
+  ];
+  const before = prepare(narrowResources).siwe.length;
+  const after = prepare([
+    ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST.resources,
+    ...ACCOUNT_MANIFEST_PERMISSIONS,
+  ]).siwe.length;
+
+  expect(before).toBe(2209);
+  expect(after).toBe(3510);
+  expect(after - before).toBe(1301);
 });
 
 test("real WASM invokeAny preserves constrained-statement caveats", async () => {

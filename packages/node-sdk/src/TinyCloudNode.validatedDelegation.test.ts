@@ -28,6 +28,28 @@ function cloneDelegation(
   };
 }
 
+function signedProvenance(authorization: string): {
+  issuer: string;
+  proofs: string[];
+  remainingRedelegationDepth?: number;
+} {
+  const compact = authorization.replace(/^Bearer /i, "");
+  const payload = JSON.parse(
+    Buffer.from(compact.split(".")[1]!, "base64url").toString("utf8"),
+  ) as {
+    iss: string;
+    prf: string[];
+    fct?: Array<{ remainingRedelegationDepth?: number }>;
+  };
+  return {
+    issuer: payload.iss,
+    proofs: payload.prf,
+    ...(payload.fct?.[0]?.remainingRedelegationDepth === undefined
+      ? {}
+      : { remainingRedelegationDepth: payload.fct[0].remainingRedelegationDepth }),
+  };
+}
+
 describe("activateValidatedRuntimeDelegation", () => {
   test("exports the validated activation helper from the node-sdk entrypoint", () => {
     expect(publicActivateValidatedRuntimeDelegation).toBe(
@@ -62,6 +84,46 @@ describe("activateValidatedRuntimeDelegation", () => {
 
       await fixture.readAndDecrypt(fixture.delegate, activated);
       fixture.assertNarrowDelegatedReadAndDecrypt(activated);
+    } finally {
+      fixture.stop();
+    }
+  });
+
+  test("derives installed provenance from signed authority instead of transport metadata", async () => {
+    const fixture = await createHermeticEncryptedNode();
+    try {
+      const delegation = await fixture.mintDelegation();
+      const provenance = signedProvenance(
+        delegation.delegationHeader.Authorization,
+      );
+      const annotated = cloneDelegation(delegation, {
+        delegatorDID: "did:key:spoofed-delegator",
+        parentCid: "bafy-spoofed-parent",
+        allowSubDelegation: provenance.remainingRedelegationDepth === 0,
+        disableSubDelegation: provenance.remainingRedelegationDepth !== 0,
+        authHeader: "spoofed-authorization",
+      });
+      const activated = await activateValidatedRuntimeDelegation(
+        fixture.delegate,
+        annotated,
+        { host: fixture.host },
+      );
+
+      expect(activated.delegation.delegatorDID).toBe(provenance.issuer);
+      expect(activated.delegation.parentCid).toBe(
+        provenance.proofs.length === 1 ? provenance.proofs[0] : undefined,
+      );
+      if (provenance.remainingRedelegationDepth !== undefined) {
+        expect(activated.delegation.allowSubDelegation).toBe(
+          provenance.remainingRedelegationDepth > 0,
+        );
+        expect(activated.delegation.disableSubDelegation).toBe(
+          provenance.remainingRedelegationDepth === 0,
+        );
+      }
+      expect(activated.delegation.authHeader).toBe(
+        delegation.delegationHeader.Authorization,
+      );
     } finally {
       fixture.stop();
     }

@@ -1,5 +1,15 @@
-import { ed25519 } from "@noble/curves/ed25519";
-import { canonicalize, fromBase64Url, toBase64Url, type ShareEnvelopeV2 } from "@tinycloud/share-envelope";
+import { ed25519, x25519 } from "@noble/curves/ed25519";
+import { sha256 } from "@noble/hashes/sha256";
+import {
+  canonicalize,
+  ed25519PublicKeyFromDidKey,
+  fromBase64Url,
+  signCompactUcanAuthorization,
+  toBase64Url,
+  verifyCompactUcanAuthorization,
+  type ShareEnvelopeV2,
+  type ShareEnvelopeV3,
+} from "@tinycloud/share-envelope";
 import type { ShareAuthorizationAdapter, ShareAuthorizedContent, ShareAuthorizationResult } from "./authorization.js";
 import { SHARE_V2_PROTOCOL } from "./protocol.js";
 
@@ -16,6 +26,10 @@ export interface SharePresentationMaterial {
   readonly proof: Record<string, unknown>;
   readonly sign?: (bytes: Uint8Array) => Promise<Uint8Array>;
   readonly email?: string;
+  /** Exact v3 credential claim returned by the verified holder ceremony. */
+  readonly claim?: Record<string, unknown>;
+  /** Exact v3 presentation returned by the verified holder ceremony. */
+  readonly presentation?: Record<string, unknown>;
 }
 
 export interface SharePolicyChallenge {
@@ -32,9 +46,9 @@ export interface ShareRecipientClientOptions {
   readonly nodeOrigin: string;
   readonly trustedNode: ShareNodeTrust;
   readonly holderDid: string;
-  readonly envelope: ShareEnvelopeV2;
+  readonly envelope: ShareEnvelopeV2 | ShareEnvelopeV3;
   readonly fetchFn?: typeof fetch;
-  readonly buildPresentation?: (input: { readonly challenge: SharePolicyChallenge; readonly envelope: ShareEnvelopeV2; readonly policy: Record<string, unknown> }) => Promise<SharePresentationMaterial>;
+  readonly buildPresentation?: (input: { readonly challenge: SharePolicyChallenge; readonly envelope: ShareEnvelopeV2 | ShareEnvelopeV3; readonly policy: Record<string, unknown> }) => Promise<SharePresentationMaterial>;
   readonly sign?: (bytes: Uint8Array) => Promise<Uint8Array>;
 }
 
@@ -60,6 +74,45 @@ function bytes(value: unknown, label: string): Uint8Array {
   const decoded = fromBase64Url(value);
   if (decoded.length !== 64 || toBase64Url(decoded) !== value) throw new Error(`${label} is invalid`);
   return decoded;
+}
+
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function toBase64(bytes: Uint8Array): string {
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i]!;
+    const b1 = i + 1 < bytes.length ? bytes[i + 1]! : 0;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2]! : 0;
+    out += BASE64_ALPHABET[(b0 >> 2) & 0x3f];
+    out += BASE64_ALPHABET[((b0 << 4) | (b1 >> 4)) & 0x3f];
+    out += i + 1 < bytes.length ? BASE64_ALPHABET[((b1 << 2) | (b2 >> 6)) & 0x3f] : "=";
+    out += i + 2 < bytes.length ? BASE64_ALPHABET[b2 & 0x3f] : "=";
+  }
+  return out;
+}
+
+function fromBase64(value: string, label: string): Uint8Array {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new Error(`${label} is invalid`);
+  }
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const out = new Uint8Array((value.length / 4) * 3 - padding);
+  let outIdx = 0;
+  for (let i = 0; i < value.length; i += 4) {
+    const v0 = BASE64_ALPHABET.indexOf(value[i]!);
+    const v1 = BASE64_ALPHABET.indexOf(value[i + 1]!);
+    const v2 = value[i + 2] === "=" ? 0 : BASE64_ALPHABET.indexOf(value[i + 2]!);
+    const v3 = value[i + 3] === "=" ? 0 : BASE64_ALPHABET.indexOf(value[i + 3]!);
+    const b0 = (v0 << 2) | (v1 >> 4);
+    const b1 = ((v1 & 0x0f) << 4) | (v2 >> 2);
+    const b2 = ((v2 & 0x03) << 6) | v3;
+    if (outIdx < out.length) out[outIdx++] = b0;
+    if (outIdx < out.length) out[outIdx++] = b1;
+    if (outIdx < out.length) out[outIdx++] = b2;
+  }
+  if (toBase64(out) !== value) throw new Error(`${label} is invalid`);
+  return out;
 }
 
 async function digest(value: unknown): Promise<string> {
@@ -103,6 +156,61 @@ function selectedAction(envelope: ShareEnvelopeV2): string {
   return envelope.actions.includes("list") ? "tinycloud.kv/list" : envelope.actions.includes("edit") ? "tinycloud.kv/put" : "tinycloud.kv/get";
 }
 
+function hex(value: Uint8Array): string {
+  return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function canonicalHashHex(value: string): string {
+  return hex(sha256(new TextEncoder().encode(canonicalize(value))));
+}
+
+async function aesGcmDecrypt(key: Uint8Array, blob: Uint8Array): Promise<Uint8Array> {
+  if (key.length !== 32 || blob.length < 28) throw new Error("encrypted content is malformed");
+  const cryptoKey = await crypto.subtle.importKey("raw", key as unknown as BufferSource, "AES-GCM", false, ["decrypt"]);
+  return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: blob.slice(0, 12) as unknown as BufferSource }, cryptoKey, blob.slice(12) as unknown as BufferSource));
+}
+
+async function aesGcmEncrypt(key: Uint8Array, plaintext: Uint8Array): Promise<Uint8Array> {
+  if (key.length !== 32) throw new Error("encrypted content key is malformed");
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const cryptoKey = await crypto.subtle.importKey("raw", key as unknown as BufferSource, "AES-GCM", false, ["encrypt"]);
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce as unknown as BufferSource }, cryptoKey, plaintext as unknown as BufferSource));
+  const output = new Uint8Array(nonce.length + ciphertext.length);
+  output.set(nonce);
+  output.set(ciphertext, nonce.length);
+  return output;
+}
+
+interface V3InlineEncryptedEnvelope {
+  readonly v: 1;
+  readonly networkId: string;
+  readonly alg: "x25519-aes256gcm/v1";
+  readonly keyVersion: number;
+  readonly encryptedSymmetricKey: string;
+  readonly encryptedSymmetricKeyHash: string;
+  readonly ciphertext: string;
+  readonly metadata?: Readonly<Record<string, string>>;
+}
+
+function parseV3InlineEncryptedEnvelope(bytes: Uint8Array, expected: ShareEnvelopeV3): V3InlineEncryptedEnvelope {
+  let value: unknown;
+  try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { throw new Error("encrypted content envelope is malformed"); }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("encrypted content envelope is malformed");
+  const record = value as Record<string, unknown>;
+  const allowed = ["v", "networkId", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "metadata"];
+  if (Object.keys(record).some((key) => !allowed.includes(key))
+    || record.v !== 1 || record.networkId !== expected.encryptionNetwork
+    || record.alg !== "x25519-aes256gcm/v1" || record.keyVersion !== expected.contentSource.keyVersion
+    || typeof record.encryptedSymmetricKey !== "string" || typeof record.encryptedSymmetricKeyHash !== "string"
+    || record.encryptedSymmetricKeyHash !== expected.contentSource.encryptedSymmetricKeyDigestHex
+    || record.encryptedSymmetricKeyHash !== canonicalHashHex(record.encryptedSymmetricKey)
+    || typeof record.ciphertext !== "string"
+    || record.metadata !== undefined && (record.metadata === null || typeof record.metadata !== "object" || Array.isArray(record.metadata) || Object.values(record.metadata).some((entry) => typeof entry !== "string"))) {
+    throw new Error("encrypted content envelope binding is invalid");
+  }
+  return record as unknown as V3InlineEncryptedEnvelope;
+}
+
 async function verifyDetachedResponse(response: Response, trust: ShareNodeTrust): Promise<void> {
   let value: unknown;
   try { value = await response.clone().json(); } catch { throw new Error("share read response is invalid"); }
@@ -124,7 +232,11 @@ export class ShareRecipientClient {
   private readonly fetchFn: typeof fetch;
   private session: SharePolicySession | undefined;
   private signer: ((bytes: Uint8Array) => Promise<Uint8Array>) | undefined;
+  private nativeSigner: ((bytes: Uint8Array) => Promise<Uint8Array>) | undefined;
   private holderProof: Record<string, unknown> | undefined;
+  private v3Authorization: string | undefined;
+  private v3ContentKey: Uint8Array | undefined;
+  private v3ContentEnvelope: V3InlineEncryptedEnvelope | undefined;
 
   constructor(private readonly options: ShareRecipientClientOptions) {
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
@@ -168,6 +280,7 @@ export class ShareRecipientClient {
     const material = await this.options.buildPresentation({ challenge, envelope, policy: {} });
     this.holderProof = material.proof;
     this.signer = material.sign;
+    this.nativeSigner = material.sign;
     if (this.signer === undefined) throw new Error("share holder signer is required");
     const presentation = {
       type: "TinyCloudSharePolicyPresentation", version: 2, challengeId: challenge.challengeId, nonce: challenge.nonce,
@@ -208,7 +321,117 @@ export class ShareRecipientClient {
 
   async establishPolicySession(): Promise<SharePolicySession> {
     if (this.session !== undefined) return this.session;
-    return this.establish(this.options.envelope);
+    const envelope = this.options.envelope;
+    if (envelope.version === 3) return this.establishV3(envelope);
+    return this.establish(envelope);
+  }
+
+  private async establishV3(envelope: ShareEnvelopeV3): Promise<SharePolicySession> {
+    if (this.options.buildPresentation === undefined) throw new Error("share presentation builder is required");
+    const challengeResponse = await this.fetchFn(new URL("/share/v3/policy/challenges", this.options.nodeOrigin), {
+      method: "POST",
+      redirect: "error",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ policyCid: envelope.policyCid, recipientDid: this.options.holderDid, requestedCapabilities: envelope.policy.capabilityCeiling }),
+    });
+    if (!challengeResponse.ok) throw new Error(`v3 policy challenge rejected (${challengeResponse.status})`);
+    const challenge = object(await challengeResponse.json(), "v3 policy challenge");
+    if (typeof challenge.challengeId !== "string" || typeof challenge.nonce !== "string" || challenge.policyCid !== envelope.policyCid || challenge.recipientDid !== this.options.holderDid) throw new Error("v3 policy challenge binding mismatch");
+    const material = await this.options.buildPresentation({
+      challenge: challenge as unknown as SharePolicyChallenge,
+      envelope,
+      policy: envelope.policy as unknown as Record<string, unknown>,
+    });
+    if (material.sign === undefined || material.claim === undefined || material.presentation === undefined) throw new Error("v3 ceremony requires a recipient signer, claim, and presentation");
+    const delegationResponse = await this.fetchFn(new URL("/share/v3/policy/delegations", this.options.nodeOrigin), {
+      method: "POST",
+      redirect: "error",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ policyCid: envelope.policyCid, challengeId: challenge.challengeId, nonce: challenge.nonce, claim: material.claim, presentation: material.presentation }),
+    });
+    if (!delegationResponse.ok) throw new Error(`v3 policy delegation rejected (${delegationResponse.status})`);
+    const delegation = object(await delegationResponse.json(), "v3 policy delegation");
+    if (delegation.admitted !== true || typeof delegation.sessionCid !== "string" || typeof delegation.authorization !== "string") throw new Error("v3 policy delegation response is not admitted");
+    const compact = verifyCompactUcanAuthorization(delegation.authorization, delegation.sessionCid);
+    const fact = compact.payload.fct[0];
+    if (compact.payload.aud !== this.options.holderDid
+      || fact.profile !== "policy-session-ucan/v1"
+      || fact.policyCid !== envelope.policyCid
+      || fact.recipientDid !== this.options.holderDid
+      || fact.policyDelegationCid !== envelope.policyRoot.cid
+      || fact.enforcementDelegationCid !== envelope.enforcementRoot.cid
+      || compact.payload.prf.length !== 2
+      || compact.payload.prf[0] !== envelope.policyRoot.cid
+      || compact.payload.prf[1] !== envelope.enforcementRoot.cid
+      || compact.payload.exp - compact.payload.nbf > 60) throw new Error("v3 policy delegation signed binding mismatch");
+    const imported = await this.fetchFn(new URL("/delegate", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { Authorization: delegation.authorization } });
+    if (!imported.ok) throw new Error(`ordinary delegation import rejected (${imported.status})`);
+    this.signer = material.sign;
+    this.v3Authorization = delegation.authorization;
+    this.session = { sessionId: delegation.sessionCid, expiresAt: new Date(compact.payload.exp * 1000).toISOString(), actions: envelope.actions, resource: envelope.resource };
+    return this.session;
+  }
+
+  /** Decrypt a v3 KV value through a fresh recipient-signed decrypt invocation. */
+  async decryptV3Content(bytes: Uint8Array): Promise<{ readonly bytes: Uint8Array; readonly mediaType: string }> {
+    const envelope = this.options.envelope;
+    const signer = this.nativeSigner ?? this.signer;
+    if (envelope.version !== 3 || this.session === undefined || this.v3Authorization === undefined || signer === undefined) throw new Error("v3 policy session signer is required");
+    const encrypted = parseV3InlineEncryptedEnvelope(bytes, envelope);
+    const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
+    const receiverPublicKey = toBase64Url(x25519.getPublicKey(receiverPrivateKey));
+    const receiverPublicKeyHash = canonicalHashHex(receiverPublicKey);
+    const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: envelope.target.nodeAudience, networkId: encrypted.networkId, alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
+    const bodyHash = hex(sha256(new TextEncoder().encode(canonicalize(body))));
+    const session = verifyCompactUcanAuthorization(this.v3Authorization, this.session.sessionId);
+    const now = Math.floor(Date.now() / 1000);
+    const invocation = await signCompactUcanAuthorization({
+      issuerDid: this.options.holderDid,
+      audienceDid: envelope.target.nodeAudience,
+      attenuation: { [encrypted.networkId]: { "tinycloud.encryption/decrypt": [{}] } },
+      facts: [{ type: body.type, targetNode: body.targetNode, networkId: body.networkId, bodyHash, encryptedSymmetricKeyHash: body.encryptedSymmetricKeyHash, receiverPublicKeyHash, alg: body.alg, keyVersion: body.keyVersion }],
+      proofs: [session.cid],
+      notBefore: now,
+      expiresAt: Math.min(now + 60, session.payload.exp),
+      nonce: toBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+      sign: signer,
+    });
+    try {
+      const response = await this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json", Authorization: invocation.authorization }, body: JSON.stringify(body) });
+      if (!response.ok) throw new Error(`v3 decrypt invocation rejected (${response.status})`);
+      const value = object(await response.json(), "v3 decrypt response");
+      const allowed = ["type", "targetNode", "networkId", "invocationCid", "encryptedSymmetricKeyHash", "receiverPublicKeyHash", "wrappedKey", "alg", "keyVersion", "requestHash", "nodeId", "nodeSignature"];
+      if (Object.keys(value).length !== allowed.length || Object.keys(value).some((key) => !allowed.includes(key))
+        || value.type !== "tinycloud.encryption.decrypt-result/v1" || value.targetNode !== body.targetNode || value.nodeId !== body.targetNode
+        || value.networkId !== body.networkId || value.invocationCid !== invocation.cid
+        || value.encryptedSymmetricKeyHash !== body.encryptedSymmetricKeyHash || value.receiverPublicKeyHash !== receiverPublicKeyHash
+        || value.alg !== body.alg || value.keyVersion !== body.keyVersion
+        || value.requestHash !== hex(sha256(new TextEncoder().encode(`${invocation.cid}${bodyHash}`)))
+        || typeof value.wrappedKey !== "string" || typeof value.nodeSignature !== "string") throw new Error("v3 decrypt response binding is invalid");
+      const unsigned = { ...value };
+      delete unsigned.nodeSignature;
+      const signature = fromBase64(value.nodeSignature, "v3 decrypt response signature");
+      if (signature.length !== 64 || !ed25519.verify(signature, new TextEncoder().encode(canonicalize(unsigned)), ed25519PublicKeyFromDidKey(body.targetNode), { zip215: false })) throw new Error("v3 decrypt response signature is invalid");
+      const wrapped = fromBase64(value.wrappedKey, "v3 wrapped content key");
+      if (wrapped.length < 60) throw new Error("v3 wrapped content key is malformed");
+      const shared = x25519.getSharedSecret(receiverPrivateKey, wrapped.slice(0, 32));
+      const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(32));
+      shared.fill(0);
+      if (symmetricKey.length !== 32) throw new Error("v3 content key is malformed");
+      const plaintext = await aesGcmDecrypt(symmetricKey, fromBase64Url(encrypted.ciphertext));
+      this.v3ContentKey?.fill(0);
+      this.v3ContentKey = symmetricKey;
+      this.v3ContentEnvelope = encrypted;
+      return { bytes: plaintext, mediaType: encrypted.metadata?.contentType ?? envelope.metadata.mediaType ?? "application/octet-stream" };
+    } finally {
+      receiverPrivateKey.fill(0);
+    }
+  }
+
+  /** Re-encrypt edited v3 content with the admitted content key. */
+  async encryptV3Content(bytes: Uint8Array, mediaType: string): Promise<Uint8Array> {
+    if (this.options.envelope.version !== 3 || this.v3ContentKey === undefined || this.v3ContentEnvelope === undefined) throw new Error("v3 content must be decrypted before it can be saved");
+    return new TextEncoder().encode(canonicalize({ ...this.v3ContentEnvelope, ciphertext: toBase64Url(await aesGcmEncrypt(this.v3ContentKey, bytes)), metadata: { ...(this.v3ContentEnvelope.metadata ?? {}), contentType: mediaType } }));
   }
 
   async resumeWithProof(envelope: ShareEnvelopeV2, resumeToken: string, proof: unknown): Promise<ShareAuthorizedContent> {
@@ -246,8 +469,10 @@ export class ShareRecipientClient {
 
   async nativeInvoke(request: { readonly action: string; readonly resource?: Record<string, unknown>; readonly body?: number[]; readonly bodyDigest?: number[]; readonly ifMatch?: string; readonly contentType?: string }): Promise<Response> {
     if (this.session === undefined) throw new Error("share policy session is required");
-    if (this.options.envelope.ownerAuthority === undefined || this.signer === undefined || this.holderProof === undefined) throw new Error("share holder signer is required");
-    const authority = this.options.envelope.ownerAuthority;
+    const envelope = this.options.envelope;
+    if (envelope.version === 3) return this.nativeInvokeV3(request, envelope);
+    if (envelope.ownerAuthority === undefined || this.signer === undefined || this.holderProof === undefined) throw new Error("share holder signer is required");
+    const authority = envelope.ownerAuthority;
     const action = request.action === "list" ? "tinycloud.kv/list" : request.action === "put" ? "tinycloud.kv/put" : request.action === "metadata" ? "tinycloud.kv/metadata" : "tinycloud.kv/get";
     const resource = typeof request.resource?.path === "string" ? request.resource.path : this.session.resource.path;
     const actions = [...new Set(this.session.actions.map(nativeAction).concat(action === "tinycloud.kv/metadata" ? [action] : []))].sort();
@@ -255,19 +480,52 @@ export class ShareRecipientClient {
     const bodyDigest = bodyBytes === undefined ? undefined : toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", bodyBytes)));
     const outer = object(authority.outerEnvelope, "owner authority outer envelope");
     const enforcement = object(authority.enforcementDelegation, "owner authority enforcement delegation");
-    const invocationBase = { type: "TinyCloudShareReadInvocation", version: 2, sessionId: this.session.sessionId, envelopeCid: authority.envelopeCid, shareCid: authority.shareCid, shareId: this.options.envelope.shareId, registrationCid: authority.registrationCid, delegationCid: this.options.envelope.delegationCid, policyCid: this.options.envelope.authorizationTarget.kind === "policy" ? this.options.envelope.authorizationTarget.policyCid : "", enforcementDelegationCid: String(enforcement.cid), contentSource: outer.contentSource, contentSourceDigest: String(outer.contentSourceDigest), holderDid: this.options.holderDid, targetOrigin: String(object(outer.target, "owner authority target").origin), nodeAudience: String(object(outer.target, "owner authority target").nodeAudience), action, actions, resource, ...(action === "tinycloud.kv/list" ? { limit: 100 } : {}), ...(bodyDigest === undefined ? {} : { bodyDigest, ifMatch: request.ifMatch, contentType: request.contentType }), issuedAt: new Date().toISOString(), expiresAt: new Date(Math.min(Date.now() + 60_000, Date.parse(this.session.expiresAt))).toISOString(), jti: toBase64Url(crypto.getRandomValues(new Uint8Array(16))) };
+    const invocationBase = { type: "TinyCloudShareReadInvocation", version: 2, sessionId: this.session.sessionId, envelopeCid: authority.envelopeCid, shareCid: authority.shareCid, shareId: envelope.shareId, registrationCid: authority.registrationCid, delegationCid: envelope.delegationCid, policyCid: envelope.authorizationTarget.kind === "policy" ? envelope.authorizationTarget.policyCid : "", enforcementDelegationCid: String(enforcement.cid), contentSource: outer.contentSource, contentSourceDigest: String(outer.contentSourceDigest), holderDid: this.options.holderDid, targetOrigin: String(object(outer.target, "owner authority target").origin), nodeAudience: String(object(outer.target, "owner authority target").nodeAudience), action, actions, resource, ...(action === "tinycloud.kv/list" ? { limit: 100 } : {}), ...(bodyDigest === undefined ? {} : { bodyDigest, ifMatch: request.ifMatch, contentType: request.contentType }), issuedAt: new Date().toISOString(), expiresAt: new Date(Math.min(Date.now() + 60_000, Date.parse(this.session.expiresAt))).toISOString(), jti: toBase64Url(crypto.getRandomValues(new Uint8Array(16))) };
     const requestBodyDigest = await digest(invocationBase);
     const invocation = { ...invocationBase, requestBodyDigest };
     const proof = { ...this.holderProof, signature: toBase64Url(await this.signer(new TextEncoder().encode(`${INVOCATION_DOMAIN}${canonicalize(invocation)}`))) };
-    const signedRequest = { sessionId: this.session.sessionId, envelopeCid: authority.envelopeCid, shareCid: authority.shareCid, shareId: this.options.envelope.shareId, registrationCid: authority.registrationCid, delegationCid: this.options.envelope.delegationCid, policyCid: this.options.envelope.authorizationTarget.kind === "policy" ? this.options.envelope.authorizationTarget.policyCid : "", enforcementDelegationCid: String(enforcement.cid), contentSource: outer.contentSource, contentSourceDigest: String(outer.contentSourceDigest), holderDid: this.options.holderDid, nodeAudience: String(object(outer.target, "owner authority target").nodeAudience), action, actions, resource, requestBodyDigest, invocation, proof };
+    const signedRequest = { sessionId: this.session.sessionId, envelopeCid: authority.envelopeCid, shareCid: authority.shareCid, shareId: envelope.shareId, registrationCid: authority.registrationCid, delegationCid: envelope.delegationCid, policyCid: envelope.authorizationTarget.kind === "policy" ? envelope.authorizationTarget.policyCid : "", enforcementDelegationCid: String(enforcement.cid), contentSource: outer.contentSource, contentSourceDigest: String(outer.contentSourceDigest), holderDid: this.options.holderDid, nodeAudience: String(object(outer.target, "owner authority target").nodeAudience), action, actions, resource, requestBodyDigest, invocation, proof };
     const response = await this.fetchFn(new URL("/share/v2/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { accept: "application/vnd.tinycloud.share+json", "content-type": "application/vnd.tinycloud.share+json" }, body: JSON.stringify({ request: signedRequest, ...(action === "tinycloud.kv/list" ? { limit: 100 } : {}), ...(bodyBytes === undefined ? {} : { body: toBase64Url(bodyBytes), bodyDigest, ifMatch: request.ifMatch, contentType: request.contentType }) }) });
     if (response.ok) await verifyDetachedResponse(response, this.options.trustedNode);
     return response;
   }
+
+  private async nativeInvokeV3(request: { readonly action: string; readonly resource?: Record<string, unknown>; readonly body?: number[]; readonly ifMatch?: string; readonly contentType?: string }, envelope: ShareEnvelopeV3): Promise<Response> {
+    const signer = this.nativeSigner ?? this.signer;
+    if (this.session === undefined || this.v3Authorization === undefined || signer === undefined) throw new Error("v3 policy session signer is required");
+    const session = verifyCompactUcanAuthorization(this.v3Authorization, this.session.sessionId);
+    if (session.payload.aud !== this.options.holderDid) throw new Error("v3 session recipient mismatch");
+    const action = request.action === "list" ? "tinycloud.kv/list" : request.action === "put" ? "tinycloud.kv/put" : request.action === "metadata" ? "tinycloud.kv/metadata" : "tinycloud.kv/get";
+    const path = typeof request.resource?.path === "string" ? request.resource.path.replace(/^\//, "").replace(/\/$/, "") : envelope.resource.path;
+    const capability = envelope.policy.capabilityCeiling.find((candidate) => candidate.kind === "kv");
+    if (capability === undefined || !capability.actions.includes(action as never)) throw new Error("v3 requested capability is not in the signed policy");
+    const marker = "/kv/";
+    const split = capability.resource.indexOf(marker);
+    if (split < 0) throw new Error("v3 KV resource is invalid");
+    const root = capability.resource.slice(split + marker.length).replace(/\/$/, "");
+    if (path !== root && !(capability.selector === "prefix" && path.startsWith(`${root}/`))) throw new Error("v3 KV request is outside the signed selector");
+    const resource = `${capability.resource.slice(0, split + marker.length)}${path}`;
+    const now = Math.floor(Date.now() / 1000);
+    const invocation = await signCompactUcanAuthorization({ issuerDid: this.options.holderDid, audienceDid: envelope.target.nodeAudience, attenuation: { [resource]: { [action]: [{ type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: resource }] } }, facts: [{ type: "tinycloud.policy.invocation/v1", policyCid: envelope.policyCid, sessionCid: session.cid }], proofs: [session.cid], notBefore: now, expiresAt: Math.min(now + 60, session.payload.exp), nonce: toBase64Url(crypto.getRandomValues(new Uint8Array(16))), sign: signer });
+    const headers = new Headers({ accept: "application/json", Authorization: invocation.authorization });
+    let body: BodyInit | undefined;
+    if (action === "tinycloud.kv/put") {
+      if (request.body === undefined) throw new Error("v3 KV put requires bytes");
+      body = Uint8Array.from(request.body) as BodyInit;
+      headers.set("content-type", request.contentType ?? "application/octet-stream");
+      if (request.ifMatch !== undefined) headers.set("if-match", request.ifMatch);
+    }
+    return this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers, ...(body === undefined ? {} : { body }) });
+  }
 }
 
-export function createAddressedAuthorization(input: Omit<ShareRecipientClientOptions, "envelope">): ShareAuthorizationAdapter<ShareAuthorizedContent> {
-  const client = (envelope: ShareEnvelopeV2): ShareRecipientClient => new ShareRecipientClient({ ...input, envelope });
+export function createAddressedAuthorization(input: Omit<ShareRecipientClientOptions, "envelope" | "buildPresentation"> & { readonly buildPresentation?: (input: { readonly challenge: SharePolicyChallenge; readonly envelope: ShareEnvelopeV2; readonly policy: Record<string, unknown> }) => Promise<SharePresentationMaterial> }): ShareAuthorizationAdapter<ShareAuthorizedContent> {
+  const { buildPresentation, ...options } = input;
+  const client = (envelope: ShareEnvelopeV2): ShareRecipientClient => new ShareRecipientClient({
+    ...options,
+    envelope,
+    ...(buildPresentation === undefined ? {} : { buildPresentation: ({ challenge, envelope: candidate, policy }) => buildPresentation({ challenge, envelope: candidate as ShareEnvelopeV2, policy }) }),
+  });
   return {
     async begin({ envelope, method }): Promise<ShareAuthorizationResult<ShareAuthorizedContent>> {
       const current = client(envelope);

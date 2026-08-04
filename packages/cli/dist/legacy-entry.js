@@ -4488,451 +4488,6 @@ var init_zod = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/data/isHex.js
-function isHex(value, { strict = true } = {}) {
-  if (!value)
-    return false;
-  if (typeof value !== "string")
-    return false;
-  return strict ? /^0x[0-9a-fA-F]*$/.test(value) : value.startsWith("0x");
-}
-var init_isHex = __esm({
-  "../../node_modules/viem/_esm/utils/data/isHex.js"() {
-    "use strict";
-  }
-});
-
-// ../../node_modules/viem/_esm/utils/data/size.js
-function size(value) {
-  if (isHex(value, { strict: false }))
-    return Math.ceil((value.length - 2) / 2);
-  return value.length;
-}
-var init_size = __esm({
-  "../../node_modules/viem/_esm/utils/data/size.js"() {
-    "use strict";
-    init_isHex();
-  }
-});
-
-// ../../node_modules/viem/_esm/errors/version.js
-var version;
-var init_version = __esm({
-  "../../node_modules/viem/_esm/errors/version.js"() {
-    "use strict";
-    version = "2.45.1";
-  }
-});
-
-// ../../node_modules/viem/_esm/errors/base.js
-function walk(err2, fn) {
-  if (fn?.(err2))
-    return err2;
-  if (err2 && typeof err2 === "object" && "cause" in err2 && err2.cause !== void 0)
-    return walk(err2.cause, fn);
-  return fn ? null : err2;
-}
-var errorConfig, BaseError;
-var init_base = __esm({
-  "../../node_modules/viem/_esm/errors/base.js"() {
-    "use strict";
-    init_version();
-    errorConfig = {
-      getDocsUrl: ({ docsBaseUrl, docsPath = "", docsSlug }) => docsPath ? `${docsBaseUrl ?? "https://viem.sh"}${docsPath}${docsSlug ? `#${docsSlug}` : ""}` : void 0,
-      version: `viem@${version}`
-    };
-    BaseError = class _BaseError extends Error {
-      constructor(shortMessage, args = {}) {
-        const details = (() => {
-          if (args.cause instanceof _BaseError)
-            return args.cause.details;
-          if (args.cause?.message)
-            return args.cause.message;
-          return args.details;
-        })();
-        const docsPath = (() => {
-          if (args.cause instanceof _BaseError)
-            return args.cause.docsPath || args.docsPath;
-          return args.docsPath;
-        })();
-        const docsUrl = errorConfig.getDocsUrl?.({ ...args, docsPath });
-        const message = [
-          shortMessage || "An error occurred.",
-          "",
-          ...args.metaMessages ? [...args.metaMessages, ""] : [],
-          ...docsUrl ? [`Docs: ${docsUrl}`] : [],
-          ...details ? [`Details: ${details}`] : [],
-          ...errorConfig.version ? [`Version: ${errorConfig.version}`] : []
-        ].join("\n");
-        super(message, args.cause ? { cause: args.cause } : void 0);
-        Object.defineProperty(this, "details", {
-          enumerable: true,
-          configurable: true,
-          writable: true,
-          value: void 0
-        });
-        Object.defineProperty(this, "docsPath", {
-          enumerable: true,
-          configurable: true,
-          writable: true,
-          value: void 0
-        });
-        Object.defineProperty(this, "metaMessages", {
-          enumerable: true,
-          configurable: true,
-          writable: true,
-          value: void 0
-        });
-        Object.defineProperty(this, "shortMessage", {
-          enumerable: true,
-          configurable: true,
-          writable: true,
-          value: void 0
-        });
-        Object.defineProperty(this, "version", {
-          enumerable: true,
-          configurable: true,
-          writable: true,
-          value: void 0
-        });
-        Object.defineProperty(this, "name", {
-          enumerable: true,
-          configurable: true,
-          writable: true,
-          value: "BaseError"
-        });
-        this.details = details;
-        this.docsPath = docsPath;
-        this.metaMessages = args.metaMessages;
-        this.name = args.name ?? this.name;
-        this.shortMessage = shortMessage;
-        this.version = version;
-      }
-      walk(fn) {
-        return walk(this, fn);
-      }
-    };
-  }
-});
-
-// ../../node_modules/viem/_esm/errors/data.js
-var SizeExceedsPaddingSizeError;
-var init_data = __esm({
-  "../../node_modules/viem/_esm/errors/data.js"() {
-    "use strict";
-    init_base();
-    SizeExceedsPaddingSizeError = class extends BaseError {
-      constructor({ size: size2, targetSize, type }) {
-        super(`${type.charAt(0).toUpperCase()}${type.slice(1).toLowerCase()} size (${size2}) exceeds padding size (${targetSize}).`, { name: "SizeExceedsPaddingSizeError" });
-      }
-    };
-  }
-});
-
-// ../../node_modules/viem/_esm/utils/data/pad.js
-function pad(hexOrBytes, { dir, size: size2 = 32 } = {}) {
-  if (typeof hexOrBytes === "string")
-    return padHex(hexOrBytes, { dir, size: size2 });
-  return padBytes(hexOrBytes, { dir, size: size2 });
-}
-function padHex(hex_, { dir, size: size2 = 32 } = {}) {
-  if (size2 === null)
-    return hex_;
-  const hex = hex_.replace("0x", "");
-  if (hex.length > size2 * 2)
-    throw new SizeExceedsPaddingSizeError({
-      size: Math.ceil(hex.length / 2),
-      targetSize: size2,
-      type: "hex"
-    });
-  return `0x${hex[dir === "right" ? "padEnd" : "padStart"](size2 * 2, "0")}`;
-}
-function padBytes(bytes, { dir, size: size2 = 32 } = {}) {
-  if (size2 === null)
-    return bytes;
-  if (bytes.length > size2)
-    throw new SizeExceedsPaddingSizeError({
-      size: bytes.length,
-      targetSize: size2,
-      type: "bytes"
-    });
-  const paddedBytes = new Uint8Array(size2);
-  for (let i = 0; i < size2; i++) {
-    const padEnd = dir === "right";
-    paddedBytes[padEnd ? i : size2 - i - 1] = bytes[padEnd ? i : bytes.length - i - 1];
-  }
-  return paddedBytes;
-}
-var init_pad = __esm({
-  "../../node_modules/viem/_esm/utils/data/pad.js"() {
-    "use strict";
-    init_data();
-  }
-});
-
-// ../../node_modules/viem/_esm/errors/encoding.js
-var IntegerOutOfRangeError, SizeOverflowError;
-var init_encoding = __esm({
-  "../../node_modules/viem/_esm/errors/encoding.js"() {
-    "use strict";
-    init_base();
-    IntegerOutOfRangeError = class extends BaseError {
-      constructor({ max, min, signed, size: size2, value }) {
-        super(`Number "${value}" is not in safe ${size2 ? `${size2 * 8}-bit ${signed ? "signed" : "unsigned"} ` : ""}integer range ${max ? `(${min} to ${max})` : `(above ${min})`}`, { name: "IntegerOutOfRangeError" });
-      }
-    };
-    SizeOverflowError = class extends BaseError {
-      constructor({ givenSize, maxSize }) {
-        super(`Size cannot exceed ${maxSize} bytes. Given size: ${givenSize} bytes.`, { name: "SizeOverflowError" });
-      }
-    };
-  }
-});
-
-// ../../node_modules/viem/_esm/utils/encoding/fromHex.js
-function assertSize(hexOrBytes, { size: size2 }) {
-  if (size(hexOrBytes) > size2)
-    throw new SizeOverflowError({
-      givenSize: size(hexOrBytes),
-      maxSize: size2
-    });
-}
-function hexToBigInt(hex, opts = {}) {
-  const { signed } = opts;
-  if (opts.size)
-    assertSize(hex, { size: opts.size });
-  const value = BigInt(hex);
-  if (!signed)
-    return value;
-  const size2 = (hex.length - 2) / 2;
-  const max = (1n << BigInt(size2) * 8n - 1n) - 1n;
-  if (value <= max)
-    return value;
-  return value - BigInt(`0x${"f".padStart(size2 * 2, "f")}`) - 1n;
-}
-function hexToNumber(hex, opts = {}) {
-  const value = hexToBigInt(hex, opts);
-  const number = Number(value);
-  if (!Number.isSafeInteger(number))
-    throw new IntegerOutOfRangeError({
-      max: `${Number.MAX_SAFE_INTEGER}`,
-      min: `${Number.MIN_SAFE_INTEGER}`,
-      signed: opts.signed,
-      size: opts.size,
-      value: `${value}n`
-    });
-  return number;
-}
-var init_fromHex = __esm({
-  "../../node_modules/viem/_esm/utils/encoding/fromHex.js"() {
-    "use strict";
-    init_encoding();
-    init_size();
-  }
-});
-
-// ../../node_modules/viem/_esm/utils/encoding/toHex.js
-function toHex(value, opts = {}) {
-  if (typeof value === "number" || typeof value === "bigint")
-    return numberToHex(value, opts);
-  if (typeof value === "string") {
-    return stringToHex(value, opts);
-  }
-  if (typeof value === "boolean")
-    return boolToHex(value, opts);
-  return bytesToHex(value, opts);
-}
-function boolToHex(value, opts = {}) {
-  const hex = `0x${Number(value)}`;
-  if (typeof opts.size === "number") {
-    assertSize(hex, { size: opts.size });
-    return pad(hex, { size: opts.size });
-  }
-  return hex;
-}
-function bytesToHex(value, opts = {}) {
-  let string2 = "";
-  for (let i = 0; i < value.length; i++) {
-    string2 += hexes[value[i]];
-  }
-  const hex = `0x${string2}`;
-  if (typeof opts.size === "number") {
-    assertSize(hex, { size: opts.size });
-    return pad(hex, { dir: "right", size: opts.size });
-  }
-  return hex;
-}
-function numberToHex(value_, opts = {}) {
-  const { signed, size: size2 } = opts;
-  const value = BigInt(value_);
-  let maxValue2;
-  if (size2) {
-    if (signed)
-      maxValue2 = (1n << BigInt(size2) * 8n - 1n) - 1n;
-    else
-      maxValue2 = 2n ** (BigInt(size2) * 8n) - 1n;
-  } else if (typeof value_ === "number") {
-    maxValue2 = BigInt(Number.MAX_SAFE_INTEGER);
-  }
-  const minValue = typeof maxValue2 === "bigint" && signed ? -maxValue2 - 1n : 0;
-  if (maxValue2 && value > maxValue2 || value < minValue) {
-    const suffix = typeof value_ === "bigint" ? "n" : "";
-    throw new IntegerOutOfRangeError({
-      max: maxValue2 ? `${maxValue2}${suffix}` : void 0,
-      min: `${minValue}${suffix}`,
-      signed,
-      size: size2,
-      value: `${value_}${suffix}`
-    });
-  }
-  const hex = `0x${(signed && value < 0 ? (1n << BigInt(size2 * 8)) + BigInt(value) : value).toString(16)}`;
-  if (size2)
-    return pad(hex, { size: size2 });
-  return hex;
-}
-function stringToHex(value_, opts = {}) {
-  const value = encoder.encode(value_);
-  return bytesToHex(value, opts);
-}
-var hexes, encoder;
-var init_toHex = __esm({
-  "../../node_modules/viem/_esm/utils/encoding/toHex.js"() {
-    "use strict";
-    init_encoding();
-    init_pad();
-    init_fromHex();
-    hexes = /* @__PURE__ */ Array.from({ length: 256 }, (_v, i) => i.toString(16).padStart(2, "0"));
-    encoder = /* @__PURE__ */ new TextEncoder();
-  }
-});
-
-// ../../node_modules/viem/_esm/utils/encoding/toBytes.js
-function toBytes(value, opts = {}) {
-  if (typeof value === "number" || typeof value === "bigint")
-    return numberToBytes(value, opts);
-  if (typeof value === "boolean")
-    return boolToBytes(value, opts);
-  if (isHex(value))
-    return hexToBytes(value, opts);
-  return stringToBytes(value, opts);
-}
-function boolToBytes(value, opts = {}) {
-  const bytes = new Uint8Array(1);
-  bytes[0] = Number(value);
-  if (typeof opts.size === "number") {
-    assertSize(bytes, { size: opts.size });
-    return pad(bytes, { size: opts.size });
-  }
-  return bytes;
-}
-function charCodeToBase16(char) {
-  if (char >= charCodeMap.zero && char <= charCodeMap.nine)
-    return char - charCodeMap.zero;
-  if (char >= charCodeMap.A && char <= charCodeMap.F)
-    return char - (charCodeMap.A - 10);
-  if (char >= charCodeMap.a && char <= charCodeMap.f)
-    return char - (charCodeMap.a - 10);
-  return void 0;
-}
-function hexToBytes(hex_, opts = {}) {
-  let hex = hex_;
-  if (opts.size) {
-    assertSize(hex, { size: opts.size });
-    hex = pad(hex, { dir: "right", size: opts.size });
-  }
-  let hexString = hex.slice(2);
-  if (hexString.length % 2)
-    hexString = `0${hexString}`;
-  const length4 = hexString.length / 2;
-  const bytes = new Uint8Array(length4);
-  for (let index = 0, j = 0; index < length4; index++) {
-    const nibbleLeft = charCodeToBase16(hexString.charCodeAt(j++));
-    const nibbleRight = charCodeToBase16(hexString.charCodeAt(j++));
-    if (nibbleLeft === void 0 || nibbleRight === void 0) {
-      throw new BaseError(`Invalid byte sequence ("${hexString[j - 2]}${hexString[j - 1]}" in "${hexString}").`);
-    }
-    bytes[index] = nibbleLeft * 16 + nibbleRight;
-  }
-  return bytes;
-}
-function numberToBytes(value, opts) {
-  const hex = numberToHex(value, opts);
-  return hexToBytes(hex);
-}
-function stringToBytes(value, opts = {}) {
-  const bytes = encoder2.encode(value);
-  if (typeof opts.size === "number") {
-    assertSize(bytes, { size: opts.size });
-    return pad(bytes, { dir: "right", size: opts.size });
-  }
-  return bytes;
-}
-var encoder2, charCodeMap;
-var init_toBytes = __esm({
-  "../../node_modules/viem/_esm/utils/encoding/toBytes.js"() {
-    "use strict";
-    init_base();
-    init_isHex();
-    init_pad();
-    init_fromHex();
-    init_toHex();
-    encoder2 = /* @__PURE__ */ new TextEncoder();
-    charCodeMap = {
-      zero: 48,
-      nine: 57,
-      A: 65,
-      F: 70,
-      a: 97,
-      f: 102
-    };
-  }
-});
-
-// ../../node_modules/@noble/hashes/esm/_u64.js
-function fromBig(n, le = false) {
-  if (le)
-    return { h: Number(n & U32_MASK64), l: Number(n >> _32n & U32_MASK64) };
-  return { h: Number(n >> _32n & U32_MASK64) | 0, l: Number(n & U32_MASK64) | 0 };
-}
-function split(lst, le = false) {
-  const len = lst.length;
-  let Ah = new Uint32Array(len);
-  let Al = new Uint32Array(len);
-  for (let i = 0; i < len; i++) {
-    const { h, l } = fromBig(lst[i], le);
-    [Ah[i], Al[i]] = [h, l];
-  }
-  return [Ah, Al];
-}
-function add(Ah, Al, Bh, Bl) {
-  const l = (Al >>> 0) + (Bl >>> 0);
-  return { h: Ah + Bh + (l / 2 ** 32 | 0) | 0, l: l | 0 };
-}
-var U32_MASK64, _32n, shrSH, shrSL, rotrSH, rotrSL, rotrBH, rotrBL, rotlSH, rotlSL, rotlBH, rotlBL, add3L, add3H, add4L, add4H, add5L, add5H;
-var init_u64 = __esm({
-  "../../node_modules/@noble/hashes/esm/_u64.js"() {
-    "use strict";
-    U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
-    _32n = /* @__PURE__ */ BigInt(32);
-    shrSH = (h, _l, s) => h >>> s;
-    shrSL = (h, l, s) => h << 32 - s | l >>> s;
-    rotrSH = (h, l, s) => h >>> s | l << 32 - s;
-    rotrSL = (h, l, s) => h << 32 - s | l >>> s;
-    rotrBH = (h, l, s) => h << 64 - s | l >>> s - 32;
-    rotrBL = (h, l, s) => h >>> s - 32 | l << 64 - s;
-    rotlSH = (h, l, s) => h << s | l >>> 32 - s;
-    rotlSL = (h, l, s) => l << s | h >>> 32 - s;
-    rotlBH = (h, l, s) => l << s - 32 | h >>> 64 - s;
-    rotlBL = (h, l, s) => h << s - 32 | l >>> 64 - s;
-    add3L = (Al, Bl, Cl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0);
-    add3H = (low, Ah, Bh, Ch) => Ah + Bh + Ch + (low / 2 ** 32 | 0) | 0;
-    add4L = (Al, Bl, Cl, Dl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0);
-    add4H = (low, Ah, Bh, Ch, Dh) => Ah + Bh + Ch + Dh + (low / 2 ** 32 | 0) | 0;
-    add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0) + (El >>> 0);
-    add5H = (low, Ah, Bh, Ch, Dh, Eh) => Ah + Bh + Ch + Dh + Eh + (low / 2 ** 32 | 0) | 0;
-  }
-});
-
 // ../../node_modules/@noble/hashes/esm/cryptoNode.js
 import * as nc from "crypto";
 var crypto2;
@@ -4999,13 +4554,13 @@ function byteSwap32(arr) {
   }
   return arr;
 }
-function bytesToHex2(bytes) {
+function bytesToHex(bytes) {
   abytes(bytes);
   if (hasHexBuiltin)
     return bytes.toHex();
   let hex = "";
   for (let i = 0; i < bytes.length; i++) {
-    hex += hexes2[bytes[i]];
+    hex += hexes[bytes[i]];
   }
   return hex;
 }
@@ -5018,7 +4573,7 @@ function asciiToBase16(ch) {
     return ch - (asciis.a - 10);
   return;
 }
-function hexToBytes2(hex) {
+function hexToBytes(hex) {
   if (typeof hex !== "string")
     throw new Error("hex string expected, got " + typeof hex);
   if (hasHexBuiltin)
@@ -5044,7 +4599,7 @@ function utf8ToBytes(str) {
     throw new Error("string expected");
   return new Uint8Array(new TextEncoder().encode(str));
 }
-function toBytes2(data) {
+function toBytes(data) {
   if (typeof data === "string")
     data = utf8ToBytes(data);
   abytes(data);
@@ -5066,7 +4621,7 @@ function concatBytes(...arrays) {
   return res;
 }
 function createHasher(hashCons) {
-  const hashC = (msg) => hashCons().update(toBytes2(msg)).digest();
+  const hashC = (msg) => hashCons().update(toBytes(msg)).digest();
   const tmp = hashCons();
   hashC.outputLen = tmp.outputLen;
   hashC.blockLen = tmp.blockLen;
@@ -5082,7 +4637,7 @@ function randomBytes(bytesLength = 32) {
   }
   throw new Error("crypto.getRandomValues must be defined");
 }
-var isLE, swap32IfBE, hasHexBuiltin, hexes2, asciis, Hash;
+var isLE, swap32IfBE, hasHexBuiltin, hexes, asciis, Hash;
 var init_utils = __esm({
   "../../node_modules/@noble/hashes/esm/utils.js"() {
     "use strict";
@@ -5093,381 +4648,10 @@ var init_utils = __esm({
       // @ts-ignore
       typeof Uint8Array.from([]).toHex === "function" && typeof Uint8Array.fromHex === "function"
     ))();
-    hexes2 = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+    hexes = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
     asciis = { _0: 48, _9: 57, A: 65, F: 70, a: 97, f: 102 };
     Hash = class {
     };
-  }
-});
-
-// ../../node_modules/@noble/hashes/esm/sha3.js
-function keccakP(s, rounds = 24) {
-  const B = new Uint32Array(5 * 2);
-  for (let round = 24 - rounds; round < 24; round++) {
-    for (let x = 0; x < 10; x++)
-      B[x] = s[x] ^ s[x + 10] ^ s[x + 20] ^ s[x + 30] ^ s[x + 40];
-    for (let x = 0; x < 10; x += 2) {
-      const idx1 = (x + 8) % 10;
-      const idx0 = (x + 2) % 10;
-      const B0 = B[idx0];
-      const B1 = B[idx0 + 1];
-      const Th = rotlH(B0, B1, 1) ^ B[idx1];
-      const Tl = rotlL(B0, B1, 1) ^ B[idx1 + 1];
-      for (let y = 0; y < 50; y += 10) {
-        s[x + y] ^= Th;
-        s[x + y + 1] ^= Tl;
-      }
-    }
-    let curH = s[2];
-    let curL = s[3];
-    for (let t = 0; t < 24; t++) {
-      const shift = SHA3_ROTL[t];
-      const Th = rotlH(curH, curL, shift);
-      const Tl = rotlL(curH, curL, shift);
-      const PI = SHA3_PI[t];
-      curH = s[PI];
-      curL = s[PI + 1];
-      s[PI] = Th;
-      s[PI + 1] = Tl;
-    }
-    for (let y = 0; y < 50; y += 10) {
-      for (let x = 0; x < 10; x++)
-        B[x] = s[y + x];
-      for (let x = 0; x < 10; x++)
-        s[y + x] ^= ~B[(x + 2) % 10] & B[(x + 4) % 10];
-    }
-    s[0] ^= SHA3_IOTA_H[round];
-    s[1] ^= SHA3_IOTA_L[round];
-  }
-  clean(B);
-}
-var _0n, _1n, _2n, _7n, _256n, _0x71n, SHA3_PI, SHA3_ROTL, _SHA3_IOTA, IOTAS, SHA3_IOTA_H, SHA3_IOTA_L, rotlH, rotlL, Keccak, gen, keccak_256;
-var init_sha3 = __esm({
-  "../../node_modules/@noble/hashes/esm/sha3.js"() {
-    "use strict";
-    init_u64();
-    init_utils();
-    _0n = BigInt(0);
-    _1n = BigInt(1);
-    _2n = BigInt(2);
-    _7n = BigInt(7);
-    _256n = BigInt(256);
-    _0x71n = BigInt(113);
-    SHA3_PI = [];
-    SHA3_ROTL = [];
-    _SHA3_IOTA = [];
-    for (let round = 0, R = _1n, x = 1, y = 0; round < 24; round++) {
-      [x, y] = [y, (2 * x + 3 * y) % 5];
-      SHA3_PI.push(2 * (5 * y + x));
-      SHA3_ROTL.push((round + 1) * (round + 2) / 2 % 64);
-      let t = _0n;
-      for (let j = 0; j < 7; j++) {
-        R = (R << _1n ^ (R >> _7n) * _0x71n) % _256n;
-        if (R & _2n)
-          t ^= _1n << (_1n << /* @__PURE__ */ BigInt(j)) - _1n;
-      }
-      _SHA3_IOTA.push(t);
-    }
-    IOTAS = split(_SHA3_IOTA, true);
-    SHA3_IOTA_H = IOTAS[0];
-    SHA3_IOTA_L = IOTAS[1];
-    rotlH = (h, l, s) => s > 32 ? rotlBH(h, l, s) : rotlSH(h, l, s);
-    rotlL = (h, l, s) => s > 32 ? rotlBL(h, l, s) : rotlSL(h, l, s);
-    Keccak = class _Keccak extends Hash {
-      // NOTE: we accept arguments in bytes instead of bits here.
-      constructor(blockLen, suffix, outputLen, enableXOF = false, rounds = 24) {
-        super();
-        this.pos = 0;
-        this.posOut = 0;
-        this.finished = false;
-        this.destroyed = false;
-        this.enableXOF = false;
-        this.blockLen = blockLen;
-        this.suffix = suffix;
-        this.outputLen = outputLen;
-        this.enableXOF = enableXOF;
-        this.rounds = rounds;
-        anumber(outputLen);
-        if (!(0 < blockLen && blockLen < 200))
-          throw new Error("only keccak-f1600 function is supported");
-        this.state = new Uint8Array(200);
-        this.state32 = u32(this.state);
-      }
-      clone() {
-        return this._cloneInto();
-      }
-      keccak() {
-        swap32IfBE(this.state32);
-        keccakP(this.state32, this.rounds);
-        swap32IfBE(this.state32);
-        this.posOut = 0;
-        this.pos = 0;
-      }
-      update(data) {
-        aexists(this);
-        data = toBytes2(data);
-        abytes(data);
-        const { blockLen, state } = this;
-        const len = data.length;
-        for (let pos = 0; pos < len; ) {
-          const take = Math.min(blockLen - this.pos, len - pos);
-          for (let i = 0; i < take; i++)
-            state[this.pos++] ^= data[pos++];
-          if (this.pos === blockLen)
-            this.keccak();
-        }
-        return this;
-      }
-      finish() {
-        if (this.finished)
-          return;
-        this.finished = true;
-        const { state, suffix, pos, blockLen } = this;
-        state[pos] ^= suffix;
-        if ((suffix & 128) !== 0 && pos === blockLen - 1)
-          this.keccak();
-        state[blockLen - 1] ^= 128;
-        this.keccak();
-      }
-      writeInto(out) {
-        aexists(this, false);
-        abytes(out);
-        this.finish();
-        const bufferOut = this.state;
-        const { blockLen } = this;
-        for (let pos = 0, len = out.length; pos < len; ) {
-          if (this.posOut >= blockLen)
-            this.keccak();
-          const take = Math.min(blockLen - this.posOut, len - pos);
-          out.set(bufferOut.subarray(this.posOut, this.posOut + take), pos);
-          this.posOut += take;
-          pos += take;
-        }
-        return out;
-      }
-      xofInto(out) {
-        if (!this.enableXOF)
-          throw new Error("XOF is not possible for this instance");
-        return this.writeInto(out);
-      }
-      xof(bytes) {
-        anumber(bytes);
-        return this.xofInto(new Uint8Array(bytes));
-      }
-      digestInto(out) {
-        aoutput(out, this);
-        if (this.finished)
-          throw new Error("digest() was already called");
-        this.writeInto(out);
-        this.destroy();
-        return out;
-      }
-      digest() {
-        return this.digestInto(new Uint8Array(this.outputLen));
-      }
-      destroy() {
-        this.destroyed = true;
-        clean(this.state);
-      }
-      _cloneInto(to) {
-        const { blockLen, suffix, outputLen, rounds, enableXOF } = this;
-        to || (to = new _Keccak(blockLen, suffix, outputLen, enableXOF, rounds));
-        to.state32.set(this.state32);
-        to.pos = this.pos;
-        to.posOut = this.posOut;
-        to.finished = this.finished;
-        to.rounds = rounds;
-        to.suffix = suffix;
-        to.outputLen = outputLen;
-        to.enableXOF = enableXOF;
-        to.destroyed = this.destroyed;
-        return to;
-      }
-    };
-    gen = (suffix, blockLen, outputLen) => createHasher(() => new Keccak(blockLen, suffix, outputLen));
-    keccak_256 = /* @__PURE__ */ (() => gen(1, 136, 256 / 8))();
-  }
-});
-
-// ../../node_modules/viem/_esm/utils/hash/keccak256.js
-function keccak256(value, to_) {
-  const to = to_ || "hex";
-  const bytes = keccak_256(isHex(value, { strict: false }) ? toBytes(value) : value);
-  if (to === "bytes")
-    return bytes;
-  return toHex(bytes);
-}
-var init_keccak256 = __esm({
-  "../../node_modules/viem/_esm/utils/hash/keccak256.js"() {
-    "use strict";
-    init_sha3();
-    init_isHex();
-    init_toBytes();
-    init_toHex();
-  }
-});
-
-// ../../node_modules/viem/_esm/errors/address.js
-var InvalidAddressError;
-var init_address = __esm({
-  "../../node_modules/viem/_esm/errors/address.js"() {
-    "use strict";
-    init_base();
-    InvalidAddressError = class extends BaseError {
-      constructor({ address }) {
-        super(`Address "${address}" is invalid.`, {
-          metaMessages: [
-            "- Address must be a hex value of 20 bytes (40 hex characters).",
-            "- Address must match its checksum counterpart."
-          ],
-          name: "InvalidAddressError"
-        });
-      }
-    };
-  }
-});
-
-// ../../node_modules/viem/_esm/utils/lru.js
-var LruMap;
-var init_lru = __esm({
-  "../../node_modules/viem/_esm/utils/lru.js"() {
-    "use strict";
-    LruMap = class extends Map {
-      constructor(size2) {
-        super();
-        Object.defineProperty(this, "maxSize", {
-          enumerable: true,
-          configurable: true,
-          writable: true,
-          value: void 0
-        });
-        this.maxSize = size2;
-      }
-      get(key) {
-        const value = super.get(key);
-        if (super.has(key) && value !== void 0) {
-          this.delete(key);
-          super.set(key, value);
-        }
-        return value;
-      }
-      set(key, value) {
-        super.set(key, value);
-        if (this.maxSize && this.size > this.maxSize) {
-          const firstKey = this.keys().next().value;
-          if (firstKey)
-            this.delete(firstKey);
-        }
-        return this;
-      }
-    };
-  }
-});
-
-// ../../node_modules/viem/_esm/utils/address/getAddress.js
-function checksumAddress(address_, chainId) {
-  if (checksumAddressCache.has(`${address_}.${chainId}`))
-    return checksumAddressCache.get(`${address_}.${chainId}`);
-  const hexAddress = chainId ? `${chainId}${address_.toLowerCase()}` : address_.substring(2).toLowerCase();
-  const hash = keccak256(stringToBytes(hexAddress), "bytes");
-  const address = (chainId ? hexAddress.substring(`${chainId}0x`.length) : hexAddress).split("");
-  for (let i = 0; i < 40; i += 2) {
-    if (hash[i >> 1] >> 4 >= 8 && address[i]) {
-      address[i] = address[i].toUpperCase();
-    }
-    if ((hash[i >> 1] & 15) >= 8 && address[i + 1]) {
-      address[i + 1] = address[i + 1].toUpperCase();
-    }
-  }
-  const result = `0x${address.join("")}`;
-  checksumAddressCache.set(`${address_}.${chainId}`, result);
-  return result;
-}
-function getAddress(address, chainId) {
-  if (!isAddress(address, { strict: false }))
-    throw new InvalidAddressError({ address });
-  return checksumAddress(address, chainId);
-}
-var checksumAddressCache;
-var init_getAddress = __esm({
-  "../../node_modules/viem/_esm/utils/address/getAddress.js"() {
-    "use strict";
-    init_address();
-    init_toBytes();
-    init_keccak256();
-    init_lru();
-    init_isAddress();
-    checksumAddressCache = /* @__PURE__ */ new LruMap(8192);
-  }
-});
-
-// ../../node_modules/viem/_esm/utils/address/isAddress.js
-function isAddress(address, options) {
-  const { strict = true } = options ?? {};
-  const cacheKey2 = `${address}.${strict}`;
-  if (isAddressCache.has(cacheKey2))
-    return isAddressCache.get(cacheKey2);
-  const result = (() => {
-    if (!addressRegex.test(address))
-      return false;
-    if (address.toLowerCase() === address)
-      return true;
-    if (strict)
-      return checksumAddress(address) === address;
-    return true;
-  })();
-  isAddressCache.set(cacheKey2, result);
-  return result;
-}
-var addressRegex, isAddressCache;
-var init_isAddress = __esm({
-  "../../node_modules/viem/_esm/utils/address/isAddress.js"() {
-    "use strict";
-    init_lru();
-    init_getAddress();
-    addressRegex = /^0x[a-fA-F0-9]{40}$/;
-    isAddressCache = /* @__PURE__ */ new LruMap(8192);
-  }
-});
-
-// ../../node_modules/viem/_esm/utils/data/concat.js
-function concat(values) {
-  if (typeof values[0] === "string")
-    return concatHex(values);
-  return concatBytes2(values);
-}
-function concatBytes2(values) {
-  let length4 = 0;
-  for (const arr of values) {
-    length4 += arr.length;
-  }
-  const result = new Uint8Array(length4);
-  let offset = 0;
-  for (const arr of values) {
-    result.set(arr, offset);
-    offset += arr.length;
-  }
-  return result;
-}
-function concatHex(values) {
-  return `0x${values.reduce((acc, x) => acc + x.replace("0x", ""), "")}`;
-}
-var init_concat = __esm({
-  "../../node_modules/viem/_esm/utils/data/concat.js"() {
-    "use strict";
-  }
-});
-
-// ../../node_modules/viem/_esm/accounts/utils/publicKeyToAddress.js
-function publicKeyToAddress(publicKey) {
-  const address = keccak256(`0x${publicKey.substring(4)}`).substring(26);
-  return checksumAddress(`0x${address}`);
-}
-var init_publicKeyToAddress = __esm({
-  "../../node_modules/viem/_esm/accounts/utils/publicKeyToAddress.js"() {
-    "use strict";
-    init_getAddress();
-    init_keccak256();
   }
 });
 
@@ -5511,7 +4695,7 @@ var init_md = __esm({
       }
       update(data) {
         aexists(this);
-        data = toBytes2(data);
+        data = toBytes(data);
         abytes(data);
         const { view, buffer, blockLen } = this;
         const len = data.length;
@@ -5613,6 +4797,51 @@ var init_md = __esm({
       1541459225,
       327033209
     ]);
+  }
+});
+
+// ../../node_modules/@noble/hashes/esm/_u64.js
+function fromBig(n, le = false) {
+  if (le)
+    return { h: Number(n & U32_MASK64), l: Number(n >> _32n & U32_MASK64) };
+  return { h: Number(n >> _32n & U32_MASK64) | 0, l: Number(n & U32_MASK64) | 0 };
+}
+function split(lst, le = false) {
+  const len = lst.length;
+  let Ah = new Uint32Array(len);
+  let Al = new Uint32Array(len);
+  for (let i = 0; i < len; i++) {
+    const { h, l } = fromBig(lst[i], le);
+    [Ah[i], Al[i]] = [h, l];
+  }
+  return [Ah, Al];
+}
+function add(Ah, Al, Bh, Bl) {
+  const l = (Al >>> 0) + (Bl >>> 0);
+  return { h: Ah + Bh + (l / 2 ** 32 | 0) | 0, l: l | 0 };
+}
+var U32_MASK64, _32n, shrSH, shrSL, rotrSH, rotrSL, rotrBH, rotrBL, rotlSH, rotlSL, rotlBH, rotlBL, add3L, add3H, add4L, add4H, add5L, add5H;
+var init_u64 = __esm({
+  "../../node_modules/@noble/hashes/esm/_u64.js"() {
+    "use strict";
+    U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
+    _32n = /* @__PURE__ */ BigInt(32);
+    shrSH = (h, _l, s) => h >>> s;
+    shrSL = (h, l, s) => h << 32 - s | l >>> s;
+    rotrSH = (h, l, s) => h >>> s | l << 32 - s;
+    rotrSL = (h, l, s) => h << 32 - s | l >>> s;
+    rotrBH = (h, l, s) => h << 64 - s | l >>> s - 32;
+    rotrBL = (h, l, s) => h >>> s - 32 | l << 64 - s;
+    rotlSH = (h, l, s) => h << s | l >>> 32 - s;
+    rotlSL = (h, l, s) => l << s | h >>> 32 - s;
+    rotlBH = (h, l, s) => l << s - 32 | h >>> 64 - s;
+    rotlBL = (h, l, s) => h << s - 32 | l >>> 64 - s;
+    add3L = (Al, Bl, Cl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0);
+    add3H = (low, Ah, Bh, Ch) => Ah + Bh + Ch + (low / 2 ** 32 | 0) | 0;
+    add4L = (Al, Bl, Cl, Dl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0);
+    add4H = (low, Ah, Bh, Ch, Dh) => Ah + Bh + Ch + Dh + (low / 2 ** 32 | 0) | 0;
+    add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0) + (El >>> 0);
+    add5H = (low, Ah, Bh, Ch, Dh, Eh) => Ah + Bh + Ch + Dh + Eh + (low / 2 ** 32 | 0) | 0;
   }
 });
 
@@ -5963,6 +5192,2297 @@ var init_sha2 = __esm({
   }
 });
 
+// ../../node_modules/@noble/curves/esm/utils.js
+function _abool2(value, title = "") {
+  if (typeof value !== "boolean") {
+    const prefix = title && `"${title}"`;
+    throw new Error(prefix + "expected boolean, got type=" + typeof value);
+  }
+  return value;
+}
+function _abytes2(value, length4, title = "") {
+  const bytes = isBytes(value);
+  const len = value?.length;
+  const needsLen = length4 !== void 0;
+  if (!bytes || needsLen && len !== length4) {
+    const prefix = title && `"${title}" `;
+    const ofLen = needsLen ? ` of length ${length4}` : "";
+    const got = bytes ? `length=${len}` : `type=${typeof value}`;
+    throw new Error(prefix + "expected Uint8Array" + ofLen + ", got " + got);
+  }
+  return value;
+}
+function hexToNumber(hex) {
+  if (typeof hex !== "string")
+    throw new Error("hex string expected, got " + typeof hex);
+  return hex === "" ? _0n : BigInt("0x" + hex);
+}
+function bytesToNumberBE(bytes) {
+  return hexToNumber(bytesToHex(bytes));
+}
+function bytesToNumberLE(bytes) {
+  abytes(bytes);
+  return hexToNumber(bytesToHex(Uint8Array.from(bytes).reverse()));
+}
+function numberToBytesBE(n, len) {
+  return hexToBytes(n.toString(16).padStart(len * 2, "0"));
+}
+function numberToBytesLE(n, len) {
+  return numberToBytesBE(n, len).reverse();
+}
+function ensureBytes(title, hex, expectedLength) {
+  let res;
+  if (typeof hex === "string") {
+    try {
+      res = hexToBytes(hex);
+    } catch (e) {
+      throw new Error(title + " must be hex string or Uint8Array, cause: " + e);
+    }
+  } else if (isBytes(hex)) {
+    res = Uint8Array.from(hex);
+  } else {
+    throw new Error(title + " must be hex string or Uint8Array");
+  }
+  const len = res.length;
+  if (typeof expectedLength === "number" && len !== expectedLength)
+    throw new Error(title + " of length " + expectedLength + " expected, got " + len);
+  return res;
+}
+function equalBytes(a, b) {
+  if (a.length !== b.length)
+    return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++)
+    diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+function copyBytes(bytes) {
+  return Uint8Array.from(bytes);
+}
+function inRange(n, min, max) {
+  return isPosBig(n) && isPosBig(min) && isPosBig(max) && min <= n && n < max;
+}
+function aInRange(title, n, min, max) {
+  if (!inRange(n, min, max))
+    throw new Error("expected valid " + title + ": " + min + " <= n < " + max + ", got " + n);
+}
+function bitLen(n) {
+  let len;
+  for (len = 0; n > _0n; n >>= _1n, len += 1)
+    ;
+  return len;
+}
+function _validateObject(object, fields, optFields = {}) {
+  if (!object || typeof object !== "object")
+    throw new Error("expected valid options object");
+  function checkField(fieldName, expectedType, isOpt) {
+    const val = object[fieldName];
+    if (isOpt && val === void 0)
+      return;
+    const current = typeof val;
+    if (current !== expectedType || val === null)
+      throw new Error(`param "${fieldName}" is invalid: expected ${expectedType}, got ${current}`);
+  }
+  Object.entries(fields).forEach(([k, v]) => checkField(k, v, false));
+  Object.entries(optFields).forEach(([k, v]) => checkField(k, v, true));
+}
+function memoized(fn) {
+  const map = /* @__PURE__ */ new WeakMap();
+  return (arg, ...args) => {
+    const val = map.get(arg);
+    if (val !== void 0)
+      return val;
+    const computed = fn(arg, ...args);
+    map.set(arg, computed);
+    return computed;
+  };
+}
+var _0n, _1n, isPosBig, bitMask, notImplemented;
+var init_utils2 = __esm({
+  "../../node_modules/@noble/curves/esm/utils.js"() {
+    "use strict";
+    init_utils();
+    init_utils();
+    _0n = /* @__PURE__ */ BigInt(0);
+    _1n = /* @__PURE__ */ BigInt(1);
+    isPosBig = (n) => typeof n === "bigint" && _0n <= n;
+    bitMask = (n) => (_1n << BigInt(n)) - _1n;
+    notImplemented = () => {
+      throw new Error("not implemented");
+    };
+  }
+});
+
+// ../../node_modules/@noble/curves/esm/abstract/modular.js
+function mod(a, b) {
+  const result = a % b;
+  return result >= _0n2 ? result : b + result;
+}
+function pow2(x, power, modulo) {
+  let res = x;
+  while (power-- > _0n2) {
+    res *= res;
+    res %= modulo;
+  }
+  return res;
+}
+function invert(number, modulo) {
+  if (number === _0n2)
+    throw new Error("invert: expected non-zero number");
+  if (modulo <= _0n2)
+    throw new Error("invert: expected positive modulus, got " + modulo);
+  let a = mod(number, modulo);
+  let b = modulo;
+  let x = _0n2, y = _1n2, u = _1n2, v = _0n2;
+  while (a !== _0n2) {
+    const q = b / a;
+    const r = b % a;
+    const m = x - u * q;
+    const n = y - v * q;
+    b = a, a = r, x = u, y = v, u = m, v = n;
+  }
+  const gcd = b;
+  if (gcd !== _1n2)
+    throw new Error("invert: does not exist");
+  return mod(x, modulo);
+}
+function assertIsSquare(Fp2, root, n) {
+  if (!Fp2.eql(Fp2.sqr(root), n))
+    throw new Error("Cannot find square root");
+}
+function sqrt3mod4(Fp2, n) {
+  const p1div4 = (Fp2.ORDER + _1n2) / _4n;
+  const root = Fp2.pow(n, p1div4);
+  assertIsSquare(Fp2, root, n);
+  return root;
+}
+function sqrt5mod8(Fp2, n) {
+  const p5div8 = (Fp2.ORDER - _5n) / _8n;
+  const n2 = Fp2.mul(n, _2n);
+  const v = Fp2.pow(n2, p5div8);
+  const nv = Fp2.mul(n, v);
+  const i = Fp2.mul(Fp2.mul(nv, _2n), v);
+  const root = Fp2.mul(nv, Fp2.sub(i, Fp2.ONE));
+  assertIsSquare(Fp2, root, n);
+  return root;
+}
+function sqrt9mod16(P) {
+  const Fp_ = Field(P);
+  const tn = tonelliShanks(P);
+  const c1 = tn(Fp_, Fp_.neg(Fp_.ONE));
+  const c2 = tn(Fp_, c1);
+  const c3 = tn(Fp_, Fp_.neg(c1));
+  const c4 = (P + _7n) / _16n;
+  return (Fp2, n) => {
+    let tv1 = Fp2.pow(n, c4);
+    let tv2 = Fp2.mul(tv1, c1);
+    const tv3 = Fp2.mul(tv1, c2);
+    const tv4 = Fp2.mul(tv1, c3);
+    const e1 = Fp2.eql(Fp2.sqr(tv2), n);
+    const e2 = Fp2.eql(Fp2.sqr(tv3), n);
+    tv1 = Fp2.cmov(tv1, tv2, e1);
+    tv2 = Fp2.cmov(tv4, tv3, e2);
+    const e3 = Fp2.eql(Fp2.sqr(tv2), n);
+    const root = Fp2.cmov(tv1, tv2, e3);
+    assertIsSquare(Fp2, root, n);
+    return root;
+  };
+}
+function tonelliShanks(P) {
+  if (P < _3n)
+    throw new Error("sqrt is not defined for small field");
+  let Q = P - _1n2;
+  let S = 0;
+  while (Q % _2n === _0n2) {
+    Q /= _2n;
+    S++;
+  }
+  let Z = _2n;
+  const _Fp = Field(P);
+  while (FpLegendre(_Fp, Z) === 1) {
+    if (Z++ > 1e3)
+      throw new Error("Cannot find square root: probably non-prime P");
+  }
+  if (S === 1)
+    return sqrt3mod4;
+  let cc = _Fp.pow(Z, Q);
+  const Q1div2 = (Q + _1n2) / _2n;
+  return function tonelliSlow(Fp2, n) {
+    if (Fp2.is0(n))
+      return n;
+    if (FpLegendre(Fp2, n) !== 1)
+      throw new Error("Cannot find square root");
+    let M = S;
+    let c = Fp2.mul(Fp2.ONE, cc);
+    let t = Fp2.pow(n, Q);
+    let R = Fp2.pow(n, Q1div2);
+    while (!Fp2.eql(t, Fp2.ONE)) {
+      if (Fp2.is0(t))
+        return Fp2.ZERO;
+      let i = 1;
+      let t_tmp = Fp2.sqr(t);
+      while (!Fp2.eql(t_tmp, Fp2.ONE)) {
+        i++;
+        t_tmp = Fp2.sqr(t_tmp);
+        if (i === M)
+          throw new Error("Cannot find square root");
+      }
+      const exponent = _1n2 << BigInt(M - i - 1);
+      const b = Fp2.pow(c, exponent);
+      M = i;
+      c = Fp2.sqr(b);
+      t = Fp2.mul(t, c);
+      R = Fp2.mul(R, b);
+    }
+    return R;
+  };
+}
+function FpSqrt(P) {
+  if (P % _4n === _3n)
+    return sqrt3mod4;
+  if (P % _8n === _5n)
+    return sqrt5mod8;
+  if (P % _16n === _9n)
+    return sqrt9mod16(P);
+  return tonelliShanks(P);
+}
+function validateField(field) {
+  const initial = {
+    ORDER: "bigint",
+    MASK: "bigint",
+    BYTES: "number",
+    BITS: "number"
+  };
+  const opts = FIELD_FIELDS.reduce((map, val) => {
+    map[val] = "function";
+    return map;
+  }, initial);
+  _validateObject(field, opts);
+  return field;
+}
+function FpPow(Fp2, num2, power) {
+  if (power < _0n2)
+    throw new Error("invalid exponent, negatives unsupported");
+  if (power === _0n2)
+    return Fp2.ONE;
+  if (power === _1n2)
+    return num2;
+  let p = Fp2.ONE;
+  let d = num2;
+  while (power > _0n2) {
+    if (power & _1n2)
+      p = Fp2.mul(p, d);
+    d = Fp2.sqr(d);
+    power >>= _1n2;
+  }
+  return p;
+}
+function FpInvertBatch(Fp2, nums, passZero = false) {
+  const inverted = new Array(nums.length).fill(passZero ? Fp2.ZERO : void 0);
+  const multipliedAcc = nums.reduce((acc, num2, i) => {
+    if (Fp2.is0(num2))
+      return acc;
+    inverted[i] = acc;
+    return Fp2.mul(acc, num2);
+  }, Fp2.ONE);
+  const invertedAcc = Fp2.inv(multipliedAcc);
+  nums.reduceRight((acc, num2, i) => {
+    if (Fp2.is0(num2))
+      return acc;
+    inverted[i] = Fp2.mul(acc, inverted[i]);
+    return Fp2.mul(acc, num2);
+  }, invertedAcc);
+  return inverted;
+}
+function FpLegendre(Fp2, n) {
+  const p1mod2 = (Fp2.ORDER - _1n2) / _2n;
+  const powered = Fp2.pow(n, p1mod2);
+  const yes = Fp2.eql(powered, Fp2.ONE);
+  const zero = Fp2.eql(powered, Fp2.ZERO);
+  const no = Fp2.eql(powered, Fp2.neg(Fp2.ONE));
+  if (!yes && !zero && !no)
+    throw new Error("invalid Legendre symbol result");
+  return yes ? 1 : zero ? 0 : -1;
+}
+function nLength(n, nBitLength) {
+  if (nBitLength !== void 0)
+    anumber(nBitLength);
+  const _nBitLength = nBitLength !== void 0 ? nBitLength : n.toString(2).length;
+  const nByteLength = Math.ceil(_nBitLength / 8);
+  return { nBitLength: _nBitLength, nByteLength };
+}
+function Field(ORDER, bitLenOrOpts, isLE2 = false, opts = {}) {
+  if (ORDER <= _0n2)
+    throw new Error("invalid field: expected ORDER > 0, got " + ORDER);
+  let _nbitLength = void 0;
+  let _sqrt = void 0;
+  let modFromBytes = false;
+  let allowedLengths = void 0;
+  if (typeof bitLenOrOpts === "object" && bitLenOrOpts != null) {
+    if (opts.sqrt || isLE2)
+      throw new Error("cannot specify opts in two arguments");
+    const _opts = bitLenOrOpts;
+    if (_opts.BITS)
+      _nbitLength = _opts.BITS;
+    if (_opts.sqrt)
+      _sqrt = _opts.sqrt;
+    if (typeof _opts.isLE === "boolean")
+      isLE2 = _opts.isLE;
+    if (typeof _opts.modFromBytes === "boolean")
+      modFromBytes = _opts.modFromBytes;
+    allowedLengths = _opts.allowedLengths;
+  } else {
+    if (typeof bitLenOrOpts === "number")
+      _nbitLength = bitLenOrOpts;
+    if (opts.sqrt)
+      _sqrt = opts.sqrt;
+  }
+  const { nBitLength: BITS, nByteLength: BYTES } = nLength(ORDER, _nbitLength);
+  if (BYTES > 2048)
+    throw new Error("invalid field: expected ORDER of <= 2048 bytes");
+  let sqrtP;
+  const f = Object.freeze({
+    ORDER,
+    isLE: isLE2,
+    BITS,
+    BYTES,
+    MASK: bitMask(BITS),
+    ZERO: _0n2,
+    ONE: _1n2,
+    allowedLengths,
+    create: (num2) => mod(num2, ORDER),
+    isValid: (num2) => {
+      if (typeof num2 !== "bigint")
+        throw new Error("invalid field element: expected bigint, got " + typeof num2);
+      return _0n2 <= num2 && num2 < ORDER;
+    },
+    is0: (num2) => num2 === _0n2,
+    // is valid and invertible
+    isValidNot0: (num2) => !f.is0(num2) && f.isValid(num2),
+    isOdd: (num2) => (num2 & _1n2) === _1n2,
+    neg: (num2) => mod(-num2, ORDER),
+    eql: (lhs, rhs) => lhs === rhs,
+    sqr: (num2) => mod(num2 * num2, ORDER),
+    add: (lhs, rhs) => mod(lhs + rhs, ORDER),
+    sub: (lhs, rhs) => mod(lhs - rhs, ORDER),
+    mul: (lhs, rhs) => mod(lhs * rhs, ORDER),
+    pow: (num2, power) => FpPow(f, num2, power),
+    div: (lhs, rhs) => mod(lhs * invert(rhs, ORDER), ORDER),
+    // Same as above, but doesn't normalize
+    sqrN: (num2) => num2 * num2,
+    addN: (lhs, rhs) => lhs + rhs,
+    subN: (lhs, rhs) => lhs - rhs,
+    mulN: (lhs, rhs) => lhs * rhs,
+    inv: (num2) => invert(num2, ORDER),
+    sqrt: _sqrt || ((n) => {
+      if (!sqrtP)
+        sqrtP = FpSqrt(ORDER);
+      return sqrtP(f, n);
+    }),
+    toBytes: (num2) => isLE2 ? numberToBytesLE(num2, BYTES) : numberToBytesBE(num2, BYTES),
+    fromBytes: (bytes, skipValidation = true) => {
+      if (allowedLengths) {
+        if (!allowedLengths.includes(bytes.length) || bytes.length > BYTES) {
+          throw new Error("Field.fromBytes: expected " + allowedLengths + " bytes, got " + bytes.length);
+        }
+        const padded = new Uint8Array(BYTES);
+        padded.set(bytes, isLE2 ? 0 : padded.length - bytes.length);
+        bytes = padded;
+      }
+      if (bytes.length !== BYTES)
+        throw new Error("Field.fromBytes: expected " + BYTES + " bytes, got " + bytes.length);
+      let scalar = isLE2 ? bytesToNumberLE(bytes) : bytesToNumberBE(bytes);
+      if (modFromBytes)
+        scalar = mod(scalar, ORDER);
+      if (!skipValidation) {
+        if (!f.isValid(scalar))
+          throw new Error("invalid field element: outside of range 0..ORDER");
+      }
+      return scalar;
+    },
+    // TODO: we don't need it here, move out to separate fn
+    invertBatch: (lst) => FpInvertBatch(f, lst),
+    // We can't move this out because Fp6, Fp12 implement it
+    // and it's unclear what to return in there.
+    cmov: (a, b, c) => c ? b : a
+  });
+  return Object.freeze(f);
+}
+var _0n2, _1n2, _2n, _3n, _4n, _5n, _7n, _8n, _9n, _16n, isNegativeLE, FIELD_FIELDS;
+var init_modular = __esm({
+  "../../node_modules/@noble/curves/esm/abstract/modular.js"() {
+    "use strict";
+    init_utils2();
+    _0n2 = BigInt(0);
+    _1n2 = BigInt(1);
+    _2n = /* @__PURE__ */ BigInt(2);
+    _3n = /* @__PURE__ */ BigInt(3);
+    _4n = /* @__PURE__ */ BigInt(4);
+    _5n = /* @__PURE__ */ BigInt(5);
+    _7n = /* @__PURE__ */ BigInt(7);
+    _8n = /* @__PURE__ */ BigInt(8);
+    _9n = /* @__PURE__ */ BigInt(9);
+    _16n = /* @__PURE__ */ BigInt(16);
+    isNegativeLE = (num2, modulo) => (mod(num2, modulo) & _1n2) === _1n2;
+    FIELD_FIELDS = [
+      "create",
+      "isValid",
+      "is0",
+      "neg",
+      "inv",
+      "sqrt",
+      "sqr",
+      "eql",
+      "add",
+      "sub",
+      "mul",
+      "pow",
+      "div",
+      "addN",
+      "subN",
+      "mulN",
+      "sqrN"
+    ];
+  }
+});
+
+// ../../node_modules/@noble/curves/esm/abstract/curve.js
+function negateCt(condition, item) {
+  const neg = item.negate();
+  return condition ? neg : item;
+}
+function normalizeZ(c, points) {
+  const invertedZs = FpInvertBatch(c.Fp, points.map((p) => p.Z));
+  return points.map((p, i) => c.fromAffine(p.toAffine(invertedZs[i])));
+}
+function validateW(W, bits) {
+  if (!Number.isSafeInteger(W) || W <= 0 || W > bits)
+    throw new Error("invalid window size, expected [1.." + bits + "], got W=" + W);
+}
+function calcWOpts(W, scalarBits) {
+  validateW(W, scalarBits);
+  const windows = Math.ceil(scalarBits / W) + 1;
+  const windowSize = 2 ** (W - 1);
+  const maxNumber = 2 ** W;
+  const mask = bitMask(W);
+  const shiftBy = BigInt(W);
+  return { windows, windowSize, mask, maxNumber, shiftBy };
+}
+function calcOffsets(n, window, wOpts) {
+  const { windowSize, mask, maxNumber, shiftBy } = wOpts;
+  let wbits = Number(n & mask);
+  let nextN = n >> shiftBy;
+  if (wbits > windowSize) {
+    wbits -= maxNumber;
+    nextN += _1n3;
+  }
+  const offsetStart = window * windowSize;
+  const offset = offsetStart + Math.abs(wbits) - 1;
+  const isZero = wbits === 0;
+  const isNeg = wbits < 0;
+  const isNegF = window % 2 !== 0;
+  const offsetF = offsetStart;
+  return { nextN, offset, isZero, isNeg, isNegF, offsetF };
+}
+function validateMSMPoints(points, c) {
+  if (!Array.isArray(points))
+    throw new Error("array expected");
+  points.forEach((p, i) => {
+    if (!(p instanceof c))
+      throw new Error("invalid point at index " + i);
+  });
+}
+function validateMSMScalars(scalars, field) {
+  if (!Array.isArray(scalars))
+    throw new Error("array of scalars expected");
+  scalars.forEach((s, i) => {
+    if (!field.isValid(s))
+      throw new Error("invalid scalar at index " + i);
+  });
+}
+function getW(P) {
+  return pointWindowSizes.get(P) || 1;
+}
+function assert0(n) {
+  if (n !== _0n3)
+    throw new Error("invalid wNAF");
+}
+function pippenger(c, fieldN, points, scalars) {
+  validateMSMPoints(points, c);
+  validateMSMScalars(scalars, fieldN);
+  const plength = points.length;
+  const slength = scalars.length;
+  if (plength !== slength)
+    throw new Error("arrays of points and scalars must have equal length");
+  const zero = c.ZERO;
+  const wbits = bitLen(BigInt(plength));
+  let windowSize = 1;
+  if (wbits > 12)
+    windowSize = wbits - 3;
+  else if (wbits > 4)
+    windowSize = wbits - 2;
+  else if (wbits > 0)
+    windowSize = 2;
+  const MASK = bitMask(windowSize);
+  const buckets = new Array(Number(MASK) + 1).fill(zero);
+  const lastBits = Math.floor((fieldN.BITS - 1) / windowSize) * windowSize;
+  let sum = zero;
+  for (let i = lastBits; i >= 0; i -= windowSize) {
+    buckets.fill(zero);
+    for (let j = 0; j < slength; j++) {
+      const scalar = scalars[j];
+      const wbits2 = Number(scalar >> BigInt(i) & MASK);
+      buckets[wbits2] = buckets[wbits2].add(points[j]);
+    }
+    let resI = zero;
+    for (let j = buckets.length - 1, sumI = zero; j > 0; j--) {
+      sumI = sumI.add(buckets[j]);
+      resI = resI.add(sumI);
+    }
+    sum = sum.add(resI);
+    if (i !== 0)
+      for (let j = 0; j < windowSize; j++)
+        sum = sum.double();
+  }
+  return sum;
+}
+function createField(order, field, isLE2) {
+  if (field) {
+    if (field.ORDER !== order)
+      throw new Error("Field.ORDER must match order: Fp == p, Fn == n");
+    validateField(field);
+    return field;
+  } else {
+    return Field(order, { isLE: isLE2 });
+  }
+}
+function _createCurveFields(type, CURVE, curveOpts = {}, FpFnLE) {
+  if (FpFnLE === void 0)
+    FpFnLE = type === "edwards";
+  if (!CURVE || typeof CURVE !== "object")
+    throw new Error(`expected valid ${type} CURVE object`);
+  for (const p of ["p", "n", "h"]) {
+    const val = CURVE[p];
+    if (!(typeof val === "bigint" && val > _0n3))
+      throw new Error(`CURVE.${p} must be positive bigint`);
+  }
+  const Fp2 = createField(CURVE.p, curveOpts.Fp, FpFnLE);
+  const Fn2 = createField(CURVE.n, curveOpts.Fn, FpFnLE);
+  const _b = type === "weierstrass" ? "b" : "d";
+  const params = ["Gx", "Gy", "a", _b];
+  for (const p of params) {
+    if (!Fp2.isValid(CURVE[p]))
+      throw new Error(`CURVE.${p} must be valid field element of CURVE.Fp`);
+  }
+  CURVE = Object.freeze(Object.assign({}, CURVE));
+  return { CURVE, Fp: Fp2, Fn: Fn2 };
+}
+var _0n3, _1n3, pointPrecomputes, pointWindowSizes, wNAF;
+var init_curve = __esm({
+  "../../node_modules/@noble/curves/esm/abstract/curve.js"() {
+    "use strict";
+    init_utils2();
+    init_modular();
+    _0n3 = BigInt(0);
+    _1n3 = BigInt(1);
+    pointPrecomputes = /* @__PURE__ */ new WeakMap();
+    pointWindowSizes = /* @__PURE__ */ new WeakMap();
+    wNAF = class {
+      // Parametrized with a given Point class (not individual point)
+      constructor(Point2, bits) {
+        this.BASE = Point2.BASE;
+        this.ZERO = Point2.ZERO;
+        this.Fn = Point2.Fn;
+        this.bits = bits;
+      }
+      // non-const time multiplication ladder
+      _unsafeLadder(elm, n, p = this.ZERO) {
+        let d = elm;
+        while (n > _0n3) {
+          if (n & _1n3)
+            p = p.add(d);
+          d = d.double();
+          n >>= _1n3;
+        }
+        return p;
+      }
+      /**
+       * Creates a wNAF precomputation window. Used for caching.
+       * Default window size is set by `utils.precompute()` and is equal to 8.
+       * Number of precomputed points depends on the curve size:
+       * 2^(𝑊−1) * (Math.ceil(𝑛 / 𝑊) + 1), where:
+       * - 𝑊 is the window size
+       * - 𝑛 is the bitlength of the curve order.
+       * For a 256-bit curve and window size 8, the number of precomputed points is 128 * 33 = 4224.
+       * @param point Point instance
+       * @param W window size
+       * @returns precomputed point tables flattened to a single array
+       */
+      precomputeWindow(point, W) {
+        const { windows, windowSize } = calcWOpts(W, this.bits);
+        const points = [];
+        let p = point;
+        let base4 = p;
+        for (let window = 0; window < windows; window++) {
+          base4 = p;
+          points.push(base4);
+          for (let i = 1; i < windowSize; i++) {
+            base4 = base4.add(p);
+            points.push(base4);
+          }
+          p = base4.double();
+        }
+        return points;
+      }
+      /**
+       * Implements ec multiplication using precomputed tables and w-ary non-adjacent form.
+       * More compact implementation:
+       * https://github.com/paulmillr/noble-secp256k1/blob/47cb1669b6e506ad66b35fe7d76132ae97465da2/index.ts#L502-L541
+       * @returns real and fake (for const-time) points
+       */
+      wNAF(W, precomputes, n) {
+        if (!this.Fn.isValid(n))
+          throw new Error("invalid scalar");
+        let p = this.ZERO;
+        let f = this.BASE;
+        const wo = calcWOpts(W, this.bits);
+        for (let window = 0; window < wo.windows; window++) {
+          const { nextN, offset, isZero, isNeg, isNegF, offsetF } = calcOffsets(n, window, wo);
+          n = nextN;
+          if (isZero) {
+            f = f.add(negateCt(isNegF, precomputes[offsetF]));
+          } else {
+            p = p.add(negateCt(isNeg, precomputes[offset]));
+          }
+        }
+        assert0(n);
+        return { p, f };
+      }
+      /**
+       * Implements ec unsafe (non const-time) multiplication using precomputed tables and w-ary non-adjacent form.
+       * @param acc accumulator point to add result of multiplication
+       * @returns point
+       */
+      wNAFUnsafe(W, precomputes, n, acc = this.ZERO) {
+        const wo = calcWOpts(W, this.bits);
+        for (let window = 0; window < wo.windows; window++) {
+          if (n === _0n3)
+            break;
+          const { nextN, offset, isZero, isNeg } = calcOffsets(n, window, wo);
+          n = nextN;
+          if (isZero) {
+            continue;
+          } else {
+            const item = precomputes[offset];
+            acc = acc.add(isNeg ? item.negate() : item);
+          }
+        }
+        assert0(n);
+        return acc;
+      }
+      getPrecomputes(W, point, transform) {
+        let comp = pointPrecomputes.get(point);
+        if (!comp) {
+          comp = this.precomputeWindow(point, W);
+          if (W !== 1) {
+            if (typeof transform === "function")
+              comp = transform(comp);
+            pointPrecomputes.set(point, comp);
+          }
+        }
+        return comp;
+      }
+      cached(point, scalar, transform) {
+        const W = getW(point);
+        return this.wNAF(W, this.getPrecomputes(W, point, transform), scalar);
+      }
+      unsafe(point, scalar, transform, prev) {
+        const W = getW(point);
+        if (W === 1)
+          return this._unsafeLadder(point, scalar, prev);
+        return this.wNAFUnsafe(W, this.getPrecomputes(W, point, transform), scalar, prev);
+      }
+      // We calculate precomputes for elliptic curve point multiplication
+      // using windowed method. This specifies window size and
+      // stores precomputed values. Usually only base point would be precomputed.
+      createCache(P, W) {
+        validateW(W, this.bits);
+        pointWindowSizes.set(P, W);
+        pointPrecomputes.delete(P);
+      }
+      hasCache(elm) {
+        return getW(elm) !== 1;
+      }
+    };
+  }
+});
+
+// ../../node_modules/@noble/curves/esm/abstract/edwards.js
+function isEdValidXY(Fp2, CURVE, x, y) {
+  const x2 = Fp2.sqr(x);
+  const y2 = Fp2.sqr(y);
+  const left = Fp2.add(Fp2.mul(CURVE.a, x2), y2);
+  const right = Fp2.add(Fp2.ONE, Fp2.mul(CURVE.d, Fp2.mul(x2, y2)));
+  return Fp2.eql(left, right);
+}
+function edwards(params, extraOpts = {}) {
+  const validated = _createCurveFields("edwards", params, extraOpts, extraOpts.FpFnLE);
+  const { Fp: Fp2, Fn: Fn2 } = validated;
+  let CURVE = validated.CURVE;
+  const { h: cofactor } = CURVE;
+  _validateObject(extraOpts, {}, { uvRatio: "function" });
+  const MASK = _2n2 << BigInt(Fn2.BYTES * 8) - _1n4;
+  const modP2 = (n) => Fp2.create(n);
+  const uvRatio2 = extraOpts.uvRatio || ((u, v) => {
+    try {
+      return { isValid: true, value: Fp2.sqrt(Fp2.div(u, v)) };
+    } catch (e) {
+      return { isValid: false, value: _0n4 };
+    }
+  });
+  if (!isEdValidXY(Fp2, CURVE, CURVE.Gx, CURVE.Gy))
+    throw new Error("bad curve params: generator point");
+  function acoord(title, n, banZero = false) {
+    const min = banZero ? _1n4 : _0n4;
+    aInRange("coordinate " + title, n, min, MASK);
+    return n;
+  }
+  function aextpoint(other) {
+    if (!(other instanceof Point2))
+      throw new Error("ExtendedPoint expected");
+  }
+  const toAffineMemo = memoized((p, iz) => {
+    const { X, Y, Z } = p;
+    const is0 = p.is0();
+    if (iz == null)
+      iz = is0 ? _8n2 : Fp2.inv(Z);
+    const x = modP2(X * iz);
+    const y = modP2(Y * iz);
+    const zz = Fp2.mul(Z, iz);
+    if (is0)
+      return { x: _0n4, y: _1n4 };
+    if (zz !== _1n4)
+      throw new Error("invZ was invalid");
+    return { x, y };
+  });
+  const assertValidMemo = memoized((p) => {
+    const { a, d } = CURVE;
+    if (p.is0())
+      throw new Error("bad point: ZERO");
+    const { X, Y, Z, T } = p;
+    const X2 = modP2(X * X);
+    const Y2 = modP2(Y * Y);
+    const Z2 = modP2(Z * Z);
+    const Z4 = modP2(Z2 * Z2);
+    const aX2 = modP2(X2 * a);
+    const left = modP2(Z2 * modP2(aX2 + Y2));
+    const right = modP2(Z4 + modP2(d * modP2(X2 * Y2)));
+    if (left !== right)
+      throw new Error("bad point: equation left != right (1)");
+    const XY = modP2(X * Y);
+    const ZT = modP2(Z * T);
+    if (XY !== ZT)
+      throw new Error("bad point: equation left != right (2)");
+    return true;
+  });
+  class Point2 {
+    constructor(X, Y, Z, T) {
+      this.X = acoord("x", X);
+      this.Y = acoord("y", Y);
+      this.Z = acoord("z", Z, true);
+      this.T = acoord("t", T);
+      Object.freeze(this);
+    }
+    static CURVE() {
+      return CURVE;
+    }
+    static fromAffine(p) {
+      if (p instanceof Point2)
+        throw new Error("extended point not allowed");
+      const { x, y } = p || {};
+      acoord("x", x);
+      acoord("y", y);
+      return new Point2(x, y, _1n4, modP2(x * y));
+    }
+    // Uses algo from RFC8032 5.1.3.
+    static fromBytes(bytes, zip215 = false) {
+      const len = Fp2.BYTES;
+      const { a, d } = CURVE;
+      bytes = copyBytes(_abytes2(bytes, len, "point"));
+      _abool2(zip215, "zip215");
+      const normed = copyBytes(bytes);
+      const lastByte = bytes[len - 1];
+      normed[len - 1] = lastByte & ~128;
+      const y = bytesToNumberLE(normed);
+      const max = zip215 ? MASK : Fp2.ORDER;
+      aInRange("point.y", y, _0n4, max);
+      const y2 = modP2(y * y);
+      const u = modP2(y2 - _1n4);
+      const v = modP2(d * y2 - a);
+      let { isValid: isValid3, value: x } = uvRatio2(u, v);
+      if (!isValid3)
+        throw new Error("bad point: invalid y coordinate");
+      const isXOdd = (x & _1n4) === _1n4;
+      const isLastByteOdd = (lastByte & 128) !== 0;
+      if (!zip215 && x === _0n4 && isLastByteOdd)
+        throw new Error("bad point: x=0 and x_0=1");
+      if (isLastByteOdd !== isXOdd)
+        x = modP2(-x);
+      return Point2.fromAffine({ x, y });
+    }
+    static fromHex(bytes, zip215 = false) {
+      return Point2.fromBytes(ensureBytes("point", bytes), zip215);
+    }
+    get x() {
+      return this.toAffine().x;
+    }
+    get y() {
+      return this.toAffine().y;
+    }
+    precompute(windowSize = 8, isLazy = true) {
+      wnaf.createCache(this, windowSize);
+      if (!isLazy)
+        this.multiply(_2n2);
+      return this;
+    }
+    // Useful in fromAffine() - not for fromBytes(), which always created valid points.
+    assertValidity() {
+      assertValidMemo(this);
+    }
+    // Compare one point to another.
+    equals(other) {
+      aextpoint(other);
+      const { X: X1, Y: Y1, Z: Z1 } = this;
+      const { X: X2, Y: Y2, Z: Z2 } = other;
+      const X1Z2 = modP2(X1 * Z2);
+      const X2Z1 = modP2(X2 * Z1);
+      const Y1Z2 = modP2(Y1 * Z2);
+      const Y2Z1 = modP2(Y2 * Z1);
+      return X1Z2 === X2Z1 && Y1Z2 === Y2Z1;
+    }
+    is0() {
+      return this.equals(Point2.ZERO);
+    }
+    negate() {
+      return new Point2(modP2(-this.X), this.Y, this.Z, modP2(-this.T));
+    }
+    // Fast algo for doubling Extended Point.
+    // https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#doubling-dbl-2008-hwcd
+    // Cost: 4M + 4S + 1*a + 6add + 1*2.
+    double() {
+      const { a } = CURVE;
+      const { X: X1, Y: Y1, Z: Z1 } = this;
+      const A = modP2(X1 * X1);
+      const B = modP2(Y1 * Y1);
+      const C = modP2(_2n2 * modP2(Z1 * Z1));
+      const D = modP2(a * A);
+      const x1y1 = X1 + Y1;
+      const E = modP2(modP2(x1y1 * x1y1) - A - B);
+      const G = D + B;
+      const F = G - C;
+      const H = D - B;
+      const X3 = modP2(E * F);
+      const Y3 = modP2(G * H);
+      const T3 = modP2(E * H);
+      const Z3 = modP2(F * G);
+      return new Point2(X3, Y3, Z3, T3);
+    }
+    // Fast algo for adding 2 Extended Points.
+    // https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#addition-add-2008-hwcd
+    // Cost: 9M + 1*a + 1*d + 7add.
+    add(other) {
+      aextpoint(other);
+      const { a, d } = CURVE;
+      const { X: X1, Y: Y1, Z: Z1, T: T1 } = this;
+      const { X: X2, Y: Y2, Z: Z2, T: T2 } = other;
+      const A = modP2(X1 * X2);
+      const B = modP2(Y1 * Y2);
+      const C = modP2(T1 * d * T2);
+      const D = modP2(Z1 * Z2);
+      const E = modP2((X1 + Y1) * (X2 + Y2) - A - B);
+      const F = D - C;
+      const G = D + C;
+      const H = modP2(B - a * A);
+      const X3 = modP2(E * F);
+      const Y3 = modP2(G * H);
+      const T3 = modP2(E * H);
+      const Z3 = modP2(F * G);
+      return new Point2(X3, Y3, Z3, T3);
+    }
+    subtract(other) {
+      return this.add(other.negate());
+    }
+    // Constant-time multiplication.
+    multiply(scalar) {
+      if (!Fn2.isValidNot0(scalar))
+        throw new Error("invalid scalar: expected 1 <= sc < curve.n");
+      const { p, f } = wnaf.cached(this, scalar, (p2) => normalizeZ(Point2, p2));
+      return normalizeZ(Point2, [p, f])[0];
+    }
+    // Non-constant-time multiplication. Uses double-and-add algorithm.
+    // It's faster, but should only be used when you don't care about
+    // an exposed private key e.g. sig verification.
+    // Does NOT allow scalars higher than CURVE.n.
+    // Accepts optional accumulator to merge with multiply (important for sparse scalars)
+    multiplyUnsafe(scalar, acc = Point2.ZERO) {
+      if (!Fn2.isValid(scalar))
+        throw new Error("invalid scalar: expected 0 <= sc < curve.n");
+      if (scalar === _0n4)
+        return Point2.ZERO;
+      if (this.is0() || scalar === _1n4)
+        return this;
+      return wnaf.unsafe(this, scalar, (p) => normalizeZ(Point2, p), acc);
+    }
+    // Checks if point is of small order.
+    // If you add something to small order point, you will have "dirty"
+    // point with torsion component.
+    // Multiplies point by cofactor and checks if the result is 0.
+    isSmallOrder() {
+      return this.multiplyUnsafe(cofactor).is0();
+    }
+    // Multiplies point by curve order and checks if the result is 0.
+    // Returns `false` is the point is dirty.
+    isTorsionFree() {
+      return wnaf.unsafe(this, CURVE.n).is0();
+    }
+    // Converts Extended point to default (x, y) coordinates.
+    // Can accept precomputed Z^-1 - for example, from invertBatch.
+    toAffine(invertedZ) {
+      return toAffineMemo(this, invertedZ);
+    }
+    clearCofactor() {
+      if (cofactor === _1n4)
+        return this;
+      return this.multiplyUnsafe(cofactor);
+    }
+    toBytes() {
+      const { x, y } = this.toAffine();
+      const bytes = Fp2.toBytes(y);
+      bytes[bytes.length - 1] |= x & _1n4 ? 128 : 0;
+      return bytes;
+    }
+    toHex() {
+      return bytesToHex(this.toBytes());
+    }
+    toString() {
+      return `<Point ${this.is0() ? "ZERO" : this.toHex()}>`;
+    }
+    // TODO: remove
+    get ex() {
+      return this.X;
+    }
+    get ey() {
+      return this.Y;
+    }
+    get ez() {
+      return this.Z;
+    }
+    get et() {
+      return this.T;
+    }
+    static normalizeZ(points) {
+      return normalizeZ(Point2, points);
+    }
+    static msm(points, scalars) {
+      return pippenger(Point2, Fn2, points, scalars);
+    }
+    _setWindowSize(windowSize) {
+      this.precompute(windowSize);
+    }
+    toRawBytes() {
+      return this.toBytes();
+    }
+  }
+  Point2.BASE = new Point2(CURVE.Gx, CURVE.Gy, _1n4, modP2(CURVE.Gx * CURVE.Gy));
+  Point2.ZERO = new Point2(_0n4, _1n4, _1n4, _0n4);
+  Point2.Fp = Fp2;
+  Point2.Fn = Fn2;
+  const wnaf = new wNAF(Point2, Fn2.BITS);
+  Point2.BASE.precompute(8);
+  return Point2;
+}
+function eddsa(Point2, cHash, eddsaOpts = {}) {
+  if (typeof cHash !== "function")
+    throw new Error('"hash" function param is required');
+  _validateObject(eddsaOpts, {}, {
+    adjustScalarBytes: "function",
+    randomBytes: "function",
+    domain: "function",
+    prehash: "function",
+    mapToCurve: "function"
+  });
+  const { prehash } = eddsaOpts;
+  const { BASE, Fp: Fp2, Fn: Fn2 } = Point2;
+  const randomBytes5 = eddsaOpts.randomBytes || randomBytes;
+  const adjustScalarBytes2 = eddsaOpts.adjustScalarBytes || ((bytes) => bytes);
+  const domain = eddsaOpts.domain || ((data, ctx, phflag) => {
+    _abool2(phflag, "phflag");
+    if (ctx.length || phflag)
+      throw new Error("Contexts/pre-hash are not supported");
+    return data;
+  });
+  function modN_LE(hash) {
+    return Fn2.create(bytesToNumberLE(hash));
+  }
+  function getPrivateScalar(key) {
+    const len = lengths.secretKey;
+    key = ensureBytes("private key", key, len);
+    const hashed = ensureBytes("hashed private key", cHash(key), 2 * len);
+    const head = adjustScalarBytes2(hashed.slice(0, len));
+    const prefix = hashed.slice(len, 2 * len);
+    const scalar = modN_LE(head);
+    return { head, prefix, scalar };
+  }
+  function getExtendedPublicKey(secretKey) {
+    const { head, prefix, scalar } = getPrivateScalar(secretKey);
+    const point = BASE.multiply(scalar);
+    const pointBytes = point.toBytes();
+    return { head, prefix, scalar, point, pointBytes };
+  }
+  function getPublicKey(secretKey) {
+    return getExtendedPublicKey(secretKey).pointBytes;
+  }
+  function hashDomainToScalar(context = Uint8Array.of(), ...msgs) {
+    const msg = concatBytes(...msgs);
+    return modN_LE(cHash(domain(msg, ensureBytes("context", context), !!prehash)));
+  }
+  function sign(msg, secretKey, options = {}) {
+    msg = ensureBytes("message", msg);
+    if (prehash)
+      msg = prehash(msg);
+    const { prefix, scalar, pointBytes } = getExtendedPublicKey(secretKey);
+    const r = hashDomainToScalar(options.context, prefix, msg);
+    const R = BASE.multiply(r).toBytes();
+    const k = hashDomainToScalar(options.context, R, pointBytes, msg);
+    const s = Fn2.create(r + k * scalar);
+    if (!Fn2.isValid(s))
+      throw new Error("sign failed: invalid s");
+    const rs = concatBytes(R, Fn2.toBytes(s));
+    return _abytes2(rs, lengths.signature, "result");
+  }
+  const verifyOpts = { zip215: true };
+  function verify(sig, msg, publicKey, options = verifyOpts) {
+    const { context, zip215 } = options;
+    const len = lengths.signature;
+    sig = ensureBytes("signature", sig, len);
+    msg = ensureBytes("message", msg);
+    publicKey = ensureBytes("publicKey", publicKey, lengths.publicKey);
+    if (zip215 !== void 0)
+      _abool2(zip215, "zip215");
+    if (prehash)
+      msg = prehash(msg);
+    const mid = len / 2;
+    const r = sig.subarray(0, mid);
+    const s = bytesToNumberLE(sig.subarray(mid, len));
+    let A, R, SB;
+    try {
+      A = Point2.fromBytes(publicKey, zip215);
+      R = Point2.fromBytes(r, zip215);
+      SB = BASE.multiplyUnsafe(s);
+    } catch (error) {
+      return false;
+    }
+    if (!zip215 && A.isSmallOrder())
+      return false;
+    const k = hashDomainToScalar(context, R.toBytes(), A.toBytes(), msg);
+    const RkA = R.add(A.multiplyUnsafe(k));
+    return RkA.subtract(SB).clearCofactor().is0();
+  }
+  const _size = Fp2.BYTES;
+  const lengths = {
+    secretKey: _size,
+    publicKey: _size,
+    signature: 2 * _size,
+    seed: _size
+  };
+  function randomSecretKey(seed = randomBytes5(lengths.seed)) {
+    return _abytes2(seed, lengths.seed, "seed");
+  }
+  function keygen(seed) {
+    const secretKey = utils.randomSecretKey(seed);
+    return { secretKey, publicKey: getPublicKey(secretKey) };
+  }
+  function isValidSecretKey(key) {
+    return isBytes(key) && key.length === Fn2.BYTES;
+  }
+  function isValidPublicKey(key, zip215) {
+    try {
+      return !!Point2.fromBytes(key, zip215);
+    } catch (error) {
+      return false;
+    }
+  }
+  const utils = {
+    getExtendedPublicKey,
+    randomSecretKey,
+    isValidSecretKey,
+    isValidPublicKey,
+    /**
+     * Converts ed public key to x public key. Uses formula:
+     * - ed25519:
+     *   - `(u, v) = ((1+y)/(1-y), sqrt(-486664)*u/x)`
+     *   - `(x, y) = (sqrt(-486664)*u/v, (u-1)/(u+1))`
+     * - ed448:
+     *   - `(u, v) = ((y-1)/(y+1), sqrt(156324)*u/x)`
+     *   - `(x, y) = (sqrt(156324)*u/v, (1+u)/(1-u))`
+     */
+    toMontgomery(publicKey) {
+      const { y } = Point2.fromBytes(publicKey);
+      const size2 = lengths.publicKey;
+      const is25519 = size2 === 32;
+      if (!is25519 && size2 !== 57)
+        throw new Error("only defined for 25519 and 448");
+      const u = is25519 ? Fp2.div(_1n4 + y, _1n4 - y) : Fp2.div(y - _1n4, y + _1n4);
+      return Fp2.toBytes(u);
+    },
+    toMontgomerySecret(secretKey) {
+      const size2 = lengths.secretKey;
+      _abytes2(secretKey, size2);
+      const hashed = cHash(secretKey.subarray(0, size2));
+      return adjustScalarBytes2(hashed).subarray(0, size2);
+    },
+    /** @deprecated */
+    randomPrivateKey: randomSecretKey,
+    /** @deprecated */
+    precompute(windowSize = 8, point = Point2.BASE) {
+      return point.precompute(windowSize, false);
+    }
+  };
+  return Object.freeze({
+    keygen,
+    getPublicKey,
+    sign,
+    verify,
+    utils,
+    Point: Point2,
+    lengths
+  });
+}
+function _eddsa_legacy_opts_to_new(c) {
+  const CURVE = {
+    a: c.a,
+    d: c.d,
+    p: c.Fp.ORDER,
+    n: c.n,
+    h: c.h,
+    Gx: c.Gx,
+    Gy: c.Gy
+  };
+  const Fp2 = c.Fp;
+  const Fn2 = Field(CURVE.n, c.nBitLength, true);
+  const curveOpts = { Fp: Fp2, Fn: Fn2, uvRatio: c.uvRatio };
+  const eddsaOpts = {
+    randomBytes: c.randomBytes,
+    adjustScalarBytes: c.adjustScalarBytes,
+    domain: c.domain,
+    prehash: c.prehash,
+    mapToCurve: c.mapToCurve
+  };
+  return { CURVE, curveOpts, hash: c.hash, eddsaOpts };
+}
+function _eddsa_new_output_to_legacy(c, eddsa2) {
+  const Point2 = eddsa2.Point;
+  const legacy = Object.assign({}, eddsa2, {
+    ExtendedPoint: Point2,
+    CURVE: c,
+    nBitLength: Point2.Fn.BITS,
+    nByteLength: Point2.Fn.BYTES
+  });
+  return legacy;
+}
+function twistedEdwards(c) {
+  const { CURVE, curveOpts, hash, eddsaOpts } = _eddsa_legacy_opts_to_new(c);
+  const Point2 = edwards(CURVE, curveOpts);
+  const EDDSA = eddsa(Point2, hash, eddsaOpts);
+  return _eddsa_new_output_to_legacy(c, EDDSA);
+}
+var _0n4, _1n4, _2n2, _8n2, PrimeEdwardsPoint;
+var init_edwards = __esm({
+  "../../node_modules/@noble/curves/esm/abstract/edwards.js"() {
+    "use strict";
+    init_utils2();
+    init_curve();
+    init_modular();
+    _0n4 = BigInt(0);
+    _1n4 = BigInt(1);
+    _2n2 = BigInt(2);
+    _8n2 = BigInt(8);
+    PrimeEdwardsPoint = class {
+      constructor(ep) {
+        this.ep = ep;
+      }
+      // Static methods that must be implemented by subclasses
+      static fromBytes(_bytes2) {
+        notImplemented();
+      }
+      static fromHex(_hex) {
+        notImplemented();
+      }
+      get x() {
+        return this.toAffine().x;
+      }
+      get y() {
+        return this.toAffine().y;
+      }
+      // Common implementations
+      clearCofactor() {
+        return this;
+      }
+      assertValidity() {
+        this.ep.assertValidity();
+      }
+      toAffine(invertedZ) {
+        return this.ep.toAffine(invertedZ);
+      }
+      toHex() {
+        return bytesToHex(this.toBytes());
+      }
+      toString() {
+        return this.toHex();
+      }
+      isTorsionFree() {
+        return true;
+      }
+      isSmallOrder() {
+        return false;
+      }
+      add(other) {
+        this.assertSame(other);
+        return this.init(this.ep.add(other.ep));
+      }
+      subtract(other) {
+        this.assertSame(other);
+        return this.init(this.ep.subtract(other.ep));
+      }
+      multiply(scalar) {
+        return this.init(this.ep.multiply(scalar));
+      }
+      multiplyUnsafe(scalar) {
+        return this.init(this.ep.multiplyUnsafe(scalar));
+      }
+      double() {
+        return this.init(this.ep.double());
+      }
+      negate() {
+        return this.init(this.ep.negate());
+      }
+      precompute(windowSize, isLazy) {
+        return this.init(this.ep.precompute(windowSize, isLazy));
+      }
+      /** @deprecated use `toBytes` */
+      toRawBytes() {
+        return this.toBytes();
+      }
+    };
+  }
+});
+
+// ../../node_modules/@noble/curves/esm/ed25519.js
+function ed25519_pow_2_252_3(x) {
+  const _10n = BigInt(10), _20n = BigInt(20), _40n = BigInt(40), _80n = BigInt(80);
+  const P = ed25519_CURVE_p;
+  const x2 = x * x % P;
+  const b2 = x2 * x % P;
+  const b4 = pow2(b2, _2n3, P) * b2 % P;
+  const b5 = pow2(b4, _1n5, P) * x % P;
+  const b10 = pow2(b5, _5n2, P) * b5 % P;
+  const b20 = pow2(b10, _10n, P) * b10 % P;
+  const b40 = pow2(b20, _20n, P) * b20 % P;
+  const b80 = pow2(b40, _40n, P) * b40 % P;
+  const b160 = pow2(b80, _80n, P) * b80 % P;
+  const b240 = pow2(b160, _80n, P) * b80 % P;
+  const b250 = pow2(b240, _10n, P) * b10 % P;
+  const pow_p_5_8 = pow2(b250, _2n3, P) * x % P;
+  return { pow_p_5_8, b2 };
+}
+function adjustScalarBytes(bytes) {
+  bytes[0] &= 248;
+  bytes[31] &= 127;
+  bytes[31] |= 64;
+  return bytes;
+}
+function uvRatio(u, v) {
+  const P = ed25519_CURVE_p;
+  const v3 = mod(v * v * v, P);
+  const v7 = mod(v3 * v3 * v, P);
+  const pow = ed25519_pow_2_252_3(u * v7).pow_p_5_8;
+  let x = mod(u * v3 * pow, P);
+  const vx2 = mod(v * x * x, P);
+  const root1 = x;
+  const root2 = mod(x * ED25519_SQRT_M1, P);
+  const useRoot1 = vx2 === u;
+  const useRoot2 = vx2 === mod(-u, P);
+  const noRoot = vx2 === mod(-u * ED25519_SQRT_M1, P);
+  if (useRoot1)
+    x = root1;
+  if (useRoot2 || noRoot)
+    x = root2;
+  if (isNegativeLE(x, P))
+    x = mod(-x, P);
+  return { isValid: useRoot1 || useRoot2, value: x };
+}
+function calcElligatorRistrettoMap(r0) {
+  const { d } = ed25519_CURVE;
+  const P = ed25519_CURVE_p;
+  const mod3 = (n) => Fp.create(n);
+  const r = mod3(SQRT_M1 * r0 * r0);
+  const Ns = mod3((r + _1n5) * ONE_MINUS_D_SQ);
+  let c = BigInt(-1);
+  const D = mod3((c - d * r) * mod3(r + d));
+  let { isValid: Ns_D_is_sq, value: s } = uvRatio(Ns, D);
+  let s_ = mod3(s * r0);
+  if (!isNegativeLE(s_, P))
+    s_ = mod3(-s_);
+  if (!Ns_D_is_sq)
+    s = s_;
+  if (!Ns_D_is_sq)
+    c = r;
+  const Nt = mod3(c * (r - _1n5) * D_MINUS_ONE_SQ - D);
+  const s2 = s * s;
+  const W0 = mod3((s + s) * D);
+  const W1 = mod3(Nt * SQRT_AD_MINUS_ONE);
+  const W2 = mod3(_1n5 - s2);
+  const W3 = mod3(_1n5 + s2);
+  return new ed25519.Point(mod3(W0 * W3), mod3(W2 * W1), mod3(W1 * W3), mod3(W0 * W2));
+}
+function ristretto255_map(bytes) {
+  abytes(bytes, 64);
+  const r1 = bytes255ToNumberLE(bytes.subarray(0, 32));
+  const R1 = calcElligatorRistrettoMap(r1);
+  const r2 = bytes255ToNumberLE(bytes.subarray(32, 64));
+  const R2 = calcElligatorRistrettoMap(r2);
+  return new _RistrettoPoint(R1.add(R2));
+}
+var _0n5, _1n5, _2n3, _3n2, _5n2, _8n3, ed25519_CURVE_p, ed25519_CURVE, ED25519_SQRT_M1, Fp, Fn, ed25519Defaults, ed25519, SQRT_M1, SQRT_AD_MINUS_ONE, INVSQRT_A_MINUS_D, ONE_MINUS_D_SQ, D_MINUS_ONE_SQ, invertSqrt, MAX_255B, bytes255ToNumberLE, _RistrettoPoint;
+var init_ed25519 = __esm({
+  "../../node_modules/@noble/curves/esm/ed25519.js"() {
+    "use strict";
+    init_sha2();
+    init_utils();
+    init_curve();
+    init_edwards();
+    init_modular();
+    init_utils2();
+    _0n5 = /* @__PURE__ */ BigInt(0);
+    _1n5 = BigInt(1);
+    _2n3 = BigInt(2);
+    _3n2 = BigInt(3);
+    _5n2 = BigInt(5);
+    _8n3 = BigInt(8);
+    ed25519_CURVE_p = BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed");
+    ed25519_CURVE = /* @__PURE__ */ (() => ({
+      p: ed25519_CURVE_p,
+      n: BigInt("0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed"),
+      h: _8n3,
+      a: BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffec"),
+      d: BigInt("0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3"),
+      Gx: BigInt("0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51a"),
+      Gy: BigInt("0x6666666666666666666666666666666666666666666666666666666666666658")
+    }))();
+    ED25519_SQRT_M1 = /* @__PURE__ */ BigInt("19681161376707505956807079304988542015446066515923890162744021073123829784752");
+    Fp = /* @__PURE__ */ (() => Field(ed25519_CURVE.p, { isLE: true }))();
+    Fn = /* @__PURE__ */ (() => Field(ed25519_CURVE.n, { isLE: true }))();
+    ed25519Defaults = /* @__PURE__ */ (() => ({
+      ...ed25519_CURVE,
+      Fp,
+      hash: sha512,
+      adjustScalarBytes,
+      // dom2
+      // Ratio of u to v. Allows us to combine inversion and square root. Uses algo from RFC8032 5.1.3.
+      // Constant-time, u/√v
+      uvRatio
+    }))();
+    ed25519 = /* @__PURE__ */ (() => twistedEdwards(ed25519Defaults))();
+    SQRT_M1 = ED25519_SQRT_M1;
+    SQRT_AD_MINUS_ONE = /* @__PURE__ */ BigInt("25063068953384623474111414158702152701244531502492656460079210482610430750235");
+    INVSQRT_A_MINUS_D = /* @__PURE__ */ BigInt("54469307008909316920995813868745141605393597292927456921205312896311721017578");
+    ONE_MINUS_D_SQ = /* @__PURE__ */ BigInt("1159843021668779879193775521855586647937357759715417654439879720876111806838");
+    D_MINUS_ONE_SQ = /* @__PURE__ */ BigInt("40440834346308536858101042469323190826248399146238708352240133220865137265952");
+    invertSqrt = (number) => uvRatio(_1n5, number);
+    MAX_255B = /* @__PURE__ */ BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    bytes255ToNumberLE = (bytes) => ed25519.Point.Fp.create(bytesToNumberLE(bytes) & MAX_255B);
+    _RistrettoPoint = class __RistrettoPoint extends PrimeEdwardsPoint {
+      constructor(ep) {
+        super(ep);
+      }
+      static fromAffine(ap) {
+        return new __RistrettoPoint(ed25519.Point.fromAffine(ap));
+      }
+      assertSame(other) {
+        if (!(other instanceof __RistrettoPoint))
+          throw new Error("RistrettoPoint expected");
+      }
+      init(ep) {
+        return new __RistrettoPoint(ep);
+      }
+      /** @deprecated use `import { ristretto255_hasher } from '@noble/curves/ed25519.js';` */
+      static hashToCurve(hex) {
+        return ristretto255_map(ensureBytes("ristrettoHash", hex, 64));
+      }
+      static fromBytes(bytes) {
+        abytes(bytes, 32);
+        const { a, d } = ed25519_CURVE;
+        const P = ed25519_CURVE_p;
+        const mod3 = (n) => Fp.create(n);
+        const s = bytes255ToNumberLE(bytes);
+        if (!equalBytes(Fp.toBytes(s), bytes) || isNegativeLE(s, P))
+          throw new Error("invalid ristretto255 encoding 1");
+        const s2 = mod3(s * s);
+        const u1 = mod3(_1n5 + a * s2);
+        const u2 = mod3(_1n5 - a * s2);
+        const u1_2 = mod3(u1 * u1);
+        const u2_2 = mod3(u2 * u2);
+        const v = mod3(a * d * u1_2 - u2_2);
+        const { isValid: isValid3, value: I } = invertSqrt(mod3(v * u2_2));
+        const Dx = mod3(I * u2);
+        const Dy = mod3(I * Dx * v);
+        let x = mod3((s + s) * Dx);
+        if (isNegativeLE(x, P))
+          x = mod3(-x);
+        const y = mod3(u1 * Dy);
+        const t = mod3(x * y);
+        if (!isValid3 || isNegativeLE(t, P) || y === _0n5)
+          throw new Error("invalid ristretto255 encoding 2");
+        return new __RistrettoPoint(new ed25519.Point(x, y, _1n5, t));
+      }
+      /**
+       * Converts ristretto-encoded string to ristretto point.
+       * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-decode).
+       * @param hex Ristretto-encoded 32 bytes. Not every 32-byte string is valid ristretto encoding
+       */
+      static fromHex(hex) {
+        return __RistrettoPoint.fromBytes(ensureBytes("ristrettoHex", hex, 32));
+      }
+      static msm(points, scalars) {
+        return pippenger(__RistrettoPoint, ed25519.Point.Fn, points, scalars);
+      }
+      /**
+       * Encodes ristretto point to Uint8Array.
+       * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-encode).
+       */
+      toBytes() {
+        let { X, Y, Z, T } = this.ep;
+        const P = ed25519_CURVE_p;
+        const mod3 = (n) => Fp.create(n);
+        const u1 = mod3(mod3(Z + Y) * mod3(Z - Y));
+        const u2 = mod3(X * Y);
+        const u2sq = mod3(u2 * u2);
+        const { value: invsqrt } = invertSqrt(mod3(u1 * u2sq));
+        const D1 = mod3(invsqrt * u1);
+        const D2 = mod3(invsqrt * u2);
+        const zInv = mod3(D1 * D2 * T);
+        let D;
+        if (isNegativeLE(T * zInv, P)) {
+          let _x = mod3(Y * SQRT_M1);
+          let _y = mod3(X * SQRT_M1);
+          X = _x;
+          Y = _y;
+          D = mod3(D1 * INVSQRT_A_MINUS_D);
+        } else {
+          D = D2;
+        }
+        if (isNegativeLE(X * zInv, P))
+          Y = mod3(-Y);
+        let s = mod3((Z - Y) * D);
+        if (isNegativeLE(s, P))
+          s = mod3(-s);
+        return Fp.toBytes(s);
+      }
+      /**
+       * Compares two Ristretto points.
+       * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-equals).
+       */
+      equals(other) {
+        this.assertSame(other);
+        const { X: X1, Y: Y1 } = this.ep;
+        const { X: X2, Y: Y2 } = other.ep;
+        const mod3 = (n) => Fp.create(n);
+        const one = mod3(X1 * Y2) === mod3(Y1 * X2);
+        const two = mod3(Y1 * Y2) === mod3(X1 * X2);
+        return one || two;
+      }
+      is0() {
+        return this.equals(__RistrettoPoint.ZERO);
+      }
+    };
+    _RistrettoPoint.BASE = /* @__PURE__ */ (() => new _RistrettoPoint(ed25519.Point.BASE))();
+    _RistrettoPoint.ZERO = /* @__PURE__ */ (() => new _RistrettoPoint(ed25519.Point.ZERO))();
+    _RistrettoPoint.Fp = /* @__PURE__ */ (() => Fp)();
+    _RistrettoPoint.Fn = /* @__PURE__ */ (() => Fn)();
+  }
+});
+
+// ../../node_modules/viem/_esm/utils/data/isHex.js
+function isHex(value, { strict = true } = {}) {
+  if (!value)
+    return false;
+  if (typeof value !== "string")
+    return false;
+  return strict ? /^0x[0-9a-fA-F]*$/.test(value) : value.startsWith("0x");
+}
+var init_isHex = __esm({
+  "../../node_modules/viem/_esm/utils/data/isHex.js"() {
+    "use strict";
+  }
+});
+
+// ../../node_modules/viem/_esm/utils/data/size.js
+function size(value) {
+  if (isHex(value, { strict: false }))
+    return Math.ceil((value.length - 2) / 2);
+  return value.length;
+}
+var init_size = __esm({
+  "../../node_modules/viem/_esm/utils/data/size.js"() {
+    "use strict";
+    init_isHex();
+  }
+});
+
+// ../../node_modules/viem/_esm/errors/version.js
+var version;
+var init_version = __esm({
+  "../../node_modules/viem/_esm/errors/version.js"() {
+    "use strict";
+    version = "2.45.1";
+  }
+});
+
+// ../../node_modules/viem/_esm/errors/base.js
+function walk(err2, fn) {
+  if (fn?.(err2))
+    return err2;
+  if (err2 && typeof err2 === "object" && "cause" in err2 && err2.cause !== void 0)
+    return walk(err2.cause, fn);
+  return fn ? null : err2;
+}
+var errorConfig, BaseError;
+var init_base = __esm({
+  "../../node_modules/viem/_esm/errors/base.js"() {
+    "use strict";
+    init_version();
+    errorConfig = {
+      getDocsUrl: ({ docsBaseUrl, docsPath = "", docsSlug }) => docsPath ? `${docsBaseUrl ?? "https://viem.sh"}${docsPath}${docsSlug ? `#${docsSlug}` : ""}` : void 0,
+      version: `viem@${version}`
+    };
+    BaseError = class _BaseError extends Error {
+      constructor(shortMessage, args = {}) {
+        const details = (() => {
+          if (args.cause instanceof _BaseError)
+            return args.cause.details;
+          if (args.cause?.message)
+            return args.cause.message;
+          return args.details;
+        })();
+        const docsPath = (() => {
+          if (args.cause instanceof _BaseError)
+            return args.cause.docsPath || args.docsPath;
+          return args.docsPath;
+        })();
+        const docsUrl = errorConfig.getDocsUrl?.({ ...args, docsPath });
+        const message = [
+          shortMessage || "An error occurred.",
+          "",
+          ...args.metaMessages ? [...args.metaMessages, ""] : [],
+          ...docsUrl ? [`Docs: ${docsUrl}`] : [],
+          ...details ? [`Details: ${details}`] : [],
+          ...errorConfig.version ? [`Version: ${errorConfig.version}`] : []
+        ].join("\n");
+        super(message, args.cause ? { cause: args.cause } : void 0);
+        Object.defineProperty(this, "details", {
+          enumerable: true,
+          configurable: true,
+          writable: true,
+          value: void 0
+        });
+        Object.defineProperty(this, "docsPath", {
+          enumerable: true,
+          configurable: true,
+          writable: true,
+          value: void 0
+        });
+        Object.defineProperty(this, "metaMessages", {
+          enumerable: true,
+          configurable: true,
+          writable: true,
+          value: void 0
+        });
+        Object.defineProperty(this, "shortMessage", {
+          enumerable: true,
+          configurable: true,
+          writable: true,
+          value: void 0
+        });
+        Object.defineProperty(this, "version", {
+          enumerable: true,
+          configurable: true,
+          writable: true,
+          value: void 0
+        });
+        Object.defineProperty(this, "name", {
+          enumerable: true,
+          configurable: true,
+          writable: true,
+          value: "BaseError"
+        });
+        this.details = details;
+        this.docsPath = docsPath;
+        this.metaMessages = args.metaMessages;
+        this.name = args.name ?? this.name;
+        this.shortMessage = shortMessage;
+        this.version = version;
+      }
+      walk(fn) {
+        return walk(this, fn);
+      }
+    };
+  }
+});
+
+// ../../node_modules/viem/_esm/errors/data.js
+var SizeExceedsPaddingSizeError;
+var init_data = __esm({
+  "../../node_modules/viem/_esm/errors/data.js"() {
+    "use strict";
+    init_base();
+    SizeExceedsPaddingSizeError = class extends BaseError {
+      constructor({ size: size2, targetSize, type }) {
+        super(`${type.charAt(0).toUpperCase()}${type.slice(1).toLowerCase()} size (${size2}) exceeds padding size (${targetSize}).`, { name: "SizeExceedsPaddingSizeError" });
+      }
+    };
+  }
+});
+
+// ../../node_modules/viem/_esm/utils/data/pad.js
+function pad(hexOrBytes, { dir, size: size2 = 32 } = {}) {
+  if (typeof hexOrBytes === "string")
+    return padHex(hexOrBytes, { dir, size: size2 });
+  return padBytes(hexOrBytes, { dir, size: size2 });
+}
+function padHex(hex_, { dir, size: size2 = 32 } = {}) {
+  if (size2 === null)
+    return hex_;
+  const hex = hex_.replace("0x", "");
+  if (hex.length > size2 * 2)
+    throw new SizeExceedsPaddingSizeError({
+      size: Math.ceil(hex.length / 2),
+      targetSize: size2,
+      type: "hex"
+    });
+  return `0x${hex[dir === "right" ? "padEnd" : "padStart"](size2 * 2, "0")}`;
+}
+function padBytes(bytes, { dir, size: size2 = 32 } = {}) {
+  if (size2 === null)
+    return bytes;
+  if (bytes.length > size2)
+    throw new SizeExceedsPaddingSizeError({
+      size: bytes.length,
+      targetSize: size2,
+      type: "bytes"
+    });
+  const paddedBytes = new Uint8Array(size2);
+  for (let i = 0; i < size2; i++) {
+    const padEnd = dir === "right";
+    paddedBytes[padEnd ? i : size2 - i - 1] = bytes[padEnd ? i : bytes.length - i - 1];
+  }
+  return paddedBytes;
+}
+var init_pad = __esm({
+  "../../node_modules/viem/_esm/utils/data/pad.js"() {
+    "use strict";
+    init_data();
+  }
+});
+
+// ../../node_modules/viem/_esm/errors/encoding.js
+var IntegerOutOfRangeError, SizeOverflowError;
+var init_encoding = __esm({
+  "../../node_modules/viem/_esm/errors/encoding.js"() {
+    "use strict";
+    init_base();
+    IntegerOutOfRangeError = class extends BaseError {
+      constructor({ max, min, signed, size: size2, value }) {
+        super(`Number "${value}" is not in safe ${size2 ? `${size2 * 8}-bit ${signed ? "signed" : "unsigned"} ` : ""}integer range ${max ? `(${min} to ${max})` : `(above ${min})`}`, { name: "IntegerOutOfRangeError" });
+      }
+    };
+    SizeOverflowError = class extends BaseError {
+      constructor({ givenSize, maxSize }) {
+        super(`Size cannot exceed ${maxSize} bytes. Given size: ${givenSize} bytes.`, { name: "SizeOverflowError" });
+      }
+    };
+  }
+});
+
+// ../../node_modules/viem/_esm/utils/encoding/fromHex.js
+function assertSize(hexOrBytes, { size: size2 }) {
+  if (size(hexOrBytes) > size2)
+    throw new SizeOverflowError({
+      givenSize: size(hexOrBytes),
+      maxSize: size2
+    });
+}
+function hexToBigInt(hex, opts = {}) {
+  const { signed } = opts;
+  if (opts.size)
+    assertSize(hex, { size: opts.size });
+  const value = BigInt(hex);
+  if (!signed)
+    return value;
+  const size2 = (hex.length - 2) / 2;
+  const max = (1n << BigInt(size2) * 8n - 1n) - 1n;
+  if (value <= max)
+    return value;
+  return value - BigInt(`0x${"f".padStart(size2 * 2, "f")}`) - 1n;
+}
+function hexToNumber2(hex, opts = {}) {
+  const value = hexToBigInt(hex, opts);
+  const number = Number(value);
+  if (!Number.isSafeInteger(number))
+    throw new IntegerOutOfRangeError({
+      max: `${Number.MAX_SAFE_INTEGER}`,
+      min: `${Number.MIN_SAFE_INTEGER}`,
+      signed: opts.signed,
+      size: opts.size,
+      value: `${value}n`
+    });
+  return number;
+}
+var init_fromHex = __esm({
+  "../../node_modules/viem/_esm/utils/encoding/fromHex.js"() {
+    "use strict";
+    init_encoding();
+    init_size();
+  }
+});
+
+// ../../node_modules/viem/_esm/utils/encoding/toHex.js
+function toHex(value, opts = {}) {
+  if (typeof value === "number" || typeof value === "bigint")
+    return numberToHex(value, opts);
+  if (typeof value === "string") {
+    return stringToHex(value, opts);
+  }
+  if (typeof value === "boolean")
+    return boolToHex(value, opts);
+  return bytesToHex2(value, opts);
+}
+function boolToHex(value, opts = {}) {
+  const hex = `0x${Number(value)}`;
+  if (typeof opts.size === "number") {
+    assertSize(hex, { size: opts.size });
+    return pad(hex, { size: opts.size });
+  }
+  return hex;
+}
+function bytesToHex2(value, opts = {}) {
+  let string2 = "";
+  for (let i = 0; i < value.length; i++) {
+    string2 += hexes2[value[i]];
+  }
+  const hex = `0x${string2}`;
+  if (typeof opts.size === "number") {
+    assertSize(hex, { size: opts.size });
+    return pad(hex, { dir: "right", size: opts.size });
+  }
+  return hex;
+}
+function numberToHex(value_, opts = {}) {
+  const { signed, size: size2 } = opts;
+  const value = BigInt(value_);
+  let maxValue2;
+  if (size2) {
+    if (signed)
+      maxValue2 = (1n << BigInt(size2) * 8n - 1n) - 1n;
+    else
+      maxValue2 = 2n ** (BigInt(size2) * 8n) - 1n;
+  } else if (typeof value_ === "number") {
+    maxValue2 = BigInt(Number.MAX_SAFE_INTEGER);
+  }
+  const minValue = typeof maxValue2 === "bigint" && signed ? -maxValue2 - 1n : 0;
+  if (maxValue2 && value > maxValue2 || value < minValue) {
+    const suffix = typeof value_ === "bigint" ? "n" : "";
+    throw new IntegerOutOfRangeError({
+      max: maxValue2 ? `${maxValue2}${suffix}` : void 0,
+      min: `${minValue}${suffix}`,
+      signed,
+      size: size2,
+      value: `${value_}${suffix}`
+    });
+  }
+  const hex = `0x${(signed && value < 0 ? (1n << BigInt(size2 * 8)) + BigInt(value) : value).toString(16)}`;
+  if (size2)
+    return pad(hex, { size: size2 });
+  return hex;
+}
+function stringToHex(value_, opts = {}) {
+  const value = encoder.encode(value_);
+  return bytesToHex2(value, opts);
+}
+var hexes2, encoder;
+var init_toHex = __esm({
+  "../../node_modules/viem/_esm/utils/encoding/toHex.js"() {
+    "use strict";
+    init_encoding();
+    init_pad();
+    init_fromHex();
+    hexes2 = /* @__PURE__ */ Array.from({ length: 256 }, (_v, i) => i.toString(16).padStart(2, "0"));
+    encoder = /* @__PURE__ */ new TextEncoder();
+  }
+});
+
+// ../../node_modules/viem/_esm/utils/encoding/toBytes.js
+function toBytes2(value, opts = {}) {
+  if (typeof value === "number" || typeof value === "bigint")
+    return numberToBytes(value, opts);
+  if (typeof value === "boolean")
+    return boolToBytes(value, opts);
+  if (isHex(value))
+    return hexToBytes2(value, opts);
+  return stringToBytes(value, opts);
+}
+function boolToBytes(value, opts = {}) {
+  const bytes = new Uint8Array(1);
+  bytes[0] = Number(value);
+  if (typeof opts.size === "number") {
+    assertSize(bytes, { size: opts.size });
+    return pad(bytes, { size: opts.size });
+  }
+  return bytes;
+}
+function charCodeToBase16(char) {
+  if (char >= charCodeMap.zero && char <= charCodeMap.nine)
+    return char - charCodeMap.zero;
+  if (char >= charCodeMap.A && char <= charCodeMap.F)
+    return char - (charCodeMap.A - 10);
+  if (char >= charCodeMap.a && char <= charCodeMap.f)
+    return char - (charCodeMap.a - 10);
+  return void 0;
+}
+function hexToBytes2(hex_, opts = {}) {
+  let hex = hex_;
+  if (opts.size) {
+    assertSize(hex, { size: opts.size });
+    hex = pad(hex, { dir: "right", size: opts.size });
+  }
+  let hexString = hex.slice(2);
+  if (hexString.length % 2)
+    hexString = `0${hexString}`;
+  const length4 = hexString.length / 2;
+  const bytes = new Uint8Array(length4);
+  for (let index = 0, j = 0; index < length4; index++) {
+    const nibbleLeft = charCodeToBase16(hexString.charCodeAt(j++));
+    const nibbleRight = charCodeToBase16(hexString.charCodeAt(j++));
+    if (nibbleLeft === void 0 || nibbleRight === void 0) {
+      throw new BaseError(`Invalid byte sequence ("${hexString[j - 2]}${hexString[j - 1]}" in "${hexString}").`);
+    }
+    bytes[index] = nibbleLeft * 16 + nibbleRight;
+  }
+  return bytes;
+}
+function numberToBytes(value, opts) {
+  const hex = numberToHex(value, opts);
+  return hexToBytes2(hex);
+}
+function stringToBytes(value, opts = {}) {
+  const bytes = encoder2.encode(value);
+  if (typeof opts.size === "number") {
+    assertSize(bytes, { size: opts.size });
+    return pad(bytes, { dir: "right", size: opts.size });
+  }
+  return bytes;
+}
+var encoder2, charCodeMap;
+var init_toBytes = __esm({
+  "../../node_modules/viem/_esm/utils/encoding/toBytes.js"() {
+    "use strict";
+    init_base();
+    init_isHex();
+    init_pad();
+    init_fromHex();
+    init_toHex();
+    encoder2 = /* @__PURE__ */ new TextEncoder();
+    charCodeMap = {
+      zero: 48,
+      nine: 57,
+      A: 65,
+      F: 70,
+      a: 97,
+      f: 102
+    };
+  }
+});
+
+// ../../node_modules/@noble/hashes/esm/sha3.js
+function keccakP(s, rounds = 24) {
+  const B = new Uint32Array(5 * 2);
+  for (let round = 24 - rounds; round < 24; round++) {
+    for (let x = 0; x < 10; x++)
+      B[x] = s[x] ^ s[x + 10] ^ s[x + 20] ^ s[x + 30] ^ s[x + 40];
+    for (let x = 0; x < 10; x += 2) {
+      const idx1 = (x + 8) % 10;
+      const idx0 = (x + 2) % 10;
+      const B0 = B[idx0];
+      const B1 = B[idx0 + 1];
+      const Th = rotlH(B0, B1, 1) ^ B[idx1];
+      const Tl = rotlL(B0, B1, 1) ^ B[idx1 + 1];
+      for (let y = 0; y < 50; y += 10) {
+        s[x + y] ^= Th;
+        s[x + y + 1] ^= Tl;
+      }
+    }
+    let curH = s[2];
+    let curL = s[3];
+    for (let t = 0; t < 24; t++) {
+      const shift = SHA3_ROTL[t];
+      const Th = rotlH(curH, curL, shift);
+      const Tl = rotlL(curH, curL, shift);
+      const PI = SHA3_PI[t];
+      curH = s[PI];
+      curL = s[PI + 1];
+      s[PI] = Th;
+      s[PI + 1] = Tl;
+    }
+    for (let y = 0; y < 50; y += 10) {
+      for (let x = 0; x < 10; x++)
+        B[x] = s[y + x];
+      for (let x = 0; x < 10; x++)
+        s[y + x] ^= ~B[(x + 2) % 10] & B[(x + 4) % 10];
+    }
+    s[0] ^= SHA3_IOTA_H[round];
+    s[1] ^= SHA3_IOTA_L[round];
+  }
+  clean(B);
+}
+var _0n6, _1n6, _2n4, _7n2, _256n, _0x71n, SHA3_PI, SHA3_ROTL, _SHA3_IOTA, IOTAS, SHA3_IOTA_H, SHA3_IOTA_L, rotlH, rotlL, Keccak, gen, keccak_256;
+var init_sha3 = __esm({
+  "../../node_modules/@noble/hashes/esm/sha3.js"() {
+    "use strict";
+    init_u64();
+    init_utils();
+    _0n6 = BigInt(0);
+    _1n6 = BigInt(1);
+    _2n4 = BigInt(2);
+    _7n2 = BigInt(7);
+    _256n = BigInt(256);
+    _0x71n = BigInt(113);
+    SHA3_PI = [];
+    SHA3_ROTL = [];
+    _SHA3_IOTA = [];
+    for (let round = 0, R = _1n6, x = 1, y = 0; round < 24; round++) {
+      [x, y] = [y, (2 * x + 3 * y) % 5];
+      SHA3_PI.push(2 * (5 * y + x));
+      SHA3_ROTL.push((round + 1) * (round + 2) / 2 % 64);
+      let t = _0n6;
+      for (let j = 0; j < 7; j++) {
+        R = (R << _1n6 ^ (R >> _7n2) * _0x71n) % _256n;
+        if (R & _2n4)
+          t ^= _1n6 << (_1n6 << /* @__PURE__ */ BigInt(j)) - _1n6;
+      }
+      _SHA3_IOTA.push(t);
+    }
+    IOTAS = split(_SHA3_IOTA, true);
+    SHA3_IOTA_H = IOTAS[0];
+    SHA3_IOTA_L = IOTAS[1];
+    rotlH = (h, l, s) => s > 32 ? rotlBH(h, l, s) : rotlSH(h, l, s);
+    rotlL = (h, l, s) => s > 32 ? rotlBL(h, l, s) : rotlSL(h, l, s);
+    Keccak = class _Keccak extends Hash {
+      // NOTE: we accept arguments in bytes instead of bits here.
+      constructor(blockLen, suffix, outputLen, enableXOF = false, rounds = 24) {
+        super();
+        this.pos = 0;
+        this.posOut = 0;
+        this.finished = false;
+        this.destroyed = false;
+        this.enableXOF = false;
+        this.blockLen = blockLen;
+        this.suffix = suffix;
+        this.outputLen = outputLen;
+        this.enableXOF = enableXOF;
+        this.rounds = rounds;
+        anumber(outputLen);
+        if (!(0 < blockLen && blockLen < 200))
+          throw new Error("only keccak-f1600 function is supported");
+        this.state = new Uint8Array(200);
+        this.state32 = u32(this.state);
+      }
+      clone() {
+        return this._cloneInto();
+      }
+      keccak() {
+        swap32IfBE(this.state32);
+        keccakP(this.state32, this.rounds);
+        swap32IfBE(this.state32);
+        this.posOut = 0;
+        this.pos = 0;
+      }
+      update(data) {
+        aexists(this);
+        data = toBytes(data);
+        abytes(data);
+        const { blockLen, state } = this;
+        const len = data.length;
+        for (let pos = 0; pos < len; ) {
+          const take = Math.min(blockLen - this.pos, len - pos);
+          for (let i = 0; i < take; i++)
+            state[this.pos++] ^= data[pos++];
+          if (this.pos === blockLen)
+            this.keccak();
+        }
+        return this;
+      }
+      finish() {
+        if (this.finished)
+          return;
+        this.finished = true;
+        const { state, suffix, pos, blockLen } = this;
+        state[pos] ^= suffix;
+        if ((suffix & 128) !== 0 && pos === blockLen - 1)
+          this.keccak();
+        state[blockLen - 1] ^= 128;
+        this.keccak();
+      }
+      writeInto(out) {
+        aexists(this, false);
+        abytes(out);
+        this.finish();
+        const bufferOut = this.state;
+        const { blockLen } = this;
+        for (let pos = 0, len = out.length; pos < len; ) {
+          if (this.posOut >= blockLen)
+            this.keccak();
+          const take = Math.min(blockLen - this.posOut, len - pos);
+          out.set(bufferOut.subarray(this.posOut, this.posOut + take), pos);
+          this.posOut += take;
+          pos += take;
+        }
+        return out;
+      }
+      xofInto(out) {
+        if (!this.enableXOF)
+          throw new Error("XOF is not possible for this instance");
+        return this.writeInto(out);
+      }
+      xof(bytes) {
+        anumber(bytes);
+        return this.xofInto(new Uint8Array(bytes));
+      }
+      digestInto(out) {
+        aoutput(out, this);
+        if (this.finished)
+          throw new Error("digest() was already called");
+        this.writeInto(out);
+        this.destroy();
+        return out;
+      }
+      digest() {
+        return this.digestInto(new Uint8Array(this.outputLen));
+      }
+      destroy() {
+        this.destroyed = true;
+        clean(this.state);
+      }
+      _cloneInto(to) {
+        const { blockLen, suffix, outputLen, rounds, enableXOF } = this;
+        to || (to = new _Keccak(blockLen, suffix, outputLen, enableXOF, rounds));
+        to.state32.set(this.state32);
+        to.pos = this.pos;
+        to.posOut = this.posOut;
+        to.finished = this.finished;
+        to.rounds = rounds;
+        to.suffix = suffix;
+        to.outputLen = outputLen;
+        to.enableXOF = enableXOF;
+        to.destroyed = this.destroyed;
+        return to;
+      }
+    };
+    gen = (suffix, blockLen, outputLen) => createHasher(() => new Keccak(blockLen, suffix, outputLen));
+    keccak_256 = /* @__PURE__ */ (() => gen(1, 136, 256 / 8))();
+  }
+});
+
+// ../../node_modules/viem/_esm/utils/hash/keccak256.js
+function keccak256(value, to_) {
+  const to = to_ || "hex";
+  const bytes = keccak_256(isHex(value, { strict: false }) ? toBytes2(value) : value);
+  if (to === "bytes")
+    return bytes;
+  return toHex(bytes);
+}
+var init_keccak256 = __esm({
+  "../../node_modules/viem/_esm/utils/hash/keccak256.js"() {
+    "use strict";
+    init_sha3();
+    init_isHex();
+    init_toBytes();
+    init_toHex();
+  }
+});
+
+// ../../node_modules/viem/_esm/errors/address.js
+var InvalidAddressError;
+var init_address = __esm({
+  "../../node_modules/viem/_esm/errors/address.js"() {
+    "use strict";
+    init_base();
+    InvalidAddressError = class extends BaseError {
+      constructor({ address }) {
+        super(`Address "${address}" is invalid.`, {
+          metaMessages: [
+            "- Address must be a hex value of 20 bytes (40 hex characters).",
+            "- Address must match its checksum counterpart."
+          ],
+          name: "InvalidAddressError"
+        });
+      }
+    };
+  }
+});
+
+// ../../node_modules/viem/_esm/utils/lru.js
+var LruMap;
+var init_lru = __esm({
+  "../../node_modules/viem/_esm/utils/lru.js"() {
+    "use strict";
+    LruMap = class extends Map {
+      constructor(size2) {
+        super();
+        Object.defineProperty(this, "maxSize", {
+          enumerable: true,
+          configurable: true,
+          writable: true,
+          value: void 0
+        });
+        this.maxSize = size2;
+      }
+      get(key) {
+        const value = super.get(key);
+        if (super.has(key) && value !== void 0) {
+          this.delete(key);
+          super.set(key, value);
+        }
+        return value;
+      }
+      set(key, value) {
+        super.set(key, value);
+        if (this.maxSize && this.size > this.maxSize) {
+          const firstKey = this.keys().next().value;
+          if (firstKey)
+            this.delete(firstKey);
+        }
+        return this;
+      }
+    };
+  }
+});
+
+// ../../node_modules/viem/_esm/utils/address/getAddress.js
+function checksumAddress(address_, chainId) {
+  if (checksumAddressCache.has(`${address_}.${chainId}`))
+    return checksumAddressCache.get(`${address_}.${chainId}`);
+  const hexAddress = chainId ? `${chainId}${address_.toLowerCase()}` : address_.substring(2).toLowerCase();
+  const hash = keccak256(stringToBytes(hexAddress), "bytes");
+  const address = (chainId ? hexAddress.substring(`${chainId}0x`.length) : hexAddress).split("");
+  for (let i = 0; i < 40; i += 2) {
+    if (hash[i >> 1] >> 4 >= 8 && address[i]) {
+      address[i] = address[i].toUpperCase();
+    }
+    if ((hash[i >> 1] & 15) >= 8 && address[i + 1]) {
+      address[i + 1] = address[i + 1].toUpperCase();
+    }
+  }
+  const result = `0x${address.join("")}`;
+  checksumAddressCache.set(`${address_}.${chainId}`, result);
+  return result;
+}
+function getAddress(address, chainId) {
+  if (!isAddress(address, { strict: false }))
+    throw new InvalidAddressError({ address });
+  return checksumAddress(address, chainId);
+}
+var checksumAddressCache;
+var init_getAddress = __esm({
+  "../../node_modules/viem/_esm/utils/address/getAddress.js"() {
+    "use strict";
+    init_address();
+    init_toBytes();
+    init_keccak256();
+    init_lru();
+    init_isAddress();
+    checksumAddressCache = /* @__PURE__ */ new LruMap(8192);
+  }
+});
+
+// ../../node_modules/viem/_esm/utils/address/isAddress.js
+function isAddress(address, options) {
+  const { strict = true } = options ?? {};
+  const cacheKey2 = `${address}.${strict}`;
+  if (isAddressCache.has(cacheKey2))
+    return isAddressCache.get(cacheKey2);
+  const result = (() => {
+    if (!addressRegex.test(address))
+      return false;
+    if (address.toLowerCase() === address)
+      return true;
+    if (strict)
+      return checksumAddress(address) === address;
+    return true;
+  })();
+  isAddressCache.set(cacheKey2, result);
+  return result;
+}
+var addressRegex, isAddressCache;
+var init_isAddress = __esm({
+  "../../node_modules/viem/_esm/utils/address/isAddress.js"() {
+    "use strict";
+    init_lru();
+    init_getAddress();
+    addressRegex = /^0x[a-fA-F0-9]{40}$/;
+    isAddressCache = /* @__PURE__ */ new LruMap(8192);
+  }
+});
+
+// ../../node_modules/viem/_esm/utils/data/concat.js
+function concat(values) {
+  if (typeof values[0] === "string")
+    return concatHex(values);
+  return concatBytes2(values);
+}
+function concatBytes2(values) {
+  let length4 = 0;
+  for (const arr of values) {
+    length4 += arr.length;
+  }
+  const result = new Uint8Array(length4);
+  let offset = 0;
+  for (const arr of values) {
+    result.set(arr, offset);
+    offset += arr.length;
+  }
+  return result;
+}
+function concatHex(values) {
+  return `0x${values.reduce((acc, x) => acc + x.replace("0x", ""), "")}`;
+}
+var init_concat = __esm({
+  "../../node_modules/viem/_esm/utils/data/concat.js"() {
+    "use strict";
+  }
+});
+
+// ../../node_modules/viem/_esm/accounts/utils/publicKeyToAddress.js
+function publicKeyToAddress(publicKey) {
+  const address = keccak256(`0x${publicKey.substring(4)}`).substring(26);
+  return checksumAddress(`0x${address}`);
+}
+var init_publicKeyToAddress = __esm({
+  "../../node_modules/viem/_esm/accounts/utils/publicKeyToAddress.js"() {
+    "use strict";
+    init_getAddress();
+    init_keccak256();
+  }
+});
+
 // ../../node_modules/@noble/hashes/esm/hmac.js
 var HMAC, hmac;
 var init_hmac = __esm({
@@ -5975,7 +7495,7 @@ var init_hmac = __esm({
         this.finished = false;
         this.destroyed = false;
         ahash(hash);
-        const key = toBytes2(_key);
+        const key = toBytes(_key);
         this.iHash = hash.create();
         if (typeof this.iHash.update !== "function")
           throw new Error("Expected instance of class which extends utils.Hash");
@@ -6054,10 +7574,10 @@ function numberToHexUnpadded(num2) {
   const hex = num2.toString(16);
   return hex.length & 1 ? "0" + hex : hex;
 }
-function hexToNumber2(hex) {
+function hexToNumber3(hex) {
   if (typeof hex !== "string")
     throw new Error("hex string expected, got " + typeof hex);
-  return hex === "" ? _0n2 : BigInt("0x" + hex);
+  return hex === "" ? _0n7 : BigInt("0x" + hex);
 }
 function bytesToHex3(bytes) {
   abytes2(bytes);
@@ -6099,20 +7619,20 @@ function hexToBytes3(hex) {
   }
   return array;
 }
-function bytesToNumberBE(bytes) {
-  return hexToNumber2(bytesToHex3(bytes));
+function bytesToNumberBE2(bytes) {
+  return hexToNumber3(bytesToHex3(bytes));
 }
-function bytesToNumberLE(bytes) {
+function bytesToNumberLE2(bytes) {
   abytes2(bytes);
-  return hexToNumber2(bytesToHex3(Uint8Array.from(bytes).reverse()));
+  return hexToNumber3(bytesToHex3(Uint8Array.from(bytes).reverse()));
 }
-function numberToBytesBE(n, len) {
+function numberToBytesBE2(n, len) {
   return hexToBytes3(n.toString(16).padStart(len * 2, "0"));
 }
-function numberToBytesLE(n, len) {
-  return numberToBytesBE(n, len).reverse();
+function numberToBytesLE2(n, len) {
+  return numberToBytesBE2(n, len).reverse();
 }
-function ensureBytes(title, hex, expectedLength) {
+function ensureBytes2(title, hex, expectedLength) {
   let res;
   if (typeof hex === "string") {
     try {
@@ -6150,16 +7670,16 @@ function utf8ToBytes2(str) {
     throw new Error("string expected");
   return new Uint8Array(new TextEncoder().encode(str));
 }
-function inRange(n, min, max) {
-  return isPosBig(n) && isPosBig(min) && isPosBig(max) && min <= n && n < max;
+function inRange2(n, min, max) {
+  return isPosBig2(n) && isPosBig2(min) && isPosBig2(max) && min <= n && n < max;
 }
-function aInRange(title, n, min, max) {
-  if (!inRange(n, min, max))
+function aInRange2(title, n, min, max) {
+  if (!inRange2(n, min, max))
     throw new Error("expected valid " + title + ": " + min + " <= n < " + max + ", got " + n);
 }
-function bitLen(n) {
+function bitLen2(n) {
   let len;
-  for (len = 0; n > _0n2; n >>= _1n2, len += 1)
+  for (len = 0; n > _0n7; n >>= _1n7, len += 1)
     ;
   return len;
 }
@@ -6211,7 +7731,7 @@ function createHmacDrbg(hashLen, qByteLen, hmacFn) {
   };
   return genUntil;
 }
-function validateObject(object, validators, optValidators = {}) {
+function validateObject2(object, validators, optValidators = {}) {
   const checkField = (fieldName, type, isOptional) => {
     const checkVal = validatorFns[type];
     if (typeof checkVal !== "function")
@@ -6229,7 +7749,7 @@ function validateObject(object, validators, optValidators = {}) {
     checkField(fieldName, type, true);
   return object;
 }
-function memoized(fn) {
+function memoized2(fn) {
   const map = /* @__PURE__ */ new WeakMap();
   return (arg, ...args) => {
     const val = map.get(arg);
@@ -6240,18 +7760,18 @@ function memoized(fn) {
     return computed;
   };
 }
-var _0n2, _1n2, hasHexBuiltin2, hexes3, asciis2, isPosBig, bitMask, u8n, u8fr, validatorFns;
-var init_utils2 = __esm({
+var _0n7, _1n7, hasHexBuiltin2, hexes3, asciis2, isPosBig2, bitMask2, u8n, u8fr, validatorFns;
+var init_utils3 = __esm({
   "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/utils.js"() {
     "use strict";
-    _0n2 = /* @__PURE__ */ BigInt(0);
-    _1n2 = /* @__PURE__ */ BigInt(1);
+    _0n7 = /* @__PURE__ */ BigInt(0);
+    _1n7 = /* @__PURE__ */ BigInt(1);
     hasHexBuiltin2 = // @ts-ignore
     typeof Uint8Array.from([]).toHex === "function" && typeof Uint8Array.fromHex === "function";
     hexes3 = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
     asciis2 = { _0: 48, _9: 57, A: 65, F: 70, a: 97, f: 102 };
-    isPosBig = (n) => typeof n === "bigint" && _0n2 <= n;
-    bitMask = (n) => (_1n2 << BigInt(n)) - _1n2;
+    isPosBig2 = (n) => typeof n === "bigint" && _0n7 <= n;
+    bitMask2 = (n) => (_1n7 << BigInt(n)) - _1n7;
     u8n = (len) => new Uint8Array(len);
     u8fr = (arr) => Uint8Array.from(arr);
     validatorFns = {
@@ -6269,27 +7789,27 @@ var init_utils2 = __esm({
 });
 
 // ../../node_modules/viem/node_modules/@noble/curves/esm/abstract/modular.js
-function mod(a, b) {
+function mod2(a, b) {
   const result = a % b;
-  return result >= _0n3 ? result : b + result;
+  return result >= _0n8 ? result : b + result;
 }
-function pow2(x, power, modulo) {
+function pow22(x, power, modulo) {
   let res = x;
-  while (power-- > _0n3) {
+  while (power-- > _0n8) {
     res *= res;
     res %= modulo;
   }
   return res;
 }
-function invert(number, modulo) {
-  if (number === _0n3)
+function invert2(number, modulo) {
+  if (number === _0n8)
     throw new Error("invert: expected non-zero number");
-  if (modulo <= _0n3)
+  if (modulo <= _0n8)
     throw new Error("invert: expected positive modulus, got " + modulo);
-  let a = mod(number, modulo);
+  let a = mod2(number, modulo);
   let b = modulo;
-  let x = _0n3, y = _1n3, u = _1n3, v = _0n3;
-  while (a !== _0n3) {
+  let x = _0n8, y = _1n8, u = _1n8, v = _0n8;
+  while (a !== _0n8) {
     const q = b / a;
     const r = b % a;
     const m = x - u * q;
@@ -6297,51 +7817,51 @@ function invert(number, modulo) {
     b = a, a = r, x = u, y = v, u = m, v = n;
   }
   const gcd = b;
-  if (gcd !== _1n3)
+  if (gcd !== _1n8)
     throw new Error("invert: does not exist");
-  return mod(x, modulo);
+  return mod2(x, modulo);
 }
-function sqrt3mod4(Fp2, n) {
-  const p1div4 = (Fp2.ORDER + _1n3) / _4n;
+function sqrt3mod42(Fp2, n) {
+  const p1div4 = (Fp2.ORDER + _1n8) / _4n2;
   const root = Fp2.pow(n, p1div4);
   if (!Fp2.eql(Fp2.sqr(root), n))
     throw new Error("Cannot find square root");
   return root;
 }
-function sqrt5mod8(Fp2, n) {
-  const p5div8 = (Fp2.ORDER - _5n) / _8n;
-  const n2 = Fp2.mul(n, _2n2);
+function sqrt5mod82(Fp2, n) {
+  const p5div8 = (Fp2.ORDER - _5n3) / _8n4;
+  const n2 = Fp2.mul(n, _2n5);
   const v = Fp2.pow(n2, p5div8);
   const nv = Fp2.mul(n, v);
-  const i = Fp2.mul(Fp2.mul(nv, _2n2), v);
+  const i = Fp2.mul(Fp2.mul(nv, _2n5), v);
   const root = Fp2.mul(nv, Fp2.sub(i, Fp2.ONE));
   if (!Fp2.eql(Fp2.sqr(root), n))
     throw new Error("Cannot find square root");
   return root;
 }
-function tonelliShanks(P) {
+function tonelliShanks2(P) {
   if (P < BigInt(3))
     throw new Error("sqrt is not defined for small field");
-  let Q = P - _1n3;
+  let Q = P - _1n8;
   let S = 0;
-  while (Q % _2n2 === _0n3) {
-    Q /= _2n2;
+  while (Q % _2n5 === _0n8) {
+    Q /= _2n5;
     S++;
   }
-  let Z = _2n2;
-  const _Fp = Field(P);
-  while (FpLegendre(_Fp, Z) === 1) {
+  let Z = _2n5;
+  const _Fp = Field2(P);
+  while (FpLegendre2(_Fp, Z) === 1) {
     if (Z++ > 1e3)
       throw new Error("Cannot find square root: probably non-prime P");
   }
   if (S === 1)
-    return sqrt3mod4;
+    return sqrt3mod42;
   let cc = _Fp.pow(Z, Q);
-  const Q1div2 = (Q + _1n3) / _2n2;
+  const Q1div2 = (Q + _1n8) / _2n5;
   return function tonelliSlow(Fp2, n) {
     if (Fp2.is0(n))
       return n;
-    if (FpLegendre(Fp2, n) !== 1)
+    if (FpLegendre2(Fp2, n) !== 1)
       throw new Error("Cannot find square root");
     let M = S;
     let c = Fp2.mul(Fp2.ONE, cc);
@@ -6358,7 +7878,7 @@ function tonelliShanks(P) {
         if (i === M)
           throw new Error("Cannot find square root");
       }
-      const exponent = _1n3 << BigInt(M - i - 1);
+      const exponent = _1n8 << BigInt(M - i - 1);
       const b = Fp2.pow(c, exponent);
       M = i;
       c = Fp2.sqr(b);
@@ -6368,44 +7888,44 @@ function tonelliShanks(P) {
     return R;
   };
 }
-function FpSqrt(P) {
-  if (P % _4n === _3n)
-    return sqrt3mod4;
-  if (P % _8n === _5n)
-    return sqrt5mod8;
-  return tonelliShanks(P);
+function FpSqrt2(P) {
+  if (P % _4n2 === _3n3)
+    return sqrt3mod42;
+  if (P % _8n4 === _5n3)
+    return sqrt5mod82;
+  return tonelliShanks2(P);
 }
-function validateField(field) {
+function validateField2(field) {
   const initial = {
     ORDER: "bigint",
     MASK: "bigint",
     BYTES: "isSafeInteger",
     BITS: "isSafeInteger"
   };
-  const opts = FIELD_FIELDS.reduce((map, val) => {
+  const opts = FIELD_FIELDS2.reduce((map, val) => {
     map[val] = "function";
     return map;
   }, initial);
-  return validateObject(field, opts);
+  return validateObject2(field, opts);
 }
-function FpPow(Fp2, num2, power) {
-  if (power < _0n3)
+function FpPow2(Fp2, num2, power) {
+  if (power < _0n8)
     throw new Error("invalid exponent, negatives unsupported");
-  if (power === _0n3)
+  if (power === _0n8)
     return Fp2.ONE;
-  if (power === _1n3)
+  if (power === _1n8)
     return num2;
   let p = Fp2.ONE;
   let d = num2;
-  while (power > _0n3) {
-    if (power & _1n3)
+  while (power > _0n8) {
+    if (power & _1n8)
       p = Fp2.mul(p, d);
     d = Fp2.sqr(d);
-    power >>= _1n3;
+    power >>= _1n8;
   }
   return p;
 }
-function FpInvertBatch(Fp2, nums, passZero = false) {
+function FpInvertBatch2(Fp2, nums, passZero = false) {
   const inverted = new Array(nums.length).fill(passZero ? Fp2.ZERO : void 0);
   const multipliedAcc = nums.reduce((acc, num2, i) => {
     if (Fp2.is0(num2))
@@ -6422,8 +7942,8 @@ function FpInvertBatch(Fp2, nums, passZero = false) {
   }, invertedAcc);
   return inverted;
 }
-function FpLegendre(Fp2, n) {
-  const p1mod2 = (Fp2.ORDER - _1n3) / _2n2;
+function FpLegendre2(Fp2, n) {
+  const p1mod2 = (Fp2.ORDER - _1n8) / _2n5;
   const powered = Fp2.pow(n, p1mod2);
   const yes = Fp2.eql(powered, Fp2.ONE);
   const zero = Fp2.eql(powered, Fp2.ZERO);
@@ -6432,17 +7952,17 @@ function FpLegendre(Fp2, n) {
     throw new Error("invalid Legendre symbol result");
   return yes ? 1 : zero ? 0 : -1;
 }
-function nLength(n, nBitLength) {
+function nLength2(n, nBitLength) {
   if (nBitLength !== void 0)
     anumber(nBitLength);
   const _nBitLength = nBitLength !== void 0 ? nBitLength : n.toString(2).length;
   const nByteLength = Math.ceil(_nBitLength / 8);
   return { nBitLength: _nBitLength, nByteLength };
 }
-function Field(ORDER, bitLen3, isLE2 = false, redef = {}) {
-  if (ORDER <= _0n3)
+function Field2(ORDER, bitLen3, isLE2 = false, redef = {}) {
+  if (ORDER <= _0n8)
     throw new Error("invalid field: expected ORDER > 0, got " + ORDER);
-  const { nBitLength: BITS, nByteLength: BYTES } = nLength(ORDER, bitLen3);
+  const { nBitLength: BITS, nByteLength: BYTES } = nLength2(ORDER, bitLen3);
   if (BYTES > 2048)
     throw new Error("invalid field: expected ORDER of <= 2048 bytes");
   let sqrtP;
@@ -6451,44 +7971,44 @@ function Field(ORDER, bitLen3, isLE2 = false, redef = {}) {
     isLE: isLE2,
     BITS,
     BYTES,
-    MASK: bitMask(BITS),
-    ZERO: _0n3,
-    ONE: _1n3,
-    create: (num2) => mod(num2, ORDER),
+    MASK: bitMask2(BITS),
+    ZERO: _0n8,
+    ONE: _1n8,
+    create: (num2) => mod2(num2, ORDER),
     isValid: (num2) => {
       if (typeof num2 !== "bigint")
         throw new Error("invalid field element: expected bigint, got " + typeof num2);
-      return _0n3 <= num2 && num2 < ORDER;
+      return _0n8 <= num2 && num2 < ORDER;
     },
-    is0: (num2) => num2 === _0n3,
-    isOdd: (num2) => (num2 & _1n3) === _1n3,
-    neg: (num2) => mod(-num2, ORDER),
+    is0: (num2) => num2 === _0n8,
+    isOdd: (num2) => (num2 & _1n8) === _1n8,
+    neg: (num2) => mod2(-num2, ORDER),
     eql: (lhs, rhs) => lhs === rhs,
-    sqr: (num2) => mod(num2 * num2, ORDER),
-    add: (lhs, rhs) => mod(lhs + rhs, ORDER),
-    sub: (lhs, rhs) => mod(lhs - rhs, ORDER),
-    mul: (lhs, rhs) => mod(lhs * rhs, ORDER),
-    pow: (num2, power) => FpPow(f, num2, power),
-    div: (lhs, rhs) => mod(lhs * invert(rhs, ORDER), ORDER),
+    sqr: (num2) => mod2(num2 * num2, ORDER),
+    add: (lhs, rhs) => mod2(lhs + rhs, ORDER),
+    sub: (lhs, rhs) => mod2(lhs - rhs, ORDER),
+    mul: (lhs, rhs) => mod2(lhs * rhs, ORDER),
+    pow: (num2, power) => FpPow2(f, num2, power),
+    div: (lhs, rhs) => mod2(lhs * invert2(rhs, ORDER), ORDER),
     // Same as above, but doesn't normalize
     sqrN: (num2) => num2 * num2,
     addN: (lhs, rhs) => lhs + rhs,
     subN: (lhs, rhs) => lhs - rhs,
     mulN: (lhs, rhs) => lhs * rhs,
-    inv: (num2) => invert(num2, ORDER),
+    inv: (num2) => invert2(num2, ORDER),
     sqrt: redef.sqrt || ((n) => {
       if (!sqrtP)
-        sqrtP = FpSqrt(ORDER);
+        sqrtP = FpSqrt2(ORDER);
       return sqrtP(f, n);
     }),
-    toBytes: (num2) => isLE2 ? numberToBytesLE(num2, BYTES) : numberToBytesBE(num2, BYTES),
+    toBytes: (num2) => isLE2 ? numberToBytesLE2(num2, BYTES) : numberToBytesBE2(num2, BYTES),
     fromBytes: (bytes) => {
       if (bytes.length !== BYTES)
         throw new Error("Field.fromBytes: expected " + BYTES + " bytes, got " + bytes.length);
-      return isLE2 ? bytesToNumberLE(bytes) : bytesToNumberBE(bytes);
+      return isLE2 ? bytesToNumberLE2(bytes) : bytesToNumberBE2(bytes);
     },
     // TODO: we don't need it here, move out to separate fn
-    invertBatch: (lst) => FpInvertBatch(f, lst),
+    invertBatch: (lst) => FpInvertBatch2(f, lst),
     // We can't move this out because Fp6, Fp12 implement it
     // and it's unclear what to return in there.
     cmov: (a, b, c) => c ? b : a
@@ -6511,24 +8031,24 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
   const minLen = getMinHashLength(fieldOrder);
   if (len < 16 || len < minLen || len > 1024)
     throw new Error("expected " + minLen + "-1024 bytes of input, got " + len);
-  const num2 = isLE2 ? bytesToNumberLE(key) : bytesToNumberBE(key);
-  const reduced = mod(num2, fieldOrder - _1n3) + _1n3;
-  return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
+  const num2 = isLE2 ? bytesToNumberLE2(key) : bytesToNumberBE2(key);
+  const reduced = mod2(num2, fieldOrder - _1n8) + _1n8;
+  return isLE2 ? numberToBytesLE2(reduced, fieldLen) : numberToBytesBE2(reduced, fieldLen);
 }
-var _0n3, _1n3, _2n2, _3n, _4n, _5n, _8n, FIELD_FIELDS;
-var init_modular = __esm({
+var _0n8, _1n8, _2n5, _3n3, _4n2, _5n3, _8n4, FIELD_FIELDS2;
+var init_modular2 = __esm({
   "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/modular.js"() {
     "use strict";
     init_utils();
-    init_utils2();
-    _0n3 = BigInt(0);
-    _1n3 = BigInt(1);
-    _2n2 = /* @__PURE__ */ BigInt(2);
-    _3n = /* @__PURE__ */ BigInt(3);
-    _4n = /* @__PURE__ */ BigInt(4);
-    _5n = /* @__PURE__ */ BigInt(5);
-    _8n = /* @__PURE__ */ BigInt(8);
-    FIELD_FIELDS = [
+    init_utils3();
+    _0n8 = BigInt(0);
+    _1n8 = BigInt(1);
+    _2n5 = /* @__PURE__ */ BigInt(2);
+    _3n3 = /* @__PURE__ */ BigInt(3);
+    _4n2 = /* @__PURE__ */ BigInt(4);
+    _5n3 = /* @__PURE__ */ BigInt(5);
+    _8n4 = /* @__PURE__ */ BigInt(8);
+    FIELD_FIELDS2 = [
       "create",
       "isValid",
       "is0",
@@ -6555,26 +8075,26 @@ function constTimeNegate(condition, item) {
   const neg = item.negate();
   return condition ? neg : item;
 }
-function validateW(W, bits) {
+function validateW2(W, bits) {
   if (!Number.isSafeInteger(W) || W <= 0 || W > bits)
     throw new Error("invalid window size, expected [1.." + bits + "], got W=" + W);
 }
-function calcWOpts(W, scalarBits) {
-  validateW(W, scalarBits);
+function calcWOpts2(W, scalarBits) {
+  validateW2(W, scalarBits);
   const windows = Math.ceil(scalarBits / W) + 1;
   const windowSize = 2 ** (W - 1);
   const maxNumber = 2 ** W;
-  const mask = bitMask(W);
+  const mask = bitMask2(W);
   const shiftBy = BigInt(W);
   return { windows, windowSize, mask, maxNumber, shiftBy };
 }
-function calcOffsets(n, window, wOpts) {
+function calcOffsets2(n, window, wOpts) {
   const { windowSize, mask, maxNumber, shiftBy } = wOpts;
   let wbits = Number(n & mask);
   let nextN = n >> shiftBy;
   if (wbits > windowSize) {
     wbits -= maxNumber;
-    nextN += _1n4;
+    nextN += _1n9;
   }
   const offsetStart = window * windowSize;
   const offset = offsetStart + Math.abs(wbits) - 1;
@@ -6584,7 +8104,7 @@ function calcOffsets(n, window, wOpts) {
   const offsetF = offsetStart;
   return { nextN, offset, isZero, isNeg, isNegF, offsetF };
 }
-function validateMSMPoints(points, c) {
+function validateMSMPoints2(points, c) {
   if (!Array.isArray(points))
     throw new Error("array expected");
   points.forEach((p, i) => {
@@ -6592,7 +8112,7 @@ function validateMSMPoints(points, c) {
       throw new Error("invalid point at index " + i);
   });
 }
-function validateMSMScalars(scalars, field) {
+function validateMSMScalars2(scalars, field) {
   if (!Array.isArray(scalars))
     throw new Error("array of scalars expected");
   scalars.forEach((s, i) => {
@@ -6600,23 +8120,23 @@ function validateMSMScalars(scalars, field) {
       throw new Error("invalid scalar at index " + i);
   });
 }
-function getW(P) {
-  return pointWindowSizes.get(P) || 1;
+function getW2(P) {
+  return pointWindowSizes2.get(P) || 1;
 }
-function wNAF(c, bits) {
+function wNAF2(c, bits) {
   return {
     constTimeNegate,
     hasPrecomputes(elm) {
-      return getW(elm) !== 1;
+      return getW2(elm) !== 1;
     },
     // non-const time multiplication ladder
     unsafeLadder(elm, n, p = c.ZERO) {
       let d = elm;
-      while (n > _0n4) {
-        if (n & _1n4)
+      while (n > _0n9) {
+        if (n & _1n9)
           p = p.add(d);
         d = d.double();
-        n >>= _1n4;
+        n >>= _1n9;
       }
       return p;
     },
@@ -6633,7 +8153,7 @@ function wNAF(c, bits) {
      * @returns precomputed point tables flattened to a single array
      */
     precomputeWindow(elm, W) {
-      const { windows, windowSize } = calcWOpts(W, bits);
+      const { windows, windowSize } = calcWOpts2(W, bits);
       const points = [];
       let p = elm;
       let base4 = p;
@@ -6658,9 +8178,9 @@ function wNAF(c, bits) {
     wNAF(W, precomputes, n) {
       let p = c.ZERO;
       let f = c.BASE;
-      const wo = calcWOpts(W, bits);
+      const wo = calcWOpts2(W, bits);
       for (let window = 0; window < wo.windows; window++) {
-        const { nextN, offset, isZero, isNeg, isNegF, offsetF } = calcOffsets(n, window, wo);
+        const { nextN, offset, isZero, isNeg, isNegF, offsetF } = calcOffsets2(n, window, wo);
         n = nextN;
         if (isZero) {
           f = f.add(constTimeNegate(isNegF, precomputes[offsetF]));
@@ -6679,11 +8199,11 @@ function wNAF(c, bits) {
      * @returns point
      */
     wNAFUnsafe(W, precomputes, n, acc = c.ZERO) {
-      const wo = calcWOpts(W, bits);
+      const wo = calcWOpts2(W, bits);
       for (let window = 0; window < wo.windows; window++) {
-        if (n === _0n4)
+        if (n === _0n9)
           break;
-        const { nextN, offset, isZero, isNeg } = calcOffsets(n, window, wo);
+        const { nextN, offset, isZero, isNeg } = calcOffsets2(n, window, wo);
         n = nextN;
         if (isZero) {
           continue;
@@ -6695,20 +8215,20 @@ function wNAF(c, bits) {
       return acc;
     },
     getPrecomputes(W, P, transform) {
-      let comp = pointPrecomputes.get(P);
+      let comp = pointPrecomputes2.get(P);
       if (!comp) {
         comp = this.precomputeWindow(P, W);
         if (W !== 1)
-          pointPrecomputes.set(P, transform(comp));
+          pointPrecomputes2.set(P, transform(comp));
       }
       return comp;
     },
     wNAFCached(P, n, transform) {
-      const W = getW(P);
+      const W = getW2(P);
       return this.wNAF(W, this.getPrecomputes(W, P, transform), n);
     },
     wNAFCachedUnsafe(P, n, transform, prev) {
-      const W = getW(P);
+      const W = getW2(P);
       if (W === 1)
         return this.unsafeLadder(P, n, prev);
       return this.wNAFUnsafe(W, this.getPrecomputes(W, P, transform), n, prev);
@@ -6717,21 +8237,21 @@ function wNAF(c, bits) {
     // using windowed method. This specifies window size and
     // stores precomputed values. Usually only base point would be precomputed.
     setWindowSize(P, W) {
-      validateW(W, bits);
-      pointWindowSizes.set(P, W);
-      pointPrecomputes.delete(P);
+      validateW2(W, bits);
+      pointWindowSizes2.set(P, W);
+      pointPrecomputes2.delete(P);
     }
   };
 }
-function pippenger(c, fieldN, points, scalars) {
-  validateMSMPoints(points, c);
-  validateMSMScalars(scalars, fieldN);
+function pippenger2(c, fieldN, points, scalars) {
+  validateMSMPoints2(points, c);
+  validateMSMScalars2(scalars, fieldN);
   const plength = points.length;
   const slength = scalars.length;
   if (plength !== slength)
     throw new Error("arrays of points and scalars must have equal length");
   const zero = c.ZERO;
-  const wbits = bitLen(BigInt(plength));
+  const wbits = bitLen2(BigInt(plength));
   let windowSize = 1;
   if (wbits > 12)
     windowSize = wbits - 3;
@@ -6739,7 +8259,7 @@ function pippenger(c, fieldN, points, scalars) {
     windowSize = wbits - 2;
   else if (wbits > 0)
     windowSize = 2;
-  const MASK = bitMask(windowSize);
+  const MASK = bitMask2(windowSize);
   const buckets = new Array(Number(MASK) + 1).fill(zero);
   const lastBits = Math.floor((fieldN.BITS - 1) / windowSize) * windowSize;
   let sum = zero;
@@ -6763,8 +8283,8 @@ function pippenger(c, fieldN, points, scalars) {
   return sum;
 }
 function validateBasic(curve) {
-  validateField(curve.Fp);
-  validateObject(curve, {
+  validateField2(curve.Fp);
+  validateObject2(curve, {
     n: "bigint",
     h: "bigint",
     Gx: "field",
@@ -6774,21 +8294,21 @@ function validateBasic(curve) {
     nByteLength: "isSafeInteger"
   });
   return Object.freeze({
-    ...nLength(curve.n, curve.nBitLength),
+    ...nLength2(curve.n, curve.nBitLength),
     ...curve,
     ...{ p: curve.Fp.ORDER }
   });
 }
-var _0n4, _1n4, pointPrecomputes, pointWindowSizes;
-var init_curve = __esm({
+var _0n9, _1n9, pointPrecomputes2, pointWindowSizes2;
+var init_curve2 = __esm({
   "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/curve.js"() {
     "use strict";
-    init_modular();
-    init_utils2();
-    _0n4 = BigInt(0);
-    _1n4 = BigInt(1);
-    pointPrecomputes = /* @__PURE__ */ new WeakMap();
-    pointWindowSizes = /* @__PURE__ */ new WeakMap();
+    init_modular2();
+    init_utils3();
+    _0n9 = BigInt(0);
+    _1n9 = BigInt(1);
+    pointPrecomputes2 = /* @__PURE__ */ new WeakMap();
+    pointWindowSizes2 = /* @__PURE__ */ new WeakMap();
   }
 });
 
@@ -6801,7 +8321,7 @@ function validateSigVerOpts(opts) {
 }
 function validatePointOpts(curve) {
   const opts = validateBasic(curve);
-  validateObject(opts, {
+  validateObject2(opts, {
     a: "field",
     b: "field"
   }, {
@@ -6825,12 +8345,12 @@ function validatePointOpts(curve) {
   return Object.freeze({ ...opts });
 }
 function numToSizedHex(num2, size2) {
-  return bytesToHex3(numberToBytesBE(num2, size2));
+  return bytesToHex3(numberToBytesBE2(num2, size2));
 }
 function weierstrassPoints(opts) {
   const CURVE = validatePointOpts(opts);
   const { Fp: Fp2 } = CURVE;
-  const Fn2 = Field(CURVE.n, CURVE.nBitLength);
+  const Fn2 = Field2(CURVE.n, CURVE.nBitLength);
   const toBytes4 = CURVE.toBytes || ((_c, point, _isCompressed) => {
     const a = point.toAffine();
     return concatBytes3(Uint8Array.from([4]), Fp2.toBytes(a.x), Fp2.toBytes(a.y));
@@ -6854,12 +8374,12 @@ function weierstrassPoints(opts) {
   }
   if (!isValidXY(CURVE.Gx, CURVE.Gy))
     throw new Error("bad curve params: generator point");
-  const _4a3 = Fp2.mul(Fp2.pow(CURVE.a, _3n2), _4n2);
+  const _4a3 = Fp2.mul(Fp2.pow(CURVE.a, _3n4), _4n3);
   const _27b2 = Fp2.mul(Fp2.sqr(CURVE.b), BigInt(27));
   if (Fp2.is0(Fp2.add(_4a3, _27b2)))
     throw new Error("bad curve params: a or b");
   function isWithinCurveOrder(num2) {
-    return inRange(num2, _1n5, CURVE.n);
+    return inRange2(num2, _1n10, CURVE.n);
   }
   function normPrivateKeyToScalar(key) {
     const { allowedPrivateKeyLengths: lengths, nByteLength, wrapPrivateKey, n: N } = CURVE;
@@ -6872,20 +8392,20 @@ function weierstrassPoints(opts) {
     }
     let num2;
     try {
-      num2 = typeof key === "bigint" ? key : bytesToNumberBE(ensureBytes("private key", key, nByteLength));
+      num2 = typeof key === "bigint" ? key : bytesToNumberBE2(ensureBytes2("private key", key, nByteLength));
     } catch (error) {
       throw new Error("invalid private key, expected hex or " + nByteLength + " bytes, got " + typeof key);
     }
     if (wrapPrivateKey)
-      num2 = mod(num2, N);
-    aInRange("private key", num2, _1n5, N);
+      num2 = mod2(num2, N);
+    aInRange2("private key", num2, _1n10, N);
     return num2;
   }
   function aprjpoint(other) {
     if (!(other instanceof Point2))
       throw new Error("ProjectivePoint expected");
   }
-  const toAffineMemo = memoized((p, iz) => {
+  const toAffineMemo = memoized2((p, iz) => {
     const { px: x, py: y, pz: z } = p;
     if (Fp2.eql(z, Fp2.ONE))
       return { x, y };
@@ -6901,7 +8421,7 @@ function weierstrassPoints(opts) {
       throw new Error("invZ was invalid");
     return { x: ax, y: ay };
   });
-  const assertValidMemo = memoized((p) => {
+  const assertValidMemo = memoized2((p) => {
     if (p.is0()) {
       if (CURVE.allowInfinityPoint && !Fp2.is0(p.py))
         return;
@@ -6955,7 +8475,7 @@ function weierstrassPoints(opts) {
      * Optimization: converts a list of projective points to a list of identical points with Z=1.
      */
     static normalizeZ(points) {
-      const toInv = FpInvertBatch(Fp2, points.map((p) => p.pz));
+      const toInv = FpInvertBatch2(Fp2, points.map((p) => p.pz));
       return points.map((p, i) => p.toAffine(toInv[i])).map(Point2.fromAffine);
     }
     /**
@@ -6963,7 +8483,7 @@ function weierstrassPoints(opts) {
      * @param hex short/long ECDSA hex
      */
     static fromHex(hex) {
-      const P = Point2.fromAffine(fromBytes2(ensureBytes("pointHex", hex)));
+      const P = Point2.fromAffine(fromBytes2(ensureBytes2("pointHex", hex)));
       P.assertValidity();
       return P;
     }
@@ -6973,7 +8493,7 @@ function weierstrassPoints(opts) {
     }
     // Multiscalar Multiplication
     static msm(points, scalars) {
-      return pippenger(Point2, Fn2, points, scalars);
+      return pippenger2(Point2, Fn2, points, scalars);
     }
     // "Private method", don't use it directly
     _setWindowSize(windowSize) {
@@ -7012,7 +8532,7 @@ function weierstrassPoints(opts) {
     // Cost: 8M + 3S + 3*a + 2*b3 + 15add.
     double() {
       const { a, b } = CURVE;
-      const b3 = Fp2.mul(b, _3n2);
+      const b3 = Fp2.mul(b, _3n4);
       const { px: X1, py: Y1, pz: Z1 } = this;
       let X3 = Fp2.ZERO, Y3 = Fp2.ZERO, Z3 = Fp2.ZERO;
       let t0 = Fp2.mul(X1, X1);
@@ -7058,7 +8578,7 @@ function weierstrassPoints(opts) {
       const { px: X2, py: Y2, pz: Z2 } = other;
       let X3 = Fp2.ZERO, Y3 = Fp2.ZERO, Z3 = Fp2.ZERO;
       const a = CURVE.a;
-      const b3 = Fp2.mul(CURVE.b, _3n2);
+      const b3 = Fp2.mul(CURVE.b, _3n4);
       let t0 = Fp2.mul(X1, X2);
       let t1 = Fp2.mul(Y1, Y2);
       let t2 = Fp2.mul(Z1, Z2);
@@ -7117,11 +8637,11 @@ function weierstrassPoints(opts) {
      */
     multiplyUnsafe(sc) {
       const { endo: endo2, n: N } = CURVE;
-      aInRange("scalar", sc, _0n5, N);
+      aInRange2("scalar", sc, _0n10, N);
       const I = Point2.ZERO;
-      if (sc === _0n5)
+      if (sc === _0n10)
         return I;
-      if (this.is0() || sc === _1n5)
+      if (this.is0() || sc === _1n10)
         return this;
       if (!endo2 || wnaf.hasPrecomputes(this))
         return wnaf.wNAFCachedUnsafe(this, sc, Point2.normalizeZ);
@@ -7129,14 +8649,14 @@ function weierstrassPoints(opts) {
       let k1p = I;
       let k2p = I;
       let d = this;
-      while (k1 > _0n5 || k2 > _0n5) {
-        if (k1 & _1n5)
+      while (k1 > _0n10 || k2 > _0n10) {
+        if (k1 & _1n10)
           k1p = k1p.add(d);
-        if (k2 & _1n5)
+        if (k2 & _1n10)
           k2p = k2p.add(d);
         d = d.double();
-        k1 >>= _1n5;
-        k2 >>= _1n5;
+        k1 >>= _1n10;
+        k2 >>= _1n10;
       }
       if (k1neg)
         k1p = k1p.negate();
@@ -7156,7 +8676,7 @@ function weierstrassPoints(opts) {
      */
     multiply(scalar) {
       const { endo: endo2, n: N } = CURVE;
-      aInRange("scalar", scalar, _1n5, N);
+      aInRange2("scalar", scalar, _1n10, N);
       let point, fake;
       if (endo2) {
         const { k1neg, k1, k2neg, k2 } = endo2.splitScalar(scalar);
@@ -7182,7 +8702,7 @@ function weierstrassPoints(opts) {
      */
     multiplyAndAddUnsafe(Q, a, b) {
       const G = Point2.BASE;
-      const mul = (P, a2) => a2 === _0n5 || a2 === _1n5 || !P.equals(G) ? P.multiplyUnsafe(a2) : P.multiply(a2);
+      const mul = (P, a2) => a2 === _0n10 || a2 === _1n10 || !P.equals(G) ? P.multiplyUnsafe(a2) : P.multiply(a2);
       const sum = mul(this, a).add(mul(Q, b));
       return sum.is0() ? void 0 : sum;
     }
@@ -7194,7 +8714,7 @@ function weierstrassPoints(opts) {
     }
     isTorsionFree() {
       const { h: cofactor, isTorsionFree } = CURVE;
-      if (cofactor === _1n5)
+      if (cofactor === _1n10)
         return true;
       if (isTorsionFree)
         return isTorsionFree(Point2, this);
@@ -7202,7 +8722,7 @@ function weierstrassPoints(opts) {
     }
     clearCofactor() {
       const { h: cofactor, clearCofactor } = CURVE;
-      if (cofactor === _1n5)
+      if (cofactor === _1n10)
         return this;
       if (clearCofactor)
         return clearCofactor(Point2, this);
@@ -7221,7 +8741,7 @@ function weierstrassPoints(opts) {
   Point2.BASE = new Point2(CURVE.Gx, CURVE.Gy, Fp2.ONE);
   Point2.ZERO = new Point2(Fp2.ZERO, Fp2.ONE, Fp2.ZERO);
   const { endo, nBitLength } = CURVE;
-  const wnaf = wNAF(Point2, endo ? Math.ceil(nBitLength / 2) : nBitLength);
+  const wnaf = wNAF2(Point2, endo ? Math.ceil(nBitLength / 2) : nBitLength);
   return {
     CURVE,
     ProjectivePoint: Point2,
@@ -7232,7 +8752,7 @@ function weierstrassPoints(opts) {
 }
 function validateOpts(curve) {
   const opts = validateBasic(curve);
-  validateObject(opts, {
+  validateObject2(opts, {
     hash: "hash",
     hmac: "function",
     randomBytes: "function"
@@ -7249,10 +8769,10 @@ function weierstrass(curveDef) {
   const compressedLen = Fp2.BYTES + 1;
   const uncompressedLen = 2 * Fp2.BYTES + 1;
   function modN2(a) {
-    return mod(a, CURVE_ORDER);
+    return mod2(a, CURVE_ORDER);
   }
   function invN(a) {
-    return invert(a, CURVE_ORDER);
+    return invert2(a, CURVE_ORDER);
   }
   const { ProjectivePoint: Point2, normPrivateKeyToScalar, weierstrassEquation, isWithinCurveOrder } = weierstrassPoints({
     ...CURVE,
@@ -7272,8 +8792,8 @@ function weierstrass(curveDef) {
       const head = bytes[0];
       const tail = bytes.subarray(1);
       if (len === compressedLen && (head === 2 || head === 3)) {
-        const x = bytesToNumberBE(tail);
-        if (!inRange(x, _1n5, Fp2.ORDER))
+        const x = bytesToNumberBE2(tail);
+        if (!inRange2(x, _1n10, Fp2.ORDER))
           throw new Error("Point is not on curve");
         const y2 = weierstrassEquation(x);
         let y;
@@ -7283,7 +8803,7 @@ function weierstrass(curveDef) {
           const suffix = sqrtError instanceof Error ? ": " + sqrtError.message : "";
           throw new Error("Point is not on curve" + suffix);
         }
-        const isYOdd = (y & _1n5) === _1n5;
+        const isYOdd = (y & _1n10) === _1n10;
         const isHeadOdd = (head & 1) === 1;
         if (isHeadOdd !== isYOdd)
           y = Fp2.neg(y);
@@ -7300,17 +8820,17 @@ function weierstrass(curveDef) {
     }
   });
   function isBiggerThanHalfOrder(number) {
-    const HALF = CURVE_ORDER >> _1n5;
+    const HALF = CURVE_ORDER >> _1n10;
     return number > HALF;
   }
   function normalizeS(s) {
     return isBiggerThanHalfOrder(s) ? modN2(-s) : s;
   }
-  const slcNum = (b, from4, to) => bytesToNumberBE(b.slice(from4, to));
+  const slcNum = (b, from4, to) => bytesToNumberBE2(b.slice(from4, to));
   class Signature {
     constructor(r, s, recovery) {
-      aInRange("r", r, _1n5, CURVE_ORDER);
-      aInRange("s", s, _1n5, CURVE_ORDER);
+      aInRange2("r", r, _1n10, CURVE_ORDER);
+      aInRange2("s", s, _1n10, CURVE_ORDER);
       this.r = r;
       this.s = s;
       if (recovery != null)
@@ -7320,13 +8840,13 @@ function weierstrass(curveDef) {
     // pair (bytes of r, bytes of s)
     static fromCompact(hex) {
       const l = nByteLength;
-      hex = ensureBytes("compactSignature", hex, l * 2);
+      hex = ensureBytes2("compactSignature", hex, l * 2);
       return new Signature(slcNum(hex, 0, l), slcNum(hex, l, 2 * l));
     }
     // DER encoded ECDSA signature
     // https://bitcoin.stackexchange.com/questions/57644/what-are-the-parts-of-a-bitcoin-transaction-input-script
     static fromDER(hex) {
-      const { r, s } = DER.toSig(ensureBytes("DER", hex));
+      const { r, s } = DER.toSig(ensureBytes2("DER", hex));
       return new Signature(r, s);
     }
     /**
@@ -7340,7 +8860,7 @@ function weierstrass(curveDef) {
     }
     recoverPublicKey(msgHash) {
       const { r, s, recovery: rec } = this;
-      const h = bits2int_modN(ensureBytes("msgHash", msgHash));
+      const h = bits2int_modN(ensureBytes2("msgHash", msgHash));
       if (rec == null || ![0, 1, 2, 3].includes(rec))
         throw new Error("recovery id invalid");
       const radj = rec === 2 || rec === 3 ? r + CURVE.n : r;
@@ -7420,7 +8940,7 @@ function weierstrass(curveDef) {
       return false;
     if (item instanceof Point2)
       return true;
-    const arr = ensureBytes("key", item);
+    const arr = ensureBytes2("key", item);
     const len = arr.length;
     const fpl = Fp2.BYTES;
     const compLen = fpl + 1;
@@ -7442,17 +8962,17 @@ function weierstrass(curveDef) {
   const bits2int = CURVE.bits2int || function(bytes) {
     if (bytes.length > 8192)
       throw new Error("input is too large");
-    const num2 = bytesToNumberBE(bytes);
+    const num2 = bytesToNumberBE2(bytes);
     const delta = bytes.length * 8 - nBitLength;
     return delta > 0 ? num2 >> BigInt(delta) : num2;
   };
   const bits2int_modN = CURVE.bits2int_modN || function(bytes) {
     return modN2(bits2int(bytes));
   };
-  const ORDER_MASK = bitMask(nBitLength);
+  const ORDER_MASK = bitMask2(nBitLength);
   function int2octets(num2) {
-    aInRange("num < 2^" + nBitLength, num2, _0n5, ORDER_MASK);
-    return numberToBytesBE(num2, nByteLength);
+    aInRange2("num < 2^" + nBitLength, num2, _0n10, ORDER_MASK);
+    return numberToBytesBE2(num2, nByteLength);
   }
   function prepSig(msgHash, privateKey, opts = defaultSigOpts) {
     if (["recovered", "canonical"].some((k) => k in opts))
@@ -7461,16 +8981,16 @@ function weierstrass(curveDef) {
     let { lowS, prehash, extraEntropy: ent } = opts;
     if (lowS == null)
       lowS = true;
-    msgHash = ensureBytes("msgHash", msgHash);
+    msgHash = ensureBytes2("msgHash", msgHash);
     validateSigVerOpts(opts);
     if (prehash)
-      msgHash = ensureBytes("prehashed msgHash", hash(msgHash));
+      msgHash = ensureBytes2("prehashed msgHash", hash(msgHash));
     const h1int = bits2int_modN(msgHash);
     const d = normPrivateKeyToScalar(privateKey);
     const seedArgs = [int2octets(d), int2octets(h1int)];
     if (ent != null && ent !== false) {
       const e = ent === true ? randomBytes5(Fp2.BYTES) : ent;
-      seedArgs.push(ensureBytes("extraEntropy", e));
+      seedArgs.push(ensureBytes2("extraEntropy", e));
     }
     const seed = concatBytes3(...seedArgs);
     const m = h1int;
@@ -7481,12 +9001,12 @@ function weierstrass(curveDef) {
       const ik = invN(k);
       const q = Point2.BASE.multiply(k).toAffine();
       const r = modN2(q.x);
-      if (r === _0n5)
+      if (r === _0n10)
         return;
       const s = modN2(ik * modN2(m + r * d));
-      if (s === _0n5)
+      if (s === _0n10)
         return;
-      let recovery = (q.x === r ? 0 : 2) | Number(q.y & _1n5);
+      let recovery = (q.x === r ? 0 : 2) | Number(q.y & _1n10);
       let normS = s;
       if (lowS && isBiggerThanHalfOrder(s)) {
         normS = normalizeS(s);
@@ -7507,8 +9027,8 @@ function weierstrass(curveDef) {
   Point2.BASE._setWindowSize(8);
   function verify(signature, msgHash, publicKey, opts = defaultVerOpts) {
     const sg = signature;
-    msgHash = ensureBytes("msgHash", msgHash);
-    publicKey = ensureBytes("publicKey", publicKey);
+    msgHash = ensureBytes2("msgHash", msgHash);
+    publicKey = ensureBytes2("publicKey", publicKey);
     const { lowS, prehash, format: format4 } = opts;
     validateSigVerOpts(opts);
     if ("strict" in opts)
@@ -7569,18 +9089,18 @@ function weierstrass(curveDef) {
 }
 function SWUFpSqrtRatio(Fp2, Z) {
   const q = Fp2.ORDER;
-  let l = _0n5;
-  for (let o = q - _1n5; o % _2n3 === _0n5; o /= _2n3)
-    l += _1n5;
+  let l = _0n10;
+  for (let o = q - _1n10; o % _2n6 === _0n10; o /= _2n6)
+    l += _1n10;
   const c1 = l;
-  const _2n_pow_c1_1 = _2n3 << c1 - _1n5 - _1n5;
-  const _2n_pow_c1 = _2n_pow_c1_1 * _2n3;
-  const c2 = (q - _1n5) / _2n_pow_c1;
-  const c3 = (c2 - _1n5) / _2n3;
-  const c4 = _2n_pow_c1 - _1n5;
+  const _2n_pow_c1_1 = _2n6 << c1 - _1n10 - _1n10;
+  const _2n_pow_c1 = _2n_pow_c1_1 * _2n6;
+  const c2 = (q - _1n10) / _2n_pow_c1;
+  const c3 = (c2 - _1n10) / _2n6;
+  const c4 = _2n_pow_c1 - _1n10;
   const c5 = _2n_pow_c1_1;
   const c6 = Fp2.pow(Z, c2);
-  const c7 = Fp2.pow(Z, (c2 + _1n5) / _2n3);
+  const c7 = Fp2.pow(Z, (c2 + _1n10) / _2n6);
   let sqrtRatio = (u, v) => {
     let tv1 = c6;
     let tv2 = Fp2.pow(v, c4);
@@ -7598,9 +9118,9 @@ function SWUFpSqrtRatio(Fp2, Z) {
     tv5 = Fp2.mul(tv4, tv1);
     tv3 = Fp2.cmov(tv2, tv3, isQR);
     tv4 = Fp2.cmov(tv5, tv4, isQR);
-    for (let i = c1; i > _1n5; i--) {
-      let tv52 = i - _2n3;
-      tv52 = _2n3 << tv52 - _1n5;
+    for (let i = c1; i > _1n10; i--) {
+      let tv52 = i - _2n6;
+      tv52 = _2n6 << tv52 - _1n10;
       let tvv5 = Fp2.pow(tv4, tv52);
       const e1 = Fp2.eql(tvv5, Fp2.ONE);
       tv2 = Fp2.mul(tv3, tv1);
@@ -7611,8 +9131,8 @@ function SWUFpSqrtRatio(Fp2, Z) {
     }
     return { isValid: isQR, value: tv3 };
   };
-  if (Fp2.ORDER % _4n2 === _3n2) {
-    const c12 = (Fp2.ORDER - _3n2) / _4n2;
+  if (Fp2.ORDER % _4n3 === _3n4) {
+    const c12 = (Fp2.ORDER - _3n4) / _4n3;
     const c22 = Fp2.sqrt(Fp2.neg(Z));
     sqrtRatio = (u, v) => {
       let tv1 = Fp2.sqr(v);
@@ -7630,7 +9150,7 @@ function SWUFpSqrtRatio(Fp2, Z) {
   return sqrtRatio;
 }
 function mapToCurveSimpleSWU(Fp2, opts) {
-  validateField(Fp2);
+  validateField2(Fp2);
   if (!Fp2.isValid(opts.A) || !Fp2.isValid(opts.B) || !Fp2.isValid(opts.Z))
     throw new Error("mapToCurveSimpleSWU: invalid opts");
   const sqrtRatio = SWUFpSqrtRatio(Fp2, opts.Z);
@@ -7662,18 +9182,18 @@ function mapToCurveSimpleSWU(Fp2, opts) {
     y = Fp2.cmov(y, value, isValid3);
     const e1 = Fp2.isOdd(u) === Fp2.isOdd(y);
     y = Fp2.cmov(Fp2.neg(y), y, e1);
-    const tv4_inv = FpInvertBatch(Fp2, [tv4], true)[0];
+    const tv4_inv = FpInvertBatch2(Fp2, [tv4], true)[0];
     x = Fp2.mul(x, tv4_inv);
     return { x, y };
   };
 }
-var DERErr, DER, _0n5, _1n5, _2n3, _3n2, _4n2;
+var DERErr, DER, _0n10, _1n10, _2n6, _3n4, _4n3;
 var init_weierstrass = __esm({
   "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/weierstrass.js"() {
     "use strict";
-    init_curve();
-    init_modular();
-    init_utils2();
+    init_curve2();
+    init_modular2();
+    init_utils3();
     DERErr = class extends Error {
       constructor(m = "") {
         super(m);
@@ -7741,7 +9261,7 @@ var init_weierstrass = __esm({
       _int: {
         encode(num2) {
           const { Err: E } = DER;
-          if (num2 < _0n5)
+          if (num2 < _0n10)
             throw new E("integer: negative integers are not allowed");
           let hex = numberToHexUnpadded(num2);
           if (Number.parseInt(hex[0], 16) & 8)
@@ -7756,12 +9276,12 @@ var init_weierstrass = __esm({
             throw new E("invalid signature integer: negative");
           if (data[0] === 0 && !(data[1] & 128))
             throw new E("invalid signature integer: unnecessary leading zero");
-          return bytesToNumberBE(data);
+          return bytesToNumberBE2(data);
         }
       },
       toSig(hex) {
         const { Err: E, _int: int, _tlv: tlv } = DER;
-        const data = ensureBytes("signature", hex);
+        const data = ensureBytes2("signature", hex);
         const { v: seqBytes, l: seqLeftBytes } = tlv.decode(48, data);
         if (seqLeftBytes.length)
           throw new E("invalid signature: left bytes after parsing");
@@ -7779,11 +9299,11 @@ var init_weierstrass = __esm({
         return tlv.encode(48, seq);
       }
     };
-    _0n5 = BigInt(0);
-    _1n5 = BigInt(1);
-    _2n3 = BigInt(2);
-    _3n2 = BigInt(3);
-    _4n2 = BigInt(4);
+    _0n10 = BigInt(0);
+    _1n10 = BigInt(1);
+    _2n6 = BigInt(2);
+    _3n4 = BigInt(3);
+    _4n3 = BigInt(4);
   }
 });
 
@@ -7868,7 +9388,7 @@ function expand_message_xof(msg, DST, lenInBytes, k, H) {
   return H.create({ dkLen: lenInBytes }).update(msg).update(i2osp(lenInBytes, 2)).update(DST).update(i2osp(DST.length, 1)).digest();
 }
 function hash_to_field(msg, count, options) {
-  validateObject(options, {
+  validateObject2(options, {
     DST: "stringOrUint8Array",
     p: "bigint",
     m: "isSafeInteger",
@@ -7898,7 +9418,7 @@ function hash_to_field(msg, count, options) {
     for (let j = 0; j < m; j++) {
       const elm_offset = L * (j + i * m);
       const tv = prb.subarray(elm_offset, elm_offset + L);
-      e[j] = mod(os2ip(tv), p);
+      e[j] = mod2(os2ip(tv), p);
     }
     u[i] = e;
   }
@@ -7908,7 +9428,7 @@ function isogenyMap(field, map) {
   const coeff = map.map((i) => Array.from(i).reverse());
   return (x, y) => {
     const [xn, xd, yn, yd] = coeff.map((val) => val.reduce((acc, i) => field.add(field.mul(acc, x), i)));
-    const [xd_inv, yd_inv] = FpInvertBatch(field, [xd, yd], true);
+    const [xd_inv, yd_inv] = FpInvertBatch2(field, [xd, yd], true);
     x = field.mul(xn, xd_inv);
     y = field.mul(y, field.mul(yn, yd_inv));
     return { x, y };
@@ -7958,9 +9478,9 @@ var os2ip;
 var init_hash_to_curve = __esm({
   "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/hash-to-curve.js"() {
     "use strict";
-    init_modular();
-    init_utils2();
-    os2ip = bytesToNumberBE;
+    init_modular2();
+    init_utils3();
+    os2ip = bytesToNumberBE2;
   }
 });
 
@@ -7979,18 +9499,18 @@ function sqrtMod(y) {
   const _23n = BigInt(23), _44n = BigInt(44), _88n = BigInt(88);
   const b2 = y * y * y % P;
   const b3 = b2 * b2 * y % P;
-  const b6 = pow2(b3, _3n5, P) * b3 % P;
-  const b9 = pow2(b6, _3n5, P) * b3 % P;
-  const b11 = pow2(b9, _2n4, P) * b2 % P;
-  const b22 = pow2(b11, _11n, P) * b11 % P;
-  const b44 = pow2(b22, _22n, P) * b22 % P;
-  const b88 = pow2(b44, _44n, P) * b44 % P;
-  const b176 = pow2(b88, _88n, P) * b88 % P;
-  const b220 = pow2(b176, _44n, P) * b44 % P;
-  const b223 = pow2(b220, _3n5, P) * b3 % P;
-  const t1 = pow2(b223, _23n, P) * b22 % P;
-  const t2 = pow2(t1, _6n, P) * b2 % P;
-  const root = pow2(t2, _2n4, P);
+  const b6 = pow22(b3, _3n5, P) * b3 % P;
+  const b9 = pow22(b6, _3n5, P) * b3 % P;
+  const b11 = pow22(b9, _2n7, P) * b2 % P;
+  const b22 = pow22(b11, _11n, P) * b11 % P;
+  const b44 = pow22(b22, _22n, P) * b22 % P;
+  const b88 = pow22(b44, _44n, P) * b44 % P;
+  const b176 = pow22(b88, _88n, P) * b88 % P;
+  const b220 = pow22(b176, _44n, P) * b44 % P;
+  const b223 = pow22(b220, _3n5, P) * b3 % P;
+  const t1 = pow22(b223, _23n, P) * b22 % P;
+  const t2 = pow22(t1, _6n, P) * b2 % P;
+  const root = pow22(t2, _2n7, P);
   if (!Fpk1.eql(Fpk1.sqr(root), y))
     throw new Error("Cannot find square root");
   return root;
@@ -8011,13 +9531,13 @@ function schnorrGetExtPubKey(priv) {
   return { scalar, bytes: pointToBytes(p) };
 }
 function lift_x(x) {
-  aInRange("x", x, _1n6, secp256k1P);
+  aInRange2("x", x, _1n11, secp256k1P);
   const xx = modP(x * x);
   const c = modP(xx * x + BigInt(7));
   let y = sqrtMod(c);
-  if (y % _2n4 !== _0n6)
+  if (y % _2n7 !== _0n11)
     y = modP(-y);
-  const p = new Point(x, y, _1n6);
+  const p = new Point(x, y, _1n11);
   p.assertValidity();
   return p;
 }
@@ -8028,13 +9548,13 @@ function schnorrGetPublicKey(privateKey) {
   return schnorrGetExtPubKey(privateKey).bytes;
 }
 function schnorrSign(message, privateKey, auxRand = randomBytes(32)) {
-  const m = ensureBytes("message", message);
+  const m = ensureBytes2("message", message);
   const { bytes: px, scalar: d } = schnorrGetExtPubKey(privateKey);
-  const a = ensureBytes("auxRand", auxRand, 32);
+  const a = ensureBytes2("auxRand", auxRand, 32);
   const t = numTo32b(d ^ num(taggedHash("BIP0340/aux", a)));
   const rand = taggedHash("BIP0340/nonce", t, px, m);
   const k_ = modN(num(rand));
-  if (k_ === _0n6)
+  if (k_ === _0n11)
     throw new Error("sign failed: k is zero");
   const { bytes: rx, scalar: k } = schnorrGetExtPubKey(k_);
   const e = challenge(rx, px, m);
@@ -8046,16 +9566,16 @@ function schnorrSign(message, privateKey, auxRand = randomBytes(32)) {
   return sig;
 }
 function schnorrVerify(signature, message, publicKey) {
-  const sig = ensureBytes("signature", signature, 64);
-  const m = ensureBytes("message", message);
-  const pub = ensureBytes("publicKey", publicKey, 32);
+  const sig = ensureBytes2("signature", signature, 64);
+  const m = ensureBytes2("message", message);
+  const pub = ensureBytes2("publicKey", publicKey, 32);
   try {
     const P = lift_x(num(pub));
     const r = num(sig.subarray(0, 32));
-    if (!inRange(r, _1n6, secp256k1P))
+    if (!inRange2(r, _1n11, secp256k1P))
       return false;
     const s = num(sig.subarray(32, 64));
-    if (!inRange(s, _1n6, secp256k1N))
+    if (!inRange2(s, _1n11, secp256k1N))
       return false;
     const e = challenge(numTo32b(r), pointToBytes(P), m);
     const R = GmulAdd(P, s, modN(-e));
@@ -8066,7 +9586,7 @@ function schnorrVerify(signature, message, publicKey) {
     return false;
   }
 }
-var secp256k1P, secp256k1N, _0n6, _1n6, _2n4, divNearest, Fpk1, secp256k1, TAGGED_HASH_PREFIXES, pointToBytes, numTo32b, modP, modN, Point, GmulAdd, num, schnorr, isoMap, mapSWU, secp256k1_hasher, hashToCurve, encodeToCurve;
+var secp256k1P, secp256k1N, _0n11, _1n11, _2n7, divNearest, Fpk1, secp256k1, TAGGED_HASH_PREFIXES, pointToBytes, numTo32b, modP, modN, Point, GmulAdd, num, schnorr, isoMap, mapSWU, secp256k1_hasher, hashToCurve, encodeToCurve;
 var init_secp256k1 = __esm({
   "../../node_modules/viem/node_modules/@noble/curves/esm/secp256k1.js"() {
     "use strict";
@@ -8074,18 +9594,18 @@ var init_secp256k1 = __esm({
     init_utils();
     init_shortw_utils();
     init_hash_to_curve();
-    init_modular();
-    init_utils2();
+    init_modular2();
+    init_utils3();
     init_weierstrass();
     secp256k1P = BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f");
     secp256k1N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
-    _0n6 = BigInt(0);
-    _1n6 = BigInt(1);
-    _2n4 = BigInt(2);
-    divNearest = (a, b) => (a + b / _2n4) / b;
-    Fpk1 = Field(secp256k1P, void 0, void 0, { sqrt: sqrtMod });
+    _0n11 = BigInt(0);
+    _1n11 = BigInt(1);
+    _2n7 = BigInt(2);
+    divNearest = (a, b) => (a + b / _2n7) / b;
+    Fpk1 = Field2(secp256k1P, void 0, void 0, { sqrt: sqrtMod });
     secp256k1 = createCurve({
-      a: _0n6,
+      a: _0n11,
       b: BigInt(7),
       Fp: Fpk1,
       n: secp256k1N,
@@ -8100,14 +9620,14 @@ var init_secp256k1 = __esm({
         splitScalar: (k) => {
           const n = secp256k1N;
           const a1 = BigInt("0x3086d221a7d46bcde86c90e49284eb15");
-          const b1 = -_1n6 * BigInt("0xe4437ed6010e88286f547fa90abfe4c3");
+          const b1 = -_1n11 * BigInt("0xe4437ed6010e88286f547fa90abfe4c3");
           const a2 = BigInt("0x114ca50f7a8e2f3f657c1108d9d44cfd8");
           const b2 = a1;
           const POW_2_128 = BigInt("0x100000000000000000000000000000000");
           const c1 = divNearest(b2 * k, n);
           const c2 = divNearest(-b1 * k, n);
-          let k1 = mod(k - c1 * a1 - c2 * a2, n);
-          let k2 = mod(-c1 * b1 - c2 * b2, n);
+          let k1 = mod2(k - c1 * a1 - c2 * a2, n);
+          let k2 = mod2(-c1 * b1 - c2 * b2, n);
           const k1neg = k1 > POW_2_128;
           const k2neg = k2 > POW_2_128;
           if (k1neg)
@@ -8123,12 +9643,12 @@ var init_secp256k1 = __esm({
     }, sha256);
     TAGGED_HASH_PREFIXES = {};
     pointToBytes = (point) => point.toRawBytes(true).slice(1);
-    numTo32b = (n) => numberToBytesBE(n, 32);
-    modP = (x) => mod(x, secp256k1P);
-    modN = (x) => mod(x, secp256k1N);
+    numTo32b = (n) => numberToBytesBE2(n, 32);
+    modP = (x) => mod2(x, secp256k1P);
+    modN = (x) => mod2(x, secp256k1N);
     Point = /* @__PURE__ */ (() => secp256k1.ProjectivePoint)();
     GmulAdd = (Q, a, b) => Point.BASE.multiplyAndAddUnsafe(Q, a, b);
-    num = bytesToNumberBE;
+    num = bytesToNumberBE2;
     schnorr = /* @__PURE__ */ (() => ({
       getPublicKey: schnorrGetPublicKey,
       sign: schnorrSign,
@@ -8137,10 +9657,10 @@ var init_secp256k1 = __esm({
         randomPrivateKey: secp256k1.utils.randomPrivateKey,
         lift_x,
         pointToBytes,
-        numberToBytesBE,
-        bytesToNumberBE,
+        numberToBytesBE: numberToBytesBE2,
+        bytesToNumberBE: bytesToNumberBE2,
         taggedHash,
-        mod
+        mod: mod2
       }
     }))();
     isoMap = /* @__PURE__ */ (() => isogenyMap(Fpk1, [
@@ -8210,7 +9730,7 @@ async function recoverPublicKey({ hash, signature }) {
     const signatureHex = isHex(signature) ? signature : toHex(signature);
     if (size(signatureHex) !== 65)
       throw new Error("invalid signature length");
-    const yParityOrV = hexToNumber(`0x${signatureHex.slice(130)}`);
+    const yParityOrV = hexToNumber2(`0x${signatureHex.slice(130)}`);
     const recoveryBit = toRecoveryBit(yParityOrV);
     return secp256k12.Signature.fromCompact(signatureHex.substring(2, 130)).addRecoveryBit(recoveryBit);
   })();
@@ -8280,7 +9800,7 @@ function toPrefixedMessage(message_) {
       return stringToHex(message_);
     if (typeof message_.raw === "string")
       return message_.raw;
-    return bytesToHex(message_.raw);
+    return bytesToHex2(message_.raw);
   })();
   const prefix = stringToHex(`${presignMessagePrefix}${size(message)}`);
   return concat([prefix, message]);
@@ -8447,28 +9967,6 @@ function withCapabilitiesReadForSpaces(resources) {
     }))
   ]);
 }
-function accountRegistryPermissions() {
-  return [
-    {
-      service: "tinycloud.kv",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: ACCOUNT_REGISTRY_PATH,
-      actions: [KV.GET, KV.PUT, KV.LIST]
-    },
-    {
-      service: "tinycloud.kv",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "spaces/",
-      actions: [KV.GET, KV.PUT, KV.LIST]
-    },
-    {
-      service: "tinycloud.sql",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "account",
-      actions: [SQL.READ, SQL.WRITE, SQL.SCHEMA]
-    }
-  ];
-}
 function composeManifestRequest(inputs, options = {}) {
   if (!Array.isArray(inputs) || inputs.length === 0) {
     throw new Error("composeManifestRequest requires at least one manifest");
@@ -8482,7 +9980,12 @@ function composeManifestRequest(inputs, options = {}) {
     return explicit.flatMap((entry) => expandPermissionEntry(entry, prefix, space));
   });
   if (includeAccountRegistryPermissions) {
-    resources.push(...accountRegistryPermissions());
+    resources.push(
+      ...ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+        ...resource,
+        actions: [...resource.actions]
+      }))
+    );
   }
   const manifestsByAppId = /* @__PURE__ */ new Map();
   for (const manifest of manifests) {
@@ -8510,7 +10013,7 @@ function composeBootstrapSpaceManifest(space) {
     includeAccountRegistryPermissions: false
   });
 }
-var CAPABILITIES, KV, SQL, DUCKDB, CAPABILITIES2, HOOKS, ENCRYPTION, SPACE, CAPABILITY_REGISTRY, DEFAULT_MANIFEST_SPACE, ACCOUNT_REGISTRY_SPACE, ACCOUNT_REGISTRY_PATH, SECRETS_SPACE, BOOTSTRAP_DEFAULT_SPACE, BOOTSTRAP_PUBLIC_SPACE, BOOTSTRAP_ENCRYPTION_NETWORK_NAME, BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE, DEFAULT_EXPIRY_MS, VAULT_PERMISSION_SERVICE, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, NETWORK_CREATE_ACTION, BOOTSTRAP_SPACE_NAMES, TINYCLOUD_DEFAULT_SPACE_MANIFEST, TINYCLOUD_APPLICATIONS_SPACE_MANIFEST, TINYCLOUD_ACCOUNT_SPACE_MANIFEST, TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST, TINYCLOUD_PUBLIC_SPACE_MANIFEST, BOOTSTRAP_SPACE_MANIFESTS, BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS, ACCOUNT_INDEX_SCHEMA, SECRET_RECORDS_SCHEMA, BOOTSTRAP_MANIFEST, BOOTSTRAP_SESSION_REQUESTS, ACCOUNT_SESSION_RAW_ALLOWLIST, BOOTSTRAP_ALLOWLIST;
+var CAPABILITIES, KV, SQL, DUCKDB, CAPABILITIES2, HOOKS, ENCRYPTION, SPACE, CAPABILITY_REGISTRY, DEFAULT_MANIFEST_SPACE, ACCOUNT_REGISTRY_SPACE, ACCOUNT_REGISTRY_PATH, SECRETS_SPACE, BOOTSTRAP_DEFAULT_SPACE, BOOTSTRAP_PUBLIC_SPACE, BOOTSTRAP_ENCRYPTION_NETWORK_NAME, BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE, DEFAULT_EXPIRY_MS, VAULT_PERMISSION_SERVICE, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, NETWORK_CREATE_ACTION, BOOTSTRAP_SPACE_NAMES, TINYCLOUD_DEFAULT_SPACE_MANIFEST, TINYCLOUD_APPLICATIONS_SPACE_MANIFEST, TINYCLOUD_ACCOUNT_SPACE_MANIFEST, TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST, TINYCLOUD_PUBLIC_SPACE_MANIFEST, BOOTSTRAP_SPACE_MANIFESTS, BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS, ACCOUNT_INDEX_SCHEMA, SECRET_RECORDS_SCHEMA, BOOTSTRAP_MANIFEST, ACCOUNT_MANIFEST_PERMISSIONS, BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST, BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST, BOOTSTRAP_SESSION_REQUESTS, ACCOUNT_SESSION_RAW_ALLOWLIST, BOOTSTRAP_ALLOWLIST;
 var init_dist = __esm({
   "../bootstrap/dist/index.js"() {
     "use strict";
@@ -8816,11 +10319,60 @@ var init_dist = __esm({
         name: BOOTSTRAP_ENCRYPTION_NETWORK_NAME
       }
     };
+    ACCOUNT_MANIFEST_PERMISSIONS = Object.freeze([
+      {
+        service: "tinycloud.kv",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: ACCOUNT_REGISTRY_PATH,
+        actions: [KV.GET, KV.PUT, KV.LIST]
+      },
+      {
+        service: "tinycloud.kv",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "spaces/",
+        actions: [KV.GET, KV.PUT, KV.LIST]
+      },
+      {
+        service: "tinycloud.kv",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "system/bootstrap/complete",
+        actions: [KV.GET, KV.PUT]
+      },
+      {
+        service: "tinycloud.delegation",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "",
+        actions: ["tinycloud.delegation/list"]
+      },
+      {
+        service: "tinycloud.sql",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "account",
+        actions: [SQL.READ, SQL.WRITE, SQL.SCHEMA]
+      },
+      {
+        service: "tinycloud.capabilities",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "",
+        actions: [CAPABILITIES2.READ]
+      }
+    ]);
+    BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST = composeBootstrapSpaceManifest(BOOTSTRAP_DEFAULT_SPACE);
+    BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST = {
+      ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
+      resources: [
+        ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST.resources,
+        ...ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+          ...resource,
+          actions: [...resource.actions]
+        }))
+      ]
+    };
     BOOTSTRAP_SESSION_REQUESTS = Object.freeze(
       Object.fromEntries(
         BOOTSTRAP_SPACE_NAMES.map((space) => [
           space,
-          composeBootstrapSpaceManifest(space)
+          space === BOOTSTRAP_DEFAULT_SPACE ? BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST : composeBootstrapSpaceManifest(space)
         ])
       )
     );
@@ -8849,1526 +10401,6 @@ var init_dist = __esm({
         }
       ])
     );
-  }
-});
-
-// ../../node_modules/@noble/curves/esm/utils.js
-function _abool2(value, title = "") {
-  if (typeof value !== "boolean") {
-    const prefix = title && `"${title}"`;
-    throw new Error(prefix + "expected boolean, got type=" + typeof value);
-  }
-  return value;
-}
-function _abytes2(value, length4, title = "") {
-  const bytes = isBytes(value);
-  const len = value?.length;
-  const needsLen = length4 !== void 0;
-  if (!bytes || needsLen && len !== length4) {
-    const prefix = title && `"${title}" `;
-    const ofLen = needsLen ? ` of length ${length4}` : "";
-    const got = bytes ? `length=${len}` : `type=${typeof value}`;
-    throw new Error(prefix + "expected Uint8Array" + ofLen + ", got " + got);
-  }
-  return value;
-}
-function hexToNumber3(hex) {
-  if (typeof hex !== "string")
-    throw new Error("hex string expected, got " + typeof hex);
-  return hex === "" ? _0n7 : BigInt("0x" + hex);
-}
-function bytesToNumberBE2(bytes) {
-  return hexToNumber3(bytesToHex2(bytes));
-}
-function bytesToNumberLE2(bytes) {
-  abytes(bytes);
-  return hexToNumber3(bytesToHex2(Uint8Array.from(bytes).reverse()));
-}
-function numberToBytesBE2(n, len) {
-  return hexToBytes2(n.toString(16).padStart(len * 2, "0"));
-}
-function numberToBytesLE2(n, len) {
-  return numberToBytesBE2(n, len).reverse();
-}
-function ensureBytes2(title, hex, expectedLength) {
-  let res;
-  if (typeof hex === "string") {
-    try {
-      res = hexToBytes2(hex);
-    } catch (e) {
-      throw new Error(title + " must be hex string or Uint8Array, cause: " + e);
-    }
-  } else if (isBytes(hex)) {
-    res = Uint8Array.from(hex);
-  } else {
-    throw new Error(title + " must be hex string or Uint8Array");
-  }
-  const len = res.length;
-  if (typeof expectedLength === "number" && len !== expectedLength)
-    throw new Error(title + " of length " + expectedLength + " expected, got " + len);
-  return res;
-}
-function equalBytes(a, b) {
-  if (a.length !== b.length)
-    return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++)
-    diff |= a[i] ^ b[i];
-  return diff === 0;
-}
-function copyBytes(bytes) {
-  return Uint8Array.from(bytes);
-}
-function inRange2(n, min, max) {
-  return isPosBig2(n) && isPosBig2(min) && isPosBig2(max) && min <= n && n < max;
-}
-function aInRange2(title, n, min, max) {
-  if (!inRange2(n, min, max))
-    throw new Error("expected valid " + title + ": " + min + " <= n < " + max + ", got " + n);
-}
-function bitLen2(n) {
-  let len;
-  for (len = 0; n > _0n7; n >>= _1n7, len += 1)
-    ;
-  return len;
-}
-function _validateObject(object, fields, optFields = {}) {
-  if (!object || typeof object !== "object")
-    throw new Error("expected valid options object");
-  function checkField(fieldName, expectedType, isOpt) {
-    const val = object[fieldName];
-    if (isOpt && val === void 0)
-      return;
-    const current = typeof val;
-    if (current !== expectedType || val === null)
-      throw new Error(`param "${fieldName}" is invalid: expected ${expectedType}, got ${current}`);
-  }
-  Object.entries(fields).forEach(([k, v]) => checkField(k, v, false));
-  Object.entries(optFields).forEach(([k, v]) => checkField(k, v, true));
-}
-function memoized2(fn) {
-  const map = /* @__PURE__ */ new WeakMap();
-  return (arg, ...args) => {
-    const val = map.get(arg);
-    if (val !== void 0)
-      return val;
-    const computed = fn(arg, ...args);
-    map.set(arg, computed);
-    return computed;
-  };
-}
-var _0n7, _1n7, isPosBig2, bitMask2, notImplemented;
-var init_utils3 = __esm({
-  "../../node_modules/@noble/curves/esm/utils.js"() {
-    "use strict";
-    init_utils();
-    init_utils();
-    _0n7 = /* @__PURE__ */ BigInt(0);
-    _1n7 = /* @__PURE__ */ BigInt(1);
-    isPosBig2 = (n) => typeof n === "bigint" && _0n7 <= n;
-    bitMask2 = (n) => (_1n7 << BigInt(n)) - _1n7;
-    notImplemented = () => {
-      throw new Error("not implemented");
-    };
-  }
-});
-
-// ../../node_modules/@noble/curves/esm/abstract/modular.js
-function mod2(a, b) {
-  const result = a % b;
-  return result >= _0n8 ? result : b + result;
-}
-function pow22(x, power, modulo) {
-  let res = x;
-  while (power-- > _0n8) {
-    res *= res;
-    res %= modulo;
-  }
-  return res;
-}
-function invert2(number, modulo) {
-  if (number === _0n8)
-    throw new Error("invert: expected non-zero number");
-  if (modulo <= _0n8)
-    throw new Error("invert: expected positive modulus, got " + modulo);
-  let a = mod2(number, modulo);
-  let b = modulo;
-  let x = _0n8, y = _1n8, u = _1n8, v = _0n8;
-  while (a !== _0n8) {
-    const q = b / a;
-    const r = b % a;
-    const m = x - u * q;
-    const n = y - v * q;
-    b = a, a = r, x = u, y = v, u = m, v = n;
-  }
-  const gcd = b;
-  if (gcd !== _1n8)
-    throw new Error("invert: does not exist");
-  return mod2(x, modulo);
-}
-function assertIsSquare(Fp2, root, n) {
-  if (!Fp2.eql(Fp2.sqr(root), n))
-    throw new Error("Cannot find square root");
-}
-function sqrt3mod42(Fp2, n) {
-  const p1div4 = (Fp2.ORDER + _1n8) / _4n3;
-  const root = Fp2.pow(n, p1div4);
-  assertIsSquare(Fp2, root, n);
-  return root;
-}
-function sqrt5mod82(Fp2, n) {
-  const p5div8 = (Fp2.ORDER - _5n2) / _8n2;
-  const n2 = Fp2.mul(n, _2n5);
-  const v = Fp2.pow(n2, p5div8);
-  const nv = Fp2.mul(n, v);
-  const i = Fp2.mul(Fp2.mul(nv, _2n5), v);
-  const root = Fp2.mul(nv, Fp2.sub(i, Fp2.ONE));
-  assertIsSquare(Fp2, root, n);
-  return root;
-}
-function sqrt9mod16(P) {
-  const Fp_ = Field2(P);
-  const tn = tonelliShanks2(P);
-  const c1 = tn(Fp_, Fp_.neg(Fp_.ONE));
-  const c2 = tn(Fp_, c1);
-  const c3 = tn(Fp_, Fp_.neg(c1));
-  const c4 = (P + _7n2) / _16n;
-  return (Fp2, n) => {
-    let tv1 = Fp2.pow(n, c4);
-    let tv2 = Fp2.mul(tv1, c1);
-    const tv3 = Fp2.mul(tv1, c2);
-    const tv4 = Fp2.mul(tv1, c3);
-    const e1 = Fp2.eql(Fp2.sqr(tv2), n);
-    const e2 = Fp2.eql(Fp2.sqr(tv3), n);
-    tv1 = Fp2.cmov(tv1, tv2, e1);
-    tv2 = Fp2.cmov(tv4, tv3, e2);
-    const e3 = Fp2.eql(Fp2.sqr(tv2), n);
-    const root = Fp2.cmov(tv1, tv2, e3);
-    assertIsSquare(Fp2, root, n);
-    return root;
-  };
-}
-function tonelliShanks2(P) {
-  if (P < _3n3)
-    throw new Error("sqrt is not defined for small field");
-  let Q = P - _1n8;
-  let S = 0;
-  while (Q % _2n5 === _0n8) {
-    Q /= _2n5;
-    S++;
-  }
-  let Z = _2n5;
-  const _Fp = Field2(P);
-  while (FpLegendre2(_Fp, Z) === 1) {
-    if (Z++ > 1e3)
-      throw new Error("Cannot find square root: probably non-prime P");
-  }
-  if (S === 1)
-    return sqrt3mod42;
-  let cc = _Fp.pow(Z, Q);
-  const Q1div2 = (Q + _1n8) / _2n5;
-  return function tonelliSlow(Fp2, n) {
-    if (Fp2.is0(n))
-      return n;
-    if (FpLegendre2(Fp2, n) !== 1)
-      throw new Error("Cannot find square root");
-    let M = S;
-    let c = Fp2.mul(Fp2.ONE, cc);
-    let t = Fp2.pow(n, Q);
-    let R = Fp2.pow(n, Q1div2);
-    while (!Fp2.eql(t, Fp2.ONE)) {
-      if (Fp2.is0(t))
-        return Fp2.ZERO;
-      let i = 1;
-      let t_tmp = Fp2.sqr(t);
-      while (!Fp2.eql(t_tmp, Fp2.ONE)) {
-        i++;
-        t_tmp = Fp2.sqr(t_tmp);
-        if (i === M)
-          throw new Error("Cannot find square root");
-      }
-      const exponent = _1n8 << BigInt(M - i - 1);
-      const b = Fp2.pow(c, exponent);
-      M = i;
-      c = Fp2.sqr(b);
-      t = Fp2.mul(t, c);
-      R = Fp2.mul(R, b);
-    }
-    return R;
-  };
-}
-function FpSqrt2(P) {
-  if (P % _4n3 === _3n3)
-    return sqrt3mod42;
-  if (P % _8n2 === _5n2)
-    return sqrt5mod82;
-  if (P % _16n === _9n)
-    return sqrt9mod16(P);
-  return tonelliShanks2(P);
-}
-function validateField2(field) {
-  const initial = {
-    ORDER: "bigint",
-    MASK: "bigint",
-    BYTES: "number",
-    BITS: "number"
-  };
-  const opts = FIELD_FIELDS2.reduce((map, val) => {
-    map[val] = "function";
-    return map;
-  }, initial);
-  _validateObject(field, opts);
-  return field;
-}
-function FpPow2(Fp2, num2, power) {
-  if (power < _0n8)
-    throw new Error("invalid exponent, negatives unsupported");
-  if (power === _0n8)
-    return Fp2.ONE;
-  if (power === _1n8)
-    return num2;
-  let p = Fp2.ONE;
-  let d = num2;
-  while (power > _0n8) {
-    if (power & _1n8)
-      p = Fp2.mul(p, d);
-    d = Fp2.sqr(d);
-    power >>= _1n8;
-  }
-  return p;
-}
-function FpInvertBatch2(Fp2, nums, passZero = false) {
-  const inverted = new Array(nums.length).fill(passZero ? Fp2.ZERO : void 0);
-  const multipliedAcc = nums.reduce((acc, num2, i) => {
-    if (Fp2.is0(num2))
-      return acc;
-    inverted[i] = acc;
-    return Fp2.mul(acc, num2);
-  }, Fp2.ONE);
-  const invertedAcc = Fp2.inv(multipliedAcc);
-  nums.reduceRight((acc, num2, i) => {
-    if (Fp2.is0(num2))
-      return acc;
-    inverted[i] = Fp2.mul(acc, inverted[i]);
-    return Fp2.mul(acc, num2);
-  }, invertedAcc);
-  return inverted;
-}
-function FpLegendre2(Fp2, n) {
-  const p1mod2 = (Fp2.ORDER - _1n8) / _2n5;
-  const powered = Fp2.pow(n, p1mod2);
-  const yes = Fp2.eql(powered, Fp2.ONE);
-  const zero = Fp2.eql(powered, Fp2.ZERO);
-  const no = Fp2.eql(powered, Fp2.neg(Fp2.ONE));
-  if (!yes && !zero && !no)
-    throw new Error("invalid Legendre symbol result");
-  return yes ? 1 : zero ? 0 : -1;
-}
-function nLength2(n, nBitLength) {
-  if (nBitLength !== void 0)
-    anumber(nBitLength);
-  const _nBitLength = nBitLength !== void 0 ? nBitLength : n.toString(2).length;
-  const nByteLength = Math.ceil(_nBitLength / 8);
-  return { nBitLength: _nBitLength, nByteLength };
-}
-function Field2(ORDER, bitLenOrOpts, isLE2 = false, opts = {}) {
-  if (ORDER <= _0n8)
-    throw new Error("invalid field: expected ORDER > 0, got " + ORDER);
-  let _nbitLength = void 0;
-  let _sqrt = void 0;
-  let modFromBytes = false;
-  let allowedLengths = void 0;
-  if (typeof bitLenOrOpts === "object" && bitLenOrOpts != null) {
-    if (opts.sqrt || isLE2)
-      throw new Error("cannot specify opts in two arguments");
-    const _opts = bitLenOrOpts;
-    if (_opts.BITS)
-      _nbitLength = _opts.BITS;
-    if (_opts.sqrt)
-      _sqrt = _opts.sqrt;
-    if (typeof _opts.isLE === "boolean")
-      isLE2 = _opts.isLE;
-    if (typeof _opts.modFromBytes === "boolean")
-      modFromBytes = _opts.modFromBytes;
-    allowedLengths = _opts.allowedLengths;
-  } else {
-    if (typeof bitLenOrOpts === "number")
-      _nbitLength = bitLenOrOpts;
-    if (opts.sqrt)
-      _sqrt = opts.sqrt;
-  }
-  const { nBitLength: BITS, nByteLength: BYTES } = nLength2(ORDER, _nbitLength);
-  if (BYTES > 2048)
-    throw new Error("invalid field: expected ORDER of <= 2048 bytes");
-  let sqrtP;
-  const f = Object.freeze({
-    ORDER,
-    isLE: isLE2,
-    BITS,
-    BYTES,
-    MASK: bitMask2(BITS),
-    ZERO: _0n8,
-    ONE: _1n8,
-    allowedLengths,
-    create: (num2) => mod2(num2, ORDER),
-    isValid: (num2) => {
-      if (typeof num2 !== "bigint")
-        throw new Error("invalid field element: expected bigint, got " + typeof num2);
-      return _0n8 <= num2 && num2 < ORDER;
-    },
-    is0: (num2) => num2 === _0n8,
-    // is valid and invertible
-    isValidNot0: (num2) => !f.is0(num2) && f.isValid(num2),
-    isOdd: (num2) => (num2 & _1n8) === _1n8,
-    neg: (num2) => mod2(-num2, ORDER),
-    eql: (lhs, rhs) => lhs === rhs,
-    sqr: (num2) => mod2(num2 * num2, ORDER),
-    add: (lhs, rhs) => mod2(lhs + rhs, ORDER),
-    sub: (lhs, rhs) => mod2(lhs - rhs, ORDER),
-    mul: (lhs, rhs) => mod2(lhs * rhs, ORDER),
-    pow: (num2, power) => FpPow2(f, num2, power),
-    div: (lhs, rhs) => mod2(lhs * invert2(rhs, ORDER), ORDER),
-    // Same as above, but doesn't normalize
-    sqrN: (num2) => num2 * num2,
-    addN: (lhs, rhs) => lhs + rhs,
-    subN: (lhs, rhs) => lhs - rhs,
-    mulN: (lhs, rhs) => lhs * rhs,
-    inv: (num2) => invert2(num2, ORDER),
-    sqrt: _sqrt || ((n) => {
-      if (!sqrtP)
-        sqrtP = FpSqrt2(ORDER);
-      return sqrtP(f, n);
-    }),
-    toBytes: (num2) => isLE2 ? numberToBytesLE2(num2, BYTES) : numberToBytesBE2(num2, BYTES),
-    fromBytes: (bytes, skipValidation = true) => {
-      if (allowedLengths) {
-        if (!allowedLengths.includes(bytes.length) || bytes.length > BYTES) {
-          throw new Error("Field.fromBytes: expected " + allowedLengths + " bytes, got " + bytes.length);
-        }
-        const padded = new Uint8Array(BYTES);
-        padded.set(bytes, isLE2 ? 0 : padded.length - bytes.length);
-        bytes = padded;
-      }
-      if (bytes.length !== BYTES)
-        throw new Error("Field.fromBytes: expected " + BYTES + " bytes, got " + bytes.length);
-      let scalar = isLE2 ? bytesToNumberLE2(bytes) : bytesToNumberBE2(bytes);
-      if (modFromBytes)
-        scalar = mod2(scalar, ORDER);
-      if (!skipValidation) {
-        if (!f.isValid(scalar))
-          throw new Error("invalid field element: outside of range 0..ORDER");
-      }
-      return scalar;
-    },
-    // TODO: we don't need it here, move out to separate fn
-    invertBatch: (lst) => FpInvertBatch2(f, lst),
-    // We can't move this out because Fp6, Fp12 implement it
-    // and it's unclear what to return in there.
-    cmov: (a, b, c) => c ? b : a
-  });
-  return Object.freeze(f);
-}
-var _0n8, _1n8, _2n5, _3n3, _4n3, _5n2, _7n2, _8n2, _9n, _16n, isNegativeLE, FIELD_FIELDS2;
-var init_modular2 = __esm({
-  "../../node_modules/@noble/curves/esm/abstract/modular.js"() {
-    "use strict";
-    init_utils3();
-    _0n8 = BigInt(0);
-    _1n8 = BigInt(1);
-    _2n5 = /* @__PURE__ */ BigInt(2);
-    _3n3 = /* @__PURE__ */ BigInt(3);
-    _4n3 = /* @__PURE__ */ BigInt(4);
-    _5n2 = /* @__PURE__ */ BigInt(5);
-    _7n2 = /* @__PURE__ */ BigInt(7);
-    _8n2 = /* @__PURE__ */ BigInt(8);
-    _9n = /* @__PURE__ */ BigInt(9);
-    _16n = /* @__PURE__ */ BigInt(16);
-    isNegativeLE = (num2, modulo) => (mod2(num2, modulo) & _1n8) === _1n8;
-    FIELD_FIELDS2 = [
-      "create",
-      "isValid",
-      "is0",
-      "neg",
-      "inv",
-      "sqrt",
-      "sqr",
-      "eql",
-      "add",
-      "sub",
-      "mul",
-      "pow",
-      "div",
-      "addN",
-      "subN",
-      "mulN",
-      "sqrN"
-    ];
-  }
-});
-
-// ../../node_modules/@noble/curves/esm/abstract/curve.js
-function negateCt(condition, item) {
-  const neg = item.negate();
-  return condition ? neg : item;
-}
-function normalizeZ(c, points) {
-  const invertedZs = FpInvertBatch2(c.Fp, points.map((p) => p.Z));
-  return points.map((p, i) => c.fromAffine(p.toAffine(invertedZs[i])));
-}
-function validateW2(W, bits) {
-  if (!Number.isSafeInteger(W) || W <= 0 || W > bits)
-    throw new Error("invalid window size, expected [1.." + bits + "], got W=" + W);
-}
-function calcWOpts2(W, scalarBits) {
-  validateW2(W, scalarBits);
-  const windows = Math.ceil(scalarBits / W) + 1;
-  const windowSize = 2 ** (W - 1);
-  const maxNumber = 2 ** W;
-  const mask = bitMask2(W);
-  const shiftBy = BigInt(W);
-  return { windows, windowSize, mask, maxNumber, shiftBy };
-}
-function calcOffsets2(n, window, wOpts) {
-  const { windowSize, mask, maxNumber, shiftBy } = wOpts;
-  let wbits = Number(n & mask);
-  let nextN = n >> shiftBy;
-  if (wbits > windowSize) {
-    wbits -= maxNumber;
-    nextN += _1n9;
-  }
-  const offsetStart = window * windowSize;
-  const offset = offsetStart + Math.abs(wbits) - 1;
-  const isZero = wbits === 0;
-  const isNeg = wbits < 0;
-  const isNegF = window % 2 !== 0;
-  const offsetF = offsetStart;
-  return { nextN, offset, isZero, isNeg, isNegF, offsetF };
-}
-function validateMSMPoints2(points, c) {
-  if (!Array.isArray(points))
-    throw new Error("array expected");
-  points.forEach((p, i) => {
-    if (!(p instanceof c))
-      throw new Error("invalid point at index " + i);
-  });
-}
-function validateMSMScalars2(scalars, field) {
-  if (!Array.isArray(scalars))
-    throw new Error("array of scalars expected");
-  scalars.forEach((s, i) => {
-    if (!field.isValid(s))
-      throw new Error("invalid scalar at index " + i);
-  });
-}
-function getW2(P) {
-  return pointWindowSizes2.get(P) || 1;
-}
-function assert0(n) {
-  if (n !== _0n9)
-    throw new Error("invalid wNAF");
-}
-function pippenger2(c, fieldN, points, scalars) {
-  validateMSMPoints2(points, c);
-  validateMSMScalars2(scalars, fieldN);
-  const plength = points.length;
-  const slength = scalars.length;
-  if (plength !== slength)
-    throw new Error("arrays of points and scalars must have equal length");
-  const zero = c.ZERO;
-  const wbits = bitLen2(BigInt(plength));
-  let windowSize = 1;
-  if (wbits > 12)
-    windowSize = wbits - 3;
-  else if (wbits > 4)
-    windowSize = wbits - 2;
-  else if (wbits > 0)
-    windowSize = 2;
-  const MASK = bitMask2(windowSize);
-  const buckets = new Array(Number(MASK) + 1).fill(zero);
-  const lastBits = Math.floor((fieldN.BITS - 1) / windowSize) * windowSize;
-  let sum = zero;
-  for (let i = lastBits; i >= 0; i -= windowSize) {
-    buckets.fill(zero);
-    for (let j = 0; j < slength; j++) {
-      const scalar = scalars[j];
-      const wbits2 = Number(scalar >> BigInt(i) & MASK);
-      buckets[wbits2] = buckets[wbits2].add(points[j]);
-    }
-    let resI = zero;
-    for (let j = buckets.length - 1, sumI = zero; j > 0; j--) {
-      sumI = sumI.add(buckets[j]);
-      resI = resI.add(sumI);
-    }
-    sum = sum.add(resI);
-    if (i !== 0)
-      for (let j = 0; j < windowSize; j++)
-        sum = sum.double();
-  }
-  return sum;
-}
-function createField(order, field, isLE2) {
-  if (field) {
-    if (field.ORDER !== order)
-      throw new Error("Field.ORDER must match order: Fp == p, Fn == n");
-    validateField2(field);
-    return field;
-  } else {
-    return Field2(order, { isLE: isLE2 });
-  }
-}
-function _createCurveFields(type, CURVE, curveOpts = {}, FpFnLE) {
-  if (FpFnLE === void 0)
-    FpFnLE = type === "edwards";
-  if (!CURVE || typeof CURVE !== "object")
-    throw new Error(`expected valid ${type} CURVE object`);
-  for (const p of ["p", "n", "h"]) {
-    const val = CURVE[p];
-    if (!(typeof val === "bigint" && val > _0n9))
-      throw new Error(`CURVE.${p} must be positive bigint`);
-  }
-  const Fp2 = createField(CURVE.p, curveOpts.Fp, FpFnLE);
-  const Fn2 = createField(CURVE.n, curveOpts.Fn, FpFnLE);
-  const _b = type === "weierstrass" ? "b" : "d";
-  const params = ["Gx", "Gy", "a", _b];
-  for (const p of params) {
-    if (!Fp2.isValid(CURVE[p]))
-      throw new Error(`CURVE.${p} must be valid field element of CURVE.Fp`);
-  }
-  CURVE = Object.freeze(Object.assign({}, CURVE));
-  return { CURVE, Fp: Fp2, Fn: Fn2 };
-}
-var _0n9, _1n9, pointPrecomputes2, pointWindowSizes2, wNAF2;
-var init_curve2 = __esm({
-  "../../node_modules/@noble/curves/esm/abstract/curve.js"() {
-    "use strict";
-    init_utils3();
-    init_modular2();
-    _0n9 = BigInt(0);
-    _1n9 = BigInt(1);
-    pointPrecomputes2 = /* @__PURE__ */ new WeakMap();
-    pointWindowSizes2 = /* @__PURE__ */ new WeakMap();
-    wNAF2 = class {
-      // Parametrized with a given Point class (not individual point)
-      constructor(Point2, bits) {
-        this.BASE = Point2.BASE;
-        this.ZERO = Point2.ZERO;
-        this.Fn = Point2.Fn;
-        this.bits = bits;
-      }
-      // non-const time multiplication ladder
-      _unsafeLadder(elm, n, p = this.ZERO) {
-        let d = elm;
-        while (n > _0n9) {
-          if (n & _1n9)
-            p = p.add(d);
-          d = d.double();
-          n >>= _1n9;
-        }
-        return p;
-      }
-      /**
-       * Creates a wNAF precomputation window. Used for caching.
-       * Default window size is set by `utils.precompute()` and is equal to 8.
-       * Number of precomputed points depends on the curve size:
-       * 2^(𝑊−1) * (Math.ceil(𝑛 / 𝑊) + 1), where:
-       * - 𝑊 is the window size
-       * - 𝑛 is the bitlength of the curve order.
-       * For a 256-bit curve and window size 8, the number of precomputed points is 128 * 33 = 4224.
-       * @param point Point instance
-       * @param W window size
-       * @returns precomputed point tables flattened to a single array
-       */
-      precomputeWindow(point, W) {
-        const { windows, windowSize } = calcWOpts2(W, this.bits);
-        const points = [];
-        let p = point;
-        let base4 = p;
-        for (let window = 0; window < windows; window++) {
-          base4 = p;
-          points.push(base4);
-          for (let i = 1; i < windowSize; i++) {
-            base4 = base4.add(p);
-            points.push(base4);
-          }
-          p = base4.double();
-        }
-        return points;
-      }
-      /**
-       * Implements ec multiplication using precomputed tables and w-ary non-adjacent form.
-       * More compact implementation:
-       * https://github.com/paulmillr/noble-secp256k1/blob/47cb1669b6e506ad66b35fe7d76132ae97465da2/index.ts#L502-L541
-       * @returns real and fake (for const-time) points
-       */
-      wNAF(W, precomputes, n) {
-        if (!this.Fn.isValid(n))
-          throw new Error("invalid scalar");
-        let p = this.ZERO;
-        let f = this.BASE;
-        const wo = calcWOpts2(W, this.bits);
-        for (let window = 0; window < wo.windows; window++) {
-          const { nextN, offset, isZero, isNeg, isNegF, offsetF } = calcOffsets2(n, window, wo);
-          n = nextN;
-          if (isZero) {
-            f = f.add(negateCt(isNegF, precomputes[offsetF]));
-          } else {
-            p = p.add(negateCt(isNeg, precomputes[offset]));
-          }
-        }
-        assert0(n);
-        return { p, f };
-      }
-      /**
-       * Implements ec unsafe (non const-time) multiplication using precomputed tables and w-ary non-adjacent form.
-       * @param acc accumulator point to add result of multiplication
-       * @returns point
-       */
-      wNAFUnsafe(W, precomputes, n, acc = this.ZERO) {
-        const wo = calcWOpts2(W, this.bits);
-        for (let window = 0; window < wo.windows; window++) {
-          if (n === _0n9)
-            break;
-          const { nextN, offset, isZero, isNeg } = calcOffsets2(n, window, wo);
-          n = nextN;
-          if (isZero) {
-            continue;
-          } else {
-            const item = precomputes[offset];
-            acc = acc.add(isNeg ? item.negate() : item);
-          }
-        }
-        assert0(n);
-        return acc;
-      }
-      getPrecomputes(W, point, transform) {
-        let comp = pointPrecomputes2.get(point);
-        if (!comp) {
-          comp = this.precomputeWindow(point, W);
-          if (W !== 1) {
-            if (typeof transform === "function")
-              comp = transform(comp);
-            pointPrecomputes2.set(point, comp);
-          }
-        }
-        return comp;
-      }
-      cached(point, scalar, transform) {
-        const W = getW2(point);
-        return this.wNAF(W, this.getPrecomputes(W, point, transform), scalar);
-      }
-      unsafe(point, scalar, transform, prev) {
-        const W = getW2(point);
-        if (W === 1)
-          return this._unsafeLadder(point, scalar, prev);
-        return this.wNAFUnsafe(W, this.getPrecomputes(W, point, transform), scalar, prev);
-      }
-      // We calculate precomputes for elliptic curve point multiplication
-      // using windowed method. This specifies window size and
-      // stores precomputed values. Usually only base point would be precomputed.
-      createCache(P, W) {
-        validateW2(W, this.bits);
-        pointWindowSizes2.set(P, W);
-        pointPrecomputes2.delete(P);
-      }
-      hasCache(elm) {
-        return getW2(elm) !== 1;
-      }
-    };
-  }
-});
-
-// ../../node_modules/@noble/curves/esm/abstract/edwards.js
-function isEdValidXY(Fp2, CURVE, x, y) {
-  const x2 = Fp2.sqr(x);
-  const y2 = Fp2.sqr(y);
-  const left = Fp2.add(Fp2.mul(CURVE.a, x2), y2);
-  const right = Fp2.add(Fp2.ONE, Fp2.mul(CURVE.d, Fp2.mul(x2, y2)));
-  return Fp2.eql(left, right);
-}
-function edwards(params, extraOpts = {}) {
-  const validated = _createCurveFields("edwards", params, extraOpts, extraOpts.FpFnLE);
-  const { Fp: Fp2, Fn: Fn2 } = validated;
-  let CURVE = validated.CURVE;
-  const { h: cofactor } = CURVE;
-  _validateObject(extraOpts, {}, { uvRatio: "function" });
-  const MASK = _2n6 << BigInt(Fn2.BYTES * 8) - _1n10;
-  const modP2 = (n) => Fp2.create(n);
-  const uvRatio2 = extraOpts.uvRatio || ((u, v) => {
-    try {
-      return { isValid: true, value: Fp2.sqrt(Fp2.div(u, v)) };
-    } catch (e) {
-      return { isValid: false, value: _0n10 };
-    }
-  });
-  if (!isEdValidXY(Fp2, CURVE, CURVE.Gx, CURVE.Gy))
-    throw new Error("bad curve params: generator point");
-  function acoord(title, n, banZero = false) {
-    const min = banZero ? _1n10 : _0n10;
-    aInRange2("coordinate " + title, n, min, MASK);
-    return n;
-  }
-  function aextpoint(other) {
-    if (!(other instanceof Point2))
-      throw new Error("ExtendedPoint expected");
-  }
-  const toAffineMemo = memoized2((p, iz) => {
-    const { X, Y, Z } = p;
-    const is0 = p.is0();
-    if (iz == null)
-      iz = is0 ? _8n3 : Fp2.inv(Z);
-    const x = modP2(X * iz);
-    const y = modP2(Y * iz);
-    const zz = Fp2.mul(Z, iz);
-    if (is0)
-      return { x: _0n10, y: _1n10 };
-    if (zz !== _1n10)
-      throw new Error("invZ was invalid");
-    return { x, y };
-  });
-  const assertValidMemo = memoized2((p) => {
-    const { a, d } = CURVE;
-    if (p.is0())
-      throw new Error("bad point: ZERO");
-    const { X, Y, Z, T } = p;
-    const X2 = modP2(X * X);
-    const Y2 = modP2(Y * Y);
-    const Z2 = modP2(Z * Z);
-    const Z4 = modP2(Z2 * Z2);
-    const aX2 = modP2(X2 * a);
-    const left = modP2(Z2 * modP2(aX2 + Y2));
-    const right = modP2(Z4 + modP2(d * modP2(X2 * Y2)));
-    if (left !== right)
-      throw new Error("bad point: equation left != right (1)");
-    const XY = modP2(X * Y);
-    const ZT = modP2(Z * T);
-    if (XY !== ZT)
-      throw new Error("bad point: equation left != right (2)");
-    return true;
-  });
-  class Point2 {
-    constructor(X, Y, Z, T) {
-      this.X = acoord("x", X);
-      this.Y = acoord("y", Y);
-      this.Z = acoord("z", Z, true);
-      this.T = acoord("t", T);
-      Object.freeze(this);
-    }
-    static CURVE() {
-      return CURVE;
-    }
-    static fromAffine(p) {
-      if (p instanceof Point2)
-        throw new Error("extended point not allowed");
-      const { x, y } = p || {};
-      acoord("x", x);
-      acoord("y", y);
-      return new Point2(x, y, _1n10, modP2(x * y));
-    }
-    // Uses algo from RFC8032 5.1.3.
-    static fromBytes(bytes, zip215 = false) {
-      const len = Fp2.BYTES;
-      const { a, d } = CURVE;
-      bytes = copyBytes(_abytes2(bytes, len, "point"));
-      _abool2(zip215, "zip215");
-      const normed = copyBytes(bytes);
-      const lastByte = bytes[len - 1];
-      normed[len - 1] = lastByte & ~128;
-      const y = bytesToNumberLE2(normed);
-      const max = zip215 ? MASK : Fp2.ORDER;
-      aInRange2("point.y", y, _0n10, max);
-      const y2 = modP2(y * y);
-      const u = modP2(y2 - _1n10);
-      const v = modP2(d * y2 - a);
-      let { isValid: isValid3, value: x } = uvRatio2(u, v);
-      if (!isValid3)
-        throw new Error("bad point: invalid y coordinate");
-      const isXOdd = (x & _1n10) === _1n10;
-      const isLastByteOdd = (lastByte & 128) !== 0;
-      if (!zip215 && x === _0n10 && isLastByteOdd)
-        throw new Error("bad point: x=0 and x_0=1");
-      if (isLastByteOdd !== isXOdd)
-        x = modP2(-x);
-      return Point2.fromAffine({ x, y });
-    }
-    static fromHex(bytes, zip215 = false) {
-      return Point2.fromBytes(ensureBytes2("point", bytes), zip215);
-    }
-    get x() {
-      return this.toAffine().x;
-    }
-    get y() {
-      return this.toAffine().y;
-    }
-    precompute(windowSize = 8, isLazy = true) {
-      wnaf.createCache(this, windowSize);
-      if (!isLazy)
-        this.multiply(_2n6);
-      return this;
-    }
-    // Useful in fromAffine() - not for fromBytes(), which always created valid points.
-    assertValidity() {
-      assertValidMemo(this);
-    }
-    // Compare one point to another.
-    equals(other) {
-      aextpoint(other);
-      const { X: X1, Y: Y1, Z: Z1 } = this;
-      const { X: X2, Y: Y2, Z: Z2 } = other;
-      const X1Z2 = modP2(X1 * Z2);
-      const X2Z1 = modP2(X2 * Z1);
-      const Y1Z2 = modP2(Y1 * Z2);
-      const Y2Z1 = modP2(Y2 * Z1);
-      return X1Z2 === X2Z1 && Y1Z2 === Y2Z1;
-    }
-    is0() {
-      return this.equals(Point2.ZERO);
-    }
-    negate() {
-      return new Point2(modP2(-this.X), this.Y, this.Z, modP2(-this.T));
-    }
-    // Fast algo for doubling Extended Point.
-    // https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#doubling-dbl-2008-hwcd
-    // Cost: 4M + 4S + 1*a + 6add + 1*2.
-    double() {
-      const { a } = CURVE;
-      const { X: X1, Y: Y1, Z: Z1 } = this;
-      const A = modP2(X1 * X1);
-      const B = modP2(Y1 * Y1);
-      const C = modP2(_2n6 * modP2(Z1 * Z1));
-      const D = modP2(a * A);
-      const x1y1 = X1 + Y1;
-      const E = modP2(modP2(x1y1 * x1y1) - A - B);
-      const G = D + B;
-      const F = G - C;
-      const H = D - B;
-      const X3 = modP2(E * F);
-      const Y3 = modP2(G * H);
-      const T3 = modP2(E * H);
-      const Z3 = modP2(F * G);
-      return new Point2(X3, Y3, Z3, T3);
-    }
-    // Fast algo for adding 2 Extended Points.
-    // https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#addition-add-2008-hwcd
-    // Cost: 9M + 1*a + 1*d + 7add.
-    add(other) {
-      aextpoint(other);
-      const { a, d } = CURVE;
-      const { X: X1, Y: Y1, Z: Z1, T: T1 } = this;
-      const { X: X2, Y: Y2, Z: Z2, T: T2 } = other;
-      const A = modP2(X1 * X2);
-      const B = modP2(Y1 * Y2);
-      const C = modP2(T1 * d * T2);
-      const D = modP2(Z1 * Z2);
-      const E = modP2((X1 + Y1) * (X2 + Y2) - A - B);
-      const F = D - C;
-      const G = D + C;
-      const H = modP2(B - a * A);
-      const X3 = modP2(E * F);
-      const Y3 = modP2(G * H);
-      const T3 = modP2(E * H);
-      const Z3 = modP2(F * G);
-      return new Point2(X3, Y3, Z3, T3);
-    }
-    subtract(other) {
-      return this.add(other.negate());
-    }
-    // Constant-time multiplication.
-    multiply(scalar) {
-      if (!Fn2.isValidNot0(scalar))
-        throw new Error("invalid scalar: expected 1 <= sc < curve.n");
-      const { p, f } = wnaf.cached(this, scalar, (p2) => normalizeZ(Point2, p2));
-      return normalizeZ(Point2, [p, f])[0];
-    }
-    // Non-constant-time multiplication. Uses double-and-add algorithm.
-    // It's faster, but should only be used when you don't care about
-    // an exposed private key e.g. sig verification.
-    // Does NOT allow scalars higher than CURVE.n.
-    // Accepts optional accumulator to merge with multiply (important for sparse scalars)
-    multiplyUnsafe(scalar, acc = Point2.ZERO) {
-      if (!Fn2.isValid(scalar))
-        throw new Error("invalid scalar: expected 0 <= sc < curve.n");
-      if (scalar === _0n10)
-        return Point2.ZERO;
-      if (this.is0() || scalar === _1n10)
-        return this;
-      return wnaf.unsafe(this, scalar, (p) => normalizeZ(Point2, p), acc);
-    }
-    // Checks if point is of small order.
-    // If you add something to small order point, you will have "dirty"
-    // point with torsion component.
-    // Multiplies point by cofactor and checks if the result is 0.
-    isSmallOrder() {
-      return this.multiplyUnsafe(cofactor).is0();
-    }
-    // Multiplies point by curve order and checks if the result is 0.
-    // Returns `false` is the point is dirty.
-    isTorsionFree() {
-      return wnaf.unsafe(this, CURVE.n).is0();
-    }
-    // Converts Extended point to default (x, y) coordinates.
-    // Can accept precomputed Z^-1 - for example, from invertBatch.
-    toAffine(invertedZ) {
-      return toAffineMemo(this, invertedZ);
-    }
-    clearCofactor() {
-      if (cofactor === _1n10)
-        return this;
-      return this.multiplyUnsafe(cofactor);
-    }
-    toBytes() {
-      const { x, y } = this.toAffine();
-      const bytes = Fp2.toBytes(y);
-      bytes[bytes.length - 1] |= x & _1n10 ? 128 : 0;
-      return bytes;
-    }
-    toHex() {
-      return bytesToHex2(this.toBytes());
-    }
-    toString() {
-      return `<Point ${this.is0() ? "ZERO" : this.toHex()}>`;
-    }
-    // TODO: remove
-    get ex() {
-      return this.X;
-    }
-    get ey() {
-      return this.Y;
-    }
-    get ez() {
-      return this.Z;
-    }
-    get et() {
-      return this.T;
-    }
-    static normalizeZ(points) {
-      return normalizeZ(Point2, points);
-    }
-    static msm(points, scalars) {
-      return pippenger2(Point2, Fn2, points, scalars);
-    }
-    _setWindowSize(windowSize) {
-      this.precompute(windowSize);
-    }
-    toRawBytes() {
-      return this.toBytes();
-    }
-  }
-  Point2.BASE = new Point2(CURVE.Gx, CURVE.Gy, _1n10, modP2(CURVE.Gx * CURVE.Gy));
-  Point2.ZERO = new Point2(_0n10, _1n10, _1n10, _0n10);
-  Point2.Fp = Fp2;
-  Point2.Fn = Fn2;
-  const wnaf = new wNAF2(Point2, Fn2.BITS);
-  Point2.BASE.precompute(8);
-  return Point2;
-}
-function eddsa(Point2, cHash, eddsaOpts = {}) {
-  if (typeof cHash !== "function")
-    throw new Error('"hash" function param is required');
-  _validateObject(eddsaOpts, {}, {
-    adjustScalarBytes: "function",
-    randomBytes: "function",
-    domain: "function",
-    prehash: "function",
-    mapToCurve: "function"
-  });
-  const { prehash } = eddsaOpts;
-  const { BASE, Fp: Fp2, Fn: Fn2 } = Point2;
-  const randomBytes5 = eddsaOpts.randomBytes || randomBytes;
-  const adjustScalarBytes2 = eddsaOpts.adjustScalarBytes || ((bytes) => bytes);
-  const domain = eddsaOpts.domain || ((data, ctx, phflag) => {
-    _abool2(phflag, "phflag");
-    if (ctx.length || phflag)
-      throw new Error("Contexts/pre-hash are not supported");
-    return data;
-  });
-  function modN_LE(hash) {
-    return Fn2.create(bytesToNumberLE2(hash));
-  }
-  function getPrivateScalar(key) {
-    const len = lengths.secretKey;
-    key = ensureBytes2("private key", key, len);
-    const hashed = ensureBytes2("hashed private key", cHash(key), 2 * len);
-    const head = adjustScalarBytes2(hashed.slice(0, len));
-    const prefix = hashed.slice(len, 2 * len);
-    const scalar = modN_LE(head);
-    return { head, prefix, scalar };
-  }
-  function getExtendedPublicKey(secretKey) {
-    const { head, prefix, scalar } = getPrivateScalar(secretKey);
-    const point = BASE.multiply(scalar);
-    const pointBytes = point.toBytes();
-    return { head, prefix, scalar, point, pointBytes };
-  }
-  function getPublicKey(secretKey) {
-    return getExtendedPublicKey(secretKey).pointBytes;
-  }
-  function hashDomainToScalar(context = Uint8Array.of(), ...msgs) {
-    const msg = concatBytes(...msgs);
-    return modN_LE(cHash(domain(msg, ensureBytes2("context", context), !!prehash)));
-  }
-  function sign(msg, secretKey, options = {}) {
-    msg = ensureBytes2("message", msg);
-    if (prehash)
-      msg = prehash(msg);
-    const { prefix, scalar, pointBytes } = getExtendedPublicKey(secretKey);
-    const r = hashDomainToScalar(options.context, prefix, msg);
-    const R = BASE.multiply(r).toBytes();
-    const k = hashDomainToScalar(options.context, R, pointBytes, msg);
-    const s = Fn2.create(r + k * scalar);
-    if (!Fn2.isValid(s))
-      throw new Error("sign failed: invalid s");
-    const rs = concatBytes(R, Fn2.toBytes(s));
-    return _abytes2(rs, lengths.signature, "result");
-  }
-  const verifyOpts = { zip215: true };
-  function verify(sig, msg, publicKey, options = verifyOpts) {
-    const { context, zip215 } = options;
-    const len = lengths.signature;
-    sig = ensureBytes2("signature", sig, len);
-    msg = ensureBytes2("message", msg);
-    publicKey = ensureBytes2("publicKey", publicKey, lengths.publicKey);
-    if (zip215 !== void 0)
-      _abool2(zip215, "zip215");
-    if (prehash)
-      msg = prehash(msg);
-    const mid = len / 2;
-    const r = sig.subarray(0, mid);
-    const s = bytesToNumberLE2(sig.subarray(mid, len));
-    let A, R, SB;
-    try {
-      A = Point2.fromBytes(publicKey, zip215);
-      R = Point2.fromBytes(r, zip215);
-      SB = BASE.multiplyUnsafe(s);
-    } catch (error) {
-      return false;
-    }
-    if (!zip215 && A.isSmallOrder())
-      return false;
-    const k = hashDomainToScalar(context, R.toBytes(), A.toBytes(), msg);
-    const RkA = R.add(A.multiplyUnsafe(k));
-    return RkA.subtract(SB).clearCofactor().is0();
-  }
-  const _size = Fp2.BYTES;
-  const lengths = {
-    secretKey: _size,
-    publicKey: _size,
-    signature: 2 * _size,
-    seed: _size
-  };
-  function randomSecretKey(seed = randomBytes5(lengths.seed)) {
-    return _abytes2(seed, lengths.seed, "seed");
-  }
-  function keygen(seed) {
-    const secretKey = utils.randomSecretKey(seed);
-    return { secretKey, publicKey: getPublicKey(secretKey) };
-  }
-  function isValidSecretKey(key) {
-    return isBytes(key) && key.length === Fn2.BYTES;
-  }
-  function isValidPublicKey(key, zip215) {
-    try {
-      return !!Point2.fromBytes(key, zip215);
-    } catch (error) {
-      return false;
-    }
-  }
-  const utils = {
-    getExtendedPublicKey,
-    randomSecretKey,
-    isValidSecretKey,
-    isValidPublicKey,
-    /**
-     * Converts ed public key to x public key. Uses formula:
-     * - ed25519:
-     *   - `(u, v) = ((1+y)/(1-y), sqrt(-486664)*u/x)`
-     *   - `(x, y) = (sqrt(-486664)*u/v, (u-1)/(u+1))`
-     * - ed448:
-     *   - `(u, v) = ((y-1)/(y+1), sqrt(156324)*u/x)`
-     *   - `(x, y) = (sqrt(156324)*u/v, (1+u)/(1-u))`
-     */
-    toMontgomery(publicKey) {
-      const { y } = Point2.fromBytes(publicKey);
-      const size2 = lengths.publicKey;
-      const is25519 = size2 === 32;
-      if (!is25519 && size2 !== 57)
-        throw new Error("only defined for 25519 and 448");
-      const u = is25519 ? Fp2.div(_1n10 + y, _1n10 - y) : Fp2.div(y - _1n10, y + _1n10);
-      return Fp2.toBytes(u);
-    },
-    toMontgomerySecret(secretKey) {
-      const size2 = lengths.secretKey;
-      _abytes2(secretKey, size2);
-      const hashed = cHash(secretKey.subarray(0, size2));
-      return adjustScalarBytes2(hashed).subarray(0, size2);
-    },
-    /** @deprecated */
-    randomPrivateKey: randomSecretKey,
-    /** @deprecated */
-    precompute(windowSize = 8, point = Point2.BASE) {
-      return point.precompute(windowSize, false);
-    }
-  };
-  return Object.freeze({
-    keygen,
-    getPublicKey,
-    sign,
-    verify,
-    utils,
-    Point: Point2,
-    lengths
-  });
-}
-function _eddsa_legacy_opts_to_new(c) {
-  const CURVE = {
-    a: c.a,
-    d: c.d,
-    p: c.Fp.ORDER,
-    n: c.n,
-    h: c.h,
-    Gx: c.Gx,
-    Gy: c.Gy
-  };
-  const Fp2 = c.Fp;
-  const Fn2 = Field2(CURVE.n, c.nBitLength, true);
-  const curveOpts = { Fp: Fp2, Fn: Fn2, uvRatio: c.uvRatio };
-  const eddsaOpts = {
-    randomBytes: c.randomBytes,
-    adjustScalarBytes: c.adjustScalarBytes,
-    domain: c.domain,
-    prehash: c.prehash,
-    mapToCurve: c.mapToCurve
-  };
-  return { CURVE, curveOpts, hash: c.hash, eddsaOpts };
-}
-function _eddsa_new_output_to_legacy(c, eddsa2) {
-  const Point2 = eddsa2.Point;
-  const legacy = Object.assign({}, eddsa2, {
-    ExtendedPoint: Point2,
-    CURVE: c,
-    nBitLength: Point2.Fn.BITS,
-    nByteLength: Point2.Fn.BYTES
-  });
-  return legacy;
-}
-function twistedEdwards(c) {
-  const { CURVE, curveOpts, hash, eddsaOpts } = _eddsa_legacy_opts_to_new(c);
-  const Point2 = edwards(CURVE, curveOpts);
-  const EDDSA = eddsa(Point2, hash, eddsaOpts);
-  return _eddsa_new_output_to_legacy(c, EDDSA);
-}
-var _0n10, _1n10, _2n6, _8n3, PrimeEdwardsPoint;
-var init_edwards = __esm({
-  "../../node_modules/@noble/curves/esm/abstract/edwards.js"() {
-    "use strict";
-    init_utils3();
-    init_curve2();
-    init_modular2();
-    _0n10 = BigInt(0);
-    _1n10 = BigInt(1);
-    _2n6 = BigInt(2);
-    _8n3 = BigInt(8);
-    PrimeEdwardsPoint = class {
-      constructor(ep) {
-        this.ep = ep;
-      }
-      // Static methods that must be implemented by subclasses
-      static fromBytes(_bytes2) {
-        notImplemented();
-      }
-      static fromHex(_hex) {
-        notImplemented();
-      }
-      get x() {
-        return this.toAffine().x;
-      }
-      get y() {
-        return this.toAffine().y;
-      }
-      // Common implementations
-      clearCofactor() {
-        return this;
-      }
-      assertValidity() {
-        this.ep.assertValidity();
-      }
-      toAffine(invertedZ) {
-        return this.ep.toAffine(invertedZ);
-      }
-      toHex() {
-        return bytesToHex2(this.toBytes());
-      }
-      toString() {
-        return this.toHex();
-      }
-      isTorsionFree() {
-        return true;
-      }
-      isSmallOrder() {
-        return false;
-      }
-      add(other) {
-        this.assertSame(other);
-        return this.init(this.ep.add(other.ep));
-      }
-      subtract(other) {
-        this.assertSame(other);
-        return this.init(this.ep.subtract(other.ep));
-      }
-      multiply(scalar) {
-        return this.init(this.ep.multiply(scalar));
-      }
-      multiplyUnsafe(scalar) {
-        return this.init(this.ep.multiplyUnsafe(scalar));
-      }
-      double() {
-        return this.init(this.ep.double());
-      }
-      negate() {
-        return this.init(this.ep.negate());
-      }
-      precompute(windowSize, isLazy) {
-        return this.init(this.ep.precompute(windowSize, isLazy));
-      }
-      /** @deprecated use `toBytes` */
-      toRawBytes() {
-        return this.toBytes();
-      }
-    };
-  }
-});
-
-// ../../node_modules/@noble/curves/esm/ed25519.js
-function ed25519_pow_2_252_3(x) {
-  const _10n = BigInt(10), _20n = BigInt(20), _40n = BigInt(40), _80n = BigInt(80);
-  const P = ed25519_CURVE_p;
-  const x2 = x * x % P;
-  const b2 = x2 * x % P;
-  const b4 = pow22(b2, _2n7, P) * b2 % P;
-  const b5 = pow22(b4, _1n11, P) * x % P;
-  const b10 = pow22(b5, _5n3, P) * b5 % P;
-  const b20 = pow22(b10, _10n, P) * b10 % P;
-  const b40 = pow22(b20, _20n, P) * b20 % P;
-  const b80 = pow22(b40, _40n, P) * b40 % P;
-  const b160 = pow22(b80, _80n, P) * b80 % P;
-  const b240 = pow22(b160, _80n, P) * b80 % P;
-  const b250 = pow22(b240, _10n, P) * b10 % P;
-  const pow_p_5_8 = pow22(b250, _2n7, P) * x % P;
-  return { pow_p_5_8, b2 };
-}
-function adjustScalarBytes(bytes) {
-  bytes[0] &= 248;
-  bytes[31] &= 127;
-  bytes[31] |= 64;
-  return bytes;
-}
-function uvRatio(u, v) {
-  const P = ed25519_CURVE_p;
-  const v3 = mod2(v * v * v, P);
-  const v7 = mod2(v3 * v3 * v, P);
-  const pow = ed25519_pow_2_252_3(u * v7).pow_p_5_8;
-  let x = mod2(u * v3 * pow, P);
-  const vx2 = mod2(v * x * x, P);
-  const root1 = x;
-  const root2 = mod2(x * ED25519_SQRT_M1, P);
-  const useRoot1 = vx2 === u;
-  const useRoot2 = vx2 === mod2(-u, P);
-  const noRoot = vx2 === mod2(-u * ED25519_SQRT_M1, P);
-  if (useRoot1)
-    x = root1;
-  if (useRoot2 || noRoot)
-    x = root2;
-  if (isNegativeLE(x, P))
-    x = mod2(-x, P);
-  return { isValid: useRoot1 || useRoot2, value: x };
-}
-function calcElligatorRistrettoMap(r0) {
-  const { d } = ed25519_CURVE;
-  const P = ed25519_CURVE_p;
-  const mod3 = (n) => Fp.create(n);
-  const r = mod3(SQRT_M1 * r0 * r0);
-  const Ns = mod3((r + _1n11) * ONE_MINUS_D_SQ);
-  let c = BigInt(-1);
-  const D = mod3((c - d * r) * mod3(r + d));
-  let { isValid: Ns_D_is_sq, value: s } = uvRatio(Ns, D);
-  let s_ = mod3(s * r0);
-  if (!isNegativeLE(s_, P))
-    s_ = mod3(-s_);
-  if (!Ns_D_is_sq)
-    s = s_;
-  if (!Ns_D_is_sq)
-    c = r;
-  const Nt = mod3(c * (r - _1n11) * D_MINUS_ONE_SQ - D);
-  const s2 = s * s;
-  const W0 = mod3((s + s) * D);
-  const W1 = mod3(Nt * SQRT_AD_MINUS_ONE);
-  const W2 = mod3(_1n11 - s2);
-  const W3 = mod3(_1n11 + s2);
-  return new ed25519.Point(mod3(W0 * W3), mod3(W2 * W1), mod3(W1 * W3), mod3(W0 * W2));
-}
-function ristretto255_map(bytes) {
-  abytes(bytes, 64);
-  const r1 = bytes255ToNumberLE(bytes.subarray(0, 32));
-  const R1 = calcElligatorRistrettoMap(r1);
-  const r2 = bytes255ToNumberLE(bytes.subarray(32, 64));
-  const R2 = calcElligatorRistrettoMap(r2);
-  return new _RistrettoPoint(R1.add(R2));
-}
-var _0n11, _1n11, _2n7, _3n4, _5n3, _8n4, ed25519_CURVE_p, ed25519_CURVE, ED25519_SQRT_M1, Fp, Fn, ed25519Defaults, ed25519, SQRT_M1, SQRT_AD_MINUS_ONE, INVSQRT_A_MINUS_D, ONE_MINUS_D_SQ, D_MINUS_ONE_SQ, invertSqrt, MAX_255B, bytes255ToNumberLE, _RistrettoPoint;
-var init_ed25519 = __esm({
-  "../../node_modules/@noble/curves/esm/ed25519.js"() {
-    "use strict";
-    init_sha2();
-    init_utils();
-    init_curve2();
-    init_edwards();
-    init_modular2();
-    init_utils3();
-    _0n11 = /* @__PURE__ */ BigInt(0);
-    _1n11 = BigInt(1);
-    _2n7 = BigInt(2);
-    _3n4 = BigInt(3);
-    _5n3 = BigInt(5);
-    _8n4 = BigInt(8);
-    ed25519_CURVE_p = BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed");
-    ed25519_CURVE = /* @__PURE__ */ (() => ({
-      p: ed25519_CURVE_p,
-      n: BigInt("0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed"),
-      h: _8n4,
-      a: BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffec"),
-      d: BigInt("0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3"),
-      Gx: BigInt("0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51a"),
-      Gy: BigInt("0x6666666666666666666666666666666666666666666666666666666666666658")
-    }))();
-    ED25519_SQRT_M1 = /* @__PURE__ */ BigInt("19681161376707505956807079304988542015446066515923890162744021073123829784752");
-    Fp = /* @__PURE__ */ (() => Field2(ed25519_CURVE.p, { isLE: true }))();
-    Fn = /* @__PURE__ */ (() => Field2(ed25519_CURVE.n, { isLE: true }))();
-    ed25519Defaults = /* @__PURE__ */ (() => ({
-      ...ed25519_CURVE,
-      Fp,
-      hash: sha512,
-      adjustScalarBytes,
-      // dom2
-      // Ratio of u to v. Allows us to combine inversion and square root. Uses algo from RFC8032 5.1.3.
-      // Constant-time, u/√v
-      uvRatio
-    }))();
-    ed25519 = /* @__PURE__ */ (() => twistedEdwards(ed25519Defaults))();
-    SQRT_M1 = ED25519_SQRT_M1;
-    SQRT_AD_MINUS_ONE = /* @__PURE__ */ BigInt("25063068953384623474111414158702152701244531502492656460079210482610430750235");
-    INVSQRT_A_MINUS_D = /* @__PURE__ */ BigInt("54469307008909316920995813868745141605393597292927456921205312896311721017578");
-    ONE_MINUS_D_SQ = /* @__PURE__ */ BigInt("1159843021668779879193775521855586647937357759715417654439879720876111806838");
-    D_MINUS_ONE_SQ = /* @__PURE__ */ BigInt("40440834346308536858101042469323190826248399146238708352240133220865137265952");
-    invertSqrt = (number) => uvRatio(_1n11, number);
-    MAX_255B = /* @__PURE__ */ BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-    bytes255ToNumberLE = (bytes) => ed25519.Point.Fp.create(bytesToNumberLE2(bytes) & MAX_255B);
-    _RistrettoPoint = class __RistrettoPoint extends PrimeEdwardsPoint {
-      constructor(ep) {
-        super(ep);
-      }
-      static fromAffine(ap) {
-        return new __RistrettoPoint(ed25519.Point.fromAffine(ap));
-      }
-      assertSame(other) {
-        if (!(other instanceof __RistrettoPoint))
-          throw new Error("RistrettoPoint expected");
-      }
-      init(ep) {
-        return new __RistrettoPoint(ep);
-      }
-      /** @deprecated use `import { ristretto255_hasher } from '@noble/curves/ed25519.js';` */
-      static hashToCurve(hex) {
-        return ristretto255_map(ensureBytes2("ristrettoHash", hex, 64));
-      }
-      static fromBytes(bytes) {
-        abytes(bytes, 32);
-        const { a, d } = ed25519_CURVE;
-        const P = ed25519_CURVE_p;
-        const mod3 = (n) => Fp.create(n);
-        const s = bytes255ToNumberLE(bytes);
-        if (!equalBytes(Fp.toBytes(s), bytes) || isNegativeLE(s, P))
-          throw new Error("invalid ristretto255 encoding 1");
-        const s2 = mod3(s * s);
-        const u1 = mod3(_1n11 + a * s2);
-        const u2 = mod3(_1n11 - a * s2);
-        const u1_2 = mod3(u1 * u1);
-        const u2_2 = mod3(u2 * u2);
-        const v = mod3(a * d * u1_2 - u2_2);
-        const { isValid: isValid3, value: I } = invertSqrt(mod3(v * u2_2));
-        const Dx = mod3(I * u2);
-        const Dy = mod3(I * Dx * v);
-        let x = mod3((s + s) * Dx);
-        if (isNegativeLE(x, P))
-          x = mod3(-x);
-        const y = mod3(u1 * Dy);
-        const t = mod3(x * y);
-        if (!isValid3 || isNegativeLE(t, P) || y === _0n11)
-          throw new Error("invalid ristretto255 encoding 2");
-        return new __RistrettoPoint(new ed25519.Point(x, y, _1n11, t));
-      }
-      /**
-       * Converts ristretto-encoded string to ristretto point.
-       * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-decode).
-       * @param hex Ristretto-encoded 32 bytes. Not every 32-byte string is valid ristretto encoding
-       */
-      static fromHex(hex) {
-        return __RistrettoPoint.fromBytes(ensureBytes2("ristrettoHex", hex, 32));
-      }
-      static msm(points, scalars) {
-        return pippenger2(__RistrettoPoint, ed25519.Point.Fn, points, scalars);
-      }
-      /**
-       * Encodes ristretto point to Uint8Array.
-       * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-encode).
-       */
-      toBytes() {
-        let { X, Y, Z, T } = this.ep;
-        const P = ed25519_CURVE_p;
-        const mod3 = (n) => Fp.create(n);
-        const u1 = mod3(mod3(Z + Y) * mod3(Z - Y));
-        const u2 = mod3(X * Y);
-        const u2sq = mod3(u2 * u2);
-        const { value: invsqrt } = invertSqrt(mod3(u1 * u2sq));
-        const D1 = mod3(invsqrt * u1);
-        const D2 = mod3(invsqrt * u2);
-        const zInv = mod3(D1 * D2 * T);
-        let D;
-        if (isNegativeLE(T * zInv, P)) {
-          let _x = mod3(Y * SQRT_M1);
-          let _y = mod3(X * SQRT_M1);
-          X = _x;
-          Y = _y;
-          D = mod3(D1 * INVSQRT_A_MINUS_D);
-        } else {
-          D = D2;
-        }
-        if (isNegativeLE(X * zInv, P))
-          Y = mod3(-Y);
-        let s = mod3((Z - Y) * D);
-        if (isNegativeLE(s, P))
-          s = mod3(-s);
-        return Fp.toBytes(s);
-      }
-      /**
-       * Compares two Ristretto points.
-       * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-equals).
-       */
-      equals(other) {
-        this.assertSame(other);
-        const { X: X1, Y: Y1 } = this.ep;
-        const { X: X2, Y: Y2 } = other.ep;
-        const mod3 = (n) => Fp.create(n);
-        const one = mod3(X1 * Y2) === mod3(Y1 * X2);
-        const two = mod3(Y1 * Y2) === mod3(X1 * X2);
-        return one || two;
-      }
-      is0() {
-        return this.equals(__RistrettoPoint.ZERO);
-      }
-    };
-    _RistrettoPoint.BASE = /* @__PURE__ */ (() => new _RistrettoPoint(ed25519.Point.BASE))();
-    _RistrettoPoint.ZERO = /* @__PURE__ */ (() => new _RistrettoPoint(ed25519.Point.ZERO))();
-    _RistrettoPoint.Fp = /* @__PURE__ */ (() => Fp)();
-    _RistrettoPoint.Fn = /* @__PURE__ */ (() => Fn)();
   }
 });
 
@@ -10512,10 +10544,10 @@ var require_decrypt_transport_response_error = __commonJS({
     var __toCommonJS = (mod3) => __copyProps2(__defProp4({}, "__esModule", { value: true }), mod3);
     var DecryptTransportResponseError_exports = {};
     __export4(DecryptTransportResponseError_exports, {
-      DecryptTransportResponseError: () => DecryptTransportResponseError4
+      DecryptTransportResponseError: () => DecryptTransportResponseError2
     });
     module.exports = __toCommonJS(DecryptTransportResponseError_exports);
-    var DecryptTransportResponseError4 = class extends Error {
+    var DecryptTransportResponseError2 = class extends Error {
       constructor(status, permissionHint) {
         super("Node decrypt request failed");
         this.status = status;
@@ -11764,16 +11796,16 @@ function ensureNetworkUsableForDecrypt(descriptor) {
     })
   };
 }
-function encryptToNetwork(crypto23, input) {
+function encryptToNetwork(crypto22, input) {
   parseNetworkId(input.networkId);
   const alg = input.alg ?? DEFAULT_ENCRYPTION_ALG;
   const keyVersion = input.keyVersion ?? DEFAULT_KEY_VERSION;
-  const symmetricKey = crypto23.randomBytes(32);
-  const ciphertext = crypto23.authEncrypt(symmetricKey, input.plaintext, input.aad);
-  const wrapped = crypto23.sealToNetworkKey(input.networkPublicKey, symmetricKey);
+  const symmetricKey = crypto22.randomBytes(32);
+  const ciphertext = crypto22.authEncrypt(symmetricKey, input.plaintext, input.aad);
+  const wrapped = crypto22.sealToNetworkKey(input.networkPublicKey, symmetricKey);
   const encryptedSymmetricKey = base64Encode2(wrapped);
   const encryptedSymmetricKeyHash = canonicalHashHex(
-    crypto23.sha256,
+    crypto22.sha256,
     encryptedSymmetricKey
   );
   const envelope = {
@@ -11789,7 +11821,7 @@ function encryptToNetwork(crypto23, input) {
   };
   return { envelope, symmetricKey };
 }
-function validateEnvelope(crypto23, envelope) {
+function validateEnvelope(crypto22, envelope) {
   if (envelope === null || typeof envelope !== "object") {
     return {
       ok: false,
@@ -11845,7 +11877,7 @@ function validateEnvelope(crypto23, envelope) {
       })
     };
   }
-  const expectedHash = canonicalHashHex(crypto23.sha256, e.encryptedSymmetricKey);
+  const expectedHash = canonicalHashHex(crypto22.sha256, e.encryptedSymmetricKey);
   if (expectedHash !== e.encryptedSymmetricKeyHash) {
     return {
       ok: false,
@@ -11857,10 +11889,10 @@ function validateEnvelope(crypto23, envelope) {
   }
   return { ok: true, data: e };
 }
-function decryptEnvelopeWithKey(crypto23, envelope, symmetricKey) {
+function decryptEnvelopeWithKey(crypto22, envelope, symmetricKey) {
   const ciphertext = base64Decode2(envelope.ciphertext);
   const aad = envelope.aad !== void 0 ? base64Decode2(envelope.aad) : void 0;
-  return crypto23.authDecrypt(symmetricKey, ciphertext, aad);
+  return crypto22.authDecrypt(symmetricKey, ciphertext, aad);
 }
 function buildCanonicalDecryptRequest(input) {
   const canonicalBody = canonicalize(input.body);
@@ -11894,7 +11926,7 @@ function buildDecryptFacts(input) {
     keyVersion: input.body.keyVersion
   };
 }
-function checkDecryptInvocationInput(crypto23, input) {
+function checkDecryptInvocationInput(crypto22, input) {
   if (input.body.type !== DECRYPT_FACT_TYPE) {
     return {
       ok: false,
@@ -11999,7 +12031,7 @@ function checkDecryptInvocationInput(crypto23, input) {
   const canonicalBody = canonicalize(
     input.body
   );
-  const expectedBodyHash = canonicalHashHex(crypto23.sha256, input.body);
+  const expectedBodyHash = canonicalHashHex(crypto22.sha256, input.body);
   if (expectedBodyHash !== input.facts.bodyHash) {
     return {
       ok: false,
@@ -12011,8 +12043,8 @@ function checkDecryptInvocationInput(crypto23, input) {
   }
   return { ok: true, data: input, canonicalBody };
 }
-async function buildDecryptInvocation(crypto23, signer, input) {
-  const checked = checkDecryptInvocationInput(crypto23, input);
+async function buildDecryptInvocation(crypto22, signer, input) {
+  const checked = checkDecryptInvocationInput(crypto22, input);
   if (!checked.ok) {
     return checked;
   }
@@ -12057,7 +12089,7 @@ function canonicalSignedResponse(response) {
   return canonicalize(rest);
 }
 function verifyDecryptResponse(input) {
-  const { crypto: crypto23, request, facts, invocationCid, requestBodyHash, response } = input;
+  const { crypto: crypto22, request, facts, invocationCid, requestBodyHash, response } = input;
   if (response.type !== DECRYPT_RESULT_TYPE) {
     return {
       ok: false,
@@ -12140,7 +12172,7 @@ function verifyDecryptResponse(input) {
     };
   }
   const expectedRequestHash = hexEncode2(
-    crypto23.sha256(utf8Encode(`${invocationCid}${requestBodyHash}`))
+    crypto22.sha256(utf8Encode(`${invocationCid}${requestBodyHash}`))
   );
   if (response.requestHash !== expectedRequestHash) {
     return {
@@ -12164,7 +12196,7 @@ function verifyDecryptResponse(input) {
     canonicalSignedResponse(response)
   );
   const signatureBytes = base64Decode2(response.nodeSignature);
-  if (!crypto23.verifyNodeSignature(response.nodeId, signedBytes, signatureBytes)) {
+  if (!crypto22.verifyNodeSignature(response.nodeId, signedBytes, signatureBytes)) {
     return {
       ok: false,
       error: encryptionError({
@@ -12174,9 +12206,9 @@ function verifyDecryptResponse(input) {
   }
   return { ok: true, data: response };
 }
-function openWrappedKey(crypto23, receiverPrivateKey, response) {
+function openWrappedKey(crypto22, receiverPrivateKey, response) {
   const wrapped = base64Decode2(response.wrappedKey);
-  return crypto23.openWithReceiverKey(receiverPrivateKey, wrapped);
+  return crypto22.openWithReceiverKey(receiverPrivateKey, wrapped);
 }
 function encOk(data) {
   return { ok: true, data };
@@ -12184,7 +12216,7 @@ function encOk(data) {
 function encErr(error) {
   return { ok: false, error };
 }
-var import_decrypt_transport_response_error, import_decrypt_transport_response_error2, import_decrypt_transport_response_error3, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HooksService, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, HEX, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
+var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HooksService, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, HEX, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
 var init_dist2 = __esm({
   "../sdk-services/dist/index.js"() {
     "use strict";
@@ -12192,8 +12224,6 @@ var init_dist2 = __esm({
     init_dist();
     init_dist();
     import_decrypt_transport_response_error = __toESM(require_decrypt_transport_response_error(), 1);
-    import_decrypt_transport_response_error2 = __toESM(require_decrypt_transport_response_error(), 1);
-    import_decrypt_transport_response_error3 = __toESM(require_decrypt_transport_response_error(), 1);
     ErrorCodes = {
       // Common errors
       NOT_FOUND: "NOT_FOUND",
@@ -17266,6 +17296,35 @@ function validateV2Invariants(value, ctx) {
   if (value.contentSource.kind === "kv" && value.contentSource.action !== "tinycloud.kv/get") ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
   if (value.contentSource.kind === "sql" && value.contentSource.action !== "tinycloud.sql/read") ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
 }
+function validateV3Invariants(value, ctx) {
+  const actions = [...value.actions];
+  if (new Set(actions).size !== actions.length || actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) {
+    ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique and canonically ordered" });
+  }
+  if (value.policyRoot.role !== "policy-authority" || value.enforcementRoot.role !== "policy-enforcement") {
+    ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policyRoot", "role"], message: "root roles are fixed" });
+  }
+  if (value.policyCid.length === 0 || value.policyCid === value.policyRoot.cid || value.policyCid === value.enforcementRoot.cid) {
+    ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policyCid"], message: "policy CID must be distinct from both roots" });
+  }
+  if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
+    ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
+  }
+  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.target.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+    ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
+  }
+  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
+    ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["contentSource"], message: "content source is not bound to policy" });
+  }
+  if (value.policy.signature.suite !== "Ed25519" || value.policy.signature.signerDid !== value.policy.ownerDid) {
+    ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policy", "signature"], message: "policy must be signed by its owner" });
+  }
+  const kvCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
+  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === value.encryptionNetwork && capability.action === "tinycloud.encryption/decrypt");
+  if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
+    ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain exact decrypt network" });
+  }
+}
 function decodeJsonSegment(segment) {
   try {
     const bytes3 = fromBase64Url(segment);
@@ -18934,7 +18993,7 @@ async function migrateShare(input) {
   const value = await receiveLegacyShare(input.link, input.reader);
   return { protocol: "tinycloud-share", version: 1, legacy: true, value, migrated: await input.publish(value) };
 }
-var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, BEARER_READ_ABILITY, READ_ABILITIES, ED25519_VERIFY_OPTS, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_SIGNATURE_DOMAIN, ENVELOPE_V2_SIGNATURE_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, DEFAULT_MAX_CONTENT_BLOB_BYTES, CONTENT_SEALED_OVERHEAD, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_SEALED_OVERHEAD, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, base58btc2, base58flickr2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN;
+var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, BEARER_READ_ABILITY, READ_ABILITIES, ED25519_VERIFY_OPTS, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_SIGNATURE_DOMAIN, ENVELOPE_V2_SIGNATURE_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, DEFAULT_MAX_CONTENT_BLOB_BYTES, CONTENT_SEALED_OVERHEAD, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_SEALED_OVERHEAD, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, base58btc2, base58flickr2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN;
 var init_dist3 = __esm({
   "../share-sdk/dist/index.js"() {
     "use strict";
@@ -19087,10 +19146,10 @@ var init_dist3 = __esm({
           return obj[e];
         });
       };
-      util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object2) => {
+      util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object3) => {
         const keys = [];
-        for (const key in object2) {
-          if (Object.prototype.hasOwnProperty.call(object2, key)) {
+        for (const key in object3) {
+          if (Object.prototype.hasOwnProperty.call(object3, key)) {
             keys.push(key);
           }
         }
@@ -23427,6 +23486,99 @@ var init_dist3 = __esm({
     }).strict();
     unsignedShareEnvelopeV2Schema = unsignedShareEnvelopeV2BaseSchema.superRefine(validateV2Invariants);
     shareEnvelopeV2Schema = unsignedShareEnvelopeV2BaseSchema.extend({ signature: signatureSchema }).strict().superRefine(validateV2Invariants);
+    unifiedResourceSchema = external_exports2.string().refine((value) => {
+      const match = /^tinycloud:\/\/([^/]+)\/kv\/(.+)$/.exec(value);
+      if (match === null || /[:?#%]/.test(match[1])) return false;
+      const path = match[2];
+      return !path.startsWith("/") && !path.endsWith("/") && !path.includes("//") && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+    }, { message: "expected canonical TinyCloud KV resource" });
+    unifiedEncryptionNetworkSchema = external_exports2.string().refine((value) => {
+      if (!value.startsWith("urn:tinycloud:encryption:")) return false;
+      const rest = value.slice("urn:tinycloud:encryption:".length);
+      const separator = rest.lastIndexOf(":");
+      const owner = separator < 0 ? "" : rest.slice(0, separator);
+      const network = separator < 0 ? "" : rest.slice(separator + 1);
+      return owner.startsWith("did:") && owner.length > 4 && network.length > 0 && !/[:/%?#\s]/.test(network);
+    }, { message: "expected canonical TinyCloud encryption network" });
+    unifiedKvCapabilitySchema = external_exports2.object({
+      kind: external_exports2.literal("kv"),
+      resource: unifiedResourceSchema,
+      selector: external_exports2.union([external_exports2.literal("exact"), external_exports2.literal("prefix")]),
+      actions: external_exports2.array(external_exports2.union([
+        external_exports2.literal("tinycloud.kv/get"),
+        external_exports2.literal("tinycloud.kv/list"),
+        external_exports2.literal("tinycloud.kv/metadata"),
+        external_exports2.literal("tinycloud.kv/put")
+      ])).min(1)
+    }).strict();
+    unifiedEncryptionCapabilitySchema = external_exports2.object({
+      kind: external_exports2.literal("encryption"),
+      resource: unifiedEncryptionNetworkSchema,
+      action: external_exports2.literal("tinycloud.encryption/decrypt")
+    }).strict();
+    unifiedCapabilitySchema = external_exports2.union([unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema]);
+    unifiedContentSourceSchema = external_exports2.object({
+      shareId: external_exports2.string().min(1),
+      kvResource: unifiedResourceSchema,
+      selector: external_exports2.union([external_exports2.literal("exact"), external_exports2.literal("prefix")]),
+      encryptionNetwork: unifiedEncryptionNetworkSchema,
+      encryptedSymmetricKeyDigestHex: external_exports2.string().regex(/^[0-9a-f]{64}$/),
+      keyVersion: external_exports2.number().int().positive(),
+      mode: external_exports2.union([external_exports2.literal("mutable"), external_exports2.literal("immutable")]),
+      initialCiphertextDigestHex: external_exports2.string().regex(/^[0-9a-f]{64}$/).optional()
+    }).strict();
+    unifiedPolicySchema = external_exports2.object({
+      schema: external_exports2.literal("xyz.tinycloud.policy/policy/v1"),
+      policyId: external_exports2.string().regex(/^pol_[a-z2-7]+$/),
+      ownerDid: external_exports2.string().min(1),
+      createdAt: external_exports2.string().datetime({ offset: true }),
+      expiresAt: external_exports2.string().datetime({ offset: true }).optional(),
+      contentSource: unifiedContentSourceSchema,
+      capabilityCeiling: external_exports2.array(unifiedCapabilitySchema).min(2),
+      signature: external_exports2.object({ suite: external_exports2.string().min(1), signerDid: external_exports2.string().min(1), value: external_exports2.string().min(1) }).strict()
+    }).strict();
+    unifiedRootSchema = external_exports2.object({
+      cid: external_exports2.string().min(1),
+      authorization: external_exports2.string().regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
+      role: external_exports2.union([external_exports2.literal("policy-authority"), external_exports2.literal("policy-enforcement")])
+    }).strict();
+    attestedEnforcerBindingV2Schema = external_exports2.object({
+      schema: external_exports2.literal("xyz.tinycloud.policy/attested-enforcer/v2"),
+      enforcerDid: external_exports2.string().regex(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/),
+      nodeAudience: external_exports2.string().min(1),
+      attestationBindingDigestHex: external_exports2.string().regex(/^[0-9a-f]{64}$/),
+      issuedAt: external_exports2.string().datetime({ offset: true }),
+      expiresAt: external_exports2.string().datetime({ offset: true }),
+      signature: external_exports2.object({ suite: external_exports2.literal("Ed25519"), signerDid: external_exports2.string().min(1), value: base64UrlString() }).strict()
+    }).strict();
+    v3TargetSchema = external_exports2.object({
+      origin: external_exports2.string().refine(isCanonicalHttpsOrigin, { message: "expected a canonical https origin" }),
+      nodeAudience: external_exports2.string().min(1),
+      spaceId: external_exports2.string().refine(isCanonicalPathSegment, { message: "expected a canonical space id" })
+    }).strict();
+    unsignedShareEnvelopeV3BaseSchema = external_exports2.object({
+      version: external_exports2.literal(3),
+      shareId: external_exports2.string().min(1),
+      recipientMatcher: recipientMatcherSchema,
+      deliveryEmail: external_exports2.string().email().optional(),
+      actions: external_exports2.array(shareActionSchema).min(1).max(3),
+      resource: resourceSelectorSchema,
+      target: v3TargetSchema,
+      policy: unifiedPolicySchema,
+      policyCid: external_exports2.string().min(1),
+      policyRoot: unifiedRootSchema,
+      enforcementRoot: unifiedRootSchema,
+      attestedEnforcerBinding: attestedEnforcerBindingV2Schema,
+      contentSource: unifiedContentSourceSchema,
+      contentSourceDigestHex: external_exports2.string().regex(/^[0-9a-f]{64}$/),
+      encryptionNetwork: unifiedEncryptionNetworkSchema,
+      expiry: external_exports2.string().datetime({ offset: true }),
+      display: displaySchema,
+      encrypted: external_exports2.literal(true),
+      metadata: contentMetadataSchema
+    }).strict();
+    unsignedShareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.superRefine(validateV3Invariants);
+    shareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.extend({ signature: signatureSchema }).strict().superRefine(validateV3Invariants);
     BEARER_READ_ABILITY = "kv/get";
     READ_ABILITIES = /* @__PURE__ */ new Set([BEARER_READ_ABILITY]);
     ED25519_VERIFY_OPTS = { zip215: false };
@@ -23958,12 +24110,6 @@ var init_dist3 = __esm({
 
 // ../sdk-core/dist/index.js
 import { SiweMessage } from "siwe";
-import crypto22 from "crypto";
-import { Buffer as Buffer2 } from "buffer";
-import { Buffer as Buffer3 } from "buffer";
-import { Buffer as Buffer4 } from "buffer";
-import { Buffer as Buffer5 } from "buffer";
-import { isIPv4, isIPv6, isIP as ipVersion } from "net";
 function equals5(aa, bb) {
   if (aa === bb) {
     return true;
@@ -24142,7 +24288,7 @@ function baseX3({ name: name2, prefix, alphabet: alphabet2 }) {
     prefix,
     name: name2,
     encode: encode52,
-    decode: (text) => coerce4(decode72(text))
+    decode: (text2) => coerce4(decode72(text2))
   });
 }
 function decode9(string2, alphabetIdx, bitsPerChar, name2) {
@@ -24408,6 +24554,9 @@ function createDigest(digest4, code3, truncate) {
   }
   return create3(code3, digest4);
 }
+function sha(name2) {
+  return async (data) => new Uint8Array(await crypto.subtle.digest(name2, data));
+}
 function parseStrictRfc33392(value) {
   if (!/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(
     value
@@ -24467,11 +24616,8 @@ function equals32(a, b) {
   }
   return true;
 }
-function asUint8Array(buf) {
-  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-}
 function allocUnsafe(size2 = 0) {
-  return asUint8Array(Buffer2.allocUnsafe(size2));
+  return new Uint8Array(size2);
 }
 function encodingLength22(value) {
   if (value < N122) {
@@ -24635,8 +24781,20 @@ function decode62(buf, offset = 0) {
     return decodeUint8ArrayList(buf, offset);
   }
 }
+function asUint8Array(buf) {
+  return buf;
+}
 function concat2(arrays, length22) {
-  return asUint8Array(Buffer3.concat(arrays, length22));
+  if (length22 == null) {
+    length22 = arrays.reduce((acc, curr) => acc + curr.length, 0);
+  }
+  const output = allocUnsafe(length22);
+  let offset = 0;
+  for (const arr of arrays) {
+    output.set(arr, offset);
+    offset += arr.length;
+  }
+  return asUint8Array(output);
 }
 function createCodec(name2, prefix, encode52, decode72) {
   return {
@@ -24657,9 +24815,6 @@ function fromString2(string2, encoding = "utf8") {
   if (base33 == null) {
     throw new Error(`Unsupported encoding "${encoding}"`);
   }
-  if (encoding === "utf8" || encoding === "utf-8") {
-    return asUint8Array(Buffer4.from(string2, "utf-8"));
-  }
   return base33.decoder.decode(`${base33.prefix}${string2}`);
 }
 function toString2(array, encoding = "utf8") {
@@ -24667,10 +24822,28 @@ function toString2(array, encoding = "utf8") {
   if (base33 == null) {
     throw new Error(`Unsupported encoding "${encoding}"`);
   }
-  if (encoding === "utf8" || encoding === "utf-8") {
-    return Buffer5.from(array.buffer, array.byteOffset, array.byteLength).toString("utf8");
-  }
   return base33.encoder.encode(array).substring(1);
+}
+function parseIPv4(input) {
+  if (input.length > MAX_IPV4_LENGTH) {
+    return void 0;
+  }
+  return parser.new(input).parseWith(() => parser.readIPv4Addr());
+}
+function parseIPv6(input) {
+  if (input.includes("%")) {
+    input = input.split("%")[0];
+  }
+  if (input.length > MAX_IPV6_LENGTH) {
+    return void 0;
+  }
+  return parser.new(input).parseWith(() => parser.readIPv6Addr());
+}
+function isIPv4(input) {
+  return Boolean(parseIPv4(input));
+}
+function isIPv6(input) {
+  return Boolean(parseIPv6(input));
 }
 function bytesToString(base33) {
   return (buf) => {
@@ -24747,7 +24920,7 @@ function bytes2mb(base33) {
     return base33.encoder.encode(buf);
   };
 }
-function integer(value) {
+function integer2(value) {
   const int = parseInt(value);
   if (int.toString() !== value) {
     throw new ValidationError("Value must be an integer");
@@ -25316,7 +25489,7 @@ async function verifyPkhSignature(did, payload, signature) {
 }
 function verifyDidKeySignature(did, payload, signature) {
   const publicKey = ed25519PublicKeyFromDidKey2(did);
-  const signatureBytes = decodeBase64Url(signature);
+  const signatureBytes = decodeBase64Url3(signature);
   if (signatureBytes.length !== 64) {
     throw new LocationRecordValidationError(
       "did:key signature must be a base64url Ed25519 signature"
@@ -25346,7 +25519,7 @@ function ed25519PublicKeyFromDidKey2(did) {
     "did:key must be an Ed25519 public key"
   );
 }
-function decodeBase64Url(value) {
+function decodeBase64Url3(value) {
   const alphabet2 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
   const bytes2 = [];
   let buffer = 0;
@@ -25367,7 +25540,7 @@ function decodeBase64Url(value) {
   }
   return Uint8Array.from(bytes2);
 }
-var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, objectHasOwn, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode42, identity2, sha2_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
+var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, objectHasOwn, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode42, identity2, sha2_browser_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, CompactHeaderSchema, CompactPayloadSchema, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, ResourceSchema, PortableDelegationSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, Parser, MAX_IPV6_LENGTH, MAX_IPV4_LENGTH, parser, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
 var init_dist4 = __esm({
   "../sdk-core/dist/index.js"() {
     "use strict";
@@ -25376,20 +25549,20 @@ var init_dist4 = __esm({
     init_dist();
     init_zod();
     init_zod();
+    init_zod();
     import_ms = __toESM(require_ms(), 1);
     init_dist2();
     init_dist2();
     init_zod();
+    init_zod();
     init_dist2();
     init_zod();
     init_dist2();
     init_dist2();
     init_zod();
     init_dist2();
-    init_dist();
     init_dist2();
     init_dist2();
-    init_dist();
     init_ed25519();
     init_esm();
     __defProp3 = Object.defineProperty;
@@ -25430,6 +25603,9 @@ var init_dist4 = __esm({
       signature: external_exports.string(),
       ens: EnsDataSchema.optional()
     });
+    objectHasOwn = Object.hasOwn ?? Object.prototype.hasOwnProperty.call.bind(
+      Object.prototype.hasOwnProperty
+    );
     base32_exports = {};
     __export3(base32_exports, {
       base32: () => base323,
@@ -25478,12 +25654,12 @@ var init_dist4 = __esm({
         this.prefixCodePoint = prefixCodePoint;
         this.baseDecode = baseDecode;
       }
-      decode(text) {
-        if (typeof text === "string") {
-          if (text.codePointAt(0) !== this.prefixCodePoint) {
-            throw Error(`Unable to decode multibase string ${JSON.stringify(text)}, ${this.name} decoder only supports inputs prefixed with ${this.prefix}`);
+      decode(text2) {
+        if (typeof text2 === "string") {
+          if (text2.codePointAt(0) !== this.prefixCodePoint) {
+            throw Error(`Unable to decode multibase string ${JSON.stringify(text2)}, ${this.name} decoder only supports inputs prefixed with ${this.prefix}`);
           }
-          return this.baseDecode(text.slice(this.prefix.length));
+          return this.baseDecode(text2.slice(this.prefix.length));
         } else {
           throw Error("Can only multibase decode strings");
         }
@@ -25910,9 +26086,6 @@ var init_dist4 = __esm({
     DAG_PB_CODE3 = 112;
     SHA_256_CODE3 = 18;
     cidSymbol3 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
-    objectHasOwn = Object.hasOwn ?? Object.prototype.hasOwnProperty.call.bind(
-      Object.prototype.hasOwnProperty
-    );
     textEncoder = new TextEncoder();
     objectHasOwn2 = Object.hasOwn ?? Object.prototype.hasOwnProperty.call.bind(
       Object.prototype.hasOwnProperty
@@ -26053,8 +26226,8 @@ var init_dist4 = __esm({
     name = "identity";
     encode42 = coerce4;
     identity2 = { code: code2, name, encode: encode42, digest };
-    sha2_exports = {};
-    __export3(sha2_exports, {
+    sha2_browser_exports = {};
+    __export3(sha2_browser_exports, {
       sha256: () => sha2562,
       sha512: () => sha5122
     });
@@ -26095,15 +26268,15 @@ var init_dist4 = __esm({
     sha2562 = from22({
       name: "sha2-256",
       code: 18,
-      encode: (input) => coerce4(crypto22.createHash("sha256").update(input).digest())
+      encode: sha("SHA-256")
     });
     sha5122 = from22({
       name: "sha2-512",
       code: 19,
-      encode: (input) => coerce4(crypto22.createHash("sha512").update(input).digest())
+      encode: sha("SHA-512")
     });
     bases = { ...identity_exports, ...base2_exports, ...base8_exports, ...base10_exports, ...base16_exports, ...base32_exports, ...base36_exports, ...base58_exports, ...base64_exports, ...base256emoji_exports };
-    hashes = { ...sha2_exports, ...identity_exports2 };
+    hashes = { ...sha2_browser_exports, ...identity_exports2 };
     textEncoder3 = new TextEncoder();
     objectHasOwn3 = Object.hasOwn ?? Object.prototype.hasOwnProperty.call.bind(
       Object.prototype.hasOwnProperty
@@ -26114,6 +26287,22 @@ var init_dist4 = __esm({
     objectHasOwn4 = Object.hasOwn ?? Object.prototype.hasOwnProperty.call.bind(
       Object.prototype.hasOwnProperty
     );
+    CompactHeaderSchema = external_exports.object({
+      alg: external_exports.literal("EdDSA"),
+      jwk: external_exports.object({ alg: external_exports.literal("EdDSA"), crv: external_exports.literal("Ed25519"), kty: external_exports.literal("OKP"), x: external_exports.string().min(1) }).strict(),
+      typ: external_exports.literal("JWT"),
+      ucv: external_exports.literal("0.10.0")
+    }).strict();
+    CompactPayloadSchema = external_exports.object({
+      att: external_exports.record(external_exports.record(external_exports.array(external_exports.unknown()).min(1))),
+      aud: external_exports.string().min(1),
+      exp: external_exports.number().int(),
+      fct: external_exports.array(external_exports.record(external_exports.unknown())).length(1),
+      iss: external_exports.string().min(1),
+      nbf: external_exports.number().int(),
+      nnc: external_exports.string().min(1),
+      prf: external_exports.array(external_exports.string().min(1))
+    }).strict();
     POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA = "xyz.tinycloud.policy/challenge/v0";
     POLICY_ENGINE_DENIAL_SCHEMA = "xyz.tinycloud.policy-engine/denial/v0";
     POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES = [
@@ -26955,6 +27144,30 @@ var init_dist4 = __esm({
         contentType: external_exports.string().min(1)
       }).strict()
     ]);
+    ResourceSchema = external_exports.object({
+      service: external_exports.string().min(1),
+      space: external_exports.string().min(1),
+      path: external_exports.string(),
+      actions: external_exports.array(external_exports.string().min(1)).min(1),
+      caveats: external_exports.array(external_exports.record(external_exports.unknown())).optional()
+    }).strict();
+    PortableDelegationSchema = external_exports.object({
+      cid: external_exports.string().min(1),
+      delegationHeader: external_exports.object({ Authorization: external_exports.string().min(1) }).strict(),
+      ownerAddress: external_exports.string().min(1),
+      chainId: external_exports.number().int().nonnegative(),
+      host: external_exports.string().url().optional(),
+      spaceId: external_exports.string().min(1),
+      path: external_exports.string(),
+      actions: external_exports.array(external_exports.string().min(1)).min(1),
+      caveats: external_exports.array(external_exports.record(external_exports.unknown())).optional(),
+      expiry: external_exports.coerce.date(),
+      delegateDID: external_exports.string().min(1),
+      delegatorDID: external_exports.string().min(1).optional(),
+      parentCid: external_exports.string().min(1).optional(),
+      disableSubDelegation: external_exports.boolean().optional(),
+      resources: external_exports.array(ResourceSchema).min(1).optional()
+    }).strict();
     MAX_NATIVE_CURSOR_BYTES = 8 * 1024;
     DEFAULT_EXPIRY_MS2 = EXPIRY.SHARE_MS;
     MAX_CONTENT_BYTES2 = 100 * 1024 * 1024;
@@ -27218,6 +27431,192 @@ var init_dist4 = __esm({
       }
     };
     __publicField(UnknownProtocolError, "name", "UnknownProtocolError");
+    Parser = class {
+      constructor() {
+        __publicField(this, "index", 0);
+        __publicField(this, "input", "");
+      }
+      new(input) {
+        this.index = 0;
+        this.input = input;
+        return this;
+      }
+      /** Run a parser, and restore the pre-parse state if it fails. */
+      readAtomically(fn) {
+        const index = this.index;
+        const result = fn();
+        if (result === void 0) {
+          this.index = index;
+        }
+        return result;
+      }
+      /** Run a parser, but fail if the entire input wasn't consumed. Doesn't run atomically. */
+      parseWith(fn) {
+        const result = fn();
+        if (this.index !== this.input.length) {
+          return void 0;
+        }
+        return result;
+      }
+      /** Peek the next character from the input */
+      peekChar() {
+        if (this.index >= this.input.length) {
+          return void 0;
+        }
+        return this.input[this.index];
+      }
+      /** Read the next character from the input */
+      readChar() {
+        if (this.index >= this.input.length) {
+          return void 0;
+        }
+        return this.input[this.index++];
+      }
+      /** Read the next character from the input if it matches the target. */
+      readGivenChar(target) {
+        return this.readAtomically(() => {
+          const char = this.readChar();
+          if (char !== target) {
+            return void 0;
+          }
+          return char;
+        });
+      }
+      /**
+       * Helper for reading separators in an indexed loop. Reads the separator
+       * character iff index > 0, then runs the parser. When used in a loop,
+       * the separator character will only be read on index > 0 (see
+       * readIPv4Addr for an example)
+       */
+      readSeparator(sep2, index, inner) {
+        return this.readAtomically(() => {
+          if (index > 0) {
+            if (this.readGivenChar(sep2) === void 0) {
+              return void 0;
+            }
+          }
+          return inner();
+        });
+      }
+      /**
+       * Read a number off the front of the input in the given radix, stopping
+       * at the first non-digit character or eof. Fails if the number has more
+       * digits than max_digits or if there is no number.
+       */
+      readNumber(radix, maxDigits, allowZeroPrefix, maxBytes) {
+        return this.readAtomically(() => {
+          let result = 0;
+          let digitCount = 0;
+          const leadingChar = this.peekChar();
+          if (leadingChar === void 0) {
+            return void 0;
+          }
+          const hasLeadingZero = leadingChar === "0";
+          const maxValue2 = 2 ** (8 * maxBytes) - 1;
+          while (true) {
+            const digit = this.readAtomically(() => {
+              const char = this.readChar();
+              if (char === void 0) {
+                return void 0;
+              }
+              const num2 = Number.parseInt(char, radix);
+              if (Number.isNaN(num2)) {
+                return void 0;
+              }
+              return num2;
+            });
+            if (digit === void 0) {
+              break;
+            }
+            result *= radix;
+            result += digit;
+            if (result > maxValue2) {
+              return void 0;
+            }
+            digitCount += 1;
+            if (maxDigits !== void 0) {
+              if (digitCount > maxDigits) {
+                return void 0;
+              }
+            }
+          }
+          if (digitCount === 0) {
+            return void 0;
+          } else if (!allowZeroPrefix && hasLeadingZero && digitCount > 1) {
+            return void 0;
+          } else {
+            return result;
+          }
+        });
+      }
+      /** Read an IPv4 address. */
+      readIPv4Addr() {
+        return this.readAtomically(() => {
+          const out = new Uint8Array(4);
+          for (let i = 0; i < out.length; i++) {
+            const ix = this.readSeparator(".", i, () => this.readNumber(10, 3, false, 1));
+            if (ix === void 0) {
+              return void 0;
+            }
+            out[i] = ix;
+          }
+          return out;
+        });
+      }
+      /** Read an IPv6 Address. */
+      readIPv6Addr() {
+        const readGroups = (groups) => {
+          for (let i = 0; i < groups.length / 2; i++) {
+            const ix = i * 2;
+            if (i < groups.length - 3) {
+              const ipv4 = this.readSeparator(":", i, () => this.readIPv4Addr());
+              if (ipv4 !== void 0) {
+                groups[ix] = ipv4[0];
+                groups[ix + 1] = ipv4[1];
+                groups[ix + 2] = ipv4[2];
+                groups[ix + 3] = ipv4[3];
+                return [ix + 4, true];
+              }
+            }
+            const group = this.readSeparator(":", i, () => this.readNumber(16, 4, true, 2));
+            if (group === void 0) {
+              return [ix, false];
+            }
+            groups[ix] = group >> 8;
+            groups[ix + 1] = group & 255;
+          }
+          return [groups.length, false];
+        };
+        return this.readAtomically(() => {
+          const head = new Uint8Array(16);
+          const [headSize, headIp4] = readGroups(head);
+          if (headSize === 16) {
+            return head;
+          }
+          if (headIp4) {
+            return void 0;
+          }
+          if (this.readGivenChar(":") === void 0) {
+            return void 0;
+          }
+          if (this.readGivenChar(":") === void 0) {
+            return void 0;
+          }
+          const tail = new Uint8Array(14);
+          const limit = 16 - (headSize + 2);
+          const [tailSize] = readGroups(tail.subarray(0, limit));
+          head.set(tail.subarray(0, tailSize), 16 - tailSize);
+          return head;
+        });
+      }
+      /** Read an IP Address, either IPv4 or IPv6. */
+      readIPAddr() {
+        return this.readIPv4Addr() ?? this.readIPv6Addr();
+      }
+    };
+    MAX_IPV6_LENGTH = 45;
+    MAX_IPV4_LENGTH = 15;
+    parser = new Parser();
     CODE_IP4 = 4;
     CODE_TCP = 6;
     CODE_UDP = 273;
@@ -27352,7 +27751,7 @@ var init_dist4 = __esm({
       decoders.slice(2).forEach((d) => acc = acc.or(d));
       return acc;
     })();
-    validatePort = validate(integer, positive, maxValue(65535));
+    validatePort = validate(integer2, positive, maxValue(65535));
     V = -1;
     Registry = class {
       constructor() {
@@ -29776,8 +30175,51 @@ function buildAuthUrl(did, options = {}) {
   if (options.expiry !== void 0) {
     params.set("expiry", String(options.expiry));
   }
+  params.set("protocolVersion", "1");
   const base4 = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
   return `${base4}/delegate?${params.toString()}`;
+}
+function validateDelegationCallbackPayload(value) {
+  if (!value || typeof value !== "object") return "expected an object";
+  const v = value;
+  if (!v.delegationHeader || typeof v.delegationHeader !== "object") {
+    return "delegationHeader must be an object";
+  }
+  const auth = v.delegationHeader.Authorization;
+  if (typeof auth !== "string" || !auth) {
+    return "delegationHeader.Authorization must be a non-empty string";
+  }
+  if (typeof v.delegationCid !== "string" || !v.delegationCid) {
+    return "delegationCid must be a non-empty string";
+  }
+  if (typeof v.spaceId !== "string" || !v.spaceId) {
+    return "spaceId must be a non-empty string";
+  }
+  if (v.permissions !== void 0) {
+    if (!Array.isArray(v.permissions)) {
+      return "permissions, when present, must be an array";
+    }
+    for (let i = 0; i < v.permissions.length; i++) {
+      const entry = v.permissions[i];
+      if (!entry || typeof entry !== "object") {
+        return `permissions[${i}] must be an object`;
+      }
+      const e = entry;
+      if (typeof e.service !== "string" || !e.service) {
+        return `permissions[${i}].service must be a non-empty string`;
+      }
+      if (typeof e.space !== "string") {
+        return `permissions[${i}].space must be a string`;
+      }
+      if (typeof e.path !== "string") {
+        return `permissions[${i}].path must be a string`;
+      }
+      if (!Array.isArray(e.actions) || e.actions.some((a) => typeof a !== "string" || !a)) {
+        return `permissions[${i}].actions must be a non-empty string[]`;
+      }
+    }
+  }
+  return null;
 }
 function shouldOpenBrowser(options) {
   if (options.noPopup) return false;
@@ -29805,12 +30247,18 @@ async function callbackFlow(did, options = {}) {
     }
     function parsePasteInput(input) {
       const trimmed = input.trim();
+      let parsed;
       try {
-        return JSON.parse(trimmed);
+        parsed = JSON.parse(trimmed);
       } catch {
         const decoded = Buffer.from(trimmed, "base64").toString("utf-8");
-        return JSON.parse(decoded);
+        parsed = JSON.parse(decoded);
       }
+      const invalid = validateDelegationCallbackPayload(parsed);
+      if (invalid) {
+        throw new Error(`Invalid delegation code: ${invalid}`);
+      }
+      return parsed;
     }
     const server = createServer((req, res) => {
       if (req.method === "POST" && req.url === "/callback") {
@@ -29821,6 +30269,13 @@ async function callbackFlow(did, options = {}) {
         req.on("end", () => {
           try {
             const data = JSON.parse(body);
+            const invalid = validateDelegationCallbackPayload(data);
+            if (invalid) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: invalid }));
+              settle({ error: new Error(`Invalid delegation payload: ${invalid}`) });
+              return;
+            }
             res.writeHead(200, {
               "Content-Type": "application/json",
               "Access-Control-Allow-Origin": "*"
@@ -29907,18 +30362,24 @@ Open this URL in a browser to authenticate:
   return new Promise((resolve4, reject) => {
     rl.question("Paste delegation code: ", (input) => {
       rl.close();
+      let parsed;
       try {
-        const data = JSON.parse(input.trim());
-        resolve4(data);
+        parsed = JSON.parse(input.trim());
       } catch {
         try {
           const decoded = Buffer.from(input.trim(), "base64").toString("utf-8");
-          const data = JSON.parse(decoded);
-          resolve4(data);
+          parsed = JSON.parse(decoded);
         } catch {
           reject(new Error("Invalid delegation code. Expected JSON or base64-encoded JSON."));
+          return;
         }
       }
+      const invalid = validateDelegationCallbackPayload(parsed);
+      if (invalid) {
+        reject(new Error(`Invalid delegation code: ${invalid}`));
+        return;
+      }
+      resolve4(parsed);
     });
   });
 }
@@ -30173,6 +30634,7 @@ function registerAuthCommand(program) {
         const delegationCids2 = [];
         let expiry2;
         const openkeyHost = resolveOpenKeyHost(profile);
+        const openkeyEffective = [];
         for (const group of groupPermissionsBySpace(requested)) {
           const delegationData = await startAuthFlow(profile.did, {
             jwk: key,
@@ -30187,13 +30649,15 @@ function registerAuthCommand(program) {
             noPopup: options.popup === false
           });
           const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
-          const stored = storedAdditionalDelegation(delegation, group);
+          const effective = permissionsFromDelegation(delegation);
+          openkeyEffective.push(...effective);
+          const stored = storedAdditionalDelegation(delegation, effective);
           await appendAdditionalDelegation(ctx.profile, stored);
           await node.useRuntimeDelegation(delegation);
           delegationCids2.push(delegation.cid);
           expiry2 = delegation.expiry.toISOString();
           await appendGrantHistory(ctx.profile, {
-            addedCaps: group,
+            addedCaps: effective,
             source: options.manifest ? "manifest" : "cli",
             delegationCid: delegation.cid,
             expiry: expiry2
@@ -30201,7 +30665,7 @@ function registerAuthCommand(program) {
         }
         outputJson({
           changed: delegationCids2.length > 0,
-          added: requested,
+          added: openkeyEffective,
           delegationCid: delegationCids2[0],
           delegationCids: delegationCids2,
           expiry: expiry2
@@ -30226,8 +30690,10 @@ function registerAuthCommand(program) {
       await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession);
       const delegationCids = [];
       let expiry;
+      const localEffective = [];
       for (const delegation of delegations) {
         const covering = permissionsFromDelegation(delegation);
+        localEffective.push(...covering);
         const stored = storedAdditionalDelegation(delegation, covering);
         await appendAdditionalDelegation(ctx.profile, stored);
         delegationCids.push(delegation.cid);
@@ -30245,7 +30711,7 @@ function registerAuthCommand(program) {
       }
       outputJson({
         changed: true,
-        added: requested,
+        added: localEffective,
         delegationCid: delegationCids[0],
         delegationCids,
         expiry
@@ -30704,13 +31170,14 @@ async function ensureDelegationAuthority(params) {
         expiry: params.expiryOption
       });
       const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host);
+      const effective = permissionsFromDelegation(delegation);
       await appendAdditionalDelegation(
         params.ctx.profile,
-        storedAdditionalDelegation(delegation, group)
+        storedAdditionalDelegation(delegation, effective)
       );
       await params.node.useRuntimeDelegation(delegation);
       await appendGrantHistory(params.ctx.profile, {
-        addedCaps: group,
+        addedCaps: effective,
         source: "cli",
         delegationCid: delegation.cid,
         expiry: delegation.expiry.toISOString()
@@ -30842,7 +31309,7 @@ function groupPermissionsBySpace(permissions) {
       rawEntries.push(permission);
       continue;
     }
-    const key = normalizeSpaceForCompare(permission.space);
+    const key = normalizeSpaceForCompare(permission.space ?? "");
     const group = groups.get(key) ?? [];
     group.push(permission);
     groups.set(key, group);
@@ -30875,7 +31342,7 @@ function portableFromOpenKeyDelegation(data, permissions, host) {
   const primary = permissions.find((permission) => !isRawPermission(permission)) ?? permissions[0];
   const returnedSpace = String(data.spaceId ?? primary.space ?? "encryption");
   const expectedSpaces = new Set(
-    permissions.filter((permission) => !isRawPermission(permission)).map((permission) => normalizeSpaceForCompare(permission.space))
+    permissions.filter((permission) => !isRawPermission(permission)).map((permission) => normalizeSpaceForCompare(permission.space ?? ""))
   );
   const matchesExpectedSpace = expectedSpaces.size === 1 && returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]);
   if (expectedSpaces.size > 0 && !matchesExpectedSpace) {
@@ -30886,18 +31353,54 @@ function portableFromOpenKeyDelegation(data, permissions, host) {
     );
   }
   const expiry = inferDelegationExpiry(data);
+  const requestedPairs = new Set(
+    permissions.flatMap(
+      (p) => isRawPermission(p) ? p.actions.map((a) => `${p.service}|${p.space ?? ""}|${p.path}|${a}`) : p.actions.map((a) => `${p.service}|${normalizeSpaceForCompare(p.space ?? "")}|${p.path}|${a}`)
+    )
+  );
+  const returnedPermissions = Array.isArray(data.permissions) ? data.permissions : null;
+  const resources = (returnedPermissions ?? permissions).map((permission) => {
+    const service = permission.service.startsWith("tinycloud.") ? permission.service.slice("tinycloud.".length) : permission.service;
+    const rawService = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${service}`;
+    const permSpace = permission.space ?? "";
+    if (returnedPermissions) {
+      const rawSpace = isRawPermission({
+        service: rawService,
+        space: permSpace,
+        path: permission.path,
+        actions: []
+      }) ? permSpace : normalizeSpaceForCompare(permSpace);
+      for (const action of permission.actions) {
+        const key = `${rawService}|${rawSpace}|${permission.path}|${action}`;
+        if (!requestedPairs.has(key)) {
+          throw new CLIError(
+            "OPENKEY_GRANT_BROADENED",
+            `OpenKey returned grant ${rawService}/${action} on ${permSpace}/${permission.path} that was not requested.`,
+            ExitCode.PERMISSION_DENIED
+          );
+        }
+      }
+    }
+    const resolvedSpace = isRawPermission({
+      service: rawService,
+      space: permSpace,
+      path: permission.path,
+      actions: []
+    }) ? permSpace : returnedSpace;
+    return {
+      service,
+      space: resolvedSpace,
+      path: permission.path,
+      actions: [...permission.actions]
+    };
+  });
   return {
     cid: String(data.delegationCid),
     delegationHeader: data.delegationHeader,
     spaceId: returnedSpace,
     path: primary.path,
     actions: primary.actions,
-    resources: permissions.map((permission) => ({
-      service: permission.service.startsWith("tinycloud.") ? permission.service.slice("tinycloud.".length) : permission.service,
-      space: isRawPermission(permission) ? permission.space : returnedSpace,
-      path: permission.path,
-      actions: [...permission.actions]
-    })),
+    resources,
     expiry,
     delegateDID: String(data.verificationMethod),
     ownerAddress: String(data.address ?? ""),
@@ -35072,17 +35575,17 @@ export {
 @noble/hashes/esm/utils.js:
   (*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
 
+@noble/curves/esm/utils.js:
+@noble/curves/esm/abstract/modular.js:
+@noble/curves/esm/abstract/curve.js:
+@noble/curves/esm/abstract/edwards.js:
+@noble/curves/esm/ed25519.js:
 @noble/curves/esm/abstract/utils.js:
 @noble/curves/esm/abstract/modular.js:
 @noble/curves/esm/abstract/curve.js:
 @noble/curves/esm/abstract/weierstrass.js:
 @noble/curves/esm/_shortw_utils.js:
 @noble/curves/esm/secp256k1.js:
-@noble/curves/esm/utils.js:
-@noble/curves/esm/abstract/modular.js:
-@noble/curves/esm/abstract/curve.js:
-@noble/curves/esm/abstract/edwards.js:
-@noble/curves/esm/ed25519.js:
   (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
 */
 //# sourceMappingURL=legacy-entry.js.map

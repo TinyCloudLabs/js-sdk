@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://witness.credentials.org/schemas/descriptor.schema.json",
+  "$defs": {
+    "nonEmptyText": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "profileId": { "type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*(?:/[a-z0-9][a-z0-9.-]*)?/v1$", "maxLength": 128 },
+    "claimId": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "minLength", "maxLength"],
+      "properties": {
+        "type": { "const": "string" },
+        "format": { "const": "email" },
+        "pattern": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "minLength": { "type": "integer", "minimum": 1, "maximum": 320 },
+        "maxLength": { "type": "integer", "minimum": 1, "maximum": 320 }
+      },
+      "anyOf": [{ "required": ["format"] }, { "required": ["pattern"] }]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "contractVersion", "protocol", "profile", "profileVersion", "display", "accessibility", "theme", "issuer", "interaction", "format", "claims", "subjectRelationship", "inputs", "steps", "holderBinding", "endpoints", "lifecycle", "status", "revocation", "presentation"],
+  "properties": {
+    "type": { "const": "tinycloud.credentials/descriptor/v1" },
+    "contractVersion": { "const": 1 },
+    "protocol": { "const": "tinycloud.credentials/acquisition/v1" },
+    "profile": { "$ref": "#/$defs/profileId" },
+    "profileVersion": { "const": 1 },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "description", "consent", "securityTextLocked"],
+      "properties": {
+        "title": { "$ref": "#/$defs/nonEmptyText" },
+        "description": { "$ref": "#/$defs/nonEmptyText" },
+        "consent": { "$ref": "#/$defs/nonEmptyText" },
+        "securityTextLocked": { "const": true }
+      }
+    },
+    "accessibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["progressLabel", "errorLiveRegion"],
+      "properties": {
+        "progressLabel": { "$ref": "#/$defs/nonEmptyText" },
+        "errorLiveRegion": { "enum": ["assertive", "polite"] }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokenVersion", "allowed"],
+      "properties": {
+        "tokenVersion": { "const": "tinycloud.credentials/tokens/v1" },
+        "allowed": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "enum": ["accentColor", "fontFamily", "borderRadius"] }
+        }
+      }
+    },
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["did", "origin", "kid"],
+      "properties": {
+        "did": { "type": "string", "pattern": "^did:web:[A-Za-z0-9._:%-]+$", "maxLength": 256 },
+        "origin": { "type": "string", "format": "uri", "pattern": "^https://[^/?#]+$", "maxLength": 256 },
+        "kid": { "type": "string", "pattern": "^did:web:[A-Za-z0-9._:%-]+#[A-Za-z0-9._:-]+$", "maxLength": 320 }
+      }
+    },
+    "interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "pathTemplate"],
+      "properties": {
+        "origin": { "const": "https://credentials.org" },
+        "pathTemplate": { "const": "/credentials/acquire/{requestId}" }
+      }
+    },
+    "format": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "vct"],
+      "properties": {
+        "id": { "const": "vc+sd-jwt" },
+        "vct": { "type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*/v1$", "maxLength": 128 }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "matching", "selectiveDisclosure"],
+        "properties": {
+          "name": { "$ref": "#/$defs/claimId" },
+          "matching": { "const": "normalized_exact" },
+          "selectiveDisclosure": { "const": true }
+        }
+      }
+    },
+    "subjectRelationship": { "const": "holder_is_subject" },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label", "schema", "prefill", "autocomplete"],
+        "properties": {
+          "id": { "$ref": "#/$defs/claimId" },
+          "label": { "$ref": "#/$defs/nonEmptyText" },
+          "schema": { "$ref": "#/$defs/inputSchema" },
+          "prefill": { "const": "privacy_hint_only" },
+          "autocomplete": { "const": "off" }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "$ref": "step-registry.schema.json#/$defs/stepRef" }
+    },
+    "holderBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "alg", "domain", "version"],
+      "properties": {
+        "required": { "const": true },
+        "alg": { "const": "EdDSA" },
+        "domain": { "const": "tinycloud.credentials/holder-binding/v1" },
+        "version": { "const": 1 }
+      }
+    },
+    "endpoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request", "state", "challenge", "proof", "holderBinding", "holderSignature", "issue", "result"],
+      "properties": {
+        "request": { "const": "request" },
+        "state": { "const": "state" },
+        "challenge": { "const": "challenge" },
+        "proof": { "const": "proof" },
+        "holderBinding": { "const": "holder_binding" },
+        "holderSignature": { "const": "holder_signature" },
+        "issue": { "const": "issue" },
+        "result": { "const": "result" }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestTtlSeconds", "challengeTtlSeconds", "maxProofAttempts", "challengeConsumption", "retry"],
+      "properties": {
+        "requestTtlSeconds": { "type": "integer", "minimum": 60, "maximum": 3600 },
+        "challengeTtlSeconds": { "type": "integer", "minimum": 30, "maximum": 900 },
+        "maxProofAttempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "challengeConsumption": { "const": "atomic_once" },
+        "retry": { "const": "bounded" }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "freshnessSeconds"],
+      "properties": {
+        "type": { "const": "none" },
+        "freshnessSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 }
+      }
+    },
+    "revocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported"],
+      "properties": { "supported": { "const": false } }
+    },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stateVersion", "states"],
+      "properties": {
+        "stateVersion": { "const": "tinycloud.credentials/ux-states/v1" },
+        "states": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "collecting" }, { "const": "challenging" }, { "const": "proving" },
+            { "const": "signing" }, { "const": "issuing" }, { "const": "verifying" },
+            { "const": "saving" }, { "const": "success" }, { "const": "recovery" }
+          ],
+          "items": false,
+          "minItems": 9,
+          "maxItems": 9
+        }
+      }
+    }
+  }
+}

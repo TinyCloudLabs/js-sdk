@@ -509,29 +509,6 @@ function withCapabilitiesReadForSpaces(
   ]);
 }
 
-function accountRegistryPermissions(): ResourceCapability[] {
-  return [
-    {
-      service: "tinycloud.kv",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: ACCOUNT_REGISTRY_PATH,
-      actions: [KV.GET, KV.PUT, KV.LIST],
-    },
-    {
-      service: "tinycloud.kv",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "spaces/",
-      actions: [KV.GET, KV.PUT, KV.LIST],
-    },
-    {
-      service: "tinycloud.sql",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "account",
-      actions: [SQL.READ, SQL.WRITE, SQL.SCHEMA],
-    },
-  ];
-}
-
 export function composeManifestRequest(
   inputs: readonly Manifest[],
   options: ComposeManifestOptions = {},
@@ -551,7 +528,12 @@ export function composeManifestRequest(
   });
 
   if (includeAccountRegistryPermissions) {
-    resources.push(...accountRegistryPermissions());
+    resources.push(
+      ...ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+        ...resource,
+        actions: [...resource.actions],
+      })),
+    );
   }
 
   const manifestsByAppId = new Map<string, Manifest[]>();
@@ -587,13 +569,75 @@ export function composeBootstrapSpaceManifest(
   });
 }
 
+/**
+ * The canonical account authority granted to ordinary sign-in sessions.
+ *
+ * Keep the completion marker as its own exact key: the registry prefixes do
+ * not cover it. Consumers must clone entries and actions before composing a
+ * request or converting this value to mutable WASM abilities.
+ */
+export const ACCOUNT_MANIFEST_PERMISSIONS: readonly ResourceCapability[] = Object.freeze([
+  {
+    service: "tinycloud.kv",
+    space: ACCOUNT_REGISTRY_SPACE,
+    path: ACCOUNT_REGISTRY_PATH,
+    actions: [KV.GET, KV.PUT, KV.LIST],
+  },
+  {
+    service: "tinycloud.kv",
+    space: ACCOUNT_REGISTRY_SPACE,
+    path: "spaces/",
+    actions: [KV.GET, KV.PUT, KV.LIST],
+  },
+  {
+    service: "tinycloud.kv",
+    space: ACCOUNT_REGISTRY_SPACE,
+    path: "system/bootstrap/complete",
+    actions: [KV.GET, KV.PUT],
+  },
+  {
+    service: "tinycloud.delegation",
+    space: ACCOUNT_REGISTRY_SPACE,
+    path: "",
+    actions: ["tinycloud.delegation/list"],
+  },
+  {
+    service: "tinycloud.sql",
+    space: ACCOUNT_REGISTRY_SPACE,
+    path: "account",
+    actions: [SQL.READ, SQL.WRITE, SQL.SCHEMA],
+  },
+  {
+    service: "tinycloud.capabilities",
+    space: ACCOUNT_REGISTRY_SPACE,
+    path: "",
+    actions: [CAPABILITIES.READ],
+  },
+]);
+
+export const BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST =
+  composeBootstrapSpaceManifest(BOOTSTRAP_DEFAULT_SPACE);
+
+const BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST: ComposedManifestRequest = {
+  ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
+  resources: [
+    ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST.resources,
+    ...ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+      ...resource,
+      actions: [...resource.actions],
+    })),
+  ],
+};
+
 export const BOOTSTRAP_SESSION_REQUESTS: Readonly<
   Record<BootstrapSpaceName, ComposedManifestRequest>
 > = Object.freeze(
   Object.fromEntries(
     BOOTSTRAP_SPACE_NAMES.map((space) => [
       space,
-      composeBootstrapSpaceManifest(space),
+      space === BOOTSTRAP_DEFAULT_SPACE
+        ? BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST
+        : composeBootstrapSpaceManifest(space),
     ]),
   ) as Record<BootstrapSpaceName, ComposedManifestRequest>,
 );

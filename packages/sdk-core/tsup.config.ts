@@ -13,6 +13,12 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   splitting: false,
+  // Resolve bundled deps' package.json "exports"/"browser" conditions as a
+  // browser platform would. Node 20+ ships a global WebCrypto (globalThis.crypto),
+  // so the browser-conditioned code these packages ship also runs correctly under
+  // Node — this is what lets us drop the Node-only variants (which pull in
+  // crypto-browserify/vm-browserify downstream) without a platform split.
+  platform: "browser",
   // Externalize all dependencies — don't bundle them into the output
   external: [
     "@multiformats/multiaddr",

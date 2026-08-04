@@ -1,0 +1,6 @@
+{
+  "owner": "OpenCredentials",
+  "contract": "tinycloud.credentials/acquisition/v1",
+  "source": "rust/opencredentials_witness/specs/credential-acquisition-v1",
+  "sync": "byte-identical"
+}

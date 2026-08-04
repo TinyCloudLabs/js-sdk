@@ -59,6 +59,8 @@ import {
   type InvokeAnyFunction,
   type InvokeFunction,
   type FetchFunction,
+  type SignRequest,
+  type SignResponse,
   INotificationHandler,
   SilentNotificationHandler,
   IENSResolver,
@@ -91,6 +93,7 @@ import {
   UnsupportedFeatureError,
   makePublicSpaceId,
   ACCOUNT_REGISTRY_SPACE,
+  BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
   BOOTSTRAP_SESSION_REQUESTS,
   SECRET_RECORDS_SCHEMA,
   SECRETS_SPACE,
@@ -102,6 +105,7 @@ import {
   type ResolvedDelegate,
   // Capability-chain delegation
   type PermissionEntry,
+  ErrorCodes,
   ENCRYPTION_PERMISSION_SERVICE,
   CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
@@ -147,6 +151,7 @@ import {
   validateOwnerSharePolicyRegistrationBytes,
   type ShareDeliveryAuthorizationReceipt,
   validateShareDeliveryAuthorizationBytes,
+  verifyEip191MessageSignature,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -178,6 +183,9 @@ const DEFAULT_HOST = "https://node.tinycloud.xyz";
 const DEFAULT_ENCRYPTION_NETWORK_NAME = "default";
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
+export const BOOTSTRAP_COMPLETION_MARKER_KEY = "system/bootstrap/complete";
+export const BOOTSTRAP_COMPLETION_MARKER_VERSION = 1;
+export const ACCEPTED_MARKER_VERSIONS: readonly number[] = [BOOTSTRAP_COMPLETION_MARKER_VERSION];
 const NETWORK_ADMIN_TYPE = "tinycloud.encryption.network-admin/v1";
 
 /** Input for {@link TinyCloudNode.readSecret}. The target space is required. */
@@ -297,6 +305,13 @@ export interface OwnerDelegationReceipt extends CoreOwnerDelegationReceipt {
 
 function isOpenKeyAutoSignStrategy(strategy: SignStrategy | undefined): boolean {
   return (strategy as { openKeyAutoSign?: unknown } | undefined)?.openKeyAutoSign === true;
+}
+
+function openKeyApproval(
+  strategy: SignStrategy | undefined,
+): ((request: SignRequest) => Promise<SignResponse>) | undefined {
+  return (strategy as { openKeyRequestApproval?: unknown } | undefined)
+    ?.openKeyRequestApproval as ((request: SignRequest) => Promise<SignResponse>) | undefined;
 }
 
 /**
@@ -676,7 +691,7 @@ export interface TinyCloudNodeConfig {
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
   capabilityRequest?: ComposedManifestRequest;
-  /** Include implicit account registry permissions when composing `manifest`. Default true. */
+  /** Include account bootstrap support in plain sessions and implicit manifest permissions. Default true. */
   includeAccountRegistryPermissions?: boolean;
   /** Run canonical first-account bootstrap when fresh account state is detected. Default true. */
   autoBootstrapAccount?: boolean;
@@ -896,6 +911,17 @@ export interface BootstrapWarning {
   message: string;
 }
 
+/** Durable attestation that the canonical account bootstrap ceremony completed. */
+export interface BootstrapCompletionMarker {
+  v: number;
+  stepIds: string[];
+  completedAt: string;
+}
+
+type BootstrapDecision =
+  | { action: "skip" }
+  | { action: "run"; mode: "fresh" | "repair" };
+
 export class TinyCloudNode {
   /** @internal Registered by importing @tinycloud/node-sdk (not /core) */
   private static nodeDefaults?: NodeDefaults;
@@ -977,9 +1003,12 @@ export class TinyCloudNode {
 
   /**
    * Outcome of the last signIn()'s account-bootstrap attempt. `skipped` is
-   * true when bootstrap did not complete (interactive signer, auto-sign
-   * denied, or a bootstrap step failed); `reason` carries the cause so apps
-   * can surface a "finish account setup" call-to-action. `warnings` is
+   * true when bootstrap did not complete in this invocation (interactive signer,
+   * auto-bootstrap disabled, already provisioned, or a decision/provisioning
+   * step failed). `already-provisioned` means the bootstrap was not run here;
+   * it does not mean a prior provisioning attempt failed to complete.
+   * `reason` carries the cause so apps can surface a "finish account setup"
+   * call-to-action. `warnings` is
    * present when bootstrap completed, but one or more steps recovered from
    * an ambiguous failure (e.g. a KV batch write reconciled via per-space
    * fallback) — clean vs. recovered runs are otherwise byte-identical.
@@ -1246,7 +1275,9 @@ export class TinyCloudNode {
       siweConfig: config.siweConfig,
       manifest: useBootstrapSignInRequest ? undefined : config.manifest,
       capabilityRequest: useBootstrapSignInRequest
-        ? BOOTSTRAP_SESSION_REQUESTS.default
+        ? config.includeAccountRegistryPermissions === false
+          ? BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST
+          : BOOTSTRAP_SESSION_REQUESTS.default
         : config.capabilityRequest,
       includeAccountRegistryPermissions: useBootstrapSignInRequest
         ? false
@@ -1358,6 +1389,17 @@ export class TinyCloudNode {
    */
   get sessionDid(): string {
     return this.sessionManager.getDID(this.sessionKeyId);
+  }
+
+  /** Bare did:key principal used as the credential subject and holder binding. */
+  get credentialHolderDid(): string {
+    return this.sessionDid.split("#", 1)[0];
+  }
+
+  /** Canonical verification method for the active credential holder key. */
+  get credentialHolderKid(): string {
+    const holder = this.credentialHolderDid;
+    return `${holder}#${holder.slice("did:key:".length)}`;
   }
 
   /**
@@ -1563,6 +1605,7 @@ export class TinyCloudNode {
     this._bootstrapStatus = { skipped: false };
 
     if (this.config.autoBootstrapAccount === false) {
+      this._bootstrapStatus = { skipped: true, reason: "auto-bootstrap-disabled" };
       return false;
     }
     if (!this.auth || !this._address) {
@@ -1585,12 +1628,15 @@ export class TinyCloudNode {
     }
 
     const steps = bootstrapSteps(this._address, this._chainId);
-    if (!(await this.isFreshBootstrapAccount(steps))) {
-      return false;
-    }
-
     try {
-      const warnings = await this.runAccountBootstrap(steps);
+      const decision = await this.resolveBootstrapDecision(steps);
+      if (decision.action === "skip") {
+        this._bootstrapStatus = { skipped: true, reason: "already-provisioned" };
+        return false;
+      }
+
+      const warnings = await this.runAccountBootstrap(steps, { mode: decision.mode });
+      await this.writeBootstrapCompletionMarker(steps);
       if (warnings.length > 0) {
         this._bootstrapStatus = { skipped: false, warnings };
         this.notificationHandler.warning(
@@ -1615,36 +1661,121 @@ export class TinyCloudNode {
     return true;
   }
 
-  private async isFreshBootstrapAccount(steps: BootstrapStep[]): Promise<boolean> {
+  private async resolveBootstrapDecision(steps: BootstrapStep[]): Promise<BootstrapDecision> {
     const enshrinedSpaceIds = new Set<string>();
     for (const step of steps) {
       if (step.kind === "session") {
         enshrinedSpaceIds.add(step.spaceId);
       }
     }
-    const skipped = (this.auth as NodeUserAuthorization).lastActivationSkippedSpaceIds;
+    const auth = this.auth;
+    if (!auth) {
+      throw new Error("Account bootstrap requires an active wallet session");
+    }
+    const skipped = auth.lastActivationSkippedSpaceIds;
     if (skipped.some((spaceId) => enshrinedSpaceIds.has(spaceId))) {
-      return true;
+      return { action: "run", mode: "fresh" };
     }
 
     try {
-      const indexed = await this.account.index.spaces.list();
-      if (indexed.ok && indexed.data.length === 0) {
-        return true;
+      const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
+      const markerPermission: PermissionEntry = {
+        service: "tinycloud.kv",
+        space: accountSpaceId,
+        path: BOOTSTRAP_COMPLETION_MARKER_KEY,
+        actions: ["get"],
+      };
+
+      if (!this.hasRuntimePermissions([markerPermission])) {
+        return { action: "run", mode: "repair" };
       }
-    } catch {
-      // A missing account index is expected before bootstrap; fall through to KV.
+
+      const marker = await this.readBootstrapCompletionMarker();
+      if (marker.ok) {
+        if (this.isAcceptedBootstrapCompletionMarker(marker.data.data)) {
+          return { action: "skip" };
+        }
+        return { action: "run", mode: "repair" };
+      }
+
+      if (
+        marker.error.code === ErrorCodes.KV_NOT_FOUND &&
+        this.markerReadIsUnhostedSpace(marker.error.meta)
+      ) {
+        return { action: "run", mode: "fresh" };
+      }
+    } catch (err) {
+      // Marker decision and transport failures are unknown state: make one
+      // bounded, idempotent repair attempt instead of treating them as
+      // provisioned. Emit this separately from the repair result so callers
+      // can diagnose the original decision failure.
+      const reason = err instanceof Error ? err.message : String(err);
+      this.notificationHandler.warning(
+        `Account bootstrap decision failed; attempting one bounded repair: ${reason}`,
+      );
+      console.warn(`[TinyCloudNode] account bootstrap decision failed: ${reason}`);
+      return { action: "run", mode: "repair" };
     }
 
-    try {
-      const spaces = await this.account.spaces.list();
-      return spaces.ok && spaces.data.length === 0;
-    } catch {
-      return false;
+    return { action: "run", mode: "repair" };
+  }
+
+  private async readBootstrapCompletionMarker() {
+    return this.kvForSpace(this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE)).get<unknown>(
+      BOOTSTRAP_COMPLETION_MARKER_KEY,
+    );
+  }
+
+  private async writeBootstrapCompletionMarker(steps: BootstrapStep[]): Promise<void> {
+    if (!this._address) {
+      throw new Error("Bootstrap completion marker requires an active wallet session");
+    }
+    const canonicalStepIds = new Set(
+      bootstrapSteps(this._address, this._chainId).map((step) => step.id),
+    );
+    const providedStepIds = new Set(steps.map((step) => step.id));
+    if (
+      canonicalStepIds.size !== providedStepIds.size ||
+      [...canonicalStepIds].some((stepId) => !providedStepIds.has(stepId))
+    ) {
+      throw new Error("Bootstrap completion marker requires the canonical bootstrap step set");
+    }
+
+    const marker: BootstrapCompletionMarker = {
+      v: BOOTSTRAP_COMPLETION_MARKER_VERSION,
+      stepIds: [...canonicalStepIds],
+      completedAt: new Date().toISOString(),
+    };
+    const written = await this.kvForSpace(this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE)).put(
+      BOOTSTRAP_COMPLETION_MARKER_KEY,
+      marker,
+    );
+    if (!written.ok) {
+      throw new Error(`Failed to write bootstrap completion marker: ${written.error.message}`);
     }
   }
 
-  private async runAccountBootstrap(steps: BootstrapStep[]): Promise<BootstrapWarning[]> {
+  private isAcceptedBootstrapCompletionMarker(value: unknown): boolean {
+    if (typeof value !== "object" || value === null) return false;
+    const entries = Object.entries(value);
+    const markerValue = (name: string): unknown =>
+      entries.find(([key]) => key === name)?.[1];
+    const version = markerValue("v");
+    return (
+      typeof version === "number" &&
+      Number.isInteger(version) &&
+      ACCEPTED_MARKER_VERSIONS.some((acceptedVersion) => acceptedVersion === version)
+    );
+  }
+
+  private markerReadIsUnhostedSpace(meta: Record<string, unknown> | undefined): boolean {
+    return meta?.status === 404;
+  }
+
+  private async runAccountBootstrap(
+    steps: BootstrapStep[],
+    { mode }: { mode: "fresh" | "repair" } = { mode: "fresh" },
+  ): Promise<BootstrapWarning[]> {
     if (!this.auth || !this._address) {
       throw new Error("Account bootstrap requires an active wallet session");
     }
@@ -1765,9 +1896,8 @@ export class TinyCloudNode {
           step.manifests.length > 0
             ? [...step.manifests]
             : TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
-          // Bootstrap only runs on an account with no registry records, so the
-          // manifest-hash pre-read is definitionally a miss. Skip it; the write
-          // it guards is an INSERT OR REPLACE and is safe to repeat.
+          // The write is an INSERT OR REPLACE and is safe to repeat during a
+          // repair, so skip the manifest-hash pre-read.
           { assumeUnregistered: true },
         );
         if (!registered.ok) {
@@ -1776,10 +1906,9 @@ export class TinyCloudNode {
       }
 
       if (step.kind === "encryption-network-create") {
-        // Bootstrap only runs on a fresh account, so the existence probe is a
-        // guaranteed 404. Create directly; a 409 is resolved to the existing
-        // descriptor.
-        await this.ensureEncryptionNetwork(step.networkId, { assumeMissing: true });
+        // A repair probes before creating because the network may already
+        // exist; a 409 remains a race guard in both modes.
+        await this.ensureEncryptionNetwork(step.networkId, { assumeMissing: mode === "fresh" });
       }
 
       if (step.kind === "secret-records-schema") {
@@ -2310,6 +2439,15 @@ export class TinyCloudNode {
     }
 
     return hosted;
+  }
+
+  /** Resolve and authenticate the owner encoded by an owned-space URI. */
+  credentialSpaceOwnerDid(spaceId: string): string {
+    const ownerDid = this.ownerDidFromSpaceId(spaceId);
+    if (ownerDid === undefined || !didPrincipalMatches(ownerDid, this.did)) {
+      throw new Error("Credential space owner does not match the active TinyCloud owner");
+    }
+    return ownerDid;
   }
 
   /**
@@ -2992,6 +3130,78 @@ export class TinyCloudNode {
     return signBytesWithJwk(bytes, session.jwk);
   }
 
+  /** Apply only an already-enabled signing policy to the exact credential request. */
+  async autoSignCredentialBytes(bytes: Uint8Array): Promise<Uint8Array | undefined> {
+    const strategy = this.config.signStrategy;
+    if (strategy?.type === "auto-sign") return this.signSessionBytes(bytes);
+    if (strategy?.type !== "callback" || !isOpenKeyAutoSignStrategy(strategy)) return undefined;
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    const request = {
+      address: this.address ?? "",
+      chainId: this.session?.chainId ?? this._chainId,
+      message: new TextDecoder().decode(bytes),
+      type: "message" as const,
+      purpose: "message" as const,
+    };
+    const decision = await strategy.handler(request);
+    if (!decision.approved) {
+      if (decision.needsApproval) return undefined;
+      throw new Error(decision.reason ?? "OpenKey automatic credential signing was rejected");
+    }
+    if (
+      typeof decision.signature !== "string" ||
+      !(await verifyEip191MessageSignature(
+        request.message,
+        decision.signature,
+        request.address,
+      ))
+    ) {
+      throw new Error("OpenKey credential signature evidence is invalid");
+    }
+    return this.signSessionBytes(bytes);
+  }
+
+  /** Invoke the configured interactive approval strategy before session signing. */
+  async approveCredentialBytes(bytes: Uint8Array): Promise<Uint8Array> {
+    const strategy = this.config.signStrategy;
+    const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    const request = {
+      address: this.address ?? "",
+      chainId: this.session?.chainId ?? this._chainId,
+      message: new TextDecoder().decode(bytes),
+      type: "message" as const,
+      purpose: "message" as const,
+    };
+    const approval = isOpenKeyAutoSignStrategy(strategy)
+      ? openKeyApproval(strategy)
+      : strategy?.type === "callback"
+      ? strategy.handler
+      : undefined;
+    if (approval) {
+      const decision = await approval(request);
+      if (!decision.approved) throw new Error(decision.reason ?? "Credential signing was rejected");
+      if (
+        decision.signature !== undefined &&
+        !(await verifyEip191MessageSignature(
+          request.message,
+          decision.signature,
+          request.address,
+        ))
+      ) {
+        throw new Error("OpenKey credential signature evidence is invalid");
+      }
+      return this.signSessionBytes(bytes);
+    }
+    if (strategy?.type === "auto-reject") throw new Error("Credential signing was rejected");
+    if (this.config.signer) {
+      await this.config.signer.signMessage(request.message);
+      return this.signSessionBytes(bytes);
+    }
+    throw new Error("Interactive OpenKey approval is not configured");
+  }
+
   /** Bind a session-signed invocation to the canonical service audience. */
   async bindInvocationAudience(authorization: string, audience: string): Promise<string> {
     const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
@@ -3069,7 +3279,9 @@ export class TinyCloudNode {
       siweConfig: this.config.siweConfig,
       manifest: useBootstrapSignInRequest ? undefined : this.config.manifest,
       capabilityRequest: useBootstrapSignInRequest
-        ? BOOTSTRAP_SESSION_REQUESTS.default
+        ? this.config.includeAccountRegistryPermissions === false
+          ? BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST
+          : BOOTSTRAP_SESSION_REQUESTS.default
         : this.config.capabilityRequest,
       includeAccountRegistryPermissions: useBootstrapSignInRequest
         ? false
@@ -3136,7 +3348,9 @@ export class TinyCloudNode {
       siweConfig: this.config.siweConfig,
       manifest: useBootstrapSignInRequest ? undefined : this.config.manifest,
       capabilityRequest: useBootstrapSignInRequest
-        ? BOOTSTRAP_SESSION_REQUESTS.default
+        ? this.config.includeAccountRegistryPermissions === false
+          ? BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST
+          : BOOTSTRAP_SESSION_REQUESTS.default
         : this.config.capabilityRequest,
       includeAccountRegistryPermissions: useBootstrapSignInRequest
         ? false
@@ -6642,6 +6856,13 @@ export class TinyCloudNode {
       disableSubDelegation?: boolean;
       /** Expiration time in milliseconds from now (must be before parent's expiry) */
       expiryMs?: number;
+      /** Explicit multi-resource projection, including encryption networks. */
+      resources?: Array<{
+        service: string;
+        space?: string;
+        path: string;
+        actions: string[];
+      }>;
     }
   ): Promise<PortableDelegation> {
     this.assertPortableDelegationCaveatsPreservable(parentDelegation);
@@ -6658,21 +6879,29 @@ export class TinyCloudNode {
       throw new Error("Parent delegation does not allow sub-delegation");
     }
 
-    // Validate path is within parent's path
-    if (!params.path.startsWith(parentDelegation.path)) {
+    const parentResources = parentDelegation.resources ?? [{
+      service: parentDelegation.actions[0]?.split("/", 1)[0]?.replace(/^tinycloud\./, "") ?? "kv",
+      space: parentDelegation.spaceId,
+      path: parentDelegation.path,
+      actions: parentDelegation.actions,
+    }];
+    const requestedResources = params.resources ?? [{
+      service: params.actions[0]?.split("/", 1)[0]?.replace(/^tinycloud\./, "") ?? "kv",
+      space: parentDelegation.spaceId,
+      path: params.path,
+      actions: params.actions,
+    }];
+    const resourceIsContained = (parent: typeof parentResources[number], child: typeof requestedResources[number]): boolean => {
+      const parentEncryption = parent.service === "encryption" || parent.service === "tinycloud.encryption";
+      const childEncryption = child.service === "encryption" || child.service === "tinycloud.encryption";
+      if (parentEncryption || childEncryption) return parentEncryption && childEncryption && parent.path === child.path && child.actions.every((action) => parent.actions.includes(action));
+      const pathContained = parent.path === child.path || parent.path.endsWith("/") && child.path.startsWith(parent.path) || child.path.startsWith(`${parent.path}/`);
+      return pathContained && child.actions.every((action) => parent.actions.includes(action));
+    };
+    if (requestedResources.length === 0 || requestedResources.some((child) => !parentResources.some((parent) => resourceIsContained(parent, child)))) {
       throw new Error(
-        `Sub-delegation path "${params.path}" must be within parent path "${parentDelegation.path}"`
+        "Sub-delegation resources exceed the received delegation"
       );
-    }
-
-    // Validate actions are subset of parent's actions
-    const parentActions = new Set(parentDelegation.actions);
-    for (const action of params.actions) {
-      if (!parentActions.has(action)) {
-        throw new Error(
-          `Sub-delegation action "${action}" is not in parent's actions: ${parentDelegation.actions.join(", ")}`
-        );
-      }
     }
 
     // Calculate expiry - cap at parent's expiry
@@ -6685,17 +6914,15 @@ export class TinyCloudNode {
 
     // Build abilities for the sub-delegation
     const abilities: Record<string, Record<string, string[]>> = {};
-    const kvActions = params.actions.filter(a => a.startsWith("tinycloud.kv/"));
-    const sqlActions = params.actions.filter(a => a.startsWith("tinycloud.sql/"));
-    const duckdbActions = params.actions.filter(a => a.startsWith("tinycloud.duckdb/"));
-    if (kvActions.length > 0) {
-      abilities.kv = { [params.path]: kvActions };
-    }
-    if (sqlActions.length > 0) {
-      abilities.sql = { [params.path]: sqlActions };
-    }
-    if (duckdbActions.length > 0) {
-      abilities.duckdb = { [params.path]: duckdbActions };
+    const rawAbilities: Record<string, string[]> = {};
+    for (const resource of requestedResources) {
+      const service = resource.service.replace(/^tinycloud\./, "");
+      if (service === "encryption") {
+        rawAbilities[resource.path] = [...resource.actions];
+        continue;
+      }
+      abilities[service] ??= {};
+      abilities[service][resource.path] = [...resource.actions];
     }
 
     // Use parent's host or fall back to config
@@ -6715,6 +6942,7 @@ export class TinyCloudNode {
       spaceId: parentDelegation.spaceId,
       delegateUri: params.delegateDID,
       parents: [parentDelegation.cid],
+      ...(Object.keys(rawAbilities).length > 0 ? { rawAbilities } : {}),
     });
 
     // Sign with THIS user's signer
@@ -6741,14 +6969,22 @@ export class TinyCloudNode {
       cid: subDelegationSession.delegationCid,
       delegationHeader: subDelegationSession.delegationHeader,
       spaceId: parentDelegation.spaceId,
-      path: params.path,
-      actions: params.actions,
+      path: requestedResources[0]!.path,
+      actions: requestedResources[0]!.actions,
       disableSubDelegation: params.disableSubDelegation ?? false,
       expiry: actualExpiry,
       delegateDID: params.delegateDID,
       ownerAddress: parentDelegation.ownerAddress!,
       chainId: parentDelegation.chainId!,
       host: targetHost,
+      resources: requestedResources.map((resource) => ({
+        service: resource.service.replace(/^tinycloud\./, ""),
+        space: resource.service.replace(/^tinycloud\./, "") === "encryption"
+          ? "encryption"
+          : resource.space ?? parentDelegation.spaceId,
+        path: resource.path,
+        actions: [...resource.actions],
+      })),
     };
   }
 }

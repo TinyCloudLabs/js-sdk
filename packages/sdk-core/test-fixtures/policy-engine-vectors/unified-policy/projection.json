@@ -1,0 +1,30 @@
+{
+  "profile": "tc-405-policy-capability-v1",
+  "vectors": [
+    {
+      "name": "kv-exact-native-projection",
+      "policyCapability": {"kind": "kv", "resource": "tinycloud://space/kv/docs/a", "selector": "exact", "actions": ["tinycloud.kv/get", "tinycloud.kv/put"]},
+      "nativeCapability": {"service": "tinycloud.kv", "space": "space", "path": "docs/a", "actions": ["tinycloud.kv/get", "tinycloud.kv/put"], "caveat": {"kind": "exact", "type": "xyz.tinycloud.resource/selector", "value": "tinycloud://space/kv/docs/a"}},
+      "nativeProjectionHashHex": "1b074b3c3534e5cd18f0e5fc7ee66ea4e6f070c63c60f62f05f190cf4f288dcb",
+      "roundTrip": true
+    },
+    {
+      "name": "prefix-segment-containment",
+      "authorized": {"kind": "kv", "resource": "tinycloud://space/kv/docs", "selector": "prefix", "actions": ["tinycloud.kv/get"]},
+      "requested": {"kind": "kv", "resource": "tinycloud://space/kv/docs/a", "selector": "exact", "actions": ["tinycloud.kv/get"]},
+      "contained": true
+    },
+    {
+      "name": "prefix-sibling-rejected",
+      "authorized": {"kind": "kv", "resource": "tinycloud://space/kv/docs", "selector": "prefix", "actions": ["tinycloud.kv/get"]},
+      "requested": {"kind": "kv", "resource": "tinycloud://space/kv/docs2/a", "selector": "exact", "actions": ["tinycloud.kv/get"]},
+      "contained": false
+    },
+    {
+      "name": "encryption-is-equality-only",
+      "authorized": {"kind": "encryption", "resource": "urn:tinycloud:encryption:did:key:zowner:default", "action": "tinycloud.encryption/decrypt"},
+      "requested": {"kind": "encryption", "resource": "urn:tinycloud:encryption:did:key:zowner:other", "action": "tinycloud.encryption/decrypt"},
+      "contained": false
+    }
+  ]
+}

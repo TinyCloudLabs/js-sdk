@@ -95,6 +95,47 @@ describe("TinyCloudNode sharing", () => {
     });
   });
 
+  test("projects KV and explicit encryption decrypt resources into a child delegation", async () => {
+    const wasmBindings = makeWasmBindings();
+    globalThis.fetch = mock(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ activated: ["share-delegation-cid"], skipped: [] }),
+      text: async () => "",
+    })) as unknown as typeof fetch;
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer: { signMessage: mock(async () => "signature") } as any,
+      wasmBindings,
+    });
+    (node as any)._address = OWNER;
+    (node as any)._chainId = 1;
+    const resources = [
+      { service: "kv", space: SPACE, path: "docs", actions: ["tinycloud.kv/get"] },
+      { service: "encryption", space: "encryption", path: "urn:tinycloud:encryption:network-1", actions: ["tinycloud.encryption/decrypt"] },
+    ];
+    const delegation = await node.createSubDelegation(
+      {
+        cid: "parent-cid",
+        delegationHeader: { Authorization: "parent.header.signature" },
+        spaceId: SPACE,
+        path: "docs",
+        actions: ["tinycloud.kv/get"],
+        resources,
+        expiry: new Date(Date.now() + 60 * 60_000),
+        delegateDID: "did:key:z6MkReceiver",
+        ownerAddress: OWNER,
+        chainId: 1,
+      },
+      { path: "docs", actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkChild", resources },
+    );
+    const prepared = (wasmBindings.prepareSession as any).mock.calls[0][0];
+    expect(prepared.abilities).toEqual({ kv: { docs: ["tinycloud.kv/get"] } });
+    expect(prepared.rawAbilities).toEqual({ "urn:tinycloud:encryption:network-1": ["tinycloud.encryption/decrypt"] });
+    expect(delegation.resources).toEqual(resources);
+    expect((globalThis.fetch as any).mock.calls[0][0]).toBe("https://node.example/delegate");
+  });
+
   test("rejects every meaningful parent caveat branch before sub-delegation signing", async () => {
     const wasmBindings = makeWasmBindings();
     const signer = { signMessage: mock(async () => "signature") };

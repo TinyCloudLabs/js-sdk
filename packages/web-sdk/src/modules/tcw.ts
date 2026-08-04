@@ -52,6 +52,7 @@ import {
   type AccountService,
   type ResolvedDelegate,
   type PermissionEntry,
+  type ResourceCapability,
   type NetworkDescriptor,
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
@@ -59,6 +60,7 @@ import {
   type OwnerSharePolicyRegistrationReceipt,
   type LocalNodeIdentityStore,
   SignInOptions,
+  ACCOUNT_MANIFEST_PERMISSIONS,
   composeManifestRequest,
   createLocalStorageLocalNodeIdentityStore,
 } from "@tinycloud/sdk-core";
@@ -95,6 +97,7 @@ import type { NotificationConfig } from "../notifications/types";
 import { WasmInitializer } from "./WasmInitializer";
 import { invoke } from "./Storage/tinycloud/module";
 import type { PortableDelegation, DelegatedAccess } from "@tinycloud/node-sdk/core";
+import { CredentialsService } from "../credentials";
 
 declare global {
   interface Window {
@@ -170,6 +173,8 @@ export interface Config extends ClientConfig {
   persistSession?: boolean;
   /** Custom session storage implementation. */
   sessionStorage?: ISessionStorage;
+  /** Whether to run node-sdk's canonical first-account bootstrap after sign-in. */
+  autoBootstrapAccount?: boolean;
   /** Browser storage key prefix for isolating apps/environments. */
   sessionStorageKeyPrefix?: string;
 
@@ -197,7 +202,7 @@ export interface Config extends ClientConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Strategy for TinyCloud root signature requests. */
   signStrategy?: SignStrategy;
-  /** Include implicit account registry permissions when composing `manifest`. Default true. */
+  /** Include canonical account registry read/create-update/list permissions in plain sessions and composed manifests. Default true. */
   includeAccountRegistryPermissions?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
@@ -308,6 +313,7 @@ export class TinyCloudWeb {
   private sessionStorage?: ISessionStorage;
   private _sessionRestoreStatus: SessionRestoreStatus = "idle";
   private _secrets = new Map<string, ISecretsService>();
+  private _credentialsService?: CredentialsService;
 
   /** Promise that resolves when WASM + node are ready */
   private _initPromise: Promise<void>;
@@ -422,6 +428,7 @@ export class TinyCloudWeb {
       signStrategy: this.config.signStrategy,
       includeAccountRegistryPermissions:
         this.config.includeAccountRegistryPermissions,
+      autoBootstrapAccount: this.config.autoBootstrapAccount,
       telemetry: this.config.telemetry,
     };
 
@@ -528,6 +535,12 @@ export class TinyCloudWeb {
   get account(): AccountService { return this.node.account; }
   get hosts(): string[] { return this.node.hosts; }
   get sessionRestoreStatus(): SessionRestoreStatus { return this._sessionRestoreStatus; }
+
+  /** Holder-bound OpenCredentials issuance using the active TinyCloud session. */
+  get credentials(): CredentialsService {
+    this._credentialsService ??= new CredentialsService(this);
+    return this._credentialsService;
+  }
 
   space(nameOrUri: string): ISpace { return this.spaces.get(nameOrUri); }
   get kvPrefix(): string { return this.config.kvPrefix || ""; }
@@ -651,23 +664,35 @@ export class TinyCloudWeb {
     }
   }
 
-  private configuredManifestPermissions(): PermissionEntry[] {
-    const request =
-      this._capabilityRequest ??
-      (this._manifest === undefined
-        ? undefined
-        : composeManifestRequest(
-            Array.isArray(this._manifest) ? this._manifest : [this._manifest],
-            {
-              includeAccountRegistryPermissions:
-                this.config.includeAccountRegistryPermissions,
-            },
-          ));
-    return (request?.resources as PermissionEntry[] | undefined) ?? [];
+  private configuredManifestPermissions(node: TinyCloudNode): ResourceCapability[] {
+    if (this._capabilityRequest !== undefined) {
+      return this._capabilityRequest.resources;
+    }
+    if (this._manifest !== undefined) {
+      return composeManifestRequest(
+        Array.isArray(this._manifest) ? this._manifest : [this._manifest],
+        {
+          includeAccountRegistryPermissions:
+            this.config.includeAccountRegistryPermissions,
+        },
+      ).resources;
+    }
+    if (this.config.includeAccountRegistryPermissions === false) {
+      return [];
+    }
+    if (node.accountSpaceId === undefined) {
+      throw new Error("Cannot check restored account permissions before account space resolution");
+    }
+    const accountSpaceId = node.accountSpaceId;
+    return ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+      ...resource,
+      space: accountSpaceId,
+      actions: [...resource.actions],
+    }));
   }
 
   private restoredSessionCoversConfiguredManifest(node: TinyCloudNode): boolean {
-    const permissions = this.configuredManifestPermissions();
+    const permissions = this.configuredManifestPermissions(node);
     return permissions.length === 0 || node.hasRuntimePermissions(permissions);
   }
 
@@ -723,12 +748,26 @@ export class TinyCloudWeb {
 
   get did(): string { return this.node.did; }
   get sessionDid(): string { return this.node.sessionDid; }
+  get credentialHolderDid(): string { return this.node.credentialHolderDid; }
+  get credentialHolderKid(): string { return this.node.credentialHolderKid; }
   get isSessionOnly(): boolean { return this.node.isSessionOnly; }
   get isWalletConnected(): boolean { return this.walletSigner !== undefined; }
 
   /** Sign protocol bytes with the established session key without exposing key material. */
   async signSessionBytes(bytes: Uint8Array): Promise<Uint8Array> {
     return this.node.signSessionBytes(bytes);
+  }
+
+  async autoSignCredentialBytes(bytes: Uint8Array): Promise<Uint8Array | undefined> {
+    return this.node.autoSignCredentialBytes(bytes);
+  }
+
+  async approveCredentialBytes(bytes: Uint8Array): Promise<Uint8Array> {
+    return this.node.approveCredentialBytes(bytes);
+  }
+
+  credentialSpaceOwnerDid(spaceId: string): string {
+    return this.node.credentialSpaceOwnerDid(spaceId);
   }
 
   // ===========================================================================
@@ -977,6 +1016,12 @@ export class TinyCloudWeb {
       delegateDID: string;
       disableSubDelegation?: boolean;
       expiryMs?: number;
+      resources?: Array<{
+        service: string;
+        space?: string;
+        path: string;
+        actions: string[];
+      }>;
     }
   ): Promise<PortableDelegation> {
     const node = await this.ensureNode();

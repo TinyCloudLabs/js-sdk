@@ -36,6 +36,8 @@ import {
 import { MemoryShareCache, type ShareCache, type ShareCacheEntry } from "./ShareCache";
 import { ShareAccessError, ShareConflict, type ShareAccessV2, type ShareDetachedProof, type ShareNativeAction, type ShareNativeInvokeResult, type ShareNativeInvokeSuccessResult, type SharePolicyBinding, type SharePolicySession, type ShareRecipientClientOptions, type ShareReadResult, type ShareMetadataResult, type ShareListEntry, type ShareListResult } from "./recipient-types";
 import { ShareNativeResponseSchema } from "./recipient-types.schema";
+import { importPortableDelegation, parsePortableDelegation, type PortableDelegation } from "./portable";
+import { createCompactPolicyInvocation, parsePolicySessionUcan } from "../policy/unified";
 
 const DEFAULT_MAX_ARTIFACT_BYTES = MAX_SHARE_ARTIFACT_BYTES;
 const DEFAULT_MAX_CONTENT_BYTES = MAX_SHARE_CONTENT_BYTES;
@@ -283,11 +285,35 @@ export class ShareRecipientClient {
         : policy && this.options.establishPolicySession !== undefined
           ? await this.options.establishPolicySession({ envelope, presentation: this.options.presentation })
           : policy ? await this.establishPolicySession(envelope) : undefined;
-      const kv = bearer || legacyBearer
-        ? session === undefined ? undefined : this.createKV(envelope.origin, session as ServiceSession)
-        : undefined;
       const policySession = policy ? session as SharePolicySession | undefined : undefined;
       if (policySession !== undefined) this.assertProvidedPolicySession(policySession, envelope);
+      const portableDelegation = policySession === undefined ? undefined : this.policySessionDelegation(policySession, envelope.origin);
+      const portableInvoke: InvokeFunction | undefined = portableDelegation === undefined
+        ? undefined
+        : this.policyInvocationSigner(portableDelegation);
+      if (portableDelegation !== undefined) {
+        if (this.options.importDelegation === undefined) {
+          await importPortableDelegation(this.fetchFn, envelope.origin, portableDelegation);
+        } else {
+          const imported = await this.options.importDelegation(portableDelegation);
+          if (imported !== undefined) {
+            const normalized = parsePortableDelegation(imported);
+            if (normalized.delegationHeader.Authorization !== portableDelegation.delegationHeader.Authorization) {
+              throw new ShareAccessError("SHARE_SESSION_INVALID", "delegation importer changed authorization bytes");
+            }
+          }
+        }
+      }
+      const ordinarySession = portableDelegation === undefined ? undefined : {
+        delegationHeader: portableDelegation.delegationHeader,
+        delegationCid: portableDelegation.cid,
+        spaceId: this.policySessionProjection(portableDelegation).spaceId,
+        verificationMethod: portableDelegation.delegateDID,
+        jwk: this.options.bearerSession?.jwk ?? {},
+      } satisfies ServiceSession;
+      const kv = bearer || legacyBearer || ordinarySession !== undefined
+        ? (session === undefined && ordinarySession === undefined ? undefined : this.createKV(envelope.origin, (ordinarySession ?? session) as ServiceSession, portableInvoke))
+        : undefined;
       const advertisedCapability: ShareCapabilityLike = { spaceId: envelope.spaceId, resource: envelope.resource, actions: envelope.actions };
       const capability = policySession?.capability === undefined
         ? advertisedCapability
@@ -316,6 +342,11 @@ export class ShareRecipientClient {
           const scope = normalizePath(input.path ?? envelope.resource.path);
           this.assertAllowed(capability, "list", scope);
           if (kv === undefined && policySession === undefined) throw new ShareAccessError("SHARE_SESSION_REQUIRED");
+          if (portableDelegation !== undefined && kv !== undefined) {
+            const result = await kv.list({ path: scope, limit: input.limit, cursor: input.cursor });
+            if (!result.ok) throw result.error;
+            return { keys: result.data.keys, truncated: result.data.truncated, nextCursor: result.data.nextCursor };
+          }
           if (policySession !== undefined) return this.nativeList(envelope, policySession, scope, input.limit, input.cursor);
           const result = await kv!.list({ path: scope, limit: input.limit, cursor: input.cursor });
           if (!result.ok) throw result.error;
@@ -331,6 +362,14 @@ export class ShareRecipientClient {
           const resolvedPath = normalizePath(path);
           this.assertAllowed(capability, "save", resolvedPath);
           if (kv === undefined && policySession === undefined) throw new ShareAccessError("SHARE_SESSION_REQUIRED");
+          if (portableDelegation !== undefined && kv !== undefined) {
+            const result = await kv.put(resolvedPath, bytes, { contentType: input.contentType ?? envelope.content.mimeType, ifMatch: input.etag });
+            if (!result.ok) {
+              if (result.error.code === ErrorCodes.KV_PRECONDITION_FAILED || result.error.code === ErrorCodes.KV_CONFLICT) throw new ShareConflict(resolvedPath, result.error.meta?.etag as string | undefined);
+              throw result.error;
+            }
+            return { etag: result.data.headers.etag };
+          }
           if (policySession !== undefined) return this.nativeSave(envelope, policySession, resolvedPath, bytes, input);
           const result = await kv!.put(resolvedPath, bytes, { contentType: input.contentType ?? envelope.content.mimeType, ifMatch: input.etag });
           if (!result.ok) {
@@ -347,6 +386,11 @@ export class ShareRecipientClient {
       const metadata = async (path = envelope.resource.kind === "exact" ? envelope.resource.path : ""): Promise<ShareMetadataResult> => {
         const resolvedPath = normalizePath(path);
         this.assertAllowed(capability, "metadata", resolvedPath);
+        if (portableDelegation !== undefined && kv !== undefined) {
+          const result = await kv.head(resolvedPath);
+          if (!result.ok) throw result.error;
+          return { metadata: { "content-type": result.data.headers.contentType ?? "application/octet-stream", "content-length": String(result.data.headers.contentLength ?? ""), ...(result.data.headers.lastModified === undefined ? {} : { "last-modified": result.data.headers.lastModified }) }, etag: result.data.headers.etag, contentType: result.data.headers.contentType, size: result.data.headers.contentLength };
+        }
         if (policySession !== undefined) return this.nativeMetadata(envelope, policySession, resolvedPath);
         if (kv === undefined) throw new ShareAccessError("SHARE_SESSION_REQUIRED");
         const result = await kv.head(resolvedPath);
@@ -354,17 +398,74 @@ export class ShareRecipientClient {
         return { metadata: { "content-type": result.data.headers.contentType ?? "application/octet-stream", "content-length": String(result.data.headers.contentLength ?? ""), ...(result.data.headers.lastModified === undefined ? {} : { "last-modified": result.data.headers.lastModified }) }, etag: result.data.headers.etag, contentType: result.data.headers.contentType, size: result.data.headers.contentLength };
       };
 
-      return { kind: "share-v2", envelope, location: { ...location, key: undefined }, resource: envelope.resource, actions: envelope.actions, expiresAt: new Date(envelope.expiresAt), kv, get, listChildren, save, metadata };
+      return { kind: "share-v2", envelope, location: { ...location, key: undefined }, resource: envelope.resource, actions: envelope.actions, expiresAt: new Date(envelope.expiresAt), kv, portableDelegation, get, listChildren, save, metadata };
     } catch (error) {
       throw asError(error);
     }
   }
 
-  private createKV(origin: string, session: ServiceSession): IKVService {
+  private policySessionDelegation(session: SharePolicySession, origin: string): PortableDelegation | undefined {
+    if (session.runtimeDelegation === undefined) return undefined;
+    const delegation = parsePortableDelegation(session.runtimeDelegation);
+    if (delegation.host !== undefined && delegation.host.replace(/\/+$/, "") !== origin.replace(/\/+$/, "")) throw new ShareAccessError("SHARE_ORIGIN_MISMATCH", "delegation host does not match the trusted share origin");
+    return delegation;
+  }
+
+  private policyInvocationSigner(delegation: PortableDelegation): InvokeFunction {
+    const privateKey = this.options.policySessionPrivateKey;
+    if (privateKey === undefined) throw new ShareAccessError("SHARE_SESSION_SIGNER_REQUIRED");
+    const session = parsePolicySessionUcan(delegation.delegationHeader.Authorization);
+    if (session.cid !== delegation.cid || session.aud !== delegation.delegateDID)
+      throw new ShareAccessError("SHARE_SESSION_INVALID");
+    return (_serviceSession, service, path, action, facts) => {
+      const serviceName = service.replace(/^tinycloud\./, "");
+      const cleanPath = path.replace(/^\//, "").replace(/\/$/, "");
+      const authority = Object.entries(session.att).find(([parentResource, abilities]) => {
+        if (!(action in abilities)) return false;
+        if (serviceName === "encryption") return parentResource.startsWith("urn:tinycloud:encryption:") && parentResource === cleanPath;
+        const match = /^tinycloud:\/\/[^/]+\/kv\/(.+)$/.exec(parentResource);
+        if (match === null) return false;
+        const parentPath = match[1]!;
+        const caveats = abilities[action] ?? [];
+        const prefix = caveats.some((value) => isRecord(value) && value.kind === "prefix");
+        return cleanPath === parentPath || (prefix && cleanPath.startsWith(`${parentPath}/`));
+      });
+      if (authority === undefined) throw new ShareAccessError("SHARE_OUT_OF_SCOPE");
+      const resource = serviceName === "encryption"
+        ? authority[0]
+        : `${authority[0].slice(0, authority[0].indexOf("/kv/") + 4)}${cleanPath}`;
+      const caveat = serviceName === "encryption" ? {} : { type: "xyz.tinycloud.resource/selector", kind: "exact", value: resource };
+      const invocation = createCompactPolicyInvocation({
+        sessionAuthorization: delegation.delegationHeader.Authorization,
+        sessionCid: delegation.cid,
+        recipientDid: delegation.delegateDID,
+        audienceDid: String(session.fact.nodeAudience),
+        resource,
+        action,
+        caveat,
+        ...(facts?.length === 1 ? { facts: facts[0] as Readonly<Record<string, unknown>> } : {}),
+        privateKey,
+        now: Math.floor(this.now().getTime() / 1000),
+      });
+      return { Authorization: invocation.authorization };
+    };
+  }
+
+  private policySessionProjection(delegation: PortableDelegation): { readonly spaceId: string } {
+    const session = parsePolicySessionUcan(delegation.delegationHeader.Authorization);
+    if (session.cid !== delegation.cid || session.aud !== delegation.delegateDID) throw new ShareAccessError("SHARE_SESSION_INVALID");
+    const kvResource = Object.keys(session.att).find((resource) => /^tinycloud:\/\/[^/]+\/kv\/.+$/.test(resource));
+    const match = kvResource === undefined ? undefined : /^tinycloud:\/\/([^/]+)\/kv\/(.+)$/.exec(kvResource);
+    if (match === undefined || match === null) throw new ShareAccessError("SHARE_SESSION_INVALID");
+    return { spaceId: match[1]! };
+  }
+
+  private createKV(origin: string, session: ServiceSession, invokeOverride?: InvokeFunction): IKVService {
+    const invoke = invokeOverride ?? this.options.invoke ?? nativeInvoke;
     if (this.options.createKVService !== undefined) {
-      return this.options.createKVService({ hosts: [origin], session, invoke: this.options.invoke ?? nativeInvoke, fetch: this.fetchFn });
+      return this.options.createKVService({ hosts: [origin], session, invoke, fetch: this.fetchFn });
     }
-    const context = new ServiceContext({ hosts: [origin], session, invoke: this.options.invoke ?? nativeInvoke, fetch: this.fetchFn });
+    const context = new ServiceContext({ hosts: [origin], session, invoke, fetch: this.fetchFn });
     const service = new KVService({ prefix: "" });
     context.registerService("kv", service);
     service.initialize(context);
@@ -548,7 +649,10 @@ export class ShareRecipientClient {
     const transport = this.options.invoke !== undefined || session.authorization !== undefined || session.delegationHeader !== undefined
       ? this.defaultNativeHeaders(session, input.action, input.resource, body)
       : undefined;
-    const response = await this.fetchFn(v2 ? `${base}/share/v2/invoke` : `${base}/invoke`, {
+    // Addressed shares are ordinary UCAN data-plane operations.  The
+    // sharing-specific v2 resolver is retired for all new sessions; keeping
+    // its URL here silently bypasses the common replay and ancestry kernel.
+    const response = await this.fetchFn(`${base}/invoke`, {
       method: "POST",
       headers: { ...headersRecord(transport), ...headersRecord(signed), "content-type": input.mediaType, accept: input.mediaType },
       body: JSON.stringify(body),

@@ -1,5 +1,317 @@
 # @tinycloudlabs/node-sdk
 
+## 2.11.0-beta.12
+
+### Patch Changes
+
+- 7805213: Publish the TC-405 v3 delegation envelope and SDK together under fresh beta
+  versions so consumers cannot resolve the stale `share-envelope@0.2.0-beta.0`
+  artifact that predates the v3 APIs. Derive installed runtime-delegation
+  provenance from signed UCAN authority and accept the node's canonical padded
+  Base64 decrypt-response fields.
+  - @tinycloud/sdk-core@2.11.0-beta.12
+
+## 2.11.0-beta.11
+
+### Minor Changes
+
+- d894c57: TC-393: recover incomplete account bootstrap with a durable account-space
+  completion marker, canonical account registry read/create-update/list, delegation,
+  capabilities-read, marker, and SQL coverage, and an idempotent
+  repair pass. One-shot CoordinationOS OpenKey sessions now explicitly disable
+  client-side bootstrap.
+
+### Patch Changes
+
+- Updated dependencies [d894c57]
+  - @tinycloud/sdk-core@2.11.0-beta.11
+  - @tinycloud/sdk-services@2.11.0-beta.11
+
+## 2.11.0-beta.10
+
+### Minor Changes
+
+- b38dd12: Add versioned OpenKey authorization protocol (v1) types and consumer wiring.
+  - `sdk-core` exports `TinyCloudAuthorizationRequestV1`, `TinyCloudAuthorizationResultV1`, `CapabilityPresentationEnvelopeV1`, `validateAuthorizationResultV1`, `isPlausibleOpenKeyActionId`, `OPENKEY_ACTION_ID_SEPARATOR`.
+  - `sdk-core` also exports narrowing-verification helpers `extractImmutableSiweFields`, `diffImmutableSiweFields`, `extractRecapAttenuations`, `unauthorizedRecapCapabilities` (with `ImmutableSiweFields` and `RecapAttenuation` types) so consumers can prove that a widget-signed SIWE is a strict narrowing of the SDK's original prepared SIWE.
+  - `node-sdk` adds `NodeUserAuthorization.signInWithOpenKeyResult()` which completes the session with the exact `signedMessage` the OpenKey widget returned (not the caller's original prepared SIWE). Its `prepared` argument now REQUIRES `siwe` (the SDK-generated reference SIWE). Validates that the signature verifies against the returned bytes, that the recovered signer matches the local signer, that every immutable SIWE header field (domain, address, URI, version, chainId, nonce, issuedAt) is preserved byte-for-byte, that the ReCap capability set is a subset of the original request, and that `selectedActionKeys` are covered by that set. Note: `statement` handling was refined in `sol-final-continuation-fixes.md` — earlier drafts of this changeset incorrectly implied statement drift was always allowed; the delivered rule is that statement is byte-immutable for plain SIWEs and validated via the ReCap subset check for ReCap-bearing SIWEs.
+  - `cli` browser-auth advertises `protocolVersion=1` on the /delegate URL, validates every callback payload before persisting (including structural checks on the optional `permissions[]` array), and (when the response includes effective `permissions`) refuses any grant that broadens the requested set.
+  - `sdk-core.unauthorizedRecapCapabilities` now enforces EXACT MULTISET EQUALITY on the caveat list for every surviving (resource, ability) pair. Removing an entire ability or resource from the child is still permitted (that is genuine narrowing), but for any (resource, ability) that survives, the child's caveat list must equal the parent's caveat list as a multiset — i.e. same set of canonicalized caveat objects with the SAME duplicate counts. Concretely: (a) adding a caveat not present in the parent is rejected, (b) removing an alternative from a non-empty parent caveat list is rejected (removing all caveats to broaden from "restricted" to "unrestricted" is the special case of this), (c) replacing a caveat with a different one is rejected, (d) changing the number of times a duplicated caveat appears is rejected, and (e) the empty-parent case requires the child to also be empty on that ability (both sides carry zero caveats — neither imposes a restriction). Order within a caveat object's own keys is normalized via canonical JSON serialization before counting, so key reordering inside a single caveat is not itself a difference; only differences in the multiset of caveat objects matter.
+  - `node-sdk.signInWithOpenKeyResult` now enforces stricter selectedActionKeys/permissions consistency: `selectedActionKeys` must cover every non-required capability in `signedMessage`; every returned `permissions` entry action must appear in `signedMessage`; broader `permissions` entries are rejected; empty `permissions[]` with a capability-bearing SIWE is rejected; duplicate `selectedActionKeys` entries are rejected; and the resource-substring fallback used to resolve permission entries has been replaced with a canonical two-form resolver (space or space+path) that fails on ambiguity.
+  - `node-sdk` adds `NodeUserAuthorization.signInWithOpenKey(authorizeFn, opts)` — the production entry point that wires `prepareSessionForSigning` → OpenKey `authorizeTinyCloud()` → `signInWithOpenKeyResult` into one call. Callers provide a thin `authorizeFn` bridge to the OpenKey SDK; the node-sdk enforces every subset/immutable-field invariant before creating any session state.
+  - `cli.parseDelegationExpiryField` numeric-seconds test fixture corrected (was passing `4_071_849_600` = Jan 11 2099, but expected Jan 1 2099 = `4_070_908_800`).
+  - `node-sdk.signInWithOpenKeyResult` REJECTS legacy two-part `resource\0action` selectedActionKeys — Sol continuation contract requires the CANONICAL four-part `service\0space\0path\0ability` shape. The prior suffix-match fallback silently accepted IDs that did not carry a validated service namespace; four-part canonical IDs are the only accepted format.
+  - `node-sdk` adds `wireOpenKeyAuthorize(openkey)` — a production adapter that translates any structurally-OpenKey object (typically `@openkey/sdk`'s `OpenKey` instance) into the `authorizeFn` callback `signInWithOpenKey` expects. The bridge does not fabricate protocol fields — every value flows through unchanged, and wire drift (missing `signedMessage`, unsupported `protocolVersion`, malformed selection) throws at the boundary. Enables real production consumers to wire OpenKey into `NodeUserAuthorization` without either package taking a direct build dependency on the other.
+
+### Patch Changes
+
+- cc75957: Sol continuation v2: add a production-shape narrowed-SIWE round-trip test
+  to `NodeUserAuthorization.signInWithOpenKey.e2e.test.ts` that exercises
+  the client's `signInWithOpenKeyResult` acceptance path against the exact
+  wire shape the OpenKey `/authorize-sign` route emits when a user narrows
+  capabilities in the widget. The test asserts:
+  - The narrowed `signedMessage` decodes to the expected reduced ability
+    set (kv/put removed, kv/get + capabilities/read retained).
+  - The ReCap-derived statement in `signedMessage` no longer mentions the
+    removed abilities.
+  - The signature verifies against `signedMessage`.
+  - Every canonical four-part `selectedActionKeys` entry resolves to a
+    real (resource, ability) pair.
+  - Every `permissions` entry has non-empty actions and matches a resource
+    in the signed ReCap.
+
+  This complements the matching OpenKey-side test in
+  `apps/api/src/__tests__/delegate-authorize-sign-nodeauth-e2e.test.ts`
+  which invokes the actual Hono router with the same production-shape
+  SIWE. Together the two tests cover the wire boundary from both sides
+  using real production code paths.
+
+- a7e3668: Sol final-continuation-review fixes on the OpenKey authorization consumer.
+  Every claim below corresponds to a delivered test that fails on the prior
+  implementation and passes with these changes.
+
+  Requirement 1 — Canonical four-part action IDs across every producer/consumer.
+
+  The on-wire structure of a TinyCloud ReCap resource is
+  `<space>/<short-service>[/<sub-path>]`; the WASM `parseRecapFromSiwe`
+  emitter strips the `<short-service>` segment out of `entry.path`. The
+  prior `signInWithOpenKeyResult` inline resource parser kept the service
+  segment INSIDE `path` (e.g. `path="kv"` for a `<space>/kv` resource),
+  which produced a canonical four-part ID that never matched what OpenKey
+  emits via `computeActionKey` (which uses WASM `entry.path` directly).
+  Real production round-trips through the widget → API → js-sdk consumer
+  therefore fell through the `grantedFourPartIndex.get(rawKey)` lookup
+  silently — Sol explicitly cited this as blocking approval.
+
+  Delivered:
+  - `packages/sdk-core/src/authorization/openkey-protocol.ts` exports
+    `parseCanonicalRecapResource(resource)` — a pure helper that strips
+    the `<short-service>` segment out of `path` for `tinycloud:` URIs and
+    returns non-`tinycloud:` URIs unchanged (e.g. raw
+    `urn:tinycloud:encryption:...` resources emitted via `rawAbilities`).
+  - `NodeUserAuthorization.signInWithOpenKeyResult` uses this helper for
+    both `grantedFourPartIndex` construction AND permissions-entry
+    resolution. Non-`tinycloud:` URIs are now correctly resolved as
+    space-verbatim (no `<short>` reconstruction).
+  - Every test helper and integration test that builds four-part IDs from
+    a signed SIWE now walks through `parseCanonicalRecapResource` — the
+    `signInWithOpenKey.e2e.test.ts` `makeSimulatedOpenKey` bridge and
+    the `signInWithOpenKeyResult.test.ts` `deriveSelectedActionKeysFromSiwe`
+    and `derivePermissionsFromSiwe` helpers.
+  - Tests in
+    `packages/sdk-core/src/authorization/openkey-protocol.test.ts::parseCanonicalRecapResource`
+    cover: whole-space grant (`path` empty), path-scoped grant (short
+    stripped), repeated-space grant (`path` = space), non-tinycloud URN
+    passthrough, and a cross-check against hardcoded expected-path values
+    that match what real WASM `parseRecapFromSiwe` emits for those URI
+    shapes (verified against a real WASM build offline; this test does not
+    invoke WASM at runtime). The actual live-WASM evidence is in the
+    separate mandatory cross-repository Hono finalize test.
+
+  Requirement 1 (final) — Wire-format acceptance test at the HTTP boundary.
+
+  Sol's final rejection called out that the js-sdk-side round-trip test
+  routed through the `wireOpenKeyAuthorize` bridge and never handed a
+  byte-shaped Hono `/authorize-sign` finalize body to the REAL
+  `signInWithOpenKeyResult` consumer. The bridge translates types but
+  does not fabricate any protocol fields — nevertheless, exercising
+  the consumer with a directly-constructed wire body proves the
+  contract at the exact boundary a compromised OpenKey response could
+  attack.
+
+  Delivered:
+  - New tests in
+    `packages/node-sdk/src/authorization/NodeUserAuthorization.signInWithOpenKeyResult.test.ts`: - `signInWithOpenKeyResult accepts a finalize body in the EXACT
+wire shape the Hono /authorize-sign route emits` builds a real
+    prepared session via the SDK, signs the exact prepared SIWE
+    bytes with the local signer, and assembles a finalize body byte-
+    for-byte in the Hono route's response shape (`{ protocolVersion,
+address, signature, signedMessage, selectedActionKeys, permissions
+}`). Passes DIRECTLY to `signInWithOpenKeyResult` — no bridge, no
+    simulator. Asserts the consumer accepts the wire body end-to-end
+    and produces a client session with the correct address and
+    signed bytes. - `signInWithOpenKeyResult accepts a NARROWED finalize body in the
+Hono /authorize-sign wire shape` performs the same test with a
+    narrowed SIWE (regenerated via WASM `prepareSession`, which is
+    exactly what OpenKey's `narrowSiwePreservingImmutable` calls),
+    proving the consumer accepts both the identity round-trip and
+    the narrowing round-trip when handed the actual Hono wire body.
+  - Companion test on the OpenKey side
+    (`apps/api/src/__tests__/delegate-authorize-sign-nodeauth-e2e.test.ts::
+finalize body validates against a MIRROR of every
+signInWithOpenKeyResult wire-format check`) asserts every wire-
+    format guard the SDK consumer runs (protocolVersion, address shape,
+    signature-verify, SIWE parseability, canonical four-part IDs, no
+    duplicates, non-empty permissions, actions grounded in ATT). Together
+    the two tests cover the boundary from BOTH sides using real
+    production code paths.
+
+  Requirement 2 — Narrowed OpenKey SIWE accepted by the SDK consumer.
+
+  `WASM.prepareSession` renders the ENTIRE SIWE statement from the ReCap
+  contents ("I further authorize the stated URI to perform the following
+  actions on my behalf: ..."). Narrowing the ReCap therefore ALWAYS
+  changes the statement. The prior `diffImmutableSiweFields` included
+  `statement` in the immutable set unconditionally, which caused every
+  legitimate narrowing to fail with `altered immutable SIWE fields:
+statement` — the exact production round-trip failure Sol cited.
+
+  Delivered:
+  - `diffImmutableSiweFields(original, signed, { originalHasRecap })`
+    accepts an optional flag. When `originalHasRecap === true`,
+    `statement` is EXCLUDED from the diff and the ReCap subset check
+    (`unauthorizedRecapCapabilities`) is the authoritative narrowing
+    gate. When `originalHasRecap === false` (plain SIWE, no `urn:recap:`
+    resource), `statement` remains byte-immutable — a caller-authored
+    statement must not silently drift.
+  - `NodeUserAuthorization.signInWithOpenKeyResult` computes
+    `originalHasRecap` from the prepared SIWE and passes it through.
+  - Tests:
+    - `NodeUserAuthorization.signInWithOpenKeyResult.test.ts` — a
+      narrowed-SIWE-with-ReCap-derived-statement test proves the full
+      round-trip completes (was: rejected) AND asserts the pre-condition
+      that the statement genuinely differs pre/post narrowing.
+    - A contrapositive test proves `diffImmutableSiweFields` still
+      rejects statement drift when `originalHasRecap: false`.
+
+  What these changesets do NOT claim:
+  - Cross-repo module import: the js-sdk and OpenKey ship independently
+    with separate package managers and separate WASM builds. Instead,
+    the js-sdk test constructs a Hono-route-shaped finalize body and
+    hands it directly to the REAL `signInWithOpenKeyResult` consumer,
+    while the matching OpenKey-side test asserts the actual `/authorize-
+sign` route emits a response that passes every wire-format check
+    the SDK runs. Together the two tests cover the boundary end-to-end.
+  - Cross-signing broadening: the strict caveat multiset equality that
+    Sol required lives on the OpenKey server side (see the matching
+    OpenKey changeset). The js-sdk `unauthorizedRecapCapabilities` was
+    already strict — no behaviour change on this side.
+
+- e525137: Address Sol continuation-review rejection blockers on the OpenKey
+  authorization consolidation.
+  - `sdk-core.ImmutableSiweFields` now covers the full immutable header set:
+    `expirationTime`, `notBefore`, `requestId`, `statement`, and
+    `nonRecapResources`. `extractImmutableSiweFields` parses them and
+    `diffImmutableSiweFields` includes them so a widget swapping any
+    of these fields fails the SDK's byte-for-byte immutable check.
+  - `sdk-core.unauthorizedRecapCapabilities` now enforces STRICT normalized
+    caveat-multiset equality. Dropping alternatives from a disjunction,
+    adding restrictions to an unrestricted parent, and any lexical caveat
+    change all reject. Formal attenuation may relax this later.
+  - `node-sdk.signInWithOpenKeyResult` requires the returned `permissions`
+    array to equal the signed authority for EVERY resource/action pair,
+    including structurally-required capabilities (e.g.
+    `tinycloud.capabilities/read`). Missing entries and extras both fail
+    hard (was: only non-required coverage was required).
+  - `node-sdk.signInWithOpenKey` accepts an optional `openkeyKeyId` option
+    and forwards it to the `authorizeFn` bridge so callers can pin the
+    OpenKey key ID used by the widget.
+  - `cli.auth request --grant` reports EFFECTIVE grants (from the signed
+    delegation) rather than the originally-requested set — the previous
+    behaviour over-reported authority when the user narrowed the request
+    in the OpenKey UI. Applies to both OpenKey-backed and local-key flows.
+  - `node-sdk` production TypeScript build no longer includes test sources
+    or test-support modules, so `tsc --noEmit -p packages/node-sdk/tsconfig.json`
+    now exits 0.
+  - `node-sdk.signInWithOpenKey` resolves the actual TinyCloud activation host
+    before preparing or sending the OpenKey authorization request. A per-call
+    host override is installed as the session host, so the host bound into the
+    OpenKey context and the host later used for activation cannot diverge.
+
+- ba9c983: Merge-readiness consolidation for the OpenKey authorization protocol.
+
+  The manifest digest now uses a shared sorted-key canonical JSON protocol with
+  OpenKey, so whitespace and object-key order in a published well-known manifest
+  do not break origin binding. The mandatory cross-repository CI job is pinned to
+  the immutable compatible OpenKey revision containing the real Hono harness.
+
+  `sdk-core` (`packages/sdk-core/src/authorization/openkey-protocol.ts`):
+  - Extend `CapabilityPresentationEnvelopeV1` with an optional
+    `manifests: Array<{ name?: string; appId?: string; payload?: Record<string, unknown> }>`
+    field. Display-only. The receiving OpenKey side size-bounds and
+    validates the envelope before use; envelopes carrying trust/verification
+    override keys are dropped. Manifests never expand authority — the
+    ReCap payload remains the sole gate.
+  - Clarify in JSDoc that `reason` is caller-supplied context and
+    rendered as "reason provided by caller" in the review UI unless a
+    cryptographic manifest signature (or origin-bind) confirms it.
+
+  `node-sdk` (`packages/node-sdk/src/authorization/NodeUserAuthorization.ts`):
+  - `signInWithOpenKey` now builds a `CapabilityPresentationEnvelopeV1`
+    from `this._manifest` (when set) and forwards it to the caller's
+    `authorizeFn`. The envelope carries `displayName`, `reason`
+    (optional), `manifestId`, a canonical SHA-256 `manifestDigest` over
+    the primary manifest, and the full `manifests[]` payload array.
+    Callers can pass a `reason` string in `options` — rendered as
+    caller-supplied, never as verified.
+  - New `options.reason?: string` parameter for
+    `signInWithOpenKey(authorizeFn, options)`.
+  - Internal helpers `canonicalStringify` + `canonicalSha256Hex` produce
+    a stable digest that the OpenKey server can match against the
+    fetched `.well-known/openkey-manifest.json` bytes. Apps that want
+    origin-binding MUST publish the same JSON at the well-known path.
+  - The presentation envelope is forwarded VERBATIM through the
+    `OpenKeyBridgeInput` shape; the bridge does not fabricate any
+    fields.
+
+  `node-sdk` (`packages/node-sdk/src/authorization/openKeyBridge.ts`):
+  - Extend `OpenKeyAuthorizeTinyCloud.authorizeTinyCloud()` request
+    shape and `OpenKeyBridgeInput` with the optional `presentation`
+    envelope. `wireOpenKeyAuthorize` forwards it to the underlying
+    OpenKey SDK unchanged.
+
+  CI (`.github/workflows/authority-tests.yml`):
+  - The isolated `authority` job now sets `OPENKEY_HARNESS_OPTIONAL: "1"`
+    so the cross-repo Hono contract test skips gracefully when no
+    sibling OpenKey developer worktree is present. Callers can no
+    longer break the js-sdk CI merely by not having OpenKey checked out
+    alongside.
+  - New required `cross-repo-contract` job checks out BOTH js-sdk and
+    OpenKey (from `openkey-so/openkey@main`) at compatible revisions,
+    builds js-sdk's authority packages, and runs the cross-repo Hono
+    contract test with `OPENKEY_WORKTREE` and `OPENKEY_RUN_HARNESS=1`
+    set. The dedicated job means the real Hono contract remains
+    MANDATORY — the escape hatch in the isolated job only prevents
+    incidental breakage.
+
+  Cross-repo Hono test:
+  - `NodeUserAuthorization.crossRepoHono.e2e.test.ts` now spawns the
+    OpenKey harness with `OPENKEY_RUN_HARNESS=1` set in the child
+    environment. The harness carries a defence-in-depth guard that
+    refuses to boot without that variable, so this cross-repo contract
+    test is the only path that spins it up (a broad `bun test` walk in
+    the OpenKey repo, or an accidental double-spawn, cannot leak a
+    stuck Hono process on the port).
+
+  Documentation-only changeset for `@tinycloud/web-sdk` and
+  `@tinycloud/sdk-services`; those packages export types re-exported
+  from `sdk-core`, so the envelope shape change flows through
+  transitively.
+
+- Updated dependencies [b38dd12]
+- Updated dependencies [cc75957]
+- Updated dependencies [a7e3668]
+- Updated dependencies [e525137]
+- Updated dependencies [ba9c983]
+  - @tinycloud/sdk-core@2.11.0-beta.10
+  - @tinycloud/sdk-services@2.11.0-beta.10
+
+## 2.11.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [10363b6]
+  - @tinycloud/sdk-core@2.11.0-beta.9
+
+## 2.11.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [68faad4]
+  - @tinycloud/sdk-core@2.11.0-beta.8
+  - @tinycloud/sdk-services@2.11.0-beta.8
+  - @tinycloud/node-sdk-wasm@1.7.6-beta.0
+
 ## 2.11.0-beta.7
 
 ### Patch Changes

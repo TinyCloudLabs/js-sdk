@@ -1,0 +1,28 @@
+{
+  "binding": {
+    "audience": "tinycloud://credentials",
+    "challengeNonce": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+    "completionContext": "fixture",
+    "completionOrigin": "https://app.example",
+    "descriptorDigest": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "expiresAt": "2026-08-03T01:10:00Z",
+    "holderDid": "did:key:z6MkiTBz1ymQWz2LdoV3frTSRHfwj2U8xqF8q7YrFzAWdV8C",
+    "issuedAt": "2026-08-03T01:00:00Z",
+    "issuer": "did:web:issuer.credentials.org",
+    "issuerKid": "did:web:issuer.credentials.org#controller",
+    "jti": "JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ",
+    "normalizedClaimsDigest": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+    "openerOrigin": "https://app.example",
+    "profile": "tinycloud.dev.synthetic-handle/v1",
+    "profileVersion": 1,
+    "protocol": "tinycloud.credentials/acquisition/v1",
+    "requestId": "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+    "requirementDigest": "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+    "type": "tinycloud.credentials/holder-binding/v1"
+  },
+  "canonical": "{\"audience\":\"tinycloud://credentials\",\"challengeNonce\":\"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\",\"completionContext\":\"fixture\",\"completionOrigin\":\"https://app.example\",\"descriptorDigest\":\"DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD\",\"expiresAt\":\"2026-08-03T01:10:00Z\",\"holderDid\":\"did:key:z6MkiTBz1ymQWz2LdoV3frTSRHfwj2U8xqF8q7YrFzAWdV8C\",\"issuedAt\":\"2026-08-03T01:00:00Z\",\"issuer\":\"did:web:issuer.credentials.org\",\"issuerKid\":\"did:web:issuer.credentials.org#controller\",\"jti\":\"JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ\",\"normalizedClaimsDigest\":\"NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN\",\"openerOrigin\":\"https://app.example\",\"profile\":\"tinycloud.dev.synthetic-handle/v1\",\"profileVersion\":1,\"protocol\":\"tinycloud.credentials/acquisition/v1\",\"requestId\":\"RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR\",\"requirementDigest\":\"QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ\",\"type\":\"tinycloud.credentials/holder-binding/v1\"}",
+  "canonicalization": "RFC8785",
+  "hash": "sha-256-base64url-nopad",
+  "digest": "a1-LcGUD2pFVm-EU2S5Vl7YHvnPZPn2KRgDTDSpX1L0",
+  "signingDomain": "tinycloud.credentials/holder-binding/v1"
+}

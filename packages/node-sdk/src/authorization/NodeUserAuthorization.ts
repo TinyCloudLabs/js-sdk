@@ -1,4 +1,6 @@
 import { EventEmitter } from "events";
+import { createHash } from "node:crypto";
+import { SiweMessage } from "siwe";
 import {
   IUserAuthorization,
   ISigner,
@@ -34,12 +36,20 @@ import {
   canonicalizeAddress,
   makePkhSpaceId,
   pkhDid,
+  extractImmutableSiweFields,
+  diffImmutableSiweFields,
+  extractRecapAttenuations,
+  unauthorizedRecapCapabilities,
+  parseCanonicalRecapResource,
+  ACCOUNT_REGISTRY_SPACE,
+  ACCOUNT_MANIFEST_PERMISSIONS,
   KV,
   SQL,
   DUCKDB,
   CAPABILITIES,
   HOOKS,
   ENCRYPTION,
+  type CapabilityPresentationEnvelopeV1,
 } from "@tinycloud/sdk-core";
 import {
   SignStrategy,
@@ -51,6 +61,50 @@ import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
+
+type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/**
+ * Canonical sorted-key JSON used by the OpenKey manifest-digest protocol.
+ * Ordinary JSON semantics are applied first so undefined object fields are
+ * omitted identically to a published JSON file.
+ */
+export function canonicalizeOpenKeyManifestJson(value: unknown): string {
+  const json = JSON.stringify(value);
+  if (json === undefined) {
+    throw new TypeError("manifest is not JSON-serializable");
+  }
+  return canonicalizeJsonValue(JSON.parse(json) as JsonValue);
+}
+
+function canonicalizeJsonValue(value: JsonValue): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalizeJsonValue).join(",")}]`;
+  }
+  return `{${Object.keys(value)
+    .sort()
+    .map(
+      (key) =>
+        `${JSON.stringify(key)}:${canonicalizeJsonValue(value[key]!)}`,
+    )
+    .join(",")}}`;
+}
+
+/** SHA-256 hex of the canonical JSON form of a published manifest. */
+export function canonicalOpenKeyManifestSha256Hex(value: unknown): string {
+  return createHash("sha256")
+    .update(canonicalizeOpenKeyManifestJson(value))
+    .digest("hex");
+}
 
 function didPrincipalMatches(actual: string, expected: string): boolean {
   try {
@@ -73,6 +127,17 @@ function addRawAbility(
   if (!actions.includes(action)) {
     actions.push(action);
   }
+}
+
+function cloneAbilitiesMap(actions: AbilitiesMap): AbilitiesMap {
+  return Object.fromEntries(
+    Object.entries(actions).map(([service, paths]) => [
+      service,
+      Object.fromEntries(
+        Object.entries(paths).map(([path, pathActions]) => [path, [...pathActions]]),
+      ),
+    ]),
+  );
 }
 
 /**
@@ -151,7 +216,7 @@ export interface NodeUserAuthorizationConfig {
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
   capabilityRequest?: ComposedManifestRequest;
-  /** Include implicit account registry permissions when composing `manifest`. Default true. */
+  /** Include canonical account registry read/create-update/list permissions when composing `manifest` and plain sign-in. Default true. */
   includeAccountRegistryPermissions?: boolean;
 }
 
@@ -566,23 +631,52 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const defaultNetworkId = this.defaultEncryptionNetworkId(address, chainId);
       const primarySpaceId = makePkhSpaceId(address, chainId, this.spacePrefix);
       const secretsSpaceId = makePkhSpaceId(address, chainId, "secrets");
-      return {
-        abilities: this.defaultActions,
-        spaceId: primarySpaceId,
-        spaceAbilities: {
-          [primarySpaceId]: this.defaultActions,
-          [secretsSpaceId]: {
-            kv: {
-              "vault/secrets/": [
-                KV.GET,
-                KV.PUT,
-                KV.DEL,
-                KV.LIST,
-                KV.METADATA,
-              ],
-            },
+      const primaryActions =
+        this.includeAccountRegistryPermissions && this.spacePrefix === ACCOUNT_REGISTRY_SPACE
+          ? cloneAbilitiesMap(this.defaultActions)
+          : this.defaultActions;
+      const spaceAbilities: Record<string, AbilitiesMap> = {
+        [primarySpaceId]: primaryActions,
+        [secretsSpaceId]: {
+          kv: {
+            "vault/secrets/": [
+              KV.GET,
+              KV.PUT,
+              KV.DEL,
+              KV.LIST,
+              KV.METADATA,
+            ],
           },
         },
+      };
+      // Plain sessions receive the canonical account-manifest permissions in
+      // the signer-derived account space. Do not duplicate the space object
+      // when the primary space itself is `account`; merge into its existing
+      // defaultActions map instead.
+      if (
+        this.includeAccountRegistryPermissions &&
+        this.spacePrefix !== ACCOUNT_REGISTRY_SPACE
+      ) {
+        spaceAbilities[makePkhSpaceId(address, chainId, ACCOUNT_REGISTRY_SPACE)] =
+          resourceCapabilitiesToAbilitiesMap(ACCOUNT_MANIFEST_PERMISSIONS);
+      } else if (this.includeAccountRegistryPermissions) {
+        const accountAbilities = resourceCapabilitiesToAbilitiesMap(
+          ACCOUNT_MANIFEST_PERMISSIONS,
+        );
+        for (const [service, paths] of Object.entries(accountAbilities)) {
+          const existingPaths = primaryActions[service] ?? (primaryActions[service] = {});
+          for (const [path, actions] of Object.entries(paths)) {
+            const existingActions = existingPaths[path] ?? (existingPaths[path] = []);
+            for (const action of actions) {
+              if (!existingActions.includes(action)) existingActions.push(action);
+            }
+          }
+        }
+      }
+      return {
+        abilities: primaryActions,
+        spaceId: primarySpaceId,
+        spaceAbilities,
         rawAbilities: {
           [defaultNetworkId]: [DECRYPT_ACTION, NETWORK_CREATE_ACTION],
         },
@@ -1391,6 +1485,711 @@ export class NodeUserAuthorization implements IUserAuthorization {
     await this.ensureSpaceExists();
 
     return clientSession;
+  }
+
+  /**
+   * End-to-end sign-in via OpenKey `authorizeTinyCloud()` (Sol CRITICAL-4).
+   *
+   * This is the production entry point that wires
+   * {@link prepareSessionForSigning} → OpenKey `authorizeTinyCloud()` →
+   * {@link signInWithOpenKeyResult} into one call. Consumers pass in a
+   * caller-provided `authorizeFn` (typically a thin wrapper around
+   * `openkey.authorizeTinyCloud()`) so this method has no direct
+   * dependency on the OpenKey SDK — it works with any transport that
+   * conforms to the versioned protocol.
+   *
+   * The `authorizeFn` MUST:
+   *   1. Send the prepared SIWE bytes to OpenKey.
+   *   2. Return the exact `TinyCloudAuthorizationResultV1` shape (with
+   *      `signedMessage` — the bytes the signature actually verifies
+   *      against — plus `selectedActionKeys` and `permissions`).
+   *
+   * NodeUserAuthorization then completes the session with `signedMessage`
+   * (never the prepared bytes), verifying the signature, the immutable
+   * SIWE fields, and every subset invariant enforced by
+   * {@link signInWithOpenKeyResult}. This preserves the exact-byte
+   * guarantee: if the user did NOT narrow, the returned `signedMessage`
+   * equals the prepared SIWE byte-for-byte; if the user narrowed, only
+   * the ReCap block differs and every immutable header field survives.
+   *
+   * Legacy exact-byte {@link signIn} callers are unaffected — this method
+   * is opt-in.
+   *
+   * @param authorizeFn Callback that invokes the versioned OpenKey
+   *   `authorizeTinyCloud()` protocol and returns the result. Receives
+   *   the prepared SIWE bytes plus a `host` hint the widget should bind
+   *   into its /authorize-sign-prepare context.
+   * @param options Optional overrides for the OpenKey request.
+   */
+  async signInWithOpenKey(
+    authorizeFn: (input: {
+      protocolVersion: 1;
+      siwe: string;
+      jwk: Record<string, unknown>;
+      host?: string;
+      /**
+       * Sol MAJOR-3: OpenKey key ID (managed or external key) to sign
+       * with. When omitted, the OpenKey SDK falls back to the last
+       * connected key. Callers who want to bind the flow to a specific
+       * OpenKey key can override via options.openkeyKeyId; otherwise the
+       * bridge relies on the SDK's connected-key state.
+       */
+      keyId?: string;
+      /**
+       * Optional presentation envelope forwarded to the OpenKey widget.
+       * Built from this instance's `_manifest` when set. Display-only —
+       * the widget/server MUST NOT let it expand authority. The envelope
+       * carries `manifests` payloads plus a stable SHA-256 digest so the
+       * OpenKey server can origin-bind the browser origin against the
+       * app's well-known manifest.
+       */
+      presentation?: CapabilityPresentationEnvelopeV1;
+    }) => Promise<{
+      protocolVersion: 1;
+      address: string;
+      signature: string;
+      signedMessage: string;
+      selectedActionKeys: string[];
+      permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
+    }>,
+    options?: {
+      host?: string;
+      openkeyKeyId?: string;
+      /**
+       * Optional caller-supplied reason string forwarded in the
+       * presentation envelope. Rendered as caller-supplied (never
+       * verified) in the widget.
+       */
+      reason?: string;
+    },
+  ): Promise<ClientSession> {
+    // A per-call host override is the host this session will actually use,
+    // not merely a display hint for OpenKey. Install it before preparation so
+    // the same value is bound into the authorization context and later used
+    // for activation.
+    if (options?.host !== undefined) {
+      const overrideHost = options.host.trim();
+      if (!overrideHost) {
+        throw new Error("OpenKey authorization host must not be empty");
+      }
+      this.tinycloudHosts = [overrideHost];
+    }
+
+    // OpenKey binds the target host into its authorization context. Resolve
+    // the same host activation will use before asking OpenKey to prepare or
+    // sign anything; signInWithPreparedSession is intentionally too late.
+    const signingAddress = canonicalizeAddress(await this.signer.getAddress());
+    const signingChainId = await this.signer.getChainId();
+    await this.resolveTinyCloudHostsForSignIn(signingAddress, signingChainId);
+
+    // 1. Prepare — this creates a SIWE bound to a fresh session key.
+    const { prepared, keyId, jwk } = await this.prepareSessionForSigning();
+
+    // 2. Build the presentation envelope from the instance manifest (if
+    //    any). This is the SUPPORTED production path for surfacing an
+    //    honest app identity in the OpenKey review UI — we NEVER
+    //    fabricate manifest fields, and the envelope is display-only.
+    const presentation = this.buildPresentationEnvelope(options?.reason);
+
+    // 3. Delegate signing to OpenKey via the caller-supplied bridge.
+    //    We forward the JWK so the OpenKey server can regenerate a
+    //    narrowed SIWE bound to the same session key when the user
+    //    edits the review — and never a caller-echoed JWK.
+    //
+    //    We forward the TinyCloud host so the widget can bind it into
+    //    its authorization context (Sol MAJOR-2). Falls back to the
+    //    first resolved TinyCloud host when not overridden.
+    //
+    //    Sol MAJOR-3: forward an OpenKey keyId when the caller supplied
+    //    one so the widget/SDK routes to the specific OpenKey key rather
+    //    than the SDK's connected-key default.
+    const hostHint = this.primaryTinyCloudHost;
+    const result = await authorizeFn({
+      protocolVersion: 1,
+      siwe: prepared.siwe,
+      jwk,
+      host: hostHint,
+      keyId: options?.openkeyKeyId,
+      presentation,
+    });
+
+    // 4. Complete with the EXACT bytes OpenKey signed. Every subset
+    //    invariant (immutable fields preserved, capabilities ⊆ prepared,
+    //    selectedActionKeys grounded in signedMessage, permissions
+    //    consistent) is enforced by signInWithOpenKeyResult before any
+    //    session state is created.
+    return this.signInWithOpenKeyResult(result, prepared, keyId, jwk);
+  }
+
+  /**
+   * Build a `CapabilityPresentationEnvelopeV1` from `this._manifest`. The
+   * envelope is display-only — the OpenKey widget renders it under an
+   * honest trust label, and the server /authorize-sign-prepare route
+   * decides whether to upgrade the label to `origin-bound` by fetching
+   * the well-known manifest and comparing its digest to
+   * `manifestDigest`.
+   *
+   * Returns `undefined` when no manifest is set — the widget renders as
+   * "no manifest supplied" (unsigned).
+   *
+   * The digest is a deterministic SHA-256 over canonical JSON of the
+   * first manifest payload; OpenKey parses the fetched well-known manifest
+   * and applies the same canonicalization before comparing digests.
+   */
+  private buildPresentationEnvelope(
+    reason?: string,
+  ): CapabilityPresentationEnvelopeV1 | undefined {
+    const manifests = Array.isArray(this._manifest)
+      ? this._manifest
+      : this._manifest
+        ? [this._manifest]
+        : [];
+    if (manifests.length === 0 && !reason) {
+      return undefined;
+    }
+    // Canonical JSON: sort keys so the digest is stable across process
+    // invocations and formatting/key-order changes in the published
+    // well-known manifest.
+    const primary = manifests[0];
+    let displayName: string | undefined;
+    let manifestId: string | undefined;
+    let manifestDigest: string | undefined;
+    const envelopeManifests: NonNullable<
+      CapabilityPresentationEnvelopeV1["manifests"]
+    > = [];
+    for (const m of manifests) {
+      envelopeManifests.push({
+        name: m.name,
+        appId: m.app_id,
+        // Deep-copy to prevent later mutations from affecting the digest.
+        payload: JSON.parse(JSON.stringify(m)) as Record<string, unknown>,
+      });
+    }
+    if (primary) {
+      displayName = primary.name;
+      manifestId = primary.app_id;
+      manifestDigest = canonicalOpenKeyManifestSha256Hex(primary);
+    }
+    return {
+      protocolVersion: 1,
+      displayName,
+      reason: reason && reason.length > 0 ? reason : undefined,
+      manifestId,
+      manifestDigest,
+      manifests: envelopeManifests.length > 0 ? envelopeManifests : undefined,
+    };
+  }
+
+  /**
+   * Complete sign-in with a versioned OpenKey authorization result.
+   *
+   * Where `signInWithPreparedSession` completes with a signature over the
+   * ORIGINAL prepared SIWE, this method completes with the SIWE bytes the
+   * OpenKey widget actually presented and signed (`signedMessage`). It
+   * exists because the versioned authorizeTinyCloud protocol lets the user
+   * narrow capabilities; the returned bytes may differ from the original
+   * request and are the only ones the signature actually verifies against.
+   *
+   * The `result` parameter is validated at the trust boundary via
+   * `validateAuthorizationResultV1` (in sdk-core). Callers should validate
+   * BEFORE calling this method so unknown/missing fields are rejected
+   * before any session state is created.
+   *
+   * Validation performed here (defence-in-depth: even a "valid" v1 payload
+   * must clear these checks before any session state is created):
+   * 1. `result.address` matches the local signer's address.
+   * 2. `result.signature` recovers to `result.address` when verified against
+   *    `result.signedMessage`.
+   * 3. Every immutable SIWE header field (domain, address, URI, version,
+   *    chainId, nonce, issuedAt) in the original prepared SIWE is preserved
+   *    byte-for-byte in `result.signedMessage`. `statement` is NOT in this
+   *    list because the WASM renders it from the ReCap contents; it MUST
+   *    change when the ReCap is narrowed.
+   * 4. Every capability in `result.signedMessage`'s ReCap block was present
+   *    in the original prepared SIWE — narrowing OK, broadening rejected.
+   * 5. Every `result.selectedActionKeys` entry corresponds to a
+   *    (resource, action) pair in the returned SIWE.
+   */
+  async signInWithOpenKeyResult(
+    result: {
+      protocolVersion: 1;
+      address: string;
+      signature: string;
+      signedMessage: string;
+      selectedActionKeys: string[];
+      permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
+    },
+    prepared: {
+      /**
+       * The ORIGINAL SIWE the SDK produced via {@link prepareSessionForSigning}.
+       * Used as the source-of-truth reference for immutable-header and
+       * capability-subset comparison against `result.signedMessage`.
+       */
+      siwe: string;
+      jwk: Record<string, unknown>;
+      spaceId: string;
+      verificationMethod: string;
+    },
+    keyId: string,
+    jwk: Record<string, unknown>,
+  ): Promise<ClientSession> {
+    if (result.protocolVersion !== 1) {
+      throw new Error(`Unsupported OpenKey protocol version ${result.protocolVersion}`);
+    }
+    if (!result.signedMessage) {
+      throw new Error("OpenKey result must include signedMessage");
+    }
+    if (!prepared.siwe) {
+      throw new Error(
+        "signInWithOpenKeyResult requires prepared.siwe (the SDK-generated SIWE the sign-in was proposed with)",
+      );
+    }
+    // Verify the signer matches what we expect. If the address that signed
+    // does not match the address the local signer will present, refuse the
+    // session — the widget returned bytes signed by someone else.
+    const expectedAddress = canonicalizeAddress(await this.signer.getAddress());
+    if (canonicalizeAddress(result.address) !== expectedAddress) {
+      throw new Error(
+        `OpenKey returned signature from ${result.address} but expected ${expectedAddress}`,
+      );
+    }
+
+    // (2) Recover the signer from the signature over the exact bytes we are
+    // about to complete the session with. SiweMessage.verify() calls
+    // ethers.verifyMessage(EIP4361Message, signature) internally and matches
+    // the recovered address (case-insensitive) against the message's address
+    // field. Any mismatch throws, which is exactly the failure mode we want.
+    let parsedSignedSiwe: SiweMessage;
+    try {
+      parsedSignedSiwe = new SiweMessage(result.signedMessage);
+    } catch (err) {
+      throw new Error(
+        `OpenKey signedMessage is not a parseable SIWE: ${(err as Error).message}`,
+      );
+    }
+    const verifyResult = await parsedSignedSiwe.verify(
+      { signature: result.signature },
+      { suppressExceptions: true },
+    );
+    if (!verifyResult.success) {
+      const errData = verifyResult.error;
+      const type =
+        errData && typeof errData === "object" && "type" in errData
+          ? (errData as { type?: string }).type
+          : undefined;
+      const details =
+        errData && typeof errData === "object" && "expected" in errData
+          ? ` (expected=${(errData as { expected?: unknown }).expected}, received=${(errData as { received?: unknown }).received})`
+          : "";
+      throw new Error(
+        `OpenKey signature verification failed${type ? `: ${type}` : ""}${details}`,
+      );
+    }
+    // Belt-and-braces: the SIWE `address` field must match what OpenKey
+    // reported and what the local signer will present. verify() checks
+    // signature-vs-siwe-address; we additionally cross-check the caller's
+    // claim and the local signer.
+    if (
+      canonicalizeAddress(parsedSignedSiwe.address) !== expectedAddress
+    ) {
+      throw new Error(
+        `OpenKey signedMessage.address (${parsedSignedSiwe.address}) does not match local signer address (${expectedAddress})`,
+      );
+    }
+
+    // (3) Immutable-fields comparison. Any drift on domain/address/URI/version/
+    // chainId/nonce/issuedAt/expirationTime/notBefore/requestId/nonRecapResources
+    // means the widget is signing a materially different SIWE than we prepared —
+    // potentially binding the session to a different relying party or a different
+    // session key.
+    //
+    // Sol final continuation contract requirement 2: pass `originalHasRecap`
+    // so `diffImmutableSiweFields` excludes `statement` for ReCap-bearing
+    // SIWEs. WASM's `prepareSession` renders the entire statement from the
+    // ReCap contents, so narrowing ALWAYS changes the statement — the
+    // ReCap subset check below is the authoritative narrowing gate. For
+    // plain SIWE flows (no urn:recap: resource) the statement remains
+    // byte-immutable.
+    const originalHasRecap = /(?:^|\n)-\s+urn:recap:/i.test(prepared.siwe);
+    const originalFields = extractImmutableSiweFields(prepared.siwe);
+    const signedFields = extractImmutableSiweFields(result.signedMessage);
+    const changedFields = diffImmutableSiweFields(originalFields, signedFields, {
+      originalHasRecap,
+    });
+    if (changedFields.length > 0) {
+      throw new Error(
+        `OpenKey signedMessage altered immutable SIWE fields: ${changedFields.join(", ")}`,
+      );
+    }
+
+    // (4) Capability subset. The widget may narrow the caller's request but
+    // MUST NOT introduce (resource, action) pairs the caller never asked for.
+    // Both sides are parsed from their `urn:recap:` resources.
+    let originalCaps;
+    let signedCaps;
+    try {
+      originalCaps = extractRecapAttenuations(prepared.siwe);
+    } catch (err) {
+      throw new Error(
+        `Failed to decode prepared SIWE recap: ${(err as Error).message}`,
+      );
+    }
+    try {
+      signedCaps = extractRecapAttenuations(result.signedMessage);
+    } catch (err) {
+      throw new Error(
+        `Failed to decode OpenKey signedMessage recap: ${(err as Error).message}`,
+      );
+    }
+    const unauthorized = unauthorizedRecapCapabilities(signedCaps, originalCaps);
+    if (unauthorized.length > 0) {
+      const previewLimit = 5;
+      const preview = unauthorized
+        .slice(0, previewLimit)
+        .map((u) => `${u.resource}::${u.action}`)
+        .join(", ");
+      const overflow =
+        unauthorized.length > previewLimit
+          ? ` (and ${unauthorized.length - previewLimit} more)`
+          : "";
+      throw new Error(
+        `OpenKey signedMessage broadened authorization beyond the original request: ${preview}${overflow}`,
+      );
+    }
+
+    // Structural check: the signed SIWE must reference the expected spaceId.
+    // We accept a substring match because the spaceId appears inside the
+    // ReCap capability list rather than as a distinct header.
+    if (!result.signedMessage.includes(prepared.spaceId)) {
+      throw new Error(
+        `OpenKey signedMessage does not reference the expected spaceId ${prepared.spaceId}`,
+      );
+    }
+
+    // (5) `selectedActionKeys` and `permissions` must EXACTLY reflect the
+    // capabilities in signedMessage — anything less is a trust boundary
+    // violation. Two rules:
+    //
+    // Rule A (selectedActionKeys covers signedCaps):
+    //   If signedMessage grants capabilities beyond the structurally-required
+    //   ones (currently `tinycloud.capabilities/read`), then `selectedActionKeys`
+    //   MUST include a coverage entry for EVERY (resource, action) pair in
+    //   signedCaps. Otherwise the client has no evidence that the SDK-visible
+    //   selection matches the ReCap it is about to trust.
+    //
+    // Rule B (each selectedActionKeys entry is grounded in signedCaps):
+    //   Every ID the widget returns must correspond to a real (resource, action)
+    //   pair in signedCaps. Broadening rejected.
+    //
+    // Sol continuation contract: the CANONICAL OpenKey action ID format is
+    // FOUR NUL-separated parts: `service\0space\0path\0ability`. The keys of
+    // `signedCaps` are the raw ReCap resource URIs — `space` for whole-space
+    // grants, or `space/path` when a path is present. The action key is
+    // `ability` (e.g. `tinycloud.kv/get`). We build a canonical index of
+    // granted authority keyed by the four-part tuple and REJECT
+    // selectedActionKeys that do not conform to it. Legacy 2-part
+    // `resource\0action` IDs are no longer accepted.
+    const grantedPairs = new Set<string>();
+    // 4-part index: `${service}\0${space}\0${path}\0${ability}` → canonical
+    // resource\0action pair (used to populate the coverage-check set).
+    // `service` is derived from the ability's namespace prefix
+    // (`tinycloud.kv/get` → `tinycloud.kv`). `space` and `path` are derived
+    // from the resource URI by splitting on the first `/` after the
+    // `tinycloud:...:name` prefix.
+    const grantedFourPartIndex = new Map<string, string>();
+    for (const [resource, actions] of Object.entries(signedCaps)) {
+      // Sol final continuation contract requirement 1: use the SHARED
+      // canonical resource parser so consumer four-part IDs match the
+      // producer's IDs byte-for-byte. Prior inline code left the service
+      // segment inside `path` (e.g. `path="kv"` for a `<space>/kv`
+      // resource), which produced a different ID than OpenKey emits via
+      // WASM `parseRecapFromSiwe` (which strips the service segment). The
+      // divergence was the actual production round-trip failure Sol cited.
+      const { space, path } = parseCanonicalRecapResource(resource);
+      for (const action of Object.keys(actions)) {
+        // Populate the coverage set with the canonical resource\0action
+        // pair so Rule A can check every non-required capability got
+        // covered by a matching selectedActionKeys entry.
+        grantedPairs.add(`${resource}\0${action}`);
+        // Canonical four-part index: derive `service` from the ability
+        // prefix. Missing prefix (bare action) is refused server-side
+        // in OpenKey — we simply skip it here rather than fabricate a
+        // half-form 4-part ID.
+        const slashIdx = action.indexOf("/");
+        const service = slashIdx > 0 ? action.slice(0, slashIdx) : "";
+        if (service) {
+          grantedFourPartIndex.set(
+            `${service}\0${space}\0${path}\0${action}`,
+            `${resource}\0${action}`,
+          );
+        }
+      }
+    }
+
+    // Sol MAJOR-5: rich-result `permissions` MUST equal the signed
+    // authority for EVERY resource/action pair, including structurally-
+    // required capabilities. Removing required capabilities from the
+    // coverage set let a widget silently omit them from the reported
+    // grants — which is fine for user consent (the user cannot remove
+    // them anyway) but a wire-format drift for the SDK's authoritative
+    // return value. Callers that build a UI on top of `permissions` end
+    // up under-reporting authority when required pairs are absent.
+    // Track both the full set (for rich-result equality) and the
+    // non-required set (retained for selectedActionKeys Rule A which
+    // legitimately does not surface required pairs in the widget UI).
+    const isStructurallyRequired = (action: string) =>
+      action === "tinycloud.capabilities/read" || action === "capabilities/read";
+
+    const nonRequiredGrantedPairs = new Set<string>();
+    for (const pair of grantedPairs) {
+      const idx = pair.indexOf("\0");
+      const action = idx >= 0 ? pair.slice(idx + 1) : pair;
+      if (!isStructurallyRequired(action)) {
+        nonRequiredGrantedPairs.add(pair);
+      }
+    }
+    // Sol MAJOR-5: the full granted-pair set — including required
+    // capabilities — is what `permissions` must equal exactly.
+    const allSignedGrantedPairs = new Set<string>(grantedPairs);
+
+    // Rule B — validate each returned selectedActionKeys entry.
+    // Build a set of grounded pairs so we can also enforce Rule A.
+    // Sol MAJOR-4: dedupe using the raw key first — duplicates in the
+    // client-supplied selection would let a subset be reported as
+    // full coverage. Callers must send each ID exactly once.
+    const seenRawKeys = new Set<string>();
+    for (const rawKey of result.selectedActionKeys) {
+      if (seenRawKeys.has(rawKey)) {
+        throw new Error(
+          `OpenKey selectedActionKeys contains duplicate entry ${rawKey}`,
+        );
+      }
+      seenRawKeys.add(rawKey);
+    }
+    const selectedResourceActionPairs = new Set<string>();
+    for (const rawKey of result.selectedActionKeys) {
+      const parts = rawKey.split("\0");
+      // Sol continuation contract: OpenKey emits ONLY the canonical
+      // four-part `service\0space\0path\0ability` shape. Legacy 2-part
+      // IDs are no longer accepted — the previous fallback let a
+      // malicious widget forward a `resource\0action` pair that matched
+      // by suffix without proving service canonicalization, which
+      // silently expanded authority when service short-names collided.
+      if (parts.length !== 4) {
+        throw new Error(
+          `OpenKey selectedActionKeys entry is malformed (expected canonical 4-part service\\0space\\0path\\0ability): ${rawKey}`,
+        );
+      }
+      const canonical = grantedFourPartIndex.get(rawKey);
+      if (!canonical) {
+        throw new Error(
+          `OpenKey selectedActionKeys entry ${rawKey} is not covered by any granted capability`,
+        );
+      }
+      selectedResourceActionPairs.add(canonical);
+    }
+
+    // Rule A — every non-required granted pair MUST be covered by at least
+    // one selectedActionKeys entry. If nonRequiredGrantedPairs is empty
+    // (e.g. bootstrap-only session), we do not require selectedActionKeys
+    // to be non-empty. If it is non-empty, the widget must have returned
+    // selection metadata for every non-required capability the user was
+    // shown; anything else is a UI/wire drift.
+    if (nonRequiredGrantedPairs.size > 0) {
+      const missingPairs: string[] = [];
+      for (const pair of nonRequiredGrantedPairs) {
+        if (!selectedResourceActionPairs.has(pair)) {
+          missingPairs.push(pair);
+        }
+      }
+      if (missingPairs.length > 0) {
+        const previewLimit = 5;
+        const preview = missingPairs
+          .slice(0, previewLimit)
+          .map((p) => p.replace("\0", "::"))
+          .join(", ");
+        const overflow =
+          missingPairs.length > previewLimit
+            ? ` (and ${missingPairs.length - previewLimit} more)`
+            : "";
+        throw new Error(
+          `OpenKey selectedActionKeys is missing entries for signedMessage capabilities: ${preview}${overflow}`,
+        );
+      }
+    }
+
+    // Sol MAJOR-4: rich-result permissions MUST exactly equal the signed
+    // authority. Strict rules:
+    //   1. If the signed SIWE grants any capabilities, `permissions` MUST
+    //      cover ALL of them — an empty `permissions` array with a
+    //      capability-bearing SIWE is a wire-format drift and is rejected.
+    //   2. Every permission entry MUST have a non-empty actions[].
+    //   3. Every (permission, action) pair MUST resolve to a real
+    //      (resource, action) pair in signedCaps via a CANONICAL
+    //      resolution — no substring fallback (which would let a
+    //      permission on `space` match a resource on `space/leaked/path`
+    //      and silently expand authority to unintended paths).
+    //   4. Permission entries MUST be duplicate-free after canonical
+    //      normalization; duplicates would let the same authority be
+    //      reported twice and mask a missing entry.
+    // Sol MAJOR-5: reject empty `permissions` for a capability-bearing
+    // SIWE regardless of whether the pairs are structurally required.
+    // A signed SIWE with any granted authority MUST come back with a
+    // matching non-empty permissions[] — otherwise the SDK cannot
+    // reconcile local state with what was actually signed.
+    if (
+      allSignedGrantedPairs.size > 0 &&
+      result.permissions.length === 0
+    ) {
+      throw new Error(
+        "OpenKey permissions is empty but signedMessage carries capabilities — refusing to accept a session without an authoritative grant list",
+      );
+    }
+    const permissionCanonicalKeys = new Set<string>();
+    const permissionPairsCovered = new Set<string>();
+    for (const perm of result.permissions) {
+      const { service, space, path, actions } = perm;
+      if (typeof service !== "string" || typeof space !== "string" || typeof path !== "string") {
+        throw new Error(
+          `OpenKey permissions entry has non-string service/space/path (service=${service}, space=${space}, path=${path})`,
+        );
+      }
+      if (!Array.isArray(actions) || actions.length === 0) {
+        throw new Error(
+          `OpenKey permissions entry (${service} ${space} ${path}) has empty actions — a capability-bearing entry must list at least one action`,
+        );
+      }
+      const canonicalKey = `${service}\0${space}\0${path}`;
+      if (permissionCanonicalKeys.has(canonicalKey)) {
+        throw new Error(
+          `OpenKey permissions has duplicate entry for (${service} ${space} ${path})`,
+        );
+      }
+      permissionCanonicalKeys.add(canonicalKey);
+
+      // Sol final continuation contract requirement 1: canonical
+      // resource resolution matches the shared `parseCanonicalRecapResource`
+      // used elsewhere. Two distinct on-wire resource shapes exist:
+      //   (a) `tinycloud:pkh:...` spaces derived from the WASM
+      //       `prepareSession` `abilities` map. These encode as
+      //       `<space>/<short-service>[/<sub-path>]` and the canonical
+      //       parser strips the `<short-service>` segment out of the
+      //       reported `path`. To match back to the raw ATT resource key
+      //       we RECONSTRUCT `<space>/<short>[/<path>]`.
+      //   (b) Non-`tinycloud:` URNs (e.g. `urn:tinycloud:encryption:...`)
+      //       emitted via `rawAbilities`. Here the resource URI IS the
+      //       space verbatim — there is no `<short-service>` segment to
+      //       reconstruct. `parseCanonicalRecapResource` returns
+      //       `{ space: uri, path: "" }` for these; the matched
+      //       resource is just `space`.
+      //
+      // We refuse the substring fallback that would let a permission on
+      // `space` silently match a `<space>/leaked/path` resource.
+      let expectedResource: string;
+      if (space.startsWith("tinycloud:")) {
+        const shortService = service.startsWith("tinycloud.")
+          ? service.slice("tinycloud.".length)
+          : service;
+        expectedResource = path
+          ? `${space}/${shortService}/${path}`
+          : `${space}/${shortService}`;
+      } else {
+        // Raw ability resource: URI is the resource key verbatim.
+        // A non-empty `path` on a non-tinycloud URI would be a wire
+        // shape drift — reject rather than silently permit.
+        if (path) {
+          throw new Error(
+            `OpenKey permissions entry (${service} ${space} ${path}) carries a path on a non-tinycloud: resource URI, which is not a recognized encoding`,
+          );
+        }
+        expectedResource = space;
+      }
+      let matchedResource: string;
+      if (signedCaps[expectedResource] !== undefined) {
+        matchedResource = expectedResource;
+      } else {
+        throw new Error(
+          `OpenKey permissions entry (${service} ${space} ${path}) claims grants not confirmed in signedMessage capabilities`,
+        );
+      }
+      const grantedActionsForResource = new Set(
+        Object.keys(signedCaps[matchedResource]),
+      );
+      for (const action of actions) {
+        if (typeof action !== "string" || !action) {
+          throw new Error(
+            `OpenKey permissions entry (${service} ${space} ${path}) has non-string action ${String(action)}`,
+          );
+        }
+        if (!grantedActionsForResource.has(action)) {
+          throw new Error(
+            `OpenKey permissions entry (${service} ${space} ${path}) claims action ${action} not present in signedMessage capabilities`,
+          );
+        }
+        permissionPairsCovered.add(`${matchedResource}\0${action}`);
+      }
+    }
+    // Sol MAJOR-5: EXACT equality between `permissions` coverage and the
+    // signed authority — for every resource/action pair, including
+    // structurally-required ones. Any missing or extra pair is a
+    // wire-format drift and the SDK refuses to build a session state
+    // that does not match the signed bytes byte-for-byte.
+    if (allSignedGrantedPairs.size > 0) {
+      const missingFromPerms: string[] = [];
+      for (const pair of allSignedGrantedPairs) {
+        if (!permissionPairsCovered.has(pair)) {
+          missingFromPerms.push(pair);
+        }
+      }
+      if (missingFromPerms.length > 0) {
+        const previewLimit = 5;
+        const preview = missingFromPerms
+          .slice(0, previewLimit)
+          .map((p) => p.replace("\0", "::"))
+          .join(", ");
+        const overflow =
+          missingFromPerms.length > previewLimit
+            ? ` (and ${missingFromPerms.length - previewLimit} more)`
+            : "";
+        throw new Error(
+          `OpenKey permissions is missing entries for signedMessage capabilities: ${preview}${overflow}`,
+        );
+      }
+      const extrasInPerms: string[] = [];
+      for (const pair of permissionPairsCovered) {
+        if (!allSignedGrantedPairs.has(pair)) {
+          extrasInPerms.push(pair);
+        }
+      }
+      if (extrasInPerms.length > 0) {
+        const previewLimit = 5;
+        const preview = extrasInPerms
+          .slice(0, previewLimit)
+          .map((p) => p.replace("\0", "::"))
+          .join(", ");
+        const overflow =
+          extrasInPerms.length > previewLimit
+            ? ` (and ${extrasInPerms.length - previewLimit} more)`
+            : "";
+        throw new Error(
+          `OpenKey permissions contains entries not present in the signed authority: ${preview}${overflow}`,
+        );
+      }
+    }
+    // Retain nonRequiredGrantedPairs reference so tsc doesn't drop it.
+    void nonRequiredGrantedPairs;
+
+    return this.signInWithPreparedSession(
+      {
+        siwe: result.signedMessage,
+        jwk: prepared.jwk,
+        spaceId: prepared.spaceId,
+        verificationMethod: prepared.verificationMethod,
+      },
+      result.signature,
+      keyId,
+      jwk,
+    );
   }
 
   /**

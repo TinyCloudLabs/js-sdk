@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildAuthUrl, publicJwkForDelegation } from "./browser-auth.js";
+import {
+  buildAuthUrl,
+  publicJwkForDelegation,
+  validateDelegationCallbackPayload,
+} from "./browser-auth.js";
 
 function decodedJwkFromUrl(url: string): Record<string, unknown> {
   const encoded = new URL(url).searchParams.get("jwk");
@@ -42,6 +46,34 @@ describe("browser auth delegation URLs", () => {
       crv: "Ed25519",
       x: "public-key",
     });
+  });
+
+  test("advertises versioned protocol via protocolVersion=1", () => {
+    const url = buildAuthUrl("did:key:z6MkDelegate", {
+      openkeyHost: "https://openkey.test",
+    });
+    expect(new URL(url).searchParams.get("protocolVersion")).toBe("1");
+  });
+
+  test("validateDelegationCallbackPayload accepts a well-formed response", () => {
+    const good = {
+      delegationHeader: { Authorization: "Bearer x" },
+      delegationCid: "bafy",
+      spaceId: "tinycloud:pkh:eip155:1:0xabc:default",
+    };
+    expect(validateDelegationCallbackPayload(good)).toBeNull();
+  });
+
+  test("validateDelegationCallbackPayload rejects missing fields", () => {
+    expect(validateDelegationCallbackPayload(null)).toContain("expected");
+    expect(validateDelegationCallbackPayload({})).toContain("delegationHeader");
+    expect(
+      validateDelegationCallbackPayload({
+        delegationHeader: { Authorization: "" },
+        delegationCid: "cid",
+        spaceId: "space",
+      }),
+    ).toContain("Authorization");
   });
 
   test("includes permission request reason for OpenKey consent", () => {

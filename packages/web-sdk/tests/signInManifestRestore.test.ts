@@ -317,3 +317,45 @@ test("signIn refreshes a restored session that does not cover the configured man
   expect(session.siwe).toBe("fresh-siwe");
   expect(tcw.sessionRestoreStatus).toBe("logging-in");
 });
+
+test("plain restored sessions require all canonical account permissions", async () => {
+  const tcw = new TinyCloudWeb();
+  const restoredSession = {
+    address: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
+    walletAddress: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
+    chainId: 1,
+    sessionKey: {} as any,
+    siwe: "canonical-siwe",
+    signature: "canonical-signature",
+  };
+  const hasRuntimePermissions = mock(() => true);
+  const node = {
+    accountSpaceId: "tinycloud:pkh:eip155:1:0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1:account",
+    hasRuntimePermissions,
+    signIn: mock(async () => undefined),
+    session: restoredSession,
+  };
+
+  await (tcw as any)._initPromise;
+  (tcw as any)._node = node;
+  (tcw as any)._initPromise = Promise.resolve();
+  (tcw as any).restoreSession = mock(async () => ({
+    status: "restored",
+    session: restoredSession,
+  }));
+
+  const session = await tcw.signIn();
+  const permissions = hasRuntimePermissions.mock.calls[0]?.[0];
+
+  expect(permissions).toHaveLength(6);
+  expect(permissions).toEqual(expect.arrayContaining([
+    expect.objectContaining({ service: "tinycloud.kv", path: "applications/" }),
+    expect.objectContaining({ service: "tinycloud.kv", path: "spaces/" }),
+    expect.objectContaining({ service: "tinycloud.kv", path: "system/bootstrap/complete" }),
+    expect.objectContaining({ service: "tinycloud.delegation", path: "" }),
+    expect.objectContaining({ service: "tinycloud.sql", path: "account" }),
+    expect.objectContaining({ service: "tinycloud.capabilities", path: "" }),
+  ]));
+  expect(node.signIn).not.toHaveBeenCalled();
+  expect(session.siwe).toBe("canonical-siwe");
+});
