@@ -1,5 +1,6 @@
 import {
   canonicalizeRecapCaveats,
+  decodeBase64Url,
   Delegation,
   DelegatedResource,
   PermissionEntry,
@@ -185,7 +186,7 @@ function compactUcanPayload(authorization: string): Record<string, unknown> {
   }
   try {
     const payload = JSON.parse(
-      Buffer.from(parts[1]!, "base64url").toString("utf8"),
+      new TextDecoder("utf-8", { fatal: true }).decode(decodeBase64Url(parts[1]!)),
     ) as unknown;
     if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
       throw new Error("payload is not an object");
