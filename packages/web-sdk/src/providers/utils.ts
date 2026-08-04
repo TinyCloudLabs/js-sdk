@@ -4,81 +4,19 @@
  * @packageDocumentation
  */
 
-import { ethers, getDefaultProvider } from "ethers";
-import {
-  isAlchemyProvider,
-  isAnkrProvider,
-  isCloudflareProvider,
-  isCustomProvider,
-  isEtherscanProvider,
-  isInfuraProvider,
-  isPocketProvider,
-  AlchemyProviderNetworks,
-  AnkrProviderNetworks,
-  EtherscanProviderNetworks,
-  InfuraProviderNetworks,
-  PocketProviderNetworks,
-  EnsData,
-  RPCProvider,
-} from "./types";
-
-/**
- * @param rpc - RPCProvider
- * @returns an ethers provider based on the RPC configuration.
- */
-export const getProvider = (
-  rpc?: RPCProvider
-): ethers.providers.BaseProvider => {
-  if (!rpc) {
-    return getDefaultProvider();
-  }
-  if (isEtherscanProvider(rpc)) {
-    return new ethers.providers.EtherscanProvider(
-      rpc.network ?? EtherscanProviderNetworks.MAINNET,
-      rpc.apiKey
-    );
-  }
-  if (isInfuraProvider(rpc)) {
-    return new ethers.providers.InfuraProvider(
-      rpc.network ?? InfuraProviderNetworks.MAINNET,
-      rpc.apiKey
-    );
-  }
-  if (isAlchemyProvider(rpc)) {
-    return new ethers.providers.AlchemyProvider(
-      rpc.network ?? AlchemyProviderNetworks.MAINNET,
-      rpc.apiKey
-    );
-  }
-  if (isCloudflareProvider(rpc)) {
-    return new ethers.providers.CloudflareProvider();
-  }
-  if (isPocketProvider(rpc)) {
-    return new ethers.providers.PocketProvider(
-      rpc.network ?? PocketProviderNetworks.MAINNET,
-      rpc.apiKey
-    );
-  }
-  if (isAnkrProvider(rpc)) {
-    return new ethers.providers.AnkrProvider(
-      rpc.network ?? AnkrProviderNetworks.MAINNET,
-      rpc.apiKey
-    );
-  }
-  if (isCustomProvider(rpc)) {
-    return new ethers.providers.JsonRpcProvider(rpc.url, rpc.network);
-  }
-  return getDefaultProvider();
-};
+import { type Address } from "viem";
+import { getEnsAvatar, getEnsName } from "viem/ens";
+import type { EnsData } from "./types";
+import type { BrowserProvider } from "../adapters/browserProvider";
 
 /**
  * Resolves ENS data supported by TCW.
- * @param provider - Ethers provider.
+ * @param provider - EIP-1193 RPC provider.
  * @param address - User address.
  * @returns Object containing ENS data.
  */
 export const resolveEns = async (
-  provider: ethers.providers.BaseProvider,
+  provider: BrowserProvider,
   /* User Address */
   address: string
 ): Promise<EnsData> => {
@@ -86,20 +24,33 @@ export const resolveEns = async (
     throw new Error("Missing address.");
   }
   const ens: EnsData = {};
-  const promises: Array<Promise<any>> = [];
-  promises.push(provider.lookupAddress(address));
-  promises.push(provider.getAvatar(address));
 
-  await Promise.all(promises)
-    .then(([domain, avatarUrl]) => {
-      if (domain) {
-        ens["domain"] = domain;
-      }
+  try {
+    const client = {
+      chain: {
+        id: 1,
+        name: "Ethereum",
+        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+        rpcUrls: { default: { http: ["https://cloudflare-eth.com"] } },
+        contracts: {
+          ensUniversalResolver: {
+            address: "0xeeeeeeee14d718c2b47d9923deab1335e144eeee",
+          },
+        },
+      },
+      request: provider.request.bind(provider),
+    } as Parameters<typeof getEnsName>[0];
+    const domain = await getEnsName(client, { address: address as Address });
+    if (domain) {
+      ens["domain"] = domain;
+      const avatarUrl = await getEnsAvatar(client, { name: domain });
       if (avatarUrl) {
         ens["avatarUrl"] = avatarUrl;
       }
-    })
-    .catch(console.error);
+    }
+  } catch (error) {
+    console.error(error);
+  }
 
   return ens;
 };

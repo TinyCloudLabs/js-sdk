@@ -7,9 +7,8 @@ import Input from "../components/Input";
 import Button from "../components/Button";
 import AccountInfo from "../components/AccountInfo";
 import { lazy } from "react";
-import { useAccount, useWalletClient } from "wagmi";
+import { useAccount } from "wagmi";
 import { useModal } from "connectkit";
-import { walletClientToEthers5Signer } from "../utils/web3modalV2Settings";
 import {
   Accordion,
   AccordionContent,
@@ -19,6 +18,7 @@ import {
 import Footer from "../components/Footer";
 import Header from "../components/Header";
 import VaultModule from "../pages/VaultModule";
+import { getWalletProvider } from "../utils/getWalletProvider";
 
 const StorageModule = lazy(() => import("../pages/StorageModule"));
 const SpaceModule = lazy(() => import("../pages/SpaceModule"));
@@ -44,8 +44,7 @@ type SignStrategyOption = "wallet-popup" | "callback" | "auto-approve";
 
 function Home() {
   const location = useLocation();
-  const { address, isConnected } = useAccount();
-  const { data: walletClient } = useWalletClient();
+  const { address, isConnected, connector } = useAccount();
   const { setOpen } = useModal();
 
   const [loading, setLoading] = useState(false);
@@ -77,7 +76,11 @@ function Home() {
   const [vaultEnabled, setVaultEnabled] = useState<string>("On");
   const [prefix, setPrefix] = useState<string>("demo-app");
   const [tinyCloudHost, setTinyCloudHost] = useState<string>(
-    window.__DEV_MODE__ ? "http://localhost:8000" : ""
+    // Allow the dev host to be overridden so the e2e suite can target a known
+    // node instead of whatever happens to be on :8000. Defaults unchanged.
+    window.__DEV_MODE__
+      ? process.env.REACT_APP_TINYCLOUD_HOST || "http://localhost:8000"
+      : ""
   );
 
   // Parse URL parameters on component mount
@@ -197,18 +200,14 @@ function Home() {
   };
 
   const signInWithWallet = async () => {
-    if (!walletClient || tcw) return;
+    if (!connector || tcw) return;
 
     setLoading(true);
 
     try {
-      const signer = walletClientToEthers5Signer(walletClient as any);
+      const provider = await getWalletProvider(connector);
       const tcwConfig = getTinyCloudWebConfig({
-        providers: {
-          web3: {
-            driver: signer.provider,
-          },
-        },
+        provider,
       });
 
       const tcwProvider = new TinyCloudWeb(tcwConfig);
@@ -263,14 +262,14 @@ function Home() {
    * This demonstrates the connectWallet() upgrade pattern.
    */
   const connectWalletAndSignIn = async () => {
-    if (!walletClient || !tcw) return;
+    if (!connector || !tcw) return;
 
     setLoading(true);
 
     try {
-      // Connect the wallet using the transport (ExternalProvider) from walletClient
-      // This upgrades from session-only mode to wallet mode
-      tcw.connectWallet((walletClient as any).transport);
+      const provider = await getWalletProvider(connector);
+      // Upgrade from session-only mode using the connector's EIP-1193 provider.
+      tcw.connectWallet(provider);
 
       console.log("Wallet connected! Now signing in...");
       console.log("  - Is Session Only:", tcw.isSessionOnly);
@@ -310,7 +309,7 @@ function Home() {
 
       // If we have a tcw in session-only mode but no wallet, prompt to connect
       if (tcw.isSessionOnly) {
-        if (!isConnected || !walletClient) {
+        if (!isConnected || !connector) {
           setOpen(true);
           return;
         }
@@ -321,7 +320,7 @@ function Home() {
     }
 
     // Standard flow (wallet mode)
-    if (!isConnected || !walletClient) {
+    if (!isConnected || !connector) {
       // User wants to sign in, so first connect the wallet
       setOpen(true);
       return;

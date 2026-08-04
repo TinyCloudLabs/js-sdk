@@ -56,7 +56,14 @@ export default defineConfig({
 
   // Run your local dev server before starting the tests
   webServer: {
-    command: 'npm start',
+    // FAST_REFRESH=false is REQUIRED, not a preference. packages/web-sdk/dist is a
+    // pre-bundled webpack output, and CRA's React Fast Refresh injects
+    // `<nested_webpack_require>.$Refresh$.runtime = ...` into it. That nested
+    // runtime has no `$Refresh$`, so importing the SDK throws
+    // "Cannot set properties of undefined (setting 'runtime')" and the app renders
+    // a blank page -- which made every e2e test time out waiting for the UI.
+    // Dev-server only; production builds do not run Fast Refresh.
+    command: 'FAST_REFRESH=false npm start',
     url: 'http://localhost:3000',
     reuseExistingServer: !process.env.CI,
     timeout: 120000,

@@ -34,6 +34,8 @@ export type {
   BrowserSessionLoadResult,
   BrowserSessionLoadStatus,
   BrowserSessionStorageOptions,
+  BrowserProvider,
+  BrowserWalletProvider,
 } from "./adapters";
 
 // Auth module (browser-specific strategies)

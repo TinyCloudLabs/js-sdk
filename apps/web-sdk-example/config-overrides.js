@@ -64,6 +64,30 @@ module.exports = function override(config, env) {
   };
   
   config.ignoreWarnings = [/Failed to parse source map/];
+
+  // `packages/web-sdk/dist` is a PRE-BUNDLED webpack output living outside both
+  // `src` and `node_modules`, so CRA's babel-loader treats it as app source and
+  // injects React Fast Refresh into it. Fast Refresh then emits
+  // `<nested_webpack_require>.$Refresh$.runtime = ...` inside a nested webpack
+  // runtime that has no `$Refresh$`, throwing
+  // "Cannot set properties of undefined (setting 'runtime')" at import and
+  // blanking the page. Dev-server only -- production builds do not run Fast
+  // Refresh -- but it makes the example app (and therefore the e2e suite)
+  // unusable. Exclude the pre-bundled dist from babel processing.
+  const prebundled = /[\\/]packages[\\/](web-sdk|sdk-core|sdk-services|bootstrap)[\\/]dist[\\/]/;
+  const excludePrebundled = (rules) => {
+    for (const rule of rules || []) {
+      if (rule.oneOf) excludePrebundled(rule.oneOf);
+      if (!rule.loader && !rule.use) continue;
+      const loaderStr = JSON.stringify(rule.loader || rule.use || '');
+      if (!loaderStr.includes('babel-loader')) continue;
+      const prev = rule.exclude;
+      rule.exclude = prev
+        ? (Array.isArray(prev) ? [...prev, prebundled] : [prev, prebundled])
+        : prebundled;
+    }
+  };
+  excludePrebundled(config.module.rules);
   
   config.plugins.push(
     new webpack.ProvidePlugin({

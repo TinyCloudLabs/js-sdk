@@ -1,4 +1,8 @@
 export { BrowserWalletSigner } from "./BrowserWalletSigner";
+export {
+  type BrowserProvider,
+  type BrowserWalletProvider,
+} from "./browserProvider";
 export { BrowserSessionStorage } from "./BrowserSessionStorage";
 export type {
   BrowserSessionLoadResult,

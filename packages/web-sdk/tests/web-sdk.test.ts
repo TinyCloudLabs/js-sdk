@@ -1,4 +1,3 @@
-const { ethers } = require('ethers');
 const { generateTestingUtils } = require('eth-testing');
 const { TextEncoder: TE, TextDecoder: TD } = require('util');
 
@@ -24,7 +23,7 @@ test('Instantiate TinyCloudWeb with providers.web3.driver and successfully sign 
   const config = {
     providers: {
       web3: {
-        driver: new ethers.providers.Web3Provider(testingUtils.getProvider()),
+        driver: testingUtils.getProvider(),
       },
     },
   };
@@ -49,7 +48,7 @@ test('Instantiate TinyCloudWeb with providers.web3.driver and daoLogin', async (
   const config = {
     providers: {
       web3: {
-        driver: new ethers.providers.Web3Provider(testingUtils.getProvider()),
+        driver: testingUtils.getProvider(),
       },
     },
     enableDaoLogin: true,
@@ -67,7 +66,7 @@ test('Instantiate TinyCloudWeb with providers.web3.driver and server and success
   const config = {
     providers: {
       web3: {
-        driver: new ethers.providers.Web3Provider(testingUtils.getProvider()),
+        driver: testingUtils.getProvider(),
       },
       server: {
         host: 'http://localhost:3001',

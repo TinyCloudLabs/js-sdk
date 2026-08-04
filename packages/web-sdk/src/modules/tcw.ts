@@ -78,7 +78,10 @@ import {
   restoreDataFromPersisted,
 } from "./browserSessionPersistence";
 import { WebSecretsService } from "./WebSecretsService";
-import type { providers } from "ethers";
+import {
+  type BrowserProvider,
+  type BrowserWalletProvider,
+} from "../adapters/browserProvider";
 
 import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
 import { BrowserNotificationHandler } from "../adapters/BrowserNotificationHandler";
@@ -287,8 +290,11 @@ export interface ShareReceiveResult<T = unknown> {
 // TinyCloudWeb
 
 export class TinyCloudWeb {
-  /** The Ethereum provider */
-  public provider!: providers.Web3Provider;
+  /** The connected wallet's raw EIP-1193 provider. */
+  public provider!: BrowserProvider;
+
+  /** The normalized EIP-1193 provider used by the SDK. */
+  public eip1193Provider!: BrowserProvider;
 
   /** Supported RPC Providers */
   public static RPCProviders = RPCProviders;
@@ -378,6 +384,7 @@ export class TinyCloudWeb {
     if (providerDriver) {
       this.walletSigner = new BrowserWalletSigner(providerDriver);
       this.provider = this.walletSigner.getProvider();
+      this.eip1193Provider = this.provider;
     }
 
     // Start async initialization (WASM + TinyCloudNode creation)
@@ -776,11 +783,12 @@ export class TinyCloudWeb {
   }
 
   connectWallet(
-    provider: providers.ExternalProvider | providers.Web3Provider,
+    provider: BrowserWalletProvider,
     options?: { spacePrefix?: string }
   ): void {
     this.walletSigner = new BrowserWalletSigner(provider);
     this.provider = this.walletSigner.getProvider();
+    this.eip1193Provider = this.provider;
     if (this._node) {
       this._node.connectSigner(this.walletSigner, {
         prefix: options?.spacePrefix,
