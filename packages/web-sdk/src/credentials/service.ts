@@ -109,7 +109,13 @@ export class CredentialsService {
       const verifier = resume?.verifier ?? randomVerifier();
       const created = resume ?? await transport.create({ descriptor, descriptorDigest, requirement, requirementDigest, holderDid, openerOrigin, completionVerifierChallenge: await sha256Base64Url(verifier), signal: timed.signal });
       if (!resume && redirectStore) await redirectStore.save({ type: "TinyCloudCredentialRedirectResume", version: 1, requestId: created.requestId, locator: created.locator, verifier, expiresAt: created.expiresAt, correlationId: created.correlationId, holderDid, descriptorDigest, requirementDigest, openerOrigin });
-      const interaction = resume ? undefined : options.browser ?? (options.interaction === "headless" ? undefined : new BrowserCredentialInteraction(options.interaction ?? "popup"));
+      const requestedInteraction = options.interaction ?? "popup";
+      let interaction = resume ? undefined : options.browser;
+      if (!resume && !interaction && requestedInteraction !== "headless") {
+        if (requestedInteraction === "inline") throw new CredentialError("UNSUPPORTED_PROFILE", "Inline credential acquisition requires a host interaction adapter");
+        interaction = new BrowserCredentialInteraction(requestedInteraction);
+      }
+      if (!resume && interaction && interaction.kind !== requestedInteraction) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential interaction adapter does not match the requested interaction");
       if (interaction) surface = await interaction.start({ interaction: descriptor.interaction, locator: created.locator, signal: timed.signal });
       const signing = options.signing ?? {
         autoSign: async (_binding: unknown, bytes: Uint8Array) => this.client.autoSignCredentialBytes?.(bytes),
@@ -118,7 +124,7 @@ export class CredentialsService {
           return this.client.approveCredentialBytes(bytes);
         },
       };
-      await interpretCredentialFlow({ descriptor, requirement, requestId: created.requestId, verifier, holderDid, descriptorDigest, requirementDigest, openerOrigin, transport, signing, handlers: surface ? undefined : options.stepHandlers, signal: timed.signal, onProgress: options.onProgress, onWait: surface ? async () => { if (surface!.closed()) throw new CredentialError("CANCELED", "Credential popup was closed"); await surface!.wake(); } : undefined });
+      await interpretCredentialFlow({ descriptor, requirement, requestId: created.requestId, verifier, holderDid, descriptorDigest, requirementDigest, openerOrigin, transport, signing, handlers: surface ? undefined : options.stepHandlers, signal: timed.signal, onProgress: options.onProgress, onWait: surface ? async () => { if (surface!.closed()) throw new CredentialError("CANCELED", "Credential interaction was closed"); await surface!.wake(); } : undefined });
       options.onProgress?.({ state: "verifying", correlationId: created.correlationId });
       const envelope = await transport.result(created.requestId, verifier, timed.signal);
       const verified = await verifyIssuedCredential({ envelope, descriptor, descriptorDigest, requirement, holderDid, issuerMetadata: await transport.issuerMetadata(timed.signal), now: options.now?.(), checkStatus: (status, signal) => transport.checkStatus(status, signal), signal: timed.signal });
