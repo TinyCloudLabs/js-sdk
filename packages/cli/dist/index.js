@@ -16833,7 +16833,10 @@ var init_dist2 = __esm({
           const descriptor = usable.data;
           const networkPublicKey = base64Decode2(descriptor.publicEncryptionKey);
           const result = encryptToNetwork(this.crypto, {
-            networkId,
+            // Discovery returns the node's canonical network identifier. Persist
+            // that spelling in the envelope so a later response can be compared
+            // byte-for-byte (notably for checksummed did:pkh principals).
+            networkId: descriptor.networkId,
             networkPublicKey,
             plaintext,
             ...options?.aad !== void 0 ? { aad: options.aad } : {},
