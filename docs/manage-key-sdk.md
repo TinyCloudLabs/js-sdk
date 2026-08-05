@@ -71,11 +71,29 @@ restart OAuth or show its consent route. Otherwise, restart the authorization
 redirect with `requestTinyCloudManageKeyScope`.
 
 The runnable `apps/manage-key-reference-clients/` workspace app contains two
-independent OAuth adapters. Notes and Tasks use distinct client IDs, token
-stores, and OAuth response objects; neither imports an identity cache from the
-other. For the same user both resolve the same canonical address, DID, and
-space. Run it with `bun run --cwd apps/manage-key-reference-clients test`; it
-is included in the workspace CI command.
+independent OAuth authorization-code clients. Notes and Tasks use distinct
+client IDs, redirect URIs, token stores, and token-response shapes; neither
+imports an identity literal or cache from the other. The local issuer is the
+only authority that derives the canonical identity, so both independently
+resolve the same address, DID, and applications space through separate HTTP
+authorize and token exchanges.
+
+Run the app (it starts its loopback OAuth issuer and prints both resolved
+identities) with:
+
+```sh
+bun run --cwd apps/manage-key-reference-clients start
+```
+
+Each client also has an isolated entry point:
+
+```sh
+bun run --cwd apps/manage-key-reference-clients start:notes
+bun run --cwd apps/manage-key-reference-clients start:tasks
+```
+
+Verify the flows with `bun run --cwd apps/manage-key-reference-clients test`.
+The app's typecheck and test commands run in the standard workspace CI job.
 
 ## Real HTTP smoke
 

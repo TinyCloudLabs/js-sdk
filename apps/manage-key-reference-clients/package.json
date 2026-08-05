@@ -3,7 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "main": "src/run.ts",
   "scripts": {
+    "start": "bun run src/run.ts",
+    "start:notes": "bun run src/run-notes.ts",
+    "start:tasks": "bun run src/run-tasks.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
