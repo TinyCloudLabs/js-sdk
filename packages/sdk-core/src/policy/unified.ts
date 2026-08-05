@@ -114,6 +114,8 @@ export interface PolicyChallengeV3 {
   readonly nonce: string;
   readonly policyCid: string;
   readonly recipientDid: string;
+  readonly expiresAt?: string;
+  readonly nodeAudience?: string;
   readonly [key: string]: unknown;
 }
 
@@ -179,7 +181,7 @@ export async function mintPolicySessionV3(input: {
   return session;
 }
 
-function compactAttenuationForPolicyCapabilities(
+export function compactAttenuationForPolicyCapabilities(
   input: readonly UnifiedPolicyCapability[],
 ): Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>> {
   const attenuation: Record<string, Record<string, readonly unknown[]>> = {};
@@ -452,23 +454,26 @@ function nonEmptyString(value: unknown, label: string): string {
 }
 
 function parseKvResource(resource: string): { space: string; path: string } {
-  const match = /^tinycloud:\/\/([^/]+)\/kv\/(.+)$/.exec(resource);
+  const marker = resource.indexOf("/kv/");
+  const encodedSpace = marker < 1 ? "" : resource.slice(0, marker);
+  const legacy = encodedSpace.startsWith("tinycloud://");
+  const space = legacy ? encodedSpace.slice("tinycloud://".length) : encodedSpace;
+  const path = marker < 1 ? "" : resource.slice(marker + 4);
   if (
-    !match ||
-    match[1]!.includes(":") ||
-    match[1]!.includes("?") ||
-    match[1]!.includes("#") ||
-    match[1]!.includes("%") ||
-    match[2]!.startsWith("/") ||
-    match[2]!.endsWith("/") ||
-    match[2]!.includes("//") ||
-    match[2]!
+    marker < 1 ||
+    (legacy
+      ? /[:/?#%]/.test(space)
+      : !encodedSpace.startsWith("tinycloud:") || /[/?#%]/.test(encodedSpace)) ||
+    path.startsWith("/") ||
+    path.endsWith("/") ||
+    path.includes("//") ||
+    path
       .split("/")
       .some((part) => part === "." || part === ".." || part.length === 0)
   ) {
     throw new Error("KV resource is not canonical");
   }
-  return { space: match[1]!, path: match[2]! };
+  return { space, path };
 }
 
 function parseEncryptionResource(resource: string): void {
@@ -667,7 +672,7 @@ export function unifiedPolicyCapabilityFromNative(
   if (
     caveat.type !== "xyz.tinycloud.resource/selector" ||
     (caveat.kind !== "exact" && caveat.kind !== "prefix") ||
-    caveat.value !== `tinycloud://${value.space}/kv/${value.path}`
+    caveat.value !== `${value.space.startsWith("tinycloud:") ? value.space : `tinycloud://${value.space}`}/kv/${value.path}`
   )
     throw new Error("native selector caveat does not match capability");
   return normalizeUnifiedPolicyCapability({
@@ -754,12 +759,20 @@ export interface SignCompactUcanAuthorizationInput {
   readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>;
 }
 
-/** Sign exact compact-UCAN bytes with a caller-owned, potentially non-extractable key. */
-export async function signCompactUcanAuthorization(
+export interface SignCompactUcanRootAuthorizationInput {
+  readonly issuerDid: string;
+  readonly audienceDid: string;
+  readonly attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>;
+  readonly facts: readonly [Readonly<Record<string, unknown>>];
+  readonly notBefore: number;
+  readonly expiresAt: number;
+  readonly nonce: string;
+  readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>;
+}
+
+async function signCompactUcan(
   input: SignCompactUcanAuthorizationInput,
 ): Promise<CompactUcanAuthorizationV1> {
-  if (input.notBefore >= input.expiresAt || input.expiresAt - input.notBefore > 60)
-    throw new Error("compact invocation lifetime must be between one and 60 seconds");
   const principal = input.issuerDid.split("#", 1)[0]!;
   const didMaterial = principal.startsWith("did:key:")
     ? base58btc.decode(principal.slice("did:key:".length))
@@ -782,6 +795,24 @@ export async function signCompactUcanAuthorization(
   const signature = await input.sign(new TextEncoder().encode(`${protectedSegment}.${payloadSegment}`));
   if (signature.length !== 64) throw new Error("compact Authorization signature must be Ed25519");
   return parseCompactUcanAuthorization(`${protectedSegment}.${payloadSegment}.${encodeBase64Url(signature)}`);
+}
+
+/** Sign exact compact-UCAN bytes with a caller-owned, potentially non-extractable key. */
+export async function signCompactUcanAuthorization(
+  input: SignCompactUcanAuthorizationInput,
+): Promise<CompactUcanAuthorizationV1> {
+  if (input.notBefore >= input.expiresAt || input.expiresAt - input.notBefore > 60)
+    throw new Error("compact invocation lifetime must be between one and 60 seconds");
+  return signCompactUcan(input);
+}
+
+/** Sign a proofless policy root without weakening the 60-second invocation profile. */
+export async function signCompactUcanRootAuthorization(
+  input: SignCompactUcanRootAuthorizationInput,
+): Promise<CompactUcanAuthorizationV1> {
+  if (input.notBefore >= input.expiresAt || input.expiresAt - input.notBefore > 31 * 24 * 60 * 60)
+    throw new Error("compact policy root lifetime must be between one second and 31 days");
+  return signCompactUcan({ ...input, proofs: [] });
 }
 
 export interface CompactPolicyInvocationInput {
@@ -994,21 +1025,21 @@ function decodeBase64Url(value: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1)
     throw new Error("value is not canonical base64url");
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const binary = typeof Buffer !== "undefined"
-    ? Buffer.from(normalized, "base64").toString("binary")
-    : atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="));
+  const binary = typeof atob === "function"
+    ? atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="))
+    : Buffer.from(normalized, "base64").toString("binary");
   const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-  const encoded = typeof Buffer !== "undefined"
-    ? Buffer.from(bytes).toString("base64url")
-    : btoa(String.fromCharCode(...bytes)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const encoded = typeof btoa === "function"
+    ? btoa(String.fromCharCode(...bytes)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_")
+    : Buffer.from(bytes).toString("base64url");
   if (encoded !== value) throw new Error("value is not canonical base64url");
   return bytes;
 }
 
 function encodeBase64Url(value: Uint8Array): string {
-  return typeof Buffer !== "undefined"
-    ? Buffer.from(value).toString("base64url")
-    : btoa(String.fromCharCode(...value)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return typeof btoa === "function"
+    ? btoa(String.fromCharCode(...value)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_")
+    : Buffer.from(value).toString("base64url");
 }
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {

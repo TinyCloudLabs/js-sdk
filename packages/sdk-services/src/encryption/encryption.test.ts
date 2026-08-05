@@ -978,6 +978,22 @@ describe("EncryptionService one-of-one round trip", () => {
     expect(capturedBody!.targetNode).toBe(TARGET_NODE);
   });
 
+  it("persists the canonical network id returned by discovery", async () => {
+    const canonicalNetworkId = PKH_NETWORK_ID;
+    const descriptor = { ...makeDescriptor(), networkId: canonicalNetworkId, ownerDid: PKH_OWNER_DID };
+    const requestedNetworkId = canonicalNetworkId.toLowerCase();
+    const service = new EncryptionService({
+      crypto: makeCrypto(),
+      signer: { signDecryptInvocation: async () => { throw new Error("unused"); } },
+      transport: { postDecrypt: async () => { throw new Error("unused"); } },
+      node: { fetchByNetworkId: async () => descriptor },
+    });
+
+    const encrypted = await service.encryptToNetwork(requestedNetworkId, utf8Encode("canonical"));
+    expect(encrypted.ok).toBe(true);
+    if (encrypted.ok) expect(encrypted.data.networkId).toBe(canonicalNetworkId);
+  });
+
   it("decrypt fails fast on a revoked network", async () => {
     const crypto = makeCrypto();
     const descriptor: NetworkDescriptor = {

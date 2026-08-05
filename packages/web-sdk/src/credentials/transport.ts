@@ -10,14 +10,14 @@ function object(value: unknown, label: string): Record<string, unknown> { if (ty
 function opaque(value: unknown, label: string): string { if (typeof value !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(value)) throw new CredentialError("REQUEST_SUBSTITUTED", `${label} is invalid`); return value; }
 function timestamp(value: unknown, label: string): string { if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) throw new CredentialError("VERIFICATION_FAILED", `${label} is invalid`); return new Date(value).toISOString(); }
 function jwtPayload(credential: string): Record<string, unknown> { const part = credential.split("~", 1)[0]?.split(".")[1]; if (!part) throw new CredentialError("VERIFICATION_FAILED", "Issued SD-JWT is invalid"); try { return object(JSON.parse(new TextDecoder().decode(decodeBase64Url(part))), "SD-JWT payload"); } catch (cause) { if (cause instanceof CredentialError) throw cause; throw new CredentialError("VERIFICATION_FAILED", "Issued SD-JWT is invalid", { cause }); } }
-const SERVER_CODES = new Set(["REQUEST_EXPIRED", "ISSUER_UNREADY", "UNSUPPORTED_PROFILE", "SIGNATURE_REJECTED"] as const);
+const SERVER_CODES = new Set(["REQUEST_EXPIRED", "ISSUER_UNREADY", "UNSUPPORTED_PROFILE", "UNSUPPORTED_VERSION", "SIGNATURE_REJECTED"] as const);
 function serverError(value: unknown, response: Response): CredentialError | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const body = value as Record<string, unknown>;
   const keys = Object.keys(body).sort();
   if (keys.join(",") !== "code,correlationId,recoverable,state,type" || body.type !== "tinycloud.credentials/error/v1" || typeof body.code !== "string" || typeof body.recoverable !== "boolean" || typeof body.state !== "string" || typeof body.correlationId !== "string") return undefined;
   if (!SERVER_CODES.has(body.code as any)) return undefined;
-  const code = body.code as "REQUEST_EXPIRED" | "ISSUER_UNREADY" | "UNSUPPORTED_PROFILE" | "SIGNATURE_REJECTED";
+  const code = body.code as "REQUEST_EXPIRED" | "ISSUER_UNREADY" | "UNSUPPORTED_PROFILE" | "UNSUPPORTED_VERSION" | "SIGNATURE_REJECTED";
   return new CredentialError(code, `OpenCredentials rejected the request: ${code}`, {
     state: body.state,
     correlationId: body.correlationId,
@@ -32,7 +32,7 @@ export class OpenCredentialsHttpTransport implements CredentialAcquisitionTransp
   private url(endpoint: Parameters<typeof credentialEndpointPath>[0], id?: string): string { return new URL(credentialEndpointPath(endpoint, id), this.descriptor.issuer.origin).href; }
   private async request(endpoint: Parameters<typeof credentialEndpointPath>[0], input: { readonly id?: string; readonly method?: "GET" | "POST"; readonly verifier?: string; readonly body?: unknown; readonly signal?: AbortSignal }): Promise<unknown> {
     let response: Response;
-    try { response = await this.fetchFn(this.url(endpoint, input.id), { method: input.method ?? "GET", credentials: endpoint === "request" ? "include" : "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal: input.signal, headers: { accept: "application/json", ...(input.body === undefined ? {} : { "content-type": "application/json" }), ...(input.verifier === undefined ? {} : { authorization: `Bearer ${input.verifier}` }) }, ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }) }); }
+    try { response = await this.fetchFn(this.url(endpoint, input.id), { method: input.method ?? "GET", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal: input.signal, headers: { accept: "application/json", ...(input.body === undefined ? {} : { "content-type": "application/json" }), ...(input.verifier === undefined ? {} : { authorization: `Bearer ${input.verifier}` }) }, ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }) }); }
     catch (cause) { if (cause instanceof DOMException && cause.name === "AbortError") throw new CredentialError("CANCELED", "Credential acquisition was canceled", { cause }); throw new CredentialError("OFFLINE", "OpenCredentials is unavailable", { cause }); }
     if (!response.ok) {
       let parsed: unknown;

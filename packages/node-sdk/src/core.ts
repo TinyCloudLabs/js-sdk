@@ -121,6 +121,8 @@ export {
   type OwnerDelegationReceipt,
   type RegisterOwnerSharePolicyParams,
   type OwnerSharePolicyRegistrationReceipt,
+  type UnifiedOwnerRootInput,
+  type UnifiedOwnerRootReceipt,
   type BootstrapWarning,
 } from "./TinyCloudNode";
 
@@ -182,8 +184,16 @@ export {
 
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";
-export { serializeDelegation, deserializeDelegation } from "./delegation";
-export type { PortableDelegation } from "./delegation";
+export {
+  activateCompactRuntimeDelegation,
+  serializeDelegation,
+  deserializeDelegation,
+} from "./delegation";
+export type {
+  CompactRuntimeDelegationInput,
+  PortableDelegation,
+  ValidatedRuntimeDelegation,
+} from "./delegation";
 
 // Re-export KV service values
 export {
