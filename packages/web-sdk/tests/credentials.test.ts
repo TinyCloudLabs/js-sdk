@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { CredentialError, canonicalDigest, createHolderBinding, type CredentialFlowDescriptor, type CredentialRequirement, type VerifiedCredential } from "@tinycloud/sdk-core";
-import { BrowserCredentialInteraction } from "../src/credentials/browser";
+import { BrowserCredentialInteraction, InlineCredentialInteraction } from "../src/credentials/browser";
 import { interpretCredentialFlow } from "../src/credentials/interpreter";
 import { renderCredentialDescriptor } from "../src/credentials/renderer";
 import { findStoredCredential, storeCredential } from "../src/credentials/storage";
@@ -40,13 +40,31 @@ test("HTTP transport emits the Rust-owned request, challenge, and proof wire sha
   await transport.submitStep(REQUEST, verifier, "mailbox_otp", { otp: "redacted" }); expect(JSON.parse(calls[3]!.init.body as string)).toEqual({ step: "mailbox_otp", stepVersion: 1, challengeNonce: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", proof: { otp: "redacted" } });
 });
 
-for (const [code, status] of [["REQUEST_EXPIRED", 410], ["ISSUER_UNREADY", 503], ["UNSUPPORTED_PROFILE", 400], ["SIGNATURE_REJECTED", 400]] as const) {
+for (const [code, status] of [["REQUEST_EXPIRED", 410], ["ISSUER_UNREADY", 503], ["SIGNATURE_REJECTED", 400]] as const) {
   test(`HTTP transport preserves typed recoverable server error ${code}`, async () => {
     const transport = new OpenCredentialsHttpTransport(email, async () => new Response(JSON.stringify({
       type: "tinycloud.credentials/error/v1", code, recoverable: true,
       state: code.toLowerCase(), correlationId: REQUEST,
     }), { status, headers: { "content-type": "application/json" } }));
     await expect(transport.state(REQUEST, "V".repeat(43))).rejects.toMatchObject({ code, recoverable: true, details: { correlationId: REQUEST } });
+  });
+}
+
+for (const code of ["UNSUPPORTED_PROFILE", "UNSUPPORTED_VERSION"] as const) {
+  test(`HTTP transport preserves non-retryable server configuration error ${code}`, async () => {
+    const transport = new OpenCredentialsHttpTransport(email, async () => new Response(JSON.stringify({
+      type: "tinycloud.credentials/error/v1", code, recoverable: true,
+      state: code.toLowerCase(), correlationId: REQUEST,
+    }), { status: 400, headers: { "content-type": "application/json" } }));
+    try {
+      await transport.state(REQUEST, "V".repeat(43));
+      throw new Error("expected the server configuration error");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CredentialError);
+      expect((error as CredentialError).code).toBe(code);
+      expect((error as CredentialError).recoverable).toBe(false);
+      expect((error as CredentialError).details.correlationId).toBe(REQUEST);
+    }
   });
 }
 
@@ -107,6 +125,43 @@ test("browser interaction rejects descriptor-substituted origins", async () => {
     interaction: { ...email.interaction, origin: "https://evil.test" } as typeof email.interaction,
     locator: REQUEST,
   })).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
+});
+
+test("inline interaction exposes no OpenCredentials capability to the host", async () => {
+  let presented: Record<string, unknown> | undefined;
+  const inline = new InlineCredentialInteraction(async (input) => {
+    presented = input;
+    return { wake: async () => undefined, close: () => undefined, closed: () => false, requestProof: async () => ({ code: "entered-locally" }) };
+  });
+  const surface = await inline.start({});
+  expect(inline.kind).toBe("inline");
+  expect(presented).toEqual({ signal: undefined });
+  expect(await surface.requestProof?.({ stepId: "collect_input", constraints: {}, display: { title: email.display.title, description: email.display.description, consent: email.display.consent, progressLabel: email.accessibility.progressLabel, errorLiveRegion: "assertive" }, inputs: [], signal: undefined })).toEqual({ code: "entered-locally" });
+  expect(await surface.wake()).toBeUndefined();
+});
+
+test("an inline fallback handles a declared proof primitive while explicit handlers retain precedence", async () => {
+  const req = requirement(synthetic); const descriptorDigest = await canonicalDigest(synthetic); const requirementDigest = await canonicalDigest(req);
+  const states: CredentialRequestState[] = [
+    { type: "OpenCredentialsAcquisitionState", version: 1, requestId: REQUEST, transitionId: "proof", state: "pending", nextStep: { id: "collect_input", type: "collect_input", version: 1, constraints: {} }, correlationId: REQUEST },
+    { type: "OpenCredentialsAcquisitionState", version: 1, requestId: REQUEST, transitionId: "sign", state: "pending", nextStep: { id: "holder_signature", type: "holder_signature", version: 1, constraints: {} }, correlationId: REQUEST },
+    { type: "OpenCredentialsAcquisitionState", version: 1, requestId: REQUEST, transitionId: "done", state: "complete", correlationId: REQUEST },
+  ];
+  let fallbackCalls = 0; let explicitCalls = 0;
+  await interpretCredentialFlow({ descriptor: synthetic, requirement: req, requestId: REQUEST, verifier: "V".repeat(32), holderDid: HOLDER, descriptorDigest, requirementDigest, openerOrigin: "https://app.test", transport: new InterpreterTransport(states, binding(synthetic, descriptorDigest, requirementDigest)), signing: { autoSign: async () => new Uint8Array([1]) }, handlers: { collect_input: async () => { explicitCalls += 1; return { acknowledged: true }; } }, proofHandler: async () => { fallbackCalls += 1; return { acknowledged: true }; } });
+  expect(explicitCalls).toBe(1); expect(fallbackCalls).toBe(0);
+});
+
+test("inline proof hosts receive declared form metadata but never requirement values", async () => {
+  const req = requirement(email); const descriptorDigest = await canonicalDigest(email); const requirementDigest = await canonicalDigest(req);
+  const states: CredentialRequestState[] = [
+    { type: "OpenCredentialsAcquisitionState", version: 1, requestId: REQUEST, transitionId: "proof", state: "pending", nextStep: { id: "mailbox_otp", type: "mailbox_otp", version: 1, constraints: {} }, correlationId: REQUEST },
+    { type: "OpenCredentialsAcquisitionState", version: 1, requestId: REQUEST, transitionId: "done", state: "complete", correlationId: REQUEST },
+  ];
+  let presented: unknown;
+  await interpretCredentialFlow({ descriptor: email, requirement: req, requestId: REQUEST, verifier: "V".repeat(32), holderDid: HOLDER, descriptorDigest, requirementDigest, openerOrigin: "https://app.test", transport: new InterpreterTransport(states, binding(email, descriptorDigest, requirementDigest)), signing: { autoSign: async () => new Uint8Array([1]) }, proofHandler: async (input) => { presented = input; return { otp: "entered-locally" }; } });
+  expect(presented).toEqual({ stepId: "mailbox_otp", constraints: {}, display: { title: email.display.title, description: email.display.description, consent: email.display.consent, progressLabel: email.accessibility.progressLabel, errorLiveRegion: "assertive" }, inputs: email.inputs.map(({ id, label, schema }) => ({ id, label, schema })), signal: undefined });
+  expect(JSON.stringify(presented)).not.toContain(req.claims.email!);
 });
 
 function kvMemory(failReadback = false) { const values = new Map<string, unknown>(); const headers = { etag: "\"etag\"", get: () => null }; return { service: { batchPut: async (items: any[]) => { for (const item of items) values.set(item.key, item.value); return { ok: true, data: { keys: items.map((item) => item.key), count: items.length } }; }, get: async (key: string) => failReadback ? { ok: false, error: {} } : values.has(key) ? { ok: true, data: { data: values.get(key), headers } } : { ok: false, error: {} }, list: async ({ prefix }: any) => ({ ok: true, data: { keys: [...values.keys()].filter((key) => key.startsWith(prefix)) } }) } as any }; }

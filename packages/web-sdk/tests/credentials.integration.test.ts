@@ -2,7 +2,7 @@ import { afterAll, expect, mock, test } from "bun:test";
 import { basename, dirname, join, resolve } from "node:path";
 import { createHermeticEncryptedNode } from "../../node-sdk/src/test-support/hermetic-encrypted-node";
 import { createOpenKeyCallbackSigningStrategy, type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
-import { BrowserCredentialInteraction, BrowserCredentialRedirectStore } from "../src/credentials/browser";
+import { BrowserCredentialInteraction, BrowserCredentialRedirectStore, InlineCredentialInteraction } from "../src/credentials/browser";
 import { CredentialsService } from "../src/credentials/service";
 import { OpenCredentialsHttpTransport } from "../src/credentials/transport";
 
@@ -60,7 +60,7 @@ const initialized = await createHermeticEncryptedNode();
 const redirectInitialized = await createHermeticEncryptedNode();
 afterAll(() => { acquisition.stop(); initialized.stop(); redirectInitialized.stop(); });
 
-test("an initialized active session ensures mounted email and catalog-added synthetic credentials", async () => {
+test("an initialized active session ensures an email credential through an inline host without a popup", async () => {
   const holderDid = initialized.delegate.credentialHolderDid;
   const holderKid = initialized.delegate.credentialHolderKid;
   const ownerDid = initialized.delegate.did;
@@ -84,44 +84,41 @@ test("an initialized active session ensures mounted email and catalog-added synt
   const service = new CredentialsService(client);
   let creates = 0;
   let resultReads = 0;
-  let browserCookie = "";
+  let sdkProofSubmissions = 0;
   const transportFor = (descriptor: CredentialFlowDescriptor) => new OpenCredentialsHttpTransport(descriptor, async (input, init) => {
     const requested = new URL(String(input));
     if (requested.pathname === "/v1/acquisitions" && init?.method === "POST") creates += 1;
     if (requested.pathname.endsWith("/result")) resultReads += 1;
-    const response = await fetch(new URL(`${requested.pathname}`, acquisition.url), init);
-    if (requested.pathname === "/v1/acquisitions" && init?.method === "POST") browserCookie = response.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
-    return response;
+    if (requested.pathname.endsWith("/proof") && init?.method === "POST") sdkProofSubmissions += 1;
+    return fetch(new URL(`${requested.pathname}`, acquisition.url), init);
   });
 
-  const hostedEmailInteraction = {
-    kind: "popup" as const,
-    start: async ({ locator }: { locator: string }) => {
-      const hosted = async (suffix: string, init: RequestInit = {}) => {
-        const response = await fetch(new URL(`/v1/acquisitions/${locator}${suffix}`, acquisition.url), {
-          ...init,
-          headers: { ...(init.headers as Record<string, string> | undefined), cookie: browserCookie, "content-type": "application/json" },
-        });
-        expect(response.ok).toBe(true);
-        return response.json() as Promise<any>;
-      };
-      const state = await hosted("/state");
-      expect(state.state).toBe("challenge_required");
-      const challenge = await hosted("/challenge", { method: "POST", body: JSON.stringify({ step: "mailbox_otp", stepVersion: 1 }) });
-      await hosted("/proof", { method: "POST", body: JSON.stringify({ step: "mailbox_otp", stepVersion: 1, challengeNonce: challenge.challengeNonce, proof: { otp: "246810" } }) });
-      return { wake: async () => undefined, close: () => undefined, closed: () => false };
-    },
-  };
+  let inlinePresented = 0;
+  const hostedEmailInteraction = new InlineCredentialInteraction(async (input) => {
+    inlinePresented += 1;
+    expect(input).toEqual({ signal: expect.any(AbortSignal) });
+    return {
+      wake: async () => undefined,
+      close: () => undefined,
+      closed: () => false,
+      requestProof: async ({ stepId }) => {
+        expect(stepId).toBe("mailbox_otp");
+        return { otp: "246810" };
+      },
+    };
+  });
 
   const emailTransport = transportFor(email);
   const emailResult = await service.ensure(requirement(email), {
-    descriptor: email, interaction: "popup", browser: hostedEmailInteraction, transport: emailTransport, openerOrigin: "https://app.test",
+    descriptor: email, interaction: "inline", browser: hostedEmailInteraction, transport: emailTransport, openerOrigin: "https://app.test",
   });
   expect(emailResult.status).toBe("acquired");
   expect(emailResult.credential.holderDid).toBe(holderDid);
   expect(emailResult.record.holderDid).toBe(holderDid);
   expect(emailResult.record.ownerDid).toBe(ownerDid);
   expect(emailResult.receipt?.ownerDid).toBe(ownerDid);
+  expect(inlinePresented).toBe(1);
+  expect(sdkProofSubmissions).toBe(1);
   expect(resultReads).toBe(1);
 
   const syntheticResult = await service.ensure(requirement(synthetic), {

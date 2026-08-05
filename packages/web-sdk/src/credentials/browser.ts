@@ -1,6 +1,6 @@
 import { CredentialError } from "@tinycloud/sdk-core";
 import type { CredentialFlowDescriptor } from "@tinycloud/sdk-core";
-import type { CredentialInteractionAdapter, CredentialRedirectResumeState, CredentialRedirectStore } from "./types";
+import type { CredentialBrowserInteractionAdapter, CredentialInlineInteractionAdapter, CredentialInteractionSurface, CredentialRedirectResumeState, CredentialRedirectStore } from "./types";
 
 interface BrowserSurface {
   readonly opener: Window;
@@ -17,7 +17,7 @@ function interactionUrl(interaction: CredentialFlowDescriptor["interaction"], lo
 }
 
 /** Exact-origin, locator-only browser interaction. Messages are non-secret wake signals. */
-export class BrowserCredentialInteraction implements CredentialInteractionAdapter {
+export class BrowserCredentialInteraction implements CredentialBrowserInteractionAdapter {
   readonly kind: "popup" | "redirect";
   constructor(kind: "popup" | "redirect" = "popup", private readonly surface: BrowserSurface = { opener: window, open: (url) => window.open(url, "tinycloud-credential", "popup,width=460,height=720"), redirect: (url) => window.location.assign(url) }) { this.kind = kind; }
 
@@ -43,6 +43,22 @@ export class BrowserCredentialInteraction implements CredentialInteractionAdapte
       close: () => { this.surface.opener.removeEventListener("message", onMessage); try { popup.close(); } catch { /* no authority is derived from popup lifecycle */ } },
       closed: () => popup.closed,
     };
+  }
+}
+
+/**
+ * Adapter for a host application's in-page acquisition view. It intentionally
+ * exposes no OpenCredentials locator or verifier to the host: the host can
+ * render an accessible local proof form, but only the SDK may submit that
+ * proof to OpenCredentials.
+ */
+export class InlineCredentialInteraction implements CredentialInlineInteractionAdapter {
+  readonly kind = "inline" as const;
+
+  constructor(private readonly present: (input: { readonly signal?: AbortSignal }) => Promise<CredentialInteractionSurface>) {}
+
+  start(input: { signal?: AbortSignal }): Promise<CredentialInteractionSurface> {
+    return this.present({ signal: input.signal });
   }
 }
 

@@ -41,10 +41,61 @@ export type PrimitiveStepHandler = (input: {
   readonly signal?: AbortSignal;
 }) => Promise<PrimitiveStepResult>;
 
-export interface CredentialInteractionAdapter {
-  readonly kind: "popup" | "redirect" | "headless";
-  start(input: { readonly interaction: CredentialFlowDescriptor["interaction"]; readonly locator: string; readonly signal?: AbortSignal }): Promise<{ readonly wake: () => Promise<void>; readonly close: () => void; readonly closed: () => boolean }>;
+/**
+ * The bounded view a host-owned inline surface may receive. It deliberately
+ * excludes requirement values, which can contain private policy inputs.
+ */
+export interface InlineCredentialProofRequest {
+  readonly stepId: string;
+  readonly constraints: Readonly<Record<string, unknown>>;
+  readonly display: {
+    readonly title: string;
+    readonly description: string;
+    readonly consent: string;
+    readonly progressLabel: string;
+    readonly errorLiveRegion: "assertive";
+  };
+  readonly inputs: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly schema: CredentialFlowDescriptor["inputs"][number]["schema"];
+  }[];
+  readonly signal?: AbortSignal;
 }
+
+export type InlineCredentialProofHandler = (input: InlineCredentialProofRequest) => Promise<PrimitiveStepResult>;
+
+export type CredentialInteractionKind = "popup" | "redirect" | "headless" | "inline";
+
+export interface CredentialInteractionSurface {
+  readonly wake: () => Promise<void>;
+  readonly close: () => void;
+  readonly closed: () => boolean;
+  /**
+   * A bounded, local UI callback for a declared primitive step. The adapter
+   * returns user-entered proof bytes to the SDK; it never receives an
+   * acquisition locator, request verifier, or transport capability.
+   */
+  readonly requestProof?: InlineCredentialProofHandler;
+}
+
+/** A browser-owned interaction that navigates to the OpenCredentials locator. */
+export interface CredentialBrowserInteractionAdapter {
+  readonly kind: Exclude<CredentialInteractionKind, "inline">;
+  start(input: { readonly interaction: CredentialFlowDescriptor["interaction"]; readonly locator: string; readonly signal?: AbortSignal }): Promise<CredentialInteractionSurface>;
+}
+
+/**
+ * A host-owned, in-page acquisition surface. It intentionally receives no
+ * OpenCredentials locator, request verifier, or transport capability. The SDK
+ * owns every OpenCredentials request, including submission of returned proof.
+ */
+export interface CredentialInlineInteractionAdapter {
+  readonly kind: "inline";
+  start(input: { readonly signal?: AbortSignal }): Promise<CredentialInteractionSurface>;
+}
+
+export type CredentialInteractionAdapter = CredentialBrowserInteractionAdapter | CredentialInlineInteractionAdapter;
 
 export interface CredentialRedirectResumeState {
   readonly type: "TinyCloudCredentialRedirectResume";
@@ -101,7 +152,11 @@ export interface CredentialsOperationOptions {
 }
 
 export interface CredentialsAcquireOptions extends CredentialsOperationOptions {
-  readonly interaction?: "popup" | "redirect" | "headless";
+  /**
+   * `inline` requires a host-provided `browser` adapter. The SDK deliberately
+   * has no default inline renderer, so it cannot embed or call tenant systems.
+   */
+  readonly interaction?: CredentialInteractionKind;
   readonly browser?: CredentialInteractionAdapter;
   readonly transport?: CredentialAcquisitionTransport;
   readonly signing?: CredentialSigningAdapter;

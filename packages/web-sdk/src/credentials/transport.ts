@@ -10,14 +10,14 @@ function object(value: unknown, label: string): Record<string, unknown> { if (ty
 function opaque(value: unknown, label: string): string { if (typeof value !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(value)) throw new CredentialError("REQUEST_SUBSTITUTED", `${label} is invalid`); return value; }
 function timestamp(value: unknown, label: string): string { if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) throw new CredentialError("VERIFICATION_FAILED", `${label} is invalid`); return new Date(value).toISOString(); }
 function jwtPayload(credential: string): Record<string, unknown> { const part = credential.split("~", 1)[0]?.split(".")[1]; if (!part) throw new CredentialError("VERIFICATION_FAILED", "Issued SD-JWT is invalid"); try { return object(JSON.parse(new TextDecoder().decode(decodeBase64Url(part))), "SD-JWT payload"); } catch (cause) { if (cause instanceof CredentialError) throw cause; throw new CredentialError("VERIFICATION_FAILED", "Issued SD-JWT is invalid", { cause }); } }
-const SERVER_CODES = new Set(["REQUEST_EXPIRED", "ISSUER_UNREADY", "UNSUPPORTED_PROFILE", "SIGNATURE_REJECTED"] as const);
+const SERVER_CODES = new Set(["REQUEST_EXPIRED", "ISSUER_UNREADY", "UNSUPPORTED_PROFILE", "UNSUPPORTED_VERSION", "SIGNATURE_REJECTED"] as const);
 function serverError(value: unknown, response: Response): CredentialError | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const body = value as Record<string, unknown>;
   const keys = Object.keys(body).sort();
   if (keys.join(",") !== "code,correlationId,recoverable,state,type" || body.type !== "tinycloud.credentials/error/v1" || typeof body.code !== "string" || typeof body.recoverable !== "boolean" || typeof body.state !== "string" || typeof body.correlationId !== "string") return undefined;
   if (!SERVER_CODES.has(body.code as any)) return undefined;
-  const code = body.code as "REQUEST_EXPIRED" | "ISSUER_UNREADY" | "UNSUPPORTED_PROFILE" | "SIGNATURE_REJECTED";
+  const code = body.code as "REQUEST_EXPIRED" | "ISSUER_UNREADY" | "UNSUPPORTED_PROFILE" | "UNSUPPORTED_VERSION" | "SIGNATURE_REJECTED";
   return new CredentialError(code, `OpenCredentials rejected the request: ${code}`, {
     state: body.state,
     correlationId: body.correlationId,
