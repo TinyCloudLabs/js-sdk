@@ -11,6 +11,7 @@
  */
 
 import {
+  activateCompactRuntimeDelegation as activateCompactRuntimeDelegationOnNode,
   TinyCloudNode,
   TinyCloudNodeConfig,
   type BootstrapWarning,
@@ -19,6 +20,9 @@ import {
   type ISessionStorage,
   type PersistedSessionData,
   type SignStrategy,
+  type ValidatedRuntimeDelegation,
+  type UnifiedOwnerRootInput,
+  type UnifiedOwnerRootReceipt,
 } from "@tinycloud/node-sdk/core";
 import {
   IKVService,
@@ -758,6 +762,10 @@ export class TinyCloudWeb {
     return this.node.signSessionBytes(bytes);
   }
 
+  async createUnifiedOwnerRoot(input: UnifiedOwnerRootInput): Promise<UnifiedOwnerRootReceipt> {
+    return this.node.createUnifiedOwnerRoot(input);
+  }
+
   async autoSignCredentialBytes(bytes: Uint8Array): Promise<Uint8Array | undefined> {
     return this.node.autoSignCredentialBytes(bytes);
   }
@@ -766,8 +774,31 @@ export class TinyCloudWeb {
     return this.node.approveCredentialBytes(bytes);
   }
 
+  async activateCompactRuntimeDelegation(input: {
+    readonly authorization: string;
+    readonly cid: string;
+    readonly host: string;
+  }): Promise<ValidatedRuntimeDelegation> {
+    const session = this.session();
+    if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
+    return activateCompactRuntimeDelegationOnNode(this.node, {
+      ...input,
+      ownerAddress: session.address,
+      chainId: session.chainId,
+    });
+  }
+
   credentialSpaceOwnerDid(spaceId: string): string {
     return this.node.credentialSpaceOwnerDid(spaceId);
+  }
+
+  /** Root authorization CID of the active session, which {@link session} omits. */
+  accountAuthorizationCid(): string {
+    const cid = this._node?.session?.delegationCid;
+    if (typeof cid !== "string" || cid.length === 0) {
+      throw new Error("Not signed in. Call signIn() first.");
+    }
+    return cid;
   }
 
   // ===========================================================================

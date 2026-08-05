@@ -65,6 +65,7 @@ function stubAccountRegistry(
   opts: {
     indexList?: ReturnType<typeof mock>;
     get?: ReturnType<typeof mock>;
+    register?: ReturnType<typeof mock>;
   },
 ): void {
   const indexList =
@@ -77,8 +78,23 @@ function stubAccountRegistry(
     }));
   (node as any)._account = {
     index: { spaces: { list: indexList } },
-    spaces: { get, register: mock(async () => ({ ok: true as const, data: {} })) },
+    spaces: {
+      get,
+      register:
+        opts.register ?? mock(async () => ({ ok: true as const, data: {} })),
+    },
   };
+}
+
+function withFetch<T>(
+  impl: (input: RequestInfo | URL) => Promise<Response>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const original = globalThis.fetch;
+  globalThis.fetch = mock(impl) as unknown as typeof fetch;
+  return fn().finally(() => {
+    globalThis.fetch = original;
+  });
 }
 
 test("ensureOwnedSpaceHosted does NOT host when the SQLite index already lists the space", async () => {
@@ -137,6 +153,32 @@ test("ensureOwnedSpaceHosted hosts when neither index nor canonical KV lists the
   expect(spaceId).toBe(SECRETS);
   expect(hostOwnedSpace).toHaveBeenCalledTimes(1);
   expect(hostOwnedSpace).toHaveBeenCalledWith("secrets");
+});
+
+test("TC-473: ensureOwnedSpaceHosted issues one registry write after hosting", async () => {
+  const node = makeNode();
+  const register = mock(async () => ({ ok: true as const, data: {} }));
+  stubAccountRegistry(node, {
+    indexList: mock(async () => ({ ok: true as const, data: [] })),
+    get: mock(async () => ({
+      ok: false as const,
+      error: { code: "KV_NOT_FOUND", message: "Key not found", service: "kv" },
+    })),
+    register,
+  });
+  (node as any).auth.hostOwnedSpace = mock(async () => true);
+
+  const spaceId = await withFetch(
+    async () =>
+      new Response(JSON.stringify({ activated: [SECRETS], skipped: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    () => node.ensureOwnedSpaceHosted("secrets"),
+  );
+
+  expect(spaceId).toBe(SECRETS);
+  expect(register).toHaveBeenCalledTimes(1);
 });
 
 test("ensureOwnedSpaceHosted falls back to canonical KV when the index THROWS (no such table: spaces)", async () => {
