@@ -41,6 +41,30 @@ export type PrimitiveStepHandler = (input: {
   readonly signal?: AbortSignal;
 }) => Promise<PrimitiveStepResult>;
 
+/**
+ * The bounded view a host-owned inline surface may receive. It deliberately
+ * excludes requirement values, which can contain private policy inputs.
+ */
+export interface InlineCredentialProofRequest {
+  readonly stepId: string;
+  readonly constraints: Readonly<Record<string, unknown>>;
+  readonly display: {
+    readonly title: string;
+    readonly description: string;
+    readonly consent: string;
+    readonly progressLabel: string;
+    readonly errorLiveRegion: "assertive";
+  };
+  readonly inputs: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly schema: CredentialFlowDescriptor["inputs"][number]["schema"];
+  }[];
+  readonly signal?: AbortSignal;
+}
+
+export type InlineCredentialProofHandler = (input: InlineCredentialProofRequest) => Promise<PrimitiveStepResult>;
+
 export type CredentialInteractionKind = "popup" | "redirect" | "headless" | "inline";
 
 export interface CredentialInteractionSurface {
@@ -52,7 +76,7 @@ export interface CredentialInteractionSurface {
    * returns user-entered proof bytes to the SDK; it never receives an
    * acquisition locator, request verifier, or transport capability.
    */
-  readonly requestProof?: (input: Parameters<PrimitiveStepHandler>[0]) => Promise<PrimitiveStepResult>;
+  readonly requestProof?: InlineCredentialProofHandler;
 }
 
 /** A browser-owned interaction that navigates to the OpenCredentials locator. */
