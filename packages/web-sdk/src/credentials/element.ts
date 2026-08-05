@@ -21,7 +21,7 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
   private closed = false;
 
   connectedCallback(): void {
-    this.root ??= this.attachShadow({ mode: "closed" });
+    this.root ??= this.attachShadow({ mode: "open" });
     this.renderShell();
   }
 
@@ -67,7 +67,7 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
   }
 
   private renderPrompt(request: InlineCredentialProofRequest): void {
-    this.root ??= this.attachShadow({ mode: "closed" });
+    this.root ??= this.attachShadow({ mode: "open" });
     this.renderShell();
     const description = this.root.querySelector<HTMLElement>("[data-description]")!;
     const formHost = this.root.querySelector<HTMLElement>("[data-form]")!;
