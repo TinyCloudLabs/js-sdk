@@ -127,8 +127,19 @@ test("an initialized active session ensures an email credential through an inlin
   });
   expect(syntheticResult.status).toBe("acquired");
   expect(syntheticResult.credential.holderDid).toBe(holderDid);
-  const reused = await service.ensure(requirement(synthetic), { descriptor: synthetic, interaction: "headless", transport: transportFor(synthetic), openerOrigin: "https://app.test" });
+  let reusePresented = false;
+  const reused = await service.ensure(requirement(synthetic), {
+    descriptor: synthetic,
+    interaction: "inline",
+    browser: new InlineCredentialInteraction(async () => {
+      reusePresented = true;
+      throw new Error("a stored credential must not mount acquisition UI");
+    }),
+    transport: transportFor(synthetic),
+    openerOrigin: "https://app.test",
+  });
   expect(reused.status).toBe("reused");
+  expect(reusePresented).toBe(false);
   expect(creates).toBe(2);
   expect(resultReads).toBe(2);
 }, 120_000);
