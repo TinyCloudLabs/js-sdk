@@ -84,32 +84,28 @@ test("an initialized active session ensures an email credential through an inlin
   const service = new CredentialsService(client);
   let creates = 0;
   let resultReads = 0;
-  let browserCookie = "";
+  let sdkProofSubmissions = 0;
   const transportFor = (descriptor: CredentialFlowDescriptor) => new OpenCredentialsHttpTransport(descriptor, async (input, init) => {
     const requested = new URL(String(input));
     if (requested.pathname === "/v1/acquisitions" && init?.method === "POST") creates += 1;
     if (requested.pathname.endsWith("/result")) resultReads += 1;
-    const response = await fetch(new URL(`${requested.pathname}`, acquisition.url), init);
-    if (requested.pathname === "/v1/acquisitions" && init?.method === "POST") browserCookie = response.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
-    return response;
+    if (requested.pathname.endsWith("/proof") && init?.method === "POST") sdkProofSubmissions += 1;
+    return fetch(new URL(`${requested.pathname}`, acquisition.url), init);
   });
 
   let inlinePresented = 0;
-  const hostedEmailInteraction = new InlineCredentialInteraction(async ({ locator }) => {
+  const hostedEmailInteraction = new InlineCredentialInteraction(async (input) => {
     inlinePresented += 1;
-    const hosted = async (suffix: string, init: RequestInit = {}) => {
-      const response = await fetch(new URL(`/v1/acquisitions/${locator}${suffix}`, acquisition.url), {
-        ...init,
-        headers: { ...(init.headers as Record<string, string> | undefined), cookie: browserCookie, "content-type": "application/json" },
-      });
-      expect(response.ok).toBe(true);
-      return response.json() as Promise<any>;
+    expect(input).toEqual({ signal: expect.any(AbortSignal) });
+    return {
+      wake: async () => undefined,
+      close: () => undefined,
+      closed: () => false,
+      requestProof: async ({ stepId }) => {
+        expect(stepId).toBe("mailbox_otp");
+        return { otp: "246810" };
+      },
     };
-    const state = await hosted("/state");
-    expect(state.state).toBe("challenge_required");
-    const challenge = await hosted("/challenge", { method: "POST", body: JSON.stringify({ step: "mailbox_otp", stepVersion: 1 }) });
-    await hosted("/proof", { method: "POST", body: JSON.stringify({ step: "mailbox_otp", stepVersion: 1, challengeNonce: challenge.challengeNonce, proof: { otp: "246810" } }) });
-    return { wake: async () => undefined, close: () => undefined, closed: () => false };
   });
 
   const emailTransport = transportFor(email);
@@ -122,6 +118,7 @@ test("an initialized active session ensures an email credential through an inlin
   expect(emailResult.record.ownerDid).toBe(ownerDid);
   expect(emailResult.receipt?.ownerDid).toBe(ownerDid);
   expect(inlinePresented).toBe(1);
+  expect(sdkProofSubmissions).toBe(1);
   expect(resultReads).toBe(1);
 
   const syntheticResult = await service.ensure(requirement(synthetic), {

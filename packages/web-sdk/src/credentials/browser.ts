@@ -47,18 +47,18 @@ export class BrowserCredentialInteraction implements CredentialInteractionAdapte
 }
 
 /**
- * Adapter for a host application's in-page OpenCredentials acquisition view.
- * It intentionally delegates rendering to the host and exposes only the
- * locator already safe for the credentials.org route; no tenant secret or
- * authorization decision crosses this SDK boundary.
+ * Adapter for a host application's in-page acquisition view. It intentionally
+ * exposes no OpenCredentials locator or verifier to the host: the host can
+ * render an accessible local proof form, but only the SDK may submit that
+ * proof to OpenCredentials.
  */
 export class InlineCredentialInteraction implements CredentialInteractionAdapter {
   readonly kind = "inline" as const;
 
-  constructor(private readonly present: (input: { readonly interaction: CredentialFlowDescriptor["interaction"]; readonly locator: string; readonly signal?: AbortSignal }) => Promise<CredentialInteractionSurface>) {}
+  constructor(private readonly present: (input: { readonly signal?: AbortSignal }) => Promise<CredentialInteractionSurface>) {}
 
   start(input: { interaction: CredentialFlowDescriptor["interaction"]; locator: string; signal?: AbortSignal }): Promise<CredentialInteractionSurface> {
-    return this.present(input);
+    return this.present({ signal: input.signal });
   }
 }
 
