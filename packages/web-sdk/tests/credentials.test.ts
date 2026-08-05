@@ -109,15 +109,16 @@ test("browser interaction rejects descriptor-substituted origins", async () => {
   })).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
 });
 
-test("inline interaction exposes only the OpenCredentials locator to the host", async () => {
-  let presented: { interaction: CredentialFlowDescriptor["interaction"]; locator: string } | undefined;
+test("inline interaction exposes no OpenCredentials capability to the host", async () => {
+  let presented: Record<string, unknown> | undefined;
   const inline = new InlineCredentialInteraction(async (input) => {
-    presented = { interaction: input.interaction, locator: input.locator };
-    return { wake: async () => undefined, close: () => undefined, closed: () => false };
+    presented = input;
+    return { wake: async () => undefined, close: () => undefined, closed: () => false, requestProof: async () => ({ code: "entered-locally" }) };
   });
   const surface = await inline.start({ interaction: email.interaction, locator: REQUEST });
   expect(inline.kind).toBe("inline");
-  expect(presented).toEqual({ interaction: email.interaction, locator: REQUEST });
+  expect(presented).toEqual({ signal: undefined });
+  expect(await surface.requestProof?.({ descriptor: email, requirement: requirement(email), stepId: "collect_input", constraints: {} })).toEqual({ code: "entered-locally" });
   expect(await surface.wake()).toBeUndefined();
 });
 

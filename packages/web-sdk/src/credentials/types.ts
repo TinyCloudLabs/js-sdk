@@ -61,12 +61,18 @@ export interface CredentialInteractionSurface {
   readonly wake: () => Promise<void>;
   readonly close: () => void;
   readonly closed: () => boolean;
+  /**
+   * A bounded, local UI callback for a declared primitive step. The adapter
+   * returns user-entered proof bytes to the SDK; it never receives an
+   * acquisition locator, request verifier, or transport capability.
+   */
+  readonly requestProof?: (input: Parameters<PrimitiveStepHandler>[0]) => Promise<PrimitiveStepResult>;
 }
 
 /**
- * A host-owned acquisition surface. Inline implementations receive only the
- * OpenCredentials interaction locator; they never receive tenant input or a
- * webhook authorization decision from the SDK.
+ * A host-owned acquisition surface. Inline implementations provide a local
+ * proof callback only. The SDK owns every OpenCredentials request, including
+ * submission of a proof returned by the host UI.
  */
 export interface CredentialInteractionAdapter {
   readonly kind: CredentialInteractionKind;
