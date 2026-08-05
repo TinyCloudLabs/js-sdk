@@ -115,7 +115,7 @@ test("inline interaction exposes no OpenCredentials capability to the host", asy
     presented = input;
     return { wake: async () => undefined, close: () => undefined, closed: () => false, requestProof: async () => ({ code: "entered-locally" }) };
   });
-  const surface = await inline.start({ interaction: email.interaction, locator: REQUEST });
+  const surface = await inline.start({});
   expect(inline.kind).toBe("inline");
   expect(presented).toEqual({ signal: undefined });
   expect(await surface.requestProof?.({ descriptor: email, requirement: requirement(email), stepId: "collect_input", constraints: {} })).toEqual({ code: "entered-locally" });
