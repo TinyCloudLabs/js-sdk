@@ -12,6 +12,11 @@ export {
   type EstablishOpenKeySessionResult,
   type EstablishOpenKeySessionStatus,
 } from "./openkey-session";
+export {
+  establishManageKeySession,
+  type EstablishManageKeySessionOptions,
+  type EstablishManageKeySessionResult,
+} from "./manage-key-session";
 export * from "./credentials";
 export type { SecretReadInput, SecretReadResult, BootstrapWarning } from "@tinycloud/node-sdk";
 export type {
@@ -76,6 +81,20 @@ export {
   type OpenKeyCallbackStrategy,
   defaultSignStrategy,
   createOpenKeyCallbackSigningStrategy,
+  TINYCLOUD_MANAGE_KEY_SCOPE,
+  TINYCLOUD_CANONICAL_IDENTITY_CLAIM,
+  OpenKeyManageKeyError,
+  requestTinyCloudManageKeyScope,
+  hasTinyCloudManageKeyScope,
+  parseCanonicalTinyCloudIdentity,
+  parseCanonicalTinyCloudIdentityClaims,
+  createOpenKeyManageKeySigningStrategy,
+  type CanonicalTinyCloudIdentity,
+  type OpenKeyManageKeyErrorCode,
+  type OpenKeyManageKeySigningRequestBody,
+  type OpenKeyManageKeySigningResponseBody,
+  type OpenKeyManageKeySigningStrategyOptions,
+  type OpenKeyManageKeyCallbackStrategy,
   type ISpaceCreationHandler,
   type SpaceCreationContext,
   AutoApproveSpaceCreationHandler,
