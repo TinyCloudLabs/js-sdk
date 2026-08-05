@@ -48,6 +48,10 @@ jobs:
           COUNT=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
           echo "pending=$COUNT" >> "$GITHUB_OUTPUT"
 
+      - name: Reject unconfirmed major beta releases
+        if: steps.check.outputs.pending != '0'
+        run: node scripts/check-beta-release-plan.mjs
+
       - name: List pending changesets
         if: steps.check.outputs.pending != '0'
         run: |
