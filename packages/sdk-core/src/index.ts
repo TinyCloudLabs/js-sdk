@@ -687,6 +687,7 @@ export {
   type OpenKeyManageKeyErrorCode,
   type OpenKeyManageKeySigningRequestBody,
   type OpenKeyManageKeySigningResponseBody,
+  type OpenKeyManageKeyFetch,
   type OpenKeyManageKeySigningStrategyOptions,
   type OpenKeyManageKeyCallbackStrategy,
   // Space creation handler types

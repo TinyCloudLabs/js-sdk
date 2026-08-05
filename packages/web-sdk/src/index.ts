@@ -7,12 +7,6 @@ export {
   type SessionRestoreStatus,
 } from "./modules/tcw";
 export {
-  establishOpenKeySession,
-  type EstablishOpenKeySessionOptions,
-  type EstablishOpenKeySessionResult,
-  type EstablishOpenKeySessionStatus,
-} from "./openkey-session";
-export {
   establishManageKeySession,
   type EstablishManageKeySessionOptions,
   type EstablishManageKeySessionResult,
@@ -93,6 +87,7 @@ export {
   type OpenKeyManageKeyErrorCode,
   type OpenKeyManageKeySigningRequestBody,
   type OpenKeyManageKeySigningResponseBody,
+  type OpenKeyManageKeyFetch,
   type OpenKeyManageKeySigningStrategyOptions,
   type OpenKeyManageKeyCallbackStrategy,
   type ISpaceCreationHandler,

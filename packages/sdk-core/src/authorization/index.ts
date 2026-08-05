@@ -81,6 +81,7 @@ export {
   type OpenKeyManageKeyErrorCode,
   type OpenKeyManageKeySigningRequestBody,
   type OpenKeyManageKeySigningResponseBody,
+  type OpenKeyManageKeyFetch,
   type OpenKeyManageKeySigningStrategyOptions,
   type OpenKeyManageKeyCallbackStrategy,
 } from "./manage-key";

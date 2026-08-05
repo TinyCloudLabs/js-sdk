@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import type { CaveatedDelegationUnsupportedError as SdkCoreError } from "@tinycloud/sdk-core";
 import type { CaveatedDelegationUnsupportedError as WebError } from "../src/index";
 import type {
-  EstablishOpenKeySessionOptions,
-  EstablishOpenKeySessionResult,
+  EstablishManageKeySessionOptions,
+  EstablishManageKeySessionResult,
 } from "../src/index";
 
 (globalThis as any).HTMLElement = class {};
@@ -37,8 +37,8 @@ type SamePublicError = WebError extends SdkCoreError
   : false;
 const hasPublicError: Assert<SamePublicError> = true;
 type HelperTypesReachable =
-  EstablishOpenKeySessionOptions["providerToken"] extends string | undefined
-    ? EstablishOpenKeySessionResult["status"] extends string
+  EstablishManageKeySessionOptions["signer"] extends object
+    ? EstablishManageKeySessionResult["identity"] extends object
       ? true
       : false
     : false;
@@ -48,8 +48,8 @@ test("exports CaveatedDelegationUnsupportedError from the web facade", () => {
   expect(hasPublicError).toBe(true);
 });
 
-test("exports establishOpenKeySession and its public types from the web facade", async () => {
+test("exports establishManageKeySession and its public types from the web facade", async () => {
   const webSdk = await import("../src/index");
-  expect(typeof webSdk.establishOpenKeySession).toBe("function");
+  expect(typeof webSdk.establishManageKeySession).toBe("function");
   expect(hasHelperTypes).toBe(true);
 });

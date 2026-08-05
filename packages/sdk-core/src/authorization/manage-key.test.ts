@@ -67,6 +67,16 @@ describe("tinycloud:manage-key OAuth signer", () => {
         did: "did:pkh:eip155:1:0x0000000000000000000000000000000000000000",
       }),
     ).toThrow(OpenKeyManageKeyError);
+
+    const nonApplicationIdentity = {
+      ...identity,
+      chainId: 137,
+      did: `did:pkh:eip155:137:${account.address}`,
+      spaceId: `tinycloud:pkh:eip155:137:${account.address}:reference-app`,
+    };
+    expect(parseCanonicalTinyCloudIdentity(nonApplicationIdentity)).toEqual(
+      nonApplicationIdentity,
+    );
   });
 
   test("signs the exact sign-in SIWE through one bearer-only cookie-free request", async () => {
@@ -75,6 +85,7 @@ describe("tinycloud:manage-key OAuth signer", () => {
     const strategy = createOpenKeyManageKeySigningStrategy({
       endpoint: "http://127.0.0.1:9999/api/delegate/sign",
       token: "consented-oauth-token",
+      scopes: "openid tinycloud:manage-key",
       identity,
       fetch: async (_input, init) => {
         requests.push({ body: String(init?.body), init });
@@ -134,6 +145,7 @@ describe("tinycloud:manage-key OAuth signer", () => {
       const strategy = createOpenKeyManageKeySigningStrategy({
         endpoint: `http://127.0.0.1:${server.port}/api/delegate/sign`,
         token: "consented-oauth-token",
+        scopes: "openid tinycloud:manage-key",
         identity,
       });
       await expect(strategy.handler(request)).resolves.toEqual({
@@ -157,31 +169,32 @@ describe("tinycloud:manage-key OAuth signer", () => {
     }
   });
 
-  test("lets independent clients resolve one canonical address and space", async () => {
-    const secondClientClaims = {
-      [TINYCLOUD_CANONICAL_IDENTITY_CLAIM]: { ...identity },
-    };
-    const [first, second] = await Promise.all([
-      Promise.resolve(
-        parseCanonicalTinyCloudIdentityClaims({
-          [TINYCLOUD_CANONICAL_IDENTITY_CLAIM]: identity,
-        }),
-      ),
-      Promise.resolve(
-        parseCanonicalTinyCloudIdentityClaims(secondClientClaims),
-      ),
-    ]);
-
-    expect(first.address).toBe(second.address);
-    expect(first.did).toBe(second.did);
-    expect(first.spaceId).toBe(second.spaceId);
-  });
-
   test("requires consent before it can call the signer", async () => {
     let calls = 0;
     const strategy = createOpenKeyManageKeySigningStrategy({
       endpoint: "https://openkey.example.test/api/delegate/sign",
       token: "",
+      scopes: "openid tinycloud:manage-key",
+      identity,
+      fetch: async () => {
+        calls += 1;
+        return new Response();
+      },
+    });
+
+    await expect(strategy.handler(request)).rejects.toMatchObject({
+      code: "CONSENT_REQUIRED",
+      retryable: false,
+    });
+    expect(calls).toBe(0);
+  });
+
+  test("does not grant signing authority to a bearer without the scope", async () => {
+    let calls = 0;
+    const strategy = createOpenKeyManageKeySigningStrategy({
+      endpoint: "https://openkey.example.test/api/delegate/sign",
+      token: "unscoped-oauth-token",
+      scopes: "openid profile",
       identity,
       fetch: async () => {
         calls += 1;
@@ -211,6 +224,7 @@ describe("tinycloud:manage-key OAuth signer", () => {
       const strategy = createOpenKeyManageKeySigningStrategy({
         endpoint: "https://openkey.example.test/api/delegate/sign",
         token: "consented-oauth-token",
+        scopes: "openid tinycloud:manage-key",
         identity,
         fetch: async () =>
           new Response(
@@ -235,6 +249,7 @@ describe("tinycloud:manage-key OAuth signer", () => {
     const strategy = createOpenKeyManageKeySigningStrategy({
       endpoint: "https://openkey.example.test/api/delegate/sign",
       token: "expired-oauth-token",
+      scopes: "openid tinycloud:manage-key",
       identity,
       fetch: async () => new Response("unauthorized", { status: 401 }),
     });
@@ -245,11 +260,42 @@ describe("tinycloud:manage-key OAuth signer", () => {
     });
   });
 
+  test("reports a signer identity mismatch distinctly from a rejected message", async () => {
+    const other = privateKeyToAccount(
+      "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+    );
+    const otherIdentity = {
+      ...identity,
+      keyId: "canonical-key-2",
+      address: other.address,
+      did: `did:pkh:eip155:1:${other.address}`,
+      spaceId: `tinycloud:pkh:eip155:1:${other.address}:applications`,
+    };
+    const strategy = createOpenKeyManageKeySigningStrategy({
+      endpoint: "https://openkey.example.test/api/delegate/sign",
+      token: "consented-oauth-token",
+      scopes: "openid tinycloud:manage-key",
+      identity,
+      fetch: async () =>
+        Response.json({
+          approved: true,
+          signature: await other.signMessage({ message: request.message }),
+          canonicalIdentity: otherIdentity,
+        }),
+    });
+
+    await expect(strategy.handler(request)).rejects.toMatchObject({
+      code: "IDENTITY_MISMATCH",
+      retryable: false,
+    });
+  });
+
   test("does not broaden authority to message or bootstrap requests", async () => {
     let calls = 0;
     const strategy = createOpenKeyManageKeySigningStrategy({
       endpoint: "https://openkey.example.test/api/delegate/sign",
       token: "consented-oauth-token",
+      scopes: "openid tinycloud:manage-key",
       identity,
       fetch: async () => {
         calls += 1;

@@ -46,7 +46,7 @@ export interface CanonicalTinyCloudIdentity {
   version: "v1";
   keyId: string;
   address: CanonicalAddress;
-  chainId: 1;
+  chainId: number;
   did: string;
   spaceId: string;
 }
@@ -56,7 +56,8 @@ export type OpenKeyManageKeyErrorCode =
   | "GRANT_DISABLED"
   | "USER_EXCLUSIVE"
   | "TOKEN_EXPIRED"
-  | "MESSAGE_REJECTED";
+  | "MESSAGE_REJECTED"
+  | "IDENTITY_MISMATCH";
 
 /** A terminal denial from the OAuth canonical-key signing boundary. */
 export class OpenKeyManageKeyError extends Error {
@@ -81,10 +82,15 @@ function rejected(message: string): OpenKeyManageKeyError {
   return new OpenKeyManageKeyError("MESSAGE_REJECTED", message);
 }
 
+function identityMismatch(message: string): OpenKeyManageKeyError {
+  return new OpenKeyManageKeyError("IDENTITY_MISMATCH", message);
+}
+
 /**
  * Parse and fail closed on the OpenID canonical identity claim. The DID and
- * applications space are derived from the checksummed address instead of
- * trusted independently.
+ * space are derived from the checksummed address instead of trusted
+ * independently. The identity claim chooses its chain and space name; this
+ * shared contract does not impose an application's chain or space.
  */
 export function parseCanonicalTinyCloudIdentity(
   value: unknown,
@@ -127,11 +133,26 @@ export function parseCanonicalTinyCloudIdentity(
       "Canonical TinyCloud identity address must use EIP-55 checksum casing",
     );
   }
-  if (value.chainId !== 1)
-    throw rejected("Canonical TinyCloud identity must use chain ID 1");
+  if (
+    typeof value.chainId !== "number" ||
+    !Number.isSafeInteger(value.chainId) ||
+    value.chainId <= 0
+  ) {
+    throw rejected("Canonical TinyCloud identity chain ID is invalid");
+  }
 
-  const did = pkhDid(address, 1);
-  const spaceId = makePkhSpaceId(address, 1, "applications");
+  const did = pkhDid(address, value.chainId);
+  const spacePrefix = `tinycloud:pkh:eip155:${value.chainId}:${address}:`;
+  if (typeof value.spaceId !== "string" || !value.spaceId.startsWith(spacePrefix)) {
+    throw rejected("Canonical TinyCloud identity space is invalid");
+  }
+  const spaceName = value.spaceId.slice(spacePrefix.length);
+  let spaceId: string;
+  try {
+    spaceId = makePkhSpaceId(address, value.chainId, spaceName);
+  } catch {
+    throw rejected("Canonical TinyCloud identity space is invalid");
+  }
   if (value.did !== did || value.spaceId !== spaceId) {
     throw rejected("Canonical TinyCloud identity does not match its address");
   }
@@ -140,7 +161,7 @@ export function parseCanonicalTinyCloudIdentity(
     version: "v1",
     keyId: value.keyId,
     address,
-    chainId: 1,
+    chainId: value.chainId,
     did,
     spaceId,
   };
@@ -158,7 +179,7 @@ export function parseCanonicalTinyCloudIdentityClaims(
 
 export interface OpenKeyManageKeySigningRequestBody {
   address: string;
-  chainId: 1;
+  chainId: number;
   message: string;
   type: "siwe";
 }
@@ -172,15 +193,23 @@ export interface OpenKeyManageKeySigningResponseBody {
   error?: string;
 }
 
+/** Minimal fetch surface used by the manage-key signer. */
+export type OpenKeyManageKeyFetch = (
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1],
+) => Promise<Response>;
+
 export interface OpenKeyManageKeySigningStrategyOptions {
   /** The OpenKey public signer route for a consented OAuth client. */
   endpoint: string;
   /** A bearer token obtained with `tinycloud:manage-key` consent. */
   token: string | (() => string | Promise<string | undefined>);
+  /** OAuth grant scopes returned with the bearer token. */
+  scopes: string | readonly string[];
   /** Canonical identity parsed from the token's OIDC claims. */
   identity: CanonicalTinyCloudIdentity;
   /** Fetch implementation. Defaults to `globalThis.fetch`. */
-  fetch?: typeof fetch;
+  fetch?: OpenKeyManageKeyFetch;
 }
 
 export interface OpenKeyManageKeyCallbackStrategy extends CallbackStrategy {
@@ -249,6 +278,28 @@ async function resolveToken(
   return value;
 }
 
+function normalizeEndpoint(value: string): string {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(value);
+  } catch {
+    throw rejected("OpenKey manage-key signing endpoint must be an absolute URL");
+  }
+  const rawHttpAuthority = value.match(/^http:\/\/([^/?#]*)/iu)?.[1];
+  const loopback = rawHttpAuthority !== undefined &&
+    /^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?$/u.test(rawHttpAuthority);
+  if (
+    (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && loopback)) ||
+    endpoint.username !== "" ||
+    endpoint.password !== "" ||
+    endpoint.search !== "" ||
+    endpoint.hash !== ""
+  ) {
+    throw rejected("OpenKey manage-key signing endpoint must use HTTPS or exact loopback HTTP");
+  }
+  return endpoint.href;
+}
+
 function assertSignInRequest(
   request: SignRequest,
   identity: CanonicalTinyCloudIdentity,
@@ -277,6 +328,7 @@ export function createOpenKeyManageKeySigningStrategy(
   options: OpenKeyManageKeySigningStrategyOptions,
 ): OpenKeyManageKeyCallbackStrategy {
   const identity = parseCanonicalTinyCloudIdentity(options.identity);
+  const endpoint = normalizeEndpoint(options.endpoint);
   return {
     type: "callback",
     openKeyAutoSign: true,
@@ -285,9 +337,15 @@ export function createOpenKeyManageKeySigningStrategy(
       const fetchImpl = options.fetch ?? globalThis.fetch;
       if (!fetchImpl)
         throw rejected("OpenKey manage-key signing requires fetch");
+      if (!hasTinyCloudManageKeyScope(options.scopes)) {
+        throw new OpenKeyManageKeyError(
+          "CONSENT_REQUIRED",
+          "The OAuth bearer token was not granted tinycloud:manage-key",
+        );
+      }
 
       const token = await resolveToken(options.token);
-      const response = await fetchImpl(options.endpoint, {
+      const response = await fetchImpl(endpoint, {
         method: "POST",
         credentials: "omit",
         headers: {
@@ -320,7 +378,7 @@ export function createOpenKeyManageKeySigningStrategy(
         body.canonicalIdentity,
       );
       if (!identitiesEqual(identity, responseIdentity)) {
-        throw rejected(
+        throw identityMismatch(
           "OpenKey manage-key signer returned a different canonical identity",
         );
       }

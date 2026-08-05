@@ -26,7 +26,7 @@ export interface EstablishManageKeySessionResult {
   session: ClientSession;
 }
 
-function createCanonicalIdentityProvider(address: string) {
+function createCanonicalIdentityProvider(address: string, chainId: number) {
   return {
     request: async ({ method }: { method: string }): Promise<unknown> => {
       switch (method) {
@@ -34,7 +34,7 @@ function createCanonicalIdentityProvider(address: string) {
         case "eth_requestAccounts":
           return [address];
         case "eth_chainId":
-          return "0x1";
+          return `0x${chainId.toString(16)}`;
         case "personal_sign":
           throw new Error(
             "Canonical-key sessions sign only through the OAuth callback",
@@ -57,11 +57,15 @@ export async function establishManageKeySession(
   const identity = parseCanonicalTinyCloudIdentity(options.identity);
   const client = new TinyCloudWeb({
     ...options.tinycloud,
-    provider: createCanonicalIdentityProvider(identity.address),
+    provider: createCanonicalIdentityProvider(identity.address, identity.chainId),
     signStrategy: createOpenKeyManageKeySigningStrategy({
       ...options.signer,
       identity,
     }),
+    // The manage-key grant signs exactly one session SIWE. Bootstrap requests
+    // need broader authority and must not be silently substituted for the
+    // app's requested capabilities.
+    autoBootstrapAccount: false,
   });
   const session = await client.signIn();
   if (
