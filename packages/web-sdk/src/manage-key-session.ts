@@ -70,7 +70,13 @@ export async function establishManageKeySession(
     // app's requested capabilities.
     autoBootstrapAccount: false,
   });
-  const session = await client.signIn();
+  // A persisted session has already passed TinyCloud's restore validation.
+  // Reuse it before asking the OAuth signer for another one-shot SIWE.
+  const restored = await client.restoreSession(identity.address);
+  const session =
+    restored.status === "restored" && restored.session
+      ? restored.session
+      : await client.signIn();
   if (
     session.address !== identity.address ||
     session.chainId !== identity.chainId

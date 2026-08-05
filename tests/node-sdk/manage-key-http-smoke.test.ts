@@ -178,7 +178,7 @@ beforeAll(async () => {
   oauthServer = startFaithfulOpenKeyHandler();
 });
 
-afterAll(() => oauthServer.stop(true));
+afterAll(() => oauthServer?.stop(true));
 
 test("public web SDK completes OAuth consent, signs one SIWE, and round-trips KV through real HTTP", async () => {
   signerRequests = [];

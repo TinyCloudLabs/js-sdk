@@ -70,10 +70,12 @@ issuer supplies `approvalUrl`, the error preserves it so the application can
 restart OAuth or show its consent route. Otherwise, restart the authorization
 redirect with `requestTinyCloudManageKeyScope`.
 
-The two independent example adapters in
-`examples/manage-key-reference-clients/` show Notes consuming validated OIDC
-claims and Tasks consuming the canonical claim supplied by its OAuth adapter.
-For the same user both resolve the same canonical address, DID, and space.
+The runnable `apps/manage-key-reference-clients/` workspace app contains two
+independent OAuth adapters. Notes and Tasks use distinct client IDs, token
+stores, and OAuth response objects; neither imports an identity cache from the
+other. For the same user both resolve the same canonical address, DID, and
+space. Run it with `bun run --cwd apps/manage-key-reference-clients test`; it
+is included in the workspace CI command.
 
 ## Real HTTP smoke
 
