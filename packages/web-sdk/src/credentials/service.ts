@@ -118,7 +118,11 @@ export class CredentialsService {
         interaction = new BrowserCredentialInteraction(requestedInteraction);
       }
       if (!resume && interaction && interaction.kind !== requestedInteraction) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential interaction adapter does not match the requested interaction");
-      if (interaction) surface = await interaction.start({ interaction: descriptor.interaction, locator: created.locator, signal: timed.signal });
+      if (interaction) {
+        surface = interaction.kind === "inline"
+          ? await interaction.start({ signal: timed.signal })
+          : await interaction.start({ interaction: descriptor.interaction, locator: created.locator, signal: timed.signal });
+      }
       const signing = options.signing ?? {
         autoSign: async (_binding: unknown, bytes: Uint8Array) => this.client.autoSignCredentialBytes?.(bytes),
         requestApproval: async (_binding: unknown, bytes: Uint8Array) => {
