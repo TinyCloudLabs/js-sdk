@@ -1,5 +1,16 @@
 # @tinycloudlabs/sdk-core
 
+## 3.0.0-beta.0
+
+### Patch Changes
+
+- ce34dc1: Add the SDK-owned `<tinycloud-credential-acquisition>` element and controller
+  for first-party inline credential issuance. The Web SDK now renders the
+  descriptor-driven ceremony inside the caller's document, reuses the active
+  TinyCloud/OpenKey session for holder binding, and keeps OpenCredentials
+  transport, verification, durable storage, and proof submission SDK-owned.
+  Existing redirect and headless credential-acquisition behavior is unchanged.
+
 ## 2.11.0
 
 ### Minor Changes
@@ -187,23 +198,21 @@
 
   Delivered:
   - New tests in
-    `packages/node-sdk/src/authorization/NodeUserAuthorization.signInWithOpenKeyResult.test.ts`:
-    - `signInWithOpenKeyResult accepts a finalize body in the EXACT
+    `packages/node-sdk/src/authorization/NodeUserAuthorization.signInWithOpenKeyResult.test.ts`: - `signInWithOpenKeyResult accepts a finalize body in the EXACT
 wire shape the Hono /authorize-sign route emits` builds a real
-      prepared session via the SDK, signs the exact prepared SIWE
-      bytes with the local signer, and assembles a finalize body byte-
-      for-byte in the Hono route's response shape (`{ protocolVersion,
+    prepared session via the SDK, signs the exact prepared SIWE
+    bytes with the local signer, and assembles a finalize body byte-
+    for-byte in the Hono route's response shape (`{ protocolVersion,
 address, signature, signedMessage, selectedActionKeys, permissions
 }`). Passes DIRECTLY to `signInWithOpenKeyResult` — no bridge, no
-      simulator. Asserts the consumer accepts the wire body end-to-end
-      and produces a client session with the correct address and
-      signed bytes.
-    - `signInWithOpenKeyResult accepts a NARROWED finalize body in the
+    simulator. Asserts the consumer accepts the wire body end-to-end
+    and produces a client session with the correct address and
+    signed bytes. - `signInWithOpenKeyResult accepts a NARROWED finalize body in the
 Hono /authorize-sign wire shape` performs the same test with a
-      narrowed SIWE (regenerated via WASM `prepareSession`, which is
-      exactly what OpenKey's `narrowSiwePreservingImmutable` calls),
-      proving the consumer accepts both the identity round-trip and
-      the narrowing round-trip when handed the actual Hono wire body.
+    narrowed SIWE (regenerated via WASM `prepareSession`, which is
+    exactly what OpenKey's `narrowSiwePreservingImmutable` calls),
+    proving the consumer accepts both the identity round-trip and
+    the narrowing round-trip when handed the actual Hono wire body.
   - Companion test on the OpenKey side
     (`apps/api/src/__tests__/delegate-authorize-sign-nodeauth-e2e.test.ts::
 finalize body validates against a MIRROR of every

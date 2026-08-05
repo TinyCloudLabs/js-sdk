@@ -1,5 +1,27 @@
 # @tinycloudlabs/web-sdk
 
+## 3.0.0-beta.0
+
+### Major Changes
+
+- 5770e70: TC-292 removes the standalone chain/RPC layer and signs through the connected
+  wallet's raw EIP-1193 provider. `TinyCloudWeb.provider` is now the raw
+  EIP-1193 provider rather than an ethers-compatible Web3 provider facade; the
+  standalone RPC provider factory and its network URL fallback are removed.
+  ENS resolution remains available through the connected wallet provider.
+
+### Patch Changes
+
+- ce34dc1: Add the SDK-owned `<tinycloud-credential-acquisition>` element and controller
+  for first-party inline credential issuance. The Web SDK now renders the
+  descriptor-driven ceremony inside the caller's document, reuses the active
+  TinyCloud/OpenKey session for holder binding, and keeps OpenCredentials
+  transport, verification, durable storage, and proof submission SDK-owned.
+  Existing redirect and headless credential-acquisition behavior is unchanged.
+- Updated dependencies [ce34dc1]
+  - @tinycloud/sdk-core@3.0.0-beta.0
+  - @tinycloud/node-sdk@3.0.0-beta.0
+
 ## 2.11.0
 
 ### Minor Changes

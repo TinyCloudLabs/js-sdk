@@ -25,5 +25,8 @@
     "@tinycloud/operations-mcp-conformance": "0.0.0",
     "@tinycloud/sdk-services-test": "15.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "tc-292-raw-eip1193",
+    "tc-475-inline-credential-acquisition"
+  ]
 }
