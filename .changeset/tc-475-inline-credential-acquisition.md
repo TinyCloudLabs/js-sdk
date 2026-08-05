@@ -3,8 +3,9 @@
 "@tinycloud/web-sdk": patch
 ---
 
-TC-475 adds the additive `UNSUPPORTED_VERSION` credential-acquisition error
-and a host-owned inline credential interaction adapter. Inline hosts receive
-only the local proof callback: OpenCredentials locators, request verifiers,
-and proof submission remain SDK-owned. Existing popup, redirect, and headless
-credential-acquisition behavior is unchanged.
+Add the SDK-owned `<tinycloud-credential-acquisition>` element and controller
+for first-party inline credential issuance. The Web SDK now renders the
+descriptor-driven ceremony inside the caller's document, reuses the active
+TinyCloud/OpenKey session for holder binding, and keeps OpenCredentials
+transport, verification, durable storage, and proof submission SDK-owned.
+Existing redirect and headless credential-acquisition behavior is unchanged.
