@@ -14,6 +14,7 @@ export {
 } from "./openkey-session";
 export * from "./credentials";
 export type { SecretReadInput, SecretReadResult, BootstrapWarning } from "@tinycloud/node-sdk";
+export type { UnifiedOwnerRootInput, UnifiedOwnerRootReceipt } from "@tinycloud/node-sdk/core";
 export type {
   CreateOwnerDelegationParams,
   OwnerDelegationPermission,

@@ -1,5 +1,19 @@
 # @tinycloudlabs/web-sdk
 
+## 2.11.1-beta.0
+
+### Patch Changes
+
+- 743dba1: Add the SDK-owned `<tinycloud-credential-acquisition>` element and controller
+  for first-party inline credential issuance. The Web SDK now renders the
+  descriptor-driven ceremony inside the caller's document, reuses the active
+  TinyCloud/OpenKey session for holder binding, and keeps OpenCredentials
+  transport, verification, durable storage, and proof submission SDK-owned.
+  Existing redirect and headless credential-acquisition behavior is unchanged.
+- Updated dependencies [743dba1]
+  - @tinycloud/sdk-core@2.11.1-beta.0
+  - @tinycloud/node-sdk@2.11.1-beta.0
+
 ## 2.11.0
 
 ### Minor Changes

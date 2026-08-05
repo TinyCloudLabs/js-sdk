@@ -7,11 +7,14 @@ import {
   parseCompactOrInlineShareUrl,
   shareEnvelopeSchema,
   shareEnvelopeV2Schema,
+  shareEnvelopeV3Schema,
   verifyEnvelopeV2,
+  verifyEnvelopeV3,
   verifyEnvelope,
   toBase64Url,
   type ShareEnvelope,
   type ShareEnvelopeV2,
+  type ShareEnvelopeV3,
 } from "@tinycloud/share-envelope";
 import type { ShareAuthorizedContent, ShareAuthorizationAdapter, ShareAuthorizationMethod } from "./authorization.js";
 
@@ -71,7 +74,7 @@ export interface ShareFetchOptions {
   readonly authorizationResumeToken?: string;
   readonly authorizationProof?: unknown;
   /** Addressed-only presentation hook. Bearer envelopes and their keys never cross this boundary. */
-  readonly onResolvedAddressedEnvelope?: (envelope: ShareEnvelope | ShareEnvelopeV2, cid: string) => void;
+  readonly onResolvedAddressedEnvelope?: (envelope: ShareEnvelope | ShareEnvelopeV2 | ShareEnvelopeV3, cid: string) => void;
 }
 
 export interface SharePolicyEvidence {
@@ -126,7 +129,7 @@ export interface ShareReceiveResult extends ShareInspection { readonly bytes: Ui
 export type ShareReceiveOutcome = ShareReceiveResult | ShareReceiveAuthorizationRequired;
 
 interface ResolvedShareEnvelope {
-  readonly envelope: ShareEnvelope | ShareEnvelopeV2;
+  readonly envelope: ShareEnvelope | ShareEnvelopeV2 | ShareEnvelopeV3;
   readonly origin: string;
   readonly cid: string;
   readonly kind: "compact" | "inline";
@@ -197,8 +200,8 @@ function registryFetcher(options: ShareFetchOptions, limit: number, tooLargeCode
   };
 }
 
-function metadataFor(envelope: ShareEnvelope | ShareEnvelopeV2, origin: string): ShareMetadata {
-  if (envelope.version === 2) {
+function metadataFor(envelope: ShareEnvelope | ShareEnvelopeV2 | ShareEnvelopeV3, origin: string): ShareMetadata {
+  if (envelope.version === 2 || envelope.version === 3) {
     const targetKind = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : envelope.recipientMatcher.kind === "emailDomain" ? "emailDomain" : "bearer";
     return {
       protocol: "tinycloud-share", version: 1, shareId: envelope.shareId, origin,
@@ -208,7 +211,7 @@ function metadataFor(envelope: ShareEnvelope | ShareEnvelopeV2, origin: string):
         ...(envelope.display.filename === undefined ? {} : { filename: envelope.display.filename }),
         ...(envelope.display.mode === undefined ? {} : { mode: envelope.display.mode }),
       },
-      ...(envelope.content === undefined ? {} : { content: { cid: envelope.content.cid } }),
+      ...(envelope.version === 2 && envelope.content !== undefined ? { content: { cid: envelope.content.cid } } : {}),
     };
   }
   return {
@@ -223,13 +226,15 @@ function metadataFor(envelope: ShareEnvelope | ShareEnvelopeV2, origin: string):
   };
 }
 
-function parseEnvelope(bytes: Uint8Array): ShareEnvelope | ShareEnvelopeV2 {
+function parseEnvelope(bytes: Uint8Array): ShareEnvelope | ShareEnvelopeV2 | ShareEnvelopeV3 {
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     const value = JSON.parse(text) as unknown;
     if (canonicalize(value) !== text) throw new Error("share envelope is not canonical JSON");
-    if (typeof value === "object" && value !== null && !Array.isArray(value) && (value as { readonly version?: unknown }).version === 2) {
-      return shareEnvelopeV2Schema.parse(value);
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      const version = (value as { readonly version?: unknown }).version;
+      if (version === 3) return shareEnvelopeV3Schema.parse(value);
+      if (version === 2) return shareEnvelopeV2Schema.parse(value);
     }
     return shareEnvelopeSchema.parse(value);
   }
@@ -334,6 +339,20 @@ async function verifyV2Envelope(envelope: ShareEnvelopeV2, linkOrigin: string, o
   }
 }
 
+async function verifyV3Envelope(envelope: ShareEnvelopeV3, linkOrigin: string, options: ShareFetchOptions): Promise<void> {
+  if (options.expectedOrigin !== undefined && linkOrigin !== options.expectedOrigin) {
+    throw new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted origin");
+  }
+  try {
+    if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: envelope.policy.ownerDid })) throw new Error("signature");
+  } catch {
+    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
+  }
+  const expiry = Date.parse(envelope.expiry);
+  if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
+  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
+}
+
 async function verifyV1PolicyEnvelope(envelope: ShareEnvelope, linkOrigin: string, options: ShareFetchOptions): Promise<void> {
   if (envelope.authorizationTarget.kind !== "policy") throw new ShareReceiveError("unsupported-target", "share target is not an addressed policy", { reason: "policy-target" });
   if (envelope.target.origin !== linkOrigin || (options.expectedOrigin !== undefined && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin))) {
@@ -376,13 +395,19 @@ export async function inspectShare(link: string, options: ShareFetchOptions = {}
   const resolved = await resolveShareEnvelope(link, options);
   if (resolved.envelope.version === 1 && resolved.envelope.authorizationTarget.kind === "policy") await verifyV1PolicyEnvelope(resolved.envelope, resolved.origin, options);
   else if (resolved.envelope.version === 1) await verifyResolved(resolved.envelope, resolved.origin, options);
-  else await verifyV2Envelope(resolved.envelope, resolved.origin, options);
-  if (resolved.envelope.version === 2 || resolved.envelope.authorizationTarget.kind === "policy") options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
+  else if (resolved.envelope.version === 2) await verifyV2Envelope(resolved.envelope, resolved.origin, options);
+  else await verifyV3Envelope(resolved.envelope, resolved.origin, options);
+  if (resolved.envelope.version === 2 || resolved.envelope.version === 3 || resolved.envelope.authorizationTarget.kind === "policy") options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
   return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind } };
 }
 
 export async function receiveShare(link: string, options: ShareFetchOptions = {}): Promise<ShareReceiveOutcome> {
   const resolved = await resolveShareEnvelope(link, options);
+  if (resolved.envelope.version === 3) {
+    await verifyV3Envelope(resolved.envelope, resolved.origin, options);
+    options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
+    return { state: "authorization-required", method: resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim" };
+  }
   if (resolved.envelope.version === 2) {
     await verifyV2Envelope(resolved.envelope, resolved.origin, options);
     options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
