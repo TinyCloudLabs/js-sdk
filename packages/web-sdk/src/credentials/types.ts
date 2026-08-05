@@ -167,17 +167,27 @@ export interface CredentialsOperationOptions {
 
 export interface CredentialsAcquireOptions extends CredentialsOperationOptions {
   /**
-   * `inline` requires a host-provided `browser` adapter. The SDK deliberately
-   * has no default inline renderer, so it cannot embed or call tenant systems.
+   * `inline` mounts the first-party TinyCloud element unless a bounded local
+   * proof adapter is explicitly supplied.
    */
   readonly interaction?: CredentialInteractionKind;
   readonly browser?: CredentialInteractionAdapter;
+  /** An element or selector inside the current document for the SDK-owned UI. */
+  readonly mountTarget?: Element | string;
+  /** Presentation-only tokens. Security-critical copy and proof order are fixed by the descriptor. */
+  readonly theme?: CredentialAcquisitionTheme;
   readonly transport?: CredentialAcquisitionTransport;
   readonly signing?: CredentialSigningAdapter;
   readonly stepHandlers?: Partial<Record<"collect_input" | "mailbox_otp", PrimitiveStepHandler>>;
   readonly openerOrigin?: string;
   /** Same-origin, request-scoped persistence used to resume a full-page redirect. */
   readonly redirectStore?: CredentialRedirectStore;
+}
+
+export interface CredentialAcquisitionTheme {
+  readonly accentColor?: string;
+  readonly backgroundColor?: string;
+  readonly textColor?: string;
 }
 
 export interface CredentialsEnsureOptions extends CredentialsAcquireOptions {}

@@ -19,6 +19,7 @@ import {
   type VerifiedCredential,
 } from "@tinycloud/sdk-core";
 import { BrowserCredentialInteraction, BrowserCredentialRedirectStore } from "./browser";
+import { CredentialAcquisitionController } from "./element";
 import { interpretCredentialFlow } from "./interpreter";
 import { findStoredCredential, storeCredential } from "./storage";
 import { OpenCredentialsHttpTransport } from "./transport";
@@ -100,6 +101,7 @@ export class CredentialsService {
     const redirectStore = options.redirectStore ?? (options.interaction === "redirect" && typeof window !== "undefined" ? new BrowserCredentialRedirectStore() : undefined);
     const timed = withTimeout(options.signal, options.timeoutMs ?? 120_000);
     let surface: Awaited<ReturnType<NonNullable<CredentialsAcquireOptions["browser"]>["start"]>> | undefined;
+    let controller: CredentialAcquisitionController | undefined;
     let completed = false;
     try {
       const resume = await redirectStore?.load();
@@ -116,7 +118,11 @@ export class CredentialsService {
       // host owns its local UI, so it must be started again after resumption.
       let interaction = resume && requestedInteraction !== "inline" ? undefined : options.browser;
       if (!resume && !interaction && requestedInteraction !== "headless") {
-        if (requestedInteraction === "inline") throw new CredentialError("UNSUPPORTED_PROFILE", "Inline credential acquisition requires a host interaction adapter");
+        if (requestedInteraction === "inline") {
+          controller = new CredentialAcquisitionController({ descriptor, mountTarget: options.mountTarget, theme: options.theme });
+          interaction = { kind: "inline", start: (input) => controller!.start(input) };
+        }
+        else
         interaction = new BrowserCredentialInteraction(requestedInteraction);
       }
       if (!resume && interaction && interaction.kind !== requestedInteraction) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential interaction adapter does not match the requested interaction");
@@ -132,12 +138,13 @@ export class CredentialsService {
           return this.client.approveCredentialBytes(bytes);
         },
       };
-      await interpretCredentialFlow({ descriptor, requirement, requestId: created.requestId, verifier, holderDid, descriptorDigest, requirementDigest, openerOrigin, transport, signing, handlers: options.stepHandlers, proofHandler: surface?.requestProof, signal: timed.signal, onProgress: options.onProgress, onWait: surface ? async () => { if (surface!.closed()) throw new CredentialError("CANCELED", "Credential interaction was closed"); await surface!.wake(); } : undefined });
-      options.onProgress?.({ state: "verifying", correlationId: created.correlationId });
+      await interpretCredentialFlow({ descriptor, requirement, requestId: created.requestId, verifier, holderDid, descriptorDigest, requirementDigest, openerOrigin, transport, signing, handlers: options.stepHandlers, proofHandler: surface?.requestProof, signal: timed.signal, onProgress: (event) => { if (event.state === "signing") controller?.progress("signing"); options.onProgress?.(event); }, onWait: surface ? async () => { if (surface!.closed()) throw new CredentialError("CANCELED", "Credential interaction was closed"); await surface!.wake(); } : undefined });
+      controller?.progress("verifying"); options.onProgress?.({ state: "verifying", correlationId: created.correlationId });
       const envelope = await transport.result(created.requestId, verifier, timed.signal);
       const verified = await verifyIssuedCredential({ envelope, descriptor, descriptorDigest, requirement, holderDid, issuerMetadata: await transport.issuerMetadata(timed.signal), now: options.now?.(), checkStatus: (status, signal) => transport.checkStatus(status, signal), signal: timed.signal });
       completed = true; await redirectStore?.clear(); return verified;
     } catch (cause) {
+      controller?.fail();
       if (timed.signal.aborted && timed.signal.reason instanceof CredentialError) throw timed.signal.reason;
       throw credentialError(cause);
     } finally { surface?.close(); if (completed) await redirectStore?.clear(); timed.clear(); }
