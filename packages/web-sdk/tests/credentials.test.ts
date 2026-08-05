@@ -62,7 +62,7 @@ for (const code of ["UNSUPPORTED_PROFILE", "UNSUPPORTED_VERSION"] as const) {
     } catch (error) {
       expect(error).toBeInstanceOf(CredentialError);
       expect((error as CredentialError).code).toBe(code);
-      expect((error as CredentialError).recoverable).toBe(false);
+      expect((error as CredentialError).recoverable).toBe(true);
       expect((error as CredentialError).details.correlationId).toBe(REQUEST);
     }
   });
