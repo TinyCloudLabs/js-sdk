@@ -1,5 +1,18 @@
 # @tinycloud/vfs
 
+## 0.1.14-beta.1
+
+### Patch Changes
+
+- Republish the 2.11-compatible dependency graph after the first TC-493 beta
+  incorrectly consumed an unrelated pending major changeset.
+
+## 0.1.14-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@2.11.1-beta.0
+
 ## 0.1.13
 
 ### Patch Changes

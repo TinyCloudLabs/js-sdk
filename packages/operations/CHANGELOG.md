@@ -1,5 +1,20 @@
 # @tinycloud/operations
 
+## 0.3.3-beta.1
+
+### Patch Changes
+
+- Republish the 2.11-compatible dependency graph after the first TC-493 beta
+  incorrectly consumed an unrelated pending major changeset.
+
+## 0.3.3-beta.0
+
+### Patch Changes
+
+- Updated dependencies [743dba1]
+  - @tinycloud/sdk-core@2.11.1-beta.0
+  - @tinycloud/node-sdk@2.11.1-beta.0
+
 ## 0.3.2
 
 ### Patch Changes
