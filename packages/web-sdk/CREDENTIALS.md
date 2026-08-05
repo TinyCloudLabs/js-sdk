@@ -29,7 +29,7 @@ The interpreter dispatches only `collect_input@1`, `mailbox_otp@1`, and `holder_
 
 ## Inline host boundary
 
-`interaction: "inline"` requires a host-owned `InlineCredentialInteraction`. The SDK gives that adapter only an abort signal and declared proof-step metadata. The host returns locally entered proof values; the SDK alone sends them to OpenCredentials, performs holder signing, verifies the issued credential, and writes the holder-owned record. In particular, an inline host never receives an acquisition locator, completion verifier, transport function, TinyCloud session, or signing capability. Do not log or forward the proof value returned by `requestProof`.
+`interaction: "inline"` requires a host-owned `InlineCredentialInteraction`. The SDK gives that adapter only an abort signal and declared proof-step metadata, never requirement values. The host returns locally entered proof values; the SDK alone sends them to OpenCredentials, performs holder signing, verifies the issued credential, and writes the holder-owned record. In particular, an inline host never receives an acquisition locator, completion verifier, transport function, TinyCloud session, signing capability, or policy value. Do not log or forward the proof value returned by `requestProof`.
 
 The host owns the accessible form: use a programmatic label for every field, move focus to the heading or alert on state changes, keep the primary action reachable by keyboard, expose busy/error status with a live region, and keep controls usable at narrow viewport widths. `requestProof` may reject with `CredentialError("CANCELED", ...)` when the holder cancels; a recoverable credential error may be rendered with an explicit retry action that calls `ensure` again.
 

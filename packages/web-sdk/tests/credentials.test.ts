@@ -136,7 +136,7 @@ test("inline interaction exposes no OpenCredentials capability to the host", asy
   const surface = await inline.start({});
   expect(inline.kind).toBe("inline");
   expect(presented).toEqual({ signal: undefined });
-  expect(await surface.requestProof?.({ descriptor: email, requirement: requirement(email), stepId: "collect_input", constraints: {} })).toEqual({ code: "entered-locally" });
+  expect(await surface.requestProof?.({ stepId: "collect_input", constraints: {}, display: { title: email.display.title, description: email.display.description, consent: email.display.consent, progressLabel: email.accessibility.progressLabel, errorLiveRegion: "assertive" }, inputs: [], signal: undefined })).toEqual({ code: "entered-locally" });
   expect(await surface.wake()).toBeUndefined();
 });
 
@@ -150,6 +150,18 @@ test("an inline fallback handles a declared proof primitive while explicit handl
   let fallbackCalls = 0; let explicitCalls = 0;
   await interpretCredentialFlow({ descriptor: synthetic, requirement: req, requestId: REQUEST, verifier: "V".repeat(32), holderDid: HOLDER, descriptorDigest, requirementDigest, openerOrigin: "https://app.test", transport: new InterpreterTransport(states, binding(synthetic, descriptorDigest, requirementDigest)), signing: { autoSign: async () => new Uint8Array([1]) }, handlers: { collect_input: async () => { explicitCalls += 1; return { acknowledged: true }; } }, proofHandler: async () => { fallbackCalls += 1; return { acknowledged: true }; } });
   expect(explicitCalls).toBe(1); expect(fallbackCalls).toBe(0);
+});
+
+test("inline proof hosts receive declared form metadata but never requirement values", async () => {
+  const req = requirement(email); const descriptorDigest = await canonicalDigest(email); const requirementDigest = await canonicalDigest(req);
+  const states: CredentialRequestState[] = [
+    { type: "OpenCredentialsAcquisitionState", version: 1, requestId: REQUEST, transitionId: "proof", state: "pending", nextStep: { id: "mailbox_otp", type: "mailbox_otp", version: 1, constraints: {} }, correlationId: REQUEST },
+    { type: "OpenCredentialsAcquisitionState", version: 1, requestId: REQUEST, transitionId: "done", state: "complete", correlationId: REQUEST },
+  ];
+  let presented: unknown;
+  await interpretCredentialFlow({ descriptor: email, requirement: req, requestId: REQUEST, verifier: "V".repeat(32), holderDid: HOLDER, descriptorDigest, requirementDigest, openerOrigin: "https://app.test", transport: new InterpreterTransport(states, binding(email, descriptorDigest, requirementDigest)), signing: { autoSign: async () => new Uint8Array([1]) }, proofHandler: async (input) => { presented = input; return { otp: "entered-locally" }; } });
+  expect(presented).toEqual({ stepId: "mailbox_otp", constraints: {}, display: { title: email.display.title, description: email.display.description, consent: email.display.consent, progressLabel: email.accessibility.progressLabel, errorLiveRegion: "assertive" }, inputs: email.inputs.map(({ id, label, schema }) => ({ id, label, schema })), signal: undefined });
+  expect(JSON.stringify(presented)).not.toContain(req.claims.email!);
 });
 
 function kvMemory(failReadback = false) { const values = new Map<string, unknown>(); const headers = { etag: "\"etag\"", get: () => null }; return { service: { batchPut: async (items: any[]) => { for (const item of items) values.set(item.key, item.value); return { ok: true, data: { keys: items.map((item) => item.key), count: items.length } }; }, get: async (key: string) => failReadback ? { ok: false, error: {} } : values.has(key) ? { ok: true, data: { data: values.get(key), headers } } : { ok: false, error: {} }, list: async ({ prefix }: any) => ({ ok: true, data: { keys: [...values.keys()].filter((key) => key.startsWith(prefix)) } }) } as any }; }
