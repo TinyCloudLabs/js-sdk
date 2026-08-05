@@ -26,6 +26,11 @@ export async function interpretCredentialFlow(input: {
   readonly openerOrigin: string;
   readonly transport: CredentialAcquisitionTransport;
   readonly signing: CredentialSigningAdapter;
+  /**
+   * Fallback for a host-owned surface. It receives every declared proof step,
+   * including primitives added by a later protocol version.
+   */
+  readonly proofHandler?: PrimitiveStepHandler;
   readonly handlers?: Partial<Record<"collect_input" | "mailbox_otp", PrimitiveStepHandler>>;
   readonly signal?: AbortSignal;
   readonly onProgress?: (event: CredentialProgressEvent) => void;
@@ -66,7 +71,7 @@ export async function interpretCredentialFlow(input: {
       await input.transport.submitHolderSignature(input.requestId, input.verifier, encodeBase64Url(signature), input.signal);
     } else {
       input.onProgress?.({ state: next.type === "collect_input" ? "collecting" : "proving", stepId: next.id, correlationId: state.correlationId });
-      const handler = input.handlers?.[next.type];
+      const handler = input.handlers?.[next.type] ?? input.proofHandler;
       if (!handler) { await (input.onWait?.() ?? delay(state.retryAfterMs ?? 50, input.signal)); continue; }
       if (next.constraints.challengeRequired === true) await input.transport.beginStep(input.requestId, input.verifier, next.type, input.signal);
       const proof = await handler({ descriptor: input.descriptor, requirement: input.requirement, stepId: next.id, constraints: next.constraints, signal: input.signal });
