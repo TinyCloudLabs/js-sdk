@@ -260,6 +260,33 @@ describe("tinycloud:manage-key OAuth signer", () => {
     });
   });
 
+  test.each(["canonical_key_unavailable", "signer_failed"] as const)(
+    "maps transient OpenKey %s failures without exposing the issuer reason",
+    async (upstreamCode) => {
+      const strategy = createOpenKeyManageKeySigningStrategy({
+        endpoint: "https://openkey.example.test/api/delegate/sign",
+        token: "consented-oauth-token",
+        scopes: "openid tinycloud:manage-key",
+        identity,
+        fetch: async () =>
+          Response.json(
+            {
+              approved: false,
+              code: upstreamCode,
+              reason: "internal signer details must not reach the application",
+            },
+            { status: 503 },
+          ),
+      });
+
+      await expect(strategy.handler(request)).rejects.toMatchObject({
+        code: "SIGNER_UNAVAILABLE",
+        message: "The canonical key signer is temporarily unavailable",
+        retryable: true,
+      });
+    },
+  );
+
   test("preserves the signer-provided consent URL on terminal recovery errors", async () => {
     const strategy = createOpenKeyManageKeySigningStrategy({
       endpoint: "https://openkey.example.test/api/delegate/sign",

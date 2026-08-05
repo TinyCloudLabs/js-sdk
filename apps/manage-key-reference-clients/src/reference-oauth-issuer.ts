@@ -1,4 +1,5 @@
 import { privateKeyToAccount } from "viem/accounts";
+import { TinyCloudNode } from "@tinycloud/node-sdk";
 import {
   TINYCLOUD_CANONICAL_IDENTITY_CLAIM,
   type CanonicalTinyCloudIdentity,
@@ -29,12 +30,25 @@ export interface ReferenceOAuthIssuer {
   stop(): void;
 }
 
+/** Hosts the canonical applications space with the owner key, out of band. */
+export async function provisionReferenceApplicationsSpace(host: string): Promise<void> {
+  const owner = new TinyCloudNode({
+    host,
+    privateKey: REFERENCE_CANONICAL_KEY,
+    autoBootstrapAccount: false,
+    autoCreateSpace: true,
+  });
+  await owner.signIn();
+  await owner.hostOwnedSpace("applications");
+}
+
 /**
  * A local public OAuth handler for the examples. It is the authority that
  * derives the canonical identity; neither client imports or caches it.
  */
 export function startReferenceOAuthIssuer(): ReferenceOAuthIssuer {
   const grants = new Map<string, PendingAuthorization>();
+  const tokens = new Map<string, PendingAuthorization>();
   const events: OAuthAuditEvent[] = [];
   const account = privateKeyToAccount(REFERENCE_CANONICAL_KEY);
   const server = Bun.serve({
@@ -80,20 +94,39 @@ export function startReferenceOAuthIssuer(): ReferenceOAuthIssuer {
         }
         grants.delete(code);
         events.push({ client: tokenClient, stage: "token", clientId });
+        const token = `${tokenClient}-${crypto.randomUUID()}`;
+        tokens.set(token, grant);
         const identity = canonicalIdentity(account.address);
         const claims = { [TINYCLOUD_CANONICAL_IDENTITY_CLAIM]: identity };
         if (tokenClient === "notes") {
           return Response.json({
             client_id: clientId,
-            access_token: `notes-${crypto.randomUUID()}`,
+            access_token: token,
             scope: grant.scope,
             claims,
           });
         }
         return Response.json({
           audience: clientId,
-          token: `tasks-${crypto.randomUUID()}`,
+          token,
           id_token_claims: claims,
+        });
+      }
+
+      if (url.pathname === "/api/delegate/sign" && request.method === "POST") {
+        const token = request.headers.get("authorization")?.replace(/^Bearer /u, "");
+        const grant = token ? tokens.get(token) : undefined;
+        if (!grant || !grant.scope.split(" ").includes("tinycloud:manage-key")) {
+          return Response.json({ approved: false, code: "missing_scope" }, { status: 403 });
+        }
+        const body = await request.json() as { message?: unknown; type?: unknown };
+        if (body.type !== "siwe" || typeof body.message !== "string") {
+          return Response.json({ approved: false, code: "message_rejected" }, { status: 400 });
+        }
+        return Response.json({
+          approved: true,
+          signature: await account.signMessage({ message: body.message }),
+          canonicalIdentity: canonicalIdentity(account.address),
         });
       }
 

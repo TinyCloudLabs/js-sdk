@@ -57,17 +57,17 @@ export type OpenKeyManageKeyErrorCode =
   | "USER_EXCLUSIVE"
   | "TOKEN_EXPIRED"
   | "MESSAGE_REJECTED"
-  | "IDENTITY_MISMATCH";
+  | "IDENTITY_MISMATCH"
+  | "SIGNER_UNAVAILABLE";
 
-/** A terminal denial from the OAuth canonical-key signing boundary. */
+/** A typed denial or recoverable outage from the OAuth canonical-key boundary. */
 export class OpenKeyManageKeyError extends Error {
-  readonly retryable = false;
-
   constructor(
     readonly code: OpenKeyManageKeyErrorCode,
     message: string,
     /** A user-visible OAuth recovery location, when the signer provides one. */
     readonly approvalUrl?: string,
+    readonly retryable = false,
   ) {
     super(message);
     this.name = "OpenKeyManageKeyError";
@@ -260,6 +260,16 @@ function errorForResponse(
     case "invalid_token":
     case "expired_token":
       return new OpenKeyManageKeyError("TOKEN_EXPIRED", message, body?.approvalUrl);
+    case "canonical_key_unavailable":
+    case "signer_failed":
+      // These are OpenKey infrastructure outcomes, not policy decisions. Do
+      // not surface an issuer-provided internal reason as a terminal denial.
+      return new OpenKeyManageKeyError(
+        "SIGNER_UNAVAILABLE",
+        "The canonical key signer is temporarily unavailable",
+        undefined,
+        true,
+      );
     default:
       return new OpenKeyManageKeyError(
         status === 401 ? "TOKEN_EXPIRED" : "MESSAGE_REJECTED",

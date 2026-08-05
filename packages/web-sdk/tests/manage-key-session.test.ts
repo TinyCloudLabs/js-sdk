@@ -98,6 +98,7 @@ test("establishManageKeySession installs only the canonical OAuth signer", async
   expect(signInRequests).toBe(1);
   expect(capturedConfig.autoBootstrapAccount).toBe(false);
   expect(capturedConfig.capabilityRequest.resources[0].path).toBe("notes/");
+  expect(capturedConfig.capabilityRequest.registryRecords).toEqual([]);
   expect(requests).toHaveLength(1);
   expect(new Headers(requests[0]?.headers).get("authorization")).toBe(
     "Bearer notes-access-token",

@@ -17,6 +17,7 @@ import { checkServerHealth, SERVER_URL, TEST_KEY } from "./setup";
 (globalThis as any).window = {
   addEventListener: () => undefined,
   removeEventListener: () => undefined,
+  dispatchEvent: () => true,
   location: { hostname: "manage-key-http-smoke.local" },
 };
 (globalThis as any).document = {

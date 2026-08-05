@@ -6,13 +6,16 @@
   "main": "src/run.ts",
   "scripts": {
     "start": "bun run src/run.ts",
+    "start:tinycloud": "bun run src/run-tinycloud.ts",
     "start:notes": "bun run src/run-notes.ts",
     "start:tasks": "bun run src/run-tasks.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@tinycloud/sdk-core": "workspace:*"
+    "@tinycloud/node-sdk": "workspace:*",
+    "@tinycloud/sdk-core": "workspace:*",
+    "@tinycloud/web-sdk": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -63,12 +63,17 @@ const { client, identity, session } = await establishManageKeySession({
 });
 ```
 
-`OpenKeyManageKeyError` is terminal (`retryable === false`) and has one of
+Terminal `OpenKeyManageKeyError` values (`retryable === false`) have one of
 `CONSENT_REQUIRED`, `GRANT_DISABLED`, `USER_EXCLUSIVE`, `TOKEN_EXPIRED`,
 `MESSAGE_REJECTED`, or `IDENTITY_MISMATCH`. Do not retry it in a loop. When an
 issuer supplies `approvalUrl`, the error preserves it so the application can
 restart OAuth or show its consent route. Otherwise, restart the authorization
 redirect with `requestTinyCloudManageKeyScope`.
+
+OpenKey's `canonical_key_unavailable` and `signer_failed` responses are
+reported as `SIGNER_UNAVAILABLE` with `retryable === true`. They intentionally
+use a stable SDK message instead of exposing an issuer-internal reason; retry
+with normal bounded backoff while the existing OAuth token remains valid.
 
 The runnable `apps/manage-key-reference-clients/` workspace app contains two
 independent OAuth authorization-code clients. Notes and Tasks use distinct
@@ -94,6 +99,16 @@ bun run --cwd apps/manage-key-reference-clients start:tasks
 
 Verify the flows with `bun run --cwd apps/manage-key-reference-clients test`.
 The app's typecheck and test commands run in the standard workspace CI job.
+
+With a local TinyCloud node, the same two independent clients can each sign a
+scoped public web-SDK session and complete an exact-byte KV round-trip. The
+issuer provisions the shared `applications` space first with its owner key;
+the OAuth clients receive only their separate bearer grants:
+
+```sh
+TC_TEST_SERVER=http://localhost:9000 \
+  bun run --cwd apps/manage-key-reference-clients start:tinycloud
+```
 
 ## Real HTTP smoke
 

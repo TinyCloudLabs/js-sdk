@@ -58,8 +58,15 @@ export async function establishManageKeySession(
   options: EstablishManageKeySessionOptions,
 ): Promise<EstablishManageKeySessionResult> {
   const identity = parseCanonicalTinyCloudIdentity(options.identity);
+  const capabilityRequest = options.tinycloud.capabilityRequest && {
+    ...options.tinycloud.capabilityRequest,
+    // A raw, app-scoped request has no account application to register. The
+    // node's fire-and-forget registry sync expects this array to exist.
+    registryRecords: options.tinycloud.capabilityRequest.registryRecords ?? [],
+  };
   const client = new TinyCloudWeb({
     ...options.tinycloud,
+    capabilityRequest,
     provider: createCanonicalIdentityProvider(identity.address, identity.chainId),
     signStrategy: createOpenKeyManageKeySigningStrategy({
       ...options.signer,

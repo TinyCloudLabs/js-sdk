@@ -63,6 +63,9 @@ sign-in before delegating decrypt access to a backend.
 
 ### Browser SDK
 
+For OAuth-consented canonical-key sessions, see the
+[manage-key integration guide](./docs/manage-key-sdk.md).
+
 ```bash
 npm install @tinycloud/web-sdk
 ```
