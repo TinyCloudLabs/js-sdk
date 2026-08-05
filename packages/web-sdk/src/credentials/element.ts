@@ -63,7 +63,27 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
 
   private renderShell(): void {
     if (!this.root) return;
-    this.root.innerHTML = `<style>:host{--tinycloud-credential-accent:#3559e0;--tinycloud-credential-background:#fff;--tinycloud-credential-text:#172033;display:block;color:var(--tinycloud-credential-text);font:inherit}.card{background:var(--tinycloud-credential-background);border:1px solid #c8d0df;border-radius:12px;padding:20px;max-width:420px;box-shadow:0 4px 16px #1720331f}.actions{display:flex;gap:8px;margin-top:16px}button{font:inherit;border-radius:7px;padding:8px 12px;border:1px solid #8993a7;background:#fff;color:inherit;cursor:pointer}button[type=submit]{background:var(--tinycloud-credential-accent);border-color:var(--tinycloud-credential-accent);color:#fff}input{box-sizing:border-box;width:100%;padding:9px;margin-top:5px;font:inherit;border:1px solid #8993a7;border-radius:6px}label{display:block;margin-top:12px}p{line-height:1.45}</style><section class="card" role="dialog" aria-modal="false" aria-labelledby="title"><h2 id="title">Credential check</h2><p data-description></p><div data-form></div><p data-live role="status" aria-live="polite">Preparing credential acquisition…</p></section>`;
+    const style = document.createElement("style");
+    style.textContent = ":host{--tinycloud-credential-accent:#3559e0;--tinycloud-credential-background:#fff;--tinycloud-credential-text:#172033;display:block;color:var(--tinycloud-credential-text);font:inherit}.card{background:var(--tinycloud-credential-background);border:1px solid #c8d0df;border-radius:12px;padding:20px;max-width:420px;box-shadow:0 4px 16px #1720331f}.actions{display:flex;gap:8px;margin-top:16px}button{font:inherit;border-radius:7px;padding:8px 12px;border:1px solid #8993a7;background:#fff;color:inherit;cursor:pointer}button[type=submit]{background:var(--tinycloud-credential-accent);border-color:var(--tinycloud-credential-accent);color:#fff}input{box-sizing:border-box;width:100%;padding:9px;margin-top:5px;font:inherit;border:1px solid #8993a7;border-radius:6px}label{display:block;margin-top:12px}p{line-height:1.45}";
+    const card = document.createElement("section");
+    card.className = "card";
+    card.setAttribute("role", "dialog");
+    card.setAttribute("aria-modal", "false");
+    card.setAttribute("aria-labelledby", "title");
+    const title = document.createElement("h2");
+    title.id = "title";
+    title.textContent = "Credential check";
+    const description = document.createElement("p");
+    description.dataset.description = "";
+    const formHost = document.createElement("div");
+    formHost.dataset.form = "";
+    const live = document.createElement("p");
+    live.dataset.live = "";
+    live.setAttribute("role", "status");
+    live.setAttribute("aria-live", "polite");
+    live.textContent = "Preparing credential acquisition…";
+    card.append(title, description, formHost, live);
+    this.root.replaceChildren(style, card);
   }
 
   private renderPrompt(request: InlineCredentialProofRequest): void {
@@ -75,10 +95,36 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
     description.textContent = request.display.description;
     const isOtp = request.stepId === "mailbox_otp";
     const fields = isOtp ? [{ id: "otp", label: "One-time mailbox code", type: "text", inputMode: "numeric" }] : request.inputs.map((field) => ({ id: field.id, label: field.label, type: field.schema.format === "email" ? "email" : "text", inputMode: field.schema.format === "email" ? "email" : "text" }));
-    formHost.innerHTML = `<form novalidate>${fields.map((field) => `<label>${field.label}<input required name="${field.id}" type="${field.type}" inputmode="${field.inputMode}" autocomplete="off" /></label>`).join("")}<p>${request.display.consent}</p><div class="actions"><button type="submit">Continue</button><button type="button" data-cancel>Cancel</button></div></form>`;
+    const form = document.createElement("form");
+    form.noValidate = true;
+    for (const field of fields) {
+      const label = document.createElement("label");
+      label.textContent = field.label;
+      const input = document.createElement("input");
+      input.required = true;
+      input.name = field.id;
+      input.type = field.type;
+      input.inputMode = field.inputMode;
+      input.autocomplete = "off";
+      label.append(input);
+      form.append(label);
+    }
+    const consent = document.createElement("p");
+    consent.textContent = request.display.consent;
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.textContent = "Continue";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.dataset.cancel = "";
+    cancel.textContent = "Cancel";
+    actions.append(submit, cancel);
+    form.append(consent, actions);
+    formHost.replaceChildren(form);
     live.setAttribute("aria-live", request.display.errorLiveRegion);
     live.textContent = isOtp ? "Enter the mailbox code to continue." : request.display.progressLabel;
-    const form = formHost.querySelector("form")!;
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const values: Record<string, string> = {};
