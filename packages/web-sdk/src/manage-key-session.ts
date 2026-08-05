@@ -15,7 +15,10 @@ export interface EstablishManageKeySessionOptions {
   /** OAuth bearer signer configuration. No browser session credentials are used. */
   signer: Omit<OpenKeyManageKeySigningStrategyOptions, "identity">;
   /** TinyCloud client configuration, including the app's requested capabilities. */
-  tinycloud: Omit<Config, "provider" | "signStrategy">;
+  tinycloud: Omit<
+    Config,
+    "provider" | "signStrategy" | "autoBootstrapAccount"
+  >;
 }
 
 /** Result of a completed TinyCloud sign-in using the OAuth canonical key. */

@@ -7,6 +7,12 @@ export {
   type SessionRestoreStatus,
 } from "./modules/tcw";
 export {
+  establishOpenKeySession,
+  type EstablishOpenKeySessionOptions,
+  type EstablishOpenKeySessionResult,
+  type EstablishOpenKeySessionStatus,
+} from "./openkey-session";
+export {
   establishManageKeySession,
   type EstablishManageKeySessionOptions,
   type EstablishManageKeySessionResult,

@@ -4,6 +4,8 @@ import type { CaveatedDelegationUnsupportedError as WebError } from "../src/inde
 import type {
   EstablishManageKeySessionOptions,
   EstablishManageKeySessionResult,
+  EstablishOpenKeySessionOptions,
+  EstablishOpenKeySessionResult,
 } from "../src/index";
 
 (globalThis as any).HTMLElement = class {};
@@ -43,6 +45,18 @@ type HelperTypesReachable =
       : false
     : false;
 const hasHelperTypes: Assert<HelperTypesReachable> = true;
+type LegacyHelperTypesReachable =
+  EstablishOpenKeySessionOptions["key"] extends object
+    ? EstablishOpenKeySessionResult["status"] extends string
+      ? true
+      : false
+    : false;
+const hasLegacyHelperTypes: Assert<LegacyHelperTypesReachable> = true;
+type BootstrapCannotBeSilentlyEnabled =
+  "autoBootstrapAccount" extends keyof EstablishManageKeySessionOptions["tinycloud"]
+    ? false
+    : true;
+const rejectsBootstrapOverride: Assert<BootstrapCannotBeSilentlyEnabled> = true;
 
 test("exports CaveatedDelegationUnsupportedError from the web facade", () => {
   expect(hasPublicError).toBe(true);
@@ -52,4 +66,11 @@ test("exports establishManageKeySession and its public types from the web facade
   const webSdk = await import("../src/index");
   expect(typeof webSdk.establishManageKeySession).toBe("function");
   expect(hasHelperTypes).toBe(true);
+  expect(rejectsBootstrapOverride).toBe(true);
+});
+
+test("retains establishOpenKeySession and its public types from the web facade", async () => {
+  const webSdk = await import("../src/index");
+  expect(typeof webSdk.establishOpenKeySession).toBe("function");
+  expect(hasLegacyHelperTypes).toBe(true);
 });

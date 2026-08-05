@@ -66,6 +66,8 @@ export class OpenKeyManageKeyError extends Error {
   constructor(
     readonly code: OpenKeyManageKeyErrorCode,
     message: string,
+    /** A user-visible OAuth recovery location, when the signer provides one. */
+    readonly approvalUrl?: string,
   ) {
     super(message);
     this.name = "OpenKeyManageKeyError";
@@ -191,6 +193,7 @@ export interface OpenKeyManageKeySigningResponseBody {
   code?: string;
   reason?: string;
   error?: string;
+  approvalUrl?: string;
 }
 
 /** Minimal fetch surface used by the manage-key signer. */
@@ -245,22 +248,23 @@ function errorForResponse(
   switch (body?.code ?? body?.error) {
     case "missing_scope":
     case "consent_required":
-      return new OpenKeyManageKeyError("CONSENT_REQUIRED", message);
+      return new OpenKeyManageKeyError("CONSENT_REQUIRED", message, body?.approvalUrl);
     case "client_disabled":
     case "signing_disabled":
     case "grant_disabled":
-      return new OpenKeyManageKeyError("GRANT_DISABLED", message);
+      return new OpenKeyManageKeyError("GRANT_DISABLED", message, body?.approvalUrl);
     case "user_exclusive":
-      return new OpenKeyManageKeyError("USER_EXCLUSIVE", message);
+      return new OpenKeyManageKeyError("USER_EXCLUSIVE", message, body?.approvalUrl);
     case "token_expired":
     case "token_too_old":
     case "invalid_token":
     case "expired_token":
-      return new OpenKeyManageKeyError("TOKEN_EXPIRED", message);
+      return new OpenKeyManageKeyError("TOKEN_EXPIRED", message, body?.approvalUrl);
     default:
       return new OpenKeyManageKeyError(
         status === 401 ? "TOKEN_EXPIRED" : "MESSAGE_REJECTED",
         message,
+        body?.approvalUrl,
       );
   }
 }

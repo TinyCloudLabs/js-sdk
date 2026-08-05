@@ -260,6 +260,31 @@ describe("tinycloud:manage-key OAuth signer", () => {
     });
   });
 
+  test("preserves the signer-provided consent URL on terminal recovery errors", async () => {
+    const strategy = createOpenKeyManageKeySigningStrategy({
+      endpoint: "https://openkey.example.test/api/delegate/sign",
+      token: "consented-oauth-token",
+      scopes: "openid tinycloud:manage-key",
+      identity,
+      fetch: async () =>
+        Response.json(
+          {
+            approved: false,
+            code: "consent_required",
+            approvalUrl: "https://issuer.example.test/authorize?scope=tinycloud%3Amanage-key",
+          },
+          { status: 403 },
+        ),
+    });
+
+    await expect(strategy.handler(request)).rejects.toMatchObject({
+      code: "CONSENT_REQUIRED",
+      retryable: false,
+      approvalUrl:
+        "https://issuer.example.test/authorize?scope=tinycloud%3Amanage-key",
+    });
+  });
+
   test("reports a signer identity mismatch distinctly from a rejected message", async () => {
     const other = privateKeyToAccount(
       "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
