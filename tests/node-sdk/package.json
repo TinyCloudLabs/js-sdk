@@ -14,6 +14,7 @@
   "dependencies": {
     "@tinycloud/node-sdk": "workspace:*",
     "@tinycloud/sdk-services": "workspace:*",
+    "@tinycloud/web-sdk": "workspace:*",
     "ethers": "^6.13.0"
   },
   "devDependencies": {

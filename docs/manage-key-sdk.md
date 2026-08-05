@@ -74,3 +74,28 @@ The two independent example adapters in
 `examples/manage-key-reference-clients/` show Notes consuming validated OIDC
 claims and Tasks consuming the canonical claim supplied by its OAuth adapter.
 For the same user both resolve the same canonical address, DID, and space.
+
+## Real HTTP smoke
+
+The public SDK smoke uses a real local TinyCloud node plus a loopback handler
+that mirrors the OpenKey `b541082` OAuth consent, token exchange, and
+`/api/delegate/sign` contract. It explicitly provisions the canonical
+`applications` space before the OAuth-scoped client signs in, then asserts a
+byte-identical `client.kv.put`/`client.kv.get` round-trip. It never substitutes
+an in-memory node or module mock.
+
+Start a local node in a separate terminal:
+
+```sh
+cd ../tinycloud-node
+ROCKET_PORT=9000 cargo run
+```
+
+Then, from this repository, run:
+
+```sh
+bun run test:manage-key-smoke
+```
+
+Set `TC_TEST_SERVER` to use another local TinyCloud node. The command fails
+loudly when `/info` cannot be reached; it is intentionally not a skipped test.
