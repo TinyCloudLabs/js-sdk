@@ -40,7 +40,7 @@ test("HTTP transport emits the Rust-owned request, challenge, and proof wire sha
   await transport.submitStep(REQUEST, verifier, "mailbox_otp", { otp: "redacted" }); expect(JSON.parse(calls[3]!.init.body as string)).toEqual({ step: "mailbox_otp", stepVersion: 1, challengeNonce: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", proof: { otp: "redacted" } });
 });
 
-for (const [code, status] of [["REQUEST_EXPIRED", 410], ["ISSUER_UNREADY", 503], ["UNSUPPORTED_PROFILE", 400], ["SIGNATURE_REJECTED", 400]] as const) {
+for (const [code, status] of [["REQUEST_EXPIRED", 410], ["ISSUER_UNREADY", 503], ["UNSUPPORTED_PROFILE", 400], ["UNSUPPORTED_VERSION", 400], ["SIGNATURE_REJECTED", 400]] as const) {
   test(`HTTP transport preserves typed recoverable server error ${code}`, async () => {
     const transport = new OpenCredentialsHttpTransport(email, async () => new Response(JSON.stringify({
       type: "tinycloud.credentials/error/v1", code, recoverable: true,
