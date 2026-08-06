@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type "release" to confirm stable release'
+        description: 'Type "release" for stable or "major-beta" for an explicitly reviewed major beta'
         required: true
 
 concurrency:
@@ -18,7 +18,9 @@ jobs:
   # On push to master: publish incrementing beta pre-releases
   beta:
     name: Beta Release
-    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
+    if: >-
+      (github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'major-beta')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -51,6 +53,8 @@ jobs:
       - name: Reject unconfirmed major beta releases
         if: steps.check.outputs.pending != '0'
         run: node scripts/check-beta-release-plan.mjs
+        env:
+          ALLOW_MAJOR_BETA: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'major-beta' }}
 
       - name: List pending changesets
         if: steps.check.outputs.pending != '0'
