@@ -1,5 +1,15 @@
 # @tinycloudlabs/web-sdk
 
+## 2.11.1-beta.1
+
+### Patch Changes
+
+- 0052312: Authorize exact-email notifications for Policy/v3 shares through a Node-signed,
+  single-use delivery receipt bound to the signed envelope and registered roots.
+- Updated dependencies [0052312]
+  - @tinycloud/sdk-core@2.11.1-beta.1
+  - @tinycloud/node-sdk@2.11.1-beta.1
+
 ## 2.11.1-beta.0
 
 ### Patch Changes
