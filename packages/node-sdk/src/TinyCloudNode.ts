@@ -151,6 +151,8 @@ import {
   validateOwnerSharePolicyRegistrationBytes,
   type ShareDeliveryAuthorizationReceipt,
   validateShareDeliveryAuthorizationBytes,
+  type ShareDeliveryAuthorizationV3Receipt,
+  validateShareDeliveryAuthorizationV3Bytes,
   verifyEip191MessageSignature,
   signCompactUcanRootAuthorization,
   type UnifiedPolicyCapability,
@@ -178,6 +180,7 @@ export type {
   RegisterOwnerSharePolicyParams,
   OwnerSharePolicyRegistrationReceipt,
   ShareDeliveryAuthorizationReceipt,
+  ShareDeliveryAuthorizationV3Receipt,
 } from "@tinycloud/sdk-core";
 
 /** Default TinyCloud host */
@@ -4381,6 +4384,50 @@ export class TinyCloudNode {
     if (!response.ok) throw new Error(`Share delivery authorization failed: ${response.status}`);
     const responseBytes = new Uint8Array(await response.arrayBuffer());
     return validateShareDeliveryAuthorizationBytes(responseBytes, { request, nodeProof: input.nodeProof, credentialsAudience: input.credentialsAudience });
+  }
+
+  /** Authorize one short-lived v3 delivery against the signed v3 envelope and registered roots. */
+  async authorizeShareDeliveryV3(input: {
+    readonly envelope: Record<string, unknown>;
+    readonly sealedEnvelope: string;
+    readonly envelopeKey: string;
+    readonly shareCid: string;
+    readonly resourcePath: string;
+    readonly recipientEmail: string;
+    readonly shareUrl: string;
+    readonly documentName: string;
+    readonly expiresAt: string;
+    readonly nodeProof: { readonly kid: string; readonly publicKey: Uint8Array };
+    readonly credentialsAudience: string;
+  }): Promise<ShareDeliveryAuthorizationV3Receipt> {
+    const session = this.currentTinyCloudSession();
+    const serviceSession = this._serviceContext?.session;
+    if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
+    const body = {
+      envelope: input.envelope,
+      sealedEnvelope: input.sealedEnvelope,
+      envelopeKey: input.envelopeKey,
+      shareCid: input.shareCid,
+      recipientEmail: input.recipientEmail,
+      shareUrl: input.shareUrl,
+      documentName: input.documentName,
+      jti: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
+      expiresAt: input.expiresAt,
+    };
+    const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));
+    const request = { ...body, requestBodyDigest };
+    const authorization = authorizationHeader(this.invokeAnyWithRuntimePermissions(serviceSession, [{ spaceId: session.spaceId, service: "kv", path: input.resourcePath, action: "tinycloud.kv/get" }]));
+    const response = await fetch(`${this.config.host!}/share/v3/deliveries/authorize`, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json", authorization },
+      body: canonicalizeEncryptionJson(request),
+    });
+    if (!response.ok) throw new Error(`V3 share delivery authorization failed: ${response.status}`);
+    return validateShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
+      request,
+      nodeProof: input.nodeProof,
+      credentialsAudience: input.credentialsAudience,
+    });
   }
 
   private async createRootDelegationForSharing(params: {
