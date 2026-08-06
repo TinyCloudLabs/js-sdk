@@ -66,3 +66,6 @@ jobs:
 
       - name: Lint every workspace package
         run: bun run lint
+
+      - name: Verify manage-key reference clients
+        run: bun run --cwd apps/manage-key-reference-clients typecheck && bun run --cwd apps/manage-key-reference-clients test

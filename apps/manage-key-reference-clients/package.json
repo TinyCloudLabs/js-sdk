@@ -1,0 +1,25 @@
+{
+  "name": "@tinycloud/manage-key-reference-clients",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/run.ts",
+  "scripts": {
+    "start": "bun run src/run.ts",
+    "start:tinycloud": "bun run src/run-tinycloud.ts",
+    "start:notes": "bun run src/run-notes.ts",
+    "start:tasks": "bun run src/run-tasks.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tinycloud/node-sdk": "workspace:*",
+    "@tinycloud/sdk-core": "workspace:*",
+    "@tinycloud/web-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.3",
+    "viem": "^2.45.0"
+  }
+}

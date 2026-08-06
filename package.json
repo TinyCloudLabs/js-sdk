@@ -46,6 +46,7 @@
     "node-demo:run:delegation": "bun run --cwd apps/node-demo src/demo-delegation-api.ts",
     "node-test": "bun run --cwd packages/node-sdk build && bun run --cwd apps/node-demo src/test-space.ts",
     "node-test:run": "bun run --cwd apps/node-demo src/test-space.ts",
+    "test:manage-key-smoke": "bun run --cwd tests/node-sdk test manage-key-http-smoke.test.ts",
     "node-sdk": "bun --cwd packages/node-sdk -c",
     "web-sdk": "bun --cwd packages/web-sdk -c",
     "sdk-core": "bun --cwd packages/sdk-core -c",

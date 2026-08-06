@@ -51,6 +51,11 @@ const sidebars: SidebarsConfig = {
               label: 'Authentication',
               id: 'web-sdk/guides/authentication-guide',
             },
+            {
+              type: 'doc',
+              label: 'OAuth Canonical Key',
+              id: 'web-sdk/guides/manage-key-oauth',
+            },
           ],
         },
         {

@@ -68,6 +68,24 @@ export {
   createOpenKeyCallbackSigningStrategy,
 } from "./strategies";
 
+export {
+  TINYCLOUD_MANAGE_KEY_SCOPE,
+  TINYCLOUD_CANONICAL_IDENTITY_CLAIM,
+  OpenKeyManageKeyError,
+  requestTinyCloudManageKeyScope,
+  hasTinyCloudManageKeyScope,
+  parseCanonicalTinyCloudIdentity,
+  parseCanonicalTinyCloudIdentityClaims,
+  createOpenKeyManageKeySigningStrategy,
+  type CanonicalTinyCloudIdentity,
+  type OpenKeyManageKeyErrorCode,
+  type OpenKeyManageKeySigningRequestBody,
+  type OpenKeyManageKeySigningResponseBody,
+  type OpenKeyManageKeyFetch,
+  type OpenKeyManageKeySigningStrategyOptions,
+  type OpenKeyManageKeyCallbackStrategy,
+} from "./manage-key";
+
 // Space creation handler types
 export {
   // Context

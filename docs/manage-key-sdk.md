@@ -1,0 +1,136 @@
+# OAuth canonical-key signer
+
+`@tinycloud/sdk-core` exposes a generic signer for an OAuth client that has
+been explicitly consented for `tinycloud:manage-key`. The shared adapter has
+no application, space-name, or first-party session-token dependency.
+
+Request the additional OAuth scope during the authorization redirect. The SDK
+only uses it after the issuer returns a bearer token whose granted scopes
+include it:
+
+```ts
+import {
+  requestTinyCloudManageKeyScope,
+  parseCanonicalTinyCloudIdentityClaims,
+  createOpenKeyManageKeySigningStrategy,
+} from "@tinycloud/sdk-core";
+
+const scope = requestTinyCloudManageKeyScope("openid profile");
+// Send `scope` to your OAuth issuer. After the redirect, validate the ID token
+// with your OAuth library before passing its claims to the SDK.
+const identity = parseCanonicalTinyCloudIdentityClaims(validatedIdTokenClaims);
+
+const signStrategy = createOpenKeyManageKeySigningStrategy({
+  endpoint: issuerManageKeyEndpoint,
+  token: accessToken,
+  scopes: grantedScopes,
+  identity,
+});
+```
+
+The identity claim is named
+`https://tinycloud.xyz/canonical_identity` and must contain exactly
+`version`, `keyId`, checksummed `address`, `chainId`, `did`, and `spaceId`.
+The SDK derives the DID and space from the EIP-55 address and rejects any
+claim that does not match. It sends the exact SIWE/ReCap string once, through
+a bearer-only request with cookies omitted, and verifies the returned EIP-191
+signature against that canonical address.
+
+For the web SDK, use `establishManageKeySession` to install the signer and
+perform the normal public `TinyCloudWeb.signIn()` flow. The helper deliberately
+does not accept a provider, alternate signing strategy, or
+`autoBootstrapAccount`: a manage-key grant can sign the one scoped session
+SIWE but cannot silently authorize bootstrap requests. Browser session
+persistence remains configurable through the remaining `TinyCloudWeb` config;
+a restored session does not require another signature.
+
+```ts
+import { establishManageKeySession } from "@tinycloud/web-sdk";
+
+const { client, identity, session } = await establishManageKeySession({
+  identity: validatedIdTokenClaims[
+    "https://tinycloud.xyz/canonical_identity"
+  ],
+  signer: {
+    endpoint: issuerManageKeyEndpoint,
+    token: accessToken,
+    scopes: grantedScopes,
+  },
+  tinycloud: {
+    capabilityRequest: requestedCapabilities,
+    persistSession: true,
+  },
+});
+```
+
+Terminal `OpenKeyManageKeyError` values (`retryable === false`) have one of
+`CONSENT_REQUIRED`, `GRANT_DISABLED`, `USER_EXCLUSIVE`, `TOKEN_EXPIRED`,
+`MESSAGE_REJECTED`, or `IDENTITY_MISMATCH`. Do not retry it in a loop. When an
+issuer supplies `approvalUrl`, the error preserves it so the application can
+restart OAuth or show its consent route. Otherwise, restart the authorization
+redirect with `requestTinyCloudManageKeyScope`.
+
+OpenKey's `canonical_key_unavailable` and `signer_failed` responses are
+reported as `SIGNER_UNAVAILABLE` with `retryable === true`. They intentionally
+use a stable SDK message instead of exposing an issuer-internal reason; retry
+with normal bounded backoff while the existing OAuth token remains valid.
+
+The runnable `apps/manage-key-reference-clients/` workspace app contains two
+independent OAuth authorization-code clients. Notes and Tasks use distinct
+client IDs, redirect URIs, token stores, and token-response shapes; neither
+imports an identity literal or cache from the other. The local issuer is the
+only authority that derives the canonical identity, so both independently
+resolve the same address, DID, and applications space through separate HTTP
+authorize and token exchanges.
+
+Run the app (it starts its loopback OAuth issuer and prints both resolved
+identities) with:
+
+```sh
+bun run --cwd apps/manage-key-reference-clients start
+```
+
+Each client also has an isolated entry point:
+
+```sh
+bun run --cwd apps/manage-key-reference-clients start:notes
+bun run --cwd apps/manage-key-reference-clients start:tasks
+```
+
+Verify the flows with `bun run --cwd apps/manage-key-reference-clients test`.
+The app's typecheck and test commands run in the standard workspace CI job.
+
+With a local TinyCloud node, the same two independent clients can each sign a
+scoped public web-SDK session and complete an exact-byte KV round-trip. The
+issuer provisions the shared `applications` space first with its owner key;
+the OAuth clients receive only their separate bearer grants:
+
+```sh
+TC_TEST_SERVER=http://localhost:9000 \
+  bun run --cwd apps/manage-key-reference-clients start:tinycloud
+```
+
+## Real HTTP smoke
+
+The public SDK smoke uses a real local TinyCloud node plus a loopback handler
+that mirrors the OpenKey `b541082` OAuth consent, token exchange, and
+`/api/delegate/sign` contract. It explicitly provisions the canonical
+`applications` space before the OAuth-scoped client signs in, then asserts a
+byte-identical `client.kv.put`/`client.kv.get` round-trip. It never substitutes
+an in-memory node or module mock.
+
+Start a local node in a separate terminal:
+
+```sh
+cd ../tinycloud-node
+ROCKET_PORT=9000 cargo run
+```
+
+Then, from this repository, run:
+
+```sh
+bun run test:manage-key-smoke
+```
+
+Set `TC_TEST_SERVER` to use another local TinyCloud node. The command fails
+loudly when `/info` cannot be reached; it is intentionally not a skipped test.

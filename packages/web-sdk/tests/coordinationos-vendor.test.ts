@@ -6,20 +6,23 @@ import { createCoordinationOsVendorManifest } from "../scripts/build-coordinatio
 test("creates deterministic CoordinationOS vendor metadata for fixed bytes", () => {
   const manifest = createCoordinationOsVendorManifest(
     new TextEncoder().encode("coordinationos-vendor-fixture"),
-    { name: "@tinycloud/web-sdk", version: "2.11.0-beta.9" },
+    { name: "@tinycloud/web-sdk", version: "2.11.0" },
   );
 
   expect(`${JSON.stringify(manifest, null, 2)}\n`).toBe(`{
   "schemaVersion": 1,
   "package": "@tinycloud/web-sdk",
-  "version": "2.11.0-beta.9",
+  "version": "2.11.0",
   "format": "esm",
-  "entry": "tinycloud-web-sdk-2.11.0-beta.9.mjs",
+  "entry": "tinycloud-web-sdk-2.11.0.mjs",
   "sha384": "sha384-zTsa9taxYVJimor3dNdKXbUbVXyzk5gN5aFhdcYYE0abTiwwWLqp7M8ZN34IUiAk",
   "exports": [
     "TinyCloudWeb",
     "createOpenKeyCallbackSigningStrategy",
-    "establishOpenKeySession"
+    "establishManageKeySession",
+    "establishOpenKeySession",
+    "parseCanonicalTinyCloudIdentityClaims",
+    "requestTinyCloudManageKeyScope"
   ]
 }
 `);
@@ -41,7 +44,7 @@ test("the generated manifest and ESM namespace expose exactly the contract", asy
     await readFile(
       resolve(
         vendorRoot,
-        "tinycloud-web-sdk-2.11.0-beta.9.vendor.json",
+        "tinycloud-web-sdk-2.11.0.vendor.json",
       ),
       "utf8",
     ),
@@ -121,11 +124,14 @@ test("the generated manifest and ESM namespace expose exactly the contract", asy
   const expected = [
     "TinyCloudWeb",
     "createOpenKeyCallbackSigningStrategy",
+    "establishManageKeySession",
     "establishOpenKeySession",
+    "parseCanonicalTinyCloudIdentityClaims",
+    "requestTinyCloudManageKeyScope",
   ];
 
   expect(manifest.format).toBe("esm");
-  expect(manifest.version).toBe("2.11.0-beta.9");
+  expect(manifest.version).toBe("2.11.0");
   expect(manifest.exports).toEqual(expected);
   expect(Object.keys(namespace).sort()).toEqual([...expected].sort());
 });

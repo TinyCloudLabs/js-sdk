@@ -21,6 +21,18 @@
         "turbo": "^2.5.4",
       },
     },
+    "apps/manage-key-reference-clients": {
+      "name": "@tinycloud/manage-key-reference-clients",
+      "version": "0.0.0",
+      "dependencies": {
+        "@tinycloud/sdk-core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.9.3",
+        "viem": "^2.45.0",
+      },
+    },
     "apps/node-demo": {
       "name": "@tinycloud/node-demo",
       "version": "0.0.31-beta.0",
@@ -1863,6 +1875,8 @@
     "@tinycloud/cli": ["@tinycloud/cli@workspace:packages/cli"],
 
     "@tinycloud/cli-tests": ["@tinycloud/cli-tests@workspace:tests/cli"],
+
+    "@tinycloud/manage-key-reference-clients": ["@tinycloud/manage-key-reference-clients@workspace:apps/manage-key-reference-clients"],
 
     "@tinycloud/mcp": ["@tinycloud/mcp@workspace:packages/mcp"],
 

@@ -13,3 +13,4 @@ Welcome to the TinyCloud Web SDK guides. These guides will help you learn how to
 - [Getting Started](./getting-started.md) - Installation and basic setup
 - [Working with Storage](./storage-guide.md) - How to use the storage functionality
 - [Authentication](./authentication-guide.md) - User authentication and authorization
+- [OAuth Canonical Key](./manage-key-oauth.md) - OAuth-consented canonical-key sessions

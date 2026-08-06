@@ -3,11 +3,14 @@ import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CONTRACT_VERSION = "2.11.0-beta.9";
+const CONTRACT_VERSION = "2.11.0";
 const CONTRACT_EXPORTS = [
   "TinyCloudWeb",
   "createOpenKeyCallbackSigningStrategy",
+  "establishManageKeySession",
   "establishOpenKeySession",
+  "parseCanonicalTinyCloudIdentityClaims",
+  "requestTinyCloudManageKeyScope",
 ] as const;
 
 export interface CoordinationOsVendorPackageMetadata {
