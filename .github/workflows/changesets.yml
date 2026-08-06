@@ -20,7 +20,7 @@ jobs:
     name: Beta Release
     if: >-
       (github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')) ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'major-beta')
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && github.event.inputs.confirm == 'major-beta')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -54,7 +54,7 @@ jobs:
         if: steps.check.outputs.pending != '0'
         run: node scripts/check-beta-release-plan.mjs
         env:
-          ALLOW_MAJOR_BETA: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'major-beta' }}
+          ALLOW_MAJOR_BETA: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && github.event.inputs.confirm == 'major-beta' }}
 
       - name: List pending changesets
         if: steps.check.outputs.pending != '0'
