@@ -23,10 +23,12 @@
     "@tinycloud/web-sdk": "2.11.0",
     "@tinycloud/mcp-sdk-contract": "0.0.0",
     "@tinycloud/operations-mcp-conformance": "0.0.0",
-    "@tinycloud/sdk-services-test": "15.0.0"
+    "@tinycloud/sdk-services-test": "15.0.0",
+    "@tinycloud/manage-key-reference-clients": "0.0.0"
   },
   "changesets": [
     "tc-292-raw-eip1193",
-    "tc-475-inline-credential-acquisition"
+    "tc-475-inline-credential-acquisition",
+    "tc-490-manage-key-sdk"
   ]
 }

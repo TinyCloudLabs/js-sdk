@@ -1,5 +1,14 @@
 # @tinycloudlabs/sdk-core
 
+## 3.0.0-beta.1
+
+### Minor Changes
+
+- 4b60562: Add the OAuth `tinycloud:manage-key` canonical-key signer and the public web
+  SDK session helper. The signer preserves the exact SIWE/ReCap bytes, uses a
+  cookie-free client token only, validates the canonical identity and signature,
+  and exposes terminal OAuth policy errors.
+
 ## 3.0.0-beta.0
 
 ### Patch Changes
