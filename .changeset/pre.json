@@ -27,6 +27,7 @@
   },
   "changesets": [
     "tc-475-inline-credential-acquisition",
-    "tc-493-corrected-beta"
+    "tc-493-corrected-beta",
+    "tc-498-v3-share-delivery"
   ]
 }
