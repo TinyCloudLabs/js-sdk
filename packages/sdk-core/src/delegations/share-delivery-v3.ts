@@ -1,10 +1,11 @@
 import { ed25519 } from "@noble/curves/ed25519";
 import { canonicalizeSignedObjectUnsigned as canonicalize } from "../policy/signed-object.js";
+import type { JsonValue } from "../policy/jcs.js";
 
 export const SHARE_DELIVERY_AUTHORIZATION_V3_DOMAIN = "xyz.tinycloud.share/delivery-authorization/v3\0";
 
 export interface ShareDeliveryAuthorizationV3Request {
-  readonly envelope: Record<string, unknown>;
+  readonly envelope: JsonValue;
   readonly sealedEnvelope: string;
   readonly envelopeKey: string;
   readonly shareCid: string;

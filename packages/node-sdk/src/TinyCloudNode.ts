@@ -153,6 +153,7 @@ import {
   validateShareDeliveryAuthorizationBytes,
   type ShareDeliveryAuthorizationV3Receipt,
   validateShareDeliveryAuthorizationV3Bytes,
+  type JsonValue,
   verifyEip191MessageSignature,
   signCompactUcanRootAuthorization,
   type UnifiedPolicyCapability,
@@ -4388,7 +4389,7 @@ export class TinyCloudNode {
 
   /** Authorize one short-lived v3 delivery against the signed v3 envelope and registered roots. */
   async authorizeShareDeliveryV3(input: {
-    readonly envelope: Record<string, unknown>;
+    readonly envelope: JsonValue;
     readonly sealedEnvelope: string;
     readonly envelopeKey: string;
     readonly shareCid: string;
