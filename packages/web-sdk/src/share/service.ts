@@ -81,7 +81,7 @@ export async function selectShareReceiverAccountSession(
 ): Promise<ReturnType<ShareReceiverClient["session"]>> {
   if (requestedIdentity === "receiver") return undefined;
   const active = client.session();
-  if (active !== undefined || requestedIdentity === "auto") return active;
+  if (active !== undefined) return active;
   const restored = await client.restoreSession();
   return restored.status === "restored" ? restored.session : undefined;
 }

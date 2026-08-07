@@ -5,6 +5,7 @@ import {
 } from "@tinycloud/sdk-core";
 
 const STORAGE_PREFIX = "tinycloud:session:";
+const ACTIVE_ADDRESS_SUFFIX = "active-address";
 
 export type BrowserSessionLoadStatus =
   | "loaded"
@@ -43,6 +44,16 @@ export class BrowserSessionStorage implements ISessionStorage {
     return this.keyPrefix + address.toLowerCase();
   }
 
+  private activeAddressKey(): string {
+    return this.keyPrefix + ACTIVE_ADDRESS_SUFFIX;
+  }
+
+  private clearActiveAddress(address: string): void {
+    if (this.storage?.getItem(this.activeAddressKey()) === address.toLowerCase()) {
+      this.storage.removeItem(this.activeAddressKey());
+    }
+  }
+
   private assertPersistable(data: PersistedSessionData): void {
     const result = validatePersistedSessionData(data);
     if (!result.ok) {
@@ -67,8 +78,21 @@ export class BrowserSessionStorage implements ISessionStorage {
   save(address: string, data: PersistedSessionData): Promise<void> {
     if (!this.storage) return Promise.resolve();
     this.assertPersistable(data);
-    this.storage.setItem(this.key(address), JSON.stringify(data));
+    const normalizedAddress = address.toLowerCase();
+    this.storage.setItem(this.key(normalizedAddress), JSON.stringify(data));
+    this.storage.setItem(this.activeAddressKey(), normalizedAddress);
     return Promise.resolve();
+  }
+
+  /** Most recently saved, still-valid session address for provider-free reloads. */
+  activeAddress(): string | undefined {
+    if (!this.storage) return undefined;
+    const address = this.storage.getItem(this.activeAddressKey());
+    if (address === null || !this.exists(address)) {
+      this.storage.removeItem(this.activeAddressKey());
+      return undefined;
+    }
+    return address;
   }
 
   load(address: string): Promise<PersistedSessionData | null> {
@@ -89,11 +113,13 @@ export class BrowserSessionStorage implements ISessionStorage {
       const result = validatePersistedSessionData(parsed);
       if (!result.ok) {
         this.storage.removeItem(key);
+        this.clearActiveAddress(address);
         return { status: "corrupt", data: null };
       }
 
       if (!result.data.tinycloudSession?.spaceId) {
         this.storage.removeItem(key);
+        this.clearActiveAddress(address);
         return { status: "corrupt", data: null };
       }
 
@@ -104,24 +130,28 @@ export class BrowserSessionStorage implements ISessionStorage {
         }
       } catch {
         this.storage.removeItem(key);
+        this.clearActiveAddress(address);
         return { status: "corrupt", data: null };
       }
 
       const expiresAt = new Date(result.data.expiresAt);
       if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
         this.storage.removeItem(key);
+        this.clearActiveAddress(address);
         return { status: "expired", data: null };
       }
 
       return { status: "loaded", data: result.data };
     } catch {
       this.storage.removeItem(key);
+      this.clearActiveAddress(address);
       return { status: "corrupt", data: null };
     }
   }
 
   clear(address: string): Promise<void> {
     this.storage?.removeItem(this.key(address));
+    this.clearActiveAddress(address);
     return Promise.resolve();
   }
 
