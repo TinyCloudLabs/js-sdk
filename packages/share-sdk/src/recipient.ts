@@ -30,6 +30,10 @@ export interface SharePresentationMaterial {
   readonly claim?: Record<string, unknown>;
   /** Exact v3 presentation returned by the verified holder ceremony. */
   readonly presentation?: Record<string, unknown>;
+  /** Exact verified issuer envelope used by accountless v4 admission. */
+  readonly credentialEnvelope?: Record<string, unknown>;
+  /** Exact credential requirement committed by the signed policy. */
+  readonly requirement?: Record<string, unknown>;
 }
 
 export interface SharePolicyChallenge {
@@ -50,6 +54,10 @@ export interface ShareRecipientClientOptions {
   readonly fetchFn?: typeof fetch;
   readonly buildPresentation?: (input: { readonly challenge: SharePolicyChallenge; readonly envelope: ShareEnvelopeV2 | ShareEnvelopeV3; readonly policy: Record<string, unknown> }) => Promise<SharePresentationMaterial>;
   readonly sign?: (bytes: Uint8Array) => Promise<Uint8Array>;
+  readonly signal?: AbortSignal;
+  readonly onStage?: (stage: "policy-admission" | "delegation-import" | "invocation" | "decryption") => void;
+  /** Previously admitted and imported ordinary policy delegation (account v3 fast path). */
+  readonly policyAuthorization?: { readonly authorization: string; readonly cid: string };
 }
 
 export interface SharePolicySession {
@@ -156,6 +164,96 @@ function selectedAction(envelope: ShareEnvelopeV2): string {
   return envelope.actions.includes("list") ? "tinycloud.kv/list" : envelope.actions.includes("edit") ? "tinycloud.kv/put" : "tinycloud.kv/get";
 }
 
+function policyAttenuationForV3(envelope: ShareEnvelopeV3): Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>> {
+  const policy = object(envelope.policy, "v3 policy");
+  if (!Array.isArray(policy.capabilityCeiling)) throw new Error("v3 policy capability ceiling is invalid");
+  const attenuation: Record<string, Record<string, readonly unknown[]>> = {};
+  for (const raw of policy.capabilityCeiling) {
+    const capability = object(raw, "v3 policy capability");
+    if (typeof capability.resource !== "string" || attenuation[capability.resource] !== undefined) throw new Error("v3 policy capability is invalid");
+    if (capability.kind === "encryption") {
+      if (capability.action !== "tinycloud.encryption/decrypt") throw new Error("v3 policy capability is invalid");
+      attenuation[capability.resource] = { [capability.action]: [{}] };
+      continue;
+    }
+    if (capability.kind !== "kv"
+      || (capability.selector !== "exact" && capability.selector !== "prefix")
+      || !Array.isArray(capability.actions)
+      || capability.actions.length === 0
+      || capability.actions.some((action) => typeof action !== "string")) throw new Error("v3 policy capability is invalid");
+    attenuation[capability.resource] = Object.fromEntries(capability.actions.map((action) => [action, [{
+      type: "xyz.tinycloud.resource/selector",
+      kind: capability.selector,
+      value: capability.resource,
+    }]]));
+  }
+  return attenuation;
+}
+
+const POLICY_SESSION_FACT_KEYS = [
+  "profile", "ownerDid", "policyId", "policyDigestHex", "policyCid",
+  "policyDelegationCid", "enforcementDelegationCid", "contentSourceDigestHex",
+  "capabilityCeilingHashHex", "nativeProjectionHashHex", "enforcerDid",
+  "nodeAudience", "recipientDid", "challengeId", "claimDigestHex", "claimJti",
+  "vpDigestHex", "credentialEvidenceDigestHex", "decisionContextDigestHex",
+  "issuanceAuditDigestHex", "remainingRedelegationDepth",
+] as const;
+const POLICY_SESSION_V4_AUDIT_FACT_KEYS = ["credentialIdAuditDigestHex", "presentationJtiAuditDigestHex"] as const;
+const POLICY_SESSION_DIGEST_FACT_KEYS = [
+  "policyDigestHex", "contentSourceDigestHex", "capabilityCeilingHashHex",
+  "nativeProjectionHashHex", "claimDigestHex", "vpDigestHex",
+  "credentialEvidenceDigestHex", "decisionContextDigestHex", "issuanceAuditDigestHex",
+] as const;
+const LOWER_SHA256_HEX = /^[0-9a-f]{64}$/;
+
+function verifyV3PolicyAuthorization(input: {
+  readonly authorization: string;
+  readonly cid: string;
+  readonly envelope: ShareEnvelopeV3;
+  readonly holderDid: string;
+}): ReturnType<typeof verifyCompactUcanAuthorization> {
+  const compact = verifyCompactUcanAuthorization(input.authorization, input.cid);
+  const fact = compact.payload.fct[0];
+  const factKeys = Object.keys(fact);
+  const legacyShape = factKeys.length === POLICY_SESSION_FACT_KEYS.length
+    && factKeys.every((key) => POLICY_SESSION_FACT_KEYS.includes(key as never))
+    && POLICY_SESSION_FACT_KEYS.every((key) => key in fact);
+  const v4Shape = factKeys.length === POLICY_SESSION_FACT_KEYS.length + POLICY_SESSION_V4_AUDIT_FACT_KEYS.length
+    && factKeys.every((key) => POLICY_SESSION_FACT_KEYS.includes(key as never) || POLICY_SESSION_V4_AUDIT_FACT_KEYS.includes(key as never))
+    && POLICY_SESSION_FACT_KEYS.every((key) => key in fact)
+    && POLICY_SESSION_V4_AUDIT_FACT_KEYS.every((key) => key in fact);
+  const binding = object(input.envelope.attestedEnforcerBinding, "v3 attested enforcer binding");
+  const policy = object(input.envelope.policy, "v3 policy");
+  const now = Math.floor(Date.now() / 1000);
+  if ((!legacyShape && !v4Shape)
+    || POLICY_SESSION_DIGEST_FACT_KEYS.some((key) => !LOWER_SHA256_HEX.test(fact[key] as string))
+    || v4Shape && (!LOWER_SHA256_HEX.test(fact.credentialIdAuditDigestHex as string) || !LOWER_SHA256_HEX.test(fact.presentationJtiAuditDigestHex as string))
+    || compact.payload.aud !== input.holderDid
+    || compact.payload.iss.split("#", 1)[0] !== fact.nodeAudience
+    || fact.profile !== "policy-session-ucan/v1"
+    || fact.ownerDid !== policy.ownerDid
+    || fact.policyId !== policy.policyId
+    || fact.policyCid !== input.envelope.policyCid
+    || fact.contentSourceDigestHex !== input.envelope.contentSourceDigestHex
+    || fact.enforcerDid !== binding.enforcerDid
+    || fact.nodeAudience !== binding.nodeAudience
+    || fact.recipientDid !== input.holderDid
+    || fact.policyDelegationCid !== input.envelope.policyRoot.cid
+    || fact.enforcementDelegationCid !== input.envelope.enforcementRoot.cid
+    || typeof fact.remainingRedelegationDepth !== "number"
+    || !Number.isInteger(fact.remainingRedelegationDepth)
+    || fact.remainingRedelegationDepth < 0
+    || fact.remainingRedelegationDepth > 8
+    || compact.payload.prf.length !== 2
+    || compact.payload.prf[0] !== input.envelope.policyRoot.cid
+    || compact.payload.prf[1] !== input.envelope.enforcementRoot.cid
+    || compact.payload.nbf > now
+    || compact.payload.exp <= now
+    || compact.payload.exp - compact.payload.nbf > 60
+    || canonicalize(compact.payload.att) !== canonicalize(policyAttenuationForV3(input.envelope))) throw new Error("v3 policy delegation signed binding mismatch");
+  return compact;
+}
+
 function hex(value: Uint8Array): string {
   return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -235,12 +333,27 @@ export class ShareRecipientClient {
   private nativeSigner: ((bytes: Uint8Array) => Promise<Uint8Array>) | undefined;
   private holderProof: Record<string, unknown> | undefined;
   private v3Authorization: string | undefined;
+  private v3NodeAudience: string | undefined;
   private v3ContentKey: Uint8Array | undefined;
   private v3ContentEnvelope: V3InlineEncryptedEnvelope | undefined;
 
   constructor(private readonly options: ShareRecipientClientOptions) {
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
     this.signer = options.sign;
+    if (options.policyAuthorization !== undefined) {
+      if (options.envelope.version !== 3) throw new Error("policy delegation fast path requires a v3 envelope");
+      const compact = verifyV3PolicyAuthorization({ ...options.policyAuthorization, envelope: options.envelope, holderDid: options.holderDid });
+      const nodeAudience = compact.payload.fct[0].nodeAudience as string;
+      this.v3Authorization = options.policyAuthorization.authorization;
+      this.v3NodeAudience = nodeAudience;
+      this.nativeSigner = options.sign;
+      this.session = {
+        sessionId: options.policyAuthorization.cid,
+        expiresAt: new Date(compact.payload.exp * 1000).toISOString(),
+        actions: options.envelope.actions,
+        resource: options.envelope.resource,
+      };
+    }
   }
 
   async beginChallenge(envelope: ShareEnvelopeV2): Promise<SharePolicyChallenge> {
@@ -328,46 +441,60 @@ export class ShareRecipientClient {
 
   private async establishV3(envelope: ShareEnvelopeV3): Promise<SharePolicySession> {
     if (this.options.buildPresentation === undefined) throw new Error("share presentation builder is required");
+    const attestedEnforcer = object(envelope.attestedEnforcerBinding, "v3 attested enforcer binding");
+    if (attestedEnforcer.enforcerDid !== envelope.target.nodeAudience || typeof attestedEnforcer.nodeAudience !== "string") throw new Error("v3 attested enforcer binding mismatch");
+    try { ed25519PublicKeyFromDidKey(attestedEnforcer.nodeAudience); } catch { throw new Error("v3 attested Node audience is invalid"); }
     const challengeResponse = await this.fetchFn(new URL("/share/v3/policy/challenges", this.options.nodeOrigin), {
       method: "POST",
       redirect: "error",
       headers: { accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify({ policyCid: envelope.policyCid, recipientDid: this.options.holderDid, requestedCapabilities: envelope.policy.capabilityCeiling }),
+      ...(this.options.signal === undefined ? {} : { signal: this.options.signal }),
     });
     if (!challengeResponse.ok) throw new Error(`v3 policy challenge rejected (${challengeResponse.status})`);
     const challenge = object(await challengeResponse.json(), "v3 policy challenge");
-    if (typeof challenge.challengeId !== "string" || typeof challenge.nonce !== "string" || challenge.policyCid !== envelope.policyCid || challenge.recipientDid !== this.options.holderDid) throw new Error("v3 policy challenge binding mismatch");
+    if (
+      typeof challenge.challengeId !== "string" ||
+      typeof challenge.nonce !== "string" ||
+      challenge.policyCid !== envelope.policyCid ||
+      challenge.recipientDid !== this.options.holderDid ||
+      challenge.nodeAudience !== attestedEnforcer.nodeAudience ||
+      (challenge.enforcerDid !== undefined && challenge.enforcerDid !== attestedEnforcer.enforcerDid) ||
+      typeof challenge.expiresAt !== "string" ||
+      !Number.isFinite(Date.parse(challenge.expiresAt)) ||
+      Date.parse(challenge.expiresAt) <= Date.now()
+    ) throw new Error("v3 policy challenge binding mismatch");
     const material = await this.options.buildPresentation({
       challenge: challenge as unknown as SharePolicyChallenge,
       envelope,
       policy: envelope.policy as unknown as Record<string, unknown>,
     });
-    if (material.sign === undefined || material.claim === undefined || material.presentation === undefined) throw new Error("v3 ceremony requires a recipient signer, claim, and presentation");
+    if (material.sign === undefined || material.presentation === undefined) throw new Error("v3 ceremony requires a recipient signer and presentation");
+    const accountless = material.presentation.schema === "xyz.tinycloud.policy/presentation/v4";
+    if (accountless ? material.credentialEnvelope === undefined || material.requirement === undefined : material.claim === undefined) {
+      throw new Error(accountless ? "v4 ceremony requires a verified credential and requirement" : "v3 ceremony requires a claim");
+    }
+    this.options.onStage?.("policy-admission");
     const delegationResponse = await this.fetchFn(new URL("/share/v3/policy/delegations", this.options.nodeOrigin), {
       method: "POST",
       redirect: "error",
       headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({ policyCid: envelope.policyCid, challengeId: challenge.challengeId, nonce: challenge.nonce, claim: material.claim, presentation: material.presentation }),
+      body: JSON.stringify(accountless
+        ? { policyCid: envelope.policyCid, challengeId: challenge.challengeId, nonce: challenge.nonce, requirement: material.requirement, credential: material.credentialEnvelope, presentation: material.presentation }
+        : { policyCid: envelope.policyCid, challengeId: challenge.challengeId, nonce: challenge.nonce, claim: material.claim, presentation: material.presentation }),
+      ...(this.options.signal === undefined ? {} : { signal: this.options.signal }),
     });
     if (!delegationResponse.ok) throw new Error(`v3 policy delegation rejected (${delegationResponse.status})`);
     const delegation = object(await delegationResponse.json(), "v3 policy delegation");
     if (delegation.admitted !== true || typeof delegation.sessionCid !== "string" || typeof delegation.authorization !== "string") throw new Error("v3 policy delegation response is not admitted");
-    const compact = verifyCompactUcanAuthorization(delegation.authorization, delegation.sessionCid);
+    const compact = verifyV3PolicyAuthorization({ authorization: delegation.authorization, cid: delegation.sessionCid, envelope, holderDid: this.options.holderDid });
     const fact = compact.payload.fct[0];
-    if (compact.payload.aud !== this.options.holderDid
-      || fact.profile !== "policy-session-ucan/v1"
-      || fact.policyCid !== envelope.policyCid
-      || fact.recipientDid !== this.options.holderDid
-      || fact.policyDelegationCid !== envelope.policyRoot.cid
-      || fact.enforcementDelegationCid !== envelope.enforcementRoot.cid
-      || compact.payload.prf.length !== 2
-      || compact.payload.prf[0] !== envelope.policyRoot.cid
-      || compact.payload.prf[1] !== envelope.enforcementRoot.cid
-      || compact.payload.exp - compact.payload.nbf > 60) throw new Error("v3 policy delegation signed binding mismatch");
-    const imported = await this.fetchFn(new URL("/delegate", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { Authorization: delegation.authorization } });
+    this.options.onStage?.("delegation-import");
+    const imported = await this.fetchFn(new URL("/delegate", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { Authorization: delegation.authorization }, ...(this.options.signal === undefined ? {} : { signal: this.options.signal }) });
     if (!imported.ok) throw new Error(`ordinary delegation import rejected (${imported.status})`);
     this.signer = material.sign;
     this.v3Authorization = delegation.authorization;
+    this.v3NodeAudience = fact.nodeAudience as string;
     this.session = { sessionId: delegation.sessionCid, expiresAt: new Date(compact.payload.exp * 1000).toISOString(), actions: envelope.actions, resource: envelope.resource };
     return this.session;
   }
@@ -376,18 +503,18 @@ export class ShareRecipientClient {
   async decryptV3Content(bytes: Uint8Array): Promise<{ readonly bytes: Uint8Array; readonly mediaType: string }> {
     const envelope = this.options.envelope;
     const signer = this.nativeSigner ?? this.signer;
-    if (envelope.version !== 3 || this.session === undefined || this.v3Authorization === undefined || signer === undefined) throw new Error("v3 policy session signer is required");
+    if (envelope.version !== 3 || this.session === undefined || this.v3Authorization === undefined || this.v3NodeAudience === undefined || signer === undefined) throw new Error("v3 policy session signer is required");
     const encrypted = parseV3InlineEncryptedEnvelope(bytes, envelope);
     const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
     const receiverPublicKey = toBase64Url(x25519.getPublicKey(receiverPrivateKey));
     const receiverPublicKeyHash = canonicalHashHex(receiverPublicKey);
-    const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: envelope.target.nodeAudience, networkId: encrypted.networkId, alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
+    const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: this.v3NodeAudience, networkId: encrypted.networkId, alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
     const bodyHash = hex(sha256(new TextEncoder().encode(canonicalize(body))));
     const session = verifyCompactUcanAuthorization(this.v3Authorization, this.session.sessionId);
     const now = Math.floor(Date.now() / 1000);
     const invocation = await signCompactUcanAuthorization({
       issuerDid: this.options.holderDid,
-      audienceDid: envelope.target.nodeAudience,
+      audienceDid: this.v3NodeAudience,
       attenuation: { [encrypted.networkId]: { "tinycloud.encryption/decrypt": [{}] } },
       facts: [{ type: body.type, targetNode: body.targetNode, networkId: body.networkId, bodyHash, encryptedSymmetricKeyHash: body.encryptedSymmetricKeyHash, receiverPublicKeyHash, alg: body.alg, keyVersion: body.keyVersion }],
       proofs: [session.cid],
@@ -397,7 +524,8 @@ export class ShareRecipientClient {
       sign: signer,
     });
     try {
-      const response = await this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json", Authorization: invocation.authorization }, body: JSON.stringify(body) });
+      this.options.onStage?.("decryption");
+      const response = await this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json", Authorization: invocation.authorization }, body: JSON.stringify(body), ...(this.options.signal === undefined ? {} : { signal: this.options.signal }) });
       if (!response.ok) throw new Error(`v3 decrypt invocation rejected (${response.status})`);
       const value = object(await response.json(), "v3 decrypt response");
       const allowed = ["type", "targetNode", "networkId", "invocationCid", "encryptedSymmetricKeyHash", "receiverPublicKeyHash", "wrappedKey", "alg", "keyVersion", "requestHash", "nodeId", "nodeSignature"];
@@ -492,7 +620,7 @@ export class ShareRecipientClient {
 
   private async nativeInvokeV3(request: { readonly action: string; readonly resource?: Record<string, unknown>; readonly body?: number[]; readonly ifMatch?: string; readonly contentType?: string }, envelope: ShareEnvelopeV3): Promise<Response> {
     const signer = this.nativeSigner ?? this.signer;
-    if (this.session === undefined || this.v3Authorization === undefined || signer === undefined) throw new Error("v3 policy session signer is required");
+    if (this.session === undefined || this.v3Authorization === undefined || this.v3NodeAudience === undefined || signer === undefined) throw new Error("v3 policy session signer is required");
     const session = verifyCompactUcanAuthorization(this.v3Authorization, this.session.sessionId);
     if (session.payload.aud !== this.options.holderDid) throw new Error("v3 session recipient mismatch");
     const action = request.action === "list" ? "tinycloud.kv/list" : request.action === "put" ? "tinycloud.kv/put" : request.action === "metadata" ? "tinycloud.kv/metadata" : "tinycloud.kv/get";
@@ -506,7 +634,7 @@ export class ShareRecipientClient {
     if (path !== root && !(capability.selector === "prefix" && path.startsWith(`${root}/`))) throw new Error("v3 KV request is outside the signed selector");
     const resource = `${capability.resource.slice(0, split + marker.length)}${path}`;
     const now = Math.floor(Date.now() / 1000);
-    const invocation = await signCompactUcanAuthorization({ issuerDid: this.options.holderDid, audienceDid: envelope.target.nodeAudience, attenuation: { [resource]: { [action]: [{ type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: resource }] } }, facts: [{ type: "tinycloud.policy.invocation/v1", policyCid: envelope.policyCid, sessionCid: session.cid }], proofs: [session.cid], notBefore: now, expiresAt: Math.min(now + 60, session.payload.exp), nonce: toBase64Url(crypto.getRandomValues(new Uint8Array(16))), sign: signer });
+    const invocation = await signCompactUcanAuthorization({ issuerDid: this.options.holderDid, audienceDid: this.v3NodeAudience, attenuation: { [resource]: { [action]: [{ type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: resource }] } }, facts: [{ type: "tinycloud.policy.invocation/v1", policyCid: envelope.policyCid, sessionCid: session.cid }], proofs: [session.cid], notBefore: now, expiresAt: Math.min(now + 60, session.payload.exp), nonce: toBase64Url(crypto.getRandomValues(new Uint8Array(16))), sign: signer });
     const headers = new Headers({ accept: "application/json", Authorization: invocation.authorization });
     let body: BodyInit | undefined;
     if (action === "tinycloud.kv/put") {
@@ -515,7 +643,8 @@ export class ShareRecipientClient {
       headers.set("content-type", request.contentType ?? "application/octet-stream");
       if (request.ifMatch !== undefined) headers.set("if-match", request.ifMatch);
     }
-    return this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers, ...(body === undefined ? {} : { body }) });
+    this.options.onStage?.("invocation");
+    return this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers, ...(body === undefined ? {} : { body }), ...(this.options.signal === undefined ? {} : { signal: this.options.signal }) });
   }
 }
 

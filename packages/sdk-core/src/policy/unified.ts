@@ -96,6 +96,13 @@ export interface UnifiedPolicyV1 {
   };
 }
 
+export type PolicySessionUcanFactV1 = Readonly<Record<string, unknown>> & {
+  /** Present only on accountless PolicyCredentialPresentation/v4 admissions. */
+  readonly credentialIdAuditDigestHex?: string;
+  /** Present only on accountless PolicyCredentialPresentation/v4 admissions. */
+  readonly presentationJtiAuditDigestHex?: string;
+};
+
 export interface PolicySessionUcanV1 {
   readonly authorization: string;
   readonly cid: string;
@@ -106,7 +113,7 @@ export interface PolicySessionUcanV1 {
   readonly nbf: number;
   readonly exp: number;
   readonly nnc: string;
-  readonly fact: Readonly<Record<string, unknown>>;
+  readonly fact: PolicySessionUcanFactV1;
 }
 
 export interface PolicyChallengeV3 {
@@ -125,11 +132,13 @@ export async function requestPolicyChallengeV3(input: {
   readonly recipientDid: string;
   readonly requestedCapabilities: readonly UnifiedPolicyCapability[];
   readonly fetch?: typeof fetch;
+  readonly signal?: AbortSignal;
 }): Promise<PolicyChallengeV3> {
   const fetchFn = input.fetch ?? globalThis.fetch.bind(globalThis);
   const response = await fetchFn(new URL("/share/v3/policy/challenges", input.nodeOrigin), {
     method: "POST",
     redirect: "error",
+    signal: input.signal,
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ policyCid: input.policyCid, recipientDid: input.recipientDid, requestedCapabilities: input.requestedCapabilities.map(normalizeUnifiedPolicyCapability) }),
   });
@@ -152,6 +161,7 @@ export async function mintPolicySessionV3(input: {
   readonly presentation: Readonly<Record<string, unknown>>;
   readonly challenge?: PolicyChallengeV3;
   readonly fetch?: typeof fetch;
+  readonly signal?: AbortSignal;
 }): Promise<PolicySessionUcanV1> {
   const fetchFn = input.fetch ?? globalThis.fetch.bind(globalThis);
   const challenge = input.challenge ?? await requestPolicyChallengeV3(input);
@@ -160,6 +170,7 @@ export async function mintPolicySessionV3(input: {
   const response = await fetchFn(new URL("/share/v3/policy/delegations", input.nodeOrigin), {
     method: "POST",
     redirect: "error",
+    signal: input.signal,
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ policyCid: input.policyCid, challengeId: challenge.challengeId, nonce: challenge.nonce, claim: input.claim, presentation: input.presentation }),
   });
@@ -422,6 +433,13 @@ const POLICY_SESSION_FACT_KEYS = [
   "issuanceAuditDigestHex",
   "remainingRedelegationDepth",
 ] as const;
+
+const POLICY_SESSION_V4_AUDIT_FACT_KEYS = [
+  "credentialIdAuditDigestHex",
+  "presentationJtiAuditDigestHex",
+] as const;
+
+const LOWER_SHA256_HEX = /^[0-9a-f]{64}$/;
 
 const KV_ACTIONS = new Set<string>([
   "tinycloud.kv/get",
@@ -990,12 +1008,19 @@ export function parsePolicySessionUcan(
     && (parsed.payload.prf[0] !== expectedProofs[0] || parsed.payload.prf[1] !== expectedProofs[1]))
     throw new Error("policy session UCAN ordered proofs do not match");
   const factKeys = Object.keys(fact);
-  if (
-    factKeys.length !== POLICY_SESSION_FACT_KEYS.length ||
-    factKeys.some((key) => !POLICY_SESSION_FACT_KEYS.includes(key as never)) ||
-    POLICY_SESSION_FACT_KEYS.some((key) => !(key in fact))
-  )
+  const hasLegacyFactShape = factKeys.length === POLICY_SESSION_FACT_KEYS.length
+    && factKeys.every((key) => POLICY_SESSION_FACT_KEYS.includes(key as never))
+    && POLICY_SESSION_FACT_KEYS.every((key) => key in fact);
+  const hasV4AuditFactShape = factKeys.length === POLICY_SESSION_FACT_KEYS.length + POLICY_SESSION_V4_AUDIT_FACT_KEYS.length
+    && factKeys.every((key) => POLICY_SESSION_FACT_KEYS.includes(key as never) || POLICY_SESSION_V4_AUDIT_FACT_KEYS.includes(key as never))
+    && POLICY_SESSION_FACT_KEYS.every((key) => key in fact)
+    && POLICY_SESSION_V4_AUDIT_FACT_KEYS.every((key) => key in fact);
+  if (!hasLegacyFactShape && !hasV4AuditFactShape)
     throw new Error("policy session UCAN fact is incomplete");
+  if (hasV4AuditFactShape
+    && (!LOWER_SHA256_HEX.test(fact.credentialIdAuditDigestHex as string)
+      || !LOWER_SHA256_HEX.test(fact.presentationJtiAuditDigestHex as string)))
+    throw new Error("policy session UCAN v4 audit facts are invalid");
   if (
     fact.profile !== POLICY_SESSION_UCAN_V1_PROFILE ||
     typeof fact.remainingRedelegationDepth !== "number" ||
@@ -1003,7 +1028,7 @@ export function parsePolicySessionUcan(
     fact.remainingRedelegationDepth < 0 ||
     fact.remainingRedelegationDepth > 8 ||
     parsed.payload.exp - parsed.payload.nbf > 60 ||
-    parsed.payload.iss.split("#", 1)[0] !== fact.enforcerDid ||
+    parsed.payload.iss.split("#", 1)[0] !== fact.nodeAudience ||
     parsed.payload.aud !== fact.recipientDid
   )
     throw new Error("policy session UCAN fact is invalid");

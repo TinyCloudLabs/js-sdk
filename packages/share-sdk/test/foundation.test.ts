@@ -158,6 +158,33 @@ describe("@tinycloud/share-sdk foundation", () => {
     })).rejects.toMatchObject({ code: "fetch-failed" });
   });
 
+  it("cancels an in-flight registry inspection without producing trusted metadata", async () => {
+    const share = await makeShare();
+    const controller = new AbortController();
+    let observedSignal: AbortSignal | null | undefined;
+    let notifyStarted!: () => void;
+    const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
+    let inspectionProduced = false;
+    const pending = inspectShare(share.url, {
+      registryBaseUrl: "https://registry.example",
+      signal: controller.signal,
+      fetchFn: ((_resource: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        observedSignal = init?.signal;
+        notifyStarted();
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      })) as typeof fetch,
+    }).then((inspection) => {
+      inspectionProduced = true;
+      return inspection;
+    });
+
+    await started;
+    controller.abort(new DOMException("cancelled", "AbortError"));
+    await expect(pending).rejects.toThrow("cancelled");
+    expect(observedSignal).toBe(controller.signal);
+    expect(inspectionProduced).toBe(false);
+  });
+
   it("rejects a CID mismatch before decryption", async () => {
     const share = await makeShare();
     const tampered = new Uint8Array(share.sealedEnvelope.blob);

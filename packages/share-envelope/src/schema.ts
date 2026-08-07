@@ -527,7 +527,7 @@ function validateV3Invariants(value: z.infer<typeof unsignedShareEnvelopeV3BaseS
   if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.target.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
   if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {

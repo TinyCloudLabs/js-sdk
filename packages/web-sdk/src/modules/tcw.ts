@@ -102,6 +102,7 @@ import { WasmInitializer } from "./WasmInitializer";
 import { invoke } from "./Storage/tinycloud/module";
 import type { PortableDelegation, DelegatedAccess } from "@tinycloud/node-sdk/core";
 import { CredentialsService } from "../credentials";
+import { ShareReceiverService, type ShareReceiverServiceOptions } from "../share";
 
 declare global {
   interface Window {
@@ -210,6 +211,8 @@ export interface Config extends ClientConfig {
   includeAccountRegistryPermissions?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
+  /** Accountless share receiver transport and session-custody configuration. */
+  shareReceiver?: ShareReceiverServiceOptions;
 }
 
 /**
@@ -318,6 +321,7 @@ export class TinyCloudWeb {
   private _sessionRestoreStatus: SessionRestoreStatus = "idle";
   private _secrets = new Map<string, ISecretsService>();
   private _credentialsService?: CredentialsService;
+  private _shareReceiverService?: ShareReceiverService;
 
   /** Promise that resolves when WASM + node are ready */
   private _initPromise: Promise<void>;
@@ -544,6 +548,12 @@ export class TinyCloudWeb {
   get credentials(): CredentialsService {
     this._credentialsService ??= new CredentialsService(this);
     return this._credentialsService;
+  }
+
+  /** First-class signed-in or accountless share receiving. */
+  get share(): ShareReceiverService {
+    this._shareReceiverService ??= new ShareReceiverService(this, this.config.shareReceiver);
+    return this._shareReceiverService;
   }
 
   space(nameOrUri: string): ISpace { return this.spaces.get(nameOrUri); }

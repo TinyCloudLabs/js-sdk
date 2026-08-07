@@ -22,6 +22,7 @@ describe("ShareEnvelopeV3 Policy/v2", () => {
     ).json()) as { policyProjection: Record<string, unknown> };
     const privateKey = new Uint8Array(32).fill(47);
     const ownerDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(privateKey));
+    const nodeDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(new Uint8Array(32).fill(48)));
     const spaceId = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:share";
     const contentSource = {
       shareId: "share-policy-v2",
@@ -86,11 +87,11 @@ describe("ShareEnvelopeV3 Policy/v2", () => {
       attestedEnforcerBinding: {
         schema: "xyz.tinycloud.policy/attested-enforcer/v2",
         enforcerDid: ownerDid,
-        nodeAudience: ownerDid,
+        nodeAudience: nodeDid,
         attestationBindingDigestHex: "d".repeat(64),
         issuedAt: "2026-08-03T12:00:00Z",
         expiresAt: "2026-08-04T12:00:00Z",
-        signature: { suite: "Ed25519", signerDid: ownerDid, value: toBase64Url(new Uint8Array(64)) },
+        signature: { suite: "Ed25519", signerDid: nodeDid, value: toBase64Url(new Uint8Array(64)) },
       },
       contentSource,
       contentSourceDigestHex: "e".repeat(64),
@@ -103,6 +104,10 @@ describe("ShareEnvelopeV3 Policy/v2", () => {
 
     const roundTripped = shareEnvelopeV3Schema.parse(JSON.parse(JSON.stringify(envelope)));
     expect(roundTripped.policy).toEqual(policy);
+    expect(roundTripped.target.nodeAudience).toBe(ownerDid);
+    expect(roundTripped.attestedEnforcerBinding.enforcerDid).toBe(ownerDid);
+    expect(roundTripped.attestedEnforcerBinding.nodeAudience).toBe(nodeDid);
+    expect(roundTripped.attestedEnforcerBinding.signature.signerDid).toBe(nodeDid);
     if (roundTripped.policy.schema !== "xyz.tinycloud.policy/policy/v2") throw new Error("expected Policy/v2");
     expect(roundTripped.policy.credentialRequirement).toEqual(vector.policyProjection);
     expect(verifyEnvelopeV3SignatureOnly(roundTripped)).toBe(true);
@@ -112,6 +117,17 @@ describe("ShareEnvelopeV3 Policy/v2", () => {
     expect(unifiedPolicySchema.safeParse(v1).success).toBe(true);
     expect(unifiedPolicySchema.safeParse({ ...v1, credentialRequirement: vector.policyProjection }).success).toBe(false);
     expect(unifiedPolicySchema.safeParse({ ...policy, credentialRequirement: undefined }).success).toBe(false);
+    expect(shareEnvelopeV3Schema.safeParse({
+      ...envelope,
+      attestedEnforcerBinding: {
+        ...envelope.attestedEnforcerBinding,
+        signature: { ...envelope.attestedEnforcerBinding.signature, signerDid: ownerDid },
+      },
+    }).success).toBe(false);
+    expect(shareEnvelopeV3Schema.safeParse({
+      ...envelope,
+      target: { ...envelope.target, nodeAudience: nodeDid },
+    }).success).toBe(false);
   });
 });
 

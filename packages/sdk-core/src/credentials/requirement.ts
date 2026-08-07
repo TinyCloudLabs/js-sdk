@@ -3,6 +3,22 @@ import { CredentialError } from "./errors";
 import type { CredentialFlowDescriptor, CredentialRequirement, StoredCredentialRecord, VerifiedCredential } from "./types";
 
 const ID = /^[a-z0-9][a-z0-9._-]{0,127}(?:\/v1)?$/;
+export const EMAIL_CREDENTIAL_MAX_AGE_SECONDS = 3600 as const;
+
+export function createEmailCredentialRequirement(input: {
+  readonly email: string;
+  readonly profile: CredentialRequirement["profile"];
+  readonly credentialType: CredentialRequirement["credentialType"];
+}): CredentialRequirement {
+  return validateCredentialRequirement({
+    type: "TinyCloudCredentialRequirement",
+    version: 1,
+    profile: input.profile,
+    credentialType: input.credentialType,
+    claims: { email: input.email },
+    maxAgeSeconds: EMAIL_CREDENTIAL_MAX_AGE_SECONDS,
+  });
+}
 
 export function validateCredentialRequirement(value: unknown): CredentialRequirement {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential requirement is invalid");

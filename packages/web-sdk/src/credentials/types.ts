@@ -37,6 +37,24 @@ export interface CredentialClient {
    * than on {@link ClientSession} so the CID stays out of the public session.
    */
   accountAuthorizationCid(): string;
+  /** Receiver-local credential custody. Its presence selects accountless mode. */
+  readonly receiverCredentialCustody?: ReceiverCredentialCustody;
+}
+
+export interface ReceiverCredentialCustody {
+  find(input: {
+    readonly requirement: CredentialRequirement;
+    readonly requirementDigest: string;
+    readonly holderDid: string;
+    readonly now?: Date;
+  }): Promise<StoredCredentialRecord | undefined>;
+  store(input: {
+    readonly verified: VerifiedCredential;
+    readonly requirement: CredentialRequirement;
+    readonly requirementDigest: string;
+    readonly holderDid: string;
+    readonly now?: Date;
+  }): Promise<StoredCredentialRecord>;
 }
 
 export interface CredentialSigningAdapter {
@@ -209,6 +227,7 @@ export interface CredentialsPolicyAdmissionOptions {
   readonly requestedCapabilities: readonly UnifiedPolicyCapability[];
   readonly nodeOrigin: string;
   readonly fetch?: typeof fetch;
+  readonly signal?: AbortSignal;
   readonly now?: Date;
   readonly jti?: string;
 }

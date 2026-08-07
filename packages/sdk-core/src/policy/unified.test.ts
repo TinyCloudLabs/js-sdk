@@ -300,4 +300,52 @@ describe("TC-405 unified policy contracts", () => {
     expect(callbackSigned.authorization).toBe(invocation.authorization);
     expect(callbackSigned.cid).toBe(invocation.cid);
   });
+
+  test("accepts exactly legacy facts or the complete validated v4 audit pair", async () => {
+    const vector = (await Bun.file(
+      `${import.meta.dir}/../../test-fixtures/policy-engine-vectors/unified-policy/compact-authorization.json`,
+    ).json()) as any;
+    const legacy = parsePolicySessionUcan(vector.s0.authorization);
+    expect(legacy.fact.credentialIdAuditDigestHex).toBeUndefined();
+    expect(legacy.fact.presentationJtiAuditDigestHex).toBeUndefined();
+
+    const parsed = parseCompactUcanAuthorization(vector.s0.authorization);
+    const privateKey = new Uint8Array(32).fill(29);
+    const publicKey = ed25519.getPublicKey(privateKey);
+    const nodeDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...publicKey]))}`;
+    const signWithFacts = async (additionalFacts: Readonly<Record<string, unknown>>) => (await signCompactUcanAuthorization({
+      issuerDid: nodeDid,
+      audienceDid: parsed.payload.aud,
+      attenuation: parsed.payload.att,
+      facts: [{ ...parsed.payload.fct[0]!, nodeAudience: nodeDid, ...additionalFacts }],
+      proofs: parsed.payload.prf,
+      notBefore: parsed.payload.nbf,
+      expiresAt: parsed.payload.exp,
+      nonce: parsed.payload.nnc,
+      sign: async (bytes) => ed25519.sign(bytes, privateKey),
+    })).authorization;
+
+    const v4 = parsePolicySessionUcan(await signWithFacts({
+      credentialIdAuditDigestHex: "a".repeat(64),
+      presentationJtiAuditDigestHex: "b".repeat(64),
+    }));
+    expect(v4.fact.credentialIdAuditDigestHex).toBe("a".repeat(64));
+    expect(v4.fact.presentationJtiAuditDigestHex).toBe("b".repeat(64));
+
+    const partial = await signWithFacts({
+      credentialIdAuditDigestHex: "a".repeat(64),
+    });
+    expect(() => parsePolicySessionUcan(partial)).toThrow("incomplete");
+    const malformed = await signWithFacts({
+      credentialIdAuditDigestHex: "A".repeat(64),
+      presentationJtiAuditDigestHex: "b".repeat(64),
+    });
+    expect(() => parsePolicySessionUcan(malformed)).toThrow("audit facts");
+    const unknown = await signWithFacts({
+      credentialIdAuditDigestHex: "a".repeat(64),
+      presentationJtiAuditDigestHex: "b".repeat(64),
+      unknownAuditFact: "c".repeat(64),
+    });
+    expect(() => parsePolicySessionUcan(unknown)).toThrow("incomplete");
+  });
 });
