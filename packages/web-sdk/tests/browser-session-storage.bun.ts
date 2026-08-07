@@ -136,6 +136,32 @@ describe("BrowserSessionStorage", () => {
     await expect(appA.load(ADDRESS)).resolves.toEqual(sessionA);
     await expect(appB.load(ADDRESS)).resolves.toEqual(sessionB);
   });
+
+  it("selects one valid app session without consulting a wallet", async () => {
+    const backend = new MemoryStorage();
+    const storage = new BrowserSessionStorage({ storage: backend, keyPrefix: "share:" });
+    const session = persistedSession();
+    await storage.save(ADDRESS, session);
+    backend.setItem("other:0x1111111111111111111111111111111111111111", "not this app");
+
+    await expect(storage.loadUnambiguousWithStatus()).resolves.toEqual({
+      status: "loaded",
+      address: ADDRESS,
+      data: session,
+    });
+  });
+
+  it("does not choose between multiple valid app sessions", async () => {
+    const storage = new BrowserSessionStorage({ storage: new MemoryStorage(), keyPrefix: "share:" });
+    const otherAddress = "0x1111111111111111111111111111111111111111";
+    await storage.save(ADDRESS, persistedSession());
+    await storage.save(otherAddress, persistedSession({ address: otherAddress }));
+
+    await expect(storage.loadUnambiguousWithStatus()).resolves.toEqual({
+      status: "missing",
+      data: null,
+    });
+  });
 });
 
 describe("browser session restore data", () => {

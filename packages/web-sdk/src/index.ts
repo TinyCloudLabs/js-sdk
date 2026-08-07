@@ -40,6 +40,7 @@ export {
 export type {
   BrowserSessionLoadResult,
   BrowserSessionLoadStatus,
+  BrowserSessionSelectionResult,
   BrowserSessionStorageOptions,
   BrowserProvider,
   BrowserWalletProvider,

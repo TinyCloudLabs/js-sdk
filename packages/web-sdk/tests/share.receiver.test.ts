@@ -82,21 +82,25 @@ test("share links are bound to the configured out-of-band Share origin", () => {
   expect(() => validateShareReceiverExpectedOrigin("https://share.example/s/claim#secret", "https://share.example/path")).toThrow("configured Share deployment");
 });
 
-test("auto identity never restores through a wallet provider before guest receive", async () => {
-  let restoreCalls = 0;
+test("auto identity restores persisted TinyCloud authority without probing a wallet provider", async () => {
+  let walletRestoreCalls = 0;
+  let persistedRestoreCalls = 0;
   const restoredSession = { address: "0x1" } as any;
   const signedOutClient = {
     session: () => undefined,
-    restoreSession: async () => { restoreCalls += 1; return { status: "restored", session: restoredSession }; },
+    restorePersistedSession: async () => { persistedRestoreCalls += 1; return { status: "restored", session: restoredSession }; },
+    restoreSession: async () => { walletRestoreCalls += 1; return { status: "restored", session: restoredSession }; },
   } as any;
-  expect(await selectShareReceiverAccountSession(signedOutClient, "auto")).toBeUndefined();
-  expect(restoreCalls).toBe(0);
+  expect(await selectShareReceiverAccountSession(signedOutClient, "auto")).toBe(restoredSession);
+  expect(persistedRestoreCalls).toBe(1);
+  expect(walletRestoreCalls).toBe(0);
   expect(await selectShareReceiverAccountSession(signedOutClient, "account")).toBe(restoredSession);
-  expect(restoreCalls).toBe(1);
+  expect(walletRestoreCalls).toBe(1);
 
   const activeClient = { ...signedOutClient, session: () => restoredSession };
   expect(await selectShareReceiverAccountSession(activeClient, "auto")).toBe(restoredSession);
-  expect(restoreCalls).toBe(1);
+  expect(persistedRestoreCalls).toBe(1);
+  expect(walletRestoreCalls).toBe(1);
 });
 
 test("Share trust requires a did:key target and keeps invitation verification identity separate", () => {

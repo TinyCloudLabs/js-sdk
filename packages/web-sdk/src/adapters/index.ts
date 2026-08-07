@@ -7,6 +7,7 @@ export { BrowserSessionStorage } from "./BrowserSessionStorage";
 export type {
   BrowserSessionLoadResult,
   BrowserSessionLoadStatus,
+  BrowserSessionSelectionResult,
   BrowserSessionStorageOptions,
 } from "./BrowserSessionStorage";
 export { BrowserENSResolver } from "./BrowserENSResolver";

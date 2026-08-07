@@ -670,6 +670,27 @@ export class TinyCloudWeb {
     }
   }
 
+  /**
+   * Restore an unambiguous persisted TinyCloud account session without asking
+   * a wallet provider for an address. Accountless share receiving uses this so
+   * `identity: "auto"` can reuse a real session without opening OpenKey.
+   */
+  async restorePersistedSession(): Promise<SessionRestoreResult> {
+    const storage = this.sessionStorage as (ISessionStorage & {
+      loadUnambiguousWithStatus?: BrowserSessionStorage["loadUnambiguousWithStatus"];
+    }) | undefined;
+    if (!storage || typeof storage.loadUnambiguousWithStatus !== "function") {
+      this._sessionRestoreStatus = this.sessionStorage ? "missing" : "disabled";
+      return { status: this._sessionRestoreStatus };
+    }
+    const selected = await storage.loadUnambiguousWithStatus();
+    if (selected.status !== "loaded") {
+      this._sessionRestoreStatus = selected.status;
+      return { status: selected.status };
+    }
+    return this.restoreSession(selected.address);
+  }
+
   async clearPersistedSession(address?: string): Promise<void> {
     if (!this.sessionStorage) return;
     const restoreAddress = await this.resolveRestoreAddress(address);
