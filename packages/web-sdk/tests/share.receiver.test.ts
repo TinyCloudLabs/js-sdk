@@ -234,10 +234,14 @@ function receivedShareForImport(onProgress?: (event: unknown) => void): Received
 test("share import is idempotent and writes content plus non-sensitive metadata once", async () => {
   let storedMetadata: Record<string, unknown> | undefined;
   let batchWrites = 0;
+  let metadataReads = 0;
   const kv = {
-    get: async () => storedMetadata === undefined
-      ? { ok: false, error: { code: "KV_NOT_FOUND", message: "missing", service: "kv" } }
-      : { ok: true, data: { data: storedMetadata, headers: {} } },
+    get: async () => {
+      metadataReads += 1;
+      return storedMetadata === undefined
+        ? { ok: false, error: { code: "KV_NOT_FOUND", message: "missing", service: "kv" } }
+        : { ok: true, data: { data: storedMetadata, headers: {} } };
+    },
     batchPut: async (items: { key: string; value: unknown }[]) => {
       batchWrites += 1;
       storedMetadata = items.find((item) => item.key.includes("/metadata/"))?.value as Record<string, unknown>;
@@ -255,6 +259,7 @@ test("share import is idempotent and writes content plus non-sensitive metadata 
   expect(imported.status).toBe("imported");
   expect(existing.status).toBe("existing");
   expect(batchWrites).toBe(1);
+  expect(metadataReads).toBe(3);
   expect(storedMetadata).toEqual({
     filename: "received.txt",
     mediaType: "text/plain",
@@ -283,4 +288,25 @@ test("share import fails closed on metadata read errors and cancellation", async
   controller.abort(new DOMException("cancelled", "AbortError"));
   await expect(received.importInto(accountClient, { namespace: "files-for-you", signal: controller.signal })).rejects.toThrow("cancelled");
   expect(batchWrites).toBe(0);
+});
+
+test("share import requires authenticated metadata readback after writing", async () => {
+  let reads = 0;
+  const accountClient = {
+    session: () => ({}) as any,
+    ensureOwnedSpaceHosted: async () => "did:key:z6MkAccount:files-for-you",
+    kvForSpace: () => ({
+      get: async () => {
+        reads += 1;
+        return reads === 1
+          ? { ok: false, error: { code: "KV_NOT_FOUND", message: "missing", service: "kv" } }
+          : { ok: false, error: { code: "AUTH_UNAUTHORIZED", message: "denied", service: "kv" } };
+      },
+      batchPut: async () => ({ ok: true, data: { count: 2, keys: [] } }),
+    }) as any,
+  };
+
+  await expect(receivedShareForImport().importInto(accountClient, { namespace: "files-for-you" }))
+    .rejects.toThrow("readback failed");
+  expect(reads).toBe(2);
 });
