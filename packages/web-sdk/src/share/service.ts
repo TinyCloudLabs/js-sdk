@@ -81,7 +81,7 @@ export async function selectShareReceiverAccountSession(
 ): Promise<ReturnType<ShareReceiverClient["session"]>> {
   if (requestedIdentity === "receiver") return undefined;
   const active = client.session();
-  if (active !== undefined || requestedIdentity === "auto") return active;
+  if (active !== undefined) return active;
   const restored = await client.restoreSession();
   return restored.status === "restored" ? restored.session : undefined;
 }
@@ -284,6 +284,10 @@ export class ReceivedShareImpl implements ReceivedShare {
       { key: metadataKey, value: metadata, contentType: "application/json" },
     ], { signal: options.signal });
     if (!written.ok) throw new Error("share import failed");
+    const readback = await kv.get<{ readonly byteDigest?: string }>(metadataKey, { signal: options.signal });
+    if ("error" in readback || readback.data.data.byteDigest !== this.content.byteDigest) {
+      throw new Error("share import readback failed");
+    }
     this.options.onProgress?.({ state: "import", status: "completed" });
     return Object.freeze({ status: "imported", path: logicalPath, byteDigest: this.content.byteDigest });
   }

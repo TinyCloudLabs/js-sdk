@@ -612,7 +612,12 @@ export class TinyCloudWeb {
   private async resolveRestoreAddress(address?: string): Promise<string | undefined> {
     if (address) return address;
     if (this._node?.address) return this._node.address;
-    return this.walletSigner?.getConnectedAddress();
+    const connected = await this.walletSigner?.getConnectedAddress();
+    if (connected !== undefined) return connected;
+    const storage = this.sessionStorage as
+      | (ISessionStorage & { activeAddress?: () => string | undefined })
+      | undefined;
+    return storage?.activeAddress?.();
   }
 
   private async loadPersistedSession(

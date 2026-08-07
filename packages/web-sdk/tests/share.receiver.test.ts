@@ -9,6 +9,7 @@ import {
 } from "@tinycloud/sdk-core";
 import { didKeyFromEd25519PublicKey, ed25519PublicKeyFromDidKey } from "@tinycloud/share-envelope";
 import { interpretCredentialFlow } from "../src/credentials/interpreter";
+import { BrowserSessionStorage } from "../src/adapters/BrowserSessionStorage";
 import type { CredentialAcquisitionTransport, CredentialRequestState } from "../src/credentials/types";
 import { SessionReceiverCredentialCustody } from "../src/share/receiver-credentials";
 import { createOrRestoreShareReceiverSession, SHARE_RECEIVER_SESSION_STORAGE_KEY } from "../src/share/receiver-session";
@@ -82,21 +83,54 @@ test("share links are bound to the configured out-of-band Share origin", () => {
   expect(() => validateShareReceiverExpectedOrigin("https://share.example/s/claim#secret", "https://share.example/path")).toThrow("configured Share deployment");
 });
 
-test("auto identity never restores through a wallet provider before guest receive", async () => {
+test("auto identity restores an existing account session before falling back to guest receive", async () => {
   let restoreCalls = 0;
   const restoredSession = { address: "0x1" } as any;
   const signedOutClient = {
     session: () => undefined,
     restoreSession: async () => { restoreCalls += 1; return { status: "restored", session: restoredSession }; },
   } as any;
-  expect(await selectShareReceiverAccountSession(signedOutClient, "auto")).toBeUndefined();
-  expect(restoreCalls).toBe(0);
-  expect(await selectShareReceiverAccountSession(signedOutClient, "account")).toBe(restoredSession);
+  expect(await selectShareReceiverAccountSession(signedOutClient, "auto")).toBe(restoredSession);
   expect(restoreCalls).toBe(1);
+  expect(await selectShareReceiverAccountSession(signedOutClient, "account")).toBe(restoredSession);
+  expect(restoreCalls).toBe(2);
 
   const activeClient = { ...signedOutClient, session: () => restoredSession };
   expect(await selectShareReceiverAccountSession(activeClient, "auto")).toBe(restoredSession);
-  expect(restoreCalls).toBe(1);
+  expect(restoreCalls).toBe(2);
+
+  const missingClient = {
+    session: () => undefined,
+    restoreSession: async () => ({ status: "missing" }),
+  } as any;
+  expect(await selectShareReceiverAccountSession(missingClient, "auto")).toBeUndefined();
+});
+
+test("browser persistence exposes the latest valid account without a wallet provider", async () => {
+  const backend = memoryStorage();
+  const storage = new BrowserSessionStorage({ storage: backend as Storage });
+  const address = "0x1234567890abcdef1234567890abcdef12345678";
+  const now = new Date();
+  await storage.save(address, {
+    address,
+    chainId: 1,
+    sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "secret" }),
+    siwe: "example.com wants you to sign in",
+    signature: "0xsig",
+    tinycloudSession: {
+      delegationHeader: { Authorization: "Bearer delegation" },
+      delegationCid: "bafydelegation",
+      spaceId: "space://tinycloud/1/owner/default",
+      verificationMethod: "did:key:z6MkSession#z6MkSession",
+    },
+    expiresAt: new Date(now.getTime() + 60_000).toISOString(),
+    createdAt: now.toISOString(),
+    version: "1.0",
+  });
+  expect(storage.activeAddress()).toBe(address);
+
+  await storage.clear(address);
+  expect(storage.activeAddress()).toBeUndefined();
 });
 
 test("Share trust requires a did:key target and keeps invitation verification identity separate", () => {
@@ -200,10 +234,14 @@ function receivedShareForImport(onProgress?: (event: unknown) => void): Received
 test("share import is idempotent and writes content plus non-sensitive metadata once", async () => {
   let storedMetadata: Record<string, unknown> | undefined;
   let batchWrites = 0;
+  let metadataReads = 0;
   const kv = {
-    get: async () => storedMetadata === undefined
-      ? { ok: false, error: { code: "KV_NOT_FOUND", message: "missing", service: "kv" } }
-      : { ok: true, data: { data: storedMetadata, headers: {} } },
+    get: async () => {
+      metadataReads += 1;
+      return storedMetadata === undefined
+        ? { ok: false, error: { code: "KV_NOT_FOUND", message: "missing", service: "kv" } }
+        : { ok: true, data: { data: storedMetadata, headers: {} } };
+    },
     batchPut: async (items: { key: string; value: unknown }[]) => {
       batchWrites += 1;
       storedMetadata = items.find((item) => item.key.includes("/metadata/"))?.value as Record<string, unknown>;
@@ -221,6 +259,7 @@ test("share import is idempotent and writes content plus non-sensitive metadata 
   expect(imported.status).toBe("imported");
   expect(existing.status).toBe("existing");
   expect(batchWrites).toBe(1);
+  expect(metadataReads).toBe(3);
   expect(storedMetadata).toEqual({
     filename: "received.txt",
     mediaType: "text/plain",
@@ -249,4 +288,25 @@ test("share import fails closed on metadata read errors and cancellation", async
   controller.abort(new DOMException("cancelled", "AbortError"));
   await expect(received.importInto(accountClient, { namespace: "files-for-you", signal: controller.signal })).rejects.toThrow("cancelled");
   expect(batchWrites).toBe(0);
+});
+
+test("share import requires authenticated metadata readback after writing", async () => {
+  let reads = 0;
+  const accountClient = {
+    session: () => ({}) as any,
+    ensureOwnedSpaceHosted: async () => "did:key:z6MkAccount:files-for-you",
+    kvForSpace: () => ({
+      get: async () => {
+        reads += 1;
+        return reads === 1
+          ? { ok: false, error: { code: "KV_NOT_FOUND", message: "missing", service: "kv" } }
+          : { ok: false, error: { code: "AUTH_UNAUTHORIZED", message: "denied", service: "kv" } };
+      },
+      batchPut: async () => ({ ok: true, data: { count: 2, keys: [] } }),
+    }) as any,
+  };
+
+  await expect(receivedShareForImport().importInto(accountClient, { namespace: "files-for-you" }))
+    .rejects.toThrow("readback failed");
+  expect(reads).toBe(2);
 });
