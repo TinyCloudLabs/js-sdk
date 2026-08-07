@@ -54,8 +54,9 @@ export function toShareErrorInfo(error: unknown): ShareErrorInfo {
 
 export interface ShareFetchOptions {
   readonly registryBaseUrl?: string;
-  readonly fetchBlob?: (input: { readonly origin: string; readonly cid: string }) => Promise<Uint8Array>;
+  readonly fetchBlob?: (input: { readonly origin: string; readonly cid: string; readonly signal?: AbortSignal }) => Promise<Uint8Array>;
   readonly fetchFn?: typeof globalThis.fetch;
+  readonly signal?: AbortSignal;
   readonly expectedOrigin?: string;
   /** Out-of-band signer trust root for addressed envelopes. */
   readonly trustedSignerDid?: string;
@@ -179,8 +180,12 @@ async function readResponseBytes(response: Response, limit: number, tooLargeCode
 function registryFetcher(options: ShareFetchOptions, limit: number, tooLargeCode: ShareErrorCode = "max-bytes-exceeded", stage: "envelope" | "content" = "envelope"): (input: { readonly origin: string; readonly cid: string }) => Promise<Uint8Array> {
   if (options.fetchBlob !== undefined) return async (input) => {
     try {
-      return boundedBytes(await options.fetchBlob!(input), limit, tooLargeCode);
+      options.signal?.throwIfAborted();
+      const bytes = await options.fetchBlob!({ ...input, ...(options.signal === undefined ? {} : { signal: options.signal }) });
+      options.signal?.throwIfAborted();
+      return boundedBytes(bytes, limit, tooLargeCode);
     } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason ?? error;
       if (error instanceof ShareReceiveError) throw error;
       throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
     }
@@ -190,10 +195,19 @@ function registryFetcher(options: ShareFetchOptions, limit: number, tooLargeCode
   const base = options.registryBaseUrl.replace(/\/+$/, "");
   return async ({ cid }) => {
     try {
-      const response = await fetchFn(`${base}/ipfs/${cid}?format=raw`, { headers: { accept: "application/vnd.ipld.raw" }, redirect: "error" });
+      options.signal?.throwIfAborted();
+      const response = await fetchFn(`${base}/ipfs/${cid}?format=raw`, {
+        headers: { accept: "application/vnd.ipld.raw" },
+        redirect: "error",
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      options.signal?.throwIfAborted();
       if (!response.ok) throw new ShareReceiveError("fetch-failed", `registry returned ${response.status}`, { stage });
-      return await readResponseBytes(response, limit, tooLargeCode);
+      const bytes = await readResponseBytes(response, limit, tooLargeCode);
+      options.signal?.throwIfAborted();
+      return bytes;
     } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason ?? error;
       if (error instanceof ShareReceiveError) throw error;
       throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
     }

@@ -28,7 +28,8 @@ import type { CredentialClient, CredentialsAcquireOptions, CredentialsEnsureOpti
 function randomVerifier(): string { return encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))); }
 
 function active(client: CredentialClient): string {
-  if (client.session() === undefined || typeof client.credentialHolderDid !== "string" || !/^did:key:z6Mk[^#]+$/.test(client.credentialHolderDid)) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "credentials requires an active TinyCloud/OpenKey session");
+  if (typeof client.credentialHolderDid !== "string" || !/^did:key:z6Mk[^#]+$/.test(client.credentialHolderDid)) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "credentials requires a canonical holder session");
+  if (client.receiverCredentialCustody === undefined && client.session() === undefined) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "credentials requires an active TinyCloud/OpenKey session");
   if (client.credentialHolderKid !== `${client.credentialHolderDid}#${client.credentialHolderDid.slice("did:key:".length)}`) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "credentials requires a canonical active holder key");
   return client.credentialHolderDid;
 }
@@ -77,6 +78,8 @@ export class CredentialsService {
   async find(requirementValue: CredentialRequirement, options: CredentialsOperationOptions = {}): Promise<StoredCredentialRecord | undefined> {
     const holderDid = active(this.client); const requirement = validateCredentialRequirement(requirementValue);
     options.onProgress?.({ state: "checking" });
+    const requirementDigest = await credentialRequirementDigest(requirement);
+    if (this.client.receiverCredentialCustody !== undefined) return this.client.receiverCredentialCustody.find({ requirement, requirementDigest, holderDid, now: options.now?.() });
     const space = await credentialSpace(this.client);
     return findStoredCredential({ kv: this.client.kvForSpace(space.spaceId), requirement, holderDid, ownerDid: space.ownerDid, now: options.now?.() });
   }
@@ -89,8 +92,12 @@ export class CredentialsService {
 
   async store(verified: VerifiedCredential, requirementValue: CredentialRequirement, options: CredentialsOperationOptions = {}) {
     const holderDid = active(this.client); const requirement = validateCredentialRequirement(requirementValue);
+    const requirementDigest = await credentialRequirementDigest(requirement);
+    if (this.client.receiverCredentialCustody !== undefined) {
+      return { record: await this.client.receiverCredentialCustody.store({ verified, requirement, requirementDigest, holderDid, now: options.now?.() }) };
+    }
     const space = await credentialSpace(this.client);
-    return storeCredential({ kv: this.client.kvForSpace(space.spaceId), verified, requirement, requirementDigest: await credentialRequirementDigest(requirement), activeHolderDid: holderDid, activeOwnerDid: space.ownerDid, now: options.now?.() });
+    return storeCredential({ kv: this.client.kvForSpace(space.spaceId), verified, requirement, requirementDigest, activeHolderDid: holderDid, activeOwnerDid: space.ownerDid, now: options.now?.() });
   }
 
   async acquire(requirementValue: CredentialRequirement, options: CredentialsAcquireOptions): Promise<VerifiedCredential> {
@@ -163,7 +170,8 @@ export class CredentialsService {
     options.onProgress?.({ state: "saving" });
     const saved = await this.store(verified, requirement, options);
     options.onProgress?.({ state: "success" });
-    return { status: "acquired", credential: verified, record: saved.record, receipt: saved.receipt };
+    const receipt = "receipt" in saved ? saved.receipt : undefined;
+    return { status: "acquired", credential: verified, record: saved.record, ...(receipt === undefined ? {} : { receipt }) };
   }
 
   async admitPolicy(
@@ -219,6 +227,7 @@ export class CredentialsService {
       requestedCapabilities: options.requestedCapabilities,
       sign: (digest) => this.client.signSessionBytes(digest),
       fetch: options.fetch,
+      signal: options.signal,
       now: options.now,
       jti: options.jti,
     });
@@ -228,6 +237,7 @@ export class CredentialsService {
         "Active TinyCloud delegation activation is unavailable",
       );
     }
+    options.signal?.throwIfAborted();
     const installed = await this.client.activateCompactRuntimeDelegation({
       authorization: admission.session.authorization,
       cid: admission.session.cid,

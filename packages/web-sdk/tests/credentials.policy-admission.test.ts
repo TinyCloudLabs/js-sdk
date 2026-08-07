@@ -187,7 +187,7 @@ async function fixture() {
     },
   };
   const session = await signCompactUcanAuthorization({
-    issuerDid: ENFORCER_DID,
+    issuerDid: NODE_DID,
     audienceDid: HOLDER_DID,
     attenuation,
     facts: [
@@ -219,7 +219,7 @@ async function fixture() {
     notBefore: Math.floor(NOW.getTime() / 1000),
     expiresAt: Math.floor(NOW.getTime() / 1000) + 60,
     nonce: "session-470",
-    sign: async (bytes) => ed25519.sign(bytes, ENFORCER_KEY),
+    sign: async (bytes) => ed25519.sign(bytes, NODE_KEY),
   });
   return { policy, policyCid, credential, record, receipt, session };
 }
@@ -227,7 +227,8 @@ async function fixture() {
 describe("TC-470 credential policy admission", () => {
   test("presents distinct issuer, owner, account, holder, enforcer, and node identities, then installs S0", async () => {
     const values = await fixture();
-    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const requests: Array<{ url: string; body: Record<string, unknown>; signal: AbortSignal | null | undefined }> = [];
+    const controller = new AbortController();
     const activate = mock(async (input: any) => ({
       cid: input.cid,
       delegation: { cid: input.cid },
@@ -252,7 +253,7 @@ describe("TC-470 credential policy admission", () => {
     const fetchFn = mock(async (resource: RequestInfo | URL, init?: RequestInit) => {
       const url = String(resource);
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      requests.push({ url, body });
+      requests.push({ url, body, signal: init?.signal });
       expect(url).not.toContain(values.credential.credential);
       if (url.endsWith("/share/v3/policy/challenges")) {
         expect(JSON.stringify(body)).not.toContain(values.credential.credential);
@@ -293,6 +294,7 @@ describe("TC-470 credential policy admission", () => {
       requestedCapabilities: [CAPABILITY],
       nodeOrigin: NODE_ORIGIN,
       fetch: fetchFn,
+      signal: controller.signal,
       now: NOW,
       jti: "presentation-470",
     });
@@ -304,6 +306,7 @@ describe("TC-470 credential policy admission", () => {
       host: NODE_ORIGIN,
     });
     expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.signal === controller.signal)).toBe(true);
     const mint = requests[1]!.body as any;
     expect(Object.keys(mint).sort()).toEqual(
       [
@@ -346,6 +349,57 @@ describe("TC-470 credential policy admission", () => {
       ),
     ).toBe(true);
     expect(new Set([OWNER_DID, ISSUER_DID, HOLDER_DID, ENFORCER_DID, NODE_DID, ACCOUNT_OWNER_DID]).size).toBe(6);
+  });
+
+  test("cancels account admission during the challenge without activating authority", async () => {
+    const values = await fixture();
+    const controller = new AbortController();
+    let notifyStarted!: () => void;
+    const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
+    let fetchCalls = 0;
+    let activateCalls = 0;
+    const client = {
+      sessionDid: HOLDER_DID,
+      credentialHolderDid: HOLDER_DID,
+      credentialHolderKid: `${HOLDER_DID}#${HOLDER_DID.slice("did:key:".length)}`,
+      session: () => ({ address: "0x1", walletAddress: "0x1", chainId: 1 }),
+      signSessionBytes: async (bytes: Uint8Array) => ed25519.sign(bytes, HOLDER_KEY),
+      ensureOwnedSpaceHosted: async () => CREDENTIAL_SPACE_ID,
+      credentialSpaceOwnerDid: () => ACCOUNT_OWNER_DID,
+      kvForSpace: () => ({}),
+      accountAuthorizationCid: () => ACCOUNT_AUTHORIZATION_CID,
+      activateCompactRuntimeDelegation: async () => { activateCalls += 1; return {} as any; },
+    } as unknown as CredentialClient;
+    const fetchFn = ((_resource: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      fetchCalls += 1;
+      expect(init?.signal).toBe(controller.signal);
+      notifyStarted();
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    })) as typeof fetch;
+
+    const pending = new CredentialsService(client).admitPolicy({
+      ensured: {
+        status: "reused",
+        credential: values.credential,
+        record: values.record,
+      },
+      policy: values.policy,
+      policyCid: values.policyCid,
+      policyRootCid: POLICY_ROOT_CID,
+      enforcementRootCid: ENFORCEMENT_ROOT_CID,
+      requirement: REQUIREMENT,
+      requestedCapabilities: [CAPABILITY],
+      nodeOrigin: NODE_ORIGIN,
+      fetch: fetchFn,
+      signal: controller.signal,
+      now: NOW,
+    });
+
+    await started;
+    controller.abort(new DOMException("cancelled", "AbortError"));
+    await expect(pending).rejects.toThrow("cancelled");
+    expect(fetchCalls).toBe(1);
+    expect(activateCalls).toBe(0);
   });
 
   test("rejects a substituted stored account owner before requesting admission", async () => {

@@ -43,7 +43,7 @@ describe("v3 recipient content", () => {
     };
     const envelope = { version: 3, target: { nodeAudience: nodeDid }, encryptionNetwork: networkId, contentSource: { keyVersion: 1, encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash }, metadata: { mediaType: "text/plain" } } as any;
     const client = new ShareRecipientClient({ nodeOrigin: "https://node.example.com", envelope, holderDid: recipientDid, trustedNode: {} as any, fetchFn, buildPresentation: async () => ({ holderDid: recipientDid, credential: "fixture", holderBinding: {}, proof: {} }) });
-    Object.assign(client as any, { session: { sessionId: session.cid }, v3Authorization: session.authorization, nativeSigner: async (bytes: Uint8Array) => ed25519.sign(bytes, recipientKey) });
+    Object.assign(client as any, { session: { sessionId: session.cid }, v3Authorization: session.authorization, v3NodeAudience: nodeDid, nativeSigner: async (bytes: Uint8Array) => ed25519.sign(bytes, recipientKey) });
 
     const opened = await client.decryptV3Content(stored);
     expect(new TextDecoder().decode(opened.bytes)).toBe("hello");

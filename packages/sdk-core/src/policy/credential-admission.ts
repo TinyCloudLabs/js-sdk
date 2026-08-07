@@ -38,6 +38,10 @@ export const POLICY_PRESENTATION_V3_SCHEMA =
   "xyz.tinycloud.policy/presentation/v3" as const;
 export const POLICY_PRESENTATION_V3_DOMAIN =
   "xyz.tinycloud.policy/Presentation/v3\0";
+export const POLICY_PRESENTATION_V4_SCHEMA =
+  "xyz.tinycloud.policy/presentation/v4" as const;
+export const POLICY_PRESENTATION_V4_DOMAIN =
+  "xyz.tinycloud.policy/Presentation/v4\0";
 
 export interface PolicyCredentialRequirementV1 {
   readonly type: typeof POLICY_CREDENTIAL_REQUIREMENT_V1_TYPE;
@@ -87,6 +91,32 @@ export interface PolicyCredentialPresentationV3 {
   readonly requestedCapabilities: readonly UnifiedPolicyCapability[];
   readonly issuedAt: string;
   readonly expiresAt: string;
+  readonly signature: {
+    readonly suite: "Ed25519";
+    readonly signerDid: string;
+    readonly value: string;
+  };
+}
+
+export interface UnsignedPolicyCredentialPresentationV4 {
+  readonly schema: typeof POLICY_PRESENTATION_V4_SCHEMA;
+  readonly jti: string;
+  readonly challengeId: string;
+  readonly nonce: string;
+  readonly policyCid: string;
+  readonly nodeAudience: string;
+  readonly holderDid: string;
+  readonly subjectDid: string;
+  readonly credentialDigest: string;
+  readonly requirementDigest: string;
+  readonly descriptorDigest: string;
+  readonly requestedCapabilities: readonly UnifiedPolicyCapability[];
+  readonly issuedAt: string;
+  readonly expiresAt: string;
+}
+
+export interface PolicyCredentialPresentationV4
+  extends UnsignedPolicyCredentialPresentationV4 {
   readonly signature: {
     readonly suite: "Ed25519";
     readonly signerDid: string;
@@ -320,6 +350,137 @@ function envelopeFromVerified(
   return envelope;
 }
 
+export function issuedCredentialEnvelopeFromVerified(
+  verified: VerifiedCredential,
+): IssuedCredentialEnvelope {
+  return envelopeFromVerified(verified);
+}
+
+/** Sign the exact accountless v4 wire value. No account custody fields exist. */
+export async function signPolicyCredentialPresentationV4(
+  value: UnsignedPolicyCredentialPresentationV4,
+  sign: (digest: Uint8Array) => Promise<Uint8Array>,
+): Promise<PolicyCredentialPresentationV4> {
+  const item = record(value, "Policy presentation v4");
+  exactKeys(item, [
+    "schema", "jti", "challengeId", "nonce", "policyCid", "nodeAudience",
+    "holderDid", "subjectDid", "credentialDigest", "requirementDigest",
+    "descriptorDigest", "requestedCapabilities", "issuedAt", "expiresAt",
+  ], "Policy presentation v4");
+  if (
+    item.schema !== POLICY_PRESENTATION_V4_SCHEMA ||
+    item.holderDid !== item.subjectDid ||
+    !Array.isArray(item.requestedCapabilities)
+  ) throw new Error("Policy presentation v4 is invalid");
+  const holderDid = nonEmpty(item.holderDid, "Policy presentation v4 holder DID");
+  didKeyBytes(holderDid);
+  const unsigned = Object.freeze({
+    schema: POLICY_PRESENTATION_V4_SCHEMA,
+    jti: nonEmpty(item.jti, "Policy presentation v4 jti"),
+    challengeId: nonEmpty(item.challengeId, "Policy presentation v4 challenge"),
+    nonce: nonEmpty(item.nonce, "Policy presentation v4 nonce"),
+    policyCid: nonEmpty(item.policyCid, "Policy presentation v4 policy CID"),
+    nodeAudience: nonEmpty(item.nodeAudience, "Policy presentation v4 audience"),
+    holderDid,
+    subjectDid: holderDid,
+    credentialDigest: nonEmpty(item.credentialDigest, "Policy presentation v4 credential digest"),
+    requirementDigest: nonEmpty(item.requirementDigest, "Policy presentation v4 requirement digest"),
+    descriptorDigest: nonEmpty(item.descriptorDigest, "Policy presentation v4 descriptor digest"),
+    // The low-level signer preserves the frozen wire bytes exactly. The
+    // policy-aware builder performs capability normalization and containment.
+    requestedCapabilities: Object.freeze(item.requestedCapabilities as UnifiedPolicyCapability[]),
+    issuedAt: date(item.issuedAt, "Policy presentation v4 issuedAt"),
+    expiresAt: date(item.expiresAt, "Policy presentation v4 expiresAt"),
+  });
+  const digest = sha256(new TextEncoder().encode(
+    POLICY_PRESENTATION_V4_DOMAIN + jcsCanonicalize(unsigned),
+  ));
+  const signature = await sign(digest);
+  if (
+    signature.length !== 64 ||
+    !ed25519.verify(signature, digest, didKeyBytes(holderDid))
+  ) throw new Error("policy presentation signature is invalid");
+  return Object.freeze({
+    ...unsigned,
+    signature: Object.freeze({
+      suite: "Ed25519" as const,
+      signerDid: holderDid,
+      value: encodeBase64Url(signature),
+    }),
+  });
+}
+
+export interface BuildPolicyCredentialPresentationV4Input {
+  readonly policy: UnifiedPolicyV2;
+  readonly policyCid: string;
+  readonly challenge: PolicyChallengeV3;
+  readonly requirement: CredentialRequirement;
+  readonly credential: VerifiedCredential;
+  readonly requestedCapabilities: readonly UnifiedPolicyCapability[];
+  readonly sign: (digest: Uint8Array) => Promise<Uint8Array>;
+  readonly now?: Date;
+  readonly jti?: string;
+}
+
+export async function buildPolicyCredentialPresentationV4(
+  input: BuildPolicyCredentialPresentationV4Input,
+): Promise<PolicyCredentialPresentationV4> {
+  const policy = validateUnifiedPolicyV2(input.policy, input.policyCid);
+  const requirement = validateCredentialRequirement(input.requirement);
+  const commitment = policy.credentialRequirement;
+  const requirementDigest = await credentialRequirementDigest(requirement);
+  const credentialDigest = await sha256Base64Url(input.credential.credential);
+  if (
+    requirementDigest !== commitment.requirementDigest ||
+    input.credential.descriptorDigest !== commitment.descriptorDigest ||
+    input.credential.credentialDigest !== credentialDigest ||
+    input.credential.issuerDid !== commitment.issuerDid ||
+    input.credential.issuerKid !== commitment.issuerKid ||
+    jcsCanonicalize(input.credential.profile) !== jcsCanonicalize(commitment.profile) ||
+    jcsCanonicalize(input.credential.credentialType) !== jcsCanonicalize(commitment.credentialType)
+  ) throw new Error("credential does not match the signed Policy/v2 requirement");
+  const requestedCapabilities = input.requestedCapabilities.map(normalizeUnifiedPolicyCapability);
+  if (
+    requestedCapabilities.length === 0 ||
+    requestedCapabilities.some((requested) =>
+      !policy.capabilityCeiling.some((authority) =>
+        unifiedPolicyCapabilityContains(authority, requested)))
+  ) throw new Error("requested capabilities exceed the signed Policy/v2 ceiling");
+  const holderDid = input.credential.holderDid;
+  if (
+    input.challenge.policyCid !== input.policyCid ||
+    input.challenge.recipientDid !== holderDid ||
+    input.credential.subjectDid !== holderDid ||
+    typeof input.challenge.nodeAudience !== "string" ||
+    input.challenge.nodeAudience.length === 0 ||
+    typeof input.challenge.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(input.challenge.expiresAt))
+  ) throw new Error("policy challenge binding is invalid");
+  const now = input.now ?? new Date();
+  const expiresAtMs = Math.min(
+    now.getTime() + 60_000,
+    Date.parse(input.challenge.expiresAt),
+    Date.parse(input.credential.expiresAt),
+  );
+  if (expiresAtMs <= now.getTime()) throw new Error("policy challenge is expired");
+  return signPolicyCredentialPresentationV4(Object.freeze({
+    schema: POLICY_PRESENTATION_V4_SCHEMA,
+    jti: input.jti ?? encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+    challengeId: input.challenge.challengeId,
+    nonce: input.challenge.nonce,
+    policyCid: input.policyCid,
+    nodeAudience: input.challenge.nodeAudience,
+    holderDid,
+    subjectDid: holderDid,
+    credentialDigest,
+    requirementDigest,
+    descriptorDigest: input.credential.descriptorDigest,
+    requestedCapabilities: Object.freeze(requestedCapabilities),
+    issuedAt: rfc3339Seconds(now),
+    expiresAt: rfc3339Seconds(new Date(expiresAtMs)),
+  }), input.sign);
+}
+
 export interface BuildPolicyCredentialPresentationV3Input {
   readonly policy: UnifiedPolicyV2;
   readonly policyCid: string;
@@ -444,6 +605,7 @@ export interface AdmitPolicyCredentialV3Input
   /** Recipient-owned `credentials` space covered by the account authorization. */
   readonly credentialSpaceId: string;
   readonly fetch?: typeof fetch;
+  readonly signal?: AbortSignal;
 }
 
 export interface PolicyCredentialAdmissionV3 {
@@ -476,6 +638,7 @@ export async function admitPolicyCredentialV3(
     recipientDid: input.credential.holderDid,
     requestedCapabilities: input.requestedCapabilities,
     fetch: fetchFn,
+    signal: input.signal,
   });
   const presentation = await buildPolicyCredentialPresentationV3({
     ...input,
@@ -487,6 +650,7 @@ export async function admitPolicyCredentialV3(
     {
       method: "POST",
       redirect: "error",
+      signal: input.signal,
       headers: { accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify({
         policyCid: input.policyCid,
@@ -527,5 +691,96 @@ export async function admitPolicyCredentialV3(
   ) {
     throw new Error("policy delegation signed binding is invalid");
   }
+  input.signal?.throwIfAborted();
+  return Object.freeze({ challenge, presentation, session });
+}
+
+export interface AdmitPolicyCredentialV4Input
+  extends Omit<BuildPolicyCredentialPresentationV4Input, "challenge"> {
+  readonly policyRootCid: string;
+  readonly enforcementRootCid: string;
+  readonly expectedNodeAudience: string;
+  readonly expectedEnforcerDid: string;
+  readonly nodeOrigin: string;
+  readonly fetch?: typeof fetch;
+  readonly signal?: AbortSignal;
+}
+
+export interface PolicyCredentialAdmissionV4 {
+  readonly challenge: PolicyChallengeV3;
+  readonly presentation: PolicyCredentialPresentationV4;
+  readonly session: PolicySessionUcanV1;
+}
+
+/** @internal */
+export function validatePolicyCredentialAdmissionV4Authority(
+  session: PolicySessionUcanV1,
+  expected: { readonly nodeAudience: string; readonly enforcerDid: string },
+): void {
+  if (session.iss.split("#", 1)[0] !== expected.nodeAudience
+    || session.fact.nodeAudience !== expected.nodeAudience
+    || session.fact.enforcerDid !== expected.enforcerDid) throw new Error("policy delegation authority binding is invalid");
+}
+
+/** Accountless admission. The request deliberately has no account custody fields. */
+export async function admitPolicyCredentialV4(
+  input: AdmitPolicyCredentialV4Input,
+): Promise<PolicyCredentialAdmissionV4> {
+  const policy = validateUnifiedPolicyV2(input.policy, input.policyCid);
+  const nodeOrigin = policyNodeOrigin(input.nodeOrigin);
+  const fetchFn = input.fetch ?? globalThis.fetch.bind(globalThis);
+  const challenge = await requestPolicyChallengeV3({
+    nodeOrigin,
+    policyCid: input.policyCid,
+    recipientDid: input.credential.holderDid,
+    requestedCapabilities: input.requestedCapabilities,
+    fetch: fetchFn,
+    signal: input.signal,
+  });
+  const presentation = await buildPolicyCredentialPresentationV4({
+    ...input,
+    policy,
+    challenge,
+  });
+  const response = await fetchFn(new URL("/share/v3/policy/delegations", nodeOrigin), {
+    method: "POST",
+    redirect: "error",
+    signal: input.signal,
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({
+      policyCid: input.policyCid,
+      challengeId: challenge.challengeId,
+      nonce: challenge.nonce,
+      requirement: validateCredentialRequirement(input.requirement),
+      credential: envelopeFromVerified(input.credential),
+      presentation,
+    }),
+  });
+  if (!response.ok) throw new Error(`policy delegation rejected (${response.status})`);
+  const value = record(await response.json(), "policy delegation");
+  if (
+    value.admitted !== true ||
+    typeof value.sessionCid !== "string" ||
+    typeof value.authorization !== "string"
+  ) throw new Error("policy delegation response is invalid");
+  const session = parsePolicySessionUcan(value.authorization, [
+    input.policyRootCid,
+    input.enforcementRootCid,
+  ]);
+  const expectedAttenuation = compactAttenuationForPolicyCapabilities(input.requestedCapabilities);
+  validatePolicyCredentialAdmissionV4Authority(session, {
+    nodeAudience: input.expectedNodeAudience,
+    enforcerDid: input.expectedEnforcerDid,
+  });
+  if (
+    session.cid !== value.sessionCid ||
+    session.aud !== input.credential.holderDid ||
+    session.fact.policyCid !== input.policyCid ||
+    session.fact.recipientDid !== input.credential.holderDid ||
+    session.fact.policyDelegationCid !== input.policyRootCid ||
+    session.fact.enforcementDelegationCid !== input.enforcementRootCid ||
+    jcsCanonicalize(session.att) !== jcsCanonicalize(expectedAttenuation)
+  ) throw new Error("policy delegation signed binding is invalid");
+  input.signal?.throwIfAborted();
   return Object.freeze({ challenge, presentation, session });
 }

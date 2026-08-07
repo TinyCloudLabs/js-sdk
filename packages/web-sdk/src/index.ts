@@ -18,6 +18,7 @@ export {
   type EstablishManageKeySessionResult,
 } from "./manage-key-session";
 export * from "./credentials";
+export * from "./share";
 export type { SecretReadInput, SecretReadResult, BootstrapWarning } from "@tinycloud/node-sdk";
 export type { UnifiedOwnerRootInput, UnifiedOwnerRootReceipt } from "@tinycloud/node-sdk/core";
 export type {
