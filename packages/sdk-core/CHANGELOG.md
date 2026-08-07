@@ -1,5 +1,17 @@
 # @tinycloudlabs/sdk-core
 
+## 3.0.0-beta.2
+
+### Minor Changes
+
+- b0069f7: Add first-class accountless share receiving with session-key credential binding, strict PolicyCredentialPresentation/v4 admission, ordinary delegation invocation, and post-render private import into `files-for-you`.
+
+### Patch Changes
+
+- Updated dependencies [b0069f7]
+  - @tinycloud/share-sdk@0.3.0-beta.0
+  - @tinycloud/share-envelope@0.2.1-beta.0
+
 ## 3.0.0-beta.1
 
 ### Minor Changes

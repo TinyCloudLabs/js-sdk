@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/share-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0-beta.0",
   "description": "Canonical headless TinyCloud Share operations for browser and Node.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -29,7 +29,7 @@
   "dependencies": {
     "@noble/curves": "^1.9.2",
     "@noble/hashes": "^1.8.0",
-    "@tinycloud/share-envelope": "0.2.0",
+    "@tinycloud/share-envelope": "0.2.1-beta.0",
     "multiformats": "^13.3.6"
   },
   "devDependencies": {

@@ -17725,7 +17725,7 @@ function validateV3Invariants(value, ctx) {
   if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.target.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
   if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
@@ -18262,10 +18262,10 @@ async function verifyEnvelopeV3(envelope, options) {
   const binding = parsed.attestedEnforcerBinding;
   const { signature: bindingSignature, ...unsignedBinding } = binding;
   const expectedBindingDigestHex = hex(sha2562(new TextEncoder().encode(canonicalize2({ enforcerDid: binding.enforcerDid, nodeAudience: binding.nodeAudience }))));
-  if (binding.enforcerDid !== parsed.target.nodeAudience || binding.nodeAudience !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.enforcerDid || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
+  if (binding.enforcerDid !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
   try {
     const digest4 = sha2562(new TextEncoder().encode(`${ATTESTED_ENFORCER_V2_DOMAIN}${canonicalize2(unsignedBinding)}`));
-    if (!ed25519.verify(fromBase64Url(bindingSignature.value), digest4, ed25519PublicKeyFromDidKey(binding.enforcerDid), ED25519_VERIFY_OPTS2)) return false;
+    if (!ed25519.verify(fromBase64Url(bindingSignature.value), digest4, ed25519PublicKeyFromDidKey(binding.nodeAudience), ED25519_VERIFY_OPTS2)) return false;
   } catch {
     return false;
   }
@@ -18278,7 +18278,7 @@ async function verifyEnvelopeV3(envelope, options) {
     const common = ["ownerDid", "policyId", "policyDigestHex", "policyCid", "contentSourceDigestHex", "capabilityCeilingHashHex", "nativeProjectionHashHex", "nodeAudience"];
     const policyKeys = [...common, "role", "mode"];
     const enforcementKeys = [...policyKeys, "enforcerDid"];
-    if (Object.keys(policyFact).length !== policyKeys.length || policyKeys.some((key) => !(key in policyFact)) || Object.keys(enforcementFact).length !== enforcementKeys.length || enforcementKeys.some((key) => !(key in enforcementFact)) || policyRoot.payload.prf.length !== 0 || enforcementRoot.payload.prf.length !== 0 || policyRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || enforcementRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || policyRoot.payload.nbf !== enforcementRoot.payload.nbf || policyRoot.payload.exp !== enforcementRoot.payload.exp || canonicalize2(policyRoot.payload.att) !== canonicalize2(expectedAttenuation) || canonicalize2(enforcementRoot.payload.att) !== canonicalize2(expectedAttenuation) || policyFact.role !== "policy-authority" || policyFact.mode !== "policy-source" || "enforcerDid" in policyFact || enforcementFact.role !== "policy-enforcement" || enforcementFact.mode !== "conditional-mint" || policyRoot.payload.aud !== `did:tinycloud:policy:${hex(policyIdDigest)}` || enforcementRoot.payload.aud !== parsed.target.nodeAudience || enforcementFact.enforcerDid !== parsed.target.nodeAudience || common.some((key) => policyFact[key] !== enforcementFact[key]) || policyFact.ownerDid !== policy.ownerDid || policyFact.policyId !== policy.policyId || policyFact.policyDigestHex !== hex(policyIdDigest) || policyFact.policyCid !== parsed.policyCid || policyFact.contentSourceDigestHex !== parsed.contentSourceDigestHex || policyFact.capabilityCeilingHashHex !== capabilityCeilingHashHex || policyFact.nativeProjectionHashHex !== nativeProjectionHashHex || policyFact.nodeAudience !== parsed.target.nodeAudience || policyRoot.payload.exp * 1e3 < Date.parse(parsed.expiry)) return false;
+    if (Object.keys(policyFact).length !== policyKeys.length || policyKeys.some((key) => !(key in policyFact)) || Object.keys(enforcementFact).length !== enforcementKeys.length || enforcementKeys.some((key) => !(key in enforcementFact)) || policyRoot.payload.prf.length !== 0 || enforcementRoot.payload.prf.length !== 0 || policyRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || enforcementRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || policyRoot.payload.nbf !== enforcementRoot.payload.nbf || policyRoot.payload.exp !== enforcementRoot.payload.exp || canonicalize2(policyRoot.payload.att) !== canonicalize2(expectedAttenuation) || canonicalize2(enforcementRoot.payload.att) !== canonicalize2(expectedAttenuation) || policyFact.role !== "policy-authority" || policyFact.mode !== "policy-source" || "enforcerDid" in policyFact || enforcementFact.role !== "policy-enforcement" || enforcementFact.mode !== "conditional-mint" || policyRoot.payload.aud !== `did:tinycloud:policy:${hex(policyIdDigest)}` || enforcementRoot.payload.aud !== binding.enforcerDid || enforcementFact.enforcerDid !== binding.enforcerDid || common.some((key) => policyFact[key] !== enforcementFact[key]) || policyFact.ownerDid !== policy.ownerDid || policyFact.policyId !== policy.policyId || policyFact.policyDigestHex !== hex(policyIdDigest) || policyFact.policyCid !== parsed.policyCid || policyFact.contentSourceDigestHex !== parsed.contentSourceDigestHex || policyFact.capabilityCeilingHashHex !== capabilityCeilingHashHex || policyFact.nativeProjectionHashHex !== nativeProjectionHashHex || policyFact.nodeAudience !== binding.nodeAudience || policyRoot.payload.exp * 1e3 < Date.parse(parsed.expiry)) return false;
   } catch {
     return false;
   }
@@ -18460,8 +18460,12 @@ async function readResponseBytes(response, limit, tooLargeCode) {
 function registryFetcher(options, limit, tooLargeCode = "max-bytes-exceeded", stage = "envelope") {
   if (options.fetchBlob !== void 0) return async (input) => {
     try {
-      return boundedBytes(await options.fetchBlob(input), limit, tooLargeCode);
+      options.signal?.throwIfAborted();
+      const bytes3 = await options.fetchBlob({ ...input, ...options.signal === void 0 ? {} : { signal: options.signal } });
+      options.signal?.throwIfAborted();
+      return boundedBytes(bytes3, limit, tooLargeCode);
     } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason ?? error;
       if (error instanceof ShareReceiveError) throw error;
       throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
     }
@@ -18471,10 +18475,19 @@ function registryFetcher(options, limit, tooLargeCode = "max-bytes-exceeded", st
   const base33 = options.registryBaseUrl.replace(/\/+$/, "");
   return async ({ cid: cid2 }) => {
     try {
-      const response = await fetchFn(`${base33}/ipfs/${cid2}?format=raw`, { headers: { accept: "application/vnd.ipld.raw" }, redirect: "error" });
+      options.signal?.throwIfAborted();
+      const response = await fetchFn(`${base33}/ipfs/${cid2}?format=raw`, {
+        headers: { accept: "application/vnd.ipld.raw" },
+        redirect: "error",
+        ...options.signal === void 0 ? {} : { signal: options.signal }
+      });
+      options.signal?.throwIfAborted();
       if (!response.ok) throw new ShareReceiveError("fetch-failed", `registry returned ${response.status}`, { stage });
-      return await readResponseBytes(response, limit, tooLargeCode);
+      const bytes3 = await readResponseBytes(response, limit, tooLargeCode);
+      options.signal?.throwIfAborted();
+      return bytes3;
     } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason ?? error;
       if (error instanceof ShareReceiveError) throw error;
       throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
     }
@@ -20265,6 +20278,39 @@ function uiAction(action) {
 function selectedAction(envelope) {
   return envelope.actions.includes("list") ? "tinycloud.kv/list" : envelope.actions.includes("edit") ? "tinycloud.kv/put" : "tinycloud.kv/get";
 }
+function policyAttenuationForV3(envelope) {
+  const policy = object2(envelope.policy, "v3 policy");
+  if (!Array.isArray(policy.capabilityCeiling)) throw new Error("v3 policy capability ceiling is invalid");
+  const attenuation = {};
+  for (const raw of policy.capabilityCeiling) {
+    const capability = object2(raw, "v3 policy capability");
+    if (typeof capability.resource !== "string" || attenuation[capability.resource] !== void 0) throw new Error("v3 policy capability is invalid");
+    if (capability.kind === "encryption") {
+      if (capability.action !== "tinycloud.encryption/decrypt") throw new Error("v3 policy capability is invalid");
+      attenuation[capability.resource] = { [capability.action]: [{}] };
+      continue;
+    }
+    if (capability.kind !== "kv" || capability.selector !== "exact" && capability.selector !== "prefix" || !Array.isArray(capability.actions) || capability.actions.length === 0 || capability.actions.some((action) => typeof action !== "string")) throw new Error("v3 policy capability is invalid");
+    attenuation[capability.resource] = Object.fromEntries(capability.actions.map((action) => [action, [{
+      type: "xyz.tinycloud.resource/selector",
+      kind: capability.selector,
+      value: capability.resource
+    }]]));
+  }
+  return attenuation;
+}
+function verifyV3PolicyAuthorization(input) {
+  const compact = verifyCompactUcanAuthorization(input.authorization, input.cid);
+  const fact = compact.payload.fct[0];
+  const factKeys = Object.keys(fact);
+  const legacyShape = factKeys.length === POLICY_SESSION_FACT_KEYS.length && factKeys.every((key) => POLICY_SESSION_FACT_KEYS.includes(key)) && POLICY_SESSION_FACT_KEYS.every((key) => key in fact);
+  const v4Shape = factKeys.length === POLICY_SESSION_FACT_KEYS.length + POLICY_SESSION_V4_AUDIT_FACT_KEYS.length && factKeys.every((key) => POLICY_SESSION_FACT_KEYS.includes(key) || POLICY_SESSION_V4_AUDIT_FACT_KEYS.includes(key)) && POLICY_SESSION_FACT_KEYS.every((key) => key in fact) && POLICY_SESSION_V4_AUDIT_FACT_KEYS.every((key) => key in fact);
+  const binding = object2(input.envelope.attestedEnforcerBinding, "v3 attested enforcer binding");
+  const policy = object2(input.envelope.policy, "v3 policy");
+  const now = Math.floor(Date.now() / 1e3);
+  if (!legacyShape && !v4Shape || POLICY_SESSION_DIGEST_FACT_KEYS.some((key) => !LOWER_SHA256_HEX.test(fact[key])) || v4Shape && (!LOWER_SHA256_HEX.test(fact.credentialIdAuditDigestHex) || !LOWER_SHA256_HEX.test(fact.presentationJtiAuditDigestHex)) || compact.payload.aud !== input.holderDid || compact.payload.iss.split("#", 1)[0] !== fact.nodeAudience || fact.profile !== "policy-session-ucan/v1" || fact.ownerDid !== policy.ownerDid || fact.policyId !== policy.policyId || fact.policyCid !== input.envelope.policyCid || fact.contentSourceDigestHex !== input.envelope.contentSourceDigestHex || fact.enforcerDid !== binding.enforcerDid || fact.nodeAudience !== binding.nodeAudience || fact.recipientDid !== input.holderDid || fact.policyDelegationCid !== input.envelope.policyRoot.cid || fact.enforcementDelegationCid !== input.envelope.enforcementRoot.cid || typeof fact.remainingRedelegationDepth !== "number" || !Number.isInteger(fact.remainingRedelegationDepth) || fact.remainingRedelegationDepth < 0 || fact.remainingRedelegationDepth > 8 || compact.payload.prf.length !== 2 || compact.payload.prf[0] !== input.envelope.policyRoot.cid || compact.payload.prf[1] !== input.envelope.enforcementRoot.cid || compact.payload.nbf > now || compact.payload.exp <= now || compact.payload.exp - compact.payload.nbf > 60 || canonicalize2(compact.payload.att) !== canonicalize2(policyAttenuationForV3(input.envelope))) throw new Error("v3 policy delegation signed binding mismatch");
+  return compact;
+}
 function hex2(value) {
   return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -20355,7 +20401,7 @@ function createAddressedAuthorization(input) {
     }
   };
 }
-var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicyV1Schema, policyCredentialRequirementV1Schema, unifiedPolicyV2Schema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, BEARER_READ_ABILITY, READ_ABILITIES, ED25519_VERIFY_OPTS, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_SIGNATURE_DOMAIN, ENVELOPE_V2_SIGNATURE_DOMAIN, ENVELOPE_V3_SIGNATURE_DOMAIN, POLICY_V1_SIGNATURE_DOMAIN, POLICY_V2_SIGNATURE_DOMAIN, CONTENT_SOURCE_V1_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN, NATIVE_PROJECTION_V1_DOMAIN, ATTESTED_ENFORCER_V2_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, DEFAULT_MAX_CONTENT_BLOB_BYTES, CONTENT_SEALED_OVERHEAD, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_SEALED_OVERHEAD, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, base58btc2, base58flickr2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, code2, SHA256_CODE2, MAX_CONTENT_BYTES, POLICY_ENFORCEMENT_DOMAIN, POLICY_DOMAIN, OWNER_SHARE_REGISTRATION_DOMAIN, ENVELOPE_DOMAIN, ENVELOPE_DOMAIN2, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN, BASE64_ALPHABET, ShareRecipientClient;
+var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicyV1Schema, policyCredentialRequirementV1Schema, unifiedPolicyV2Schema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, BEARER_READ_ABILITY, READ_ABILITIES, ED25519_VERIFY_OPTS, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_SIGNATURE_DOMAIN, ENVELOPE_V2_SIGNATURE_DOMAIN, ENVELOPE_V3_SIGNATURE_DOMAIN, POLICY_V1_SIGNATURE_DOMAIN, POLICY_V2_SIGNATURE_DOMAIN, CONTENT_SOURCE_V1_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN, NATIVE_PROJECTION_V1_DOMAIN, ATTESTED_ENFORCER_V2_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, DEFAULT_MAX_CONTENT_BLOB_BYTES, CONTENT_SEALED_OVERHEAD, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_SEALED_OVERHEAD, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, base58btc2, base58flickr2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, code2, SHA256_CODE2, MAX_CONTENT_BYTES, POLICY_ENFORCEMENT_DOMAIN, POLICY_DOMAIN, OWNER_SHARE_REGISTRATION_DOMAIN, ENVELOPE_DOMAIN, ENVELOPE_DOMAIN2, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN, BASE64_ALPHABET, POLICY_SESSION_FACT_KEYS, POLICY_SESSION_V4_AUDIT_FACT_KEYS, POLICY_SESSION_DIGEST_FACT_KEYS, LOWER_SHA256_HEX, ShareRecipientClient;
 var init_dist3 = __esm({
   "../share-sdk/dist/index.js"() {
     "use strict";
@@ -25518,11 +25564,61 @@ var init_dist3 = __esm({
     SESSION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
     INVOCATION_DOMAIN = SHARE_V2_PROTOCOL.invocationDomain;
     BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    POLICY_SESSION_FACT_KEYS = [
+      "profile",
+      "ownerDid",
+      "policyId",
+      "policyDigestHex",
+      "policyCid",
+      "policyDelegationCid",
+      "enforcementDelegationCid",
+      "contentSourceDigestHex",
+      "capabilityCeilingHashHex",
+      "nativeProjectionHashHex",
+      "enforcerDid",
+      "nodeAudience",
+      "recipientDid",
+      "challengeId",
+      "claimDigestHex",
+      "claimJti",
+      "vpDigestHex",
+      "credentialEvidenceDigestHex",
+      "decisionContextDigestHex",
+      "issuanceAuditDigestHex",
+      "remainingRedelegationDepth"
+    ];
+    POLICY_SESSION_V4_AUDIT_FACT_KEYS = ["credentialIdAuditDigestHex", "presentationJtiAuditDigestHex"];
+    POLICY_SESSION_DIGEST_FACT_KEYS = [
+      "policyDigestHex",
+      "contentSourceDigestHex",
+      "capabilityCeilingHashHex",
+      "nativeProjectionHashHex",
+      "claimDigestHex",
+      "vpDigestHex",
+      "credentialEvidenceDigestHex",
+      "decisionContextDigestHex",
+      "issuanceAuditDigestHex"
+    ];
+    LOWER_SHA256_HEX = /^[0-9a-f]{64}$/;
     ShareRecipientClient = class {
       constructor(options) {
         this.options = options;
         this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
         this.signer = options.sign;
+        if (options.policyAuthorization !== void 0) {
+          if (options.envelope.version !== 3) throw new Error("policy delegation fast path requires a v3 envelope");
+          const compact = verifyV3PolicyAuthorization({ ...options.policyAuthorization, envelope: options.envelope, holderDid: options.holderDid });
+          const nodeAudience = compact.payload.fct[0].nodeAudience;
+          this.v3Authorization = options.policyAuthorization.authorization;
+          this.v3NodeAudience = nodeAudience;
+          this.nativeSigner = options.sign;
+          this.session = {
+            sessionId: options.policyAuthorization.cid,
+            expiresAt: new Date(compact.payload.exp * 1e3).toISOString(),
+            actions: options.envelope.actions,
+            resource: options.envelope.resource
+          };
+        }
       }
       fetchFn;
       session;
@@ -25530,6 +25626,7 @@ var init_dist3 = __esm({
       nativeSigner;
       holderProof;
       v3Authorization;
+      v3NodeAudience;
       v3ContentKey;
       v3ContentEnvelope;
       async beginChallenge(envelope) {
@@ -25619,37 +25716,52 @@ var init_dist3 = __esm({
       }
       async establishV3(envelope) {
         if (this.options.buildPresentation === void 0) throw new Error("share presentation builder is required");
+        const attestedEnforcer = object2(envelope.attestedEnforcerBinding, "v3 attested enforcer binding");
+        if (attestedEnforcer.enforcerDid !== envelope.target.nodeAudience || typeof attestedEnforcer.nodeAudience !== "string") throw new Error("v3 attested enforcer binding mismatch");
+        try {
+          ed25519PublicKeyFromDidKey(attestedEnforcer.nodeAudience);
+        } catch {
+          throw new Error("v3 attested Node audience is invalid");
+        }
         const challengeResponse = await this.fetchFn(new URL("/share/v3/policy/challenges", this.options.nodeOrigin), {
           method: "POST",
           redirect: "error",
           headers: { accept: "application/json", "content-type": "application/json" },
-          body: JSON.stringify({ policyCid: envelope.policyCid, recipientDid: this.options.holderDid, requestedCapabilities: envelope.policy.capabilityCeiling })
+          body: JSON.stringify({ policyCid: envelope.policyCid, recipientDid: this.options.holderDid, requestedCapabilities: envelope.policy.capabilityCeiling }),
+          ...this.options.signal === void 0 ? {} : { signal: this.options.signal }
         });
         if (!challengeResponse.ok) throw new Error(`v3 policy challenge rejected (${challengeResponse.status})`);
         const challenge2 = object2(await challengeResponse.json(), "v3 policy challenge");
-        if (typeof challenge2.challengeId !== "string" || typeof challenge2.nonce !== "string" || challenge2.policyCid !== envelope.policyCid || challenge2.recipientDid !== this.options.holderDid) throw new Error("v3 policy challenge binding mismatch");
+        if (typeof challenge2.challengeId !== "string" || typeof challenge2.nonce !== "string" || challenge2.policyCid !== envelope.policyCid || challenge2.recipientDid !== this.options.holderDid || challenge2.nodeAudience !== attestedEnforcer.nodeAudience || challenge2.enforcerDid !== void 0 && challenge2.enforcerDid !== attestedEnforcer.enforcerDid || typeof challenge2.expiresAt !== "string" || !Number.isFinite(Date.parse(challenge2.expiresAt)) || Date.parse(challenge2.expiresAt) <= Date.now()) throw new Error("v3 policy challenge binding mismatch");
         const material = await this.options.buildPresentation({
           challenge: challenge2,
           envelope,
           policy: envelope.policy
         });
-        if (material.sign === void 0 || material.claim === void 0 || material.presentation === void 0) throw new Error("v3 ceremony requires a recipient signer, claim, and presentation");
+        if (material.sign === void 0 || material.presentation === void 0) throw new Error("v3 ceremony requires a recipient signer and presentation");
+        const accountless = material.presentation.schema === "xyz.tinycloud.policy/presentation/v4";
+        if (accountless ? material.credentialEnvelope === void 0 || material.requirement === void 0 : material.claim === void 0) {
+          throw new Error(accountless ? "v4 ceremony requires a verified credential and requirement" : "v3 ceremony requires a claim");
+        }
+        this.options.onStage?.("policy-admission");
         const delegationResponse = await this.fetchFn(new URL("/share/v3/policy/delegations", this.options.nodeOrigin), {
           method: "POST",
           redirect: "error",
           headers: { accept: "application/json", "content-type": "application/json" },
-          body: JSON.stringify({ policyCid: envelope.policyCid, challengeId: challenge2.challengeId, nonce: challenge2.nonce, claim: material.claim, presentation: material.presentation })
+          body: JSON.stringify(accountless ? { policyCid: envelope.policyCid, challengeId: challenge2.challengeId, nonce: challenge2.nonce, requirement: material.requirement, credential: material.credentialEnvelope, presentation: material.presentation } : { policyCid: envelope.policyCid, challengeId: challenge2.challengeId, nonce: challenge2.nonce, claim: material.claim, presentation: material.presentation }),
+          ...this.options.signal === void 0 ? {} : { signal: this.options.signal }
         });
         if (!delegationResponse.ok) throw new Error(`v3 policy delegation rejected (${delegationResponse.status})`);
         const delegation = object2(await delegationResponse.json(), "v3 policy delegation");
         if (delegation.admitted !== true || typeof delegation.sessionCid !== "string" || typeof delegation.authorization !== "string") throw new Error("v3 policy delegation response is not admitted");
-        const compact = verifyCompactUcanAuthorization(delegation.authorization, delegation.sessionCid);
+        const compact = verifyV3PolicyAuthorization({ authorization: delegation.authorization, cid: delegation.sessionCid, envelope, holderDid: this.options.holderDid });
         const fact = compact.payload.fct[0];
-        if (compact.payload.aud !== this.options.holderDid || fact.profile !== "policy-session-ucan/v1" || fact.policyCid !== envelope.policyCid || fact.recipientDid !== this.options.holderDid || fact.policyDelegationCid !== envelope.policyRoot.cid || fact.enforcementDelegationCid !== envelope.enforcementRoot.cid || compact.payload.prf.length !== 2 || compact.payload.prf[0] !== envelope.policyRoot.cid || compact.payload.prf[1] !== envelope.enforcementRoot.cid || compact.payload.exp - compact.payload.nbf > 60) throw new Error("v3 policy delegation signed binding mismatch");
-        const imported = await this.fetchFn(new URL("/delegate", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { Authorization: delegation.authorization } });
+        this.options.onStage?.("delegation-import");
+        const imported = await this.fetchFn(new URL("/delegate", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { Authorization: delegation.authorization }, ...this.options.signal === void 0 ? {} : { signal: this.options.signal } });
         if (!imported.ok) throw new Error(`ordinary delegation import rejected (${imported.status})`);
         this.signer = material.sign;
         this.v3Authorization = delegation.authorization;
+        this.v3NodeAudience = fact.nodeAudience;
         this.session = { sessionId: delegation.sessionCid, expiresAt: new Date(compact.payload.exp * 1e3).toISOString(), actions: envelope.actions, resource: envelope.resource };
         return this.session;
       }
@@ -25657,18 +25769,18 @@ var init_dist3 = __esm({
       async decryptV3Content(bytes3) {
         const envelope = this.options.envelope;
         const signer = this.nativeSigner ?? this.signer;
-        if (envelope.version !== 3 || this.session === void 0 || this.v3Authorization === void 0 || signer === void 0) throw new Error("v3 policy session signer is required");
+        if (envelope.version !== 3 || this.session === void 0 || this.v3Authorization === void 0 || this.v3NodeAudience === void 0 || signer === void 0) throw new Error("v3 policy session signer is required");
         const encrypted = parseV3InlineEncryptedEnvelope(bytes3, envelope);
         const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
         const receiverPublicKey = toBase64Url(x25519.getPublicKey(receiverPrivateKey));
         const receiverPublicKeyHash = canonicalHashHex2(receiverPublicKey);
-        const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: envelope.target.nodeAudience, networkId: encrypted.networkId, alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
+        const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: this.v3NodeAudience, networkId: encrypted.networkId, alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
         const bodyHash = hex2(sha2562(new TextEncoder().encode(canonicalize2(body))));
         const session = verifyCompactUcanAuthorization(this.v3Authorization, this.session.sessionId);
         const now = Math.floor(Date.now() / 1e3);
         const invocation = await signCompactUcanAuthorization({
           issuerDid: this.options.holderDid,
-          audienceDid: envelope.target.nodeAudience,
+          audienceDid: this.v3NodeAudience,
           attenuation: { [encrypted.networkId]: { "tinycloud.encryption/decrypt": [{}] } },
           facts: [{ type: body.type, targetNode: body.targetNode, networkId: body.networkId, bodyHash, encryptedSymmetricKeyHash: body.encryptedSymmetricKeyHash, receiverPublicKeyHash, alg: body.alg, keyVersion: body.keyVersion }],
           proofs: [session.cid],
@@ -25678,7 +25790,8 @@ var init_dist3 = __esm({
           sign: signer
         });
         try {
-          const response = await this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json", Authorization: invocation.authorization }, body: JSON.stringify(body) });
+          this.options.onStage?.("decryption");
+          const response = await this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json", Authorization: invocation.authorization }, body: JSON.stringify(body), ...this.options.signal === void 0 ? {} : { signal: this.options.signal } });
           if (!response.ok) throw new Error(`v3 decrypt invocation rejected (${response.status})`);
           const value = object2(await response.json(), "v3 decrypt response");
           const allowed = ["type", "targetNode", "networkId", "invocationCid", "encryptedSymmetricKeyHash", "receiverPublicKeyHash", "wrappedKey", "alg", "keyVersion", "requestHash", "nodeId", "nodeSignature"];
@@ -25752,7 +25865,7 @@ var init_dist3 = __esm({
       }
       async nativeInvokeV3(request, envelope) {
         const signer = this.nativeSigner ?? this.signer;
-        if (this.session === void 0 || this.v3Authorization === void 0 || signer === void 0) throw new Error("v3 policy session signer is required");
+        if (this.session === void 0 || this.v3Authorization === void 0 || this.v3NodeAudience === void 0 || signer === void 0) throw new Error("v3 policy session signer is required");
         const session = verifyCompactUcanAuthorization(this.v3Authorization, this.session.sessionId);
         if (session.payload.aud !== this.options.holderDid) throw new Error("v3 session recipient mismatch");
         const action = request.action === "list" ? "tinycloud.kv/list" : request.action === "put" ? "tinycloud.kv/put" : request.action === "metadata" ? "tinycloud.kv/metadata" : "tinycloud.kv/get";
@@ -25766,7 +25879,7 @@ var init_dist3 = __esm({
         if (path !== root && !(capability.selector === "prefix" && path.startsWith(`${root}/`))) throw new Error("v3 KV request is outside the signed selector");
         const resource = `${capability.resource.slice(0, split2 + marker.length)}${path}`;
         const now = Math.floor(Date.now() / 1e3);
-        const invocation = await signCompactUcanAuthorization({ issuerDid: this.options.holderDid, audienceDid: envelope.target.nodeAudience, attenuation: { [resource]: { [action]: [{ type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: resource }] } }, facts: [{ type: "tinycloud.policy.invocation/v1", policyCid: envelope.policyCid, sessionCid: session.cid }], proofs: [session.cid], notBefore: now, expiresAt: Math.min(now + 60, session.payload.exp), nonce: toBase64Url(crypto.getRandomValues(new Uint8Array(16))), sign: signer });
+        const invocation = await signCompactUcanAuthorization({ issuerDid: this.options.holderDid, audienceDid: this.v3NodeAudience, attenuation: { [resource]: { [action]: [{ type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: resource }] } }, facts: [{ type: "tinycloud.policy.invocation/v1", policyCid: envelope.policyCid, sessionCid: session.cid }], proofs: [session.cid], notBefore: now, expiresAt: Math.min(now + 60, session.payload.exp), nonce: toBase64Url(crypto.getRandomValues(new Uint8Array(16))), sign: signer });
         const headers = new Headers({ accept: "application/json", Authorization: invocation.authorization });
         let body;
         if (action === "tinycloud.kv/put") {
@@ -25775,7 +25888,8 @@ var init_dist3 = __esm({
           headers.set("content-type", request.contentType ?? "application/octet-stream");
           if (request.ifMatch !== void 0) headers.set("if-match", request.ifMatch);
         }
-        return this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers, ...body === void 0 ? {} : { body } });
+        this.options.onStage?.("invocation");
+        return this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers, ...body === void 0 ? {} : { body }, ...this.options.signal === void 0 ? {} : { signal: this.options.signal } });
       }
     };
   }
@@ -32445,7 +32559,7 @@ function validateV3Invariants2(value, ctx) {
   if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.target.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
   if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {

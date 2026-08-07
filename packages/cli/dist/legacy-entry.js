@@ -17687,7 +17687,7 @@ function validateV3Invariants(value, ctx) {
   if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.target.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
   if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
@@ -18190,10 +18190,10 @@ async function verifyEnvelopeV3(envelope, options) {
   const binding = parsed.attestedEnforcerBinding;
   const { signature: bindingSignature, ...unsignedBinding } = binding;
   const expectedBindingDigestHex = hex(sha2562(new TextEncoder().encode(canonicalize2({ enforcerDid: binding.enforcerDid, nodeAudience: binding.nodeAudience }))));
-  if (binding.enforcerDid !== parsed.target.nodeAudience || binding.nodeAudience !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.enforcerDid || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
+  if (binding.enforcerDid !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
   try {
     const digest4 = sha2562(new TextEncoder().encode(`${ATTESTED_ENFORCER_V2_DOMAIN}${canonicalize2(unsignedBinding)}`));
-    if (!ed25519.verify(fromBase64Url(bindingSignature.value), digest4, ed25519PublicKeyFromDidKey(binding.enforcerDid), ED25519_VERIFY_OPTS2)) return false;
+    if (!ed25519.verify(fromBase64Url(bindingSignature.value), digest4, ed25519PublicKeyFromDidKey(binding.nodeAudience), ED25519_VERIFY_OPTS2)) return false;
   } catch {
     return false;
   }
@@ -18206,7 +18206,7 @@ async function verifyEnvelopeV3(envelope, options) {
     const common = ["ownerDid", "policyId", "policyDigestHex", "policyCid", "contentSourceDigestHex", "capabilityCeilingHashHex", "nativeProjectionHashHex", "nodeAudience"];
     const policyKeys = [...common, "role", "mode"];
     const enforcementKeys = [...policyKeys, "enforcerDid"];
-    if (Object.keys(policyFact).length !== policyKeys.length || policyKeys.some((key) => !(key in policyFact)) || Object.keys(enforcementFact).length !== enforcementKeys.length || enforcementKeys.some((key) => !(key in enforcementFact)) || policyRoot.payload.prf.length !== 0 || enforcementRoot.payload.prf.length !== 0 || policyRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || enforcementRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || policyRoot.payload.nbf !== enforcementRoot.payload.nbf || policyRoot.payload.exp !== enforcementRoot.payload.exp || canonicalize2(policyRoot.payload.att) !== canonicalize2(expectedAttenuation) || canonicalize2(enforcementRoot.payload.att) !== canonicalize2(expectedAttenuation) || policyFact.role !== "policy-authority" || policyFact.mode !== "policy-source" || "enforcerDid" in policyFact || enforcementFact.role !== "policy-enforcement" || enforcementFact.mode !== "conditional-mint" || policyRoot.payload.aud !== `did:tinycloud:policy:${hex(policyIdDigest)}` || enforcementRoot.payload.aud !== parsed.target.nodeAudience || enforcementFact.enforcerDid !== parsed.target.nodeAudience || common.some((key) => policyFact[key] !== enforcementFact[key]) || policyFact.ownerDid !== policy.ownerDid || policyFact.policyId !== policy.policyId || policyFact.policyDigestHex !== hex(policyIdDigest) || policyFact.policyCid !== parsed.policyCid || policyFact.contentSourceDigestHex !== parsed.contentSourceDigestHex || policyFact.capabilityCeilingHashHex !== capabilityCeilingHashHex || policyFact.nativeProjectionHashHex !== nativeProjectionHashHex || policyFact.nodeAudience !== parsed.target.nodeAudience || policyRoot.payload.exp * 1e3 < Date.parse(parsed.expiry)) return false;
+    if (Object.keys(policyFact).length !== policyKeys.length || policyKeys.some((key) => !(key in policyFact)) || Object.keys(enforcementFact).length !== enforcementKeys.length || enforcementKeys.some((key) => !(key in enforcementFact)) || policyRoot.payload.prf.length !== 0 || enforcementRoot.payload.prf.length !== 0 || policyRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || enforcementRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || policyRoot.payload.nbf !== enforcementRoot.payload.nbf || policyRoot.payload.exp !== enforcementRoot.payload.exp || canonicalize2(policyRoot.payload.att) !== canonicalize2(expectedAttenuation) || canonicalize2(enforcementRoot.payload.att) !== canonicalize2(expectedAttenuation) || policyFact.role !== "policy-authority" || policyFact.mode !== "policy-source" || "enforcerDid" in policyFact || enforcementFact.role !== "policy-enforcement" || enforcementFact.mode !== "conditional-mint" || policyRoot.payload.aud !== `did:tinycloud:policy:${hex(policyIdDigest)}` || enforcementRoot.payload.aud !== binding.enforcerDid || enforcementFact.enforcerDid !== binding.enforcerDid || common.some((key) => policyFact[key] !== enforcementFact[key]) || policyFact.ownerDid !== policy.ownerDid || policyFact.policyId !== policy.policyId || policyFact.policyDigestHex !== hex(policyIdDigest) || policyFact.policyCid !== parsed.policyCid || policyFact.contentSourceDigestHex !== parsed.contentSourceDigestHex || policyFact.capabilityCeilingHashHex !== capabilityCeilingHashHex || policyFact.nativeProjectionHashHex !== nativeProjectionHashHex || policyFact.nodeAudience !== binding.nodeAudience || policyRoot.payload.exp * 1e3 < Date.parse(parsed.expiry)) return false;
   } catch {
     return false;
   }
@@ -18388,8 +18388,12 @@ async function readResponseBytes(response, limit, tooLargeCode) {
 function registryFetcher(options, limit, tooLargeCode = "max-bytes-exceeded", stage = "envelope") {
   if (options.fetchBlob !== void 0) return async (input) => {
     try {
-      return boundedBytes(await options.fetchBlob(input), limit, tooLargeCode);
+      options.signal?.throwIfAborted();
+      const bytes3 = await options.fetchBlob({ ...input, ...options.signal === void 0 ? {} : { signal: options.signal } });
+      options.signal?.throwIfAborted();
+      return boundedBytes(bytes3, limit, tooLargeCode);
     } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason ?? error;
       if (error instanceof ShareReceiveError) throw error;
       throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
     }
@@ -18399,10 +18403,19 @@ function registryFetcher(options, limit, tooLargeCode = "max-bytes-exceeded", st
   const base33 = options.registryBaseUrl.replace(/\/+$/, "");
   return async ({ cid: cid2 }) => {
     try {
-      const response = await fetchFn(`${base33}/ipfs/${cid2}?format=raw`, { headers: { accept: "application/vnd.ipld.raw" }, redirect: "error" });
+      options.signal?.throwIfAborted();
+      const response = await fetchFn(`${base33}/ipfs/${cid2}?format=raw`, {
+        headers: { accept: "application/vnd.ipld.raw" },
+        redirect: "error",
+        ...options.signal === void 0 ? {} : { signal: options.signal }
+      });
+      options.signal?.throwIfAborted();
       if (!response.ok) throw new ShareReceiveError("fetch-failed", `registry returned ${response.status}`, { stage });
-      return await readResponseBytes(response, limit, tooLargeCode);
+      const bytes3 = await readResponseBytes(response, limit, tooLargeCode);
+      options.signal?.throwIfAborted();
+      return bytes3;
     } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason ?? error;
       if (error instanceof ShareReceiveError) throw error;
       throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
     }

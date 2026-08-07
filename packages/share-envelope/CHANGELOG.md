@@ -1,5 +1,11 @@
 # @tinycloud/share-envelope
 
+## 0.2.1-beta.0
+
+### Patch Changes
+
+- b0069f7: Add first-class accountless share receiving with session-key credential binding, strict PolicyCredentialPresentation/v4 admission, ordinary delegation invocation, and post-render private import into `files-for-you`.
+
 ## 0.2.0
 
 ### Minor Changes
