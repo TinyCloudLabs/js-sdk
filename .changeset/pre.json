@@ -30,6 +30,7 @@
     "tc-292-raw-eip1193",
     "tc-475-inline-credential-acquisition",
     "tc-490-manage-key-sdk",
+    "tc-500-account-session-restore",
     "tc-500-accountless-share-receive"
   ]
 }

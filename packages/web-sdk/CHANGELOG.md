@@ -1,5 +1,11 @@
 # @tinycloudlabs/web-sdk
 
+## 3.0.0-beta.3
+
+### Patch Changes
+
+- ea49653: Restore the most recently persisted TinyCloud account for `share.receive(..., { identity: "auto" })` before falling back to an accountless receiver key.
+
 ## 3.0.0-beta.2
 
 ### Minor Changes
