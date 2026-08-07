@@ -17,6 +17,10 @@ export type BrowserSessionLoadResult =
   | { status: "loaded"; data: PersistedSessionData }
   | { status: Exclude<BrowserSessionLoadStatus, "loaded">; data: null };
 
+export type BrowserSessionSelectionResult =
+  | { status: "loaded"; address: string; data: PersistedSessionData }
+  | { status: Exclude<BrowserSessionLoadStatus, "loaded">; data: null };
+
 export interface BrowserSessionStorageOptions {
   /** Storage backend. Defaults to globalThis.localStorage when available. */
   storage?: Storage;
@@ -118,6 +122,39 @@ export class BrowserSessionStorage implements ISessionStorage {
       this.storage.removeItem(key);
       return { status: "corrupt", data: null };
     }
+  }
+
+  /**
+   * Load the only valid account session in this app's storage namespace.
+   *
+   * This deliberately does not consult a wallet provider. If more than one
+   * account session is present, there is no unambiguous signed-in identity and
+   * callers must keep using the accountless path until the app activates one.
+   */
+  async loadUnambiguousWithStatus(): Promise<BrowserSessionSelectionResult> {
+    if (!this.storage) return { status: "storage-unavailable", data: null };
+    const addresses: string[] = [];
+    try {
+      for (let index = 0; index < this.storage.length; index += 1) {
+        const key = this.storage.key(index);
+        if (key === null || !key.startsWith(this.keyPrefix)) continue;
+        const address = key.slice(this.keyPrefix.length);
+        if (/^0x[a-f0-9]{40}$/.test(address)) addresses.push(address);
+      }
+    } catch {
+      return { status: "storage-unavailable", data: null };
+    }
+
+    const loaded: { address: string; data: PersistedSessionData }[] = [];
+    for (const address of addresses) {
+      const result = await this.loadWithStatus(address);
+      if (result.status === "loaded" && result.data.address.toLowerCase() === address) {
+        loaded.push({ address: result.data.address, data: result.data });
+      }
+    }
+    return loaded.length === 1
+      ? { status: "loaded", ...loaded[0]! }
+      : { status: "missing", data: null };
   }
 
   clear(address: string): Promise<void> {

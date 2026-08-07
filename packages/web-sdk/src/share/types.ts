@@ -61,6 +61,7 @@ export interface ShareReceiverClient extends ShareImportAccountClient {
   readonly credentialHolderDid: string;
   readonly credentialHolderKid: string;
   readonly credentials: CredentialsService;
+  restorePersistedSession(): Promise<{ readonly status: string; readonly session?: ClientSession }>;
   restoreSession(): Promise<{ readonly status: string; readonly session?: ClientSession }>;
   signSessionBytes(bytes: Uint8Array): Promise<Uint8Array>;
 }
