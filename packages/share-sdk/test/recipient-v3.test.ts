@@ -40,7 +40,7 @@ describe("v3 recipient content", () => {
       const wrapped = await aesEncrypt(shared, symmetricKey);
       const invocation = verifyCompactUcanAuthorization(new Headers(init?.headers).get("Authorization")!);
       const bodyHash = canonicalHash(body);
-      const unsigned = { type: "tinycloud.encryption.decrypt-result/v1", targetNode: nodeDid, networkId, invocationCid: invocation.cid, encryptedSymmetricKeyHash, receiverPublicKeyHash: body.receiverPublicKeyHash, wrappedKey: base64(Uint8Array.from([...ephemeralPublic, ...wrapped])), alg: "x25519-aes256gcm/v1", keyVersion: 1, requestHash: hex(sha256(new TextEncoder().encode(`${invocation.cid}${bodyHash}`))), nodeId: nodeDid };
+      const unsigned = { type: "tinycloud.encryption.decrypt-result/v1", targetNode: nodeDid, networkId, invocationCid: invocation.cid, encryptedSymmetricKeyHash, receiverPublicKeyHash: body.receiverPublicKeyHash, wrappedKey: base64(Uint8Array.from([...ephemeralPublic, 1, ...wrapped])), alg: "x25519-aes256gcm/v1", keyVersion: 1, requestHash: hex(sha256(new TextEncoder().encode(`${invocation.cid}${bodyHash}`))), nodeId: nodeDid };
       return Response.json({ ...unsigned, nodeSignature: base64(ed25519.sign(new TextEncoder().encode(canonicalize(unsigned)), nodeKey)) });
     };
     const envelope = { version: 3, target: { nodeAudience: nodeDid }, encryptionNetwork: networkId, contentSource: { keyVersion: 1, encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash }, metadata: { mediaType: "text/plain" } } as any;

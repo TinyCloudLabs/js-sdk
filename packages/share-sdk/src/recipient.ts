@@ -541,9 +541,9 @@ export class ShareRecipientClient {
       const signature = fromBase64(value.nodeSignature, "v3 decrypt response signature");
       if (signature.length !== 64 || !ed25519.verify(signature, new TextEncoder().encode(canonicalize(unsigned)), ed25519PublicKeyFromDidKey(body.targetNode), { zip215: false })) throw new Error("v3 decrypt response signature is invalid");
       const wrapped = fromBase64(value.wrappedKey, "v3 wrapped content key");
-      if (wrapped.length < 60) throw new Error("v3 wrapped content key is malformed");
+      if (wrapped.length < 61 || wrapped[32] !== 1) throw new Error("v3 wrapped content key is malformed");
       const shared = x25519.getSharedSecret(receiverPrivateKey, wrapped.slice(0, 32));
-      const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(32));
+      const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(33));
       shared.fill(0);
       if (symmetricKey.length !== 32) throw new Error("v3 content key is malformed");
       const plaintext = await aesGcmDecrypt(symmetricKey, fromBase64Url(encrypted.ciphertext));
