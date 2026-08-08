@@ -506,7 +506,7 @@ export class ShareRecipientClient {
     if (envelope.version !== 3 || this.session === undefined || this.v3Authorization === undefined || this.v3NodeAudience === undefined || signer === undefined) throw new Error("v3 policy session signer is required");
     const encrypted = parseV3InlineEncryptedEnvelope(bytes, envelope);
     const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
-    const receiverPublicKey = toBase64Url(x25519.getPublicKey(receiverPrivateKey));
+    const receiverPublicKey = toBase64(x25519.getPublicKey(receiverPrivateKey));
     const receiverPublicKeyHash = canonicalHashHex(receiverPublicKey);
     const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: this.v3NodeAudience, networkId: encrypted.networkId, alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
     const bodyHash = hex(sha256(new TextEncoder().encode(canonicalize(body))));

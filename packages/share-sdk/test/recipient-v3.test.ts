@@ -31,7 +31,9 @@ describe("v3 recipient content", () => {
     const stored = new TextEncoder().encode(canonicalize({ v: 1, networkId, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext: toBase64Url(ciphertext), metadata: { contentType: "text/plain" } }));
     const fetchFn: typeof fetch = async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      const receiverPublicKey = Uint8Array.from(Buffer.from(String(body.receiverPublicKey), "base64url"));
+      const encodedReceiverPublicKey = String(body.receiverPublicKey);
+      const receiverPublicKey = Uint8Array.from(Buffer.from(encodedReceiverPublicKey, "base64"));
+      expect(base64(receiverPublicKey)).toBe(encodedReceiverPublicKey);
       const ephemeralPrivate = new Uint8Array(32).fill(23);
       const ephemeralPublic = x25519.getPublicKey(ephemeralPrivate);
       const shared = x25519.getSharedSecret(ephemeralPrivate, receiverPublicKey);
