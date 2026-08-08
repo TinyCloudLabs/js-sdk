@@ -2,6 +2,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { blake3 } from "@noble/hashes/blake3";
 import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
+import { fromBase64Url, toBase64Url } from "./bytes.js";
 import { canonicalize } from "./jcs.js";
 import { ed25519PublicKeyFromDidKey } from "./didkey.js";
 
@@ -44,7 +45,7 @@ export async function signCompactUcanAuthorization(
   const publicKey = ed25519PublicKeyFromDidKey(principal);
   const header = {
     alg: "EdDSA",
-    jwk: { alg: "EdDSA", crv: "Ed25519", kty: "OKP", x: encodeBase64Url(publicKey) },
+    jwk: { alg: "EdDSA", crv: "Ed25519", kty: "OKP", x: toBase64Url(publicKey) },
     typ: "JWT",
     ucv: "0.10.0",
   };
@@ -60,13 +61,13 @@ export async function signCompactUcanAuthorization(
     nnc: input.nonce,
     prf: input.proofs,
   };
-  const protectedSegment = encodeBase64Url(new TextEncoder().encode(canonicalize(header)));
-  const payloadSegment = encodeBase64Url(new TextEncoder().encode(canonicalize(payload)));
+  const protectedSegment = toBase64Url(new TextEncoder().encode(canonicalize(header)));
+  const payloadSegment = toBase64Url(new TextEncoder().encode(canonicalize(payload)));
   const signingInput = new TextEncoder().encode(`${protectedSegment}.${payloadSegment}`);
   const signature = await input.sign(signingInput);
   if (signature.length !== 64) throw new TypeError("compact Authorization signature must be Ed25519");
   return verifyCompactUcanAuthorization(
-    `${protectedSegment}.${payloadSegment}.${encodeBase64Url(signature)}`,
+    `${protectedSegment}.${payloadSegment}.${toBase64Url(signature)}`,
   );
 }
 
@@ -78,9 +79,9 @@ export function verifyCompactUcanAuthorization(
   const segments = authorization.split(".");
   if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) throw new TypeError("compact Authorization must contain three segments");
   const [headerSegment, payloadSegment, signatureSegment] = segments as [string, string, string];
-  const headerBytes = decodeBase64Url(headerSegment);
-  const payloadBytes = decodeBase64Url(payloadSegment);
-  const signature = decodeBase64Url(signatureSegment);
+  const headerBytes = fromBase64Url(headerSegment);
+  const payloadBytes = fromBase64Url(payloadSegment);
+  const signature = fromBase64Url(signatureSegment);
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const header = JSON.parse(decoder.decode(headerBytes)) as Record<string, unknown>;
   const payload = JSON.parse(decoder.decode(payloadBytes)) as Record<string, unknown>;
@@ -93,7 +94,7 @@ export function verifyCompactUcanAuthorization(
   if (typeof payload.iss !== "string" || typeof payload.aud !== "string" || typeof payload.nnc !== "string" || !Number.isInteger(payload.nbf) || !Number.isInteger(payload.exp) || (payload.nbf as number) >= (payload.exp as number) || !Array.isArray(payload.prf) || payload.prf.some((proof) => typeof proof !== "string") || !Array.isArray(payload.fct) || payload.fct.length !== 1) throw new TypeError("compact Authorization payload is invalid");
   const principal = payload.iss.split("#", 1)[0]!;
   const publicKey = ed25519PublicKeyFromDidKey(principal);
-  if (!equal(publicKey, decodeBase64Url(jwk.x))) throw new TypeError("compact Authorization JWK does not bind issuer");
+  if (!equal(publicKey, fromBase64Url(jwk.x))) throw new TypeError("compact Authorization JWK does not bind issuer");
   if (!ed25519.verify(signature, new TextEncoder().encode(`${headerSegment}.${payloadSegment}`), publicKey, { zip215: false })) throw new TypeError("compact Authorization signature is invalid");
   const cid = CID.createV1(0x55, createDigest(0x1e, blake3(new TextEncoder().encode(authorization)))).toString();
   if (expectedCid !== undefined && cid !== expectedCid) throw new TypeError("compact Authorization CID mismatch");
@@ -107,24 +108,6 @@ function object(value: unknown, label: string): Record<string, unknown> {
 
 function assertExactKeys(value: Record<string, unknown>, keys: readonly string[], label: string): void {
   if (Object.keys(value).length !== keys.length || Object.keys(value).some((key) => !keys.includes(key))) throw new TypeError(`${label} has unknown or missing fields`);
-}
-
-function decodeBase64Url(value: string): Uint8Array {
-  if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) throw new TypeError("compact Authorization segment is not base64url");
-  const bytes = typeof Buffer !== "undefined"
-    ? new Uint8Array(Buffer.from(value, "base64url"))
-    : Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=")), (character) => character.charCodeAt(0));
-  const encoded = typeof Buffer !== "undefined"
-    ? Buffer.from(bytes).toString("base64url")
-    : btoa(String.fromCharCode(...bytes)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  if (encoded !== value) throw new TypeError("compact Authorization segment is not canonical");
-  return bytes;
-}
-
-function encodeBase64Url(value: Uint8Array): string {
-  return typeof Buffer !== "undefined"
-    ? Buffer.from(value).toString("base64url")
-    : btoa(String.fromCharCode(...value)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
 function equal(left: Uint8Array, right: Uint8Array): boolean {

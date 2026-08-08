@@ -506,7 +506,7 @@ export class ShareRecipientClient {
     if (envelope.version !== 3 || this.session === undefined || this.v3Authorization === undefined || this.v3NodeAudience === undefined || signer === undefined) throw new Error("v3 policy session signer is required");
     const encrypted = parseV3InlineEncryptedEnvelope(bytes, envelope);
     const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
-    const receiverPublicKey = toBase64Url(x25519.getPublicKey(receiverPrivateKey));
+    const receiverPublicKey = toBase64(x25519.getPublicKey(receiverPrivateKey));
     const receiverPublicKeyHash = canonicalHashHex(receiverPublicKey);
     const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: this.v3NodeAudience, networkId: encrypted.networkId, alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
     const bodyHash = hex(sha256(new TextEncoder().encode(canonicalize(body))));
@@ -541,12 +541,12 @@ export class ShareRecipientClient {
       const signature = fromBase64(value.nodeSignature, "v3 decrypt response signature");
       if (signature.length !== 64 || !ed25519.verify(signature, new TextEncoder().encode(canonicalize(unsigned)), ed25519PublicKeyFromDidKey(body.targetNode), { zip215: false })) throw new Error("v3 decrypt response signature is invalid");
       const wrapped = fromBase64(value.wrappedKey, "v3 wrapped content key");
-      if (wrapped.length < 60) throw new Error("v3 wrapped content key is malformed");
+      if (wrapped.length < 61 || wrapped[32] !== 1) throw new Error("v3 wrapped content key is malformed");
       const shared = x25519.getSharedSecret(receiverPrivateKey, wrapped.slice(0, 32));
-      const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(32));
+      const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(33));
       shared.fill(0);
       if (symmetricKey.length !== 32) throw new Error("v3 content key is malformed");
-      const plaintext = await aesGcmDecrypt(symmetricKey, fromBase64Url(encrypted.ciphertext));
+      const plaintext = await aesGcmDecrypt(symmetricKey, fromBase64(encrypted.ciphertext, "v3 encrypted content"));
       this.v3ContentKey?.fill(0);
       this.v3ContentKey = symmetricKey;
       this.v3ContentEnvelope = encrypted;

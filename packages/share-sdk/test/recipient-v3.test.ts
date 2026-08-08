@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ed25519, x25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
-import { canonicalize, didKeyFromEd25519PublicKey, signCompactUcanAuthorization, toBase64Url, verifyCompactUcanAuthorization } from "@tinycloud/share-envelope";
+import { canonicalize, didKeyFromEd25519PublicKey, signCompactUcanAuthorization, verifyCompactUcanAuthorization } from "@tinycloud/share-envelope";
 import { ShareRecipientClient } from "../src/recipient.js";
 
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString("hex");
@@ -28,17 +28,19 @@ describe("v3 recipient content", () => {
     const session = await signCompactUcanAuthorization({ issuerDid: nodeDid, audienceDid: recipientDid, attenuation: { [networkId]: { "tinycloud.encryption/decrypt": [{}] } }, facts: [{ profile: "policy-session-ucan/v1", policyCid: "policy", recipientDid }], proofs: ["policy-root", "enforcement-root"], notBefore: now - 1, expiresAt: now + 59, nonce: "session", sign: async (bytes) => ed25519.sign(bytes, nodeKey) });
     const symmetricKey = new Uint8Array(32).fill(41);
     const ciphertext = await aesEncrypt(symmetricKey, new TextEncoder().encode("hello"));
-    const stored = new TextEncoder().encode(canonicalize({ v: 1, networkId, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext: toBase64Url(ciphertext), metadata: { contentType: "text/plain" } }));
+    const stored = new TextEncoder().encode(canonicalize({ v: 1, networkId, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext: base64(ciphertext), metadata: { contentType: "text/plain" } }));
     const fetchFn: typeof fetch = async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      const receiverPublicKey = Uint8Array.from(Buffer.from(String(body.receiverPublicKey), "base64url"));
+      const encodedReceiverPublicKey = String(body.receiverPublicKey);
+      const receiverPublicKey = Uint8Array.from(Buffer.from(encodedReceiverPublicKey, "base64"));
+      expect(base64(receiverPublicKey)).toBe(encodedReceiverPublicKey);
       const ephemeralPrivate = new Uint8Array(32).fill(23);
       const ephemeralPublic = x25519.getPublicKey(ephemeralPrivate);
       const shared = x25519.getSharedSecret(ephemeralPrivate, receiverPublicKey);
       const wrapped = await aesEncrypt(shared, symmetricKey);
       const invocation = verifyCompactUcanAuthorization(new Headers(init?.headers).get("Authorization")!);
       const bodyHash = canonicalHash(body);
-      const unsigned = { type: "tinycloud.encryption.decrypt-result/v1", targetNode: nodeDid, networkId, invocationCid: invocation.cid, encryptedSymmetricKeyHash, receiverPublicKeyHash: body.receiverPublicKeyHash, wrappedKey: base64(Uint8Array.from([...ephemeralPublic, ...wrapped])), alg: "x25519-aes256gcm/v1", keyVersion: 1, requestHash: hex(sha256(new TextEncoder().encode(`${invocation.cid}${bodyHash}`))), nodeId: nodeDid };
+      const unsigned = { type: "tinycloud.encryption.decrypt-result/v1", targetNode: nodeDid, networkId, invocationCid: invocation.cid, encryptedSymmetricKeyHash, receiverPublicKeyHash: body.receiverPublicKeyHash, wrappedKey: base64(Uint8Array.from([...ephemeralPublic, 1, ...wrapped])), alg: "x25519-aes256gcm/v1", keyVersion: 1, requestHash: hex(sha256(new TextEncoder().encode(`${invocation.cid}${bodyHash}`))), nodeId: nodeDid };
       return Response.json({ ...unsigned, nodeSignature: base64(ed25519.sign(new TextEncoder().encode(canonicalize(unsigned)), nodeKey)) });
     };
     const envelope = { version: 3, target: { nodeAudience: nodeDid }, encryptionNetwork: networkId, contentSource: { keyVersion: 1, encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash }, metadata: { mediaType: "text/plain" } } as any;
