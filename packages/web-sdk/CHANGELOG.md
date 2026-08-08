@@ -1,5 +1,11 @@
 # @tinycloudlabs/web-sdk
 
+## 3.0.0-beta.4
+
+### Patch Changes
+
+- a6dd764: Expose verified share metadata on the first-class `share.receive()` result so host applications can render without re-parsing the share.
+
 ## 3.0.0-beta.3
 
 ### Patch Changes
