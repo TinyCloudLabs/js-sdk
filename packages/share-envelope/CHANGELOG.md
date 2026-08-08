@@ -1,5 +1,11 @@
 # @tinycloud/share-envelope
 
+## 0.2.1-beta.1
+
+### Patch Changes
+
+- dc92402: Use the browser-safe base64url codec when verifying compact UCAN roots, even when the host bundle exposes a partial `Buffer` polyfill.
+
 ## 0.2.1-beta.0
 
 ### Patch Changes

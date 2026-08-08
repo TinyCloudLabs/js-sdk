@@ -18077,7 +18077,7 @@ async function signCompactUcanAuthorization(input) {
   const publicKey = ed25519PublicKeyFromDidKey(principal);
   const header = {
     alg: "EdDSA",
-    jwk: { alg: "EdDSA", crv: "Ed25519", kty: "OKP", x: encodeBase64Url(publicKey) },
+    jwk: { alg: "EdDSA", crv: "Ed25519", kty: "OKP", x: toBase64Url(publicKey) },
     typ: "JWT",
     ucv: "0.10.0"
   };
@@ -18091,13 +18091,13 @@ async function signCompactUcanAuthorization(input) {
     nnc: input.nonce,
     prf: input.proofs
   };
-  const protectedSegment = encodeBase64Url(new TextEncoder().encode(canonicalize2(header)));
-  const payloadSegment = encodeBase64Url(new TextEncoder().encode(canonicalize2(payload)));
+  const protectedSegment = toBase64Url(new TextEncoder().encode(canonicalize2(header)));
+  const payloadSegment = toBase64Url(new TextEncoder().encode(canonicalize2(payload)));
   const signingInput = new TextEncoder().encode(`${protectedSegment}.${payloadSegment}`);
   const signature = await input.sign(signingInput);
   if (signature.length !== 64) throw new TypeError("compact Authorization signature must be Ed25519");
   return verifyCompactUcanAuthorization(
-    `${protectedSegment}.${payloadSegment}.${encodeBase64Url(signature)}`
+    `${protectedSegment}.${payloadSegment}.${toBase64Url(signature)}`
   );
 }
 function verifyCompactUcanAuthorization(authorization, expectedCid) {
@@ -18105,9 +18105,9 @@ function verifyCompactUcanAuthorization(authorization, expectedCid) {
   const segments = authorization.split(".");
   if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) throw new TypeError("compact Authorization must contain three segments");
   const [headerSegment, payloadSegment, signatureSegment] = segments;
-  const headerBytes = decodeBase64Url(headerSegment);
-  const payloadBytes = decodeBase64Url(payloadSegment);
-  const signature = decodeBase64Url(signatureSegment);
+  const headerBytes = fromBase64Url(headerSegment);
+  const payloadBytes = fromBase64Url(payloadSegment);
+  const signature = fromBase64Url(signatureSegment);
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const header = JSON.parse(decoder.decode(headerBytes));
   const payload = JSON.parse(decoder.decode(payloadBytes));
@@ -18120,7 +18120,7 @@ function verifyCompactUcanAuthorization(authorization, expectedCid) {
   if (typeof payload.iss !== "string" || typeof payload.aud !== "string" || typeof payload.nnc !== "string" || !Number.isInteger(payload.nbf) || !Number.isInteger(payload.exp) || payload.nbf >= payload.exp || !Array.isArray(payload.prf) || payload.prf.some((proof) => typeof proof !== "string") || !Array.isArray(payload.fct) || payload.fct.length !== 1) throw new TypeError("compact Authorization payload is invalid");
   const principal = payload.iss.split("#", 1)[0];
   const publicKey = ed25519PublicKeyFromDidKey(principal);
-  if (!equal(publicKey, decodeBase64Url(jwk.x))) throw new TypeError("compact Authorization JWK does not bind issuer");
+  if (!equal(publicKey, fromBase64Url(jwk.x))) throw new TypeError("compact Authorization JWK does not bind issuer");
   if (!ed25519.verify(signature, new TextEncoder().encode(`${headerSegment}.${payloadSegment}`), publicKey, { zip215: false })) throw new TypeError("compact Authorization signature is invalid");
   const cid2 = CID.createV1(85, create(30, blake3(new TextEncoder().encode(authorization)))).toString();
   if (expectedCid !== void 0 && cid2 !== expectedCid) throw new TypeError("compact Authorization CID mismatch");
@@ -18132,16 +18132,6 @@ function object(value, label) {
 }
 function assertExactKeys(value, keys, label) {
   if (Object.keys(value).length !== keys.length || Object.keys(value).some((key) => !keys.includes(key))) throw new TypeError(`${label} has unknown or missing fields`);
-}
-function decodeBase64Url(value) {
-  if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) throw new TypeError("compact Authorization segment is not base64url");
-  const bytes3 = typeof Buffer !== "undefined" ? new Uint8Array(Buffer.from(value, "base64url")) : Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=")), (character) => character.charCodeAt(0));
-  const encoded = typeof Buffer !== "undefined" ? Buffer.from(bytes3).toString("base64url") : btoa(String.fromCharCode(...bytes3)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  if (encoded !== value) throw new TypeError("compact Authorization segment is not canonical");
-  return bytes3;
-}
-function encodeBase64Url(value) {
-  return typeof Buffer !== "undefined" ? Buffer.from(value).toString("base64url") : btoa(String.fromCharCode(...value)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 function equal(left, right) {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
@@ -25772,7 +25762,7 @@ var init_dist3 = __esm({
         if (envelope.version !== 3 || this.session === void 0 || this.v3Authorization === void 0 || this.v3NodeAudience === void 0 || signer === void 0) throw new Error("v3 policy session signer is required");
         const encrypted = parseV3InlineEncryptedEnvelope(bytes3, envelope);
         const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
-        const receiverPublicKey = toBase64Url(x25519.getPublicKey(receiverPrivateKey));
+        const receiverPublicKey = toBase64(x25519.getPublicKey(receiverPrivateKey));
         const receiverPublicKeyHash = canonicalHashHex2(receiverPublicKey);
         const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: this.v3NodeAudience, networkId: encrypted.networkId, alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
         const bodyHash = hex2(sha2562(new TextEncoder().encode(canonicalize2(body))));
@@ -25801,12 +25791,12 @@ var init_dist3 = __esm({
           const signature = fromBase64(value.nodeSignature, "v3 decrypt response signature");
           if (signature.length !== 64 || !ed25519.verify(signature, new TextEncoder().encode(canonicalize2(unsigned)), ed25519PublicKeyFromDidKey(body.targetNode), { zip215: false })) throw new Error("v3 decrypt response signature is invalid");
           const wrapped = fromBase64(value.wrappedKey, "v3 wrapped content key");
-          if (wrapped.length < 60) throw new Error("v3 wrapped content key is malformed");
+          if (wrapped.length < 61 || wrapped[32] !== 1) throw new Error("v3 wrapped content key is malformed");
           const shared = x25519.getSharedSecret(receiverPrivateKey, wrapped.slice(0, 32));
-          const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(32));
+          const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(33));
           shared.fill(0);
           if (symmetricKey.length !== 32) throw new Error("v3 content key is malformed");
-          const plaintext = await aesGcmDecrypt(symmetricKey, fromBase64Url(encrypted.ciphertext));
+          const plaintext = await aesGcmDecrypt(symmetricKey, fromBase64(encrypted.ciphertext, "v3 encrypted content"));
           this.v3ContentKey?.fill(0);
           this.v3ContentKey = symmetricKey;
           this.v3ContentEnvelope = encrypted;

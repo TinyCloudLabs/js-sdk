@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-core
 
+## 3.0.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [dc92402]
+  - @tinycloud/share-envelope@0.2.1-beta.1
+  - @tinycloud/share-sdk@0.3.0-beta.1
+
 ## 3.0.0-beta.2
 
 ### Minor Changes

@@ -18036,9 +18036,9 @@ function verifyCompactUcanAuthorization(authorization, expectedCid) {
   const segments = authorization.split(".");
   if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) throw new TypeError("compact Authorization must contain three segments");
   const [headerSegment, payloadSegment, signatureSegment] = segments;
-  const headerBytes = decodeBase64Url(headerSegment);
-  const payloadBytes = decodeBase64Url(payloadSegment);
-  const signature = decodeBase64Url(signatureSegment);
+  const headerBytes = fromBase64Url(headerSegment);
+  const payloadBytes = fromBase64Url(payloadSegment);
+  const signature = fromBase64Url(signatureSegment);
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const header = JSON.parse(decoder.decode(headerBytes));
   const payload = JSON.parse(decoder.decode(payloadBytes));
@@ -18051,7 +18051,7 @@ function verifyCompactUcanAuthorization(authorization, expectedCid) {
   if (typeof payload.iss !== "string" || typeof payload.aud !== "string" || typeof payload.nnc !== "string" || !Number.isInteger(payload.nbf) || !Number.isInteger(payload.exp) || payload.nbf >= payload.exp || !Array.isArray(payload.prf) || payload.prf.some((proof) => typeof proof !== "string") || !Array.isArray(payload.fct) || payload.fct.length !== 1) throw new TypeError("compact Authorization payload is invalid");
   const principal = payload.iss.split("#", 1)[0];
   const publicKey = ed25519PublicKeyFromDidKey(principal);
-  if (!equal(publicKey, decodeBase64Url(jwk.x))) throw new TypeError("compact Authorization JWK does not bind issuer");
+  if (!equal(publicKey, fromBase64Url(jwk.x))) throw new TypeError("compact Authorization JWK does not bind issuer");
   if (!ed25519.verify(signature, new TextEncoder().encode(`${headerSegment}.${payloadSegment}`), publicKey, { zip215: false })) throw new TypeError("compact Authorization signature is invalid");
   const cid2 = CID.createV1(85, create(30, blake3(new TextEncoder().encode(authorization)))).toString();
   if (expectedCid !== void 0 && cid2 !== expectedCid) throw new TypeError("compact Authorization CID mismatch");
@@ -18063,13 +18063,6 @@ function object(value, label) {
 }
 function assertExactKeys(value, keys, label) {
   if (Object.keys(value).length !== keys.length || Object.keys(value).some((key) => !keys.includes(key))) throw new TypeError(`${label} has unknown or missing fields`);
-}
-function decodeBase64Url(value) {
-  if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) throw new TypeError("compact Authorization segment is not base64url");
-  const bytes3 = typeof Buffer !== "undefined" ? new Uint8Array(Buffer.from(value, "base64url")) : Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=")), (character) => character.charCodeAt(0));
-  const encoded = typeof Buffer !== "undefined" ? Buffer.from(bytes3).toString("base64url") : btoa(String.fromCharCode(...bytes3)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  if (encoded !== value) throw new TypeError("compact Authorization segment is not canonical");
-  return bytes3;
 }
 function equal(left, right) {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
