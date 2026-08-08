@@ -7,7 +7,7 @@ import {
   type CredentialRequirement,
   type UnifiedPolicyV2,
 } from "@tinycloud/sdk-core";
-import { inspectShare, ShareRecipientClient } from "@tinycloud/share-sdk";
+import { inspectShare, ShareRecipientClient, type ShareMetadata } from "@tinycloud/share-sdk";
 import { ed25519PublicKeyFromDidKey, type ShareEnvelopeV3 } from "@tinycloud/share-envelope";
 import { CredentialsService, type CredentialClient } from "../credentials";
 import { SessionReceiverCredentialCustody } from "./receiver-credentials";
@@ -131,7 +131,7 @@ export class ReceivedShareImpl implements ReceivedShare {
 
   constructor(
     readonly identity: ShareReceiverIdentity,
-    readonly shareId: string,
+    readonly metadata: ShareMetadata,
     private readonly envelope: ShareEnvelopeV3,
     private readonly credentials: CredentialsService,
     private readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>,
@@ -140,6 +140,8 @@ export class ReceivedShareImpl implements ReceivedShare {
     private readonly credentialDiscoveryUrl: string,
     private readonly trustedNode: { readonly invitationKid: string; readonly invitationPublicKey: Uint8Array },
   ) {}
+
+  get shareId(): string { return this.metadata.shareId; }
 
   get(): Promise<ShareReceivedContent> {
     if (this.content !== undefined) return Promise.resolve(this.content);
@@ -338,6 +340,6 @@ export class ShareReceiverService {
       sign = (bytes) => receiver.sign(bytes);
     }
     options.onProgress?.({ state: "identity-selection", status: "completed", identity });
-    return new ReceivedShareImpl(identity, inspection.metadata.shareId, envelope, credentials, sign, options, this.fetchFn, this.config.credentialDiscoveryUrl ?? DEFAULT_CREDENTIAL_DISCOVERY, trustedNode);
+    return new ReceivedShareImpl(identity, inspection.metadata, envelope, credentials, sign, options, this.fetchFn, this.config.credentialDiscoveryUrl ?? DEFAULT_CREDENTIAL_DISCOVERY, trustedNode);
   }
 }

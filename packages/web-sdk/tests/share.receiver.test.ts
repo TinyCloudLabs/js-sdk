@@ -205,7 +205,17 @@ test("receiver holder binding uses the receiver signer without an OpenKey approv
 function receivedShareForImport(onProgress?: (event: unknown) => void): ReceivedShareImpl {
   const received = new ReceivedShareImpl(
     { kind: "receiver", holderDid: "did:key:z6MkReceiver", custody: "session", origin: "https://share.example" },
-    "share-1",
+    {
+      protocol: "tinycloud-share",
+      version: 1,
+      shareId: "share-1",
+      origin: "https://share.example",
+      target: { kind: "email", origin: "https://node.example", nodeAudience: "did:key:z6MkEnforcer", spaceId: "space-1" },
+      resource: { kind: "exact", path: "shares/share-1/received.txt" },
+      actions: ["read"],
+      expiresAt: "2030-01-02T00:00:00.000Z",
+      display: { filename: "received.txt" },
+    },
     {} as never,
     {} as never,
     async () => new Uint8Array(64),
@@ -228,6 +238,7 @@ function receivedShareForImport(onProgress?: (event: unknown) => void): Received
     receivedAt: "2030-01-01T00:00:00.000Z",
   });
   (received as unknown as { content: ShareReceivedContent }).content = content;
+  expect(received.shareId).toBe(received.metadata.shareId);
   return received;
 }
 

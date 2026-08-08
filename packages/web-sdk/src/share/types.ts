@@ -1,4 +1,5 @@
 import type { ClientSession, IKVService } from "@tinycloud/sdk-core";
+import type { ShareMetadata } from "@tinycloud/share-sdk";
 import type { CredentialsService } from "../credentials";
 
 export type ShareReceiverIdentity =
@@ -52,6 +53,7 @@ export interface ShareImportAccountClient {
 
 export interface ReceivedShare {
   readonly identity: ShareReceiverIdentity;
+  readonly metadata: ShareMetadata;
   readonly shareId: string;
   get(): Promise<ShareReceivedContent>;
   importInto(accountClient: ShareImportAccountClient, options: ShareImportOptions): Promise<ShareImportResult>;
