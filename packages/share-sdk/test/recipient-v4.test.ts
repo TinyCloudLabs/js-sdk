@@ -179,6 +179,8 @@ describe("TC-500 accountless v4 recipient", () => {
       encryptedSymmetricKeyHash,
       ciphertext: "AA",
     }));
+    envelope.contentSource.initialCiphertextDigestHex = [...sha256(encryptedEnvelope)]
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
     await expect(client.decryptV3Content(encryptedEnvelope)).rejects.toThrow("decrypt invocation rejected");
     expect(decryptBody?.targetNode).toBe(nodeDid);
     expect(verifyCompactUcanAuthorization(decryptAuthorization).payload.aud).toBe(nodeDid);

@@ -10,6 +10,14 @@ describe("TinyCloud share authority adapter", () => {
     expect(source).not.toContain("/share/v2/deliveries/authorize");
   });
 
+  it("uses the existing signed Policy/v3 root revocation primitive for addressed shares", async () => {
+    const source = await readFile(new URL("./adapters.ts", import.meta.url), "utf8");
+    expect(source).toContain("revokePolicyRootV3({");
+    expect(source).toContain("revokePolicyRoot: input.revokePolicyRoot");
+    expect(source).toContain('reason: "share revoked"');
+    expect(source).not.toContain("/share/v2/revoke");
+  });
+
   it("posts the exact signed delivery receipt only to api.share", async () => {
     const emailOrigin = "https://email.example";
     const request = { returnLink: "https://share.example/viewer?tc2=public-policy" };

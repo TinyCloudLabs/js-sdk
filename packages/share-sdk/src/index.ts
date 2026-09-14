@@ -17,7 +17,7 @@ export type { ShareAuthorizationMethod, ShareAuthorizationRequired, ShareAuthori
 export { notifyShare, recipientMatchesShareRecord, ShareNotifyError } from "./notify.js";
 export type { ShareNotifyState, ShareNotifyResult, ShareNotifyInput, ShareDeliveryAdapter } from "./notify.js";
 export { listShares, showShare, revokeShare } from "./lifecycle.js";
-export type { ShareHistoryView, ShareRevocationResult, ShareRevocationAdapter } from "./lifecycle.js";
+export type { ShareHistoryView, SharePolicyRootRevocation, ShareRevocationResult, ShareRevocationAdapter } from "./lifecycle.js";
 export { normalizeShareTarget, publishTargetShare, targetAuthorizationMethod } from "./targets.js";
 export type { ShareTarget, TargetPublishInput, TargetPublishOutcome, TargetPublishAdapter } from "./targets.js";
 export { ShareRecipientClient, createAddressedAuthorization } from "./recipient.js";

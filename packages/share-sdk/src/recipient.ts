@@ -259,6 +259,21 @@ function hex(value: Uint8Array): string {
   return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * The signed content source commits to the literal owner-KV representation,
+ * not an equivalent parsed JSON value. Compare all digest bytes before any
+ * envelope parsing or key-unwrapping work.
+ */
+function matchesInitialCiphertextDigest(bytes: Uint8Array, expected: unknown): boolean {
+  if (typeof expected !== "string" || !LOWER_SHA256_HEX.test(expected)) return false;
+  const actual = sha256(bytes);
+  let mismatch = 0;
+  for (let index = 0; index < actual.length; index += 1) {
+    mismatch |= actual[index]! ^ Number.parseInt(expected.slice(index * 2, index * 2 + 2), 16);
+  }
+  return mismatch === 0;
+}
+
 function canonicalHashHex(value: string): string {
   return hex(sha256(new TextEncoder().encode(canonicalize(value))));
 }
@@ -460,6 +475,7 @@ export class ShareRecipientClient {
     const envelope = this.options.envelope;
     const signer = this.nativeSigner ?? this.signer;
     if (envelope.version !== 3 || this.session === undefined || this.v3Authorization === undefined || this.v3NodeAudience === undefined || signer === undefined) throw new Error("v3 policy session signer is required");
+    if (!matchesInitialCiphertextDigest(bytes, envelope.contentSource.initialCiphertextDigestHex)) throw new Error("v3 owner KV ciphertext digest mismatch");
     const encrypted = parseV3InlineEncryptedEnvelope(bytes, envelope);
     const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
     const receiverPublicKey = toBase64(x25519.getPublicKey(receiverPrivateKey));

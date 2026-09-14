@@ -17677,7 +17677,7 @@ function validateV3Invariants(value, ctx) {
   if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
   if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
@@ -17843,7 +17843,7 @@ async function verifyEnvelopeV3(envelope, options) {
   const binding = parsed.attestedEnforcerBinding;
   const { signature: bindingSignature, ...unsignedBinding } = binding;
   const expectedBindingDigestHex = hex(sha2562(new TextEncoder().encode(canonicalize2({ enforcerDid: binding.enforcerDid, nodeAudience: binding.nodeAudience }))));
-  if (binding.enforcerDid !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
+  if (binding.nodeAudience !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
   try {
     const digest3 = sha2562(new TextEncoder().encode(`${ATTESTED_ENFORCER_V2_DOMAIN}${canonicalize2(unsignedBinding)}`));
     if (!ed25519.verify(fromBase64Url(bindingSignature.value), digest3, ed25519PublicKeyFromDidKey(binding.nodeAudience), ED25519_VERIFY_OPTS2)) return false;
@@ -18608,7 +18608,20 @@ async function revokeShare(input) {
   const scope = input.scope ?? "direct";
   const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
   if (delegationCid === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
-  await input.adapter.revokeDelegation({ delegationCid, scope });
+  if (target === "bearer") {
+    if (input.adapter.revokeDelegation === void 0) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokeDelegation({ delegationCid, scope });
+  } else {
+    if (input.record.ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
+    if (input.adapter.revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokePolicyRoot({
+      rootCid: delegationCid,
+      targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
+      ownerDid: input.record.ownerDid,
+      nodeOrigin: input.record.target.origin,
+      nodeAudience: input.record.target.nodeAudience
+    });
+  }
   const revokedAt = (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records !== void 0) await input.records.put({ ...input.record, revokedAt });
   return { state: "revoked", target, delegationCid, revokedAt };
@@ -24931,16 +24944,26 @@ async function verifyLocationRecord(input) {
   }
   return false;
 }
-async function fetchLocationRecord(registryUrl, subject, fetchFn = globalThis.fetch) {
+async function fetchLocationRecord(registryUrl, subject, fetchFn = globalThis.fetch, signal) {
   const url = `${registryUrl.replace(/\/$/, "")}/v1/locations/${encodeURIComponent(subject)}`;
-  const response = await fetchFn(url);
+  const response = await fetchFn(url, {
+    redirect: "error",
+    headers: { accept: "application/json" },
+    ...signal === void 0 ? {} : { signal }
+  });
   if (response.status === 404) {
     return null;
   }
   if (!response.ok) {
     throw new Error(`location registry returned HTTP ${response.status}`);
   }
-  const body = await response.json();
+  const text2 = await boundedResponseText(response, "location registry", 64 * 1024);
+  let body;
+  try {
+    body = JSON.parse(text2);
+  } catch {
+    throw new LocationRecordValidationError("registry response is not JSON");
+  }
   if (body.record === void 0) {
     throw new LocationRecordValidationError("registry response missing record");
   }
@@ -25115,6 +25138,38 @@ function multiaddrToHttpUrl(input) {
     );
   }
   return uri;
+}
+async function boundedResponseText(response, label, maxBytes) {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maxBytes)) {
+    throw new LocationRecordValidationError(`${label} response is too large`);
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value === void 0) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => void 0);
+        throw new LocationRecordValidationError(`${label} response is too large`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes2 = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes2.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes2);
 }
 function validateSubject(subject) {
   if (typeof subject !== "string" || subject.length === 0) {

@@ -345,10 +345,10 @@ var init_util = __esm({
           return obj[e];
         });
       };
-      util3.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object2) => {
+      util3.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object3) => {
         const keys = [];
-        for (const key in object2) {
-          if (Object.prototype.hasOwnProperty.call(object2, key)) {
+        for (const key in object3) {
+          if (Object.prototype.hasOwnProperty.call(object3, key)) {
             keys.push(key);
           }
         }
@@ -5222,11 +5222,11 @@ function bitLen(n) {
     ;
   return len;
 }
-function _validateObject(object2, fields, optFields = {}) {
-  if (!object2 || typeof object2 !== "object")
+function _validateObject(object3, fields, optFields = {}) {
+  if (!object3 || typeof object3 !== "object")
     throw new Error("expected valid options object");
   function checkField(fieldName, expectedType, isOpt) {
-    const val = object2[fieldName];
+    const val = object3[fieldName];
     if (isOpt && val === void 0)
       return;
     const current = typeof val;
@@ -7681,15 +7681,15 @@ function createHmacDrbg(hashLen, qByteLen, hmacFn) {
   };
   return genUntil;
 }
-function validateObject2(object2, validators, optValidators = {}) {
+function validateObject2(object3, validators, optValidators = {}) {
   const checkField = (fieldName, type, isOptional) => {
     const checkVal = validatorFns[type];
     if (typeof checkVal !== "function")
       throw new Error("invalid validator function");
-    const val = object2[fieldName];
+    const val = object3[fieldName];
     if (isOptional && val === void 0)
       return;
-    if (!checkVal(val, object2)) {
+    if (!checkVal(val, object3)) {
       throw new Error("param " + String(fieldName) + " is invalid. Expected " + type + ", got " + val);
     }
   };
@@ -7697,7 +7697,7 @@ function validateObject2(object2, validators, optValidators = {}) {
     checkField(fieldName, type, false);
   for (const [fieldName, type] of Object.entries(optValidators))
     checkField(fieldName, type, true);
-  return object2;
+  return object3;
 }
 function memoized2(fn) {
   const map = /* @__PURE__ */ new WeakMap();
@@ -7732,7 +7732,7 @@ var init_utils3 = __esm({
       stringOrUint8Array: (val) => typeof val === "string" || isBytes2(val),
       isSafeInteger: (val) => Number.isSafeInteger(val),
       array: (val) => Array.isArray(val),
-      field: (val, object2) => object2.Fp.isValid(val),
+      field: (val, object3) => object3.Fp.isValid(val),
       hash: (val) => typeof val === "function" && Number.isSafeInteger(val.outputLen)
     };
   }
@@ -17564,7 +17564,7 @@ function validateV3Invariants(value, ctx) {
   if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
   if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
@@ -17730,7 +17730,7 @@ async function verifyEnvelopeV3(envelope, options) {
   const binding = parsed.attestedEnforcerBinding;
   const { signature: bindingSignature, ...unsignedBinding } = binding;
   const expectedBindingDigestHex = hex(sha2562(new TextEncoder().encode(canonicalize2({ enforcerDid: binding.enforcerDid, nodeAudience: binding.nodeAudience }))));
-  if (binding.enforcerDid !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
+  if (binding.nodeAudience !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
   try {
     const digest3 = sha2562(new TextEncoder().encode(`${ATTESTED_ENFORCER_V2_DOMAIN}${canonicalize2(unsignedBinding)}`));
     if (!ed25519.verify(fromBase64Url(bindingSignature.value), digest3, ed25519PublicKeyFromDidKey(binding.nodeAudience), ED25519_VERIFY_OPTS2)) return false;
@@ -18705,7 +18705,20 @@ async function revokeShare(input) {
   const scope = input.scope ?? "direct";
   const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
   if (delegationCid === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
-  await input.adapter.revokeDelegation({ delegationCid, scope });
+  if (target === "bearer") {
+    if (input.adapter.revokeDelegation === void 0) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokeDelegation({ delegationCid, scope });
+  } else {
+    if (input.record.ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
+    if (input.adapter.revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokePolicyRoot({
+      rootCid: delegationCid,
+      targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
+      ownerDid: input.record.ownerDid,
+      nodeOrigin: input.record.target.origin,
+      nodeAudience: input.record.target.nodeAudience
+    });
+  }
   const revokedAt = (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records !== void 0) await input.records.put({ ...input.record, revokedAt });
   return { state: "revoked", target, delegationCid, revokedAt };
@@ -23905,6 +23918,182 @@ var init_dist3 = __esm({
 
 // ../sdk-core/dist/index.js
 import { SiweMessage } from "siwe";
+function jcsCanonicalize(input) {
+  return serialize2(normalizeJson(input, "$"));
+}
+function normalizeJson(input, path = "$") {
+  if (input === null) {
+    return null;
+  }
+  switch (typeof input) {
+    case "boolean":
+      return input;
+    case "number":
+      if (!Number.isFinite(input)) {
+        throw new SignedObjectCanonicalizationError(
+          `${path} must be a finite JSON number`
+        );
+      }
+      return input;
+    case "string":
+      assertUnicodeScalarString(input, path);
+      return input;
+    case "object":
+      return normalizeJsonObjectOrArray(input, path);
+    case "bigint":
+    case "function":
+    case "symbol":
+    case "undefined":
+    default:
+      throw new SignedObjectCanonicalizationError(
+        `${path} is not a JSON value`
+      );
+  }
+}
+function serialize2(value) {
+  if (value === null) {
+    return "null";
+  }
+  switch (typeof value) {
+    case "boolean":
+      return value ? "true" : "false";
+    case "number": {
+      const encoded = JSON.stringify(value);
+      if (encoded === void 0) {
+        throw new SignedObjectCanonicalizationError(
+          "number could not be serialized as JSON"
+        );
+      }
+      return encoded;
+    }
+    case "string":
+      return JSON.stringify(value);
+    case "object":
+      if (Array.isArray(value)) {
+        return `[${value.map((item) => serialize2(item)).join(",")}]`;
+      }
+      return serializeObject(value);
+    default:
+      throw new SignedObjectCanonicalizationError(
+        `unsupported JSON value type ${typeof value}`
+      );
+  }
+}
+function normalizeJsonObjectOrArray(input, path) {
+  assertNoSymbolKeys(input, path);
+  if (Array.isArray(input)) {
+    for (const key of Object.getOwnPropertyNames(input)) {
+      if (key === "length") {
+        continue;
+      }
+      if (!isArrayIndexKey(key, input.length)) {
+        throw new SignedObjectCanonicalizationError(
+          `${path}.${key} is not allowed on a JSON array`
+        );
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(input, key);
+      if (descriptor?.enumerable !== true) {
+        throw new SignedObjectCanonicalizationError(
+          `${path}[${key}] must be an enumerable JSON array item`
+        );
+      }
+      if (!("value" in descriptor)) {
+        throw new SignedObjectCanonicalizationError(
+          `${path}[${key}] must be a JSON data property`
+        );
+      }
+    }
+    const output2 = [];
+    for (let index = 0; index < input.length; index++) {
+      if (!objectHasOwn(input, index)) {
+        throw new SignedObjectCanonicalizationError(
+          `${path}[${index}] must not be a sparse array hole`
+        );
+      }
+      output2.push(normalizeJson(input[index], `${path}[${index}]`));
+    }
+    return output2;
+  }
+  const proto = Object.getPrototypeOf(input);
+  if (proto !== Object.prototype && proto !== null) {
+    throw new SignedObjectCanonicalizationError(
+      `${path} must be a plain JSON object`
+    );
+  }
+  const output = /* @__PURE__ */ Object.create(null);
+  for (const key of Object.getOwnPropertyNames(input)) {
+    assertUnicodeScalarString(key, `${path} key`);
+    if (key === "__proto__" || key === "constructor") {
+      throw new SignedObjectCanonicalizationError(
+        `${path}.${key} is not allowed`
+      );
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (descriptor?.enumerable !== true) {
+      throw new SignedObjectCanonicalizationError(
+        `${path}.${key} must be an enumerable JSON object property`
+      );
+    }
+    if (!("value" in descriptor)) {
+      throw new SignedObjectCanonicalizationError(
+        `${path}.${key} must be a JSON data property`
+      );
+    }
+    const value = descriptor.value;
+    output[key] = normalizeJson(value, `${path}.${key}`);
+  }
+  return output;
+}
+function assertNoSymbolKeys(input, path) {
+  if (Object.getOwnPropertySymbols(input).length > 0) {
+    throw new SignedObjectCanonicalizationError(
+      `${path} must not have symbol properties`
+    );
+  }
+}
+function isArrayIndexKey(key, length22) {
+  if (!/^(0|[1-9]\d*)$/.test(key)) {
+    return false;
+  }
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index < length22;
+}
+function serializeObject(value) {
+  const keys = Object.keys(value).sort(compareUtf16CodeUnits);
+  const parts = keys.map((key) => `${JSON.stringify(key)}:${serialize2(value[key])}`);
+  return `{${parts.join(",")}}`;
+}
+function compareUtf16CodeUnits(a, b) {
+  const max = Math.min(a.length, b.length);
+  for (let index = 0; index < max; index++) {
+    const leftCodeUnit = a.charCodeAt(index);
+    const rightCodeUnit = b.charCodeAt(index);
+    if (leftCodeUnit !== rightCodeUnit) {
+      return leftCodeUnit - rightCodeUnit;
+    }
+  }
+  return a.length - b.length;
+}
+function assertUnicodeScalarString(value, path) {
+  for (let index = 0; index < value.length; index++) {
+    const code32 = value.charCodeAt(index);
+    if (code32 >= 55296 && code32 <= 56319) {
+      const next = value.charCodeAt(index + 1);
+      if (Number.isNaN(next) || next < 56320 || next > 57343) {
+        throw new SignedObjectCanonicalizationError(
+          `${path} contains a lone high surrogate`
+        );
+      }
+      index++;
+      continue;
+    }
+    if (code32 >= 56320 && code32 <= 57343) {
+      throw new SignedObjectCanonicalizationError(
+        `${path} contains a lone low surrogate`
+      );
+    }
+  }
+}
 function equals5(aa, bb) {
   if (aa === bb) {
     return true;
@@ -24351,6 +24540,39 @@ function createDigest(digest4, code32, truncate) {
 }
 function sha(name2) {
   return async (data) => new Uint8Array(await crypto.subtle.digest(name2, data));
+}
+async function revokePolicyRootV3(input) {
+  if (input.reason.length === 0) throw new Error("policy root revocation reason is required");
+  const unsigned = {
+    schema: ROOT_REVOCATION_V1_SCHEMA,
+    targetCid: input.rootCid,
+    targetRole: input.targetRole,
+    ownerDid: input.ownerDid,
+    nodeAudience: input.nodeAudience,
+    revokedAt: (input.now ?? /* @__PURE__ */ new Date()).toISOString(),
+    reason: input.reason,
+    issuerDid: input.issuerDid
+  };
+  const signature = await input.sign(sha2562(new TextEncoder().encode(ROOT_REVOCATION_V1_DOMAIN + jcsCanonicalize(unsigned))));
+  if (signature.length !== 64) throw new Error("policy root revocation signature must be Ed25519");
+  const fetchFn = input.fetch ?? globalThis.fetch.bind(globalThis);
+  const response = await fetchFn(new URL("/revoke", input.nodeOrigin), {
+    method: "POST",
+    redirect: "error",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({ revocation: { ...unsigned, signature: { suite: "Ed25519", signerDid: input.issuerDid, value: encodeBase64Url2(signature) } } })
+  });
+  if (!response.ok) throw new Error(`policy root revocation rejected (${response.status})`);
+  return object2(await response.json(), "policy root revocation");
+}
+function object2(value, label) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value;
+}
+function encodeBase64Url2(value) {
+  return typeof btoa === "function" ? btoa(String.fromCharCode(...value)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_") : Buffer.from(value).toString("base64url");
 }
 function parseStrictRfc33392(value) {
   if (!/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(
@@ -25033,16 +25255,26 @@ async function verifyLocationRecord(input) {
   }
   return false;
 }
-async function fetchLocationRecord(registryUrl, subject, fetchFn = globalThis.fetch) {
+async function fetchLocationRecord(registryUrl, subject, fetchFn = globalThis.fetch, signal) {
   const url = `${registryUrl.replace(/\/$/, "")}/v1/locations/${encodeURIComponent(subject)}`;
-  const response = await fetchFn(url);
+  const response = await fetchFn(url, {
+    redirect: "error",
+    headers: { accept: "application/json" },
+    ...signal === void 0 ? {} : { signal }
+  });
   if (response.status === 404) {
     return null;
   }
   if (!response.ok) {
     throw new Error(`location registry returned HTTP ${response.status}`);
   }
-  const body = await response.json();
+  const text2 = await boundedResponseText(response, "location registry", 64 * 1024);
+  let body;
+  try {
+    body = JSON.parse(text2);
+  } catch {
+    throw new LocationRecordValidationError("registry response is not JSON");
+  }
   if (body.record === void 0) {
     throw new LocationRecordValidationError("registry response missing record");
   }
@@ -25218,6 +25450,38 @@ function multiaddrToHttpUrl(input) {
   }
   return uri;
 }
+async function boundedResponseText(response, label, maxBytes) {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maxBytes)) {
+    throw new LocationRecordValidationError(`${label} response is too large`);
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value === void 0) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => void 0);
+        throw new LocationRecordValidationError(`${label} response is too large`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes2 = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes2.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes2);
+}
 function validateSubject(subject) {
   if (typeof subject !== "string" || subject.length === 0) {
     throw new LocationRecordValidationError(
@@ -25316,13 +25580,14 @@ function decodeBase64Url4(value) {
   }
   return Uint8Array.from(bytes2);
 }
-var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, objectHasOwn, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, textEncoder2, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder22, textDecoder, identity_exports2, code2, name, encode42, identity2, sha2_browser_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha25622, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, CompactHeaderSchema, CompactPayloadSchema, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, ResourceSchema, PortableDelegationSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, Parser, MAX_IPV6_LENGTH, MAX_IPV4_LENGTH, parser, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
+var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, SignedObjectProfileError, SignedObjectCanonicalizationError, objectHasOwn, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, textEncoder2, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder22, textDecoder, identity_exports2, code2, name, encode42, identity2, sha2_browser_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha25622, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, ROOT_REVOCATION_V1_SCHEMA, ROOT_REVOCATION_V1_DOMAIN, CompactHeaderSchema, CompactPayloadSchema, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, ResourceSchema, PortableDelegationSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, Parser, MAX_IPV6_LENGTH, MAX_IPV4_LENGTH, parser, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
 var init_dist4 = __esm({
   "../sdk-core/dist/index.js"() {
     "use strict";
     init_zod();
     init_zod();
     init_dist();
+    init_sha256();
     init_zod();
     init_zod();
     init_zod();
@@ -25379,6 +25644,19 @@ var init_dist4 = __esm({
       signature: external_exports.string(),
       ens: EnsDataSchema.optional()
     });
+    SignedObjectProfileError = class extends Error {
+      constructor(code32, message) {
+        super(message);
+        this.name = "SignedObjectProfileError";
+        this.code = code32;
+      }
+    };
+    SignedObjectCanonicalizationError = class extends SignedObjectProfileError {
+      constructor(message) {
+        super("canonicalization-mismatch", message);
+        this.name = "SignedObjectCanonicalizationError";
+      }
+    };
     objectHasOwn = Object.hasOwn ?? Object.prototype.hasOwnProperty.call.bind(
       Object.prototype.hasOwnProperty
     );
@@ -26063,6 +26341,8 @@ var init_dist4 = __esm({
     objectHasOwn4 = Object.hasOwn ?? Object.prototype.hasOwnProperty.call.bind(
       Object.prototype.hasOwnProperty
     );
+    ROOT_REVOCATION_V1_SCHEMA = "xyz.tinycloud.policy/root-revocation/v1";
+    ROOT_REVOCATION_V1_DOMAIN = "xyz.tinycloud.policy/RootRevocation/v1\0";
     CompactHeaderSchema = external_exports.object({
       alg: external_exports.literal("EdDSA"),
       jwk: external_exports.object({ alg: external_exports.literal("EdDSA"), crv: external_exports.literal("Ed25519"), kty: external_exports.literal("OKP"), x: external_exports.string().min(1) }).strict(),
@@ -30445,7 +30725,7 @@ function validateV3Invariants2(value, ctx) {
   if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
   if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
@@ -30491,7 +30771,7 @@ function serializeString2(text) {
   assertNoLoneSurrogates2(text);
   return JSON.stringify(text);
 }
-function serialize2(value) {
+function serialize3(value) {
   if (value === null) return "null";
   switch (typeof value) {
     case "boolean":
@@ -30509,7 +30789,7 @@ function serialize2(value) {
       throw new TypeError(`cannot canonicalize value of type ${typeof value}`);
   }
   if (Array.isArray(value)) {
-    return `[${value.map((item) => serialize2(item)).join(",")}]`;
+    return `[${value.map((item) => serialize3(item)).join(",")}]`;
   }
   if (!isPlainRecord2(value)) {
     throw new TypeError("cannot canonicalize non-plain object");
@@ -30519,16 +30799,17 @@ function serialize2(value) {
   for (const key of keys) {
     const member = value[key];
     if (member === void 0) continue;
-    members.push(`${serializeString2(key)}:${serialize2(member)}`);
+    members.push(`${serializeString2(key)}:${serialize3(member)}`);
   }
   return `{${members.join(",")}}`;
 }
 function canonicalize3(value) {
-  return serialize2(value);
+  return serialize3(value);
 }
 var MAX_INLINE_BYTES2 = 256 * 1024;
 
 // src/share/adapters.ts
+init_dist4();
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 async function postAddressedShareDelivery(input) {
   if (input.receipt.request.returnLink !== input.shareUrl) throw new Error("credential invitation is not bound to the share link");
@@ -30687,12 +30968,12 @@ function createShareAuthorityAdapters(input = {}) {
     if (!response.ok) throw new Error("share public config is unavailable");
     const value = await response.json();
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share public config is invalid");
-    const object2 = value;
-    if (object2.version !== "tinycloud.share/config-v2") throw new Error("share public config version is unsupported");
+    const object3 = value;
+    if (object3.version !== "tinycloud.share/config-v2") throw new Error("share public config version is unsupported");
     return {
-      shareOrigin: canonicalOrigin(object2.shareOrigin, "origin"),
-      registryOrigin: canonicalOrigin(object2.registryOrigin, "registry origin"),
-      emailOrigin: canonicalOrigin(input.emailOrigin ?? object2.emailOrigin, "email origin")
+      shareOrigin: canonicalOrigin(object3.shareOrigin, "origin"),
+      registryOrigin: canonicalOrigin(object3.registryOrigin, "registry origin"),
+      emailOrigin: canonicalOrigin(input.emailOrigin ?? object3.emailOrigin, "email origin")
     };
   })();
   let nodePromise;
@@ -30821,10 +31102,29 @@ function createShareAuthorityAdapters(input = {}) {
     if (!response.ok) throw new Error("share delivery was not accepted");
     return response.status === 208 ? "already-delivered" : "delivered";
   }) };
-  const revocation = { revokeDelegation: input.revokeDelegation ?? (async (request) => {
-    const result = await (await authenticatedNode()).revokeDelegation(request.delegationCid);
-    if (!result.ok) throw new Error("share delegation revocation was rejected");
-  }) };
+  const revocation = {
+    revokeDelegation: input.revokeDelegation ?? (async (request) => {
+      const result = await (await authenticatedNode()).revokeDelegation(request.delegationCid);
+      if (!result.ok) throw new Error("share delegation revocation was rejected");
+    }),
+    revokePolicyRoot: input.revokePolicyRoot ?? (async (request) => {
+      const node = await authenticatedNode();
+      const activeNode = await node.activeNodeIdentity();
+      if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.did) {
+        throw new Error("share Policy/v3 revocation is not bound to the active owner node");
+      }
+      await revokePolicyRootV3({
+        nodeOrigin: activeNode.origin,
+        rootCid: request.rootCid,
+        targetRole: request.targetRole,
+        ownerDid: node.did,
+        issuerDid: node.did,
+        nodeAudience: activeNode.nodeDid,
+        reason: "share revoked",
+        sign: (digest2) => node.signSessionBytes(digest2)
+      });
+    })
+  };
   const nativeReader = async (link2) => {
     const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
     const token = parseNativeShareUrl(link2);

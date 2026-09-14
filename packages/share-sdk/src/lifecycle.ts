@@ -4,8 +4,23 @@ export type ShareRevocationResult =
   | { readonly state: "revoked"; readonly target: "bearer" | "recipientDid" | "email" | "emailDomain"; readonly delegationCid: string; readonly revokedAt: string }
   | { readonly state: "unsupported"; readonly target: string; readonly reason: string; readonly code: "unsupported-target" };
 
+export interface SharePolicyRootRevocation {
+  readonly rootCid: string;
+  readonly targetRole: "policy-authority" | "policy-enforcement";
+  readonly ownerDid: string;
+  readonly nodeOrigin: string;
+  readonly nodeAudience: string;
+}
+
 export interface ShareRevocationAdapter {
-  revokeDelegation(input: { readonly delegationCid: string; readonly scope: "direct" | "ancestor" }): Promise<void>;
+  /** Native bearer authority uses the ordinary node delegation endpoint. */
+  revokeDelegation?(input: { readonly delegationCid: string; readonly scope: "direct" | "ancestor" }): Promise<void>;
+  /**
+   * Addressed Policy/v3 authority uses the Node's signed root-revocation
+   * endpoint. The Node checks that root for active sessions, new admission,
+   * and delivery; this is not a separate share authority plane.
+   */
+  revokePolicyRoot?(input: SharePolicyRootRevocation): Promise<void>;
 }
 
 function targetKind(record: SenderShareRecord): string {
@@ -13,7 +28,16 @@ function targetKind(record: SenderShareRecord): string {
   return record.recipientMatcher.kind === "exactEmail" ? "email" : record.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
 }
 
-/** Revoke the exact node-enforced delegation retained in sender history. */
+function policyNodeAudience(record: SenderShareRecord): string {
+  const envelope = record.deliveryMaterial?.envelope;
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record.target.nodeAudience;
+  const binding = (envelope as Record<string, unknown>).attestedEnforcerBinding;
+  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record.target.nodeAudience;
+  const nodeAudience = (binding as Record<string, unknown>).nodeAudience;
+  return typeof nodeAudience === "string" ? nodeAudience : record.target.nodeAudience;
+}
+
+/** Revoke the native bearer delegation or the selected signed Policy/v3 root. */
 export async function revokeShare(input: {
   readonly record: SenderShareRecord;
   /** Optional durable store; successful revocation is persisted before return. */
@@ -27,7 +51,20 @@ export async function revokeShare(input: {
   const scope = input.scope ?? "direct";
   const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
   if (delegationCid === undefined) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
-  await input.adapter.revokeDelegation({ delegationCid, scope });
+  if (target === "bearer") {
+    if (input.adapter.revokeDelegation === undefined) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokeDelegation({ delegationCid, scope });
+  } else {
+    if (input.record.ownerDid === undefined) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
+    if (input.adapter.revokePolicyRoot === undefined) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokePolicyRoot({
+      rootCid: delegationCid,
+      targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
+      ownerDid: input.record.ownerDid,
+      nodeOrigin: input.record.target.origin,
+      nodeAudience: policyNodeAudience(input.record),
+    });
+  }
   const revokedAt = (input.now?.() ?? new Date()).toISOString();
   if (input.records !== undefined) await input.records.put({ ...input.record, revokedAt });
   return { state: "revoked", target: target as "bearer" | "recipientDid" | "email" | "emailDomain", delegationCid, revokedAt };

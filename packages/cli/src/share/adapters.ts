@@ -18,6 +18,7 @@ import {
   type TargetPublishInput,
 } from "@tinycloud/share-sdk";
 import { canonicalize } from "@tinycloud/share-envelope";
+import { revokePolicyRootV3 } from "@tinycloud/sdk-core";
 
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 
@@ -170,6 +171,7 @@ export function createShareAuthorityAdapters(input: {
   readonly publishTarget?: (value: TargetPublishInput) => Promise<TargetPublishOutcome>;
   readonly deliver?: ShareDeliveryAdapter["deliver"];
   readonly revokeDelegation?: ShareRevocationAdapter["revokeDelegation"];
+  readonly revokePolicyRoot?: ShareRevocationAdapter["revokePolicyRoot"];
 } = {}): {
   readonly targetAdapter: TargetPublishAdapter;
   readonly records: SenderShareRecordStorage;
@@ -340,10 +342,29 @@ export function createShareAuthorityAdapters(input: {
     if (!response.ok) throw new Error("share delivery was not accepted");
     return response.status === 208 ? "already-delivered" : "delivered";
   }) };
-  const revocation: ShareRevocationAdapter = { revokeDelegation: input.revokeDelegation ?? (async (request) => {
-    const result = await (await authenticatedNode()).revokeDelegation(request.delegationCid);
-    if (!result.ok) throw new Error("share delegation revocation was rejected");
-  }) };
+  const revocation: ShareRevocationAdapter = {
+    revokeDelegation: input.revokeDelegation ?? (async (request) => {
+      const result = await (await authenticatedNode()).revokeDelegation(request.delegationCid);
+      if (!result.ok) throw new Error("share delegation revocation was rejected");
+    }),
+    revokePolicyRoot: input.revokePolicyRoot ?? (async (request) => {
+      const node = await authenticatedNode();
+      const activeNode = await node.activeNodeIdentity();
+      if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.did) {
+        throw new Error("share Policy/v3 revocation is not bound to the active owner node");
+      }
+      await revokePolicyRootV3({
+        nodeOrigin: activeNode.origin,
+        rootCid: request.rootCid,
+        targetRole: request.targetRole,
+        ownerDid: node.did,
+        issuerDid: node.did,
+        nodeAudience: activeNode.nodeDid,
+        reason: "share revoked",
+        sign: (digest) => node.signSessionBytes(digest),
+      });
+    }),
+  };
   const nativeReader = async (link: string): Promise<{ readonly bytes: Uint8Array; readonly filename: string }> => {
     const { TinyCloudNode } = await import("@tinycloud/node-sdk");
     const token = parseNativeShareUrl(link);

@@ -84,7 +84,7 @@ describe("Share lifecycle and authorization parity", () => {
     expect(calls).toEqual(["bafy-enforcement:direct"]);
   });
 
-  it("classifies a missing addressed revocation authority as unsupported target", async () => {
+  it("requires Policy/v3 root authority for addressed revocation", async () => {
     const addressed = { ...record, targetKind: "recipientDid" as const, recipientMatcher: { kind: "recipientDid" as const, value: "did:key:z6Mkrecipient" } };
     await expect(revokeShare({ record: addressed })).resolves.toEqual({
       state: "unsupported",
@@ -92,13 +92,50 @@ describe("Share lifecycle and authorization parity", () => {
       reason: "node revocation authority is required",
       code: "unsupported-target",
     });
+    await expect(revokeShare({ record: addressed, adapter: { async revokeDelegation() { throw new Error("must not use generic delegation revocation"); } } })).resolves.toEqual({
+      state: "unsupported",
+      target: "recipientDid",
+      reason: "Policy/v3 root revocation authority is required",
+      code: "unsupported-target",
+    });
   });
 
-  it("revokes the owner delegation for ancestor scope", async () => {
-    const calls: string[] = [];
-    const addressed = { ...record, targetKind: "recipientDid" as const, recipientMatcher: { kind: "recipientDid" as const, value: "did:key:z6Mkrecipient" } };
-    await expect(revokeShare({ record: addressed, scope: "ancestor", adapter: { async revokeDelegation(input) { calls.push(`${input.delegationCid}:${input.scope}`); } } })).resolves.toMatchObject({ state: "revoked", delegationCid: "bafy-owner" });
-    expect(calls).toEqual(["bafy-owner:ancestor"]);
+  it("revokes the selected signed Policy/v3 root for active sessions, admission, and delivery", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const addressed = {
+      ...record,
+      targetKind: "recipientDid" as const,
+      recipientMatcher: { kind: "recipientDid" as const, value: "did:key:z6Mkrecipient" },
+      deliveryMaterial: {
+        shareCid: "bafy-share",
+        envelope: { attestedEnforcerBinding: { nodeAudience: "did:key:z6MkPhysicalNode" } },
+      },
+    };
+    await expect(revokeShare({
+      record: addressed,
+      adapter: { async revokePolicyRoot(input) { calls.push(input); } },
+    })).resolves.toMatchObject({ state: "revoked", delegationCid: "bafy-enforcement" });
+    expect(calls).toEqual([{
+      rootCid: "bafy-enforcement",
+      targetRole: "policy-enforcement",
+      ownerDid: "did:key:z6Mkowner",
+      nodeOrigin: "https://node.example",
+      nodeAudience: "did:key:z6MkPhysicalNode",
+    }]);
+
+    calls.length = 0;
+    await expect(revokeShare({
+      record: addressed,
+      scope: "ancestor",
+      adapter: { async revokePolicyRoot(input) { calls.push(input); } },
+    })).resolves.toMatchObject({ state: "revoked", delegationCid: "bafy-owner" });
+    expect(calls).toEqual([{
+      rootCid: "bafy-owner",
+      targetRole: "policy-authority",
+      ownerDid: "did:key:z6Mkowner",
+      nodeOrigin: "https://node.example",
+      nodeAudience: "did:key:z6MkPhysicalNode",
+    }]);
   });
 
   it("persists the revocation receipt state after a successful revoke", async () => {
@@ -114,7 +151,7 @@ describe("Share lifecycle and authorization parity", () => {
       record: (await storage.get("share-1"))!,
       records: storage,
       now: () => new Date("2026-07-29T12:00:00.000Z"),
-      adapter: { async revokeDelegation() {} },
+      adapter: { async revokePolicyRoot() {} },
     });
     expect(result).toMatchObject({ state: "revoked", revokedAt: "2026-07-29T12:00:00.000Z" });
     expect((await storage.get("share-1"))?.revokedAt).toBe("2026-07-29T12:00:00.000Z");
