@@ -1,7 +1,8 @@
 import {
   canonicalize,
   computeCid,
-  parseInlineShareUrl,
+  open,
+  parseSealedInlineShareUrl,
   shareEnvelopeV3Schema,
   verifyEnvelopeV3,
   type ShareEnvelopeV3,
@@ -37,7 +38,7 @@ export function toShareErrorInfo(error: unknown): ShareErrorInfo {
   return { protocol: "tinycloud-share", version: SHARE_RESULT_VERSION, error: { code: "fetch-failed" } };
 }
 
-/** Policy/v3 links are self-contained authorization metadata; no blob fetch adapter exists. */
+/** Policy/v3 links seal their authorization metadata in a fragment; no blob fetch adapter exists. */
 export interface ShareFetchOptions {
   readonly expectedOrigin?: string;
   readonly signal?: AbortSignal;
@@ -105,22 +106,20 @@ function metadataFor(envelope: ShareEnvelopeV3, origin: string): ShareMetadata {
 async function resolvePolicyShare(link: string, options: ShareFetchOptions): Promise<{ readonly envelope: ShareEnvelopeV3; readonly origin: string; readonly cid: string }> {
   options.signal?.throwIfAborted();
   let url: URL;
-  let parsed: ReturnType<typeof parseInlineShareUrl>;
+  let parsed: Awaited<ReturnType<typeof parseSealedInlineShareUrl>>;
   try {
     url = new URL(link);
-    if (url.pathname !== "/viewer" || url.hash !== "" || url.searchParams.size !== 1 || !url.searchParams.has("tc2")) throw new Error("not public Policy/v3");
-    parsed = parseInlineShareUrl(link, { ...(options.expectedOrigin === undefined ? {} : { expectedOrigin: options.expectedOrigin }) });
-    if (parsed.key32 !== undefined) throw new Error("secret inline transport is retired");
+    parsed = await parseSealedInlineShareUrl(link, { ...(options.expectedOrigin === undefined ? {} : { expectedOrigin: options.expectedOrigin }) });
   } catch {
     throw new ShareReceiveError("invalid-link", "share link format is invalid");
   }
   const limit = options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES;
-  if (!Number.isSafeInteger(limit) || limit <= 0 || parsed.ciphertext.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "public policy envelope exceeds the configured byte limit");
-  if (await computeCid(parsed.ciphertext) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "public envelope bytes do not match the link CID");
+  if (!Number.isSafeInteger(limit) || limit <= 0 || parsed.ciphertext.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "sealed policy envelope exceeds the configured byte limit");
+  if (await computeCid(parsed.ciphertext) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "sealed envelope bytes do not match the link CID");
   options.signal?.throwIfAborted();
   let envelope: ShareEnvelopeV3;
   try {
-    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(parsed.ciphertext);
+    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(await open(parsed.ciphertext, parsed.key32));
     const value = JSON.parse(encoded) as unknown;
     if (canonicalize(value) !== encoded) throw new Error("non-canonical envelope");
     envelope = shareEnvelopeV3Schema.parse(value);

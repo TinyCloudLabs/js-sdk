@@ -109,6 +109,8 @@ describe("Share lifecycle and authorization parity", () => {
       deliveryMaterial: {
         shareCid: "bafy-share",
         envelope: { attestedEnforcerBinding: { nodeAudience: "did:key:z6MkPhysicalNode" } },
+        sealedEnvelope: "AQ",
+        envelopeKey: "A".repeat(43),
       },
     };
     await expect(revokeShare({

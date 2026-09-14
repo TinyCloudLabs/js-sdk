@@ -4347,6 +4347,10 @@ export class TinyCloudNode {
   /** Authorize one short-lived v3 delivery against the signed v3 envelope and registered roots. */
   async authorizeShareDeliveryV3(input: {
     readonly envelope: Record<string, CanonicalJson | undefined>;
+    /** Canonical sealed recipient envelope: version || nonce || ciphertext+tag. */
+    readonly sealedEnvelope: string;
+    /** Base64url 32-byte envelope key; it must also be the URL fragment key. */
+    readonly envelopeKey: string;
     readonly shareCid: string;
     readonly resourcePath: string;
     readonly recipientEmail: string;
@@ -4360,6 +4364,8 @@ export class TinyCloudNode {
     if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
     const body = {
       envelope: input.envelope,
+      sealedEnvelope: input.sealedEnvelope,
+      envelopeKey: input.envelopeKey,
       shareCid: input.shareCid,
       recipientEmail: input.recipientEmail,
       shareUrl: input.shareUrl,

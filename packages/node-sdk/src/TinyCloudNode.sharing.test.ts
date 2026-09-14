@@ -3,6 +3,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   CapabilityKeyRegistry,
   CaveatedDelegationUnsupportedError,
+  canonicalizeEncryptionJson,
   type EncodedShareData,
   type ISessionManager,
   type IWasmBindings,
@@ -708,9 +709,9 @@ describe("TinyCloudNode sharing", () => {
   });
 
   test("delivery authorization uses only the embedded Policy/v3 route", async () => {
-    const calls: string[] = [];
-    globalThis.fetch = mock(async (input: string | URL | Request) => {
-      calls.push(String(input));
+    const calls: Array<{ readonly url: string; readonly body: Record<string, unknown> }> = [];
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
     const wasmBindings = {
@@ -723,19 +724,33 @@ describe("TinyCloudNode sharing", () => {
     const common = {
       resourcePath: "shares/test/readme.md",
       recipientEmail: "recipient@example.test",
-      shareUrl: "https://share.tinycloud.xyz/viewer?tc2=opaque",
+      sealedEnvelope: "AQ".repeat(20),
+      envelopeKey: "A".repeat(43),
+      shareUrl: "https://share.tinycloud.xyz/s/inline#v=2&p=eyJjIjoiQVEiLCJjaWQiOiJjaWQiLCJrIjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwidiI6Mn0",
       documentName: "readme.md",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       nodeProof: { kid: "did:web:node.example#key", publicKey: new Uint8Array(32) },
-      deliveryAudience: "https://api.share.tinycloud.xyz",
+      deliveryAudience: "https://witness.credentials.org",
     };
     await expect(node.authorizeShareDeliveryV3({
       ...common,
       envelope: { version: 3 },
       shareCid: "cid",
     })).rejects.toThrow();
-    expect(calls).toEqual(["https://node.example/policy/v3/deliveries/authorize"]);
+    expect(calls.map((call) => call.url)).toEqual(["https://node.example/policy/v3/deliveries/authorize"]);
 
     expect(calls).toHaveLength(1);
+    const { requestBodyDigest, ...unsigned } = calls[0]!.body;
+    expect(unsigned).toMatchObject({
+      sealedEnvelope: common.sealedEnvelope,
+      envelopeKey: common.envelopeKey,
+      shareCid: "cid",
+      shareUrl: common.shareUrl,
+    });
+    const digest = new Uint8Array(await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(canonicalizeEncryptionJson(unsigned)),
+    ));
+    expect(requestBodyDigest).toBe(Buffer.from(digest).toString("base64url"));
   });
 });

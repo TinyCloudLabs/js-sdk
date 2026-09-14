@@ -34,18 +34,18 @@ export class ShareAuthorityError extends Error {
 interface SharePublicConfig {
   readonly shareOrigin: string;
   readonly registryOrigin: string;
-  readonly emailOrigin: string;
+  readonly credentialsOrigin: string;
 }
 
 export async function postAddressedShareDelivery(input: {
-  readonly emailOrigin: string;
+  readonly credentialsOrigin: string;
   readonly receipt: { readonly request: { readonly returnLink: string }; readonly admission: unknown; readonly proof: unknown };
   readonly shareUrl: string;
   readonly fetchFn: typeof globalThis.fetch;
   readonly signal?: AbortSignal;
 }): Promise<Response> {
   if (input.receipt.request.returnLink !== input.shareUrl) throw new Error("credential invitation is not bound to the share link");
-  return input.fetchFn(`${input.emailOrigin}/v1/email`, {
+  return input.fetchFn(`${input.credentialsOrigin}/v1/credential-invitations`, {
     method: "POST",
     credentials: "omit",
     redirect: "error",
@@ -164,7 +164,7 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
 export function createShareAuthorityAdapters(input: {
   readonly origin?: string;
   readonly nodeOrigin?: string;
-  readonly emailOrigin?: string;
+  readonly credentialsOrigin?: string;
   readonly profileName?: () => Promise<string>;
   readonly fetchFn?: typeof globalThis.fetch;
   /** Injected in-process authority for tests or a host-specific deployment. */
@@ -204,7 +204,7 @@ export function createShareAuthorityAdapters(input: {
     return {
       shareOrigin: canonicalOrigin(object.shareOrigin, "origin"),
       registryOrigin: canonicalOrigin(object.registryOrigin, "registry origin"),
-      emailOrigin: canonicalOrigin(input.emailOrigin ?? object.emailOrigin, "email origin"),
+      credentialsOrigin: canonicalOrigin(input.credentialsOrigin ?? object.credentialsOrigin, "credentials origin"),
     };
   })();
   let nodePromise: Promise<Awaited<ReturnType<typeof import("../lib/sdk.js")["ensureAuthenticated"]>>> | undefined;
@@ -324,16 +324,18 @@ export function createShareAuthorityAdapters(input: {
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
     const receipt = await node.authorizeShareDeliveryV3({
       envelope: record.deliveryMaterial.envelope as Parameters<typeof node.authorizeShareDeliveryV3>[0]["envelope"],
+      sealedEnvelope: record.deliveryMaterial.sealedEnvelope,
+      envelopeKey: record.deliveryMaterial.envelopeKey,
       shareCid: record.deliveryMaterial.shareCid,
       resourcePath: record.resource.path,
       recipientEmail: request.recipient,
       shareUrl: record.link,
       documentName: record.filename ?? "share.md",
       expiresAt: new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1000)).toISOString(),
-      deliveryAudience: config.emailOrigin,
+      deliveryAudience: config.credentialsOrigin,
     });
     const response = await postAddressedShareDelivery({
-      emailOrigin: config.emailOrigin,
+      credentialsOrigin: config.credentialsOrigin,
       receipt,
       shareUrl: record.link,
       fetchFn,

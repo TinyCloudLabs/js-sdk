@@ -112,12 +112,13 @@ printf '%s' "$SHARE_URL" | tc share receive - --stdout
 ```
 
 Human publish output is exactly one canonical URL. Bearer shares use
-`/viewer#tc1=<opaque TinyCloud delegation>`; addressed shares use the public,
-fragment-free `/viewer?tc2=<signed Policy/v3 envelope>` form. Inspect never
-prints plaintext or secret-bearing fields. Receive invokes the owner node,
-uses a sanitized single-segment filename, and refuses overwrite unless
-`--force` is explicit. Pre-cutover blob-backed and legacy link forms are not
-accepted.
+`/viewer#tc1=<opaque TinyCloud delegation>`; addressed shares use
+`/s/inline#v=2&p=<sealed Policy/v3 envelope>`. The sealed envelope and its
+AES-GCM key remain in the fragment, never in a query string or HTTP request.
+Inspect never prints plaintext or secret-bearing fields. Receive invokes the
+owner node, uses a sanitized single-segment filename, and refuses overwrite
+unless `--force` is explicit. Pre-cutover blob-backed and plaintext `?tc2`
+link forms are not accepted.
 
 ### Share Publish Options
 
