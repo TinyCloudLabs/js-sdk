@@ -10,7 +10,7 @@ import { theme } from "./output/theme.js";
 import { isInteractive } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
-import { createProductionUploadAuthorizer, createShareAuthorityAdapters } from "./share/adapters.js";
+import { createShareAuthorityAdapters } from "./share/adapters.js";
 
 const program = new Command();
 const shareAuthority = createShareAuthorityAdapters({
@@ -26,16 +26,6 @@ function selectedShareProfile(): string | undefined {
     if (value?.startsWith("--profile=")) return value.slice("--profile=".length);
   }
   return process.env.TC_PROFILE;
-}
-
-function selectedShareHost(): string | undefined {
-  const args = process.argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const value = args[index];
-    if (value === "--host" || value === "-H") return args[index + 1];
-    if (value?.startsWith("--host=")) return value.slice("--host=".length);
-  }
-  return process.env.TC_HOST;
 }
 
 program
@@ -82,21 +72,11 @@ program.hook("preAction", async (thisCommand) => {
 });
 
 configureShareCommandServices({
-  fetchFn: globalThis.fetch,
-  // Node-specific registry upload authorization is retired. The adapter keeps
-  // the explicit contract seam while production callers use inline links.
-  authorizeUpload: createProductionUploadAuthorizer({
-    fetchFn: globalThis.fetch,
-    profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
-    nodeOrigin: async () => selectedShareHost() ?? (await ProfileManager.resolveContext({ profile: selectedShareProfile() })).host,
-  }),
   targetAdapter: shareAuthority.targetAdapter,
-  authorization: shareAuthority.authorization,
-  trustedPolicyAuthority: shareAuthority.policyAuthority,
   records: shareAuthority.records,
   delivery: shareAuthority.delivery,
   revocation: shareAuthority.revocation,
-  legacyReader: shareAuthority.legacyReader,
+  nativeReader: shareAuthority.nativeReader,
 });
 
 const argv = process.argv.slice(2);

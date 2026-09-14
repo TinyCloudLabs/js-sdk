@@ -1,18 +1,14 @@
-export { DEFAULT_MAX_CONTENT_BLOB_BYTES, DEFAULT_MAX_SEALED_BLOB_BYTES, SHARE_RESULT_VERSION, inspectShare, receiveShare, ShareReceiveError, toShareErrorInfo, verifyBearerEnvelope, type ShareReceiveAuthorizationRequired, type ShareErrorCode, type ShareErrorInfo, type ShareFetchOptions, type ShareInspection, type ShareMetadata, type ShareReceiveOutcome, type ShareReceiveResult, type VerifyBearerEnvelopeOptions, type SharePolicyAuthority, type SharePolicyEvidence } from "./receive.js";
-export { DEFAULT_SHARE_LIFETIME_MS, SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, SHARE_SEALED_OVERHEAD, publishShare, redactPublishedShare, SharePublishError, type PublishedShare, type PublishedShareDeliveryMaterial, type PublishedShareMetadata, type SharePublishErrorCode, type SharePublishOptions, type SharePublishTarget, type ShareUpload, type ShareUploadAuthorization, type ShareUploadInput, type ShareUploadResult } from "./publish.js";
+export { DEFAULT_MAX_CONTENT_BLOB_BYTES, DEFAULT_MAX_SEALED_BLOB_BYTES, SHARE_RESULT_VERSION, inspectShare, receiveShare, ShareReceiveError, toShareErrorInfo, type ShareReceiveAuthorizationRequired, type ShareErrorCode, type ShareErrorInfo, type ShareFetchOptions, type ShareInspection, type ShareMetadata, type ShareReceiveOutcome, type ShareReceiveResult } from "./receive.js";
+export { DEFAULT_SHARE_LIFETIME_MS, SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, redactPublishedShare, SharePublishError, type PublishedShare, type PublishedShareDeliveryMaterial, type PublishedShareMetadata, type SharePublishErrorCode, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
 export { parseAddressedEnvelope, type ParsedAddressedEnvelope } from "./addressed.js";
 export { publishAddressedShare } from "./addressed-publish.js";
 export type { AddressedOwnerRootInput, AddressedOwnerRootReceipt, AddressedPolicyRegistrationInput, AddressedPolicyRegistrationReceipt, AddressedPublishAuthority, AddressedSharePublishOptions } from "./addressed-publish.js";
-export { createRegisteredPolicyAuthority } from "./policy-authority.js";
-export type { RegisteredPolicyAuthorityOptions } from "./policy-authority.js";
 export { checkBearerDelegation, resourceUriCovers, requiredResourceUri, type CheckBearerDelegationOptions, type DelegationCheckResult } from "@tinycloud/share-envelope";
 export { canonicalize, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
 export { MemoryShareCache } from "./cache.js";
 export type { ShareCache, ShareCacheEntry, ShareCacheKey, ShareCacheMetadata } from "./cache.js";
 export { createDelegatedShareKey, restoreDelegatedShareKey, createPolicyEnforcementDelegation, canonicalOwnerSharePolicy, computeOwnerShareRegistrationCid, validateOwnerSharePolicyRegistration, validateOwnerSharePolicyRegistrationBytes, OWNER_SHARE_REGISTRATION_DOMAIN, MAX_CONTENT_BYTES } from "./owner-policy.js";
 export type { OwnerDelegationReceipt, OwnerDelegationPermission, CreateOwnerDelegationParams, OwnerShareAction, OwnerShareDecryption, OwnerShareMatcher, OwnerSharePolicyV2, DelegatedShareKey, SignedDelegation, RegisterOwnerSharePolicyParams, OwnerSharePolicyRegistration, OwnerSharePolicyRegistrationReceipt } from "./owner-policy.js";
-export { SHARE_DELIVERY_AUTHORIZATION_DOMAIN, validateShareDeliveryAuthorizationBytes, shareDeliveryTrustedKid } from "./delivery.js";
-export type { ShareDeliveryAuthorizationRequest, ShareDeliveryAuthorization, ShareDeliveryAuthorizationReceipt, ValidateShareDeliveryAuthorizationExpected } from "./delivery.js";
 export { MemorySenderShareRecordStorage, MemorySenderShareKeyStorage, SenderShareStore, historyRecordForPublishedShare } from "./history.js";
 export { MemoryEncryptedShareHistoryStorage, EncryptedSenderShareHistory } from "./history.js";
 export type { SenderShareRecord, SenderShareRecordStorage, SenderShareKeyStorage, SenderShareRevocationScope, EncryptedShareHistoryStorage } from "./history.js";
@@ -21,9 +17,7 @@ export type { ShareAuthorizationMethod, ShareAuthorizationRequired, ShareAuthori
 export { notifyShare, recipientMatchesShareRecord, ShareNotifyError } from "./notify.js";
 export type { ShareNotifyState, ShareNotifyResult, ShareNotifyInput, ShareDeliveryAdapter } from "./notify.js";
 export { listShares, showShare, revokeShare } from "./lifecycle.js";
-export type { ShareHistoryView, ShareRevocationResult, ShareRevocationAdapter } from "./lifecycle.js";
-export { isLegacyShareLink, receiveLegacyShare, migrateShare } from "./legacy.js";
-export type { LegacyShareReader, LegacyMigrationResult } from "./legacy.js";
+export type { ShareHistoryView, SharePolicyRootRevocation, ShareRevocationResult, ShareRevocationAdapter } from "./lifecycle.js";
 export { normalizeShareTarget, publishTargetShare, targetAuthorizationMethod } from "./targets.js";
 export type { ShareTarget, TargetPublishInput, TargetPublishOutcome, TargetPublishAdapter } from "./targets.js";
 export { ShareRecipientClient, createAddressedAuthorization } from "./recipient.js";
@@ -31,3 +25,5 @@ export type { ShareNodeTrust, SharePolicyChallenge, SharePresentationMaterial, S
 export { SHARE_V2_PROTOCOL, createShareV2HolderBindingArtifact } from "./protocol.js";
 export { publishPolicyShare, claimShare, resumeShareAuthorization } from "./policy.js";
 export type { SharePolicyPublishAdapter } from "./policy.js";
+export { NATIVE_SHARE_FRAGMENT_PARAMETER, createNativeShare, openNativeShare, parseNativeShareUrl } from "./native.js";
+export type { NativeSharingService } from "./native.js";

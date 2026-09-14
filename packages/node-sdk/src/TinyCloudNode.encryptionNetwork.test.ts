@@ -147,6 +147,18 @@ test("fetchNodeId reuses the nodeId that sign-in already read from /info", async
   );
 });
 
+test("activeNodeIdentity exposes the registry-resolved origin joined to that Node's cached DID", async () => {
+  const node = makeNode({ cachedNodeIdHost: HOST });
+
+  await withRecordedFetch(
+    () => undefined,
+    async (recorded) => {
+      await expect(node.activeNodeIdentity()).resolves.toEqual({ origin: HOST, nodeDid: NODE_DID });
+      expect(recorded).toEqual([]);
+    },
+  );
+});
+
 test("fetchNodeId falls back to GET /info when sign-in recorded a different host", async () => {
   // Sign-in targeted another node: the cached DID must not be reused here.
   const node = makeNode({ cachedNodeIdHost: "https://other.tinycloud.test" });

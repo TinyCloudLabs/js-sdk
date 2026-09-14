@@ -24,6 +24,42 @@ export interface LocationRecord extends LocationRecordPayload {
   signature: string;
 }
 
+export interface VerifyOwnerNodeBindingOptions {
+  /** Registry that serves the owner's signed location record. */
+  registryUrl: string;
+  /** Owner DID that signed both the location record and share policy. */
+  ownerDid: string;
+  /** Exact node origin carried by the share target. */
+  nodeOrigin: string;
+  /** Exact node DID carried by the node-attested share target. */
+  nodeDid: string;
+  /** Custom fetch implementation. Defaults to globalThis.fetch. */
+  fetch?: typeof fetch;
+  signal?: AbortSignal;
+  /** Total registry + Node identity lookup budget. Defaults to 5 seconds. */
+  timeoutMs?: number;
+}
+
+export interface VerifiedOwnerNodeBinding {
+  readonly record: LocationRecord;
+  readonly nodeOrigin: string;
+  readonly nodeDid: string;
+}
+
+export interface PublishLocationRecordOptions {
+  /** Public registry that stores the signed discovery record. */
+  registryUrl: string;
+  /** DID that owns the active TinyCloud session. */
+  subject: string;
+  /** Exact active TinyCloud node origin to publish. */
+  nodeOrigin: string;
+  /** Signer for `subject`; the registry never receives private key material. */
+  signer: LocationRecordSigner;
+  /** Custom fetch implementation. Defaults to globalThis.fetch. */
+  fetch?: typeof fetch;
+  now?: () => Date;
+}
+
 /**
  * Where a resolved TinyCloud host came from, ordered highest to lowest
  * priority. `local-loopback` and `local-link` are probed + identity-verified
@@ -52,6 +88,8 @@ export const LOCAL_LOOPBACK_PROBE_TIMEOUT_MS = 250;
 export const LOCAL_LINK_PROBE_TIMEOUT_MS = 750;
 /** Hostname suffix identifying a local-link tunnel candidate. */
 export const LOCAL_LINK_HOST_SUFFIX = ".local.tinycloud.link";
+/** Total network budget for an owner registry record plus live Node identity. */
+export const OWNER_NODE_BINDING_TIMEOUT_MS = 5_000;
 
 export interface LocationCandidate {
   source: LocationSource;
@@ -389,20 +427,94 @@ export async function fetchLocationRecord(
   registryUrl: string,
   subject: string,
   fetchFn: typeof fetch = globalThis.fetch,
+  signal?: AbortSignal,
 ): Promise<LocationRecord | null> {
   const url = `${registryUrl.replace(/\/$/, "")}/v1/locations/${encodeURIComponent(subject)}`;
-  const response = await fetchFn(url);
+  const response = await fetchFn(url, {
+    redirect: "error",
+    headers: { accept: "application/json" },
+    ...(signal === undefined ? {} : { signal }),
+  });
   if (response.status === 404) {
     return null;
   }
   if (!response.ok) {
     throw new Error(`location registry returned HTTP ${response.status}`);
   }
-  const body = (await response.json()) as { record?: unknown };
+  const text = await boundedResponseText(response, "location registry", 64 * 1024);
+  let body: { record?: unknown };
+  try {
+    body = JSON.parse(text) as { record?: unknown };
+  } catch {
+    throw new LocationRecordValidationError("registry response is not JSON");
+  }
   if (body.record === undefined) {
     throw new LocationRecordValidationError("registry response missing record");
   }
   return validateLocationRecord(body.record);
+}
+
+/**
+ * Publish the active owner node as a subject-signed discovery record.
+ *
+ * Existing signed multiaddrs are preserved and the exact active origin is
+ * added once. A matching live record is returned without another signature.
+ * This makes registry publication idempotent for application sign-in/share
+ * flows while keeping the registry a cache, never an authority.
+ */
+export async function publishLocationRecord(
+  options: PublishLocationRecordOptions,
+): Promise<LocationRecord> {
+  validateSubject(options.subject);
+  const registryUrl = exactHttpOrigin(options.registryUrl, "registry URL");
+  const nodeOrigin = exactHttpOrigin(options.nodeOrigin, "node origin");
+  const fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const current = await fetchLocationRecord(registryUrl, options.subject, fetchFn);
+  if (current !== null) {
+    if (current.subject !== options.subject || !(await verifyLocationRecord(current))) {
+      throw new LocationRecordValidationError("existing location record signature is invalid");
+    }
+    if (publishedHttpOrigins(current).includes(nodeOrigin)) {
+      return current;
+    }
+  }
+
+  const record = await signLocationRecord({
+    version: 1,
+    subject: options.subject,
+    multiaddrs: [...(current?.multiaddrs ?? []), httpUrlToMultiaddr(nodeOrigin)],
+    updated_at: (options.now?.() ?? new Date()).toISOString(),
+    sequence: (current?.sequence ?? -1) + 1,
+  }, options.signer);
+  const response = await fetchFn(
+    `${registryUrl}/v1/locations/${encodeURIComponent(options.subject)}`,
+    {
+      method: "PUT",
+      redirect: "error",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify(record),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`location registry publish returned HTTP ${response.status}`);
+  }
+  const text = await boundedResponseText(response, "location registry", 64 * 1024);
+  let body: { record?: unknown };
+  try {
+    body = JSON.parse(text) as { record?: unknown };
+  } catch {
+    throw new LocationRecordValidationError("registry publish response is not JSON");
+  }
+  if (body.record === undefined) {
+    throw new LocationRecordValidationError("registry publish response missing record");
+  }
+  const published = validateLocationRecord(body.record);
+  if (canonicalLocationPayload(locationPayloadForRecord(published)) !== canonicalLocationPayload(locationPayloadForRecord(record))
+    || published.signature !== record.signature
+    || !(await verifyLocationRecord(published))) {
+    throw new LocationRecordValidationError("registry publish response does not match the signed record");
+  }
+  return published;
 }
 
 export async function resolveCloudLocation(
@@ -772,6 +884,146 @@ export function multiaddrToHttpUrl(input: string): string {
     );
   }
   return uri;
+}
+
+function exactHttpOrigin(value: string, label: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new LocationRecordValidationError(`${label} must be an absolute URL origin`);
+  }
+  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new LocationRecordValidationError(`${label} must use HTTPS (or loopback HTTP)`);
+  }
+  if (url.username !== "" || url.password !== "" || url.pathname !== "/" || url.search !== "" || url.hash !== "") {
+    throw new LocationRecordValidationError(`${label} must be an origin without credentials, path, query, or fragment`);
+  }
+  return url.origin;
+}
+
+function publishedHttpOrigins(record: LocationRecord): string[] {
+  const origins: string[] = [];
+  for (const address of record.multiaddrs) {
+    try {
+      origins.push(exactHttpOrigin(multiaddrToHttpUrl(address), "published node URL"));
+    } catch {
+      // Location records may also advertise non-HTTP transports. They are not
+      // browser targets, but must not invalidate a valid HTTPS entry beside them.
+    }
+  }
+  return origins;
+}
+
+async function boundedResponseText(
+  response: Response,
+  label: string,
+  maxBytes: number,
+): Promise<string> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maxBytes)) {
+    throw new LocationRecordValidationError(`${label} response is too large`);
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value === undefined) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new LocationRecordValidationError(`${label} response is too large`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
+
+function boundedSignal(parent: AbortSignal | undefined, timeoutMs: number): { readonly signal: AbortSignal; dispose(): void } {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new LocationRecordValidationError("owner-node binding timeout must be positive");
+  }
+  const controller = new AbortController();
+  const abortFromParent = (): void => controller.abort(parent?.reason);
+  if (parent?.aborted) abortFromParent();
+  else parent?.addEventListener("abort", abortFromParent, { once: true });
+  const timer = setTimeout(() => controller.abort(new DOMException("owner-node binding timed out", "TimeoutError")), timeoutMs);
+  return {
+    signal: controller.signal,
+    dispose(): void {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", abortFromParent);
+    },
+  };
+}
+
+/**
+ * Proves that an addressed-share target is the owner's published TinyCloud.
+ *
+ * The share envelope alone can only prove that its keys agree with each
+ * other. This adds the external discovery anchor: the owner must have signed
+ * a registry record naming the exact target origin, and that origin must
+ * answer `/info` with the exact node DID attested in the share.
+ */
+export async function verifyOwnerNodeBinding(
+  options: VerifyOwnerNodeBindingOptions,
+): Promise<VerifiedOwnerNodeBinding> {
+  validateSubject(options.ownerDid);
+  validateSubject(options.nodeDid);
+  const registryUrl = exactHttpOrigin(options.registryUrl, "registry URL");
+  const nodeOrigin = exactHttpOrigin(options.nodeOrigin, "node origin");
+  const fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const lookup = boundedSignal(options.signal, options.timeoutMs ?? OWNER_NODE_BINDING_TIMEOUT_MS);
+  try {
+    const record = await fetchLocationRecord(registryUrl, options.ownerDid, fetchFn, lookup.signal);
+    if (record === null) {
+      throw new LocationRecordValidationError("owner has no published location record");
+    }
+    if (record.subject !== options.ownerDid || !(await verifyLocationRecord(record))) {
+      throw new LocationRecordValidationError("owner location record signature is invalid");
+    }
+    const publishedOrigins = publishedHttpOrigins(record);
+    if (!publishedOrigins.includes(nodeOrigin)) {
+      throw new LocationRecordValidationError("share target is not in the owner's signed location record");
+    }
+
+    const response = await fetchFn(new URL("/info", nodeOrigin), {
+      redirect: "error",
+      headers: { accept: "application/json" },
+      signal: lookup.signal,
+    });
+    if (!response.ok) {
+      throw new LocationRecordValidationError(`target node /info returned HTTP ${response.status}`);
+    }
+    const text = await boundedResponseText(response, "target node /info", 16 * 1024);
+    let body: unknown;
+    try {
+      body = JSON.parse(text) as unknown;
+    } catch {
+      throw new LocationRecordValidationError("target node /info response is not JSON");
+    }
+    if (body === null || typeof body !== "object" || Array.isArray(body)
+      || (body as { nodeId?: unknown }).nodeId !== options.nodeDid) {
+      throw new LocationRecordValidationError("target node identity does not match the share attestation");
+    }
+    return Object.freeze({ record, nodeOrigin, nodeDid: options.nodeDid });
+  } finally {
+    lookup.dispose();
+  }
 }
 
 export function httpUrlToMultiaddr(input: string): string {

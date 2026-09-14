@@ -292,6 +292,8 @@ export interface ShareReceiveResult<T = unknown> {
   delegation: Delegation;
   path: string;
   spaceId: string;
+  /** Owner Node named by the link; that node independently verifies the accompanying delegation. */
+  host: string;
 }
 
 // TinyCloudWeb
@@ -542,6 +544,17 @@ export class TinyCloudWeb {
   get accountSpaceId(): string | undefined { return this._node?.accountSpaceId; }
   get account(): AccountService { return this.node.account; }
   get hosts(): string[] { return this.node.hosts; }
+  /** Registry-resolved owner Node identity used to bind native share targets. */
+  async activeNodeIdentity(): Promise<{ readonly origin: string; readonly nodeDid: string }> {
+    return (await this.ensureNode()).activeNodeIdentity();
+  }
+  /** Publish the active owner Node as a session-signed registry record. */
+  async publishActiveNodeLocation(registryUrl: string, fetchFn?: typeof fetch) {
+    const node = await this.ensureNode();
+    return fetchFn === undefined
+      ? node.publishActiveNodeLocation(registryUrl)
+      : node.publishActiveNodeLocation(registryUrl, fetchFn);
+  }
   get sessionRestoreStatus(): SessionRestoreStatus { return this._sessionRestoreStatus; }
 
   /** Holder-bound OpenCredentials issuance using the active TinyCloud session. */
@@ -893,12 +906,6 @@ export class TinyCloudWeb {
     return node.registerPolicy(params);
   }
 
-  /** @deprecated Policy/v2 delivery transport is retired. Use authorizeShareDeliveryV3. */
-  async authorizeShareDelivery(input: Parameters<TinyCloudNode["authorizeShareDelivery"]>[0]): ReturnType<TinyCloudNode["authorizeShareDelivery"]> {
-    const node = await this.ensureNode();
-    return node.authorizeShareDelivery(input);
-  }
-
   /** Authorize a short-lived, one-use v3 delivery against the signed envelope and roots. */
   async authorizeShareDeliveryV3(input: Parameters<TinyCloudNode["authorizeShareDeliveryV3"]>[0]): ReturnType<TinyCloudNode["authorizeShareDeliveryV3"]> {
     const node = await this.ensureNode();
@@ -1105,12 +1112,13 @@ export class TinyCloudWeb {
   // ===========================================================================
 
   /**
-   * Receive and retrieve data from a v2 share link.
+   * Receive and retrieve data from a native TinyCloud bearer delegation.
    * Static method — no auth required. Uses browser WASM.
    */
   public static async receiveShare<T = unknown>(
     link: string,
-    key?: string
+    key?: string,
+    options?: { readonly binary?: boolean },
   ): Promise<Result<ShareReceiveResult<T>, DelegationError>> {
     await WasmInitializer.ensureInitialized();
 
@@ -1199,7 +1207,7 @@ export class TinyCloudWeb {
       kvService.initialize(context);
 
       const fetchKey = key ?? shareData.path;
-      const kvResult = await kvService.get<T>(fetchKey);
+      const kvResult = await kvService.get<T>(fetchKey, options);
 
       if (kvResult.ok) {
         return {
@@ -1209,6 +1217,7 @@ export class TinyCloudWeb {
             delegation: shareData.delegation,
             path: shareData.path,
             spaceId: shareData.spaceId,
+            host: shareData.host,
           },
         };
       }

@@ -1,13 +1,13 @@
 import { sha256 } from "@noble/hashes/sha256";
 import {
-  canonicalize, computeCid, encodeInlineShareUrl, encodeShareUrl, generateKey,
-  seal, shareEnvelopeV3Schema, toBase64Url, unsignedShareEnvelopeV3Schema,
+  canonicalize, computeCid, encodePublicInlineShareUrl,
+  shareEnvelopeV3Schema, toBase64Url, unsignedShareEnvelopeV3Schema,
   type PolicyCredentialRequirementV1, type ShareAction, type UnifiedContentSource,
   type UnifiedPolicy, type UnifiedPolicyCapability, type UnifiedRoot,
 } from "@tinycloud/share-envelope";
 import {
   SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, redactPublishedShare,
-  uploadShareBlob, type PublishedShare, type PublishedShareDeliveryMaterial, type SharePublishOptions,
+  type PublishedShare, type PublishedShareDeliveryMaterial,
 } from "./publish.js";
 import { normalizeShareTarget, type ShareTarget } from "./targets.js";
 import type { OwnerShareAction, OwnerShareMatcher } from "./owner-policy.js";
@@ -68,16 +68,6 @@ export interface AddressedPolicyRegistrationReceipt {
   };
 }
 
-export interface AddressedPublishedBinding {
-  readonly version: 3;
-  readonly shareCid: string;
-  readonly shareId: string;
-  readonly policyCid: string;
-  readonly policyRootCid: string;
-  readonly enforcementRootCid: string;
-  readonly contentSourceDigestHex: string;
-}
-
 /** App-neutral owner authority. Node SDK owns all Policy/v3 transport. */
 export interface AddressedPublishAuthority {
   readonly ownerDid: string;
@@ -105,18 +95,12 @@ export interface AddressedSharePublishOptions {
   readonly artifact?: "html";
   readonly deliveryEmail?: string;
   readonly expiresAt: Date;
-  readonly inline?: boolean;
-  /** Ephemeral sender-only material required by Node's Policy/v3 delivery authorization. */
+  /** Sender-history material required by Node's Policy/v3 delivery authorization. */
   readonly onDeliveryMaterial?: (input: {
     readonly envelope: Readonly<Record<string, unknown>>;
-    readonly sealedEnvelope: string;
-    readonly envelopeKey: string;
     readonly shareCid: string;
   }) => void;
-  /** App-owned persistence for the public, non-secret envelope binding. */
-  readonly publishBinding?: (input: AddressedPublishedBinding) => Promise<void>;
   readonly authority: AddressedPublishAuthority;
-  readonly upload: Pick<SharePublishOptions, "registryBaseUrl" | "fetchFn" | "authorizeUpload" | "authorizationOrigin" | "credentials" | "allowInsecureRegistry" | "uploadBlob">;
 }
 
 function targetMatcher(target: Exclude<ShareTarget, { readonly kind: "bearer" }>): OwnerShareMatcher {
@@ -217,12 +201,11 @@ function publicationResult(input: {
   readonly enforcementRootCid: string;
   readonly enforcerDid: string;
   readonly expiry: string;
-  readonly retention: string;
   readonly deliveryMaterial: PublishedShareDeliveryMaterial;
 }): PublishedShare {
   const result = {
     protocol: "tinycloud-share", version: SHARE_PUBLISH_RESULT_VERSION, url: input.url,
-    link: { kind: input.options.inline === true ? "inline" as const : "compact" as const, cid: input.envelopeCid },
+    link: { kind: "policy" as const, cid: input.envelopeCid },
     metadata: {
       protocol: "tinycloud-share" as const, version: 1 as const, shareId: input.options.shareId,
       origin: input.options.shareOrigin,
@@ -232,7 +215,6 @@ function publicationResult(input: {
       ownerDelegationCid: input.policyRootCid, enforcementDelegationCid: input.enforcementRootCid,
       ownerDid: input.options.authority.ownerDid, enforcerDid: input.enforcerDid, envelopeCid: input.envelopeCid, shareCid: input.envelopeCid,
     },
-    registryDeleteAfter: input.retention,
   } satisfies PublishedShare;
   Object.defineProperty(result, "toJSON", { enumerable: false, value: () => redactPublishedShare(result) });
   Object.defineProperty(result, "url", { enumerable: false, value: input.url });
@@ -290,34 +272,15 @@ export async function publishAddressedShare(options: AddressedSharePublishOption
   if (envelopeSignature.byteLength !== 64) throw new TypeError("v3 envelope signature must be Ed25519");
   const envelope = { ...unsigned, signature: { signerDid: options.authority.ownerDid, algorithm: "Ed25519" as const, value: toBase64Url(envelopeSignature) } };
   shareEnvelopeV3Schema.parse(envelope);
-  const envelopeKey = generateKey();
-  try {
-    const sealed = await seal(textEncoder.encode(canonicalize(envelope)), envelopeKey);
-    let url: string;
-    // The signed policy/envelope schema uses canonical whole-second RFC 3339,
-    // while the existing registry upload contract requires millisecond form.
-    // Keep those wire formats independent instead of leaking the policy format
-    // into the registry transport.
-    let retention = options.expiresAt.toISOString();
-    if (options.inline === true) url = await encodeInlineShareUrl({ origin: options.shareOrigin, ciphertext: sealed.blob, key32: envelopeKey });
-    else {
-      const uploaded = await uploadShareBlob({ source: new Uint8Array([1]), filename: options.filename, origin: options.shareOrigin, ...options.upload }, { blob: sealed.blob, cid: sealed.cid, deleteAfter: retention, contentLength: sealed.blob.byteLength });
-      retention = uploaded.deleteAfter;
-      url = encodeShareUrl({ origin: options.shareOrigin, ciphertextCid: uploaded.cid, key32: envelopeKey });
-    }
-    await options.publishBinding?.({
-      version: 3,
-      shareCid: sealed.cid,
-      shareId: options.shareId,
-      policyCid: created.policyCid,
-      policyRootCid: policyRoot.cid,
-      enforcementRootCid: enforcementRoot.cid,
-      contentSourceDigestHex,
-    });
-    const deliveryMaterial = { envelope, sealedEnvelope: toBase64Url(sealed.blob), envelopeKey: toBase64Url(envelopeKey), shareCid: sealed.cid };
-    options.onDeliveryMaterial?.(deliveryMaterial);
-    return publicationResult({ options, url, envelopeCid: sealed.cid, matcher, policyCid: created.policyCid, policyRootCid: policyRoot.cid, enforcementRootCid: enforcementRoot.cid, enforcerDid: registration.attestedEnforcerBinding.enforcerDid, expiry, retention, deliveryMaterial });
-  } finally {
-    envelopeKey.fill(0);
-  }
+  const envelopeBytes = textEncoder.encode(canonicalize(envelope));
+  const envelopeCid = await computeCid(envelopeBytes);
+  const url = await encodePublicInlineShareUrl({ origin: options.shareOrigin, plaintext: envelopeBytes });
+  const deliveryMaterial = { envelope, shareCid: envelopeCid };
+  options.onDeliveryMaterial?.(deliveryMaterial);
+  return publicationResult({
+    options, url, envelopeCid, matcher, policyCid: created.policyCid,
+    policyRootCid: policyRoot.cid, enforcementRootCid: enforcementRoot.cid,
+    enforcerDid: registration.attestedEnforcerBinding.enforcerDid,
+    expiry, deliveryMaterial,
+  });
 }

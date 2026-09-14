@@ -105,10 +105,12 @@ export {
 export {
   encodeShareUrl,
   encodeInlineShareUrl,
+  encodePublicInlineShareUrl,
   parseCompactOrInlineShareUrl,
   parseInlineShareUrl,
   parseShareUrl,
   type InlineShareUrlParts,
+  type PublicInlineShareUrlParts,
   type ParseShareUrlOptions,
   type ParsedInlineShareUrl,
   type ShareUrlParts,

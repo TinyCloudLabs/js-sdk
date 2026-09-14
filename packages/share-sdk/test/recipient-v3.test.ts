@@ -16,7 +16,7 @@ async function aesEncrypt(key: Uint8Array, plaintext: Uint8Array): Promise<Uint8
 }
 
 describe("v3 recipient content", () => {
-  it("verifies the node response, decrypts locally, and keeps edits encrypted", async () => {
+  it("requires the exact signed owner-KV ciphertext bytes before key unwrap", async () => {
     const recipientKey = new Uint8Array(32).fill(9);
     const nodeKey = new Uint8Array(32).fill(8);
     const recipientDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(recipientKey));
@@ -29,7 +29,9 @@ describe("v3 recipient content", () => {
     const symmetricKey = new Uint8Array(32).fill(41);
     const ciphertext = await aesEncrypt(symmetricKey, new TextEncoder().encode("hello"));
     const stored = new TextEncoder().encode(canonicalize({ v: 1, networkId, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext: base64(ciphertext), metadata: { contentType: "text/plain" } }));
+    let decryptInvocations = 0;
     const fetchFn: typeof fetch = async (_input, init) => {
+      decryptInvocations += 1;
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       const encodedReceiverPublicKey = String(body.receiverPublicKey);
       const receiverPublicKey = Uint8Array.from(Buffer.from(encodedReceiverPublicKey, "base64"));
@@ -43,7 +45,17 @@ describe("v3 recipient content", () => {
       const unsigned = { type: "tinycloud.encryption.decrypt-result/v1", targetNode: nodeDid, networkId, invocationCid: invocation.cid, encryptedSymmetricKeyHash, receiverPublicKeyHash: body.receiverPublicKeyHash, wrappedKey: base64(Uint8Array.from([...ephemeralPublic, 1, ...wrapped])), alg: "x25519-aes256gcm/v1", keyVersion: 1, requestHash: hex(sha256(new TextEncoder().encode(`${invocation.cid}${bodyHash}`))), nodeId: nodeDid };
       return Response.json({ ...unsigned, nodeSignature: base64(ed25519.sign(new TextEncoder().encode(canonicalize(unsigned)), nodeKey)) });
     };
-    const envelope = { version: 3, target: { nodeAudience: nodeDid }, encryptionNetwork: networkId, contentSource: { keyVersion: 1, encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash }, metadata: { mediaType: "text/plain" } } as any;
+    const envelope = {
+      version: 3,
+      target: { nodeAudience: nodeDid },
+      encryptionNetwork: networkId,
+      contentSource: {
+        keyVersion: 1,
+        encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash,
+        initialCiphertextDigestHex: hex(sha256(stored)),
+      },
+      metadata: { mediaType: "text/plain" },
+    } as any;
     const client = new ShareRecipientClient({ nodeOrigin: "https://node.example.com", envelope, holderDid: recipientDid, trustedNode: {} as any, fetchFn, buildPresentation: async () => ({ holderDid: recipientDid, credential: "fixture", holderBinding: {}, proof: {} }) });
     Object.assign(client as any, { session: { sessionId: session.cid }, v3Authorization: session.authorization, v3NodeAudience: nodeDid, nativeSigner: async (bytes: Uint8Array) => ed25519.sign(bytes, recipientKey) });
 
@@ -51,5 +63,14 @@ describe("v3 recipient content", () => {
     expect(new TextDecoder().decode(opened.bytes)).toBe("hello");
     expect(opened.mediaType).toBe("text/plain");
     expect(new TextDecoder().decode(await client.encryptV3Content(new TextEncoder().encode("edited"), "text/plain"))).not.toContain("edited");
+    expect(decryptInvocations).toBe(1);
+
+    // Whitespace does not change the JSON envelope but does change the exact
+    // bytes returned by owner KV. It must be rejected before `/invoke`.
+    const substituted = new Uint8Array(stored.length + 1);
+    substituted[0] = 0x20;
+    substituted.set(stored, 1);
+    await expect(client.decryptV3Content(substituted)).rejects.toThrow("owner KV ciphertext digest mismatch");
+    expect(decryptInvocations).toBe(1);
   });
 });

@@ -1,56 +1,72 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { describe, expect, it, mock } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { ProfileManager } from "../config/profiles.js";
-import { NodeWasmBindings } from "../../../node-sdk/src/NodeWasmBindings.js";
-import { PrivateKeySigner } from "../../../node-sdk/src/signers/PrivateKeySigner.js";
-import { createProductionUploadAuthorizer, createShareAuthorityAdapters, postAddressedShareDelivery } from "./adapters.js";
 
-const upload = {
-  blob: new Uint8Array([1, 2, 3]),
-  cid: "bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  deleteAfter: "2030-01-01T00:00:00.000Z",
-  contentLength: 3,
+const transportDid = "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX";
+const credentialHolderDid = "did:key:z6Mko9hTggMwjSTEaJaPUfE6tqcy2xvU6BnNq3e3o8qVBiyH";
+const nodeDid = "did:key:z6MkvRXNYcE7MMduynWTgeKbDaT1iijDSC8pZqXZc8rHPrf2";
+const ownerRootInputs: Array<{ readonly ownerDid: string; readonly role: string }> = [];
+const sessionSignatures: Uint8Array[] = [];
+
+const node = {
+  did: transportDid,
+  credentialHolderDid,
+  spaceId: "tinycloud:test-space",
+  activeNodeIdentity: async () => ({ origin: "https://node.example", nodeDid }),
+  getEncryptionNetworkIdForSpace: () => `urn:tinycloud:encryption:${credentialHolderDid}:default`,
+  encryption: {
+    encryptToNetwork: async (networkId: string) => ({
+      ok: true as const,
+      data: {
+        v: 1,
+        networkId,
+        alg: "x25519-aes256gcm/v1",
+        keyVersion: 1,
+        encryptedSymmetricKey: "network-wrapped-key",
+        encryptedSymmetricKeyHash: "1".repeat(64),
+        ciphertext: "AQ",
+        metadata: { contentType: "text/plain" },
+      },
+    }),
+  },
+  kvForSpace: () => ({ put: async () => ({ ok: true as const }) }),
+  createUnifiedOwnerRoot: async (input: { readonly ownerDid: string; readonly role: "policy-authority" | "policy-enforcement" }) => {
+    // Match TinyCloudNode.createUnifiedOwnerRoot's holder-identity guard. A
+    // transport DID here must fail, so this real adapter path catches it.
+    if (input.ownerDid !== credentialHolderDid) throw new Error("unified owner root signer does not match owner DID");
+    ownerRootInputs.push(input);
+    return {
+      cid: input.role === "policy-authority" ? "bafy-policy-root" : "bafy-enforcement-root",
+      delegationHeader: { Authorization: input.role === "policy-authority" ? "a.b.c" : "d.e.f" },
+    };
+  },
+  signSessionBytes: async (bytes: Uint8Array) => {
+    sessionSignatures.push(bytes.slice());
+    return new Uint8Array(64).fill(7);
+  },
+  registerPolicy: async (input: { readonly policyCid: string; readonly policyRoot: { readonly cid: string }; readonly enforcementRoot: { readonly cid: string } }) => ({
+    policyCid: input.policyCid,
+    policyRootCid: input.policyRoot.cid,
+    enforcementRootCid: input.enforcementRoot.cid,
+    attestedEnforcerBinding: {
+      schema: "xyz.tinycloud.policy/attested-enforcer/v2" as const,
+      enforcerDid: nodeDid,
+      nodeAudience: nodeDid,
+      attestationBindingDigestHex: "2".repeat(64),
+      issuedAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      signature: { suite: "Ed25519" as const, signerDid: nodeDid, value: "AQ" },
+    },
+  }),
 };
 
-const profile = {
-  name: "openkey-profile",
-  host: "https://node.example",
-  chainId: 1,
-  spaceName: "default",
-  did: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
-  sessionDid: "did:key:session",
-  createdAt: "2026-01-01T00:00:00.000Z",
-  authMethod: "openkey" as const,
-};
-const session = await (async () => {
-  const wasm = new NodeWasmBindings();
-  const signer = new PrivateKeySigner("7".repeat(64));
-  const address = await signer.getAddress();
-  const chainId = await signer.getChainId();
-  const manager = wasm.createSessionManager();
-  const jwk = JSON.parse(manager.jwk("default")!);
-  profile.sessionDid = manager.getDID("default");
-  const spaceId = wasm.makeSpaceId(address, chainId, "default");
-  const prepared = wasm.prepareSession({ abilities: { kv: { "": ["tinycloud.kv/get"] } }, address, chainId, domain: "localhost", issuedAt: new Date().toISOString(), expirationTime: new Date(Date.now() + 60_000).toISOString(), spaceId, jwk });
-  const complete = wasm.completeSessionSetup({ ...prepared, signature: await signer.signMessage(prepared.siwe) });
-  return { ...complete, jwk, verificationMethod: profile.sessionDid };
-})();
-const restore: Array<{ mockRestore: () => void }> = [];
+mock.module("../config/profiles.js", () => ({
+  ProfileManager: { resolveContext: async () => ({ profile: "test", host: "https://node.example" }) },
+}));
+mock.module("../lib/sdk.js", () => ({ ensureAuthenticated: async () => node }));
 
-beforeEach(() => {
-  restore.push(spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    if (String(input).endsWith("/delegate")) {
-      return new Response(JSON.stringify({ activated: [] }), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    throw new Error("unexpected test fetch");
-  }));
-});
+const { createShareAuthorityAdapters, postAddressedShareDelivery } = await import("./adapters.js");
 
-afterEach(() => {
-  while (restore.length > 0) restore.pop()?.mockRestore();
-});
-
-describe("Share upload authority adapter", () => {
+describe("TinyCloud share authority adapter", () => {
   it("routes addressed delivery through Policy/v3 with no retired Node delivery fallback", async () => {
     const source = await readFile(new URL("./adapters.ts", import.meta.url), "utf8");
     expect(source).toContain("node.authorizeShareDeliveryV3({");
@@ -58,17 +74,92 @@ describe("Share upload authority adapter", () => {
     expect(source).not.toContain("/share/v2/deliveries/authorize");
   });
 
-  it("posts the exact signed delivery receipt only to OpenCredentials", async () => {
-    const credentialsOrigin = "https://credentials.example";
+  it("uses the existing signed Policy/v3 root revocation primitive for addressed shares", async () => {
+    const source = await readFile(new URL("./adapters.ts", import.meta.url), "utf8");
+    expect(source).toContain("revokePolicyRootV3({");
+    expect(source).toContain("revokePolicyRoot: input.revokePolicyRoot");
+    expect(source).toContain('reason: "share revoked"');
+    expect(source).not.toContain("/share/v2/revoke");
+  });
+
+  it("uses the credential holder for owner roots and the signed Policy/v3 revoke payload", async () => {
+    ownerRootInputs.length = 0;
+    sessionSignatures.length = 0;
+    const originalFetch = globalThis.fetch;
+    const revocations: Array<{ readonly url: string; readonly body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (input, init) => {
+      revocations.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      return Response.json({ ok: true });
+    }) as typeof globalThis.fetch;
+
+    try {
+      const { targetAdapter, revocation } = createShareAuthorityAdapters({
+        origin: "https://share.example",
+        profileName: async () => "test",
+        fetchFn: (async (input) => {
+          expect(String(input)).toBe("https://share.example/.well-known/tinycloud-share/config.json");
+          return Response.json({
+            version: "tinycloud.share/config-v2",
+            shareOrigin: "https://share.example",
+            registryOrigin: "https://registry.example",
+            emailOrigin: "https://email.example",
+          });
+        }) as typeof globalThis.fetch,
+      });
+
+      await targetAdapter.publish({
+        source: new TextEncoder().encode("holder-bound share"),
+        filename: "readme.txt",
+        target: { kind: "email", address: "alice@example.com" },
+        expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+        origin: "https://share.example",
+        mediaType: "text/plain",
+      });
+
+      expect(ownerRootInputs.map(({ ownerDid, role }) => ({ ownerDid, role }))).toEqual([
+        { ownerDid: credentialHolderDid, role: "policy-authority" },
+        { ownerDid: credentialHolderDid, role: "policy-enforcement" },
+      ]);
+
+      await revocation.revokePolicyRoot!({
+        rootCid: "bafy-enforcement-root",
+        targetRole: "policy-enforcement",
+        ownerDid: credentialHolderDid,
+        nodeOrigin: "https://node.example",
+        nodeAudience: nodeDid,
+      });
+
+      expect(revocations).toHaveLength(1);
+      expect(revocations[0]?.url).toBe("https://node.example/revoke");
+      expect(revocations[0]?.body).toMatchObject({
+        revocation: {
+          schema: "xyz.tinycloud.policy/root-revocation/v1",
+          targetCid: "bafy-enforcement-root",
+          targetRole: "policy-enforcement",
+          ownerDid: credentialHolderDid,
+          issuerDid: credentialHolderDid,
+          nodeAudience: nodeDid,
+          reason: "share revoked",
+          signature: { suite: "Ed25519", signerDid: credentialHolderDid },
+        },
+      });
+      expect(sessionSignatures).toHaveLength(3);
+      expect(sessionSignatures.at(-1)).toHaveLength(32);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("posts the exact signed delivery receipt only to api.share", async () => {
     const emailOrigin = "https://email.example";
-    const request = { returnLink: "share-url-with-private-fragment" };
+    const request = { returnLink: "https://share.example/viewer?tc2=public-policy" };
     const admission = { schema: "xyz.tinycloud.policy/delivery-admission/v0" };
     const proof = { alg: "EdDSA", kid: "did:web:node.example#key", signature: "test-signature" };
-    const shareUrl = "share-url-with-private-fragment";
+    const shareUrl = request.returnLink;
     const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
 
     const response = await postAddressedShareDelivery({
-      credentialsOrigin,
+      emailOrigin,
       receipt: { request, admission, proof },
       shareUrl,
       fetchFn: (async (input, init) => {
@@ -79,8 +170,7 @@ describe("Share upload authority adapter", () => {
 
     expect(response.status).toBe(202);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe(`${credentialsOrigin}/v1/credential-invitations`);
-    expect(calls[0]?.url).not.toBe(`${emailOrigin}/v1/credential-invitations`);
+    expect(calls[0]?.url).toBe(`${emailOrigin}/v1/email`);
     expect(calls[0]?.init).toMatchObject({
       method: "POST",
       credentials: "omit",
@@ -94,59 +184,4 @@ describe("Share upload authority adapter", () => {
     expect(Object.keys(body).sort()).toEqual(["admission", "proof", "request"]);
   });
 
-  it("uses an explicit noninteractive acquisition hook without reading or persisting a private JWK", async () => {
-    let received: string | undefined;
-    const authorize = createProductionUploadAuthorizer({
-      profileName: async () => "openkey-profile",
-      testOnly: true,
-      acquireUploadAuthorization: async (input) => {
-        received = input.profileName;
-        expect(input.upload.cid).toBe(upload.cid);
-        return { cookie: "share_session_opaque" };
-      },
-    });
-
-    await expect(authorize(upload)).resolves.toEqual({ cookie: "share_session_opaque" });
-    expect(received).toBe("openkey-profile");
-  });
-
-  it("accepts an already host-issued session as the resumable authority", async () => {
-    const authorize = createProductionUploadAuthorizer({
-      profileName: async () => "openkey-profile",
-      testOnly: true,
-      sessionAuthorization: async () => ({ cookie: "share_session_opaque" }),
-    });
-    await expect(authorize(upload)).resolves.toEqual({ cookie: "share_session_opaque" });
-  });
-
-  it("retires production Node upload authorization without a network fallback", async () => {
-    const requests: string[] = [];
-    const authorize = createProductionUploadAuthorizer({
-      origin: "https://share.tinycloud.xyz",
-      profileName: async () => profile.name,
-      fetchFn: (async (input) => { requests.push(String(input)); throw new Error("unexpected network request"); }) as typeof globalThis.fetch,
-    });
-    await expect(authorize(upload)).rejects.toThrow();
-    expect(requests).toEqual([]);
-  });
-
-  it("uses the persisted recipient DID and rejects a wrong-DID envelope before the Node ceremony", async () => {
-    restore.push(spyOn(ProfileManager, "getProfile").mockResolvedValue(profile));
-    restore.push(spyOn(ProfileManager, "getSession").mockResolvedValue(session));
-    const calls: string[] = [];
-    const services = createShareAuthorityAdapters({
-      profileName: async () => profile.name,
-      fetchFn: (async (input: unknown) => {
-        calls.push(String(input));
-        return new Response(JSON.stringify({
-          shareOrigin: "https://share.tinycloud.xyz", registryOrigin: "https://registry.tinycloud.xyz", nodeOrigin: profile.host, emailOrigin: "https://email.tinycloud.xyz", credentialsOrigin: "https://credentials.tinycloud.xyz", nodeAudience: "did:web:node.example", enforcerDid: "did:key:enforcer", nodeInvitationKid: "did:web:node.example#invitation", nodeInvitationPublicKey: "A".repeat(43),
-        }), { status: 200 });
-      }) as unknown as typeof globalThis.fetch,
-    });
-    const envelope = {
-      version: 2, shareId: "share-id", recipientMatcher: { kind: "recipientDid", value: "did:key:other" }, actions: ["read"], resource: { kind: "exact", path: "docs/plan.md" }, target: { origin: profile.host, nodeAudience: "did:web:node.example", spaceId: "space" }, delegationCid: "bafy-delegation", authorityMaterialHandle: "handle", authorityMaterialDigest: "A".repeat(43), contentSource: { kind: "kv", space: "space", path: "docs/plan.md", action: "tinycloud.kv/get" }, contentSourceDigest: "B".repeat(43), authorizationTarget: { kind: "recipientDid", did: "did:key:other" }, display: {}, expiry: "2030-01-01T00:00:00.000Z", encrypted: true, metadata: { byteLength: 1, mediaType: "text/markdown" }, signature: { signerDid: "did:key:owner", algorithm: "Ed25519", value: "" },
-    } as any;
-    await expect(services.authorization.begin({ envelope, method: "openkey-device" })).resolves.toEqual({ state: "denied", reason: "rejected" });
-    expect(calls).toHaveLength(1);
-  });
 });

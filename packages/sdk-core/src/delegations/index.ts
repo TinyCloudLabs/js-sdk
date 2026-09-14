@@ -168,12 +168,6 @@ export type {
 } from "./owner-policy";
 
 export {
-  SHARE_DELIVERY_AUTHORIZATION_DOMAIN,
-  validateShareDeliveryAuthorizationBytes,
-  shareDeliveryTrustedKid,
-} from "./share-delivery";
-
-export {
   CREDENTIAL_INVITATION_REQUEST_DOMAIN,
   DELIVERY_ADMISSION_DOMAIN,
   validateShareDeliveryAuthorizationV3Bytes,
@@ -184,13 +178,6 @@ export type {
   DeliveryAdmission,
   ShareDeliveryAuthorizationV3Receipt,
 } from "./share-delivery-v3";
-export type {
-  ShareDeliveryAuthorizationRequest,
-  ShareDeliveryAuthorization,
-  ShareDeliveryAuthorizationReceipt,
-  ValidateShareDeliveryAuthorizationExpected,
-} from "./share-delivery";
-
 export {
   MemorySenderShareRecordStorage,
   MemorySenderShareKeyStorage,
@@ -210,9 +197,6 @@ export {
   publishPolicyShare,
   claimShare,
   resumeShareAuthorization,
-  isLegacyShareLink,
-  receiveLegacyShare,
-  migrateShare,
   MemoryEncryptedShareHistoryStorage,
   EncryptedSenderShareHistory,
 } from "@tinycloud/share-sdk";
@@ -234,8 +218,6 @@ export type {
   TargetPublishOutcome,
   TargetPublishAdapter,
   SharePolicyPublishAdapter,
-  LegacyShareReader,
-  LegacyMigrationResult,
   EncryptedShareHistoryStorage,
 } from "@tinycloud/share-sdk";
 export type {
@@ -289,7 +271,6 @@ export {
   receiveShare,
   ShareReceiveError,
   toShareErrorInfo,
-  verifyBearerEnvelope,
 } from "@tinycloud/share-sdk";
 export type {
   ShareErrorCode,
@@ -298,7 +279,6 @@ export type {
   ShareInspection,
   ShareMetadata,
   ShareReceiveResult,
-  VerifyBearerEnvelopeOptions,
 } from "@tinycloud/share-sdk";
 export {
   ShareActionSchema,

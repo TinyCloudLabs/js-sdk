@@ -1,7 +1,6 @@
 import type { ShareAuthorizationRequired, ShareAuthorizationMethod } from "./authorization.js";
 import { authorizationMethodForTarget } from "./authorization.js";
-import type { AddressedSharePublishOptions } from "./addressed-publish.js";
-import { publishShare, SharePublishError, SHARE_CONTENT_LIMIT, type PublishedShare, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
+import { DEFAULT_SHARE_LIFETIME_MS, SharePublishError, SHARE_CONTENT_LIMIT, type PublishedShare, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
 import { base58btc } from "multiformats/bases/base58";
 
 export type ShareTarget = SharePublishTarget;
@@ -11,14 +10,12 @@ export interface TargetPublishInput {
   readonly filename: string;
   /** Additional files for a prefix resource; source remains the first file for compatibility. */
   readonly files?: readonly { readonly bytes: Uint8Array; readonly filename: string; readonly mediaType?: string }[];
-  readonly target: Exclude<ShareTarget, { readonly kind: "bearer" }>;
+  readonly target: ShareTarget;
   readonly expiresAt: Date;
   readonly origin: string;
   readonly mediaType?: string;
   readonly resourceKind?: "exact" | "prefix";
   readonly actions?: readonly ("read" | "list" | "edit")[];
-  readonly inline?: boolean;
-  readonly upload?: AddressedSharePublishOptions["upload"];
   readonly notify?: boolean;
 }
 
@@ -78,7 +75,7 @@ export function targetAuthorizationMethod(target: ShareTarget): ShareAuthorizati
   return authorizationMethodForTarget(target);
 }
 
-/** Publish bearer shares locally, and route addressed shares to an authority adapter. */
+/** Route every share through the authenticated TinyCloud authority adapter. */
 export async function publishTargetShare(input: SharePublishOptions & {
   readonly target: ShareTarget;
   readonly notify?: boolean;
@@ -88,8 +85,8 @@ export async function publishTargetShare(input: SharePublishOptions & {
   readonly actions?: readonly ("read" | "list" | "edit")[];
 }): Promise<TargetPublishOutcome> {
   const target = normalizeShareTarget(input.target);
-  if (target.kind === "bearer") return publishShare(input);
   if (input.targetAdapter === undefined) {
+    if (target.kind === "bearer") throw new SharePublishError("authority-required", "native bearer publication requires an authenticated TinyCloud node");
     return {
       state: "authorization-required",
       method: targetAuthorizationMethod(target)!,
@@ -99,9 +96,9 @@ export async function publishTargetShare(input: SharePublishOptions & {
     const chunks: Uint8Array[] = [];
     let size = 0;
     for await (const chunk of input.source as AsyncIterable<Uint8Array>) {
-      if (!(chunk instanceof Uint8Array)) throw new TypeError("addressed publication source yielded invalid bytes");
+      if (!(chunk instanceof Uint8Array)) throw new TypeError("share publication source yielded invalid bytes");
       size += chunk.byteLength;
-      if (size > (input.maxBytes ?? 100 * 1024 * 1024)) throw new TypeError("addressed publication exceeds maxBytes");
+      if (size > (input.maxBytes ?? SHARE_CONTENT_LIMIT)) throw new SharePublishError("max-bytes-exceeded", "share publication exceeds maxBytes");
       chunks.push(chunk.slice());
     }
     const bytes = new Uint8Array(size);
@@ -109,6 +106,14 @@ export async function publishTargetShare(input: SharePublishOptions & {
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
     return bytes;
   })();
+  if (source.byteLength === 0) throw new SharePublishError("invalid-argument", "share content is empty");
+  if (!input.filename || input.filename === "." || input.filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(input.filename)) {
+    throw new SharePublishError("invalid-argument", "filename must be one safe path segment");
+  }
+  if (target.kind === "bearer" && input.allowBinary !== true) {
+    try { new TextDecoder("utf-8", { fatal: true }).decode(source); }
+    catch { throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8"); }
+  }
   const files = input.files === undefined || input.files.length === 0
     ? [{ bytes: source }]
     : input.files;
@@ -117,9 +122,12 @@ export async function publishTargetShare(input: SharePublishOptions & {
   for (const file of files) {
     totalBytes += file.bytes.byteLength;
     if (!Number.isSafeInteger(totalBytes) || totalBytes > limit) {
-      throw new SharePublishError("max-bytes-exceeded", "addressed publication exceeds the combined byte limit");
+      throw new SharePublishError("max-bytes-exceeded", "share publication exceeds the combined byte limit");
     }
   }
+  const nowMs = input.now?.() ?? Date.now();
+  const expiresAt = input.expiresAt ?? new Date(nowMs + DEFAULT_SHARE_LIFETIME_MS);
+  if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= nowMs) throw new SharePublishError("invalid-argument", "expiresAt must be a valid future time");
   return input.targetAdapter.publish({
     source,
     filename: input.filename,
@@ -128,18 +136,8 @@ export async function publishTargetShare(input: SharePublishOptions & {
     ...(input.resourceKind === undefined ? {} : { resourceKind: input.resourceKind }),
     ...(input.actions === undefined ? {} : { actions: input.actions }),
     target,
-    expiresAt: input.expiresAt ?? new Date((input.now?.() ?? Date.now()) + 7 * 24 * 60 * 60 * 1000),
+    expiresAt,
     origin: input.origin,
-    ...(input.inline === undefined ? {} : { inline: input.inline }),
-    upload: {
-      ...(input.registryBaseUrl === undefined ? {} : { registryBaseUrl: input.registryBaseUrl }),
-      ...(input.fetchFn === undefined ? {} : { fetchFn: input.fetchFn }),
-      ...(input.authorizeUpload === undefined ? {} : { authorizeUpload: input.authorizeUpload }),
-      ...(input.authorizationOrigin === undefined ? {} : { authorizationOrigin: input.authorizationOrigin }),
-      ...(input.credentials === undefined ? {} : { credentials: input.credentials }),
-      ...(input.allowInsecureRegistry === undefined ? {} : { allowInsecureRegistry: input.allowInsecureRegistry }),
-      ...(input.uploadBlob === undefined ? {} : { uploadBlob: input.uploadBlob }),
-    },
     ...(input.notify === undefined ? {} : { notify: input.notify }),
   });
 }

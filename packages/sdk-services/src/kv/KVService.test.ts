@@ -96,6 +96,19 @@ function createContext(
 }
 
 describe("KVService batch reads", () => {
+  test("uses an exact delegated prefix unchanged for an empty relative key", async () => {
+    const invocations: Array<{ service: string; path: string; action: string }> = [];
+    const service = new KVService({ prefix: "xyz.tinycloud.share/shares/exact.bin" });
+    service.initialize(createContext(async () => response(true, 200, "bytes"), invocations));
+
+    await expect(service.get("", { binary: true })).resolves.toMatchObject({ ok: true });
+    expect(invocations).toEqual([{
+      service: "kv",
+      path: "xyz.tinycloud.share/shares/exact.bin",
+      action: "tinycloud.kv/get",
+    }]);
+  });
+
   test("reduces three gets from three signatures and requests to one", async () => {
     const individualInvocations: Array<{
       service: string;

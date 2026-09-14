@@ -319,9 +319,9 @@ function capSpecFromAuthMeta(resource, action) {
   if (nextSlash <= 0) return void 0;
   const serviceShort = rest.slice(0, nextSlash);
   const path = rest.slice(nextSlash + 1);
-  const actionName2 = action.includes("/") ? action.slice(action.indexOf("/") + 1) : action;
+  const actionName = action.includes("/") ? action.slice(action.indexOf("/") + 1) : action;
   const spaceName = spaceUri.startsWith("tinycloud:") ? spaceUri.slice(spaceUri.lastIndexOf(":") + 1) : spaceUri;
-  return `tinycloud.${serviceShort}:${spaceName}:${path}:${actionName2}`;
+  return `tinycloud.${serviceShort}:${spaceName}:${path}:${actionName}`;
 }
 function buildNetworkHint() {
   const readHost = (name2) => {
@@ -13307,7 +13307,7 @@ var init_dist2 = __esm({
        */
       getFullPath(key, prefixOverride) {
         const prefix = prefixOverride ?? this._config.prefix ?? "";
-        return prefix ? `${prefix}/${key}` : key;
+        return prefix ? key === "" ? prefix : `${prefix}/${key}` : key;
       }
       /**
        * Get the host URL.
@@ -17609,17 +17609,6 @@ function fromBase64Url(text) {
 function utf8Bytes(text) {
   return new TextEncoder().encode(text);
 }
-function didKeyFromEd25519PublicKey(publicKey) {
-  if (publicKey.length !== PUBLIC_KEY_LENGTH) {
-    throw new TypeError(
-      `ed25519 public key must be ${PUBLIC_KEY_LENGTH} bytes, got ${publicKey.length}`
-    );
-  }
-  const prefixed = new Uint8Array(ED25519_MULTICODEC_PREFIX.length + publicKey.length);
-  prefixed.set(ED25519_MULTICODEC_PREFIX, 0);
-  prefixed.set(publicKey, ED25519_MULTICODEC_PREFIX.length);
-  return `did:key:${base58btc.encode(prefixed)}`;
-}
 function ed25519PublicKeyFromDidKey(did) {
   if (!did.startsWith("did:key:")) {
     throw new TypeError(`not a did:key: ${did}`);
@@ -17630,15 +17619,6 @@ function ed25519PublicKeyFromDidKey(did) {
     throw new TypeError("did:key does not encode an ed25519 public key");
   }
   return prefixed.slice(ED25519_MULTICODEC_PREFIX.length);
-}
-function getBearerSessionJwk(envelope) {
-  const target = envelope.authorizationTarget;
-  if (target.kind !== "bearerKey") {
-    throw new TypeError(
-      `envelope authorizationTarget is "${target.kind}", not "bearerKey"`
-    );
-  }
-  return target.sessionJwk;
 }
 function decodeBase64UrlOrNull(value) {
   try {
@@ -17697,7 +17677,7 @@ function validateV3Invariants(value, ctx) {
   if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
   if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
@@ -17711,273 +17691,6 @@ function validateV3Invariants(value, ctx) {
   if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain exact decrypt network" });
   }
-}
-function decodeJsonSegment(segment) {
-  try {
-    const bytes3 = fromBase64Url(segment);
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes3));
-  } catch {
-    return null;
-  }
-}
-function isJsonObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function parseCapability(value) {
-  if (!isJsonObject(value)) return null;
-  const withUri = value["with"];
-  const can = value["can"];
-  if (typeof withUri !== "string" || withUri.length === 0) return null;
-  if (typeof can !== "string" || can.length === 0) return null;
-  return { with: withUri, can };
-}
-function parseCanonicalResourceUri(uri) {
-  const match = /^(https:\/\/[^/\\]+)\/(.*)$/.exec(uri);
-  if (match === null) return null;
-  const [, origin, path] = match;
-  if (!isCanonicalHttpsOrigin(origin)) return null;
-  if (!isCanonicalResourcePath(path)) return null;
-  return { origin, segments: path.split("/") };
-}
-function resourceUriCovers(granted, target) {
-  const targetParsed = parseCanonicalResourceUri(target);
-  if (targetParsed === null) return false;
-  const wildcard = granted.endsWith("/*");
-  const grantedParsed = parseCanonicalResourceUri(
-    wildcard ? granted.slice(0, -2) : granted
-  );
-  if (grantedParsed === null) return false;
-  if (grantedParsed.origin !== targetParsed.origin) return false;
-  const grantedSegments = grantedParsed.segments;
-  const targetSegments = targetParsed.segments;
-  const prefixMatches = grantedSegments.every(
-    (segment, index) => segment === targetSegments[index]
-  );
-  if (!prefixMatches) return false;
-  return wildcard ? targetSegments.length > grantedSegments.length : targetSegments.length === grantedSegments.length;
-}
-function bearerResourceUri(origin, spaceId, path) {
-  return `${origin}/${spaceId}/${path}`;
-}
-function requiredResourceUri(envelope) {
-  const { origin, spaceId, resource } = envelope.target;
-  return bearerResourceUri(origin, spaceId, resource.path);
-}
-function checkBearerDelegation(envelope, options = {}) {
-  let sessionDid;
-  try {
-    const jwk = getBearerSessionJwk(envelope);
-    if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519") {
-      return {
-        ok: false,
-        detail: `unsupported bearer session key family ${jwk.kty}/${jwk.crv}; this build binds Ed25519 keys only`
-      };
-    }
-    const publicKey = fromBase64Url(jwk.x);
-    const privateKey = fromBase64Url(jwk.d);
-    if (publicKey.length !== 32 || privateKey.length !== 32) {
-      return { ok: false, detail: "bearer session key must contain 32-byte Ed25519 coordinates" };
-    }
-    const derivedPublicKey = ed25519.getPublicKey(privateKey);
-    if (!derivedPublicKey.every((byte, index) => byte === publicKey[index])) {
-      return { ok: false, detail: "bearer session private and public keys do not match" };
-    }
-    sessionDid = didKeyFromEd25519PublicKey(publicKey);
-  } catch (error) {
-    return {
-      ok: false,
-      detail: `could not derive did:key from embedded session key: ${error instanceof Error ? error.message : String(error)}`
-    };
-  }
-  const segments = envelope.delegation.split(".");
-  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) {
-    return { ok: false, detail: "delegation is not a three-segment JWT-shaped token" };
-  }
-  const [headerSegment, payloadSegment, signatureSegment] = segments;
-  const header = decodeJsonSegment(headerSegment);
-  if (!isJsonObject(header)) {
-    return { ok: false, detail: "delegation header is not a base64url JSON object" };
-  }
-  const payload = decodeJsonSegment(payloadSegment);
-  if (!isJsonObject(payload)) {
-    return { ok: false, detail: "delegation payload is not a base64url JSON object" };
-  }
-  let signatureBytes;
-  try {
-    signatureBytes = fromBase64Url(signatureSegment);
-    if (signatureBytes.length === 0) {
-      return { ok: false, detail: "delegation signature segment is empty" };
-    }
-  } catch {
-    return { ok: false, detail: "delegation signature segment is not base64url" };
-  }
-  if (header["alg"] !== "EdDSA") {
-    return {
-      ok: false,
-      detail: `delegation alg must be EdDSA, got ${JSON.stringify(header["alg"])}`
-    };
-  }
-  const issuer = payload["iss"];
-  if (typeof issuer !== "string" || issuer.length === 0) {
-    return { ok: false, detail: "delegation payload has no issuer (iss) DID" };
-  }
-  let issuerPublicKey;
-  try {
-    issuerPublicKey = ed25519PublicKeyFromDidKey(issuer);
-  } catch (error) {
-    return {
-      ok: false,
-      detail: `delegation issuer is not an ed25519 did:key: ${error instanceof Error ? error.message : String(error)}`
-    };
-  }
-  let signatureValid;
-  try {
-    signatureValid = ed25519.verify(
-      signatureBytes,
-      utf8Bytes(`${headerSegment}.${payloadSegment}`),
-      issuerPublicKey,
-      ED25519_VERIFY_OPTS
-    );
-  } catch {
-    signatureValid = false;
-  }
-  if (!signatureValid) {
-    return { ok: false, detail: "delegation signature does not verify against iss" };
-  }
-  const nowMs2 = options.now?.() ?? Date.now();
-  const exp = payload["exp"];
-  if (typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= 0) {
-    return { ok: false, detail: "delegation has no valid expiry (exp) claim" };
-  }
-  if (nowMs2 >= exp * 1e3) {
-    return { ok: false, detail: "delegation is expired" };
-  }
-  const nbf = payload["nbf"];
-  if (nbf !== void 0) {
-    if (typeof nbf !== "number" || !Number.isSafeInteger(nbf)) {
-      return { ok: false, detail: "delegation nbf claim is not a valid time" };
-    }
-    if (nowMs2 < nbf * 1e3) {
-      return { ok: false, detail: "delegation is not yet valid (nbf)" };
-    }
-  }
-  const audience = payload["aud"];
-  if (typeof audience !== "string" || audience.length === 0) {
-    return { ok: false, detail: "delegation payload has no audience (aud) DID" };
-  }
-  if (audience !== sessionDid) {
-    return {
-      ok: false,
-      detail: "delegation audience is not the link's embedded session key"
-    };
-  }
-  const att = payload["att"];
-  if (!Array.isArray(att) || att.length === 0) {
-    return { ok: false, detail: "delegation payload has no capabilities (att)" };
-  }
-  const required = requiredResourceUri(envelope);
-  const granted = att.map(parseCapability).some(
-    (capability) => capability !== null && READ_ABILITIES.has(capability.can) && resourceUriCovers(capability.with, required)
-  );
-  if (!granted) {
-    return {
-      ok: false,
-      detail: `delegation grants no read capability covering ${required}`
-    };
-  }
-  return { ok: true, delegateeDid: audience };
-}
-function mintBearerDelegation(options) {
-  const { issuerPrivateKey, audienceDid, resourceUri, expiresAtSeconds } = options;
-  if (!audienceDid.startsWith("did:")) {
-    throw new TypeError(`audienceDid must be a DID, got ${audienceDid}`);
-  }
-  if (resourceUri.length === 0) {
-    throw new TypeError("resourceUri must be non-empty");
-  }
-  if (!Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= 0) {
-    throw new TypeError(
-      `expiresAtSeconds must be a positive integer (epoch seconds), got ${expiresAtSeconds}`
-    );
-  }
-  const issuerDid = didKeyFromEd25519PublicKey(
-    ed25519.getPublicKey(issuerPrivateKey)
-  );
-  const header = { alg: "EdDSA", typ: "JWT", ucv: "0.9.1" };
-  const payload = {
-    iss: issuerDid,
-    aud: audienceDid,
-    att: [{ with: resourceUri, can: BEARER_READ_ABILITY }],
-    prf: [],
-    exp: expiresAtSeconds
-  };
-  const signingInput = `${toBase64Url(utf8Bytes(JSON.stringify(header)))}.${toBase64Url(
-    utf8Bytes(JSON.stringify(payload))
-  )}`;
-  const signature = ed25519.sign(utf8Bytes(signingInput), issuerPrivateKey);
-  return `${signingInput}.${toBase64Url(signature)}`;
-}
-function assertKey(key32) {
-  if (key32.length !== KEY_LENGTH) {
-    throw new TypeError(`key must be ${KEY_LENGTH} bytes, got ${key32.length}`);
-  }
-}
-async function importAesKey(key32, usage) {
-  assertKey(key32);
-  return globalThis.crypto.subtle.importKey(
-    "raw",
-    key32,
-    "AES-GCM",
-    false,
-    [usage]
-  );
-}
-function generateKey() {
-  return globalThis.crypto.getRandomValues(new Uint8Array(KEY_LENGTH));
-}
-async function seal(plaintextBytes, key32) {
-  const { nonce, ciphertext } = await encryptEnvelope(plaintextBytes, key32);
-  const blob = new Uint8Array(HEADER_LENGTH + nonce.length + ciphertext.length);
-  blob[0] = SEALED_BLOB_VERSION;
-  blob.set(nonce, HEADER_LENGTH);
-  blob.set(ciphertext, HEADER_LENGTH + nonce.length);
-  return { blob, cid: await computeCid(blob) };
-}
-async function open(blob, key32) {
-  if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
-    throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
-  }
-  if (blob[0] !== SEALED_BLOB_VERSION) {
-    throw new TypeError(`unknown sealed blob version: ${blob[0]}`);
-  }
-  const nonce = blob.subarray(HEADER_LENGTH, HEADER_LENGTH + NONCE_LENGTH);
-  const ciphertext = blob.subarray(HEADER_LENGTH + NONCE_LENGTH);
-  return decryptEnvelope(nonce, ciphertext, key32);
-}
-async function encryptEnvelope(plaintextBytes, key32) {
-  const key = await importAesKey(key32, "encrypt");
-  const nonce = globalThis.crypto.getRandomValues(new Uint8Array(NONCE_LENGTH));
-  const ciphertext = new Uint8Array(
-    await globalThis.crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: nonce, additionalData: AAD },
-      key,
-      plaintextBytes
-    )
-  );
-  return { nonce, ciphertext };
-}
-async function decryptEnvelope(nonce, ciphertext, key32) {
-  if (nonce.length !== NONCE_LENGTH) {
-    throw new TypeError(`nonce must be ${NONCE_LENGTH} bytes, got ${nonce.length}`);
-  }
-  const key = await importAesKey(key32, "decrypt");
-  return new Uint8Array(
-    await globalThis.crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: nonce, additionalData: AAD },
-      key,
-      ciphertext
-    )
-  );
 }
 function isPlainRecord(value) {
   const proto = Object.getPrototypeOf(value);
@@ -18077,22 +17790,6 @@ function assertExactKeys(value, keys, label) {
 function equal(left, right) {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
 }
-function signingBytes(unsigned) {
-  const domain = utf8Bytes(ENVELOPE_SIGNATURE_DOMAIN);
-  const body = utf8Bytes(canonicalize2(unsigned));
-  const bytes3 = new Uint8Array(domain.length + body.length);
-  bytes3.set(domain);
-  bytes3.set(body, domain.length);
-  return bytes3;
-}
-function signingBytesV2(unsigned) {
-  const domain = utf8Bytes(ENVELOPE_V2_SIGNATURE_DOMAIN);
-  const body = utf8Bytes(canonicalize2(unsigned));
-  const bytes3 = new Uint8Array(domain.length + body.length);
-  bytes3.set(domain);
-  bytes3.set(body, domain.length);
-  return bytes3;
-}
 function signingBytesV3(unsigned) {
   const domain = utf8Bytes(ENVELOPE_V3_SIGNATURE_DOMAIN);
   const body = utf8Bytes(canonicalize2(unsigned));
@@ -18100,53 +17797,6 @@ function signingBytesV3(unsigned) {
   bytes3.set(domain);
   bytes3.set(body, domain.length);
   return bytes3;
-}
-function signEnvelope(envelopeWithoutSig, ed25519PrivKey) {
-  const unsigned = unsignedShareEnvelopeSchema.parse(envelopeWithoutSig);
-  const publicKey = ed25519.getPublicKey(ed25519PrivKey);
-  const signature = ed25519.sign(signingBytes(unsigned), ed25519PrivKey);
-  return {
-    ...unsigned,
-    signature: {
-      signerDid: didKeyFromEd25519PublicKey(publicKey),
-      algorithm: "Ed25519",
-      value: toBase64Url(signature)
-    }
-  };
-}
-function verifyEnvelopeSignatureOnly(envelope) {
-  const parsed = shareEnvelopeSchema.parse(envelope);
-  const { signature, ...unsigned } = parsed;
-  const publicKey = ed25519PublicKeyFromDidKey(signature.signerDid);
-  return ed25519.verify(
-    fromBase64Url(signature.value),
-    signingBytes(unsigned),
-    publicKey,
-    ED25519_VERIFY_OPTS2
-  );
-}
-async function verifyEnvelope(envelope, options) {
-  const parsed = shareEnvelopeSchema.parse(envelope);
-  if (parsed.signature.signerDid !== options.expectedSignerDid) return false;
-  if (!verifyEnvelopeSignatureOnly(parsed)) return false;
-  if (parsed.authorizationTarget.kind === "policy") {
-    const policyBytes = fromBase64Url(parsed.authorizationTarget.policyBytes);
-    if (await computeCid(policyBytes) !== parsed.authorizationTarget.policyCid) {
-      return false;
-    }
-  }
-  return true;
-}
-function verifyEnvelopeV2SignatureOnly(envelope) {
-  const parsed = shareEnvelopeV2Schema.parse(envelope);
-  const { signature, ...unsigned } = parsed;
-  return ed25519.verify(fromBase64Url(signature.value), signingBytesV2(unsigned), ed25519PublicKeyFromDidKey(signature.signerDid), ED25519_VERIFY_OPTS2);
-}
-async function verifyEnvelopeV2(envelope, options) {
-  const parsed = shareEnvelopeV2Schema.parse(envelope);
-  if (parsed.signature.signerDid !== options.expectedSignerDid || !verifyEnvelopeV2SignatureOnly(parsed)) return false;
-  if (parsed.authorizationTarget.kind === "policy") return await computeCid(fromBase64Url(parsed.authorizationTarget.policyBytes)) === parsed.authorizationTarget.policyCid;
-  return true;
 }
 function verifyEnvelopeV3SignatureOnly(envelope) {
   const parsed = shareEnvelopeV3Schema.parse(envelope);
@@ -18193,7 +17843,7 @@ async function verifyEnvelopeV3(envelope, options) {
   const binding = parsed.attestedEnforcerBinding;
   const { signature: bindingSignature, ...unsignedBinding } = binding;
   const expectedBindingDigestHex = hex(sha2562(new TextEncoder().encode(canonicalize2({ enforcerDid: binding.enforcerDid, nodeAudience: binding.nodeAudience }))));
-  if (binding.enforcerDid !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
+  if (binding.nodeAudience !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
   try {
     const digest3 = sha2562(new TextEncoder().encode(`${ATTESTED_ENFORCER_V2_DOMAIN}${canonicalize2(unsignedBinding)}`));
     if (!ed25519.verify(fromBase64Url(bindingSignature.value), digest3, ed25519PublicKeyFromDidKey(binding.nodeAudience), ED25519_VERIFY_OPTS2)) return false;
@@ -18241,77 +17891,18 @@ function assertCanonicalCid(cidString) {
     throw new TypeError(`not a canonical CIDv1 raw sha2-256 base32 CID: ${cidString}`);
   }
 }
-function encodeShareUrl({ origin, ciphertextCid, key32 }) {
-  if (key32.length !== KEY_LENGTH2) {
-    throw new TypeError(`key must be ${KEY_LENGTH2} bytes, got ${key32.length}`);
-  }
-  assertCanonicalCid(ciphertextCid);
-  if (!isCanonicalHttpsOrigin(origin)) {
-    throw new TypeError(`origin must be a canonical https origin, got ${origin}`);
-  }
-  return `${origin}/s/${ciphertextCid}#k=${toBase64Url(key32)}`;
-}
-function parseShareUrl(url, options = {}) {
-  const parsed = new URL(url);
-  if (parsed.protocol !== "https:") {
-    throw new TypeError(`share URL must be https, got ${parsed.protocol}`);
-  }
-  if (parsed.username !== "" || parsed.password !== "") {
-    throw new TypeError("share URL must not carry userinfo");
-  }
-  if (parsed.search !== "") {
-    throw new TypeError("share URL must not have a query string");
-  }
-  if (options.expectedOrigin !== void 0) {
-    if (!isCanonicalHttpsOrigin(options.expectedOrigin)) {
-      throw new TypeError(
-        `expectedOrigin must be a canonical https origin, got ${options.expectedOrigin}`
-      );
-    }
-    if (parsed.origin !== options.expectedOrigin) {
-      throw new TypeError(
-        `share URL origin ${parsed.origin} does not match expected ${options.expectedOrigin}`
-      );
-    }
-  }
-  const match = /^\/s\/([a-z2-7]+)$/.exec(parsed.pathname);
-  if (!match || match[1] === void 0) {
-    throw new TypeError(`not a share URL path: ${parsed.pathname}`);
-  }
-  const ciphertextCid = match[1];
-  assertCanonicalCid(ciphertextCid);
-  if (!parsed.hash.startsWith("#k=")) {
-    throw new TypeError("share URL is missing the #k= key fragment");
-  }
-  const key32 = fromBase64Url(parsed.hash.slice("#k=".length));
-  if (key32.length !== KEY_LENGTH2) {
-    throw new TypeError(`fragment key must be ${KEY_LENGTH2} bytes, got ${key32.length}`);
-  }
-  return { ciphertextCid, key32 };
-}
-async function encodeInlineShareUrl(parts) {
-  if (!isCanonicalHttpsOrigin(parts.origin)) throw new TypeError("origin must be a canonical https origin");
-  if (parts.ciphertext.byteLength === 0 || parts.ciphertext.byteLength > MAX_INLINE_BYTES) throw new RangeError("inline ciphertext is outside the allowed size");
-  if (parts.key32 !== void 0 && parts.key32.length !== KEY_LENGTH2) throw new TypeError("inline key must be 32 bytes");
-  const ciphertextCid = await computeCid(parts.ciphertext);
-  const payload = canonicalize2({
-    v: 2,
-    c: toBase64Url(parts.ciphertext),
-    cid: ciphertextCid,
-    ...parts.key32 === void 0 ? {} : { k: toBase64Url(parts.key32) }
-  });
-  const payloadBytes = new TextEncoder().encode(payload);
-  if (payloadBytes.byteLength > MAX_INLINE_BYTES * 2) throw new RangeError("inline URL is too large");
-  return `${parts.origin}/s/inline${INLINE_PREFIX}${toBase64Url(payloadBytes)}`;
-}
 function parseInlineShareUrl(url, options = {}) {
   const parsed = new URL(url);
-  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" || parsed.search !== "") throw new TypeError("inline share URL must be canonical HTTPS without query or userinfo");
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("inline share URL must be canonical HTTPS without userinfo");
   if (!isCanonicalHttpsOrigin(parsed.origin) || options.expectedOrigin !== void 0 && parsed.origin !== options.expectedOrigin) throw new TypeError("inline share URL origin is not trusted");
-  if (parsed.pathname !== "/s/inline" || !parsed.hash.startsWith(INLINE_PREFIX)) throw new TypeError("not an inline v2 share URL");
+  if (parsed.pathname !== "/viewer") throw new TypeError("not a TinyCloud policy share URL");
+  const secretPayload = parsed.search === "" && parsed.hash.startsWith(INLINE_PREFIX) ? parsed.hash.slice(INLINE_PREFIX.length) : void 0;
+  const publicPayload = parsed.hash === "" && parsed.searchParams.size === 1 ? parsed.searchParams.get(PUBLIC_INLINE_PARAMETER) ?? void 0 : void 0;
+  if (secretPayload === void 0 && publicPayload === void 0) throw new TypeError("not a canonical TinyCloud policy share URL");
+  if (publicPayload !== void 0 && parsed.search !== `?${PUBLIC_INLINE_PARAMETER}=${publicPayload}`) throw new TypeError("public inline URL is not canonical");
   let payloadBytes;
   try {
-    payloadBytes = fromBase64Url(parsed.hash.slice(INLINE_PREFIX.length));
+    payloadBytes = fromBase64Url(secretPayload ?? publicPayload);
   } catch {
     throw new TypeError("inline payload is not canonical base64url");
   }
@@ -18324,356 +17915,95 @@ function parseInlineShareUrl(url, options = {}) {
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("inline payload must be an object");
   if (canonicalize2(value) !== new TextDecoder("utf-8").decode(payloadBytes)) throw new TypeError("inline payload is not canonical JSON");
-  const record2 = value;
-  const keys = Object.keys(record2);
-  if (!keys.every((key) => key === "v" || key === "c" || key === "cid" || key === "k") || record2.v !== 2 || typeof record2.c !== "string" || typeof record2.cid !== "string") throw new TypeError("inline payload has invalid fields");
+  const record = value;
+  const keys = Object.keys(record);
+  if (!keys.every((key) => key === "v" || key === "c" || key === "cid" || key === "k") || record.v !== 2 || typeof record.c !== "string" || typeof record.cid !== "string" || publicPayload !== void 0 && (keys.length !== 3 || record.k !== void 0)) throw new TypeError("inline payload has invalid fields");
   let ciphertext;
   try {
-    ciphertext = fromBase64Url(record2.c);
+    ciphertext = fromBase64Url(record.c);
   } catch {
     throw new TypeError("inline ciphertext is not canonical base64url");
   }
   if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES) throw new TypeError("inline ciphertext is outside the allowed size");
-  assertCanonicalCid(record2.cid);
-  if (record2.k !== void 0 && typeof record2.k !== "string") throw new TypeError("inline key must be base64url");
+  assertCanonicalCid(record.cid);
+  if (record.k !== void 0 && typeof record.k !== "string") throw new TypeError("inline key must be base64url");
   let key32;
   try {
-    key32 = record2.k === void 0 ? void 0 : fromBase64Url(record2.k);
+    key32 = record.k === void 0 ? void 0 : fromBase64Url(record.k);
   } catch {
     throw new TypeError("inline key is not canonical base64url");
   }
   if (key32 !== void 0 && key32.length !== KEY_LENGTH2) throw new TypeError("inline key must be 32 bytes");
-  return { kind: "inline", ciphertextCid: record2.cid, ciphertext, ...key32 === void 0 ? {} : { key32 } };
-}
-function parseCompactOrInlineShareUrl(url, options = {}) {
-  if (new URL(url).pathname === "/s/inline") return parseInlineShareUrl(url, options);
-  return { kind: "compact", ...parseShareUrl(url, options) };
-}
-function boundedBytes(value, limit, code3) {
-  if (!Number.isSafeInteger(limit) || limit <= 0) throw new ShareReceiveError("fetch-failed", "share byte limit is invalid");
-  if (!(value instanceof Uint8Array)) throw new ShareReceiveError("fetch-failed", "registry returned invalid bytes");
-  if (value.byteLength > limit) throw new ShareReceiveError(code3, "share blob exceeds the configured byte limit");
-  return value;
-}
-async function readResponseBytes(response, limit, tooLargeCode) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength !== null && Number.isSafeInteger(Number(contentLength)) && Number(contentLength) > limit) {
-    throw new ShareReceiveError(tooLargeCode, "share blob exceeds the configured byte limit");
-  }
-  if (response.body === null) {
-    return boundedBytes(new Uint8Array(await response.arrayBuffer()), limit, tooLargeCode);
-  }
-  const reader = response.body.getReader();
-  const chunks = [];
-  let total = 0;
-  try {
-    for (; ; ) {
-      const part = await reader.read();
-      if (part.done) break;
-      total += part.value.byteLength;
-      if (total > limit) {
-        await reader.cancel();
-        throw new ShareReceiveError(tooLargeCode, "share blob exceeds the configured byte limit");
-      }
-      chunks.push(part.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes3 = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes3.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes3;
-}
-function registryFetcher(options, limit, tooLargeCode = "max-bytes-exceeded", stage = "envelope") {
-  if (options.fetchBlob !== void 0) return async (input) => {
-    try {
-      options.signal?.throwIfAborted();
-      const bytes3 = await options.fetchBlob({ ...input, ...options.signal === void 0 ? {} : { signal: options.signal } });
-      options.signal?.throwIfAborted();
-      return boundedBytes(bytes3, limit, tooLargeCode);
-    } catch (error) {
-      if (options.signal?.aborted) throw options.signal.reason ?? error;
-      if (error instanceof ShareReceiveError) throw error;
-      throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
-    }
-  };
-  if (options.registryBaseUrl === void 0) throw new ShareReceiveError("fetch-failed", "a registry fetch adapter is required");
-  const fetchFn = options.fetchFn ?? globalThis.fetch;
-  const base33 = options.registryBaseUrl.replace(/\/+$/, "");
-  return async ({ cid: cid2 }) => {
-    try {
-      options.signal?.throwIfAborted();
-      const response = await fetchFn(`${base33}/ipfs/${cid2}?format=raw`, {
-        headers: { accept: "application/vnd.ipld.raw" },
-        redirect: "error",
-        ...options.signal === void 0 ? {} : { signal: options.signal }
-      });
-      options.signal?.throwIfAborted();
-      if (!response.ok) throw new ShareReceiveError("fetch-failed", `registry returned ${response.status}`, { stage });
-      const bytes3 = await readResponseBytes(response, limit, tooLargeCode);
-      options.signal?.throwIfAborted();
-      return bytes3;
-    } catch (error) {
-      if (options.signal?.aborted) throw options.signal.reason ?? error;
-      if (error instanceof ShareReceiveError) throw error;
-      throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
-    }
-  };
+  return { kind: "inline", ciphertextCid: record.cid, ciphertext, ...key32 === void 0 ? {} : { key32 } };
 }
 function metadataFor(envelope, origin) {
-  if (envelope.version === 2 || envelope.version === 3) {
-    const targetKind3 = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : envelope.recipientMatcher.kind === "emailDomain" ? "emailDomain" : "bearer";
-    return {
-      protocol: "tinycloud-share",
-      version: 1,
-      shareId: envelope.shareId,
-      origin,
-      target: { ...envelope.target, kind: targetKind3 },
-      resource: envelope.resource,
-      actions: envelope.actions,
-      expiresAt: envelope.expiry,
-      display: {
-        ...envelope.display.senderName === void 0 ? {} : { senderName: envelope.display.senderName },
-        ...envelope.display.filename === void 0 ? {} : { filename: envelope.display.filename },
-        ...envelope.display.mode === void 0 ? {} : { mode: envelope.display.mode }
-      },
-      ...envelope.version === 2 && envelope.content !== void 0 ? { content: { cid: envelope.content.cid } } : {}
-    };
-  }
+  const kind = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : "emailDomain";
   return {
     protocol: "tinycloud-share",
     version: 1,
     shareId: envelope.shareId,
     origin,
-    target: { ...envelope.target, kind: "bearer" },
-    resource: envelope.target.resource,
-    actions: ["read"],
+    target: { ...envelope.target, kind },
+    resource: { ...envelope.resource },
+    actions: [...envelope.actions],
     expiresAt: envelope.expiry,
     display: {
       ...envelope.display.senderName === void 0 ? {} : { senderName: envelope.display.senderName },
       ...envelope.display.filename === void 0 ? {} : { filename: envelope.display.filename },
       ...envelope.display.mode === void 0 ? {} : { mode: envelope.display.mode }
-    },
-    ...envelope.content === void 0 ? {} : { content: { cid: envelope.content.cid } }
+    }
   };
 }
-function parseEnvelope(bytes3) {
-  try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes3);
-    const value = JSON.parse(text);
-    if (canonicalize2(value) !== text) throw new Error("share envelope is not canonical JSON");
-    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-      const version2 = value.version;
-      if (version2 === 3) return shareEnvelopeV3Schema.parse(value);
-      if (version2 === 2) return shareEnvelopeV2Schema.parse(value);
-    }
-    return shareEnvelopeSchema.parse(value);
-  } catch {
-    throw new ShareReceiveError("envelope-invalid", "share envelope is invalid");
-  }
-}
-async function resolveShareEnvelope(link2, options = {}) {
+async function resolvePolicyShare(link2, options) {
+  options.signal?.throwIfAborted();
+  let url;
   let parsed;
   try {
-    parsed = parseCompactOrInlineShareUrl(link2, { ...options.expectedOrigin === void 0 ? {} : { expectedOrigin: options.expectedOrigin } });
+    url = new URL(link2);
+    if (url.pathname !== "/viewer" || url.hash !== "" || url.searchParams.size !== 1 || !url.searchParams.has("tc2")) throw new Error("not public Policy/v3");
+    parsed = parseInlineShareUrl(link2, { ...options.expectedOrigin === void 0 ? {} : { expectedOrigin: options.expectedOrigin } });
+    if (parsed.key32 !== void 0) throw new Error("secret inline transport is retired");
   } catch {
     throw new ShareReceiveError("invalid-link", "share link format is invalid");
   }
+  const limit = options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES;
+  if (!Number.isSafeInteger(limit) || limit <= 0 || parsed.ciphertext.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "public policy envelope exceeds the configured byte limit");
+  if (await computeCid(parsed.ciphertext) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "public envelope bytes do not match the link CID");
+  options.signal?.throwIfAborted();
+  let envelope;
   try {
-    if (parsed.key32 !== void 0) options.onKeyParsed?.(parsed.key32);
-    const url = new URL(link2);
-    const sealed = parsed.kind === "inline" ? boundedBytes(parsed.ciphertext, options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES, "max-bytes-exceeded") : await registryFetcher(options, options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES)({ origin: url.origin, cid: parsed.ciphertextCid });
-    if (await computeCid(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "registry bytes do not match the link CID");
-    let plaintext;
-    try {
-      plaintext = parsed.key32 === void 0 ? sealed : await open(sealed, parsed.key32);
-    } catch {
-      throw new ShareReceiveError("decrypt-failed", "share envelope could not be opened");
-    }
-    return { envelope: parseEnvelope(plaintext), origin: url.origin, cid: parsed.ciphertextCid, kind: parsed.kind };
-  } finally {
-    parsed.key32?.fill(0);
-  }
-}
-function actionName(value) {
-  return value === "read" ? "tinycloud.kv/get" : value === "list" ? "tinycloud.kv/list" : value === "edit" ? "tinycloud.kv/put" : value;
-}
-function resourceContains(outer, inner) {
-  if (outer.kind === "exact") return inner.kind === "exact" && outer.path === inner.path;
-  const prefix = outer.path.endsWith("/") ? outer.path : `${outer.path}/`;
-  return inner.path === outer.path || inner.path.startsWith(prefix);
-}
-function policyEvidenceMatches(envelope, evidence) {
-  const registeredActions = new Set(evidence.actions.map(actionName));
-  return evidence.policyCid === (envelope.authorizationTarget.kind === "policy" ? envelope.authorizationTarget.policyCid : "") && evidence.signerDid === envelope.signature.signerDid && evidence.registrationCid.length > 0 && evidence.shareId === envelope.shareId && canonicalize2(evidence.recipientMatcher) === canonicalize2(envelope.recipientMatcher) && canonicalize2(evidence.target) === canonicalize2(envelope.target) && resourceContains(evidence.resource, envelope.resource) && envelope.actions.every((action) => registeredActions.has(actionName(action))) && canonicalize2(evidence.contentSource) === canonicalize2(envelope.contentSource) && evidence.contentSourceDigest === envelope.contentSourceDigest && evidence.delegationCid === envelope.delegationCid && evidence.authorityMaterialHandle === envelope.authorityMaterialHandle && evidence.authorityMaterialDigest === envelope.authorityMaterialDigest && evidence.expiresAt === envelope.expiry && Number.isFinite(Date.parse(evidence.expiresAt)) && Date.parse(evidence.expiresAt) === Date.parse(envelope.expiry);
-}
-async function verifyV2Envelope(envelope, linkOrigin, options) {
-  if (options.expectedOrigin !== void 0 && linkOrigin !== options.expectedOrigin) {
-    throw new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted origin");
-  }
-  try {
-    if (!await verifyEnvelopeV2(envelope, { expectedSignerDid: envelope.signature.signerDid })) throw new Error("signature");
+    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(parsed.ciphertext);
+    const value = JSON.parse(encoded);
+    if (canonicalize2(value) !== encoded) throw new Error("non-canonical envelope");
+    envelope = shareEnvelopeV3Schema.parse(value);
   } catch {
-    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
-  }
-  const expiry = Date.parse(envelope.expiry);
-  if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
-  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
-  if (envelope.authorizationTarget.kind === "policy") {
-    if (options.trustedPolicyAuthority === void 0) throw new ShareReceiveError("envelope-invalid", "an external policy authority is required");
-    let evidence;
-    try {
-      evidence = await options.trustedPolicyAuthority.resolve({ policyCid: envelope.authorizationTarget.policyCid, envelope });
-    } catch {
-      evidence = void 0;
-    }
-    if (evidence === void 0 || !policyEvidenceMatches(envelope, evidence)) throw new ShareReceiveError("capability-invalid", "share policy authority evidence is not bound to the envelope");
-    if (options.trustedSignerDid !== void 0 && (evidence.signerDid !== options.trustedSignerDid || envelope.signature.signerDid !== options.trustedSignerDid)) {
-      throw new ShareReceiveError("signature-invalid", "share signer is not trusted");
-    }
-  } else if (envelope.authorizationTarget.kind === "recipientDid" && envelope.recipientMatcher.kind === "recipientDid" && envelope.authorizationTarget.did !== envelope.recipientMatcher.value) {
-    throw new ShareReceiveError("capability-invalid", "recipient authorization does not match the signed recipient");
-  } else {
-    if (options.trustedSignerDid === void 0 || envelope.signature.signerDid !== options.trustedSignerDid) throw new ShareReceiveError("signature-invalid", "an addressed signer trust root is required");
-  }
-}
-async function verifyV3Envelope(envelope, linkOrigin, options) {
-  if (options.expectedOrigin !== void 0 && linkOrigin !== options.expectedOrigin) {
-    throw new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted origin");
+    throw new ShareReceiveError("envelope-invalid", "share envelope is invalid");
   }
   try {
     if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: envelope.policy.ownerDid })) throw new Error("signature");
   } catch {
     throw new ShareReceiveError("signature-invalid", "share signature is invalid");
   }
+  options.signal?.throwIfAborted();
   const expiry = Date.parse(envelope.expiry);
   if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
   if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
-}
-async function verifyV1PolicyEnvelope(envelope, linkOrigin, options) {
-  if (envelope.authorizationTarget.kind !== "policy") throw new ShareReceiveError("unsupported-target", "share target is not an addressed policy", { reason: "policy-target" });
-  if (envelope.target.origin !== linkOrigin || options.expectedOrigin !== void 0 && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin)) {
-    throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
-  }
-  throw new ShareReceiveError("unsupported-target", "share policy target is not supported", { reason: "policy-target" });
-}
-async function verifyBearerEnvelope(envelope, linkOrigin, options = {}) {
-  if (envelope.target.origin !== linkOrigin || options.expectedOrigin !== void 0 && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin)) {
-    throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
-  }
-  if (envelope.authorizationTarget.kind !== "bearerKey") throw new ShareReceiveError("unsupported-target", "this receive path only handles bearer shares", { reason: envelope.authorizationTarget.kind === "policy" ? "policy-target" : "recipient-did-target" });
-  if (envelope.target.resource.kind !== "exact") throw new ShareReceiveError("unsupported-target", "this receive path only handles exact resources", { reason: "prefix-resource" });
-  const expiry = Date.parse(envelope.expiry);
-  if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
-  try {
-    if (!await verifyEnvelope(envelope, { expectedSignerDid: envelope.signature.signerDid })) throw new Error("signature");
-  } catch {
-    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
-  }
-  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
-  const capability = checkBearerDelegation(envelope, options.now === void 0 ? {} : { now: options.now });
-  if (!capability.ok) throw new ShareReceiveError("capability-invalid", "share delegation does not authorize the target");
-}
-async function verifyResolved(envelope, linkOrigin, options) {
-  await verifyBearerEnvelope(envelope, linkOrigin, options);
+  options.onResolvedAddressedEnvelope?.(envelope, parsed.ciphertextCid);
+  return { envelope, origin: url.origin, cid: parsed.ciphertextCid };
 }
 async function inspectShare(link2, options = {}) {
-  const resolved = await resolveShareEnvelope(link2, options);
-  if (resolved.envelope.version === 1 && resolved.envelope.authorizationTarget.kind === "policy") await verifyV1PolicyEnvelope(resolved.envelope, resolved.origin, options);
-  else if (resolved.envelope.version === 1) await verifyResolved(resolved.envelope, resolved.origin, options);
-  else if (resolved.envelope.version === 2) await verifyV2Envelope(resolved.envelope, resolved.origin, options);
-  else await verifyV3Envelope(resolved.envelope, resolved.origin, options);
-  if (resolved.envelope.version === 2 || resolved.envelope.version === 3 || resolved.envelope.authorizationTarget.kind === "policy") options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
-  return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind } };
+  const resolved = await resolvePolicyShare(link2, options);
+  return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "policy" } };
 }
 async function receiveShare(link2, options = {}) {
-  const resolved = await resolveShareEnvelope(link2, options);
-  if (resolved.envelope.version === 3) {
-    await verifyV3Envelope(resolved.envelope, resolved.origin, options);
-    options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
-    return { state: "authorization-required", method: resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim" };
-  }
-  if (resolved.envelope.version === 2) {
-    await verifyV2Envelope(resolved.envelope, resolved.origin, options);
-    options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
-    const method = resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim";
-    if (options.authorization === void 0) return { state: "authorization-required", method };
-    const result = options.authorizationResumeToken === void 0 ? await options.authorization.begin({ envelope: resolved.envelope, method }) : await options.authorization.resume({ envelope: resolved.envelope, method, resumeToken: options.authorizationResumeToken, ...options.authorizationProof === void 0 ? {} : { proof: options.authorizationProof } });
-    if (result.state === "authorization-required") return result;
-    if (result.state === "denied") throw new ShareReceiveError("authorization-denied", "share authorization was denied");
-    if (result.value === null || typeof result.value !== "object" || !(result.value.bytes instanceof Uint8Array) || result.value.proof === void 0 || options.authorization.verifyResult === void 0) {
-      throw new ShareReceiveError("content-integrity-failed", "share authorization returned an unsigned content result");
-    }
-    const authorized = result.value;
-    try {
-      if (!await options.authorization.verifyResult({ envelope: resolved.envelope, value: authorized, proof: authorized.proof })) throw new Error("node proof");
-    } catch {
-      throw new ShareReceiveError("content-integrity-failed", "node authorization proof is invalid");
-    }
-    const bytes4 = authorized.bytes.slice();
-    const maxBytes = options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES;
-    if (bytes4.byteLength > maxBytes) throw new ShareReceiveError("max-bytes-exceeded", "shared content exceeds the configured byte limit");
-    const digestBytes3 = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes4));
-    const bodyDigest = toBase64Url(digestBytes3);
-    if (authorized.bodyDigest !== bodyDigest) throw new ShareReceiveError("content-integrity-failed", "authorized content digest does not match");
-    if (authorized.contentSourceDigest !== resolved.envelope.contentSourceDigest) throw new ShareReceiveError("content-integrity-failed", "authorized content source does not match");
-    const binding = authorized.binding;
-    if (binding.shareId !== resolved.envelope.shareId || binding.delegationCid !== resolved.envelope.delegationCid || binding.authorityMaterialHandle !== resolved.envelope.authorityMaterialHandle || binding.authorityMaterialDigest !== resolved.envelope.authorityMaterialDigest || binding.resource.kind !== resolved.envelope.resource.kind || binding.resource.path !== resolved.envelope.resource.path || binding.action !== void 0 && !resolved.envelope.actions.some((action) => action === binding.action || `tinycloud.kv/${action}` === binding.action)) throw new ShareReceiveError("content-integrity-failed", "authorized content binding does not match");
-    if (resolved.envelope.metadata.byteLength !== void 0 && resolved.envelope.metadata.byteLength !== bytes4.byteLength) {
-      throw new ShareReceiveError("content-integrity-failed", "authorized content length does not match");
-    }
-    let text2;
-    try {
-      text2 = new TextDecoder("utf-8", { fatal: true }).decode(bytes4);
-    } catch {
-    }
-    return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind }, bytes: bytes4, ...text2 === void 0 ? {} : { text: text2 } };
-  }
-  if (resolved.envelope.authorizationTarget.kind === "policy") {
-    await verifyV1PolicyEnvelope(resolved.envelope, resolved.origin, options);
-    options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
-    return { state: "authorization-required", method: "email-claim" };
-  }
-  await verifyResolved(resolved.envelope, resolved.origin, options);
-  let bytes3 = new Uint8Array();
-  if (resolved.envelope.content !== void 0) {
-    bytes3 = await registryFetcher(
-      options,
-      (options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES) + CONTENT_SEALED_OVERHEAD,
-      "max-bytes-exceeded",
-      "content"
-    )({ origin: resolved.origin, cid: resolved.envelope.content.cid });
-    if (await computeCid(bytes3) !== resolved.envelope.content.cid) throw new ShareReceiveError("content-integrity-failed", "shared content CID does not match");
-    const key = fromBase64Url(resolved.envelope.content.key);
-    try {
-      bytes3 = await open(bytes3, key);
-    } catch {
-      throw new ShareReceiveError("content-integrity-failed", "shared content could not be opened");
-    } finally {
-      key.fill(0);
-    }
-    if (bytes3.byteLength > (options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES)) {
-      throw new ShareReceiveError("max-bytes-exceeded", "shared content exceeds the configured byte limit");
-    }
-  }
-  let text;
-  if (bytes3.byteLength !== 0) {
-    try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes3);
-    } catch {
-    }
-  }
-  return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind }, bytes: bytes3, ...text === void 0 ? {} : { text } };
+  const resolved = await resolvePolicyShare(link2, options);
+  return { state: "authorization-required", method: resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim" };
 }
 function redactPublishedShare(result) {
   return {
     protocol: "tinycloud-share",
     version: SHARE_PUBLISH_RESULT_VERSION,
-    link: { kind: result.link.kind, cid: result.link.cid },
+    link: { ...result.link },
     metadata: {
       protocol: "tinycloud-share",
       version: 1,
@@ -18683,242 +18013,9 @@ function redactPublishedShare(result) {
       resource: { ...result.metadata.resource },
       actions: [...result.metadata.actions],
       expiresAt: result.metadata.expiresAt,
-      display: { ...result.metadata.display },
-      ...result.metadata.content === void 0 ? {} : { content: { cid: result.metadata.content.cid } }
-    },
-    registryDeleteAfter: result.registryDeleteAfter
+      display: { ...result.metadata.display }
+    }
   };
-}
-function assertSafeFilename(filename) {
-  if (filename.length === 0 || filename === "." || filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(filename)) {
-    throw new SharePublishError("invalid-argument", "filename must be one safe path segment");
-  }
-}
-function assertOrigin(origin, label) {
-  if (!isCanonicalHttpsOrigin(origin)) {
-    throw new SharePublishError("invalid-argument", `${label} must be a canonical HTTPS origin`);
-  }
-}
-async function snapshotSource(source, limit) {
-  if (!Number.isSafeInteger(limit) || limit <= 0) {
-    throw new SharePublishError("invalid-argument", "maxBytes must be a positive safe integer");
-  }
-  if (source instanceof Uint8Array) {
-    if (source.byteLength > limit) throw new SharePublishError("max-bytes-exceeded", "share content exceeds the configured byte limit");
-    return source.slice();
-  }
-  const chunks = [];
-  let total = 0;
-  try {
-    for await (const chunk of source) {
-      if (!(chunk instanceof Uint8Array)) throw new SharePublishError("invalid-argument", "share source yielded invalid bytes");
-      total += chunk.byteLength;
-      if (total > limit) throw new SharePublishError("max-bytes-exceeded", "share content exceeds the configured byte limit");
-      chunks.push(chunk);
-    }
-  } catch (error) {
-    if (error instanceof SharePublishError) throw error;
-    throw new SharePublishError("upload-failed", "share source could not be read");
-  }
-  const bytes3 = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes3.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes3;
-}
-function assertTarget(target) {
-  if (target.kind !== "bearer") {
-    throw new SharePublishError("unsupported-target", "this release publishes bearer shares only");
-  }
-}
-function assertRegistryUrl(value, allowInsecure) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new SharePublishError("invalid-argument", "registry URL is invalid");
-  }
-  if (url.username || url.password || url.search || url.hash) throw new SharePublishError("invalid-argument", "registry URL must not contain credentials, query, or fragment");
-  if (!allowInsecure && url.protocol !== "https:") throw new SharePublishError("invalid-argument", "production registry uploads require HTTPS");
-  if (url.protocol !== "https:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost") throw new SharePublishError("invalid-argument", "insecure registry uploads are limited to localhost");
-  return url;
-}
-async function defaultUpload(options, input) {
-  if (options.registryBaseUrl === void 0) throw new SharePublishError("upload-auth-required", "an authenticated share registry is required");
-  const base33 = assertRegistryUrl(options.registryBaseUrl, options.allowInsecureRegistry === true).toString().replace(/\/$/, "");
-  const localInsecure = options.allowInsecureRegistry === true && (new URL(base33).hostname === "127.0.0.1" || new URL(base33).hostname === "localhost");
-  if (options.authorizeUpload === void 0 && !localInsecure) {
-    throw new SharePublishError("upload-auth-required", "share upload authorization is required");
-  }
-  let authorization;
-  if (options.authorizeUpload !== void 0) {
-    try {
-      authorization = await options.authorizeUpload(input);
-    } catch {
-      throw new SharePublishError("upload-auth-required", "share upload authorization was rejected");
-    }
-  }
-  if (authorization !== void 0 && options.authorizationOrigin !== void 0) {
-    let authorizationUrl;
-    try {
-      authorizationUrl = new URL(options.authorizationOrigin);
-    } catch {
-      throw new SharePublishError("invalid-argument", "upload authorization origin is invalid");
-    }
-    if (authorizationUrl.origin !== new URL(base33).origin) throw new SharePublishError("upload-auth-required", "upload authorization is scoped to another origin");
-  }
-  const headers = new Headers({
-    "content-type": "application/vnd.ipld.raw",
-    "if-none-match": "*",
-    "x-delete-after": input.deleteAfter
-  });
-  if (typeof authorization === "string") {
-    headers.set("x-tinycloud-upload-attestation", authorization);
-    try {
-      const attestation = JSON.parse(authorization);
-      if (attestation.retention === void 0) throw new Error("retention");
-      headers.set("x-tinycloud-retention", canonicalize2(attestation.retention));
-    } catch {
-      throw new SharePublishError("upload-auth-required", "share upload authorization was rejected");
-    }
-  } else if (authorization !== void 0) {
-    new Headers(authorization).forEach((value, key) => headers.set(key, value));
-  }
-  let response;
-  try {
-    response = await (options.fetchFn ?? globalThis.fetch)(`${base33}/blobs`, {
-      method: "POST",
-      headers,
-      body: input.blob,
-      ...options.credentials === void 0 ? {} : { credentials: options.credentials },
-      redirect: "error",
-      referrerPolicy: "no-referrer"
-    });
-  } catch {
-    throw new SharePublishError("upload-failed", "share registry is unavailable");
-  }
-  if (response.status === 401 || response.status === 403) throw new SharePublishError("upload-auth-required", "share upload authorization was rejected");
-  if (!response.ok) throw new SharePublishError("upload-failed", "share registry rejected the encrypted blob");
-  let body;
-  try {
-    body = await response.json();
-  } catch {
-    throw new SharePublishError("upload-failed", "share registry returned an invalid response");
-  }
-  const record2 = typeof body === "object" && body !== null ? body : {};
-  if (record2.cid !== input.cid || typeof record2.deleteAfter !== "string") throw new SharePublishError("upload-failed", "share registry returned an unexpected CID or retention value");
-  return { cid: input.cid, deleteAfter: record2.deleteAfter };
-}
-async function uploadShareBlob(options, input) {
-  const result = await (options.uploadBlob ?? ((value) => defaultUpload(options, value)))(input);
-  if (result.cid !== input.cid || typeof result.deleteAfter !== "string") throw new SharePublishError("upload-failed", "share uploader returned an invalid result");
-  return result;
-}
-async function publishShare(options) {
-  const target = options.target ?? { kind: "bearer" };
-  assertTarget(target);
-  assertSafeFilename(options.filename);
-  assertOrigin(options.origin, "share origin");
-  if (options.mediaType !== void 0 && options.mediaType.length === 0) throw new SharePublishError("invalid-argument", "mediaType must not be empty");
-  const maxBytes = options.maxBytes ?? SHARE_CONTENT_LIMIT;
-  if (maxBytes > SHARE_CONTENT_LIMIT) throw new SharePublishError("max-bytes-exceeded", "share content exceeds the maximum 100 MiB limit");
-  const content = await snapshotSource(options.source, maxBytes);
-  if (content.byteLength === 0) throw new SharePublishError("invalid-argument", "share content is empty");
-  if (options.allowBinary !== true) {
-    try {
-      new TextDecoder("utf-8", { fatal: true }).decode(content);
-    } catch {
-      throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8");
-    }
-  }
-  const nowMs2 = options.now?.() ?? Date.now();
-  const expiresAt = options.expiresAt ?? new Date(nowMs2 + DEFAULT_SHARE_LIFETIME_MS);
-  if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= nowMs2) throw new SharePublishError("invalid-argument", "expiresAt must be a valid future time");
-  const expiry = expiresAt.toISOString();
-  const nodeAudience = options.nodeAudience ?? "did:web:node.tinycloud.xyz";
-  const spaceId = options.spaceId ?? "bearer";
-  const shareId = toBase64Url(globalThis.crypto.getRandomValues(new Uint8Array(16)));
-  const path = `shares/${shareId}/${options.filename}`;
-  const sessionPrivateKey = ed25519.utils.randomPrivateKey();
-  const senderPrivateKey = ed25519.utils.randomPrivateKey();
-  let contentKey;
-  let envelopeKey;
-  try {
-    const sessionPublicKey = ed25519.getPublicKey(sessionPrivateKey);
-    const sessionDid = didKeyFromEd25519PublicKey(sessionPublicKey);
-    const delegation = mintBearerDelegation({
-      issuerPrivateKey: senderPrivateKey,
-      audienceDid: sessionDid,
-      resourceUri: bearerResourceUri(options.origin, spaceId, path),
-      expiresAtSeconds: Math.ceil(expiresAt.getTime() / 1e3)
-    });
-    contentKey = generateKey();
-    const sealedContent = await seal(content, contentKey);
-    const unsigned = {
-      version: 1,
-      shareId,
-      delegation,
-      authorizationTarget: {
-        kind: "bearerKey",
-        sessionJwk: { kty: "OKP", crv: "Ed25519", x: toBase64Url(sessionPublicKey), d: toBase64Url(sessionPrivateKey) }
-      },
-      target: { origin: options.origin, nodeAudience, spaceId, resource: { kind: "exact", path } },
-      display: { filename: options.filename },
-      expiry,
-      content: { cid: sealedContent.cid, key: toBase64Url(contentKey) }
-    };
-    const envelope = signEnvelope(unsigned, senderPrivateKey);
-    envelopeKey = generateKey();
-    const sealedEnvelope = await seal(new TextEncoder().encode(canonicalize2(envelope)), envelopeKey);
-    let inlineUrl;
-    if (options.inline === true) {
-      try {
-        inlineUrl = await encodeInlineShareUrl({ origin: options.origin, ciphertext: sealedEnvelope.blob, key32: envelopeKey });
-      } catch (error) {
-        throw new SharePublishError("inline-too-large", error instanceof Error ? error.message : "inline share is too large");
-      }
-    }
-    const contentUpload = await uploadShareBlob(options, { blob: sealedContent.blob, cid: sealedContent.cid, deleteAfter: expiry, contentLength: sealedContent.blob.byteLength });
-    let url;
-    let kind;
-    let retention = contentUpload.deleteAfter;
-    if (options.inline === true) {
-      if (inlineUrl === void 0) throw new SharePublishError("inline-too-large", "inline share is too large");
-      url = inlineUrl;
-      kind = "inline";
-    } else {
-      const envelopeUpload = await uploadShareBlob(options, { blob: sealedEnvelope.blob, cid: sealedEnvelope.cid, deleteAfter: expiry, contentLength: sealedEnvelope.blob.byteLength });
-      url = encodeShareUrl({ origin: options.origin, ciphertextCid: envelopeUpload.cid, key32: envelopeKey });
-      kind = "compact";
-      retention = envelopeUpload.deleteAfter;
-    }
-    const metadata = {
-      protocol: "tinycloud-share",
-      version: 1,
-      shareId,
-      origin: options.origin,
-      target: { kind: "bearer", origin: options.origin, nodeAudience, spaceId },
-      resource: { kind: "exact", path },
-      actions: ["read"],
-      expiresAt: expiry,
-      display: { filename: options.filename },
-      content: { cid: sealedContent.cid }
-    };
-    const result = { protocol: "tinycloud-share", version: SHARE_PUBLISH_RESULT_VERSION, link: { kind, cid: sealedEnvelope.cid }, metadata, registryDeleteAfter: retention };
-    Object.defineProperty(result, "toJSON", {
-      enumerable: false,
-      value: () => redactPublishedShare(result)
-    });
-    Object.defineProperty(result, "url", { enumerable: false, value: url });
-    return result;
-  } finally {
-    sessionPrivateKey.fill(0);
-    senderPrivateKey.fill(0);
-    contentKey?.fill(0);
-    envelopeKey?.fill(0);
-  }
 }
 function authorizationMethodForTarget(target) {
   if (target.kind === "recipientDid") return "openkey-device";
@@ -19218,8 +18315,8 @@ function targetAuthorizationMethod(target) {
 }
 async function publishTargetShare(input) {
   const target = normalizeShareTarget(input.target);
-  if (target.kind === "bearer") return publishShare(input);
   if (input.targetAdapter === void 0) {
+    if (target.kind === "bearer") throw new SharePublishError("authority-required", "native bearer publication requires an authenticated TinyCloud node");
     return {
       state: "authorization-required",
       method: targetAuthorizationMethod(target)
@@ -19229,9 +18326,9 @@ async function publishTargetShare(input) {
     const chunks = [];
     let size2 = 0;
     for await (const chunk of input.source) {
-      if (!(chunk instanceof Uint8Array)) throw new TypeError("addressed publication source yielded invalid bytes");
+      if (!(chunk instanceof Uint8Array)) throw new TypeError("share publication source yielded invalid bytes");
       size2 += chunk.byteLength;
-      if (size2 > (input.maxBytes ?? 100 * 1024 * 1024)) throw new TypeError("addressed publication exceeds maxBytes");
+      if (size2 > (input.maxBytes ?? SHARE_CONTENT_LIMIT)) throw new SharePublishError("max-bytes-exceeded", "share publication exceeds maxBytes");
       chunks.push(chunk.slice());
     }
     const bytes3 = new Uint8Array(size2);
@@ -19242,15 +18339,29 @@ async function publishTargetShare(input) {
     }
     return bytes3;
   })();
+  if (source.byteLength === 0) throw new SharePublishError("invalid-argument", "share content is empty");
+  if (!input.filename || input.filename === "." || input.filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(input.filename)) {
+    throw new SharePublishError("invalid-argument", "filename must be one safe path segment");
+  }
+  if (target.kind === "bearer" && input.allowBinary !== true) {
+    try {
+      new TextDecoder("utf-8", { fatal: true }).decode(source);
+    } catch {
+      throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8");
+    }
+  }
   const files = input.files === void 0 || input.files.length === 0 ? [{ bytes: source }] : input.files;
   const limit = input.maxBytes ?? SHARE_CONTENT_LIMIT;
   let totalBytes = 0;
   for (const file of files) {
     totalBytes += file.bytes.byteLength;
     if (!Number.isSafeInteger(totalBytes) || totalBytes > limit) {
-      throw new SharePublishError("max-bytes-exceeded", "addressed publication exceeds the combined byte limit");
+      throw new SharePublishError("max-bytes-exceeded", "share publication exceeds the combined byte limit");
     }
   }
+  const nowMs2 = input.now?.() ?? Date.now();
+  const expiresAt = input.expiresAt ?? new Date(nowMs2 + DEFAULT_SHARE_LIFETIME_MS);
+  if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= nowMs2) throw new SharePublishError("invalid-argument", "expiresAt must be a valid future time");
   return input.targetAdapter.publish({
     source,
     filename: input.filename,
@@ -19259,18 +18370,8 @@ async function publishTargetShare(input) {
     ...input.resourceKind === void 0 ? {} : { resourceKind: input.resourceKind },
     ...input.actions === void 0 ? {} : { actions: input.actions },
     target,
-    expiresAt: input.expiresAt ?? new Date((input.now?.() ?? Date.now()) + 7 * 24 * 60 * 60 * 1e3),
+    expiresAt,
     origin: input.origin,
-    ...input.inline === void 0 ? {} : { inline: input.inline },
-    upload: {
-      ...input.registryBaseUrl === void 0 ? {} : { registryBaseUrl: input.registryBaseUrl },
-      ...input.fetchFn === void 0 ? {} : { fetchFn: input.fetchFn },
-      ...input.authorizeUpload === void 0 ? {} : { authorizeUpload: input.authorizeUpload },
-      ...input.authorizationOrigin === void 0 ? {} : { authorizationOrigin: input.authorizationOrigin },
-      ...input.credentials === void 0 ? {} : { credentials: input.credentials },
-      ...input.allowInsecureRegistry === void 0 ? {} : { allowInsecureRegistry: input.allowInsecureRegistry },
-      ...input.uploadBlob === void 0 ? {} : { uploadBlob: input.uploadBlob }
-    },
     ...input.notify === void 0 ? {} : { notify: input.notify }
   });
 }
@@ -19459,8 +18560,8 @@ function historyRecordForPublishedShare(result, now = /* @__PURE__ */ new Date()
     ...result.metadata.display.filename === void 0 ? {} : { filename: result.metadata.display.filename }
   };
 }
-function recipientMatchesShareRecord(record2, recipient) {
-  const matcher = record2.recipientMatcher;
+function recipientMatchesShareRecord(record, recipient) {
+  const matcher = record.recipientMatcher;
   if (matcher.kind === "bearer" || matcher.kind === "recipientDid") return false;
   if (matcher.kind === "exactEmail") return matcher.value === recipient;
   const at = recipient.lastIndexOf("@");
@@ -19497,65 +18598,80 @@ async function defaultIdempotencyKey(shareId, recipient) {
   ));
   return `tinycloud-share:${shareId}:${toBase64Url(digest3)}`;
 }
-function targetKind2(record2) {
-  if (record2.targetKind !== void 0) return record2.targetKind;
-  return record2.recipientMatcher.kind === "exactEmail" ? "email" : record2.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record2.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
+function targetKind2(record) {
+  if (record.targetKind !== void 0) return record.targetKind;
+  return record.recipientMatcher.kind === "exactEmail" ? "email" : record.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
+}
+function policyNodeAudience(record) {
+  const envelope = record.deliveryMaterial?.envelope;
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record.target.nodeAudience;
+  const binding = envelope.attestedEnforcerBinding;
+  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record.target.nodeAudience;
+  const nodeAudience = binding.nodeAudience;
+  return typeof nodeAudience === "string" ? nodeAudience : record.target.nodeAudience;
 }
 async function revokeShare(input) {
   const target = targetKind2(input.record);
-  if (target === "bearer") return { state: "retention-only", target, reason: "bearer-capability-cannot-be-revoked" };
   if (input.adapter === void 0) return { state: "unsupported", target, reason: "node revocation authority is required", code: "unsupported-target" };
   const scope = input.scope ?? "direct";
   const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
   if (delegationCid === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
-  await input.adapter.revokeDelegation({ delegationCid, scope });
+  if (target === "bearer") {
+    if (input.adapter.revokeDelegation === void 0) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokeDelegation({ delegationCid, scope });
+  } else {
+    if (input.record.ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
+    if (input.adapter.revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokePolicyRoot({
+      rootCid: delegationCid,
+      targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
+      ownerDid: input.record.ownerDid,
+      nodeOrigin: input.record.target.origin,
+      nodeAudience: policyNodeAudience(input.record)
+    });
+  }
   const revokedAt = (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records !== void 0) await input.records.put({ ...input.record, revokedAt });
   return { state: "revoked", target, delegationCid, revokedAt };
 }
-function redactRecord(record2, revealLink, link2) {
-  const matcher = record2.recipientMatcher;
-  const revealedLink = revealLink ? link2 ?? record2.link : void 0;
+function redactRecord(record, revealLink, link2) {
+  const matcher = record.recipientMatcher;
+  const revealedLink = revealLink ? link2 ?? record.link : void 0;
   return {
-    shareId: record2.shareId,
+    shareId: record.shareId,
     target: matcher.kind === "exactEmail" ? "email" : matcher.kind === "emailDomain" ? "email-domain" : matcher.kind === "recipientDid" ? "recipient-did" : "bearer",
     ...matcher.kind === "exactEmail" ? { recipient: matcher.value } : matcher.kind === "emailDomain" ? { recipient: `*@${matcher.value}` } : matcher.kind === "recipientDid" ? { recipient: matcher.value } : {},
-    expiresAt: record2.expiresAt,
-    revoked: record2.revokedAt !== void 0,
+    expiresAt: record.expiresAt,
+    revoked: record.revokedAt !== void 0,
     ...revealedLink === void 0 ? {} : { link: revealedLink }
   };
 }
 async function listShares(storage) {
   const records = await storage.list();
-  return records.map((record2) => redactRecord(record2, false));
+  return records.map((record) => redactRecord(record, false));
 }
 async function showShare(input) {
-  const record2 = await input.storage.get(input.shareId);
-  if (record2 === void 0) throw new Error("share not found");
-  return redactRecord(record2, input.revealLink === true, input.link);
+  const record = await input.storage.get(input.shareId);
+  if (record === void 0) throw new Error("share not found");
+  return redactRecord(record, input.revealLink === true, input.link);
 }
-function isLegacyShareLink(value) {
-  return value.startsWith("tc1:");
+function parseNativeShareUrl(value) {
+  const url = new URL(value);
+  if (url.search || url.pathname !== "/viewer") throw new TypeError("native shares must carry tc1 only in the /viewer URL fragment");
+  const fragment = new URLSearchParams(url.hash.slice(1));
+  const token = fragment.get(NATIVE_SHARE_FRAGMENT_PARAMETER);
+  if (!token || fragment.size !== 1) throw new TypeError("missing native share fragment");
+  return token;
 }
-async function receiveLegacyShare(link2, reader) {
-  if (!isLegacyShareLink(link2)) throw new Error("legacy link must use tc1:");
-  return reader.read(link2);
-}
-async function migrateShare(input) {
-  const value = await receiveLegacyShare(input.link, input.reader);
-  return { protocol: "tinycloud-share", version: 1, legacy: true, value, migrated: await input.publish(value) };
-}
-var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicyV1Schema, policyCredentialRequirementV1Schema, unifiedPolicyV2Schema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, BEARER_READ_ABILITY, READ_ABILITIES, ED25519_VERIFY_OPTS, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_SIGNATURE_DOMAIN, ENVELOPE_V2_SIGNATURE_DOMAIN, ENVELOPE_V3_SIGNATURE_DOMAIN, POLICY_V1_SIGNATURE_DOMAIN, POLICY_V2_SIGNATURE_DOMAIN, CONTENT_SOURCE_V1_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN, NATIVE_PROJECTION_V1_DOMAIN, ATTESTED_ENFORCER_V2_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, DEFAULT_MAX_CONTENT_BLOB_BYTES, CONTENT_SEALED_OVERHEAD, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_SEALED_OVERHEAD, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base58btc2, base58flickr2, textEncoder, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN;
+var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicyV1Schema, policyCredentialRequirementV1Schema, unifiedPolicyV2Schema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, ENVELOPE_AAD_LABEL, AAD, ED25519_VERIFY_OPTS2, ENVELOPE_V3_SIGNATURE_DOMAIN, POLICY_V1_SIGNATURE_DOMAIN, POLICY_V2_SIGNATURE_DOMAIN, CONTENT_SOURCE_V1_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN, NATIVE_PROJECTION_V1_DOMAIN, ATTESTED_ENFORCER_V2_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, PUBLIC_INLINE_PARAMETER, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base58btc2, base58flickr2, textEncoder, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN, NATIVE_SHARE_FRAGMENT_PARAMETER;
 var init_dist3 = __esm({
   "../share-sdk/dist/index.js"() {
     "use strict";
     init_sha2();
     init_ed25519();
-    init_ed25519();
     init_blake3();
     init_ed25519();
     init_sha256();
-    init_ed25519();
     __defProp2 = Object.defineProperty;
     __export2 = (target, all) => {
       for (var name2 in all)
@@ -24162,19 +23278,9 @@ var init_dist3 = __esm({
     }).strict();
     unsignedShareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.superRefine(validateV3Invariants);
     shareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.extend({ signature: signatureSchema }).strict().superRefine(validateV3Invariants);
-    BEARER_READ_ABILITY = "kv/get";
-    READ_ABILITIES = /* @__PURE__ */ new Set([BEARER_READ_ABILITY]);
-    ED25519_VERIFY_OPTS = { zip215: false };
     ENVELOPE_AAD_LABEL = "tinycloud-share-envelope-v1";
-    SEALED_BLOB_VERSION = 1;
     AAD = utf8Bytes(ENVELOPE_AAD_LABEL);
-    KEY_LENGTH = 32;
-    NONCE_LENGTH = 12;
-    TAG_LENGTH = 16;
-    HEADER_LENGTH = 1;
     ED25519_VERIFY_OPTS2 = { zip215: false };
-    ENVELOPE_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v1\0";
-    ENVELOPE_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v2\0";
     ENVELOPE_V3_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
     POLICY_V1_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v1\0";
     POLICY_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v2\0";
@@ -24183,12 +23289,11 @@ var init_dist3 = __esm({
     NATIVE_PROJECTION_V1_DOMAIN = "xyz.tinycloud.policy/NativeProjection/v1\0";
     ATTESTED_ENFORCER_V2_DOMAIN = "xyz.tinycloud.policy/AttestedEnforcerBinding/v2\0";
     KEY_LENGTH2 = 32;
-    INLINE_PREFIX = "#v=2&p=";
+    INLINE_PREFIX = "#tc2=";
+    PUBLIC_INLINE_PARAMETER = "tc2";
     MAX_INLINE_BYTES = 256 * 1024;
     SHARE_RESULT_VERSION = 1;
     DEFAULT_MAX_SEALED_BLOB_BYTES = 100 * 1024 * 1024 + 29;
-    DEFAULT_MAX_CONTENT_BLOB_BYTES = DEFAULT_MAX_SEALED_BLOB_BYTES;
-    CONTENT_SEALED_OVERHEAD = 1 + 12 + 16;
     ShareReceiveError = class extends Error {
       code;
       details;
@@ -24198,13 +23303,11 @@ var init_dist3 = __esm({
         this.code = code3;
         this.details = details;
       }
-      /** Machine output is deliberately code-only; diagnostics belong on stderr. */
       toJSON() {
         return { protocol: "tinycloud-share", version: SHARE_RESULT_VERSION, error: { code: this.code } };
       }
     };
     SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
-    SHARE_SEALED_OVERHEAD = 1 + 12 + 16;
     SHARE_PUBLISH_RESULT_VERSION = 1;
     DEFAULT_SHARE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1e3;
     SharePublishError = class extends Error {
@@ -24696,6 +23799,7 @@ var init_dist3 = __esm({
     PRESENTATION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
     SESSION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
     INVOCATION_DOMAIN = SHARE_V2_PROTOCOL.invocationDomain;
+    NATIVE_SHARE_FRAGMENT_PARAMETER = "tc1";
   }
 });
 
@@ -25848,16 +24952,26 @@ async function verifyLocationRecord(input) {
   }
   return false;
 }
-async function fetchLocationRecord(registryUrl, subject, fetchFn = globalThis.fetch) {
+async function fetchLocationRecord(registryUrl, subject, fetchFn = globalThis.fetch, signal) {
   const url = `${registryUrl.replace(/\/$/, "")}/v1/locations/${encodeURIComponent(subject)}`;
-  const response = await fetchFn(url);
+  const response = await fetchFn(url, {
+    redirect: "error",
+    headers: { accept: "application/json" },
+    ...signal === void 0 ? {} : { signal }
+  });
   if (response.status === 404) {
     return null;
   }
   if (!response.ok) {
     throw new Error(`location registry returned HTTP ${response.status}`);
   }
-  const body = await response.json();
+  const text2 = await boundedResponseText(response, "location registry", 64 * 1024);
+  let body;
+  try {
+    body = JSON.parse(text2);
+  } catch {
+    throw new LocationRecordValidationError("registry response is not JSON");
+  }
   if (body.record === void 0) {
     throw new LocationRecordValidationError("registry response missing record");
   }
@@ -26032,6 +25146,38 @@ function multiaddrToHttpUrl(input) {
     );
   }
   return uri;
+}
+async function boundedResponseText(response, label, maxBytes) {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maxBytes)) {
+    throw new LocationRecordValidationError(`${label} response is too large`);
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value === void 0) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => void 0);
+        throw new LocationRecordValidationError(`${label} response is too large`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes2 = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes2.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes2);
 }
 function validateSubject(subject) {
   if (typeof subject !== "string" || subject.length === 0) {
@@ -29246,7 +28392,7 @@ var init_profiles = __esm({
 // src/commands/account.ts
 init_profiles();
 init_constants();
-import open2 from "open";
+import open from "open";
 import { readFile as readFile3 } from "fs/promises";
 
 // src/lib/sdk.ts
@@ -30617,7 +29763,7 @@ function registerAccountCommand(program) {
     billing.command(name2).description(`${name2 === "status" ? "Show" : "Open"} account billing page`).option("--open", "Open account.tinycloud.xyz in your browser").action(async (options) => {
       try {
         if (options.open) {
-          await open2(ACCOUNT_BILLING_URL);
+          await open(ACCOUNT_BILLING_URL);
         }
         outputJson({ url: ACCOUNT_BILLING_URL, opened: Boolean(options.open) });
       } catch (error) {
@@ -30909,8 +30055,8 @@ async function callbackFlow(did, options = {}) {
       }
       if (openBrowser) {
         try {
-          const open4 = (await import("open")).default;
-          await open4(authUrl);
+          const open3 = (await import("open")).default;
+          await open3(authUrl);
         } catch {
           server.close();
           throw new Error("Failed to open browser");
@@ -30999,7 +30145,7 @@ function ensureWasm() {
     wasmInitialized = true;
   }
 }
-function generateKey2() {
+function generateKey() {
   ensureWasm();
   const mgr = new TCWSessionManager();
   const keyId = mgr.createSessionKey("cli");
@@ -31262,7 +30408,7 @@ async function ensureShareDeviceAuthorization(input) {
   }
   let key = await ProfileManager.getKey(input.profileName);
   if (!key) {
-    const generated = generateKey2();
+    const generated = generateKey();
     key = generated.jwk;
     await ProfileManager.setKey(input.profileName, key);
   }
@@ -32324,7 +31470,7 @@ async function rotateAuthKey(profileName, host, options = {}) {
     return;
   }
   const { jwk, did } = await withSpinner("Generating session key...", async () => {
-    return generateKey2();
+    return generateKey();
   });
   await ProfileManager.setKey(profileName, jwk);
   await ProfileManager.clearSession(profileName);
@@ -32407,7 +31553,7 @@ async function handleLocalAuth(profileName, host, options = {}) {
   const hasKey = await ProfileManager.getKey(profileName);
   if (options.forceSessionKey || !hasKey) {
     const { jwk, did: generatedSessionDid } = await withSpinner("Generating session key...", async () => {
-      return generateKey2();
+      return generateKey();
     });
     await ProfileManager.setKey(profileName, jwk);
     sessionDid = generatedSessionDid;
@@ -33122,7 +32268,7 @@ function registerInitCommand(program) {
       }
       await ProfileManager.ensureConfigDir();
       const { jwk, did } = await withSpinner("Generating key...", async () => {
-        return generateKey2();
+        return generateKey();
       });
       await ProfileManager.setKey(profileName, jwk);
       const profileConfig = {
@@ -33642,7 +32788,7 @@ function registerProfileCommand(program) {
         throw new CLIError("PROFILE_EXISTS", `Profile "${name2}" already exists`, ExitCode.ERROR);
       }
       await ProfileManager.ensureConfigDir();
-      const { jwk, did } = generateKey2();
+      const { jwk, did } = generateKey();
       await ProfileManager.setKey(name2, jwk);
       await ProfileManager.setProfile(name2, {
         name: name2,
@@ -34777,8 +33923,8 @@ function registerSecretsCommand(program, openKeyAcquisition) {
   });
   secrets.command("manage").description("Open the TinyCloud Secrets Manager in your browser").action(async () => {
     try {
-      const open4 = (await import("open")).default;
-      await open4("https://secrets.tinycloud.xyz");
+      const open3 = (await import("open")).default;
+      await open3("https://secrets.tinycloud.xyz");
       outputJson({ opened: "https://secrets.tinycloud.xyz" });
     } catch (error) {
       handleError(error);
@@ -34788,7 +33934,6 @@ function registerSecretsCommand(program, openKeyAcquisition) {
 
 // src/commands/share.ts
 init_dist3();
-import { readFile as readFile10 } from "fs/promises";
 init_errors();
 
 // src/share/output.ts
@@ -34828,7 +33973,7 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat, mkdir as mkdir3, mkdtemp, open as open3, readFile as readFile9, realpath, stat as stat2, link, rename as rename2, rm as rm2, unlink } from "fs/promises";
+import { lstat, mkdir as mkdir3, mkdtemp, open as open2, readFile as readFile9, realpath, stat as stat2, link, rename as rename2, rm as rm2, unlink } from "fs/promises";
 import { randomBytes as randomBytes4 } from "crypto";
 import { basename as basename2, join as join6, resolve as resolve2, sep } from "path";
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
@@ -34896,7 +34041,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve2(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open3(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open2(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath(outputDirectory);
   const outputPath = join6(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
@@ -34920,7 +34065,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open3(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open2(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -34950,8 +34095,6 @@ async function writeShareOutput(directory, filename, bytes, force) {
 
 // src/commands/share.ts
 var SHARE_ORIGIN = "https://share.tinycloud.xyz";
-var DEFAULT_REGISTRY = `${SHARE_ORIGIN}/api/share/link-only/registry`;
-var DEFAULT_READ_REGISTRY = "https://registry.tinycloud.xyz";
 var shareServices = {};
 function parseShareTarget(value) {
   if (value === "anyone" || value === "bearer") return { kind: "bearer" };
@@ -34961,26 +34104,11 @@ function parseShareTarget(value) {
   if (value.includes("@")) return { kind: "email", address: value };
   throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
 }
-function publishServices(insecureLocalRegistry = false) {
-  return {
-    ...shareServices.uploadBlob === void 0 ? {} : { uploadBlob: shareServices.uploadBlob },
-    ...shareServices.authorizeUpload === void 0 ? {} : { authorizeUpload: shareServices.authorizeUpload },
-    ...shareServices.authorizeUpload === void 0 || insecureLocalRegistry ? {} : { authorizationOrigin: SHARE_ORIGIN },
-    ...shareServices.credentials === void 0 ? {} : { credentials: shareServices.credentials },
-    ...shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn }
-  };
-}
-function fetchServices() {
-  return {
-    ...shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn },
-    ...shareServices.trustedPolicyAuthority === void 0 ? {} : { trustedPolicyAuthority: shareServices.trustedPolicyAuthority }
-  };
-}
 function shareCliError(error) {
   if (error instanceof CLIError) return error;
   if (error instanceof SharePublishError) {
-    const exit = error.code === "upload-auth-required" ? 3 : error.code === "upload-failed" ? 4 : error.code === "max-bytes-exceeded" || error.code === "inline-too-large" ? 7 : error.code === "unsupported-target" || error.code === "invalid-argument" ? 2 : 1;
-    const code3 = error.code === "upload-auth-required" ? "UPLOAD_AUTH_REQUIRED" : error.code === "upload-failed" ? "UNAVAILABLE" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : error.code === "inline-too-large" ? "INLINE_TOO_LARGE" : error.code === "unsupported-target" ? "UNSUPPORTED_LINK" : error.code === "invalid-argument" ? "INVALID_ARGUMENT" : "ERROR";
+    const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
+    const code3 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
     return new CLIError(code3, error.message, exit);
   }
   if (error instanceof ShareReceiveError) {
@@ -35010,6 +34138,15 @@ function inputUrl(value, stdin) {
   if (stdin || value === "-") return readBoundedUrlStdin();
   if (value === void 0 || value.length === 0) throw new CLIError("INVALID_ARGUMENT", "a share URL or - is required", 2);
   return Promise.resolve(value);
+}
+async function inspectShareInputOnce(value, stdin, expectedOrigin, dependencies = {}) {
+  const link2 = stdin || value === "-" ? await (dependencies.read ?? readBoundedUrlStdin)() : await inputUrl(value, false);
+  try {
+    parseNativeShareUrl(link2);
+  } catch {
+    return (dependencies.inspect ?? inspectShare)(link2, { expectedOrigin });
+  }
+  throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
 }
 function jsonOutput(options, command) {
   return options.json === true || command.optsWithGlobals().json === true;
@@ -35041,19 +34178,6 @@ function requestedActions(values) {
   if (actions.some((value) => value !== "read" && value !== "list" && value !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
   return [...new Set(actions)];
 }
-async function authorizationProof(options) {
-  const encoded = options.authorizationProofFile === void 0 ? void 0 : await readFile10(options.authorizationProofFile, "utf8").catch(() => {
-    throw new CLIError("INVALID_ARGUMENT", "authorization proof file could not be read", 2);
-  });
-  if (encoded === void 0) return void 0;
-  try {
-    const value = JSON.parse(encoded);
-    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("object");
-    return value;
-  } catch {
-    throw new CLIError("INVALID_ARGUMENT", "authorization proof must be a JSON object", 2);
-  }
-}
 function assertAggregateInputLimit(inputs, maxBytes) {
   const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
   let total = 0;
@@ -35064,10 +34188,9 @@ function assertAggregateInputLimit(inputs, maxBytes) {
 }
 function registerShareCommand(program) {
   const share = program.command("share").description("Publish and consume TinyCloud Share links");
-  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime", "7d").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--inline", "Embed the sealed envelope in the URL fragment").option("--compact", "Use a CID-addressed compact link (default)").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY).option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests").action(async (files, options, command) => {
+  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime", "7d").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
     try {
       const json = jsonOutput(options, command);
-      if (options.inline && options.compact) throw new CLIError("INVALID_ARGUMENT", "--inline and --compact are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const inputs = await Promise.all(files.map((file) => readShareInput(file, files.length === 1 ? options.name : void 0, maxBytes)));
@@ -35089,13 +34212,9 @@ function registerShareCommand(program) {
         actions,
         expiresAt: expires(options.expires),
         origin: options.viewerOrigin,
-        inline: options.inline === true,
         ...maxBytes === void 0 ? {} : { maxBytes },
-        registryBaseUrl: options.registry,
-        allowInsecureRegistry: options.insecureRegistry === true,
         notify: options.notify === true,
-        targetAdapter: shareServices.targetAdapter,
-        ...publishServices(options.insecureRegistry === true)
+        targetAdapter: shareServices.targetAdapter
       });
       if ("state" in result) {
         if (json) {
@@ -35117,44 +34236,44 @@ function registerShareCommand(program) {
       handleError(shareCliError(error));
     }
   });
-  share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
+  share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
     try {
       const json = jsonOutput(options, command);
-      const link2 = await inputUrl(url, options.stdin === true);
-      const result = await inspectShare(link2, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin, ...fetchServices() });
+      const result = await inspectShareInputOnce(url, options.stdin === true, options.viewerOrigin);
       if (json) writeJson2(result);
       else inspectHuman(result);
     } catch (error) {
       handleError(shareCliError(error));
     }
   });
-  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--resume-token <token>", "Resume a previously returned recipient authorization step").option("--authorization-proof-file <path>", "Read the JSON authorization proof from a file").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).option("--legacy", "Read a legacy tc1: link (read-only)").action(async (url, options, command) => {
+  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (options.stdout && json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
       const link2 = await inputUrl(url, options.stdin === true);
-      const proof = await authorizationProof(options);
-      if (options.legacy) {
-        if (!isLegacyShareLink(link2) || shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy receive requires an installed read-only tc1 adapter", 2);
-        const bytes = await receiveLegacyShare(link2, shareServices.legacyReader);
+      let nativeLink = false;
+      try {
+        parseNativeShareUrl(link2);
+        nativeLink = true;
+      } catch {
+      }
+      if (nativeLink) {
+        if (shareServices.nativeReader === void 0) throw new CLIError("AUTH_REQUIRED", "native TinyCloud receive is not configured", 3);
+        const native = await shareServices.nativeReader(link2);
+        if (maxBytes !== void 0 && native.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);
         if (options.stdout) {
-          process.stdout.write(Buffer.from(bytes));
+          process.stdout.write(Buffer.from(native.bytes));
           return;
         }
-        const output3 = await writeShareOutput(options.output ?? ".", "share.md", bytes, options.force === true);
-        if (json) writeJson2({ protocol: "tinycloud-share", version: 1, legacy: true, path: output3 });
+        const output3 = await writeShareOutput(options.output ?? ".", native.filename, native.bytes, options.force === true);
+        if (json) writeJson2({ protocol: "tinycloud-share", version: 1, path: output3, transport: "native" });
         else receiveHuman(output3);
         return;
       }
       const result = await receiveShare(link2, {
-        registryBaseUrl: options.registry,
         expectedOrigin: options.viewerOrigin,
-        ...fetchServices(),
-        ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes },
-        ...shareServices.authorization === void 0 ? {} : { authorization: shareServices.authorization },
-        ...options.resumeToken === void 0 ? {} : { authorizationResumeToken: options.resumeToken },
-        ...proof === void 0 ? {} : { authorizationProof: proof }
+        ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes }
       });
       if ("state" in result) {
         if (json) {
@@ -35171,50 +34290,6 @@ function registerShareCommand(program) {
       const output2 = await writeShareOutput(options.output ?? ".", result.metadata.display.filename ?? "share.md", result.bytes, options.force === true);
       if (json) receiveJson(result, output2);
       else receiveHuman(output2);
-    } catch (error) {
-      handleError(shareCliError(error));
-    }
-  });
-  share.command("migrate [url]").description("Read a legacy tc1 link and re-mint a modern Share link").option("--stdin", "Read the complete legacy link from stdin").option("--name <filename>", "Filename for the migrated content", "migrated.md").option("--to <target>", "Modern Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Modern share lifetime", "7d").option("--max-bytes <bytes>", "Bound migrated content bytes").option("--inline", "Embed the sealed envelope in the URL fragment").option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY).option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests").option("--json", "Print versioned redacted JSON").action(async (url, options, command) => {
-    try {
-      const json = jsonOutput(options, command);
-      if (shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy migration requires an installed read-only tc1 adapter", 2);
-      const link2 = await inputUrl(url, options.stdin === true);
-      if (!isLegacyShareLink(link2)) throw new CLIError("UNSUPPORTED_LINK", "only tc1: links can be migrated", 2);
-      const maxBytes = byteLimit(options.maxBytes) ?? MAX_SHARE_STDIN_BYTES;
-      const migrated = await migrateShare({
-        link: link2,
-        reader: shareServices.legacyReader,
-        publish: async (bytes) => {
-          if (bytes.byteLength > maxBytes) throw new SharePublishError("max-bytes-exceeded", "legacy content exceeds the configured byte limit");
-          const result = await publishTargetShare({
-            source: bytes,
-            filename: options.name,
-            mediaType: "text/markdown",
-            target: parseShareTarget(options.to),
-            expiresAt: expires(options.expires),
-            origin: options.viewerOrigin,
-            inline: options.inline === true,
-            registryBaseUrl: options.registry,
-            allowInsecureRegistry: options.insecureRegistry === true,
-            notify: options.notify === true,
-            targetAdapter: shareServices.targetAdapter,
-            ...publishServices(options.insecureRegistry === true)
-          });
-          if ("state" in result) throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
-          const record = await rememberPublishedShare(result);
-          if (options.notify === true) {
-            const target = parseShareTarget(options.to);
-            if (target.kind !== "email") throw new CLIError("INVALID_ARGUMENT", "--notify requires an exact email target", 2);
-            if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-            const delivery = await notifyShare({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
-            if (delivery.state === "partial-failure") process.exitCode = 9;
-          }
-          return result;
-        }
-      });
-      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, legacy: true, migrated: redactPublishedShare(migrated.migrated) });
-      else publishHuman(migrated.migrated);
     } catch (error) {
       handleError(shareCliError(error));
     }
@@ -36127,7 +35202,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { readFile as readFile11 } from "fs/promises";
+import { readFile as readFile10 } from "fs/promises";
 import { writeFile as writeFile8 } from "fs/promises";
 import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
 async function readStdin4() {
@@ -36185,7 +35260,7 @@ function registerVaultCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile11(options.file));
+        putValue = new Uint8Array(await readFile10(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin4());
       } else {
@@ -36304,7 +35379,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { readFile as readFile12 } from "fs/promises";
+import { readFile as readFile11 } from "fs/promises";
 import { writeFile as writeFile9 } from "fs/promises";
 var VARIABLES_PREFIX = "variables/";
 async function readStdin5() {
@@ -36405,7 +35480,7 @@ function registerVarsCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile12(options.file, "utf-8");
+        varValue = await readFile11(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin5()).toString("utf-8");
       } else {

@@ -129,6 +129,9 @@ class LoopbackEncryptedNode {
     delegatedKvRead: false,
     delegatedDecrypt: false,
     delegatedKvResources: [] as string[],
+    delegations: 0,
+    revocations: 0,
+    revokedInvocations: 0,
     kvReads: 0,
     kvWrites: 0,
   };
@@ -139,6 +142,7 @@ class LoopbackEncryptedNode {
   private spaceId?: string;
   private networkId?: string;
   private readonly delegationCids = new Set<string>();
+  private readonly revokedDelegationCids = new Set<string>();
   private readonly kvData = new Map<string, Map<string, unknown>>();
   private secretPresent = true;
   private browserCredentialBoundary?: {
@@ -163,6 +167,16 @@ class LoopbackEncryptedNode {
         );
         const response = await this.handle(request);
         outgoing.statusCode = response.status;
+        // The native-bearer browser smoke loads Share from a distinct local
+        // origin. Keep this fixture deliberately narrow: it only permits the
+        // caller's Origin and exposes no credentials.
+        const origin = incoming.headers.origin;
+        if (typeof origin === "string") {
+          outgoing.setHeader("access-control-allow-origin", origin);
+          outgoing.setHeader("vary", "Origin");
+          outgoing.setHeader("access-control-allow-headers", "authorization, content-type");
+          outgoing.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+        }
         response.headers.forEach((value, name) => outgoing.setHeader(name, value));
         outgoing.end(Buffer.from(await response.arrayBuffer()));
       } catch (cause) {
@@ -414,6 +428,7 @@ class LoopbackEncryptedNode {
 
   private async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "OPTIONS") return new Response(null, { status: 204 });
     if (url.pathname === "/info" && request.method === "GET") {
       return this.json({
         protocol: this.wasm.protocolVersion(),
@@ -442,9 +457,25 @@ class LoopbackEncryptedNode {
         return new Response("delegation chain rejected by loopback transport", { status: 403 });
       }
       this.observed.signedDelegation = true;
+      this.observed.delegations += 1;
       this.activations.add(cid);
       this.delegationCids.add(cid);
       return this.json({ activated: [cid], skipped: [] });
+    }
+
+    if (url.pathname === "/revoke" && request.method === "POST") {
+      const authorization = request.headers.get("authorization");
+      if (!authorization) return new Response("missing authorization", { status: 401 });
+      const payload = verifiedCompactPayload(authorization);
+      const target = Object.entries(payload.att ?? {}).find(([, actions]) =>
+        Object.keys(actions).includes("tinycloud.delegation/revoke")
+      )?.[0];
+      if (!target?.startsWith("urn:cid:")) return new Response("delegation revoke proof required", { status: 403 });
+      const cid = target.slice("urn:cid:".length);
+      if (!this.delegationCids.has(cid)) return new Response("delegation not found", { status: 404 });
+      this.revokedDelegationCids.add(cid);
+      this.observed.revocations += 1;
+      return this.json({ cid, revoked: true });
     }
 
     const descriptorPrefix = "/encryption/networks/";
@@ -461,6 +492,10 @@ class LoopbackEncryptedNode {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
       const payload = verifiedCompactPayload(authorization);
+      if (payload.prf?.some((cid) => this.revokedDelegationCids.has(cid))) {
+        this.observed.revokedInvocations += 1;
+        return new Response("delegation has been revoked", { status: 403 });
+      }
       if (this.targetsBrowserCredentials(payload) && !this.matchesBrowserSession(payload)) {
         return new Response("activated browser session proof required", { status: 403 });
       }
@@ -476,23 +511,33 @@ class LoopbackEncryptedNode {
           hasExactCapability(payload, resource, action, this.delegationCids);
       });
       if (writes.length > 0) {
-        const form = await request.formData();
         const written: string[] = [];
-        for (const write of writes) {
+        const contentType = request.headers.get("content-type") ?? "";
+        if (writes.length === 1 && !contentType.startsWith("multipart/form-data")) {
+          const write = writes[0]!;
           const separator = write.resource.lastIndexOf("/kv/");
           const targetSpace = write.resource.slice(0, separator).toLowerCase();
           const path = write.resource.slice(separator + 4);
-          const encodedPath = encodeURIComponent(path).replace(/[!'()*]/g, (character) =>
-            `%${character.charCodeAt(0).toString(16).toUpperCase()}`
-          );
-          const part = form.get(path) ?? form.get(encodedPath);
-          if (!(part instanceof Blob)) return new Response("missing batch value", { status: 400 });
-          const text = await part.text();
-          const value = part.type.includes("application/json") || /^(?:\{|\[)/.test(text.trimStart())
-            ? JSON.parse(text)
-            : text;
-          this.kvData.get(targetSpace)!.set(path, value);
+          this.kvData.get(targetSpace)!.set(path, new Uint8Array(await request.arrayBuffer()));
           written.push(path);
+        } else {
+          const form = await request.formData();
+          for (const write of writes) {
+            const separator = write.resource.lastIndexOf("/kv/");
+            const targetSpace = write.resource.slice(0, separator).toLowerCase();
+            const path = write.resource.slice(separator + 4);
+            const encodedPath = encodeURIComponent(path).replace(/[!'()*]/g, (character) =>
+              `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+            );
+            const part = form.get(path) ?? form.get(encodedPath);
+            if (!(part instanceof Blob)) return new Response("missing batch value", { status: 400 });
+            const text = await part.text();
+            const value = part.type.includes("application/json") || /^(?:\{|\[)/.test(text.trimStart())
+              ? JSON.parse(text)
+              : text;
+            this.kvData.get(targetSpace)!.set(path, value);
+            written.push(path);
+          }
         }
         this.observed.signedInvocation = true;
         this.observed.kvWrites += written.length;
@@ -531,7 +576,11 @@ class LoopbackEncryptedNode {
             return this.json([...entries.keys()].filter((key) => key.startsWith(path)).sort());
           }
           if (!entries.has(path)) return new Response("not found", { status: 404 });
-          return this.json(entries.get(path));
+          const value = entries.get(path);
+          if (value instanceof Uint8Array) {
+            return new Response(value, { headers: { "content-type": "application/octet-stream" } });
+          }
+          return this.json(value);
         }
       }
 
@@ -749,6 +798,8 @@ function installSession(node: TinyCloudNode, session: TinyCloudSession): void {
 
 export interface HermeticEncryptedNode {
   readonly host: string;
+  /** Authenticated owner used by cross-origin sharing smoke tests. */
+  readonly owner: TinyCloudNode;
   readonly delegate: TinyCloudNode;
   readonly restorableSession: {
     delegationHeader: { Authorization: string };
@@ -769,6 +820,13 @@ export interface HermeticEncryptedNode {
   readonly applicationsSpaceId: string;
   readonly permissions: readonly PermissionEntry[];
   readonly unrelatedAudience: string;
+  nativeBearerStats(): Readonly<{
+    delegations: number;
+    revocations: number;
+    revokedInvocations: number;
+    kvReads: number;
+    kvWrites: number;
+  }>;
   provisionKvSpace(spaceId: string): void;
   createRestoredDelegate(): TinyCloudNode;
   createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
@@ -805,6 +863,8 @@ export async function createHermeticEncryptedNode(
     delegateSignStrategy?: SignStrategy;
     secretPayloadValue?: string;
     secretPresent?: boolean;
+    /** Configure the authenticated owner for a single native KV bearer path. */
+    nativeBearerPath?: string;
   }> = {},
 ): Promise<HermeticEncryptedNode> {
   const transport = new LoopbackEncryptedNode();
@@ -858,10 +918,14 @@ export async function createHermeticEncryptedNode(
     "agents/sibling/private": { hidden: true },
   });
 
+  const ownerSessionSpaceId = options.nativeBearerPath === undefined ? spaceId : applicationsSpaceId;
+  const ownerSessionAbilities = options.nativeBearerPath === undefined
+    ? { kv: { [SECRET_PATH]: ["tinycloud.kv/get"] } }
+    : { kv: { [options.nativeBearerPath]: ["tinycloud.kv/get", "tinycloud.kv/put"] } };
   const ownerSession = await makeSession(ownerRuntime.node, ownerRuntime.signer, {
     address: ownerAddress,
-    spaceId,
-    abilities: { kv: { [SECRET_PATH]: ["tinycloud.kv/get"] } },
+    spaceId: ownerSessionSpaceId,
+    abilities: ownerSessionAbilities,
     rawAbilities: {
       [networkId]: ["tinycloud.encryption/decrypt"],
       [`${accountSpaceId}/kv/spaces/`]: ["tinycloud.kv/get", "tinycloud.kv/list"],
@@ -869,6 +933,10 @@ export async function createHermeticEncryptedNode(
     },
   });
   installSession(ownerRuntime.node, ownerSession);
+  // Native bearer owners write through their authenticated primary session
+  // before creating the child read delegation.  Treat that base proof as an
+  // accepted invocation proof just as a real node does.
+  if (options.nativeBearerPath !== undefined) transport.allowInvocationProof(ownerSession.delegationCid);
 
   const delegateAddress = await delegateRuntime.signer.getAddress();
   const delegateSession = await makeSession(delegateRuntime.node, delegateRuntime.signer, {
@@ -933,6 +1001,7 @@ export async function createHermeticEncryptedNode(
 
   return {
     host: transport.host,
+    owner: ownerRuntime.node,
     delegate: delegateRuntime.node,
     restorableSession: {
       delegationHeader: delegateSession.delegationHeader,
@@ -964,6 +1033,13 @@ export async function createHermeticEncryptedNode(
     applicationsSpaceId,
     permissions,
     unrelatedAudience,
+    nativeBearerStats: () => ({
+      delegations: transport.observed.delegations,
+      revocations: transport.observed.revocations,
+      revokedInvocations: transport.observed.revokedInvocations,
+      kvReads: transport.observed.kvReads,
+      kvWrites: transport.observed.kvWrites,
+    }),
     provisionKvSpace: (spaceId) => transport.provisionKv(spaceId),
     createRestoredDelegate: () =>
       new TinyCloudNode({ host: transport.host, wasmBindings: transport.wasm }),

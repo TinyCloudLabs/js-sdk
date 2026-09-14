@@ -8,8 +8,6 @@ export const DELIVERY_ADMISSION_DOMAIN = "xyz.tinycloud.policy/delivery-admissio
 
 export interface ShareDeliveryAuthorizationV3Request {
   readonly envelope: Record<string, unknown>;
-  readonly sealedEnvelope: string;
-  readonly envelopeKey: string;
   readonly shareCid: string;
   readonly recipientEmail: string;
   readonly shareUrl: string;
@@ -27,6 +25,8 @@ export interface CredentialInvitationRequest {
   readonly credentialType: string;
   readonly returnLink: string;
   readonly envelopeRef: string;
+  readonly label: string;
+  readonly shareExpiresAt: string;
   readonly audience: string;
   readonly issuedAt: string;
   readonly expiresAt: string;
@@ -43,6 +43,8 @@ export interface DeliveryAdmission {
   readonly credentialType: string;
   readonly returnLink: string;
   readonly envelopeRef: string;
+  readonly label: string;
+  readonly shareExpiresAt: string;
   readonly senderKeyDid: string;
   readonly audience: string;
   readonly issuedAt: string;
@@ -61,8 +63,8 @@ export interface ShareDeliveryAuthorizationV3Receipt {
   readonly proof: { readonly alg: "EdDSA"; readonly kid: string; readonly signature: string };
 }
 
-const REQUEST_KEYS = ["schema", "policyId", "recipient", "resource", "credentialType", "returnLink", "envelopeRef", "audience", "issuedAt", "expiresAt", "nonce"] as const;
-const ADMISSION_KEYS = ["schema", "policyId", "ownerDid", "recipient", "resource", "actions", "credentialType", "returnLink", "envelopeRef", "senderKeyDid", "audience", "issuedAt", "expiresAt", "nonce", "signature"] as const;
+const REQUEST_KEYS = ["schema", "policyId", "recipient", "resource", "credentialType", "returnLink", "envelopeRef", "label", "shareExpiresAt", "audience", "issuedAt", "expiresAt", "nonce"] as const;
+const ADMISSION_KEYS = ["schema", "policyId", "ownerDid", "recipient", "resource", "actions", "credentialType", "returnLink", "envelopeRef", "label", "shareExpiresAt", "senderKeyDid", "audience", "issuedAt", "expiresAt", "nonce", "signature"] as const;
 
 function exactObject(value: unknown, keys: readonly string[], label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} is invalid`);
@@ -98,7 +100,7 @@ export function validateShareDeliveryAuthorizationV3Bytes(
   expected: {
     readonly request: ShareDeliveryAuthorizationV3Request;
     readonly senderKeyDid: string;
-    readonly credentialsAudience: string;
+    readonly deliveryAudience: string;
   },
 ): Omit<ShareDeliveryAuthorizationV3Receipt, "proof"> {
   let parsed: unknown;
@@ -115,7 +117,8 @@ export function validateShareDeliveryAuthorizationV3Bytes(
   const contentSource = object(envelope.contentSource, "v3 content source");
   const envelopeSignature = object(envelope.signature, "v3 envelope signature");
   const target = object(envelope.target, "v3 target");
-  const fields = ["policyId", "recipient", "resource", "credentialType", "returnLink", "envelopeRef", "audience", "issuedAt", "expiresAt", "nonce"];
+  const binding = object(envelope.attestedEnforcerBinding, "v3 attested enforcer binding");
+  const fields = ["policyId", "recipient", "resource", "credentialType", "returnLink", "envelopeRef", "label", "shareExpiresAt", "audience", "issuedAt", "expiresAt", "nonce"];
   if (
     request.schema !== "xyz.tinycloud.credentials/invitation-request/v1"
     || admission.schema !== "xyz.tinycloud.policy/delivery-admission/v0"
@@ -127,14 +130,17 @@ export function validateShareDeliveryAuthorizationV3Bytes(
     || request.credentialType !== "opencredentials.email/v1"
     || request.returnLink !== expected.request.shareUrl
     || request.envelopeRef !== expected.request.shareCid
-    || request.audience !== expected.credentialsAudience
+    || request.label !== expected.request.documentName
+    || request.shareExpiresAt !== envelope.expiry
+    || request.audience !== expected.deliveryAudience
     || request.expiresAt !== expected.request.expiresAt
     || request.nonce !== expected.request.jti
     || admission.ownerDid !== envelopeSignature.signerDid
     || admission.senderKeyDid !== expected.senderKeyDid
     || canonicalize(admission.actions) !== canonicalize(["tinycloud.kv/get"])
     || signature.suite !== "eddsa-ed25519-sha256-jcs-v1"
-    || signature.signerDid !== target.nodeAudience
+    || target.nodeAudience !== binding.nodeAudience
+    || signature.signerDid !== binding.nodeAudience
   ) throw new Error("v3 share delivery authorization is not bound to the submitted request");
   const issuedAt = Date.parse(String(request.issuedAt));
   const expiresAt = Date.parse(String(request.expiresAt));

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { generateKey } from "../src/aead.js";
 import { computeCid } from "../src/cid.js";
-import { encodeInlineShareUrl, encodeShareUrl, parseCompactOrInlineShareUrl, parseShareUrl } from "../src/link.js";
+import { encodeInlineShareUrl, encodePublicInlineShareUrl, encodeShareUrl, parseCompactOrInlineShareUrl, parseShareUrl } from "../src/link.js";
 import { utf8Bytes } from "../src/bytes.js";
 
 const ORIGIN = "https://share.tinycloud.xyz";
@@ -145,9 +145,25 @@ describe("share link codec", () => {
     expect(new URL(url).search).toBe("");
   });
 
+  it("round-trips a public addressed envelope without a fragment or key", async () => {
+    const plaintext = utf8Bytes('{"signed":"policy-envelope"}');
+    const url = await encodePublicInlineShareUrl({ origin: ORIGIN, plaintext });
+    const parsedUrl = new URL(url);
+    const parsed = parseCompactOrInlineShareUrl(url);
+    expect(parsedUrl.pathname).toBe("/viewer");
+    expect(parsedUrl.hash).toBe("");
+    expect([...parsedUrl.searchParams.keys()]).toEqual(["tc2"]);
+    expect(parsed.kind).toBe("inline");
+    if (parsed.kind !== "inline") throw new Error("expected inline");
+    expect(parsed.ciphertext).toEqual(plaintext);
+    expect(parsed.key32).toBeUndefined();
+    expect(() => parseCompactOrInlineShareUrl(`${url}#tc2=secret`)).toThrow(TypeError);
+    expect(() => parseCompactOrInlineShareUrl(`${url}&k=secret`)).toThrow(TypeError);
+  });
+
   it("rejects inline payload tampering and untrusted origins", async () => {
     const url = await encodeInlineShareUrl({ origin: ORIGIN, ciphertext: utf8Bytes("x"), key32: generateKey() });
     expect(() => parseCompactOrInlineShareUrl(url.replace("share.tinycloud.xyz", "evil.example"), { expectedOrigin: ORIGIN })).toThrow(TypeError);
-    expect(() => parseCompactOrInlineShareUrl(url.replace(/p=./, "p=!"))).toThrow(TypeError);
+    expect(() => parseCompactOrInlineShareUrl(url.replace("#tc2=", "#tc2=!"))).toThrow(TypeError);
   });
 });

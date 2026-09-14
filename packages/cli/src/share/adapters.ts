@@ -3,26 +3,22 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { ProfileManager } from "../config/profiles.js";
 import {
-  createRegisteredPolicyAuthority,
-  createAddressedAuthorization,
-  createShareV2HolderBindingArtifact,
-  SHARE_V2_PROTOCOL,
+  createNativeShare,
+  parseNativeShareUrl,
+  SHARE_PUBLISH_RESULT_VERSION,
   publishAddressedShare,
-  type SharePolicyAuthority,
-  type ShareUploadAuthorization,
-  type ShareUploadInput,
+  redactPublishedShare,
+  type PublishedShare,
   type SenderShareRecord,
   type SenderShareRecordStorage,
-  type ShareAuthorizationAdapter,
-  type ShareAuthorizedContent,
   type TargetPublishAdapter,
   type ShareDeliveryAdapter,
   type ShareRevocationAdapter,
   type TargetPublishOutcome,
   type TargetPublishInput,
-  type LegacyShareReader,
 } from "@tinycloud/share-sdk";
-import { canonicalize, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
+import { canonicalize } from "@tinycloud/share-envelope";
+import { revokePolicyRootV3 } from "@tinycloud/sdk-core";
 
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 
@@ -38,24 +34,18 @@ export class ShareAuthorityError extends Error {
 interface SharePublicConfig {
   readonly shareOrigin: string;
   readonly registryOrigin: string;
-  readonly nodeOrigin: string;
   readonly emailOrigin: string;
-  readonly credentialsOrigin: string;
-  readonly nodeAudience: string;
-  readonly enforcerDid: string;
-  readonly nodeInvitationKid: string;
-  readonly nodeInvitationPublicKey: Uint8Array;
 }
 
 export async function postAddressedShareDelivery(input: {
-  readonly credentialsOrigin: string;
+  readonly emailOrigin: string;
   readonly receipt: { readonly request: { readonly returnLink: string }; readonly admission: unknown; readonly proof: unknown };
   readonly shareUrl: string;
   readonly fetchFn: typeof globalThis.fetch;
   readonly signal?: AbortSignal;
 }): Promise<Response> {
   if (input.receipt.request.returnLink !== input.shareUrl) throw new Error("credential invitation is not bound to the share link");
-  return input.fetchFn(`${input.credentialsOrigin}/v1/credential-invitations`, {
+  return input.fetchFn(`${input.emailOrigin}/v1/email`, {
     method: "POST",
     credentials: "omit",
     redirect: "error",
@@ -179,18 +169,15 @@ export function createShareAuthorityAdapters(input: {
   readonly fetchFn?: typeof globalThis.fetch;
   /** Injected in-process authority for tests or a host-specific deployment. */
   readonly publishTarget?: (value: TargetPublishInput) => Promise<TargetPublishOutcome>;
-  readonly authorize?: ShareAuthorizationAdapter<ShareAuthorizedContent>;
   readonly deliver?: ShareDeliveryAdapter["deliver"];
   readonly revokeDelegation?: ShareRevocationAdapter["revokeDelegation"];
-  readonly verifyResult?: NonNullable<ShareAuthorizationAdapter<ShareAuthorizedContent>["verifyResult"]>;
+  readonly revokePolicyRoot?: ShareRevocationAdapter["revokePolicyRoot"];
 } = {}): {
   readonly targetAdapter: TargetPublishAdapter;
-  readonly authorization: ShareAuthorizationAdapter<ShareAuthorizedContent>;
   readonly records: SenderShareRecordStorage;
   readonly delivery: ShareDeliveryAdapter;
   readonly revocation: ShareRevocationAdapter;
-  readonly legacyReader: LegacyShareReader<Uint8Array>;
-  readonly policyAuthority: SharePolicyAuthority;
+  readonly nativeReader: (link: string) => Promise<{ readonly bytes: Uint8Array; readonly filename: string }>;
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
@@ -213,46 +200,67 @@ export function createShareAuthorityAdapters(input: {
     const value = await response.json() as unknown;
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share public config is invalid");
     const object = value as Record<string, unknown>;
-    const decodePublicKey = (key: unknown): Uint8Array => {
-      if (typeof key !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(key)) throw new Error("share node receipt key is invalid");
-      const decoded = new Uint8Array(Buffer.from(key, "base64url"));
-      if (decoded.length !== 32 || Buffer.from(decoded).toString("base64url") !== key) throw new Error("share node receipt key is invalid");
-      return decoded;
-    };
-    const nodeOrigin = canonicalOrigin(input.nodeOrigin ?? object.nodeOrigin, "node origin");
-    const nodeAudience = typeof object.nodeAudience === "string" ? object.nodeAudience : "";
-    const enforcerDid = typeof object.enforcerDid === "string" ? object.enforcerDid : nodeAudience;
-    const nodeInvitationKid = typeof object.nodeInvitationKid === "string" ? object.nodeInvitationKid : "";
-    if (!nodeAudience.startsWith("did:web:") || !nodeInvitationKid.startsWith(`${nodeAudience}#`) || (!enforcerDid.startsWith("did:key:") && enforcerDid !== nodeAudience)) throw new Error("share node trust binding is invalid");
+    if (object.version !== "tinycloud.share/config-v2") throw new Error("share public config version is unsupported");
     return {
       shareOrigin: canonicalOrigin(object.shareOrigin, "origin"),
       registryOrigin: canonicalOrigin(object.registryOrigin, "registry origin"),
-      nodeOrigin,
       emailOrigin: canonicalOrigin(input.emailOrigin ?? object.emailOrigin, "email origin"),
-      credentialsOrigin: canonicalOrigin(object.credentialsOrigin, "credentials origin"),
-      nodeAudience,
-      enforcerDid,
-      nodeInvitationKid,
-      nodeInvitationPublicKey: decodePublicKey(object.nodeInvitationPublicKey),
     };
   })();
   let nodePromise: Promise<Awaited<ReturnType<typeof import("../lib/sdk.js")["ensureAuthenticated"]>>> | undefined;
   const authenticatedNode = async () => nodePromise ??= (async () => {
-    const config = await publicConfig();
     const profile = await (input.profileName?.() ?? selectedProfileName());
-    const context = await ProfileManager.resolveContext({ profile, host: config.nodeOrigin });
+    const context = await ProfileManager.resolveContext({ profile, ...(input.nodeOrigin === undefined ? {} : { host: input.nodeOrigin }) });
     const { ensureAuthenticated } = await import("../lib/sdk.js");
     return ensureAuthenticated(context);
   })();
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
-    if (targetInput.origin !== config.shareOrigin || node.spaceId === undefined) throw new Error("addressed publication is not bound to the configured Share service");
+    if (targetInput.origin !== config.shareOrigin || node.spaceId === undefined) throw new Error("share publication is not bound to the configured Share service");
+    const activeNode = await node.activeNodeIdentity();
     const shareId = crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === undefined || targetInput.files.length === 0
       ? [{ bytes: targetInput.source, filename: targetInput.filename, mediaType: targetInput.mediaType }]
       : targetInput.files;
     const resourceKind = targetInput.resourceKind ?? "exact";
+    if (targetInput.target.kind === "bearer") {
+      if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
+      const file = files[0]!;
+      const resourcePath = `xyz.tinycloud.share/shares/${shareId}/${targetInput.filename}`;
+      const written = await node.kvForSpace(node.spaceId).put(resourcePath, file.bytes.slice(), {
+        contentType: targetInput.mediaType ?? file.mediaType ?? "application/octet-stream",
+      });
+      if (!written.ok) throw new Error("native bearer source upload was rejected");
+      const native = await createNativeShare(node.sharing, {
+        path: resourcePath,
+        expiresAt: targetInput.expiresAt,
+        viewerOrigin: config.shareOrigin,
+      });
+      if (native.spaceId !== node.spaceId) throw new Error("native bearer delegation authority does not match the authenticated owner space");
+      const result = {
+        protocol: "tinycloud-share" as const,
+        version: SHARE_PUBLISH_RESULT_VERSION,
+        url: native.url,
+        link: { kind: "native" as const, cid: native.delegationCid },
+        metadata: {
+          protocol: "tinycloud-share" as const,
+          version: 1 as const,
+          shareId: native.delegationCid,
+          origin: config.shareOrigin,
+          target: { kind: "bearer" as const, origin: activeNode.origin, nodeAudience: activeNode.nodeDid, spaceId: native.spaceId },
+          resource: { kind: "exact" as const, path: resourcePath },
+          actions: ["read"],
+          expiresAt: native.expiresAt.toISOString(),
+          display: { filename: targetInput.filename },
+          recipientMatcher: { kind: "bearer" as const },
+          enforcementDelegationCid: native.delegationCid,
+        },
+      } satisfies PublishedShare;
+      Object.defineProperty(result, "toJSON", { enumerable: false, value: () => redactPublishedShare(result) });
+      Object.defineProperty(result, "url", { enumerable: false, value: native.url });
+      return result;
+    }
     // A v3 addressed share is bound to one wrapped content key, so the
     // encrypted source is a single exact KV resource. Prefix fan-out would
     // need a shared key the envelope does not carry.
@@ -283,9 +291,9 @@ export function createShareAuthorityAdapters(input: {
     return publishAddressedShare({
       shareId,
       shareOrigin: config.shareOrigin,
-      nodeOrigin: config.nodeOrigin,
-      nodeAudience: config.nodeAudience,
-      enforcerDid: config.enforcerDid,
+      nodeOrigin: activeNode.origin,
+      nodeAudience: activeNode.nodeDid,
+      enforcerDid: activeNode.nodeDid,
       spaceId: node.spaceId,
       target: targetInput.target,
       resource: { kind: resourceKind, path: resourcePath },
@@ -296,107 +304,16 @@ export function createShareAuthorityAdapters(input: {
       mediaType,
       byteLength,
       expiresAt: targetInput.expiresAt,
-      inline: targetInput.inline,
       // App-neutral owner authority: the Node SDK owns every Policy/v3
       // transport hop, so the CLI supplies only owner signing material.
       authority: {
-        ownerDid: node.did,
+        ownerDid: node.credentialHolderDid,
         createOwnerRoot: (request) => node.createUnifiedOwnerRoot(request),
         sign: (bytes) => node.signSessionBytes(bytes),
         registerPolicy: (request) => node.registerPolicy(request),
       },
-      upload: targetInput.upload ?? {},
     });
   } };
-  const canonicalAuthorization = async (): Promise<ShareAuthorizationAdapter<ShareAuthorizedContent>> => {
-    const [config, profileName] = await Promise.all([publicConfig(), input.profileName?.() ?? selectedProfileName()]);
-    const profile = await ProfileManager.getProfile(profileName).catch(() => {
-      throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an initialized profile");
-    });
-    const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
-    const node = await authenticatedNode();
-    const holderDid = node.sessionDid;
-    if (profile.authMethod !== "openkey" || session === null || typeof holderDid !== "string" || !holderDid.startsWith("did:key:")) {
-      throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an active OpenKey session");
-    }
-    const delegationHeader = session.delegationHeader;
-    const credential = typeof delegationHeader === "object" && delegationHeader !== null
-      ? (delegationHeader as Record<string, unknown>).Authorization
-      : undefined;
-    const delegationCid = session.delegationCid;
-    if (typeof credential !== "string" || credential.length === 0 || typeof delegationCid !== "string" || delegationCid.length === 0) {
-      throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an active OpenKey delegation");
-    }
-    const addressed = createAddressedAuthorization({
-      nodeOrigin: config.nodeOrigin,
-      trustedNode: { invitationKid: config.nodeInvitationKid, invitationPublicKey: config.nodeInvitationPublicKey },
-      holderDid,
-      sign: async (bytes) => {
-        return node.signSessionBytes(bytes);
-      },
-      buildPresentation: async ({ challenge, envelope }) => {
-        const authority = envelope.ownerAuthority;
-        if (authority === undefined) throw new Error("addressed-owner-authority-missing");
-        const nativeAction = (action: string): string => action === "list" ? "tinycloud.kv/list" : action === "edit" ? "tinycloud.kv/put" : "tinycloud.kv/get";
-        const actions = [...new Set(envelope.actions.map(nativeAction))].sort();
-        const action = envelope.actions.includes("list") ? "tinycloud.kv/list" : envelope.actions.includes("edit") ? "tinycloud.kv/put" : "tinycloud.kv/get";
-        const policyCid = envelope.authorizationTarget.kind === "policy" ? envelope.authorizationTarget.policyCid : "";
-        const enforcerDid = challenge.enforcerDid;
-        if (typeof enforcerDid !== "string" || enforcerDid.length === 0) throw new ShareAuthorityError("UNAVAILABLE", "share authority returned an unbound challenge");
-        const credentialDigest = base64UrlSha256(new TextEncoder().encode(credential));
-        const jti = toBase64Url(crypto.getRandomValues(new Uint8Array(16)));
-        const presentation = {
-          type: "TinyCloudSharePolicyPresentation", version: 2, challengeId: challenge.challengeId, nonce: challenge.nonce,
-          shareCid: authority.shareCid, shareId: envelope.shareId, delegationCid: envelope.delegationCid, policyCid,
-          authorityMaterialHandle: envelope.authorityMaterialHandle, authorityMaterialDigest: envelope.authorityMaterialDigest,
-          contentSource: envelope.contentSource, contentSourceDigest: envelope.contentSourceDigest, holderDid,
-          targetOrigin: envelope.target.origin, nodeAudience: envelope.target.nodeAudience,
-          enforcerDid, credentialDigest,
-          action, actions, resource: envelope.resource.path.replace(/\/$/, ""), requestBodyDigest: challenge.requestBodyDigest,
-          issuedAt: new Date().toISOString(), expiresAt: challenge.expiresAt, jti,
-        };
-        const signature = toBase64Url(await node.signSessionBytes(new TextEncoder().encode(`${SHARE_V2_PROTOCOL.sessionDomain}${canonicalize(presentation)}`)));
-        const proof = { alg: "EdDSA", kid: `${holderDid}#${holderDid.slice("did:key:".length)}`, signature };
-        const holderBinding = await createShareV2HolderBindingArtifact({
-          holderDid,
-          sign: (bytes) => node.signSessionBytes(bytes),
-          message: {
-            type: SHARE_V2_PROTOCOL.holderBindingType,
-            version: SHARE_V2_PROTOCOL.holderBindingVersion,
-            holderDid,
-            challengeId: challenge.challengeId,
-            challengeNonce: challenge.nonce,
-            shareId: envelope.shareId,
-            policyCid,
-            credentialDigest,
-            delegationCid,
-            targetOrigin: envelope.target.origin,
-            nodeAudience: envelope.target.nodeAudience,
-            enforcerDid,
-            expiresAt: challenge.expiresAt,
-            jti,
-          },
-        });
-        return {
-          holderDid, credential, credentialDigest, presentation, presentationProof: proof,
-          proof,
-          holderBinding,
-          sign: (bytes: Uint8Array) => node.signSessionBytes(bytes),
-        };
-      },
-    });
-    const matchesRecipient = (envelope: Parameters<ShareAuthorizationAdapter<ShareAuthorizedContent>["begin"]>[0]["envelope"]): boolean => envelope.authorizationTarget.kind !== "recipientDid" || (envelope.authorizationTarget.did === holderDid && envelope.recipientMatcher.kind === "recipientDid" && envelope.recipientMatcher.value === holderDid);
-    return {
-      async begin(request) { return matchesRecipient(request.envelope) ? addressed.begin(request) : { state: "denied", reason: "rejected" as const }; },
-      async resume(request) { return matchesRecipient(request.envelope) ? addressed.resume(request) : { state: "denied", reason: "rejected" as const }; },
-      verifyResult: addressed.verifyResult,
-    };
-  };
-  const authorization: ShareAuthorizationAdapter<ShareAuthorizedContent> = input.authorize ?? {
-    async begin(request) { return (await canonicalAuthorization()).begin(request); },
-    async resume(request) { return (await canonicalAuthorization()).resume(request); },
-    verifyResult: async (request) => (await canonicalAuthorization()).verifyResult?.(request) ?? false,
-  };
   const delivery: ShareDeliveryAdapter = { deliver: input.deliver ?? (async (request) => {
     const record = request.record;
     if (
@@ -407,19 +324,16 @@ export function createShareAuthorityAdapters(input: {
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
     const receipt = await node.authorizeShareDeliveryV3({
       envelope: record.deliveryMaterial.envelope as Parameters<typeof node.authorizeShareDeliveryV3>[0]["envelope"],
-      sealedEnvelope: record.deliveryMaterial.sealedEnvelope,
-      envelopeKey: record.deliveryMaterial.envelopeKey,
       shareCid: record.deliveryMaterial.shareCid,
       resourcePath: record.resource.path,
       recipientEmail: request.recipient,
       shareUrl: record.link,
       documentName: record.filename ?? "share.md",
       expiresAt: new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1000)).toISOString(),
-      nodeProof: { kid: config.nodeInvitationKid, publicKey: config.nodeInvitationPublicKey },
-      credentialsAudience: config.credentialsOrigin,
+      deliveryAudience: config.emailOrigin,
     });
     const response = await postAddressedShareDelivery({
-      credentialsOrigin: config.credentialsOrigin,
+      emailOrigin: config.emailOrigin,
       receipt,
       shareUrl: record.link,
       fetchFn,
@@ -428,36 +342,44 @@ export function createShareAuthorityAdapters(input: {
     if (!response.ok) throw new Error("share delivery was not accepted");
     return response.status === 208 ? "already-delivered" : "delivered";
   }) };
-  const revocation: ShareRevocationAdapter = { revokeDelegation: input.revokeDelegation ?? (async (request) => {
-    const result = await (await authenticatedNode()).revokeDelegation(request.delegationCid);
-    if (!result.ok) throw new Error("share delegation revocation was rejected");
-  }) };
-  const legacyReader: LegacyShareReader<Uint8Array> = {
-    async read(link) {
-      // This is deliberately an explicit, read-only bridge. Modern publish
-      // never enters the legacy SDK and the raw tc1 material never crosses
-      // the command result boundary.
-      const { TinyCloudNode } = await import("@tinycloud/node-sdk");
-      const node = new TinyCloudNode({ host: (await publicConfig()).nodeOrigin, autoDiscoverLocalNode: false });
-      const received = await node.sharing.receive(link, { autoSubdelegate: false, useSessionKey: false });
-      if (!received.ok) throw new Error("legacy share could not be verified");
-      const value = await received.data.kv.get<Uint8Array>(received.data.path, { binary: true });
-      if (!value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("legacy share content could not be read");
-      return value.data.data.slice();
-    },
+  const revocation: ShareRevocationAdapter = {
+    revokeDelegation: input.revokeDelegation ?? (async (request) => {
+      const result = await (await authenticatedNode()).revokeDelegation(request.delegationCid);
+      if (!result.ok) throw new Error("share delegation revocation was rejected");
+    }),
+    revokePolicyRoot: input.revokePolicyRoot ?? (async (request) => {
+      const node = await authenticatedNode();
+      const activeNode = await node.activeNodeIdentity();
+      if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.credentialHolderDid) {
+        throw new Error("share Policy/v3 revocation is not bound to the active owner node");
+      }
+      await revokePolicyRootV3({
+        nodeOrigin: activeNode.origin,
+        rootCid: request.rootCid,
+        targetRole: request.targetRole,
+        ownerDid: node.credentialHolderDid,
+        issuerDid: node.credentialHolderDid,
+        nodeAudience: activeNode.nodeDid,
+        reason: "share revoked",
+        sign: (digest) => node.signSessionBytes(digest),
+      });
+    }),
   };
-  const policyAuthority: SharePolicyAuthority = {
-    async resolve(request) {
-      const config = await publicConfig();
-      return createRegisteredPolicyAuthority({
-        nodeProof: { kid: config.nodeInvitationKid, publicKey: config.nodeInvitationPublicKey },
-        expectedTarget: { origin: config.nodeOrigin, nodeAudience: config.nodeAudience, enforcerDid: config.enforcerDid },
-      }).resolve(request);
-    },
+  const nativeReader = async (link: string): Promise<{ readonly bytes: Uint8Array; readonly filename: string }> => {
+    const { TinyCloudNode } = await import("@tinycloud/node-sdk");
+    const token = parseNativeShareUrl(link);
+    const decoder = new TinyCloudNode({ autoDiscoverLocalNode: false });
+    const decoded = decoder.sharing.decodeLink(token) as { readonly host?: unknown };
+    if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
+    const client = new TinyCloudNode({ host: canonicalOrigin(decoded.host, "owner node origin"), autoDiscoverLocalNode: false });
+    const received = await client.sharing.receive(token, { autoSubdelegate: false, useSessionKey: false });
+    if (!received.ok) throw new Error("native share could not be verified");
+    const value = await received.data.kv.get<Uint8Array>("", { binary: true });
+    if (!value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("native share content could not be read");
+    return { bytes: value.data.data.slice(), filename: received.data.path.split("/").at(-1) || "share.md" };
   };
   return {
     targetAdapter,
-    authorization,
     records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName, async (bytes) => {
       // Bearer-share history only needs the already-established local session
       // signer. Do not fetch Share public configuration or initialize addressed
@@ -469,51 +391,11 @@ export function createShareAuthorityAdapters(input: {
     }),
     delivery,
     revocation,
-    legacyReader,
-    policyAuthority,
+    nativeReader,
   };
 }
 
 async function selectedProfileName(): Promise<string> {
   const config = await ProfileManager.getConfig();
   return process.env.TC_PROFILE ?? config.defaultProfile;
-}
-
-function base64UrlSha256(value: Uint8Array): string {
-  return createHash("sha256").update(value).digest("base64url");
-}
-
-/**
- * Keeps the explicit test injection seam used by the CLI contract suite.
- * Production Node-specific upload authorization is retired; callers can use
- * inline links without introducing a Node `/share/*` transport.
- */
-export function createProductionUploadAuthorizer(input: {
-  readonly origin?: string;
-  readonly fetchFn?: typeof globalThis.fetch;
-  /** Test-only seam; production uses the persisted OpenKey session. */
-  readonly sessionAuthorization?: () => Promise<ShareUploadAuthorization | undefined>;
-  /** Test-only explicit acquisition hook. */
-  readonly acquireUploadAuthorization?: (input: { readonly profileName: string; readonly upload: ShareUploadInput }) => Promise<ShareUploadAuthorization | undefined>;
-  /** Test-only resume hook. */
-  readonly resumeUploadAuthorization?: (input: { readonly profileName: string; readonly resumeToken: string; readonly upload: ShareUploadInput }) => Promise<ShareUploadAuthorization | undefined>;
-  /** Test-only seam. The production CLI entrypoint never sets this flag. */
-  readonly testOnly?: boolean;
-  /** Resolved by the command adapter so --profile always wins over defaults. */
-  readonly profileName?: () => Promise<string>;
-  /** Resolve the explicit CLI/ENV Node origin for first-time profiles. */
-  readonly nodeOrigin?: () => Promise<string>;
-} = {}): (upload: ShareUploadInput) => Promise<ShareUploadAuthorization> {
-  const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
-  if (origin !== DEFAULT_SHARE_ORIGIN) throw new ShareAuthorityError("UNAVAILABLE", "share upload authorization is restricted to the canonical Share origin");
-  return async (upload) => {
-    const profileName = await (input.profileName?.() ?? selectedProfileName());
-    if (input.testOnly === true) {
-      const suppliedSession = input.sessionAuthorization === undefined ? undefined : await input.sessionAuthorization();
-      if (suppliedSession !== undefined) return suppliedSession;
-      const acquired = await input.acquireUploadAuthorization?.({ profileName, upload });
-      if (acquired !== undefined) return acquired;
-    }
-    throw new ShareAuthorityError("UNAVAILABLE", "Node-specific registry upload authorization is retired; use an inline share");
-  };
 }

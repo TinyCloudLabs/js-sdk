@@ -21,17 +21,17 @@ const envelope = {
   resource: { kind: "exact", path: "shares/share-v3/report.pdf" },
   policy: { policyId: "pol_example", credentialRequirement: { credentialType: { id: "opencredentials.email/v1", version: 1 } } },
   target: { origin: "https://node.tinycloud.xyz", nodeAudience: nodeDid },
+  attestedEnforcerBinding: { enforcerDid: nodeDid, nodeAudience: nodeDid },
   contentSource: { shareId: "share-v3", kvResource: `${ownerDid}/kv/shares/share-v3/report.pdf` },
+  expiry: "2026-08-13T12:00:00Z",
   signature: { algorithm: "Ed25519", signerDid: ownerDid, value: "signature" },
 };
 
 const request = {
   envelope,
-  sealedEnvelope: "sealed-envelope",
-  envelopeKey: "A".repeat(43),
   shareCid,
   recipientEmail: "alice@example.com",
-  shareUrl: `https://share.tinycloud.xyz/s/${shareCid}#k=${"A".repeat(43)}`,
+  shareUrl: `https://share.tinycloud.xyz/viewer?tc2=${"A".repeat(43)}`,
   documentName: "report.pdf",
   jti,
   expiresAt: "2026-08-06T12:05:00Z",
@@ -47,7 +47,9 @@ function response(overrides: Record<string, unknown> = {}): Uint8Array {
     credentialType: envelope.policy.credentialRequirement.credentialType.id,
     returnLink: request.shareUrl,
     envelopeRef: request.shareCid,
-    audience: "https://witness.credentials.org",
+    label: request.documentName,
+    shareExpiresAt: "2026-08-13T12:00:00Z",
+    audience: "https://api.share.tinycloud.xyz",
     issuedAt: "2026-08-06T12:00:00Z",
     expiresAt: request.expiresAt,
     nonce: request.jti,
@@ -75,7 +77,7 @@ describe("v3 share delivery authorization", () => {
     expect(validateShareDeliveryAuthorizationV3Bytes(response(), {
       request,
       senderKeyDid,
-      credentialsAudience: "https://witness.credentials.org",
+      deliveryAudience: "https://api.share.tinycloud.xyz",
     }).request.envelopeRef).toBe(shareCid);
   });
 
@@ -83,7 +85,7 @@ describe("v3 share delivery authorization", () => {
     expect(() => validateShareDeliveryAuthorizationV3Bytes(response({ recipient: "other@example.com" }), {
       request,
       senderKeyDid,
-      credentialsAudience: "https://witness.credentials.org",
+      deliveryAudience: "https://api.share.tinycloud.xyz",
     })).toThrow("not bound");
   });
 
@@ -91,7 +93,7 @@ describe("v3 share delivery authorization", () => {
     expect(() => validateShareDeliveryAuthorizationV3Bytes(response({ senderKeyDid: ownerDid }), {
       request,
       senderKeyDid,
-      credentialsAudience: "https://witness.credentials.org",
+      deliveryAudience: "https://api.share.tinycloud.xyz",
     })).toThrow("not bound");
   });
 
@@ -101,7 +103,7 @@ describe("v3 share delivery authorization", () => {
     expect(() => validateShareDeliveryAuthorizationV3Bytes(new TextEncoder().encode(JSON.stringify(parsed)), {
       request,
       senderKeyDid,
-      credentialsAudience: "https://witness.credentials.org",
+      deliveryAudience: "https://api.share.tinycloud.xyz",
     })).toThrow("signature");
   });
 });

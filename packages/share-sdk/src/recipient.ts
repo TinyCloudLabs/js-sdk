@@ -48,7 +48,8 @@ export interface SharePolicyChallenge {
 
 export interface ShareRecipientClientOptions {
   readonly nodeOrigin: string;
-  readonly trustedNode: ShareNodeTrust;
+  /** Required only by the retired v2 response-proof adapter. Policy/v3 trusts its signed attested binding. */
+  readonly trustedNode?: ShareNodeTrust;
   readonly holderDid: string;
   readonly envelope: ShareEnvelopeV2 | ShareEnvelopeV3;
   readonly fetchFn?: typeof fetch;
@@ -258,6 +259,21 @@ function hex(value: Uint8Array): string {
   return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * The signed content source commits to the literal owner-KV representation,
+ * not an equivalent parsed JSON value. Compare all digest bytes before any
+ * envelope parsing or key-unwrapping work.
+ */
+function matchesInitialCiphertextDigest(bytes: Uint8Array, expected: unknown): boolean {
+  if (typeof expected !== "string" || !LOWER_SHA256_HEX.test(expected)) return false;
+  const actual = sha256(bytes);
+  let mismatch = 0;
+  for (let index = 0; index < actual.length; index += 1) {
+    mismatch |= actual[index]! ^ Number.parseInt(expected.slice(index * 2, index * 2 + 2), 16);
+  }
+  return mismatch === 0;
+}
+
 function canonicalHashHex(value: string): string {
   return hex(sha256(new TextEncoder().encode(canonicalize(value))));
 }
@@ -459,6 +475,7 @@ export class ShareRecipientClient {
     const envelope = this.options.envelope;
     const signer = this.nativeSigner ?? this.signer;
     if (envelope.version !== 3 || this.session === undefined || this.v3Authorization === undefined || this.v3NodeAudience === undefined || signer === undefined) throw new Error("v3 policy session signer is required");
+    if (!matchesInitialCiphertextDigest(bytes, envelope.contentSource.initialCiphertextDigestHex)) throw new Error("v3 owner KV ciphertext digest mismatch");
     const encrypted = parseV3InlineEncryptedEnvelope(bytes, envelope);
     const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
     const receiverPublicKey = toBase64(x25519.getPublicKey(receiverPrivateKey));
@@ -594,7 +611,7 @@ export function createAddressedAuthorization(input: Omit<ShareRecipientClientOpt
           response.bodyDigest !== await digestBytes(value.bytes)
         ) return false;
         const detached = object(wrapper.detached, "share read detached proof");
-        if (detached.alg !== "EdDSA" || detached.kid !== input.trustedNode.invitationKid) return false;
+        if (input.trustedNode === undefined || detached.alg !== "EdDSA" || detached.kid !== input.trustedNode.invitationKid) return false;
         const unsigned = { ...response };
         delete unsigned.proof;
         return ed25519.verify(bytes(detached.signature, "share read signature"), new TextEncoder().encode(`${SHARE_V2_PROTOCOL.readResponseDomain}${canonicalize(unsigned)}`), trustedPublicKey(input.trustedNode));

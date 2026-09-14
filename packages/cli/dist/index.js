@@ -188,9 +188,9 @@ function capSpecFromAuthMeta(resource, action) {
   if (nextSlash <= 0) return void 0;
   const serviceShort = rest.slice(0, nextSlash);
   const path = rest.slice(nextSlash + 1);
-  const actionName2 = action.includes("/") ? action.slice(action.indexOf("/") + 1) : action;
+  const actionName = action.includes("/") ? action.slice(action.indexOf("/") + 1) : action;
   const spaceName = spaceUri.startsWith("tinycloud:") ? spaceUri.slice(spaceUri.lastIndexOf(":") + 1) : spaceUri;
-  return `tinycloud.${serviceShort}:${spaceName}:${path}:${actionName2}`;
+  return `tinycloud.${serviceShort}:${spaceName}:${path}:${actionName}`;
 }
 function buildNetworkHint() {
   const readHost = (name2) => {
@@ -4499,11 +4499,11 @@ function bytesToHex(bytes) {
   abytes(bytes);
   if (hasHexBuiltin)
     return bytes.toHex();
-  let hex4 = "";
+  let hex3 = "";
   for (let i = 0; i < bytes.length; i++) {
-    hex4 += hexes[bytes[i]];
+    hex3 += hexes[bytes[i]];
   }
-  return hex4;
+  return hex3;
 }
 function asciiToBase16(ch) {
   if (ch >= asciis._0 && ch <= asciis._9)
@@ -4514,21 +4514,21 @@ function asciiToBase16(ch) {
     return ch - (asciis.a - 10);
   return;
 }
-function hexToBytes(hex4) {
-  if (typeof hex4 !== "string")
-    throw new Error("hex string expected, got " + typeof hex4);
+function hexToBytes(hex3) {
+  if (typeof hex3 !== "string")
+    throw new Error("hex string expected, got " + typeof hex3);
   if (hasHexBuiltin)
-    return Uint8Array.fromHex(hex4);
-  const hl = hex4.length;
+    return Uint8Array.fromHex(hex3);
+  const hl = hex3.length;
   const al = hl / 2;
   if (hl % 2)
     throw new Error("hex string expected, got unpadded hex of length " + hl);
   const array = new Uint8Array(al);
   for (let ai = 0, hi = 0; ai < al; ai++, hi += 2) {
-    const n1 = asciiToBase16(hex4.charCodeAt(hi));
-    const n2 = asciiToBase16(hex4.charCodeAt(hi + 1));
+    const n1 = asciiToBase16(hex3.charCodeAt(hi));
+    const n2 = asciiToBase16(hex3.charCodeAt(hi + 1));
     if (n1 === void 0 || n2 === void 0) {
-      const char = hex4[hi] + hex4[hi + 1];
+      const char = hex3[hi] + hex3[hi + 1];
       throw new Error('hex string expected, got non-hex character "' + char + '" at index ' + hi);
     }
     array[ai] = n1 * 16 + n2;
@@ -5162,10 +5162,10 @@ function _abytes2(value, length5, title = "") {
   }
   return value;
 }
-function hexToNumber(hex4) {
-  if (typeof hex4 !== "string")
-    throw new Error("hex string expected, got " + typeof hex4);
-  return hex4 === "" ? _0n : BigInt("0x" + hex4);
+function hexToNumber(hex3) {
+  if (typeof hex3 !== "string")
+    throw new Error("hex string expected, got " + typeof hex3);
+  return hex3 === "" ? _0n : BigInt("0x" + hex3);
 }
 function bytesToNumberBE(bytes) {
   return hexToNumber(bytesToHex(bytes));
@@ -5180,16 +5180,16 @@ function numberToBytesBE(n, len) {
 function numberToBytesLE(n, len) {
   return numberToBytesBE(n, len).reverse();
 }
-function ensureBytes(title, hex4, expectedLength) {
+function ensureBytes(title, hex3, expectedLength) {
   let res;
-  if (typeof hex4 === "string") {
+  if (typeof hex3 === "string") {
     try {
-      res = hexToBytes(hex4);
+      res = hexToBytes(hex3);
     } catch (e) {
       throw new Error(title + " must be hex string or Uint8Array, cause: " + e);
     }
-  } else if (isBytes(hex4)) {
-    res = Uint8Array.from(hex4);
+  } else if (isBytes(hex3)) {
+    res = Uint8Array.from(hex3);
   } else {
     throw new Error(title + " must be hex string or Uint8Array");
   }
@@ -6427,142 +6427,14 @@ var init_edwards = __esm({
   }
 });
 
-// ../../node_modules/@noble/curves/esm/abstract/montgomery.js
-function validateOpts(curve) {
-  _validateObject(curve, {
-    adjustScalarBytes: "function",
-    powPminus2: "function"
-  });
-  return Object.freeze({ ...curve });
-}
-function montgomery(curveDef) {
-  const CURVE = validateOpts(curveDef);
-  const { P, type, adjustScalarBytes: adjustScalarBytes2, powPminus2, randomBytes: rand } = CURVE;
-  const is25519 = type === "x25519";
-  if (!is25519 && type !== "x448")
-    throw new Error("invalid type");
-  const randomBytes_ = rand || randomBytes;
-  const montgomeryBits = is25519 ? 255 : 448;
-  const fieldLen = is25519 ? 32 : 56;
-  const Gu = is25519 ? BigInt(9) : BigInt(5);
-  const a24 = is25519 ? BigInt(121665) : BigInt(39081);
-  const minScalar = is25519 ? _2n3 ** BigInt(254) : _2n3 ** BigInt(447);
-  const maxAdded = is25519 ? BigInt(8) * _2n3 ** BigInt(251) - _1n5 : BigInt(4) * _2n3 ** BigInt(445) - _1n5;
-  const maxScalar = minScalar + maxAdded + _1n5;
-  const modP2 = (n) => mod(n, P);
-  const GuBytes = encodeU(Gu);
-  function encodeU(u) {
-    return numberToBytesLE(modP2(u), fieldLen);
-  }
-  function decodeU(u) {
-    const _u = ensureBytes("u coordinate", u, fieldLen);
-    if (is25519)
-      _u[31] &= 127;
-    return modP2(bytesToNumberLE(_u));
-  }
-  function decodeScalar(scalar) {
-    return bytesToNumberLE(adjustScalarBytes2(ensureBytes("scalar", scalar, fieldLen)));
-  }
-  function scalarMult(scalar, u) {
-    const pu = montgomeryLadder(decodeU(u), decodeScalar(scalar));
-    if (pu === _0n5)
-      throw new Error("invalid private or public key received");
-    return encodeU(pu);
-  }
-  function scalarMultBase(scalar) {
-    return scalarMult(scalar, GuBytes);
-  }
-  function cswap(swap, x_2, x_3) {
-    const dummy = modP2(swap * (x_2 - x_3));
-    x_2 = modP2(x_2 - dummy);
-    x_3 = modP2(x_3 + dummy);
-    return { x_2, x_3 };
-  }
-  function montgomeryLadder(u, scalar) {
-    aInRange("u", u, _0n5, P);
-    aInRange("scalar", scalar, minScalar, maxScalar);
-    const k = scalar;
-    const x_1 = u;
-    let x_2 = _1n5;
-    let z_2 = _0n5;
-    let x_3 = u;
-    let z_3 = _1n5;
-    let swap = _0n5;
-    for (let t = BigInt(montgomeryBits - 1); t >= _0n5; t--) {
-      const k_t = k >> t & _1n5;
-      swap ^= k_t;
-      ({ x_2, x_3 } = cswap(swap, x_2, x_3));
-      ({ x_2: z_2, x_3: z_3 } = cswap(swap, z_2, z_3));
-      swap = k_t;
-      const A = x_2 + z_2;
-      const AA = modP2(A * A);
-      const B = x_2 - z_2;
-      const BB = modP2(B * B);
-      const E = AA - BB;
-      const C = x_3 + z_3;
-      const D = x_3 - z_3;
-      const DA = modP2(D * A);
-      const CB = modP2(C * B);
-      const dacb = DA + CB;
-      const da_cb = DA - CB;
-      x_3 = modP2(dacb * dacb);
-      z_3 = modP2(x_1 * modP2(da_cb * da_cb));
-      x_2 = modP2(AA * BB);
-      z_2 = modP2(E * (AA + modP2(a24 * E)));
-    }
-    ({ x_2, x_3 } = cswap(swap, x_2, x_3));
-    ({ x_2: z_2, x_3: z_3 } = cswap(swap, z_2, z_3));
-    const z2 = powPminus2(z_2);
-    return modP2(x_2 * z2);
-  }
-  const lengths = {
-    secretKey: fieldLen,
-    publicKey: fieldLen,
-    seed: fieldLen
-  };
-  const randomSecretKey = (seed = randomBytes_(fieldLen)) => {
-    abytes(seed, lengths.seed);
-    return seed;
-  };
-  function keygen(seed) {
-    const secretKey = randomSecretKey(seed);
-    return { secretKey, publicKey: scalarMultBase(secretKey) };
-  }
-  const utils = {
-    randomSecretKey,
-    randomPrivateKey: randomSecretKey
-  };
-  return {
-    keygen,
-    getSharedSecret: (secretKey, publicKey) => scalarMult(secretKey, publicKey),
-    getPublicKey: (secretKey) => scalarMultBase(secretKey),
-    scalarMult,
-    scalarMultBase,
-    utils,
-    GuBytes: GuBytes.slice(),
-    lengths
-  };
-}
-var _0n5, _1n5, _2n3;
-var init_montgomery = __esm({
-  "../../node_modules/@noble/curves/esm/abstract/montgomery.js"() {
-    "use strict";
-    init_utils2();
-    init_modular();
-    _0n5 = BigInt(0);
-    _1n5 = BigInt(1);
-    _2n3 = BigInt(2);
-  }
-});
-
 // ../../node_modules/@noble/curves/esm/ed25519.js
 function ed25519_pow_2_252_3(x) {
   const _10n = BigInt(10), _20n = BigInt(20), _40n = BigInt(40), _80n = BigInt(80);
   const P = ed25519_CURVE_p;
   const x2 = x * x % P;
   const b2 = x2 * x % P;
-  const b4 = pow2(b2, _2n4, P) * b2 % P;
-  const b5 = pow2(b4, _1n6, P) * x % P;
+  const b4 = pow2(b2, _2n3, P) * b2 % P;
+  const b5 = pow2(b4, _1n5, P) * x % P;
   const b10 = pow2(b5, _5n2, P) * b5 % P;
   const b20 = pow2(b10, _10n, P) * b10 % P;
   const b40 = pow2(b20, _20n, P) * b20 % P;
@@ -6570,7 +6442,7 @@ function ed25519_pow_2_252_3(x) {
   const b160 = pow2(b80, _80n, P) * b80 % P;
   const b240 = pow2(b160, _80n, P) * b80 % P;
   const b250 = pow2(b240, _10n, P) * b10 % P;
-  const pow_p_5_8 = pow2(b250, _2n4, P) * x % P;
+  const pow_p_5_8 = pow2(b250, _2n3, P) * x % P;
   return { pow_p_5_8, b2 };
 }
 function adjustScalarBytes(bytes) {
@@ -6604,7 +6476,7 @@ function calcElligatorRistrettoMap(r0) {
   const P = ed25519_CURVE_p;
   const mod3 = (n) => Fp.create(n);
   const r = mod3(SQRT_M1 * r0 * r0);
-  const Ns = mod3((r + _1n6) * ONE_MINUS_D_SQ);
+  const Ns = mod3((r + _1n5) * ONE_MINUS_D_SQ);
   let c = BigInt(-1);
   const D = mod3((c - d * r) * mod3(r + d));
   let { isValid: Ns_D_is_sq, value: s } = uvRatio(Ns, D);
@@ -6615,12 +6487,12 @@ function calcElligatorRistrettoMap(r0) {
     s = s_;
   if (!Ns_D_is_sq)
     c = r;
-  const Nt = mod3(c * (r - _1n6) * D_MINUS_ONE_SQ - D);
+  const Nt = mod3(c * (r - _1n5) * D_MINUS_ONE_SQ - D);
   const s2 = s * s;
   const W0 = mod3((s + s) * D);
   const W1 = mod3(Nt * SQRT_AD_MINUS_ONE);
-  const W2 = mod3(_1n6 - s2);
-  const W3 = mod3(_1n6 + s2);
+  const W2 = mod3(_1n5 - s2);
+  const W3 = mod3(_1n5 + s2);
   return new ed25519.Point(mod3(W0 * W3), mod3(W2 * W1), mod3(W1 * W3), mod3(W0 * W2));
 }
 function ristretto255_map(bytes) {
@@ -6631,7 +6503,7 @@ function ristretto255_map(bytes) {
   const R2 = calcElligatorRistrettoMap(r2);
   return new _RistrettoPoint(R1.add(R2));
 }
-var _0n6, _1n6, _2n4, _3n2, _5n2, _8n3, ed25519_CURVE_p, ed25519_CURVE, ED25519_SQRT_M1, Fp, Fn, ed25519Defaults, ed25519, x25519, SQRT_M1, SQRT_AD_MINUS_ONE, INVSQRT_A_MINUS_D, ONE_MINUS_D_SQ, D_MINUS_ONE_SQ, invertSqrt, MAX_255B, bytes255ToNumberLE, _RistrettoPoint;
+var _0n5, _1n5, _2n3, _3n2, _5n2, _8n3, ed25519_CURVE_p, ed25519_CURVE, ED25519_SQRT_M1, Fp, Fn, ed25519Defaults, ed25519, SQRT_M1, SQRT_AD_MINUS_ONE, INVSQRT_A_MINUS_D, ONE_MINUS_D_SQ, D_MINUS_ONE_SQ, invertSqrt, MAX_255B, bytes255ToNumberLE, _RistrettoPoint;
 var init_ed25519 = __esm({
   "../../node_modules/@noble/curves/esm/ed25519.js"() {
     "use strict";
@@ -6640,11 +6512,10 @@ var init_ed25519 = __esm({
     init_curve();
     init_edwards();
     init_modular();
-    init_montgomery();
     init_utils2();
-    _0n6 = /* @__PURE__ */ BigInt(0);
-    _1n6 = BigInt(1);
-    _2n4 = BigInt(2);
+    _0n5 = /* @__PURE__ */ BigInt(0);
+    _1n5 = BigInt(1);
+    _2n3 = BigInt(2);
     _3n2 = BigInt(3);
     _5n2 = BigInt(5);
     _8n3 = BigInt(8);
@@ -6672,24 +6543,12 @@ var init_ed25519 = __esm({
       uvRatio
     }))();
     ed25519 = /* @__PURE__ */ (() => twistedEdwards(ed25519Defaults))();
-    x25519 = /* @__PURE__ */ (() => {
-      const P = Fp.ORDER;
-      return montgomery({
-        P,
-        type: "x25519",
-        powPminus2: (x) => {
-          const { pow_p_5_8, b2 } = ed25519_pow_2_252_3(x);
-          return mod(pow2(pow_p_5_8, _3n2, P) * b2, P);
-        },
-        adjustScalarBytes
-      });
-    })();
     SQRT_M1 = ED25519_SQRT_M1;
     SQRT_AD_MINUS_ONE = /* @__PURE__ */ BigInt("25063068953384623474111414158702152701244531502492656460079210482610430750235");
     INVSQRT_A_MINUS_D = /* @__PURE__ */ BigInt("54469307008909316920995813868745141605393597292927456921205312896311721017578");
     ONE_MINUS_D_SQ = /* @__PURE__ */ BigInt("1159843021668779879193775521855586647937357759715417654439879720876111806838");
     D_MINUS_ONE_SQ = /* @__PURE__ */ BigInt("40440834346308536858101042469323190826248399146238708352240133220865137265952");
-    invertSqrt = (number) => uvRatio(_1n6, number);
+    invertSqrt = (number) => uvRatio(_1n5, number);
     MAX_255B = /* @__PURE__ */ BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
     bytes255ToNumberLE = (bytes) => ed25519.Point.Fp.create(bytesToNumberLE(bytes) & MAX_255B);
     _RistrettoPoint = class __RistrettoPoint extends PrimeEdwardsPoint {
@@ -6707,8 +6566,8 @@ var init_ed25519 = __esm({
         return new __RistrettoPoint(ep);
       }
       /** @deprecated use `import { ristretto255_hasher } from '@noble/curves/ed25519.js';` */
-      static hashToCurve(hex4) {
-        return ristretto255_map(ensureBytes("ristrettoHash", hex4, 64));
+      static hashToCurve(hex3) {
+        return ristretto255_map(ensureBytes("ristrettoHash", hex3, 64));
       }
       static fromBytes(bytes) {
         abytes(bytes, 32);
@@ -6719,8 +6578,8 @@ var init_ed25519 = __esm({
         if (!equalBytes(Fp.toBytes(s), bytes) || isNegativeLE(s, P))
           throw new Error("invalid ristretto255 encoding 1");
         const s2 = mod3(s * s);
-        const u1 = mod3(_1n6 + a * s2);
-        const u2 = mod3(_1n6 - a * s2);
+        const u1 = mod3(_1n5 + a * s2);
+        const u2 = mod3(_1n5 - a * s2);
         const u1_2 = mod3(u1 * u1);
         const u2_2 = mod3(u2 * u2);
         const v = mod3(a * d * u1_2 - u2_2);
@@ -6732,17 +6591,17 @@ var init_ed25519 = __esm({
           x = mod3(-x);
         const y = mod3(u1 * Dy);
         const t = mod3(x * y);
-        if (!isValid3 || isNegativeLE(t, P) || y === _0n6)
+        if (!isValid3 || isNegativeLE(t, P) || y === _0n5)
           throw new Error("invalid ristretto255 encoding 2");
-        return new __RistrettoPoint(new ed25519.Point(x, y, _1n6, t));
+        return new __RistrettoPoint(new ed25519.Point(x, y, _1n5, t));
       }
       /**
        * Converts ristretto-encoded string to ristretto point.
        * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-decode).
        * @param hex Ristretto-encoded 32 bytes. Not every 32-byte string is valid ristretto encoding
        */
-      static fromHex(hex4) {
-        return __RistrettoPoint.fromBytes(ensureBytes("ristrettoHex", hex4, 32));
+      static fromHex(hex3) {
+        return __RistrettoPoint.fromBytes(ensureBytes("ristrettoHex", hex3, 32));
       }
       static msm(points, scalars) {
         return pippenger(__RistrettoPoint, ed25519.Point.Fn, points, scalars);
@@ -6953,14 +6812,14 @@ function pad(hexOrBytes, { dir, size: size2 = 32 } = {}) {
 function padHex(hex_, { dir, size: size2 = 32 } = {}) {
   if (size2 === null)
     return hex_;
-  const hex4 = hex_.replace("0x", "");
-  if (hex4.length > size2 * 2)
+  const hex3 = hex_.replace("0x", "");
+  if (hex3.length > size2 * 2)
     throw new SizeExceedsPaddingSizeError({
-      size: Math.ceil(hex4.length / 2),
+      size: Math.ceil(hex3.length / 2),
       targetSize: size2,
       type: "hex"
     });
-  return `0x${hex4[dir === "right" ? "padEnd" : "padStart"](size2 * 2, "0")}`;
+  return `0x${hex3[dir === "right" ? "padEnd" : "padStart"](size2 * 2, "0")}`;
 }
 function padBytes(bytes, { dir, size: size2 = 32 } = {}) {
   if (size2 === null)
@@ -7012,21 +6871,21 @@ function assertSize(hexOrBytes, { size: size2 }) {
       maxSize: size2
     });
 }
-function hexToBigInt(hex4, opts = {}) {
+function hexToBigInt(hex3, opts = {}) {
   const { signed } = opts;
   if (opts.size)
-    assertSize(hex4, { size: opts.size });
-  const value = BigInt(hex4);
+    assertSize(hex3, { size: opts.size });
+  const value = BigInt(hex3);
   if (!signed)
     return value;
-  const size2 = (hex4.length - 2) / 2;
+  const size2 = (hex3.length - 2) / 2;
   const max = (1n << BigInt(size2) * 8n - 1n) - 1n;
   if (value <= max)
     return value;
   return value - BigInt(`0x${"f".padStart(size2 * 2, "f")}`) - 1n;
 }
-function hexToNumber2(hex4, opts = {}) {
-  const value = hexToBigInt(hex4, opts);
+function hexToNumber2(hex3, opts = {}) {
+  const value = hexToBigInt(hex3, opts);
   const number = Number(value);
   if (!Number.isSafeInteger(number))
     throw new IntegerOutOfRangeError({
@@ -7058,24 +6917,24 @@ function toHex(value, opts = {}) {
   return bytesToHex2(value, opts);
 }
 function boolToHex(value, opts = {}) {
-  const hex4 = `0x${Number(value)}`;
+  const hex3 = `0x${Number(value)}`;
   if (typeof opts.size === "number") {
-    assertSize(hex4, { size: opts.size });
-    return pad(hex4, { size: opts.size });
+    assertSize(hex3, { size: opts.size });
+    return pad(hex3, { size: opts.size });
   }
-  return hex4;
+  return hex3;
 }
 function bytesToHex2(value, opts = {}) {
   let string2 = "";
   for (let i = 0; i < value.length; i++) {
     string2 += hexes2[value[i]];
   }
-  const hex4 = `0x${string2}`;
+  const hex3 = `0x${string2}`;
   if (typeof opts.size === "number") {
-    assertSize(hex4, { size: opts.size });
-    return pad(hex4, { dir: "right", size: opts.size });
+    assertSize(hex3, { size: opts.size });
+    return pad(hex3, { dir: "right", size: opts.size });
   }
-  return hex4;
+  return hex3;
 }
 function numberToHex(value_, opts = {}) {
   const { signed, size: size2 } = opts;
@@ -7100,10 +6959,10 @@ function numberToHex(value_, opts = {}) {
       value: `${value_}${suffix}`
     });
   }
-  const hex4 = `0x${(signed && value < 0 ? (1n << BigInt(size2 * 8)) + BigInt(value) : value).toString(16)}`;
+  const hex3 = `0x${(signed && value < 0 ? (1n << BigInt(size2 * 8)) + BigInt(value) : value).toString(16)}`;
   if (size2)
-    return pad(hex4, { size: size2 });
-  return hex4;
+    return pad(hex3, { size: size2 });
+  return hex3;
 }
 function stringToHex(value_, opts = {}) {
   const value = encoder.encode(value_);
@@ -7150,12 +7009,12 @@ function charCodeToBase16(char) {
   return void 0;
 }
 function hexToBytes2(hex_, opts = {}) {
-  let hex4 = hex_;
+  let hex3 = hex_;
   if (opts.size) {
-    assertSize(hex4, { size: opts.size });
-    hex4 = pad(hex4, { dir: "right", size: opts.size });
+    assertSize(hex3, { size: opts.size });
+    hex3 = pad(hex3, { dir: "right", size: opts.size });
   }
-  let hexString = hex4.slice(2);
+  let hexString = hex3.slice(2);
   if (hexString.length % 2)
     hexString = `0${hexString}`;
   const length5 = hexString.length / 2;
@@ -7171,8 +7030,8 @@ function hexToBytes2(hex_, opts = {}) {
   return bytes;
 }
 function numberToBytes(value, opts) {
-  const hex4 = numberToHex(value, opts);
-  return hexToBytes2(hex4);
+  const hex3 = numberToHex(value, opts);
+  return hexToBytes2(hex3);
 }
 function stringToBytes(value, opts = {}) {
   const bytes = encoder2.encode(value);
@@ -7244,30 +7103,30 @@ function keccakP(s, rounds = 24) {
   }
   clean(B);
 }
-var _0n7, _1n7, _2n5, _7n2, _256n, _0x71n, SHA3_PI, SHA3_ROTL, _SHA3_IOTA, IOTAS, SHA3_IOTA_H, SHA3_IOTA_L, rotlH, rotlL, Keccak, gen, keccak_256;
+var _0n6, _1n6, _2n4, _7n2, _256n, _0x71n, SHA3_PI, SHA3_ROTL, _SHA3_IOTA, IOTAS, SHA3_IOTA_H, SHA3_IOTA_L, rotlH, rotlL, Keccak, gen, keccak_256;
 var init_sha3 = __esm({
   "../../node_modules/@noble/hashes/esm/sha3.js"() {
     "use strict";
     init_u64();
     init_utils();
-    _0n7 = BigInt(0);
-    _1n7 = BigInt(1);
-    _2n5 = BigInt(2);
+    _0n6 = BigInt(0);
+    _1n6 = BigInt(1);
+    _2n4 = BigInt(2);
     _7n2 = BigInt(7);
     _256n = BigInt(256);
     _0x71n = BigInt(113);
     SHA3_PI = [];
     SHA3_ROTL = [];
     _SHA3_IOTA = [];
-    for (let round = 0, R = _1n7, x = 1, y = 0; round < 24; round++) {
+    for (let round = 0, R = _1n6, x = 1, y = 0; round < 24; round++) {
       [x, y] = [y, (2 * x + 3 * y) % 5];
       SHA3_PI.push(2 * (5 * y + x));
       SHA3_ROTL.push((round + 1) * (round + 2) / 2 % 64);
-      let t = _0n7;
+      let t = _0n6;
       for (let j = 0; j < 7; j++) {
-        R = (R << _1n7 ^ (R >> _7n2) * _0x71n) % _256n;
-        if (R & _2n5)
-          t ^= _1n7 << (_1n7 << /* @__PURE__ */ BigInt(j)) - _1n7;
+        R = (R << _1n6 ^ (R >> _7n2) * _0x71n) % _256n;
+        if (R & _2n4)
+          t ^= _1n6 << (_1n6 << /* @__PURE__ */ BigInt(j)) - _1n6;
       }
       _SHA3_IOTA.push(t);
     }
@@ -7662,23 +7521,23 @@ function abool(title, value) {
     throw new Error(title + " boolean expected, got " + value);
 }
 function numberToHexUnpadded(num2) {
-  const hex4 = num2.toString(16);
-  return hex4.length & 1 ? "0" + hex4 : hex4;
+  const hex3 = num2.toString(16);
+  return hex3.length & 1 ? "0" + hex3 : hex3;
 }
-function hexToNumber3(hex4) {
-  if (typeof hex4 !== "string")
-    throw new Error("hex string expected, got " + typeof hex4);
-  return hex4 === "" ? _0n8 : BigInt("0x" + hex4);
+function hexToNumber3(hex3) {
+  if (typeof hex3 !== "string")
+    throw new Error("hex string expected, got " + typeof hex3);
+  return hex3 === "" ? _0n7 : BigInt("0x" + hex3);
 }
 function bytesToHex3(bytes) {
   abytes2(bytes);
   if (hasHexBuiltin2)
     return bytes.toHex();
-  let hex4 = "";
+  let hex3 = "";
   for (let i = 0; i < bytes.length; i++) {
-    hex4 += hexes3[bytes[i]];
+    hex3 += hexes3[bytes[i]];
   }
-  return hex4;
+  return hex3;
 }
 function asciiToBase162(ch) {
   if (ch >= asciis2._0 && ch <= asciis2._9)
@@ -7689,21 +7548,21 @@ function asciiToBase162(ch) {
     return ch - (asciis2.a - 10);
   return;
 }
-function hexToBytes3(hex4) {
-  if (typeof hex4 !== "string")
-    throw new Error("hex string expected, got " + typeof hex4);
+function hexToBytes3(hex3) {
+  if (typeof hex3 !== "string")
+    throw new Error("hex string expected, got " + typeof hex3);
   if (hasHexBuiltin2)
-    return Uint8Array.fromHex(hex4);
-  const hl = hex4.length;
+    return Uint8Array.fromHex(hex3);
+  const hl = hex3.length;
   const al = hl / 2;
   if (hl % 2)
     throw new Error("hex string expected, got unpadded hex of length " + hl);
   const array = new Uint8Array(al);
   for (let ai = 0, hi = 0; ai < al; ai++, hi += 2) {
-    const n1 = asciiToBase162(hex4.charCodeAt(hi));
-    const n2 = asciiToBase162(hex4.charCodeAt(hi + 1));
+    const n1 = asciiToBase162(hex3.charCodeAt(hi));
+    const n2 = asciiToBase162(hex3.charCodeAt(hi + 1));
     if (n1 === void 0 || n2 === void 0) {
-      const char = hex4[hi] + hex4[hi + 1];
+      const char = hex3[hi] + hex3[hi + 1];
       throw new Error('hex string expected, got non-hex character "' + char + '" at index ' + hi);
     }
     array[ai] = n1 * 16 + n2;
@@ -7723,16 +7582,16 @@ function numberToBytesBE2(n, len) {
 function numberToBytesLE2(n, len) {
   return numberToBytesBE2(n, len).reverse();
 }
-function ensureBytes2(title, hex4, expectedLength) {
+function ensureBytes2(title, hex3, expectedLength) {
   let res;
-  if (typeof hex4 === "string") {
+  if (typeof hex3 === "string") {
     try {
-      res = hexToBytes3(hex4);
+      res = hexToBytes3(hex3);
     } catch (e) {
       throw new Error(title + " must be hex string or Uint8Array, cause: " + e);
     }
-  } else if (isBytes2(hex4)) {
-    res = Uint8Array.from(hex4);
+  } else if (isBytes2(hex3)) {
+    res = Uint8Array.from(hex3);
   } else {
     throw new Error(title + " must be hex string or Uint8Array");
   }
@@ -7770,7 +7629,7 @@ function aInRange2(title, n, min, max) {
 }
 function bitLen2(n) {
   let len;
-  for (len = 0; n > _0n8; n >>= _1n8, len += 1)
+  for (len = 0; n > _0n7; n >>= _1n7, len += 1)
     ;
   return len;
 }
@@ -7851,18 +7710,18 @@ function memoized2(fn) {
     return computed;
   };
 }
-var _0n8, _1n8, hasHexBuiltin2, hexes3, asciis2, isPosBig2, bitMask2, u8n, u8fr, validatorFns;
+var _0n7, _1n7, hasHexBuiltin2, hexes3, asciis2, isPosBig2, bitMask2, u8n, u8fr, validatorFns;
 var init_utils3 = __esm({
   "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/utils.js"() {
     "use strict";
-    _0n8 = /* @__PURE__ */ BigInt(0);
-    _1n8 = /* @__PURE__ */ BigInt(1);
+    _0n7 = /* @__PURE__ */ BigInt(0);
+    _1n7 = /* @__PURE__ */ BigInt(1);
     hasHexBuiltin2 = // @ts-ignore
     typeof Uint8Array.from([]).toHex === "function" && typeof Uint8Array.fromHex === "function";
     hexes3 = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
     asciis2 = { _0: 48, _9: 57, A: 65, F: 70, a: 97, f: 102 };
-    isPosBig2 = (n) => typeof n === "bigint" && _0n8 <= n;
-    bitMask2 = (n) => (_1n8 << BigInt(n)) - _1n8;
+    isPosBig2 = (n) => typeof n === "bigint" && _0n7 <= n;
+    bitMask2 = (n) => (_1n7 << BigInt(n)) - _1n7;
     u8n = (len) => new Uint8Array(len);
     u8fr = (arr) => Uint8Array.from(arr);
     validatorFns = {
@@ -7882,25 +7741,25 @@ var init_utils3 = __esm({
 // ../../node_modules/viem/node_modules/@noble/curves/esm/abstract/modular.js
 function mod2(a, b) {
   const result = a % b;
-  return result >= _0n9 ? result : b + result;
+  return result >= _0n8 ? result : b + result;
 }
 function pow22(x, power, modulo) {
   let res = x;
-  while (power-- > _0n9) {
+  while (power-- > _0n8) {
     res *= res;
     res %= modulo;
   }
   return res;
 }
 function invert2(number, modulo) {
-  if (number === _0n9)
+  if (number === _0n8)
     throw new Error("invert: expected non-zero number");
-  if (modulo <= _0n9)
+  if (modulo <= _0n8)
     throw new Error("invert: expected positive modulus, got " + modulo);
   let a = mod2(number, modulo);
   let b = modulo;
-  let x = _0n9, y = _1n9, u = _1n9, v = _0n9;
-  while (a !== _0n9) {
+  let x = _0n8, y = _1n8, u = _1n8, v = _0n8;
+  while (a !== _0n8) {
     const q = b / a;
     const r = b % a;
     const m = x - u * q;
@@ -7908,12 +7767,12 @@ function invert2(number, modulo) {
     b = a, a = r, x = u, y = v, u = m, v = n;
   }
   const gcd = b;
-  if (gcd !== _1n9)
+  if (gcd !== _1n8)
     throw new Error("invert: does not exist");
   return mod2(x, modulo);
 }
 function sqrt3mod42(Fp2, n) {
-  const p1div4 = (Fp2.ORDER + _1n9) / _4n2;
+  const p1div4 = (Fp2.ORDER + _1n8) / _4n2;
   const root = Fp2.pow(n, p1div4);
   if (!Fp2.eql(Fp2.sqr(root), n))
     throw new Error("Cannot find square root");
@@ -7921,10 +7780,10 @@ function sqrt3mod42(Fp2, n) {
 }
 function sqrt5mod82(Fp2, n) {
   const p5div8 = (Fp2.ORDER - _5n3) / _8n4;
-  const n2 = Fp2.mul(n, _2n6);
+  const n2 = Fp2.mul(n, _2n5);
   const v = Fp2.pow(n2, p5div8);
   const nv = Fp2.mul(n, v);
-  const i = Fp2.mul(Fp2.mul(nv, _2n6), v);
+  const i = Fp2.mul(Fp2.mul(nv, _2n5), v);
   const root = Fp2.mul(nv, Fp2.sub(i, Fp2.ONE));
   if (!Fp2.eql(Fp2.sqr(root), n))
     throw new Error("Cannot find square root");
@@ -7933,13 +7792,13 @@ function sqrt5mod82(Fp2, n) {
 function tonelliShanks2(P) {
   if (P < BigInt(3))
     throw new Error("sqrt is not defined for small field");
-  let Q = P - _1n9;
+  let Q = P - _1n8;
   let S = 0;
-  while (Q % _2n6 === _0n9) {
-    Q /= _2n6;
+  while (Q % _2n5 === _0n8) {
+    Q /= _2n5;
     S++;
   }
-  let Z = _2n6;
+  let Z = _2n5;
   const _Fp = Field2(P);
   while (FpLegendre2(_Fp, Z) === 1) {
     if (Z++ > 1e3)
@@ -7948,7 +7807,7 @@ function tonelliShanks2(P) {
   if (S === 1)
     return sqrt3mod42;
   let cc = _Fp.pow(Z, Q);
-  const Q1div2 = (Q + _1n9) / _2n6;
+  const Q1div2 = (Q + _1n8) / _2n5;
   return function tonelliSlow(Fp2, n) {
     if (Fp2.is0(n))
       return n;
@@ -7969,7 +7828,7 @@ function tonelliShanks2(P) {
         if (i === M)
           throw new Error("Cannot find square root");
       }
-      const exponent = _1n9 << BigInt(M - i - 1);
+      const exponent = _1n8 << BigInt(M - i - 1);
       const b = Fp2.pow(c, exponent);
       M = i;
       c = Fp2.sqr(b);
@@ -8000,19 +7859,19 @@ function validateField2(field) {
   return validateObject2(field, opts);
 }
 function FpPow2(Fp2, num2, power) {
-  if (power < _0n9)
+  if (power < _0n8)
     throw new Error("invalid exponent, negatives unsupported");
-  if (power === _0n9)
+  if (power === _0n8)
     return Fp2.ONE;
-  if (power === _1n9)
+  if (power === _1n8)
     return num2;
   let p = Fp2.ONE;
   let d = num2;
-  while (power > _0n9) {
-    if (power & _1n9)
+  while (power > _0n8) {
+    if (power & _1n8)
       p = Fp2.mul(p, d);
     d = Fp2.sqr(d);
-    power >>= _1n9;
+    power >>= _1n8;
   }
   return p;
 }
@@ -8034,7 +7893,7 @@ function FpInvertBatch2(Fp2, nums, passZero = false) {
   return inverted;
 }
 function FpLegendre2(Fp2, n) {
-  const p1mod2 = (Fp2.ORDER - _1n9) / _2n6;
+  const p1mod2 = (Fp2.ORDER - _1n8) / _2n5;
   const powered = Fp2.pow(n, p1mod2);
   const yes = Fp2.eql(powered, Fp2.ONE);
   const zero = Fp2.eql(powered, Fp2.ZERO);
@@ -8051,7 +7910,7 @@ function nLength2(n, nBitLength) {
   return { nBitLength: _nBitLength, nByteLength };
 }
 function Field2(ORDER, bitLen3, isLE2 = false, redef = {}) {
-  if (ORDER <= _0n9)
+  if (ORDER <= _0n8)
     throw new Error("invalid field: expected ORDER > 0, got " + ORDER);
   const { nBitLength: BITS, nByteLength: BYTES } = nLength2(ORDER, bitLen3);
   if (BYTES > 2048)
@@ -8063,16 +7922,16 @@ function Field2(ORDER, bitLen3, isLE2 = false, redef = {}) {
     BITS,
     BYTES,
     MASK: bitMask2(BITS),
-    ZERO: _0n9,
-    ONE: _1n9,
+    ZERO: _0n8,
+    ONE: _1n8,
     create: (num2) => mod2(num2, ORDER),
     isValid: (num2) => {
       if (typeof num2 !== "bigint")
         throw new Error("invalid field element: expected bigint, got " + typeof num2);
-      return _0n9 <= num2 && num2 < ORDER;
+      return _0n8 <= num2 && num2 < ORDER;
     },
-    is0: (num2) => num2 === _0n9,
-    isOdd: (num2) => (num2 & _1n9) === _1n9,
+    is0: (num2) => num2 === _0n8,
+    isOdd: (num2) => (num2 & _1n8) === _1n8,
     neg: (num2) => mod2(-num2, ORDER),
     eql: (lhs, rhs) => lhs === rhs,
     sqr: (num2) => mod2(num2 * num2, ORDER),
@@ -8123,18 +7982,18 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
   if (len < 16 || len < minLen || len > 1024)
     throw new Error("expected " + minLen + "-1024 bytes of input, got " + len);
   const num2 = isLE2 ? bytesToNumberLE2(key) : bytesToNumberBE2(key);
-  const reduced = mod2(num2, fieldOrder - _1n9) + _1n9;
+  const reduced = mod2(num2, fieldOrder - _1n8) + _1n8;
   return isLE2 ? numberToBytesLE2(reduced, fieldLen) : numberToBytesBE2(reduced, fieldLen);
 }
-var _0n9, _1n9, _2n6, _3n3, _4n2, _5n3, _8n4, FIELD_FIELDS2;
+var _0n8, _1n8, _2n5, _3n3, _4n2, _5n3, _8n4, FIELD_FIELDS2;
 var init_modular2 = __esm({
   "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/modular.js"() {
     "use strict";
     init_utils();
     init_utils3();
-    _0n9 = BigInt(0);
-    _1n9 = BigInt(1);
-    _2n6 = /* @__PURE__ */ BigInt(2);
+    _0n8 = BigInt(0);
+    _1n8 = BigInt(1);
+    _2n5 = /* @__PURE__ */ BigInt(2);
     _3n3 = /* @__PURE__ */ BigInt(3);
     _4n2 = /* @__PURE__ */ BigInt(4);
     _5n3 = /* @__PURE__ */ BigInt(5);
@@ -8185,7 +8044,7 @@ function calcOffsets2(n, window, wOpts) {
   let nextN = n >> shiftBy;
   if (wbits > windowSize) {
     wbits -= maxNumber;
-    nextN += _1n10;
+    nextN += _1n9;
   }
   const offsetStart = window * windowSize;
   const offset = offsetStart + Math.abs(wbits) - 1;
@@ -8223,11 +8082,11 @@ function wNAF2(c, bits) {
     // non-const time multiplication ladder
     unsafeLadder(elm, n, p = c.ZERO) {
       let d = elm;
-      while (n > _0n10) {
-        if (n & _1n10)
+      while (n > _0n9) {
+        if (n & _1n9)
           p = p.add(d);
         d = d.double();
-        n >>= _1n10;
+        n >>= _1n9;
       }
       return p;
     },
@@ -8292,7 +8151,7 @@ function wNAF2(c, bits) {
     wNAFUnsafe(W, precomputes, n, acc = c.ZERO) {
       const wo = calcWOpts2(W, bits);
       for (let window = 0; window < wo.windows; window++) {
-        if (n === _0n10)
+        if (n === _0n9)
           break;
         const { nextN, offset, isZero, isNeg } = calcOffsets2(n, window, wo);
         n = nextN;
@@ -8390,14 +8249,14 @@ function validateBasic(curve) {
     ...{ p: curve.Fp.ORDER }
   });
 }
-var _0n10, _1n10, pointPrecomputes2, pointWindowSizes2;
+var _0n9, _1n9, pointPrecomputes2, pointWindowSizes2;
 var init_curve2 = __esm({
   "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/curve.js"() {
     "use strict";
     init_modular2();
     init_utils3();
-    _0n10 = BigInt(0);
-    _1n10 = BigInt(1);
+    _0n9 = BigInt(0);
+    _1n9 = BigInt(1);
     pointPrecomputes2 = /* @__PURE__ */ new WeakMap();
     pointWindowSizes2 = /* @__PURE__ */ new WeakMap();
   }
@@ -8470,7 +8329,7 @@ function weierstrassPoints(opts) {
   if (Fp2.is0(Fp2.add(_4a3, _27b2)))
     throw new Error("bad curve params: a or b");
   function isWithinCurveOrder(num2) {
-    return inRange2(num2, _1n11, CURVE.n);
+    return inRange2(num2, _1n10, CURVE.n);
   }
   function normPrivateKeyToScalar(key) {
     const { allowedPrivateKeyLengths: lengths, nByteLength, wrapPrivateKey, n: N } = CURVE;
@@ -8489,7 +8348,7 @@ function weierstrassPoints(opts) {
     }
     if (wrapPrivateKey)
       num2 = mod2(num2, N);
-    aInRange2("private key", num2, _1n11, N);
+    aInRange2("private key", num2, _1n10, N);
     return num2;
   }
   function aprjpoint(other) {
@@ -8573,8 +8432,8 @@ function weierstrassPoints(opts) {
      * Converts hash string or Uint8Array to Point.
      * @param hex short/long ECDSA hex
      */
-    static fromHex(hex4) {
-      const P = Point2.fromAffine(fromBytes2(ensureBytes2("pointHex", hex4)));
+    static fromHex(hex3) {
+      const P = Point2.fromAffine(fromBytes2(ensureBytes2("pointHex", hex3)));
       P.assertValidity();
       return P;
     }
@@ -8728,11 +8587,11 @@ function weierstrassPoints(opts) {
      */
     multiplyUnsafe(sc) {
       const { endo: endo2, n: N } = CURVE;
-      aInRange2("scalar", sc, _0n11, N);
+      aInRange2("scalar", sc, _0n10, N);
       const I = Point2.ZERO;
-      if (sc === _0n11)
+      if (sc === _0n10)
         return I;
-      if (this.is0() || sc === _1n11)
+      if (this.is0() || sc === _1n10)
         return this;
       if (!endo2 || wnaf.hasPrecomputes(this))
         return wnaf.wNAFCachedUnsafe(this, sc, Point2.normalizeZ);
@@ -8740,14 +8599,14 @@ function weierstrassPoints(opts) {
       let k1p = I;
       let k2p = I;
       let d = this;
-      while (k1 > _0n11 || k2 > _0n11) {
-        if (k1 & _1n11)
+      while (k1 > _0n10 || k2 > _0n10) {
+        if (k1 & _1n10)
           k1p = k1p.add(d);
-        if (k2 & _1n11)
+        if (k2 & _1n10)
           k2p = k2p.add(d);
         d = d.double();
-        k1 >>= _1n11;
-        k2 >>= _1n11;
+        k1 >>= _1n10;
+        k2 >>= _1n10;
       }
       if (k1neg)
         k1p = k1p.negate();
@@ -8767,7 +8626,7 @@ function weierstrassPoints(opts) {
      */
     multiply(scalar) {
       const { endo: endo2, n: N } = CURVE;
-      aInRange2("scalar", scalar, _1n11, N);
+      aInRange2("scalar", scalar, _1n10, N);
       let point, fake;
       if (endo2) {
         const { k1neg, k1, k2neg, k2 } = endo2.splitScalar(scalar);
@@ -8793,7 +8652,7 @@ function weierstrassPoints(opts) {
      */
     multiplyAndAddUnsafe(Q, a, b) {
       const G = Point2.BASE;
-      const mul = (P, a2) => a2 === _0n11 || a2 === _1n11 || !P.equals(G) ? P.multiplyUnsafe(a2) : P.multiply(a2);
+      const mul = (P, a2) => a2 === _0n10 || a2 === _1n10 || !P.equals(G) ? P.multiplyUnsafe(a2) : P.multiply(a2);
       const sum = mul(this, a).add(mul(Q, b));
       return sum.is0() ? void 0 : sum;
     }
@@ -8805,7 +8664,7 @@ function weierstrassPoints(opts) {
     }
     isTorsionFree() {
       const { h: cofactor, isTorsionFree } = CURVE;
-      if (cofactor === _1n11)
+      if (cofactor === _1n10)
         return true;
       if (isTorsionFree)
         return isTorsionFree(Point2, this);
@@ -8813,7 +8672,7 @@ function weierstrassPoints(opts) {
     }
     clearCofactor() {
       const { h: cofactor, clearCofactor } = CURVE;
-      if (cofactor === _1n11)
+      if (cofactor === _1n10)
         return this;
       if (clearCofactor)
         return clearCofactor(Point2, this);
@@ -8841,7 +8700,7 @@ function weierstrassPoints(opts) {
     isWithinCurveOrder
   };
 }
-function validateOpts2(curve) {
+function validateOpts(curve) {
   const opts = validateBasic(curve);
   validateObject2(opts, {
     hash: "hash",
@@ -8855,7 +8714,7 @@ function validateOpts2(curve) {
   return Object.freeze({ lowS: true, ...opts });
 }
 function weierstrass(curveDef) {
-  const CURVE = validateOpts2(curveDef);
+  const CURVE = validateOpts(curveDef);
   const { Fp: Fp2, n: CURVE_ORDER, nByteLength, nBitLength } = CURVE;
   const compressedLen = Fp2.BYTES + 1;
   const uncompressedLen = 2 * Fp2.BYTES + 1;
@@ -8884,7 +8743,7 @@ function weierstrass(curveDef) {
       const tail = bytes.subarray(1);
       if (len === compressedLen && (head === 2 || head === 3)) {
         const x = bytesToNumberBE2(tail);
-        if (!inRange2(x, _1n11, Fp2.ORDER))
+        if (!inRange2(x, _1n10, Fp2.ORDER))
           throw new Error("Point is not on curve");
         const y2 = weierstrassEquation(x);
         let y;
@@ -8894,7 +8753,7 @@ function weierstrass(curveDef) {
           const suffix = sqrtError instanceof Error ? ": " + sqrtError.message : "";
           throw new Error("Point is not on curve" + suffix);
         }
-        const isYOdd = (y & _1n11) === _1n11;
+        const isYOdd = (y & _1n10) === _1n10;
         const isHeadOdd = (head & 1) === 1;
         if (isHeadOdd !== isYOdd)
           y = Fp2.neg(y);
@@ -8911,7 +8770,7 @@ function weierstrass(curveDef) {
     }
   });
   function isBiggerThanHalfOrder(number) {
-    const HALF = CURVE_ORDER >> _1n11;
+    const HALF = CURVE_ORDER >> _1n10;
     return number > HALF;
   }
   function normalizeS(s) {
@@ -8920,8 +8779,8 @@ function weierstrass(curveDef) {
   const slcNum = (b, from5, to) => bytesToNumberBE2(b.slice(from5, to));
   class Signature {
     constructor(r, s, recovery) {
-      aInRange2("r", r, _1n11, CURVE_ORDER);
-      aInRange2("s", s, _1n11, CURVE_ORDER);
+      aInRange2("r", r, _1n10, CURVE_ORDER);
+      aInRange2("s", s, _1n10, CURVE_ORDER);
       this.r = r;
       this.s = s;
       if (recovery != null)
@@ -8929,15 +8788,15 @@ function weierstrass(curveDef) {
       Object.freeze(this);
     }
     // pair (bytes of r, bytes of s)
-    static fromCompact(hex4) {
+    static fromCompact(hex3) {
       const l = nByteLength;
-      hex4 = ensureBytes2("compactSignature", hex4, l * 2);
-      return new Signature(slcNum(hex4, 0, l), slcNum(hex4, l, 2 * l));
+      hex3 = ensureBytes2("compactSignature", hex3, l * 2);
+      return new Signature(slcNum(hex3, 0, l), slcNum(hex3, l, 2 * l));
     }
     // DER encoded ECDSA signature
     // https://bitcoin.stackexchange.com/questions/57644/what-are-the-parts-of-a-bitcoin-transaction-input-script
-    static fromDER(hex4) {
-      const { r, s } = DER.toSig(ensureBytes2("DER", hex4));
+    static fromDER(hex3) {
+      const { r, s } = DER.toSig(ensureBytes2("DER", hex3));
       return new Signature(r, s);
     }
     /**
@@ -9062,7 +8921,7 @@ function weierstrass(curveDef) {
   };
   const ORDER_MASK = bitMask2(nBitLength);
   function int2octets(num2) {
-    aInRange2("num < 2^" + nBitLength, num2, _0n11, ORDER_MASK);
+    aInRange2("num < 2^" + nBitLength, num2, _0n10, ORDER_MASK);
     return numberToBytesBE2(num2, nByteLength);
   }
   function prepSig(msgHash, privateKey, opts = defaultSigOpts) {
@@ -9092,12 +8951,12 @@ function weierstrass(curveDef) {
       const ik = invN(k);
       const q = Point2.BASE.multiply(k).toAffine();
       const r = modN2(q.x);
-      if (r === _0n11)
+      if (r === _0n10)
         return;
       const s = modN2(ik * modN2(m + r * d));
-      if (s === _0n11)
+      if (s === _0n10)
         return;
-      let recovery = (q.x === r ? 0 : 2) | Number(q.y & _1n11);
+      let recovery = (q.x === r ? 0 : 2) | Number(q.y & _1n10);
       let normS = s;
       if (lowS && isBiggerThanHalfOrder(s)) {
         normS = normalizeS(s);
@@ -9180,18 +9039,18 @@ function weierstrass(curveDef) {
 }
 function SWUFpSqrtRatio(Fp2, Z) {
   const q = Fp2.ORDER;
-  let l = _0n11;
-  for (let o = q - _1n11; o % _2n7 === _0n11; o /= _2n7)
-    l += _1n11;
+  let l = _0n10;
+  for (let o = q - _1n10; o % _2n6 === _0n10; o /= _2n6)
+    l += _1n10;
   const c1 = l;
-  const _2n_pow_c1_1 = _2n7 << c1 - _1n11 - _1n11;
-  const _2n_pow_c1 = _2n_pow_c1_1 * _2n7;
-  const c2 = (q - _1n11) / _2n_pow_c1;
-  const c3 = (c2 - _1n11) / _2n7;
-  const c4 = _2n_pow_c1 - _1n11;
+  const _2n_pow_c1_1 = _2n6 << c1 - _1n10 - _1n10;
+  const _2n_pow_c1 = _2n_pow_c1_1 * _2n6;
+  const c2 = (q - _1n10) / _2n_pow_c1;
+  const c3 = (c2 - _1n10) / _2n6;
+  const c4 = _2n_pow_c1 - _1n10;
   const c5 = _2n_pow_c1_1;
   const c6 = Fp2.pow(Z, c2);
-  const c7 = Fp2.pow(Z, (c2 + _1n11) / _2n7);
+  const c7 = Fp2.pow(Z, (c2 + _1n10) / _2n6);
   let sqrtRatio = (u, v) => {
     let tv1 = c6;
     let tv2 = Fp2.pow(v, c4);
@@ -9209,9 +9068,9 @@ function SWUFpSqrtRatio(Fp2, Z) {
     tv5 = Fp2.mul(tv4, tv1);
     tv3 = Fp2.cmov(tv2, tv3, isQR);
     tv4 = Fp2.cmov(tv5, tv4, isQR);
-    for (let i = c1; i > _1n11; i--) {
-      let tv52 = i - _2n7;
-      tv52 = _2n7 << tv52 - _1n11;
+    for (let i = c1; i > _1n10; i--) {
+      let tv52 = i - _2n6;
+      tv52 = _2n6 << tv52 - _1n10;
       let tvv5 = Fp2.pow(tv4, tv52);
       const e1 = Fp2.eql(tvv5, Fp2.ONE);
       tv2 = Fp2.mul(tv3, tv1);
@@ -9278,7 +9137,7 @@ function mapToCurveSimpleSWU(Fp2, opts) {
     return { x, y };
   };
 }
-var DERErr, DER, _0n11, _1n11, _2n7, _3n4, _4n3;
+var DERErr, DER, _0n10, _1n10, _2n6, _3n4, _4n3;
 var init_weierstrass = __esm({
   "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/weierstrass.js"() {
     "use strict";
@@ -9352,14 +9211,14 @@ var init_weierstrass = __esm({
       _int: {
         encode(num2) {
           const { Err: E } = DER;
-          if (num2 < _0n11)
+          if (num2 < _0n10)
             throw new E("integer: negative integers are not allowed");
-          let hex4 = numberToHexUnpadded(num2);
-          if (Number.parseInt(hex4[0], 16) & 8)
-            hex4 = "00" + hex4;
-          if (hex4.length & 1)
+          let hex3 = numberToHexUnpadded(num2);
+          if (Number.parseInt(hex3[0], 16) & 8)
+            hex3 = "00" + hex3;
+          if (hex3.length & 1)
             throw new E("unexpected DER parsing assertion: unpadded hex");
-          return hex4;
+          return hex3;
         },
         decode(data) {
           const { Err: E } = DER;
@@ -9370,9 +9229,9 @@ var init_weierstrass = __esm({
           return bytesToNumberBE2(data);
         }
       },
-      toSig(hex4) {
+      toSig(hex3) {
         const { Err: E, _int: int, _tlv: tlv } = DER;
-        const data = ensureBytes2("signature", hex4);
+        const data = ensureBytes2("signature", hex3);
         const { v: seqBytes, l: seqLeftBytes } = tlv.decode(48, data);
         if (seqLeftBytes.length)
           throw new E("invalid signature: left bytes after parsing");
@@ -9390,9 +9249,9 @@ var init_weierstrass = __esm({
         return tlv.encode(48, seq);
       }
     };
-    _0n11 = BigInt(0);
-    _1n11 = BigInt(1);
-    _2n7 = BigInt(2);
+    _0n10 = BigInt(0);
+    _1n10 = BigInt(1);
+    _2n6 = BigInt(2);
     _3n4 = BigInt(3);
     _4n3 = BigInt(4);
   }
@@ -9592,7 +9451,7 @@ function sqrtMod(y) {
   const b3 = b2 * b2 * y % P;
   const b6 = pow22(b3, _3n5, P) * b3 % P;
   const b9 = pow22(b6, _3n5, P) * b3 % P;
-  const b11 = pow22(b9, _2n8, P) * b2 % P;
+  const b11 = pow22(b9, _2n7, P) * b2 % P;
   const b22 = pow22(b11, _11n, P) * b11 % P;
   const b44 = pow22(b22, _22n, P) * b22 % P;
   const b88 = pow22(b44, _44n, P) * b44 % P;
@@ -9601,7 +9460,7 @@ function sqrtMod(y) {
   const b223 = pow22(b220, _3n5, P) * b3 % P;
   const t1 = pow22(b223, _23n, P) * b22 % P;
   const t2 = pow22(t1, _6n, P) * b2 % P;
-  const root = pow22(t2, _2n8, P);
+  const root = pow22(t2, _2n7, P);
   if (!Fpk1.eql(Fpk1.sqr(root), y))
     throw new Error("Cannot find square root");
   return root;
@@ -9622,13 +9481,13 @@ function schnorrGetExtPubKey(priv) {
   return { scalar, bytes: pointToBytes(p) };
 }
 function lift_x(x) {
-  aInRange2("x", x, _1n12, secp256k1P);
+  aInRange2("x", x, _1n11, secp256k1P);
   const xx = modP(x * x);
   const c = modP(xx * x + BigInt(7));
   let y = sqrtMod(c);
-  if (y % _2n8 !== _0n12)
+  if (y % _2n7 !== _0n11)
     y = modP(-y);
-  const p = new Point(x, y, _1n12);
+  const p = new Point(x, y, _1n11);
   p.assertValidity();
   return p;
 }
@@ -9645,7 +9504,7 @@ function schnorrSign(message, privateKey, auxRand = randomBytes(32)) {
   const t = numTo32b(d ^ num(taggedHash("BIP0340/aux", a)));
   const rand = taggedHash("BIP0340/nonce", t, px, m);
   const k_ = modN(num(rand));
-  if (k_ === _0n12)
+  if (k_ === _0n11)
     throw new Error("sign failed: k is zero");
   const { bytes: rx, scalar: k } = schnorrGetExtPubKey(k_);
   const e = challenge(rx, px, m);
@@ -9663,10 +9522,10 @@ function schnorrVerify(signature, message, publicKey) {
   try {
     const P = lift_x(num(pub));
     const r = num(sig.subarray(0, 32));
-    if (!inRange2(r, _1n12, secp256k1P))
+    if (!inRange2(r, _1n11, secp256k1P))
       return false;
     const s = num(sig.subarray(32, 64));
-    if (!inRange2(s, _1n12, secp256k1N))
+    if (!inRange2(s, _1n11, secp256k1N))
       return false;
     const e = challenge(numTo32b(r), pointToBytes(P), m);
     const R = GmulAdd(P, s, modN(-e));
@@ -9677,7 +9536,7 @@ function schnorrVerify(signature, message, publicKey) {
     return false;
   }
 }
-var secp256k1P, secp256k1N, _0n12, _1n12, _2n8, divNearest, Fpk1, secp256k1, TAGGED_HASH_PREFIXES, pointToBytes, numTo32b, modP, modN, Point, GmulAdd, num, schnorr, isoMap, mapSWU, secp256k1_hasher, hashToCurve, encodeToCurve;
+var secp256k1P, secp256k1N, _0n11, _1n11, _2n7, divNearest, Fpk1, secp256k1, TAGGED_HASH_PREFIXES, pointToBytes, numTo32b, modP, modN, Point, GmulAdd, num, schnorr, isoMap, mapSWU, secp256k1_hasher, hashToCurve, encodeToCurve;
 var init_secp256k1 = __esm({
   "../../node_modules/viem/node_modules/@noble/curves/esm/secp256k1.js"() {
     "use strict";
@@ -9690,13 +9549,13 @@ var init_secp256k1 = __esm({
     init_weierstrass();
     secp256k1P = BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f");
     secp256k1N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
-    _0n12 = BigInt(0);
-    _1n12 = BigInt(1);
-    _2n8 = BigInt(2);
-    divNearest = (a, b) => (a + b / _2n8) / b;
+    _0n11 = BigInt(0);
+    _1n11 = BigInt(1);
+    _2n7 = BigInt(2);
+    divNearest = (a, b) => (a + b / _2n7) / b;
     Fpk1 = Field2(secp256k1P, void 0, void 0, { sqrt: sqrtMod });
     secp256k1 = createCurve({
-      a: _0n12,
+      a: _0n11,
       b: BigInt(7),
       Fp: Fpk1,
       n: secp256k1N,
@@ -9711,7 +9570,7 @@ var init_secp256k1 = __esm({
         splitScalar: (k) => {
           const n = secp256k1N;
           const a1 = BigInt("0x3086d221a7d46bcde86c90e49284eb15");
-          const b1 = -_1n12 * BigInt("0xe4437ed6010e88286f547fa90abfe4c3");
+          const b1 = -_1n11 * BigInt("0xe4437ed6010e88286f547fa90abfe4c3");
           const a2 = BigInt("0x114ca50f7a8e2f3f657c1108d9d44cfd8");
           const b2 = a1;
           const POW_2_128 = BigInt("0x100000000000000000000000000000000");
@@ -11581,8 +11440,8 @@ function normalizeWebhookRecord(data) {
   if (!data || typeof data !== "object") {
     return null;
   }
-  const record2 = isRecordContainer(data);
-  const candidate = pickWebhookRecord(record2) ?? normalizeWebhookRecord(record2.webhook) ?? normalizeWebhookRecord(record2.hook) ?? normalizeWebhookRecord(record2.subscription) ?? normalizeWebhookRecord(record2.data);
+  const record = isRecordContainer(data);
+  const candidate = pickWebhookRecord(record) ?? normalizeWebhookRecord(record.webhook) ?? normalizeWebhookRecord(record.hook) ?? normalizeWebhookRecord(record.subscription) ?? normalizeWebhookRecord(record.data);
   return candidate ?? null;
 }
 function normalizeWebhookRecordList(data) {
@@ -11593,12 +11452,12 @@ function normalizeWebhookRecordList(data) {
   if (!data || typeof data !== "object") {
     return null;
   }
-  const record2 = isRecordContainer(data);
-  const nested = maybeRecordArray(record2.webhooks) ?? maybeRecordArray(record2.subscriptions) ?? maybeRecordArray(record2.hooks) ?? maybeRecordArray(record2.data);
+  const record = isRecordContainer(data);
+  const nested = maybeRecordArray(record.webhooks) ?? maybeRecordArray(record.subscriptions) ?? maybeRecordArray(record.hooks) ?? maybeRecordArray(record.data);
   if (nested) {
     return nested;
   }
-  const single = pickWebhookRecord(record2);
+  const single = pickWebhookRecord(record);
   return single ? [single] : null;
 }
 function maybeRecordArray(value) {
@@ -13339,7 +13198,7 @@ var init_dist2 = __esm({
        */
       getFullPath(key, prefixOverride) {
         const prefix = prefixOverride ?? this._config.prefix ?? "";
-        return prefix ? `${prefix}/${key}` : key;
+        return prefix ? key === "" ? prefix : `${prefix}/${key}` : key;
       }
       /**
        * Get the host URL.
@@ -17491,8 +17350,8 @@ function read2(buf, offset) {
   return res;
 }
 function decode3(data, offset = 0) {
-  const code222 = varint_default.decode(data, offset);
-  return [code222, varint_default.decode.bytes];
+  const code22 = varint_default.decode(data, offset);
+  return [code22, varint_default.decode.bytes];
 }
 function encodeTo(int, target, offset = 0) {
   varint_default.encode(int, target, offset);
@@ -17501,25 +17360,25 @@ function encodeTo(int, target, offset = 0) {
 function encodingLength(int) {
   return varint_default.encodingLength(int);
 }
-function create(code222, digest3) {
+function create(code22, digest3) {
   const size2 = digest3.byteLength;
-  const sizeOffset = encodingLength(code222);
+  const sizeOffset = encodingLength(code22);
   const digestOffset = sizeOffset + encodingLength(size2);
   const bytes3 = new Uint8Array(digestOffset + size2);
-  encodeTo(code222, bytes3, 0);
+  encodeTo(code22, bytes3, 0);
   encodeTo(size2, bytes3, sizeOffset);
   bytes3.set(digest3, digestOffset);
-  return new Digest(code222, size2, digest3, bytes3);
+  return new Digest(code22, size2, digest3, bytes3);
 }
 function decode4(multihash) {
   const bytes3 = coerce22(multihash);
-  const [code222, sizeOffset] = decode3(bytes3);
+  const [code22, sizeOffset] = decode3(bytes3);
   const [size2, digestOffset] = decode3(bytes3.subarray(sizeOffset));
   const digest3 = bytes3.subarray(sizeOffset + digestOffset);
   if (digest3.byteLength !== size2) {
     throw new Error("Incorrect length");
   }
-  return new Digest(code222, size2, digest3, bytes3);
+  return new Digest(code22, size2, digest3, bytes3);
 }
 function equals2(a, b) {
   if (a === b) {
@@ -17602,12 +17461,12 @@ function toStringV1(bytes3, cache22, base222) {
     return cid2;
   }
 }
-function encodeCID(version3, code222, multihash) {
+function encodeCID(version3, code22, multihash) {
   const codeOffset = encodingLength(version3);
-  const hashOffset = codeOffset + encodingLength(code222);
+  const hashOffset = codeOffset + encodingLength(code22);
   const bytes3 = new Uint8Array(hashOffset + multihash.byteLength);
   encodeTo(version3, bytes3, 0);
-  encodeTo(code222, bytes3, codeOffset);
+  encodeTo(code22, bytes3, codeOffset);
   bytes3.set(multihash, hashOffset);
   return bytes3;
 }
@@ -17637,17 +17496,6 @@ function fromBase64Url(text) {
 function utf8Bytes(text) {
   return new TextEncoder().encode(text);
 }
-function didKeyFromEd25519PublicKey(publicKey) {
-  if (publicKey.length !== PUBLIC_KEY_LENGTH) {
-    throw new TypeError(
-      `ed25519 public key must be ${PUBLIC_KEY_LENGTH} bytes, got ${publicKey.length}`
-    );
-  }
-  const prefixed = new Uint8Array(ED25519_MULTICODEC_PREFIX.length + publicKey.length);
-  prefixed.set(ED25519_MULTICODEC_PREFIX, 0);
-  prefixed.set(publicKey, ED25519_MULTICODEC_PREFIX.length);
-  return `did:key:${base58btc.encode(prefixed)}`;
-}
 function ed25519PublicKeyFromDidKey(did) {
   if (!did.startsWith("did:key:")) {
     throw new TypeError(`not a did:key: ${did}`);
@@ -17658,15 +17506,6 @@ function ed25519PublicKeyFromDidKey(did) {
     throw new TypeError("did:key does not encode an ed25519 public key");
   }
   return prefixed.slice(ED25519_MULTICODEC_PREFIX.length);
-}
-function getBearerSessionJwk(envelope) {
-  const target = envelope.authorizationTarget;
-  if (target.kind !== "bearerKey") {
-    throw new TypeError(
-      `envelope authorizationTarget is "${target.kind}", not "bearerKey"`
-    );
-  }
-  return target.sessionJwk;
 }
 function decodeBase64UrlOrNull(value) {
   try {
@@ -17725,7 +17564,7 @@ function validateV3Invariants(value, ctx) {
   if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
   if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
@@ -17739,273 +17578,6 @@ function validateV3Invariants(value, ctx) {
   if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain exact decrypt network" });
   }
-}
-function decodeJsonSegment(segment) {
-  try {
-    const bytes3 = fromBase64Url(segment);
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes3));
-  } catch {
-    return null;
-  }
-}
-function isJsonObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function parseCapability(value) {
-  if (!isJsonObject(value)) return null;
-  const withUri = value["with"];
-  const can = value["can"];
-  if (typeof withUri !== "string" || withUri.length === 0) return null;
-  if (typeof can !== "string" || can.length === 0) return null;
-  return { with: withUri, can };
-}
-function parseCanonicalResourceUri(uri) {
-  const match = /^(https:\/\/[^/\\]+)\/(.*)$/.exec(uri);
-  if (match === null) return null;
-  const [, origin, path] = match;
-  if (!isCanonicalHttpsOrigin(origin)) return null;
-  if (!isCanonicalResourcePath(path)) return null;
-  return { origin, segments: path.split("/") };
-}
-function resourceUriCovers(granted, target) {
-  const targetParsed = parseCanonicalResourceUri(target);
-  if (targetParsed === null) return false;
-  const wildcard = granted.endsWith("/*");
-  const grantedParsed = parseCanonicalResourceUri(
-    wildcard ? granted.slice(0, -2) : granted
-  );
-  if (grantedParsed === null) return false;
-  if (grantedParsed.origin !== targetParsed.origin) return false;
-  const grantedSegments = grantedParsed.segments;
-  const targetSegments = targetParsed.segments;
-  const prefixMatches = grantedSegments.every(
-    (segment, index) => segment === targetSegments[index]
-  );
-  if (!prefixMatches) return false;
-  return wildcard ? targetSegments.length > grantedSegments.length : targetSegments.length === grantedSegments.length;
-}
-function bearerResourceUri(origin, spaceId, path) {
-  return `${origin}/${spaceId}/${path}`;
-}
-function requiredResourceUri(envelope) {
-  const { origin, spaceId, resource } = envelope.target;
-  return bearerResourceUri(origin, spaceId, resource.path);
-}
-function checkBearerDelegation(envelope, options = {}) {
-  let sessionDid;
-  try {
-    const jwk = getBearerSessionJwk(envelope);
-    if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519") {
-      return {
-        ok: false,
-        detail: `unsupported bearer session key family ${jwk.kty}/${jwk.crv}; this build binds Ed25519 keys only`
-      };
-    }
-    const publicKey = fromBase64Url(jwk.x);
-    const privateKey = fromBase64Url(jwk.d);
-    if (publicKey.length !== 32 || privateKey.length !== 32) {
-      return { ok: false, detail: "bearer session key must contain 32-byte Ed25519 coordinates" };
-    }
-    const derivedPublicKey = ed25519.getPublicKey(privateKey);
-    if (!derivedPublicKey.every((byte, index) => byte === publicKey[index])) {
-      return { ok: false, detail: "bearer session private and public keys do not match" };
-    }
-    sessionDid = didKeyFromEd25519PublicKey(publicKey);
-  } catch (error) {
-    return {
-      ok: false,
-      detail: `could not derive did:key from embedded session key: ${error instanceof Error ? error.message : String(error)}`
-    };
-  }
-  const segments = envelope.delegation.split(".");
-  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) {
-    return { ok: false, detail: "delegation is not a three-segment JWT-shaped token" };
-  }
-  const [headerSegment, payloadSegment, signatureSegment] = segments;
-  const header = decodeJsonSegment(headerSegment);
-  if (!isJsonObject(header)) {
-    return { ok: false, detail: "delegation header is not a base64url JSON object" };
-  }
-  const payload = decodeJsonSegment(payloadSegment);
-  if (!isJsonObject(payload)) {
-    return { ok: false, detail: "delegation payload is not a base64url JSON object" };
-  }
-  let signatureBytes;
-  try {
-    signatureBytes = fromBase64Url(signatureSegment);
-    if (signatureBytes.length === 0) {
-      return { ok: false, detail: "delegation signature segment is empty" };
-    }
-  } catch {
-    return { ok: false, detail: "delegation signature segment is not base64url" };
-  }
-  if (header["alg"] !== "EdDSA") {
-    return {
-      ok: false,
-      detail: `delegation alg must be EdDSA, got ${JSON.stringify(header["alg"])}`
-    };
-  }
-  const issuer = payload["iss"];
-  if (typeof issuer !== "string" || issuer.length === 0) {
-    return { ok: false, detail: "delegation payload has no issuer (iss) DID" };
-  }
-  let issuerPublicKey;
-  try {
-    issuerPublicKey = ed25519PublicKeyFromDidKey(issuer);
-  } catch (error) {
-    return {
-      ok: false,
-      detail: `delegation issuer is not an ed25519 did:key: ${error instanceof Error ? error.message : String(error)}`
-    };
-  }
-  let signatureValid;
-  try {
-    signatureValid = ed25519.verify(
-      signatureBytes,
-      utf8Bytes(`${headerSegment}.${payloadSegment}`),
-      issuerPublicKey,
-      ED25519_VERIFY_OPTS
-    );
-  } catch {
-    signatureValid = false;
-  }
-  if (!signatureValid) {
-    return { ok: false, detail: "delegation signature does not verify against iss" };
-  }
-  const nowMs2 = options.now?.() ?? Date.now();
-  const exp = payload["exp"];
-  if (typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= 0) {
-    return { ok: false, detail: "delegation has no valid expiry (exp) claim" };
-  }
-  if (nowMs2 >= exp * 1e3) {
-    return { ok: false, detail: "delegation is expired" };
-  }
-  const nbf = payload["nbf"];
-  if (nbf !== void 0) {
-    if (typeof nbf !== "number" || !Number.isSafeInteger(nbf)) {
-      return { ok: false, detail: "delegation nbf claim is not a valid time" };
-    }
-    if (nowMs2 < nbf * 1e3) {
-      return { ok: false, detail: "delegation is not yet valid (nbf)" };
-    }
-  }
-  const audience = payload["aud"];
-  if (typeof audience !== "string" || audience.length === 0) {
-    return { ok: false, detail: "delegation payload has no audience (aud) DID" };
-  }
-  if (audience !== sessionDid) {
-    return {
-      ok: false,
-      detail: "delegation audience is not the link's embedded session key"
-    };
-  }
-  const att = payload["att"];
-  if (!Array.isArray(att) || att.length === 0) {
-    return { ok: false, detail: "delegation payload has no capabilities (att)" };
-  }
-  const required = requiredResourceUri(envelope);
-  const granted = att.map(parseCapability).some(
-    (capability) => capability !== null && READ_ABILITIES.has(capability.can) && resourceUriCovers(capability.with, required)
-  );
-  if (!granted) {
-    return {
-      ok: false,
-      detail: `delegation grants no read capability covering ${required}`
-    };
-  }
-  return { ok: true, delegateeDid: audience };
-}
-function mintBearerDelegation(options) {
-  const { issuerPrivateKey, audienceDid, resourceUri, expiresAtSeconds } = options;
-  if (!audienceDid.startsWith("did:")) {
-    throw new TypeError(`audienceDid must be a DID, got ${audienceDid}`);
-  }
-  if (resourceUri.length === 0) {
-    throw new TypeError("resourceUri must be non-empty");
-  }
-  if (!Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= 0) {
-    throw new TypeError(
-      `expiresAtSeconds must be a positive integer (epoch seconds), got ${expiresAtSeconds}`
-    );
-  }
-  const issuerDid = didKeyFromEd25519PublicKey(
-    ed25519.getPublicKey(issuerPrivateKey)
-  );
-  const header = { alg: "EdDSA", typ: "JWT", ucv: "0.9.1" };
-  const payload = {
-    iss: issuerDid,
-    aud: audienceDid,
-    att: [{ with: resourceUri, can: BEARER_READ_ABILITY }],
-    prf: [],
-    exp: expiresAtSeconds
-  };
-  const signingInput = `${toBase64Url(utf8Bytes(JSON.stringify(header)))}.${toBase64Url(
-    utf8Bytes(JSON.stringify(payload))
-  )}`;
-  const signature = ed25519.sign(utf8Bytes(signingInput), issuerPrivateKey);
-  return `${signingInput}.${toBase64Url(signature)}`;
-}
-function assertKey(key32) {
-  if (key32.length !== KEY_LENGTH) {
-    throw new TypeError(`key must be ${KEY_LENGTH} bytes, got ${key32.length}`);
-  }
-}
-async function importAesKey(key32, usage) {
-  assertKey(key32);
-  return globalThis.crypto.subtle.importKey(
-    "raw",
-    key32,
-    "AES-GCM",
-    false,
-    [usage]
-  );
-}
-function generateKey() {
-  return globalThis.crypto.getRandomValues(new Uint8Array(KEY_LENGTH));
-}
-async function seal(plaintextBytes, key32) {
-  const { nonce, ciphertext } = await encryptEnvelope(plaintextBytes, key32);
-  const blob = new Uint8Array(HEADER_LENGTH + nonce.length + ciphertext.length);
-  blob[0] = SEALED_BLOB_VERSION;
-  blob.set(nonce, HEADER_LENGTH);
-  blob.set(ciphertext, HEADER_LENGTH + nonce.length);
-  return { blob, cid: await computeCid(blob) };
-}
-async function open(blob, key32) {
-  if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
-    throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
-  }
-  if (blob[0] !== SEALED_BLOB_VERSION) {
-    throw new TypeError(`unknown sealed blob version: ${blob[0]}`);
-  }
-  const nonce = blob.subarray(HEADER_LENGTH, HEADER_LENGTH + NONCE_LENGTH);
-  const ciphertext = blob.subarray(HEADER_LENGTH + NONCE_LENGTH);
-  return decryptEnvelope(nonce, ciphertext, key32);
-}
-async function encryptEnvelope(plaintextBytes, key32) {
-  const key = await importAesKey(key32, "encrypt");
-  const nonce = globalThis.crypto.getRandomValues(new Uint8Array(NONCE_LENGTH));
-  const ciphertext = new Uint8Array(
-    await globalThis.crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: nonce, additionalData: AAD },
-      key,
-      plaintextBytes
-    )
-  );
-  return { nonce, ciphertext };
-}
-async function decryptEnvelope(nonce, ciphertext, key32) {
-  if (nonce.length !== NONCE_LENGTH) {
-    throw new TypeError(`nonce must be ${NONCE_LENGTH} bytes, got ${nonce.length}`);
-  }
-  const key = await importAesKey(key32, "decrypt");
-  return new Uint8Array(
-    await globalThis.crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: nonce, additionalData: AAD },
-      key,
-      ciphertext
-    )
-  );
 }
 function isPlainRecord(value) {
   const proto = Object.getPrototypeOf(value);
@@ -18069,37 +17641,6 @@ function serialize(value) {
 function canonicalize2(value) {
   return serialize(value);
 }
-async function signCompactUcanAuthorization(input) {
-  if (input.notBefore >= input.expiresAt || input.expiresAt - input.notBefore > 60) {
-    throw new TypeError("compact invocation lifetime must be between one and 60 seconds");
-  }
-  const principal = input.issuerDid.split("#", 1)[0];
-  const publicKey = ed25519PublicKeyFromDidKey(principal);
-  const header = {
-    alg: "EdDSA",
-    jwk: { alg: "EdDSA", crv: "Ed25519", kty: "OKP", x: toBase64Url(publicKey) },
-    typ: "JWT",
-    ucv: "0.10.0"
-  };
-  const payload = {
-    att: input.attenuation,
-    aud: input.audienceDid,
-    exp: input.expiresAt,
-    fct: input.facts,
-    iss: input.issuerDid.includes("#") ? input.issuerDid : `${principal}#${principal.slice("did:key:".length)}`,
-    nbf: input.notBefore,
-    nnc: input.nonce,
-    prf: input.proofs
-  };
-  const protectedSegment = toBase64Url(new TextEncoder().encode(canonicalize2(header)));
-  const payloadSegment = toBase64Url(new TextEncoder().encode(canonicalize2(payload)));
-  const signingInput = new TextEncoder().encode(`${protectedSegment}.${payloadSegment}`);
-  const signature = await input.sign(signingInput);
-  if (signature.length !== 64) throw new TypeError("compact Authorization signature must be Ed25519");
-  return verifyCompactUcanAuthorization(
-    `${protectedSegment}.${payloadSegment}.${toBase64Url(signature)}`
-  );
-}
 function verifyCompactUcanAuthorization(authorization, expectedCid) {
   if (/\s/.test(authorization)) throw new TypeError("compact Authorization contains whitespace");
   const segments = authorization.split(".");
@@ -18136,22 +17677,6 @@ function assertExactKeys(value, keys, label) {
 function equal(left, right) {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
 }
-function signingBytes(unsigned) {
-  const domain = utf8Bytes(ENVELOPE_SIGNATURE_DOMAIN);
-  const body = utf8Bytes(canonicalize2(unsigned));
-  const bytes3 = new Uint8Array(domain.length + body.length);
-  bytes3.set(domain);
-  bytes3.set(body, domain.length);
-  return bytes3;
-}
-function signingBytesV2(unsigned) {
-  const domain = utf8Bytes(ENVELOPE_V2_SIGNATURE_DOMAIN);
-  const body = utf8Bytes(canonicalize2(unsigned));
-  const bytes3 = new Uint8Array(domain.length + body.length);
-  bytes3.set(domain);
-  bytes3.set(body, domain.length);
-  return bytes3;
-}
 function signingBytesV3(unsigned) {
   const domain = utf8Bytes(ENVELOPE_V3_SIGNATURE_DOMAIN);
   const body = utf8Bytes(canonicalize2(unsigned));
@@ -18159,53 +17684,6 @@ function signingBytesV3(unsigned) {
   bytes3.set(domain);
   bytes3.set(body, domain.length);
   return bytes3;
-}
-function signEnvelope(envelopeWithoutSig, ed25519PrivKey) {
-  const unsigned = unsignedShareEnvelopeSchema.parse(envelopeWithoutSig);
-  const publicKey = ed25519.getPublicKey(ed25519PrivKey);
-  const signature = ed25519.sign(signingBytes(unsigned), ed25519PrivKey);
-  return {
-    ...unsigned,
-    signature: {
-      signerDid: didKeyFromEd25519PublicKey(publicKey),
-      algorithm: "Ed25519",
-      value: toBase64Url(signature)
-    }
-  };
-}
-function verifyEnvelopeSignatureOnly(envelope) {
-  const parsed = shareEnvelopeSchema.parse(envelope);
-  const { signature, ...unsigned } = parsed;
-  const publicKey = ed25519PublicKeyFromDidKey(signature.signerDid);
-  return ed25519.verify(
-    fromBase64Url(signature.value),
-    signingBytes(unsigned),
-    publicKey,
-    ED25519_VERIFY_OPTS2
-  );
-}
-async function verifyEnvelope(envelope, options) {
-  const parsed = shareEnvelopeSchema.parse(envelope);
-  if (parsed.signature.signerDid !== options.expectedSignerDid) return false;
-  if (!verifyEnvelopeSignatureOnly(parsed)) return false;
-  if (parsed.authorizationTarget.kind === "policy") {
-    const policyBytes = fromBase64Url(parsed.authorizationTarget.policyBytes);
-    if (await computeCid(policyBytes) !== parsed.authorizationTarget.policyCid) {
-      return false;
-    }
-  }
-  return true;
-}
-function verifyEnvelopeV2SignatureOnly(envelope) {
-  const parsed = shareEnvelopeV2Schema.parse(envelope);
-  const { signature, ...unsigned } = parsed;
-  return ed25519.verify(fromBase64Url(signature.value), signingBytesV2(unsigned), ed25519PublicKeyFromDidKey(signature.signerDid), ED25519_VERIFY_OPTS2);
-}
-async function verifyEnvelopeV2(envelope, options) {
-  const parsed = shareEnvelopeV2Schema.parse(envelope);
-  if (parsed.signature.signerDid !== options.expectedSignerDid || !verifyEnvelopeV2SignatureOnly(parsed)) return false;
-  if (parsed.authorizationTarget.kind === "policy") return await computeCid(fromBase64Url(parsed.authorizationTarget.policyBytes)) === parsed.authorizationTarget.policyCid;
-  return true;
 }
 function verifyEnvelopeV3SignatureOnly(envelope) {
   const parsed = shareEnvelopeV3Schema.parse(envelope);
@@ -18252,7 +17730,7 @@ async function verifyEnvelopeV3(envelope, options) {
   const binding = parsed.attestedEnforcerBinding;
   const { signature: bindingSignature, ...unsignedBinding } = binding;
   const expectedBindingDigestHex = hex(sha2562(new TextEncoder().encode(canonicalize2({ enforcerDid: binding.enforcerDid, nodeAudience: binding.nodeAudience }))));
-  if (binding.enforcerDid !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
+  if (binding.nodeAudience !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.nodeAudience || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
   try {
     const digest3 = sha2562(new TextEncoder().encode(`${ATTESTED_ENFORCER_V2_DOMAIN}${canonicalize2(unsignedBinding)}`));
     if (!ed25519.verify(fromBase64Url(bindingSignature.value), digest3, ed25519PublicKeyFromDidKey(binding.nodeAudience), ED25519_VERIFY_OPTS2)) return false;
@@ -18300,77 +17778,30 @@ function assertCanonicalCid(cidString) {
     throw new TypeError(`not a canonical CIDv1 raw sha2-256 base32 CID: ${cidString}`);
   }
 }
-function encodeShareUrl({ origin, ciphertextCid, key32 }) {
-  if (key32.length !== KEY_LENGTH2) {
-    throw new TypeError(`key must be ${KEY_LENGTH2} bytes, got ${key32.length}`);
-  }
-  assertCanonicalCid(ciphertextCid);
-  if (!isCanonicalHttpsOrigin(origin)) {
-    throw new TypeError(`origin must be a canonical https origin, got ${origin}`);
-  }
-  return `${origin}/s/${ciphertextCid}#k=${toBase64Url(key32)}`;
-}
-function parseShareUrl(url, options = {}) {
-  const parsed = new URL(url);
-  if (parsed.protocol !== "https:") {
-    throw new TypeError(`share URL must be https, got ${parsed.protocol}`);
-  }
-  if (parsed.username !== "" || parsed.password !== "") {
-    throw new TypeError("share URL must not carry userinfo");
-  }
-  if (parsed.search !== "") {
-    throw new TypeError("share URL must not have a query string");
-  }
-  if (options.expectedOrigin !== void 0) {
-    if (!isCanonicalHttpsOrigin(options.expectedOrigin)) {
-      throw new TypeError(
-        `expectedOrigin must be a canonical https origin, got ${options.expectedOrigin}`
-      );
-    }
-    if (parsed.origin !== options.expectedOrigin) {
-      throw new TypeError(
-        `share URL origin ${parsed.origin} does not match expected ${options.expectedOrigin}`
-      );
-    }
-  }
-  const match = /^\/s\/([a-z2-7]+)$/.exec(parsed.pathname);
-  if (!match || match[1] === void 0) {
-    throw new TypeError(`not a share URL path: ${parsed.pathname}`);
-  }
-  const ciphertextCid = match[1];
-  assertCanonicalCid(ciphertextCid);
-  if (!parsed.hash.startsWith("#k=")) {
-    throw new TypeError("share URL is missing the #k= key fragment");
-  }
-  const key32 = fromBase64Url(parsed.hash.slice("#k=".length));
-  if (key32.length !== KEY_LENGTH2) {
-    throw new TypeError(`fragment key must be ${KEY_LENGTH2} bytes, got ${key32.length}`);
-  }
-  return { ciphertextCid, key32 };
-}
-async function encodeInlineShareUrl(parts) {
+async function encodePublicInlineShareUrl(parts) {
   if (!isCanonicalHttpsOrigin(parts.origin)) throw new TypeError("origin must be a canonical https origin");
-  if (parts.ciphertext.byteLength === 0 || parts.ciphertext.byteLength > MAX_INLINE_BYTES) throw new RangeError("inline ciphertext is outside the allowed size");
-  if (parts.key32 !== void 0 && parts.key32.length !== KEY_LENGTH2) throw new TypeError("inline key must be 32 bytes");
-  const ciphertextCid = await computeCid(parts.ciphertext);
-  const payload = canonicalize2({
+  if (parts.plaintext.byteLength === 0 || parts.plaintext.byteLength > MAX_INLINE_BYTES) throw new RangeError("public inline envelope is outside the allowed size");
+  const ciphertextCid = await computeCid(parts.plaintext);
+  const payloadBytes = new TextEncoder().encode(canonicalize2({
     v: 2,
-    c: toBase64Url(parts.ciphertext),
-    cid: ciphertextCid,
-    ...parts.key32 === void 0 ? {} : { k: toBase64Url(parts.key32) }
-  });
-  const payloadBytes = new TextEncoder().encode(payload);
+    c: toBase64Url(parts.plaintext),
+    cid: ciphertextCid
+  }));
   if (payloadBytes.byteLength > MAX_INLINE_BYTES * 2) throw new RangeError("inline URL is too large");
-  return `${parts.origin}/s/inline${INLINE_PREFIX}${toBase64Url(payloadBytes)}`;
+  return `${parts.origin}/viewer?${PUBLIC_INLINE_PARAMETER}=${toBase64Url(payloadBytes)}`;
 }
 function parseInlineShareUrl(url, options = {}) {
   const parsed = new URL(url);
-  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" || parsed.search !== "") throw new TypeError("inline share URL must be canonical HTTPS without query or userinfo");
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("inline share URL must be canonical HTTPS without userinfo");
   if (!isCanonicalHttpsOrigin(parsed.origin) || options.expectedOrigin !== void 0 && parsed.origin !== options.expectedOrigin) throw new TypeError("inline share URL origin is not trusted");
-  if (parsed.pathname !== "/s/inline" || !parsed.hash.startsWith(INLINE_PREFIX)) throw new TypeError("not an inline v2 share URL");
+  if (parsed.pathname !== "/viewer") throw new TypeError("not a TinyCloud policy share URL");
+  const secretPayload = parsed.search === "" && parsed.hash.startsWith(INLINE_PREFIX) ? parsed.hash.slice(INLINE_PREFIX.length) : void 0;
+  const publicPayload = parsed.hash === "" && parsed.searchParams.size === 1 ? parsed.searchParams.get(PUBLIC_INLINE_PARAMETER) ?? void 0 : void 0;
+  if (secretPayload === void 0 && publicPayload === void 0) throw new TypeError("not a canonical TinyCloud policy share URL");
+  if (publicPayload !== void 0 && parsed.search !== `?${PUBLIC_INLINE_PARAMETER}=${publicPayload}`) throw new TypeError("public inline URL is not canonical");
   let payloadBytes;
   try {
-    payloadBytes = fromBase64Url(parsed.hash.slice(INLINE_PREFIX.length));
+    payloadBytes = fromBase64Url(secretPayload ?? publicPayload);
   } catch {
     throw new TypeError("inline payload is not canonical base64url");
   }
@@ -18383,356 +17814,95 @@ function parseInlineShareUrl(url, options = {}) {
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("inline payload must be an object");
   if (canonicalize2(value) !== new TextDecoder("utf-8").decode(payloadBytes)) throw new TypeError("inline payload is not canonical JSON");
-  const record2 = value;
-  const keys = Object.keys(record2);
-  if (!keys.every((key) => key === "v" || key === "c" || key === "cid" || key === "k") || record2.v !== 2 || typeof record2.c !== "string" || typeof record2.cid !== "string") throw new TypeError("inline payload has invalid fields");
+  const record = value;
+  const keys = Object.keys(record);
+  if (!keys.every((key) => key === "v" || key === "c" || key === "cid" || key === "k") || record.v !== 2 || typeof record.c !== "string" || typeof record.cid !== "string" || publicPayload !== void 0 && (keys.length !== 3 || record.k !== void 0)) throw new TypeError("inline payload has invalid fields");
   let ciphertext;
   try {
-    ciphertext = fromBase64Url(record2.c);
+    ciphertext = fromBase64Url(record.c);
   } catch {
     throw new TypeError("inline ciphertext is not canonical base64url");
   }
   if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES) throw new TypeError("inline ciphertext is outside the allowed size");
-  assertCanonicalCid(record2.cid);
-  if (record2.k !== void 0 && typeof record2.k !== "string") throw new TypeError("inline key must be base64url");
+  assertCanonicalCid(record.cid);
+  if (record.k !== void 0 && typeof record.k !== "string") throw new TypeError("inline key must be base64url");
   let key32;
   try {
-    key32 = record2.k === void 0 ? void 0 : fromBase64Url(record2.k);
+    key32 = record.k === void 0 ? void 0 : fromBase64Url(record.k);
   } catch {
     throw new TypeError("inline key is not canonical base64url");
   }
   if (key32 !== void 0 && key32.length !== KEY_LENGTH2) throw new TypeError("inline key must be 32 bytes");
-  return { kind: "inline", ciphertextCid: record2.cid, ciphertext, ...key32 === void 0 ? {} : { key32 } };
-}
-function parseCompactOrInlineShareUrl(url, options = {}) {
-  if (new URL(url).pathname === "/s/inline") return parseInlineShareUrl(url, options);
-  return { kind: "compact", ...parseShareUrl(url, options) };
-}
-function boundedBytes(value, limit, code32) {
-  if (!Number.isSafeInteger(limit) || limit <= 0) throw new ShareReceiveError("fetch-failed", "share byte limit is invalid");
-  if (!(value instanceof Uint8Array)) throw new ShareReceiveError("fetch-failed", "registry returned invalid bytes");
-  if (value.byteLength > limit) throw new ShareReceiveError(code32, "share blob exceeds the configured byte limit");
-  return value;
-}
-async function readResponseBytes(response, limit, tooLargeCode) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength !== null && Number.isSafeInteger(Number(contentLength)) && Number(contentLength) > limit) {
-    throw new ShareReceiveError(tooLargeCode, "share blob exceeds the configured byte limit");
-  }
-  if (response.body === null) {
-    return boundedBytes(new Uint8Array(await response.arrayBuffer()), limit, tooLargeCode);
-  }
-  const reader = response.body.getReader();
-  const chunks = [];
-  let total = 0;
-  try {
-    for (; ; ) {
-      const part = await reader.read();
-      if (part.done) break;
-      total += part.value.byteLength;
-      if (total > limit) {
-        await reader.cancel();
-        throw new ShareReceiveError(tooLargeCode, "share blob exceeds the configured byte limit");
-      }
-      chunks.push(part.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes3 = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes3.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes3;
-}
-function registryFetcher(options, limit, tooLargeCode = "max-bytes-exceeded", stage = "envelope") {
-  if (options.fetchBlob !== void 0) return async (input) => {
-    try {
-      options.signal?.throwIfAborted();
-      const bytes3 = await options.fetchBlob({ ...input, ...options.signal === void 0 ? {} : { signal: options.signal } });
-      options.signal?.throwIfAborted();
-      return boundedBytes(bytes3, limit, tooLargeCode);
-    } catch (error) {
-      if (options.signal?.aborted) throw options.signal.reason ?? error;
-      if (error instanceof ShareReceiveError) throw error;
-      throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
-    }
-  };
-  if (options.registryBaseUrl === void 0) throw new ShareReceiveError("fetch-failed", "a registry fetch adapter is required");
-  const fetchFn = options.fetchFn ?? globalThis.fetch;
-  const base33 = options.registryBaseUrl.replace(/\/+$/, "");
-  return async ({ cid: cid2 }) => {
-    try {
-      options.signal?.throwIfAborted();
-      const response = await fetchFn(`${base33}/ipfs/${cid2}?format=raw`, {
-        headers: { accept: "application/vnd.ipld.raw" },
-        redirect: "error",
-        ...options.signal === void 0 ? {} : { signal: options.signal }
-      });
-      options.signal?.throwIfAborted();
-      if (!response.ok) throw new ShareReceiveError("fetch-failed", `registry returned ${response.status}`, { stage });
-      const bytes3 = await readResponseBytes(response, limit, tooLargeCode);
-      options.signal?.throwIfAborted();
-      return bytes3;
-    } catch (error) {
-      if (options.signal?.aborted) throw options.signal.reason ?? error;
-      if (error instanceof ShareReceiveError) throw error;
-      throw new ShareReceiveError("fetch-failed", "registry unavailable", { stage });
-    }
-  };
+  return { kind: "inline", ciphertextCid: record.cid, ciphertext, ...key32 === void 0 ? {} : { key32 } };
 }
 function metadataFor(envelope, origin) {
-  if (envelope.version === 2 || envelope.version === 3) {
-    const targetKind3 = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : envelope.recipientMatcher.kind === "emailDomain" ? "emailDomain" : "bearer";
-    return {
-      protocol: "tinycloud-share",
-      version: 1,
-      shareId: envelope.shareId,
-      origin,
-      target: { ...envelope.target, kind: targetKind3 },
-      resource: envelope.resource,
-      actions: envelope.actions,
-      expiresAt: envelope.expiry,
-      display: {
-        ...envelope.display.senderName === void 0 ? {} : { senderName: envelope.display.senderName },
-        ...envelope.display.filename === void 0 ? {} : { filename: envelope.display.filename },
-        ...envelope.display.mode === void 0 ? {} : { mode: envelope.display.mode }
-      },
-      ...envelope.version === 2 && envelope.content !== void 0 ? { content: { cid: envelope.content.cid } } : {}
-    };
-  }
+  const kind = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : "emailDomain";
   return {
     protocol: "tinycloud-share",
     version: 1,
     shareId: envelope.shareId,
     origin,
-    target: { ...envelope.target, kind: "bearer" },
-    resource: envelope.target.resource,
-    actions: ["read"],
+    target: { ...envelope.target, kind },
+    resource: { ...envelope.resource },
+    actions: [...envelope.actions],
     expiresAt: envelope.expiry,
     display: {
       ...envelope.display.senderName === void 0 ? {} : { senderName: envelope.display.senderName },
       ...envelope.display.filename === void 0 ? {} : { filename: envelope.display.filename },
       ...envelope.display.mode === void 0 ? {} : { mode: envelope.display.mode }
-    },
-    ...envelope.content === void 0 ? {} : { content: { cid: envelope.content.cid } }
+    }
   };
 }
-function parseEnvelope(bytes3) {
-  try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes3);
-    const value = JSON.parse(text);
-    if (canonicalize2(value) !== text) throw new Error("share envelope is not canonical JSON");
-    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-      const version3 = value.version;
-      if (version3 === 3) return shareEnvelopeV3Schema.parse(value);
-      if (version3 === 2) return shareEnvelopeV2Schema.parse(value);
-    }
-    return shareEnvelopeSchema.parse(value);
-  } catch {
-    throw new ShareReceiveError("envelope-invalid", "share envelope is invalid");
-  }
-}
-async function resolveShareEnvelope(link2, options = {}) {
+async function resolvePolicyShare(link2, options) {
+  options.signal?.throwIfAborted();
+  let url;
   let parsed;
   try {
-    parsed = parseCompactOrInlineShareUrl(link2, { ...options.expectedOrigin === void 0 ? {} : { expectedOrigin: options.expectedOrigin } });
+    url = new URL(link2);
+    if (url.pathname !== "/viewer" || url.hash !== "" || url.searchParams.size !== 1 || !url.searchParams.has("tc2")) throw new Error("not public Policy/v3");
+    parsed = parseInlineShareUrl(link2, { ...options.expectedOrigin === void 0 ? {} : { expectedOrigin: options.expectedOrigin } });
+    if (parsed.key32 !== void 0) throw new Error("secret inline transport is retired");
   } catch {
     throw new ShareReceiveError("invalid-link", "share link format is invalid");
   }
+  const limit = options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES;
+  if (!Number.isSafeInteger(limit) || limit <= 0 || parsed.ciphertext.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "public policy envelope exceeds the configured byte limit");
+  if (await computeCid(parsed.ciphertext) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "public envelope bytes do not match the link CID");
+  options.signal?.throwIfAborted();
+  let envelope;
   try {
-    if (parsed.key32 !== void 0) options.onKeyParsed?.(parsed.key32);
-    const url = new URL(link2);
-    const sealed = parsed.kind === "inline" ? boundedBytes(parsed.ciphertext, options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES, "max-bytes-exceeded") : await registryFetcher(options, options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES)({ origin: url.origin, cid: parsed.ciphertextCid });
-    if (await computeCid(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "registry bytes do not match the link CID");
-    let plaintext;
-    try {
-      plaintext = parsed.key32 === void 0 ? sealed : await open(sealed, parsed.key32);
-    } catch {
-      throw new ShareReceiveError("decrypt-failed", "share envelope could not be opened");
-    }
-    return { envelope: parseEnvelope(plaintext), origin: url.origin, cid: parsed.ciphertextCid, kind: parsed.kind };
-  } finally {
-    parsed.key32?.fill(0);
-  }
-}
-function actionName(value) {
-  return value === "read" ? "tinycloud.kv/get" : value === "list" ? "tinycloud.kv/list" : value === "edit" ? "tinycloud.kv/put" : value;
-}
-function resourceContains(outer, inner) {
-  if (outer.kind === "exact") return inner.kind === "exact" && outer.path === inner.path;
-  const prefix = outer.path.endsWith("/") ? outer.path : `${outer.path}/`;
-  return inner.path === outer.path || inner.path.startsWith(prefix);
-}
-function policyEvidenceMatches(envelope, evidence) {
-  const registeredActions = new Set(evidence.actions.map(actionName));
-  return evidence.policyCid === (envelope.authorizationTarget.kind === "policy" ? envelope.authorizationTarget.policyCid : "") && evidence.signerDid === envelope.signature.signerDid && evidence.registrationCid.length > 0 && evidence.shareId === envelope.shareId && canonicalize2(evidence.recipientMatcher) === canonicalize2(envelope.recipientMatcher) && canonicalize2(evidence.target) === canonicalize2(envelope.target) && resourceContains(evidence.resource, envelope.resource) && envelope.actions.every((action) => registeredActions.has(actionName(action))) && canonicalize2(evidence.contentSource) === canonicalize2(envelope.contentSource) && evidence.contentSourceDigest === envelope.contentSourceDigest && evidence.delegationCid === envelope.delegationCid && evidence.authorityMaterialHandle === envelope.authorityMaterialHandle && evidence.authorityMaterialDigest === envelope.authorityMaterialDigest && evidence.expiresAt === envelope.expiry && Number.isFinite(Date.parse(evidence.expiresAt)) && Date.parse(evidence.expiresAt) === Date.parse(envelope.expiry);
-}
-async function verifyV2Envelope(envelope, linkOrigin, options) {
-  if (options.expectedOrigin !== void 0 && linkOrigin !== options.expectedOrigin) {
-    throw new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted origin");
-  }
-  try {
-    if (!await verifyEnvelopeV2(envelope, { expectedSignerDid: envelope.signature.signerDid })) throw new Error("signature");
+    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(parsed.ciphertext);
+    const value = JSON.parse(encoded);
+    if (canonicalize2(value) !== encoded) throw new Error("non-canonical envelope");
+    envelope = shareEnvelopeV3Schema.parse(value);
   } catch {
-    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
-  }
-  const expiry = Date.parse(envelope.expiry);
-  if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
-  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
-  if (envelope.authorizationTarget.kind === "policy") {
-    if (options.trustedPolicyAuthority === void 0) throw new ShareReceiveError("envelope-invalid", "an external policy authority is required");
-    let evidence;
-    try {
-      evidence = await options.trustedPolicyAuthority.resolve({ policyCid: envelope.authorizationTarget.policyCid, envelope });
-    } catch {
-      evidence = void 0;
-    }
-    if (evidence === void 0 || !policyEvidenceMatches(envelope, evidence)) throw new ShareReceiveError("capability-invalid", "share policy authority evidence is not bound to the envelope");
-    if (options.trustedSignerDid !== void 0 && (evidence.signerDid !== options.trustedSignerDid || envelope.signature.signerDid !== options.trustedSignerDid)) {
-      throw new ShareReceiveError("signature-invalid", "share signer is not trusted");
-    }
-  } else if (envelope.authorizationTarget.kind === "recipientDid" && envelope.recipientMatcher.kind === "recipientDid" && envelope.authorizationTarget.did !== envelope.recipientMatcher.value) {
-    throw new ShareReceiveError("capability-invalid", "recipient authorization does not match the signed recipient");
-  } else {
-    if (options.trustedSignerDid === void 0 || envelope.signature.signerDid !== options.trustedSignerDid) throw new ShareReceiveError("signature-invalid", "an addressed signer trust root is required");
-  }
-}
-async function verifyV3Envelope(envelope, linkOrigin, options) {
-  if (options.expectedOrigin !== void 0 && linkOrigin !== options.expectedOrigin) {
-    throw new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted origin");
+    throw new ShareReceiveError("envelope-invalid", "share envelope is invalid");
   }
   try {
     if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: envelope.policy.ownerDid })) throw new Error("signature");
   } catch {
     throw new ShareReceiveError("signature-invalid", "share signature is invalid");
   }
+  options.signal?.throwIfAborted();
   const expiry = Date.parse(envelope.expiry);
   if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
   if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
-}
-async function verifyV1PolicyEnvelope(envelope, linkOrigin, options) {
-  if (envelope.authorizationTarget.kind !== "policy") throw new ShareReceiveError("unsupported-target", "share target is not an addressed policy", { reason: "policy-target" });
-  if (envelope.target.origin !== linkOrigin || options.expectedOrigin !== void 0 && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin)) {
-    throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
-  }
-  throw new ShareReceiveError("unsupported-target", "share policy target is not supported", { reason: "policy-target" });
-}
-async function verifyBearerEnvelope(envelope, linkOrigin, options = {}) {
-  if (envelope.target.origin !== linkOrigin || options.expectedOrigin !== void 0 && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin)) {
-    throw new ShareReceiveError("origin-mismatch", "share origin does not match the trusted origin");
-  }
-  if (envelope.authorizationTarget.kind !== "bearerKey") throw new ShareReceiveError("unsupported-target", "this receive path only handles bearer shares", { reason: envelope.authorizationTarget.kind === "policy" ? "policy-target" : "recipient-did-target" });
-  if (envelope.target.resource.kind !== "exact") throw new ShareReceiveError("unsupported-target", "this receive path only handles exact resources", { reason: "prefix-resource" });
-  const expiry = Date.parse(envelope.expiry);
-  if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
-  try {
-    if (!await verifyEnvelope(envelope, { expectedSignerDid: envelope.signature.signerDid })) throw new Error("signature");
-  } catch {
-    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
-  }
-  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
-  const capability = checkBearerDelegation(envelope, options.now === void 0 ? {} : { now: options.now });
-  if (!capability.ok) throw new ShareReceiveError("capability-invalid", "share delegation does not authorize the target");
-}
-async function verifyResolved(envelope, linkOrigin, options) {
-  await verifyBearerEnvelope(envelope, linkOrigin, options);
+  options.onResolvedAddressedEnvelope?.(envelope, parsed.ciphertextCid);
+  return { envelope, origin: url.origin, cid: parsed.ciphertextCid };
 }
 async function inspectShare(link2, options = {}) {
-  const resolved = await resolveShareEnvelope(link2, options);
-  if (resolved.envelope.version === 1 && resolved.envelope.authorizationTarget.kind === "policy") await verifyV1PolicyEnvelope(resolved.envelope, resolved.origin, options);
-  else if (resolved.envelope.version === 1) await verifyResolved(resolved.envelope, resolved.origin, options);
-  else if (resolved.envelope.version === 2) await verifyV2Envelope(resolved.envelope, resolved.origin, options);
-  else await verifyV3Envelope(resolved.envelope, resolved.origin, options);
-  if (resolved.envelope.version === 2 || resolved.envelope.version === 3 || resolved.envelope.authorizationTarget.kind === "policy") options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
-  return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind } };
+  const resolved = await resolvePolicyShare(link2, options);
+  return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "policy" } };
 }
 async function receiveShare(link2, options = {}) {
-  const resolved = await resolveShareEnvelope(link2, options);
-  if (resolved.envelope.version === 3) {
-    await verifyV3Envelope(resolved.envelope, resolved.origin, options);
-    options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
-    return { state: "authorization-required", method: resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim" };
-  }
-  if (resolved.envelope.version === 2) {
-    await verifyV2Envelope(resolved.envelope, resolved.origin, options);
-    options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
-    const method = resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim";
-    if (options.authorization === void 0) return { state: "authorization-required", method };
-    const result = options.authorizationResumeToken === void 0 ? await options.authorization.begin({ envelope: resolved.envelope, method }) : await options.authorization.resume({ envelope: resolved.envelope, method, resumeToken: options.authorizationResumeToken, ...options.authorizationProof === void 0 ? {} : { proof: options.authorizationProof } });
-    if (result.state === "authorization-required") return result;
-    if (result.state === "denied") throw new ShareReceiveError("authorization-denied", "share authorization was denied");
-    if (result.value === null || typeof result.value !== "object" || !(result.value.bytes instanceof Uint8Array) || result.value.proof === void 0 || options.authorization.verifyResult === void 0) {
-      throw new ShareReceiveError("content-integrity-failed", "share authorization returned an unsigned content result");
-    }
-    const authorized = result.value;
-    try {
-      if (!await options.authorization.verifyResult({ envelope: resolved.envelope, value: authorized, proof: authorized.proof })) throw new Error("node proof");
-    } catch {
-      throw new ShareReceiveError("content-integrity-failed", "node authorization proof is invalid");
-    }
-    const bytes4 = authorized.bytes.slice();
-    const maxBytes = options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES;
-    if (bytes4.byteLength > maxBytes) throw new ShareReceiveError("max-bytes-exceeded", "shared content exceeds the configured byte limit");
-    const digestBytes3 = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes4));
-    const bodyDigest = toBase64Url(digestBytes3);
-    if (authorized.bodyDigest !== bodyDigest) throw new ShareReceiveError("content-integrity-failed", "authorized content digest does not match");
-    if (authorized.contentSourceDigest !== resolved.envelope.contentSourceDigest) throw new ShareReceiveError("content-integrity-failed", "authorized content source does not match");
-    const binding = authorized.binding;
-    if (binding.shareId !== resolved.envelope.shareId || binding.delegationCid !== resolved.envelope.delegationCid || binding.authorityMaterialHandle !== resolved.envelope.authorityMaterialHandle || binding.authorityMaterialDigest !== resolved.envelope.authorityMaterialDigest || binding.resource.kind !== resolved.envelope.resource.kind || binding.resource.path !== resolved.envelope.resource.path || binding.action !== void 0 && !resolved.envelope.actions.some((action) => action === binding.action || `tinycloud.kv/${action}` === binding.action)) throw new ShareReceiveError("content-integrity-failed", "authorized content binding does not match");
-    if (resolved.envelope.metadata.byteLength !== void 0 && resolved.envelope.metadata.byteLength !== bytes4.byteLength) {
-      throw new ShareReceiveError("content-integrity-failed", "authorized content length does not match");
-    }
-    let text2;
-    try {
-      text2 = new TextDecoder("utf-8", { fatal: true }).decode(bytes4);
-    } catch {
-    }
-    return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind }, bytes: bytes4, ...text2 === void 0 ? {} : { text: text2 } };
-  }
-  if (resolved.envelope.authorizationTarget.kind === "policy") {
-    await verifyV1PolicyEnvelope(resolved.envelope, resolved.origin, options);
-    options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
-    return { state: "authorization-required", method: "email-claim" };
-  }
-  await verifyResolved(resolved.envelope, resolved.origin, options);
-  let bytes3 = new Uint8Array();
-  if (resolved.envelope.content !== void 0) {
-    bytes3 = await registryFetcher(
-      options,
-      (options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES) + CONTENT_SEALED_OVERHEAD,
-      "max-bytes-exceeded",
-      "content"
-    )({ origin: resolved.origin, cid: resolved.envelope.content.cid });
-    if (await computeCid(bytes3) !== resolved.envelope.content.cid) throw new ShareReceiveError("content-integrity-failed", "shared content CID does not match");
-    const key = fromBase64Url(resolved.envelope.content.key);
-    try {
-      bytes3 = await open(bytes3, key);
-    } catch {
-      throw new ShareReceiveError("content-integrity-failed", "shared content could not be opened");
-    } finally {
-      key.fill(0);
-    }
-    if (bytes3.byteLength > (options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES)) {
-      throw new ShareReceiveError("max-bytes-exceeded", "shared content exceeds the configured byte limit");
-    }
-  }
-  let text;
-  if (bytes3.byteLength !== 0) {
-    try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes3);
-    } catch {
-    }
-  }
-  return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind }, bytes: bytes3, ...text === void 0 ? {} : { text } };
+  const resolved = await resolvePolicyShare(link2, options);
+  return { state: "authorization-required", method: resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim" };
 }
 function redactPublishedShare(result) {
   return {
     protocol: "tinycloud-share",
     version: SHARE_PUBLISH_RESULT_VERSION,
-    link: { kind: result.link.kind, cid: result.link.cid },
+    link: { ...result.link },
     metadata: {
       protocol: "tinycloud-share",
       version: 1,
@@ -18742,242 +17912,9 @@ function redactPublishedShare(result) {
       resource: { ...result.metadata.resource },
       actions: [...result.metadata.actions],
       expiresAt: result.metadata.expiresAt,
-      display: { ...result.metadata.display },
-      ...result.metadata.content === void 0 ? {} : { content: { cid: result.metadata.content.cid } }
-    },
-    registryDeleteAfter: result.registryDeleteAfter
+      display: { ...result.metadata.display }
+    }
   };
-}
-function assertSafeFilename(filename) {
-  if (filename.length === 0 || filename === "." || filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(filename)) {
-    throw new SharePublishError("invalid-argument", "filename must be one safe path segment");
-  }
-}
-function assertOrigin(origin, label) {
-  if (!isCanonicalHttpsOrigin(origin)) {
-    throw new SharePublishError("invalid-argument", `${label} must be a canonical HTTPS origin`);
-  }
-}
-async function snapshotSource(source, limit) {
-  if (!Number.isSafeInteger(limit) || limit <= 0) {
-    throw new SharePublishError("invalid-argument", "maxBytes must be a positive safe integer");
-  }
-  if (source instanceof Uint8Array) {
-    if (source.byteLength > limit) throw new SharePublishError("max-bytes-exceeded", "share content exceeds the configured byte limit");
-    return source.slice();
-  }
-  const chunks = [];
-  let total = 0;
-  try {
-    for await (const chunk of source) {
-      if (!(chunk instanceof Uint8Array)) throw new SharePublishError("invalid-argument", "share source yielded invalid bytes");
-      total += chunk.byteLength;
-      if (total > limit) throw new SharePublishError("max-bytes-exceeded", "share content exceeds the configured byte limit");
-      chunks.push(chunk);
-    }
-  } catch (error) {
-    if (error instanceof SharePublishError) throw error;
-    throw new SharePublishError("upload-failed", "share source could not be read");
-  }
-  const bytes3 = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes3.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes3;
-}
-function assertTarget(target) {
-  if (target.kind !== "bearer") {
-    throw new SharePublishError("unsupported-target", "this release publishes bearer shares only");
-  }
-}
-function assertRegistryUrl(value, allowInsecure) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new SharePublishError("invalid-argument", "registry URL is invalid");
-  }
-  if (url.username || url.password || url.search || url.hash) throw new SharePublishError("invalid-argument", "registry URL must not contain credentials, query, or fragment");
-  if (!allowInsecure && url.protocol !== "https:") throw new SharePublishError("invalid-argument", "production registry uploads require HTTPS");
-  if (url.protocol !== "https:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost") throw new SharePublishError("invalid-argument", "insecure registry uploads are limited to localhost");
-  return url;
-}
-async function defaultUpload(options, input) {
-  if (options.registryBaseUrl === void 0) throw new SharePublishError("upload-auth-required", "an authenticated share registry is required");
-  const base33 = assertRegistryUrl(options.registryBaseUrl, options.allowInsecureRegistry === true).toString().replace(/\/$/, "");
-  const localInsecure = options.allowInsecureRegistry === true && (new URL(base33).hostname === "127.0.0.1" || new URL(base33).hostname === "localhost");
-  if (options.authorizeUpload === void 0 && !localInsecure) {
-    throw new SharePublishError("upload-auth-required", "share upload authorization is required");
-  }
-  let authorization;
-  if (options.authorizeUpload !== void 0) {
-    try {
-      authorization = await options.authorizeUpload(input);
-    } catch {
-      throw new SharePublishError("upload-auth-required", "share upload authorization was rejected");
-    }
-  }
-  if (authorization !== void 0 && options.authorizationOrigin !== void 0) {
-    let authorizationUrl;
-    try {
-      authorizationUrl = new URL(options.authorizationOrigin);
-    } catch {
-      throw new SharePublishError("invalid-argument", "upload authorization origin is invalid");
-    }
-    if (authorizationUrl.origin !== new URL(base33).origin) throw new SharePublishError("upload-auth-required", "upload authorization is scoped to another origin");
-  }
-  const headers = new Headers({
-    "content-type": "application/vnd.ipld.raw",
-    "if-none-match": "*",
-    "x-delete-after": input.deleteAfter
-  });
-  if (typeof authorization === "string") {
-    headers.set("x-tinycloud-upload-attestation", authorization);
-    try {
-      const attestation = JSON.parse(authorization);
-      if (attestation.retention === void 0) throw new Error("retention");
-      headers.set("x-tinycloud-retention", canonicalize2(attestation.retention));
-    } catch {
-      throw new SharePublishError("upload-auth-required", "share upload authorization was rejected");
-    }
-  } else if (authorization !== void 0) {
-    new Headers(authorization).forEach((value, key) => headers.set(key, value));
-  }
-  let response;
-  try {
-    response = await (options.fetchFn ?? globalThis.fetch)(`${base33}/blobs`, {
-      method: "POST",
-      headers,
-      body: input.blob,
-      ...options.credentials === void 0 ? {} : { credentials: options.credentials },
-      redirect: "error",
-      referrerPolicy: "no-referrer"
-    });
-  } catch {
-    throw new SharePublishError("upload-failed", "share registry is unavailable");
-  }
-  if (response.status === 401 || response.status === 403) throw new SharePublishError("upload-auth-required", "share upload authorization was rejected");
-  if (!response.ok) throw new SharePublishError("upload-failed", "share registry rejected the encrypted blob");
-  let body;
-  try {
-    body = await response.json();
-  } catch {
-    throw new SharePublishError("upload-failed", "share registry returned an invalid response");
-  }
-  const record2 = typeof body === "object" && body !== null ? body : {};
-  if (record2.cid !== input.cid || typeof record2.deleteAfter !== "string") throw new SharePublishError("upload-failed", "share registry returned an unexpected CID or retention value");
-  return { cid: input.cid, deleteAfter: record2.deleteAfter };
-}
-async function uploadShareBlob(options, input) {
-  const result = await (options.uploadBlob ?? ((value) => defaultUpload(options, value)))(input);
-  if (result.cid !== input.cid || typeof result.deleteAfter !== "string") throw new SharePublishError("upload-failed", "share uploader returned an invalid result");
-  return result;
-}
-async function publishShare(options) {
-  const target = options.target ?? { kind: "bearer" };
-  assertTarget(target);
-  assertSafeFilename(options.filename);
-  assertOrigin(options.origin, "share origin");
-  if (options.mediaType !== void 0 && options.mediaType.length === 0) throw new SharePublishError("invalid-argument", "mediaType must not be empty");
-  const maxBytes = options.maxBytes ?? SHARE_CONTENT_LIMIT;
-  if (maxBytes > SHARE_CONTENT_LIMIT) throw new SharePublishError("max-bytes-exceeded", "share content exceeds the maximum 100 MiB limit");
-  const content = await snapshotSource(options.source, maxBytes);
-  if (content.byteLength === 0) throw new SharePublishError("invalid-argument", "share content is empty");
-  if (options.allowBinary !== true) {
-    try {
-      new TextDecoder("utf-8", { fatal: true }).decode(content);
-    } catch {
-      throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8");
-    }
-  }
-  const nowMs2 = options.now?.() ?? Date.now();
-  const expiresAt = options.expiresAt ?? new Date(nowMs2 + DEFAULT_SHARE_LIFETIME_MS);
-  if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= nowMs2) throw new SharePublishError("invalid-argument", "expiresAt must be a valid future time");
-  const expiry = expiresAt.toISOString();
-  const nodeAudience = options.nodeAudience ?? "did:web:node.tinycloud.xyz";
-  const spaceId = options.spaceId ?? "bearer";
-  const shareId = toBase64Url(globalThis.crypto.getRandomValues(new Uint8Array(16)));
-  const path = `shares/${shareId}/${options.filename}`;
-  const sessionPrivateKey = ed25519.utils.randomPrivateKey();
-  const senderPrivateKey = ed25519.utils.randomPrivateKey();
-  let contentKey;
-  let envelopeKey;
-  try {
-    const sessionPublicKey = ed25519.getPublicKey(sessionPrivateKey);
-    const sessionDid = didKeyFromEd25519PublicKey(sessionPublicKey);
-    const delegation = mintBearerDelegation({
-      issuerPrivateKey: senderPrivateKey,
-      audienceDid: sessionDid,
-      resourceUri: bearerResourceUri(options.origin, spaceId, path),
-      expiresAtSeconds: Math.ceil(expiresAt.getTime() / 1e3)
-    });
-    contentKey = generateKey();
-    const sealedContent = await seal(content, contentKey);
-    const unsigned = {
-      version: 1,
-      shareId,
-      delegation,
-      authorizationTarget: {
-        kind: "bearerKey",
-        sessionJwk: { kty: "OKP", crv: "Ed25519", x: toBase64Url(sessionPublicKey), d: toBase64Url(sessionPrivateKey) }
-      },
-      target: { origin: options.origin, nodeAudience, spaceId, resource: { kind: "exact", path } },
-      display: { filename: options.filename },
-      expiry,
-      content: { cid: sealedContent.cid, key: toBase64Url(contentKey) }
-    };
-    const envelope = signEnvelope(unsigned, senderPrivateKey);
-    envelopeKey = generateKey();
-    const sealedEnvelope = await seal(new TextEncoder().encode(canonicalize2(envelope)), envelopeKey);
-    let inlineUrl;
-    if (options.inline === true) {
-      try {
-        inlineUrl = await encodeInlineShareUrl({ origin: options.origin, ciphertext: sealedEnvelope.blob, key32: envelopeKey });
-      } catch (error) {
-        throw new SharePublishError("inline-too-large", error instanceof Error ? error.message : "inline share is too large");
-      }
-    }
-    const contentUpload = await uploadShareBlob(options, { blob: sealedContent.blob, cid: sealedContent.cid, deleteAfter: expiry, contentLength: sealedContent.blob.byteLength });
-    let url;
-    let kind;
-    let retention = contentUpload.deleteAfter;
-    if (options.inline === true) {
-      if (inlineUrl === void 0) throw new SharePublishError("inline-too-large", "inline share is too large");
-      url = inlineUrl;
-      kind = "inline";
-    } else {
-      const envelopeUpload = await uploadShareBlob(options, { blob: sealedEnvelope.blob, cid: sealedEnvelope.cid, deleteAfter: expiry, contentLength: sealedEnvelope.blob.byteLength });
-      url = encodeShareUrl({ origin: options.origin, ciphertextCid: envelopeUpload.cid, key32: envelopeKey });
-      kind = "compact";
-      retention = envelopeUpload.deleteAfter;
-    }
-    const metadata = {
-      protocol: "tinycloud-share",
-      version: 1,
-      shareId,
-      origin: options.origin,
-      target: { kind: "bearer", origin: options.origin, nodeAudience, spaceId },
-      resource: { kind: "exact", path },
-      actions: ["read"],
-      expiresAt: expiry,
-      display: { filename: options.filename },
-      content: { cid: sealedContent.cid }
-    };
-    const result = { protocol: "tinycloud-share", version: SHARE_PUBLISH_RESULT_VERSION, link: { kind, cid: sealedEnvelope.cid }, metadata, registryDeleteAfter: retention };
-    Object.defineProperty(result, "toJSON", {
-      enumerable: false,
-      value: () => redactPublishedShare(result)
-    });
-    Object.defineProperty(result, "url", { enumerable: false, value: url });
-    return result;
-  } finally {
-    sessionPrivateKey.fill(0);
-    senderPrivateKey.fill(0);
-    contentKey?.fill(0);
-    envelopeKey?.fill(0);
-  }
 }
 function authorizationMethodForTarget(target) {
   if (target.kind === "recipientDid") return "openkey-device";
@@ -19277,8 +18214,8 @@ function targetAuthorizationMethod(target) {
 }
 async function publishTargetShare(input) {
   const target = normalizeShareTarget(input.target);
-  if (target.kind === "bearer") return publishShare(input);
   if (input.targetAdapter === void 0) {
+    if (target.kind === "bearer") throw new SharePublishError("authority-required", "native bearer publication requires an authenticated TinyCloud node");
     return {
       state: "authorization-required",
       method: targetAuthorizationMethod(target)
@@ -19288,9 +18225,9 @@ async function publishTargetShare(input) {
     const chunks = [];
     let size2 = 0;
     for await (const chunk of input.source) {
-      if (!(chunk instanceof Uint8Array)) throw new TypeError("addressed publication source yielded invalid bytes");
+      if (!(chunk instanceof Uint8Array)) throw new TypeError("share publication source yielded invalid bytes");
       size2 += chunk.byteLength;
-      if (size2 > (input.maxBytes ?? 100 * 1024 * 1024)) throw new TypeError("addressed publication exceeds maxBytes");
+      if (size2 > (input.maxBytes ?? SHARE_CONTENT_LIMIT)) throw new SharePublishError("max-bytes-exceeded", "share publication exceeds maxBytes");
       chunks.push(chunk.slice());
     }
     const bytes3 = new Uint8Array(size2);
@@ -19301,15 +18238,29 @@ async function publishTargetShare(input) {
     }
     return bytes3;
   })();
+  if (source.byteLength === 0) throw new SharePublishError("invalid-argument", "share content is empty");
+  if (!input.filename || input.filename === "." || input.filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(input.filename)) {
+    throw new SharePublishError("invalid-argument", "filename must be one safe path segment");
+  }
+  if (target.kind === "bearer" && input.allowBinary !== true) {
+    try {
+      new TextDecoder("utf-8", { fatal: true }).decode(source);
+    } catch {
+      throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8");
+    }
+  }
   const files = input.files === void 0 || input.files.length === 0 ? [{ bytes: source }] : input.files;
   const limit = input.maxBytes ?? SHARE_CONTENT_LIMIT;
   let totalBytes = 0;
   for (const file of files) {
     totalBytes += file.bytes.byteLength;
     if (!Number.isSafeInteger(totalBytes) || totalBytes > limit) {
-      throw new SharePublishError("max-bytes-exceeded", "addressed publication exceeds the combined byte limit");
+      throw new SharePublishError("max-bytes-exceeded", "share publication exceeds the combined byte limit");
     }
   }
+  const nowMs2 = input.now?.() ?? Date.now();
+  const expiresAt = input.expiresAt ?? new Date(nowMs2 + DEFAULT_SHARE_LIFETIME_MS);
+  if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= nowMs2) throw new SharePublishError("invalid-argument", "expiresAt must be a valid future time");
   return input.targetAdapter.publish({
     source,
     filename: input.filename,
@@ -19318,18 +18269,8 @@ async function publishTargetShare(input) {
     ...input.resourceKind === void 0 ? {} : { resourceKind: input.resourceKind },
     ...input.actions === void 0 ? {} : { actions: input.actions },
     target,
-    expiresAt: input.expiresAt ?? new Date((input.now?.() ?? Date.now()) + 7 * 24 * 60 * 60 * 1e3),
+    expiresAt,
     origin: input.origin,
-    ...input.inline === void 0 ? {} : { inline: input.inline },
-    upload: {
-      ...input.registryBaseUrl === void 0 ? {} : { registryBaseUrl: input.registryBaseUrl },
-      ...input.fetchFn === void 0 ? {} : { fetchFn: input.fetchFn },
-      ...input.authorizeUpload === void 0 ? {} : { authorizeUpload: input.authorizeUpload },
-      ...input.authorizationOrigin === void 0 ? {} : { authorizationOrigin: input.authorizationOrigin },
-      ...input.credentials === void 0 ? {} : { credentials: input.credentials },
-      ...input.allowInsecureRegistry === void 0 ? {} : { allowInsecureRegistry: input.allowInsecureRegistry },
-      ...input.uploadBlob === void 0 ? {} : { uploadBlob: input.uploadBlob }
-    },
     ...input.notify === void 0 ? {} : { notify: input.notify }
   });
 }
@@ -19412,7 +18353,7 @@ function publicationResult(input) {
     protocol: "tinycloud-share",
     version: SHARE_PUBLISH_RESULT_VERSION,
     url: input.url,
-    link: { kind: input.options.inline === true ? "inline" : "compact", cid: input.envelopeCid },
+    link: { kind: "policy", cid: input.envelopeCid },
     metadata: {
       protocol: "tinycloud-share",
       version: 1,
@@ -19431,8 +18372,7 @@ function publicationResult(input) {
       enforcerDid: input.enforcerDid,
       envelopeCid: input.envelopeCid,
       shareCid: input.envelopeCid
-    },
-    registryDeleteAfter: input.retention
+    }
   };
   Object.defineProperty(result, "toJSON", { enumerable: false, value: () => redactPublishedShare(result) });
   Object.defineProperty(result, "url", { enumerable: false, value: input.url });
@@ -19514,32 +18454,23 @@ async function publishAddressedShare(options) {
   if (envelopeSignature.byteLength !== 64) throw new TypeError("v3 envelope signature must be Ed25519");
   const envelope = { ...unsigned, signature: { signerDid: options.authority.ownerDid, algorithm: "Ed25519", value: toBase64Url(envelopeSignature) } };
   shareEnvelopeV3Schema.parse(envelope);
-  const envelopeKey = generateKey();
-  try {
-    const sealed = await seal(textEncoder.encode(canonicalize2(envelope)), envelopeKey);
-    let url;
-    let retention = options.expiresAt.toISOString();
-    if (options.inline === true) url = await encodeInlineShareUrl({ origin: options.shareOrigin, ciphertext: sealed.blob, key32: envelopeKey });
-    else {
-      const uploaded = await uploadShareBlob({ source: new Uint8Array([1]), filename: options.filename, origin: options.shareOrigin, ...options.upload }, { blob: sealed.blob, cid: sealed.cid, deleteAfter: retention, contentLength: sealed.blob.byteLength });
-      retention = uploaded.deleteAfter;
-      url = encodeShareUrl({ origin: options.shareOrigin, ciphertextCid: uploaded.cid, key32: envelopeKey });
-    }
-    await options.publishBinding?.({
-      version: 3,
-      shareCid: sealed.cid,
-      shareId: options.shareId,
-      policyCid: created.policyCid,
-      policyRootCid: policyRoot.cid,
-      enforcementRootCid: enforcementRoot.cid,
-      contentSourceDigestHex
-    });
-    const deliveryMaterial = { envelope, sealedEnvelope: toBase64Url(sealed.blob), envelopeKey: toBase64Url(envelopeKey), shareCid: sealed.cid };
-    options.onDeliveryMaterial?.(deliveryMaterial);
-    return publicationResult({ options, url, envelopeCid: sealed.cid, matcher, policyCid: created.policyCid, policyRootCid: policyRoot.cid, enforcementRootCid: enforcementRoot.cid, enforcerDid: registration.attestedEnforcerBinding.enforcerDid, expiry, retention, deliveryMaterial });
-  } finally {
-    envelopeKey.fill(0);
-  }
+  const envelopeBytes = textEncoder.encode(canonicalize2(envelope));
+  const envelopeCid = await computeCid(envelopeBytes);
+  const url = await encodePublicInlineShareUrl({ origin: options.shareOrigin, plaintext: envelopeBytes });
+  const deliveryMaterial = { envelope, shareCid: envelopeCid };
+  options.onDeliveryMaterial?.(deliveryMaterial);
+  return publicationResult({
+    options,
+    url,
+    envelopeCid,
+    matcher,
+    policyCid: created.policyCid,
+    policyRootCid: policyRoot.cid,
+    enforcementRootCid: enforcementRoot.cid,
+    enforcerDid: registration.attestedEnforcerBinding.enforcerDid,
+    expiry,
+    deliveryMaterial
+  });
 }
 function encode4(num2, out, offset) {
   out = out || [];
@@ -19692,270 +18623,6 @@ function encodeCID2(version3, code32, multihash) {
   bytes3.set(multihash, hashOffset);
   return bytes3;
 }
-function fromB64(value) {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("owner-share value is not canonical base64url");
-  if (typeof atob === "function") {
-    const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4);
-    return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
-  }
-  if (typeof Buffer !== "undefined") return new Uint8Array(Buffer.from(value, "base64url"));
-  throw new Error("base64url decoding is unavailable");
-}
-function cid(bytesValue) {
-  return CID2.createV1(code2, create2(SHA256_CODE2, sha2562(bytesValue))).toString(base322.encoder);
-}
-function dagCborEncode(value) {
-  const output = [];
-  const writeHeader = (major, length32) => {
-    if (!Number.isSafeInteger(length32) || length32 < 0) throw new Error("DAG-CBOR value is too large");
-    if (length32 < 24) output.push(major << 5 | length32);
-    else if (length32 < 256) output.push(major << 5 | 24, length32);
-    else if (length32 < 65536) output.push(major << 5 | 25, length32 >> 8, length32 & 255);
-    else throw new Error("DAG-CBOR value is too large");
-  };
-  const write = (item) => {
-    if (item === null) {
-      output.push(246);
-      return;
-    }
-    if (item === false) {
-      output.push(244);
-      return;
-    }
-    if (item === true) {
-      output.push(245);
-      return;
-    }
-    if (typeof item === "string") {
-      const encoded = new TextEncoder().encode(item);
-      writeHeader(3, encoded.length);
-      output.push(...encoded);
-      return;
-    }
-    if (typeof item === "number" && Number.isSafeInteger(item)) {
-      if (item >= 0) writeHeader(0, item);
-      else writeHeader(1, -1 - item);
-      return;
-    }
-    if (Array.isArray(item)) {
-      writeHeader(4, item.length);
-      item.forEach(write);
-      return;
-    }
-    if (typeof item === "object" && item !== null) {
-      const entries = Object.entries(item).map(([key, value2]) => {
-        const keyBytes = dagCborEncode(key);
-        return { key, value: value2, keyBytes };
-      }).sort((left, right) => {
-        if (left.keyBytes.length !== right.keyBytes.length) return left.keyBytes.length - right.keyBytes.length;
-        for (let index = 0; index < left.keyBytes.length; index += 1) {
-          const leftByte = left.keyBytes[index] ?? 0;
-          const rightByte = right.keyBytes[index] ?? 0;
-          if (leftByte !== rightByte) return leftByte - rightByte;
-        }
-        return 0;
-      });
-      writeHeader(5, entries.length);
-      entries.forEach(({ key, value: value2 }) => {
-        write(key);
-        write(value2);
-      });
-      return;
-    }
-    throw new Error("Unsupported DAG-CBOR value");
-  };
-  write(value);
-  return Uint8Array.from(output);
-}
-function assertObject(value, keys, label) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} is invalid`);
-  const record2 = value;
-  if (Object.keys(record2).length !== keys.length || keys.some((key) => !Object.prototype.hasOwnProperty.call(record2, key))) throw new Error(`${label} has unknown or missing fields`);
-  return record2;
-}
-function computeOwnerShareRegistrationCid(registration) {
-  return cid(new TextEncoder().encode(canonicalize2(registration)));
-}
-function validateOwnerSharePolicyRegistration(value, expected) {
-  if (cid(expected.policy.bytes) !== expected.policy.cid) throw new Error("submitted owner-share policy bytes do not match its CID");
-  const root = assertObject(value, ["registration", "proof"], "owner-share registration response");
-  const registration = assertObject(root.registration, ["registrationCid", "policyCid", "ownerDelegationCid", "enforcementDelegationCid", "ownerDid", "shareKeyDid", "enforcerDid", "shareId", "recipientMatcher", "target", "resource", "actions", "contentSource", "contentSourceDigest", "registeredAt", "expiresAt"], "owner-share registration");
-  const proof = assertObject(root.proof, ["alg", "kid", "signature"], "owner-share registration proof");
-  if (registration.policyCid !== expected.policy.cid || registration.ownerDelegationCid !== expected.ownerDelegation.delegationCid || registration.enforcementDelegationCid !== expected.enforcementDelegation.cid || registration.contentSourceDigest !== expected.contentSourceDigest) throw new Error("owner-share registration is not bound to the submitted chain");
-  let policyValue;
-  try {
-    policyValue = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(expected.policy.bytes));
-  } catch {
-    throw new Error("owner-share policy is not valid JSON");
-  }
-  const policy = policyValue.policy;
-  if (policyValue.domain !== "xyz.tinycloud.share/policy/v2\0" || policy === void 0 || Array.isArray(policy)) throw new Error("owner-share policy envelope is invalid");
-  const target = policy.target;
-  const resource = policy.resource;
-  const registrationTarget = registration.target;
-  const registrationResource = registration.resource;
-  const enforcementFacts = expected.enforcementDelegation.facts;
-  if (typeof target?.origin !== "string" || typeof target.nodeAudience !== "string" || typeof target.enforcerDid !== "string" || typeof target.spaceId !== "string" || typeof resource?.kind !== "string" || !["exact", "prefix"].includes(resource.kind) || typeof resource?.path !== "string" || !Array.isArray(policy.actions) || policy.ownerDid !== registration.ownerDid || policy.shareKeyDid !== registration.shareKeyDid || policy.shareId !== registration.shareId || canonicalize2(policy.recipientMatcher) !== canonicalize2(registration.recipientMatcher) || target.origin !== registrationTarget.origin || target.nodeAudience !== registrationTarget.nodeAudience || target.enforcerDid !== registration.enforcerDid || target.spaceId !== registrationTarget.spaceId || resource.kind !== registrationResource.kind || resource.path !== registrationResource.path || canonicalize2(policy.actions) !== canonicalize2(registration.actions) || canonicalize2(policy.contentSource) !== canonicalize2(registration.contentSource) || policy.expiresAt !== registration.expiresAt || policy.contentSourceDigest !== registration.contentSourceDigest || enforcementFacts.ownerDelegationCid !== registration.ownerDelegationCid || enforcementFacts.policyCid !== registration.policyCid || enforcementFacts.shareKeyDid !== registration.shareKeyDid || enforcementFacts.enforcerDid !== registration.enforcerDid || enforcementFacts.nodeAudience !== registrationTarget.nodeAudience || enforcementFacts.spaceId !== registrationTarget.spaceId || enforcementFacts.path !== registrationResource.path || canonicalize2(enforcementFacts.actions) !== canonicalize2(registration.actions) || enforcementFacts.expiresAt !== registration.expiresAt) throw new Error("owner-share registration is not bound to the canonical policy");
-  if (typeof registration.registrationCid !== "string" || typeof registration.expiresAt !== "string" || typeof registration.registeredAt !== "string") throw new Error("owner-share registration timestamps are invalid");
-  if (new Date(registration.expiresAt).toISOString() !== registration.expiresAt || Date.parse(registration.expiresAt) <= Date.now()) throw new Error("owner-share registration is expired or non-canonical");
-  const { registrationCid: _registrationCid, ...registrationCore } = registration;
-  if (computeOwnerShareRegistrationCid(registrationCore) !== registration.registrationCid) throw new Error("owner-share registration CID does not match its canonical core");
-  if (proof.alg !== "EdDSA" || typeof proof.kid !== "string" || typeof proof.signature !== "string") throw new Error("owner-share registration proof is invalid");
-  const proofKey = expected.nodeProof;
-  if (proofKey === void 0) throw new Error("owner-share registration proof trust material is required");
-  if (proof.kid !== proofKey.kid) throw new Error("owner-share registration proof key is not trusted");
-  const encodedKid = proofKey.publicKey;
-  if (encodedKid.length === 34 && encodedKid[0] === 237 && encodedKid[1] === 1) {
-  } else if (encodedKid.length !== 32) throw new Error("owner-share registration proof key is invalid");
-  const publicKey = encodedKid.length === 34 ? encodedKid.slice(2) : encodedKid;
-  const signatureBytes = fromB64(proof.signature);
-  const signedBytes = new TextEncoder().encode(`${OWNER_SHARE_REGISTRATION_DOMAIN}${canonicalize2(registrationCore)}`);
-  if (signatureBytes.length !== 64 || !ed25519.verify(signatureBytes, signedBytes, publicKey)) throw new Error("owner-share registration proof signature is invalid");
-  return { registration, proof };
-}
-function record(value, keys, label) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} is invalid`);
-  const output = value;
-  if (Object.keys(output).length !== keys.length || keys.some((key) => !Object.hasOwn(output, key))) throw new Error(`${label} has unknown or missing fields`);
-  return output;
-}
-function requiredString(value, label) {
-  if (typeof value !== "string" || value.length === 0) throw new Error(`${label} is invalid`);
-  return value;
-}
-function stringArray(value, label) {
-  if (!Array.isArray(value) || value.length === 0 || !value.every((item) => typeof item === "string" && item.length > 0)) throw new Error(`${label} is invalid`);
-  return value;
-}
-function parseEnforcement(value) {
-  const delegation = record(value, ["cid", "dagCbor", "issuerDid", "audienceDid", "facts", "signature"], "policy enforcement delegation");
-  const facts = record(delegation.facts, ["ownerDelegationCid", "policyCid", "shareId", "shareKeyDid", "enforcerDid", "nodeAudience", "spaceId", "path", "actions", "contentSourceDigest", "expiresAt"], "policy enforcement facts");
-  return {
-    cid: requiredString(delegation.cid, "policy enforcement CID"),
-    dagCbor: requiredString(delegation.dagCbor, "policy enforcement bytes"),
-    issuerDid: requiredString(delegation.issuerDid, "policy enforcement issuer"),
-    audienceDid: requiredString(delegation.audienceDid, "policy enforcement audience"),
-    facts: {
-      ownerDelegationCid: requiredString(facts.ownerDelegationCid, "owner delegation CID"),
-      policyCid: requiredString(facts.policyCid, "policy CID"),
-      shareId: requiredString(facts.shareId, "share id"),
-      shareKeyDid: requiredString(facts.shareKeyDid, "share key DID"),
-      enforcerDid: requiredString(facts.enforcerDid, "enforcer DID"),
-      nodeAudience: requiredString(facts.nodeAudience, "node audience"),
-      spaceId: requiredString(facts.spaceId, "space id"),
-      path: requiredString(facts.path, "resource path"),
-      actions: stringArray(facts.actions, "policy actions"),
-      contentSourceDigest: requiredString(facts.contentSourceDigest, "content source digest"),
-      expiresAt: requiredString(facts.expiresAt, "policy expiry")
-    },
-    signature: requiredString(delegation.signature, "policy enforcement signature")
-  };
-}
-async function verifyEnforcement(delegation) {
-  try {
-    const dagCbor = fromBase64Url(delegation.dagCbor);
-    if (await computeCid(dagCbor) !== delegation.cid) return false;
-    const expectedDagCbor = dagCborEncode({
-      domain: POLICY_ENFORCEMENT_DOMAIN,
-      unsigned: {
-        type: "TinyCloudSharePolicyEnforcement",
-        version: 2,
-        issuerDid: delegation.issuerDid,
-        audienceDid: delegation.audienceDid,
-        facts: delegation.facts
-      }
-    });
-    if (expectedDagCbor.length !== dagCbor.length || expectedDagCbor.some((byte, index) => byte !== dagCbor[index])) return false;
-    const signature = fromBase64Url(delegation.signature);
-    return signature.length === 64 && ed25519.verify(
-      signature,
-      dagCbor,
-      ed25519PublicKeyFromDidKey(delegation.issuerDid),
-      { zip215: false }
-    );
-  } catch {
-    return false;
-  }
-}
-async function verifyOuterEnvelope(value, envelope, policyCid, expectedEnforcerDid, expectedActions) {
-  try {
-    const hasDecryption = typeof value === "object" && value !== null && Object.hasOwn(value, "decryption");
-    const outer = record(value, ["schema", "version", "shareId", "delegationCid", "policyCid", "target", "resource", "actions", ...hasDecryption ? ["decryption"] : [], "contentSource", "contentSourceDigest", "expiresAt", "envelopeCid", "shareCid", "signature"], "outer envelope");
-    const target = record(outer.target, ["origin", "nodeAudience", "enforcerDid", "spaceId"], "outer target");
-    const signature = record(outer.signature, ["signerDid", "algorithm", "value"], "outer envelope signature");
-    const envelopeCid = requiredString(outer.envelopeCid, "outer envelope CID");
-    const shareCid = requiredString(outer.shareCid, "outer share CID");
-    const { signature: _signature, envelopeCid: _envelopeCid, shareCid: _shareCid, ...identity3 } = outer;
-    if (outer.schema !== "xyz.tinycloud.share/envelope/v2" || outer.version !== 2 || outer.shareId !== envelope.shareId || outer.delegationCid !== envelope.delegationCid || outer.policyCid !== policyCid || target.origin !== envelope.target.origin || target.nodeAudience !== envelope.target.nodeAudience || target.enforcerDid !== expectedEnforcerDid || target.spaceId !== envelope.target.spaceId || canonicalize2(outer.resource) !== canonicalize2(envelope.resource) || canonicalize2(outer.actions) !== canonicalize2(expectedActions) || (hasDecryption ? envelope.decryption === void 0 || canonicalize2(outer.decryption) !== canonicalize2(envelope.decryption) : envelope.decryption !== void 0) || canonicalize2(outer.contentSource) !== canonicalize2(envelope.contentSource) || outer.contentSourceDigest !== envelope.contentSourceDigest || outer.expiresAt !== envelope.expiry || signature.signerDid !== envelope.signature.signerDid || signature.algorithm !== "Ed25519") return void 0;
-    if (envelopeCid !== await computeCid(new TextEncoder().encode(canonicalize2(identity3)))) return void 0;
-    if (shareCid !== await computeCid(new TextEncoder().encode(canonicalize2({ version: 2, shareId: envelope.shareId, policyCid, envelopeCid })))) return void 0;
-    const unsigned = { ...identity3, envelopeCid, shareCid };
-    const signatureBytes = fromBase64Url(requiredString(signature.value, "outer signature"));
-    if (signatureBytes.length !== 64 || !ed25519.verify(
-      signatureBytes,
-      new TextEncoder().encode(`${ENVELOPE_DOMAIN}${canonicalize2(unsigned)}`),
-      ed25519PublicKeyFromDidKey(envelope.signature.signerDid),
-      { zip215: false }
-    )) return void 0;
-    return { envelopeCid, shareCid };
-  } catch {
-    return void 0;
-  }
-}
-function createRegisteredPolicyAuthority(options) {
-  const proofKey = options.nodeProof.publicKey.slice();
-  return {
-    async resolve({ policyCid, envelope }) {
-      try {
-        if (envelope.authorizationTarget.kind !== "policy" || envelope.authorizationTarget.policyCid !== policyCid) return void 0;
-        const ownerAuthority = envelope.ownerAuthority;
-        if (ownerAuthority?.registrationReceipt === void 0) return void 0;
-        const enforcement = parseEnforcement(ownerAuthority.enforcementDelegation);
-        if (!await verifyEnforcement(enforcement)) return void 0;
-        const policyBytes = fromBase64Url(envelope.authorizationTarget.policyBytes);
-        const ownerDelegation = {
-          delegationCid: envelope.delegationCid,
-          signedDagCbor: new Uint8Array(),
-          delegation: {
-            delegateDID: envelope.signature.signerDid,
-            spaceId: envelope.target.spaceId,
-            path: envelope.resource.path,
-            actions: envelope.actions,
-            expiry: new Date(envelope.expiry)
-          }
-        };
-        const receipt = validateOwnerSharePolicyRegistration(ownerAuthority.registrationReceipt, {
-          policy: { bytes: policyBytes, cid: policyCid, proof: "" },
-          ownerDelegation,
-          enforcementDelegation: enforcement,
-          contentSourceDigest: envelope.contentSourceDigest,
-          nodeProof: { kid: options.nodeProof.kid, publicKey: proofKey }
-        });
-        const registration = receipt.registration;
-        const outer = await verifyOuterEnvelope(ownerAuthority.outerEnvelope, envelope, policyCid, options.expectedTarget.enforcerDid, registration.actions);
-        if (outer === void 0 || ownerAuthority.registrationCid !== registration.registrationCid || ownerAuthority.envelopeCid !== outer.envelopeCid || ownerAuthority.shareCid !== outer.shareCid || envelope.authorityMaterialHandle !== registration.registrationCid || envelope.signature.signerDid !== registration.shareKeyDid || registration.target.origin !== options.expectedTarget.origin || registration.target.nodeAudience !== options.expectedTarget.nodeAudience || registration.enforcerDid !== options.expectedTarget.enforcerDid || enforcement.issuerDid !== registration.shareKeyDid || enforcement.audienceDid !== registration.enforcerDid) return void 0;
-        return {
-          policyCid: registration.policyCid,
-          signerDid: registration.shareKeyDid,
-          registrationCid: registration.registrationCid,
-          shareId: registration.shareId,
-          recipientMatcher: registration.recipientMatcher,
-          target: registration.target,
-          resource: registration.resource,
-          actions: registration.actions,
-          contentSource: registration.contentSource,
-          contentSourceDigest: registration.contentSourceDigest,
-          delegationCid: registration.ownerDelegationCid,
-          authorityMaterialHandle: registration.registrationCid,
-          authorityMaterialDigest: envelope.authorityMaterialDigest,
-          expiresAt: registration.expiresAt
-        };
-      } catch {
-        return void 0;
-      }
-    }
-  };
-}
 function historyRecordForPublishedShare(result, now = /* @__PURE__ */ new Date()) {
   const target = result.metadata.target.kind;
   const supplied = result.metadata.recipientMatcher;
@@ -19990,8 +18657,8 @@ function historyRecordForPublishedShare(result, now = /* @__PURE__ */ new Date()
     ...result.metadata.display.filename === void 0 ? {} : { filename: result.metadata.display.filename }
   };
 }
-function recipientMatchesShareRecord(record2, recipient) {
-  const matcher = record2.recipientMatcher;
+function recipientMatchesShareRecord(record, recipient) {
+  const matcher = record.recipientMatcher;
   if (matcher.kind === "bearer" || matcher.kind === "recipientDid") return false;
   if (matcher.kind === "exactEmail") return matcher.value === recipient;
   const at = recipient.lastIndexOf("@");
@@ -20028,257 +18695,97 @@ async function defaultIdempotencyKey(shareId, recipient) {
   ));
   return `tinycloud-share:${shareId}:${toBase64Url(digest3)}`;
 }
-function targetKind2(record2) {
-  if (record2.targetKind !== void 0) return record2.targetKind;
-  return record2.recipientMatcher.kind === "exactEmail" ? "email" : record2.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record2.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
+function targetKind2(record) {
+  if (record.targetKind !== void 0) return record.targetKind;
+  return record.recipientMatcher.kind === "exactEmail" ? "email" : record.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
+}
+function policyNodeAudience(record) {
+  const envelope = record.deliveryMaterial?.envelope;
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record.target.nodeAudience;
+  const binding = envelope.attestedEnforcerBinding;
+  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record.target.nodeAudience;
+  const nodeAudience = binding.nodeAudience;
+  return typeof nodeAudience === "string" ? nodeAudience : record.target.nodeAudience;
 }
 async function revokeShare(input) {
   const target = targetKind2(input.record);
-  if (target === "bearer") return { state: "retention-only", target, reason: "bearer-capability-cannot-be-revoked" };
   if (input.adapter === void 0) return { state: "unsupported", target, reason: "node revocation authority is required", code: "unsupported-target" };
   const scope = input.scope ?? "direct";
   const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
   if (delegationCid === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
-  await input.adapter.revokeDelegation({ delegationCid, scope });
+  if (target === "bearer") {
+    if (input.adapter.revokeDelegation === void 0) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokeDelegation({ delegationCid, scope });
+  } else {
+    if (input.record.ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
+    if (input.adapter.revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
+    await input.adapter.revokePolicyRoot({
+      rootCid: delegationCid,
+      targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
+      ownerDid: input.record.ownerDid,
+      nodeOrigin: input.record.target.origin,
+      nodeAudience: policyNodeAudience(input.record)
+    });
+  }
   const revokedAt = (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records !== void 0) await input.records.put({ ...input.record, revokedAt });
   return { state: "revoked", target, delegationCid, revokedAt };
 }
-function redactRecord(record2, revealLink, link2) {
-  const matcher = record2.recipientMatcher;
-  const revealedLink = revealLink ? link2 ?? record2.link : void 0;
+function redactRecord(record, revealLink, link2) {
+  const matcher = record.recipientMatcher;
+  const revealedLink = revealLink ? link2 ?? record.link : void 0;
   return {
-    shareId: record2.shareId,
+    shareId: record.shareId,
     target: matcher.kind === "exactEmail" ? "email" : matcher.kind === "emailDomain" ? "email-domain" : matcher.kind === "recipientDid" ? "recipient-did" : "bearer",
     ...matcher.kind === "exactEmail" ? { recipient: matcher.value } : matcher.kind === "emailDomain" ? { recipient: `*@${matcher.value}` } : matcher.kind === "recipientDid" ? { recipient: matcher.value } : {},
-    expiresAt: record2.expiresAt,
-    revoked: record2.revokedAt !== void 0,
+    expiresAt: record.expiresAt,
+    revoked: record.revokedAt !== void 0,
     ...revealedLink === void 0 ? {} : { link: revealedLink }
   };
 }
 async function listShares(storage) {
   const records = await storage.list();
-  return records.map((record2) => redactRecord(record2, false));
+  return records.map((record) => redactRecord(record, false));
 }
 async function showShare(input) {
-  const record2 = await input.storage.get(input.shareId);
-  if (record2 === void 0) throw new Error("share not found");
-  return redactRecord(record2, input.revealLink === true, input.link);
+  const record = await input.storage.get(input.shareId);
+  if (record === void 0) throw new Error("share not found");
+  return redactRecord(record, input.revealLink === true, input.link);
 }
-function isLegacyShareLink(value) {
-  return value.startsWith("tc1:");
+function canonicalViewerUrl(viewerOrigin) {
+  const url = new URL(viewerOrigin);
+  if (url.protocol !== "https:" || url.origin !== viewerOrigin || url.pathname !== "/" || url.search || url.hash) throw new TypeError("viewer origin must be a canonical HTTPS origin");
+  url.pathname = "/viewer";
+  return url;
 }
-async function receiveLegacyShare(link2, reader) {
-  if (!isLegacyShareLink(link2)) throw new Error("legacy link must use tc1:");
-  return reader.read(link2);
+async function createNativeShare(sharing, input) {
+  if (!input.path || input.path.startsWith("/") || input.path.endsWith("/") || input.path.includes("..") || input.path.includes("//")) throw new TypeError("native share path must be one canonical TinyCloud KV key");
+  const generated = await sharing.generate({ path: input.path, actions: ["tinycloud.kv/get"], expiry: input.expiresAt });
+  if (generated.ok !== true) throw new Error(typeof generated.error?.message === "string" ? generated.error.message : "TinyCloud sharing service rejected delegation generation");
+  if (typeof generated.data?.token !== "string" || typeof generated.data.delegation?.cid !== "string" || !(generated.data.expiresAt instanceof Date)) throw new Error("TinyCloud sharing service returned incomplete delegation metadata");
+  const delegation = sharing.decodeLink(generated.data.token);
+  if (typeof delegation.spaceId !== "string" || delegation.spaceId.length === 0 || typeof delegation.path !== "string" || delegation.path.length === 0) throw new Error("TinyCloud sharing service returned a non-canonical delegation authority");
+  const url = canonicalViewerUrl(input.viewerOrigin);
+  url.hash = `${NATIVE_SHARE_FRAGMENT_PARAMETER}=${encodeURIComponent(generated.data.token)}`;
+  return { url: url.toString(), delegationCid: generated.data.delegation.cid, expiresAt: generated.data.expiresAt, spaceId: delegation.spaceId };
 }
-async function migrateShare(input) {
-  const value = await receiveLegacyShare(input.link, input.reader);
-  return { protocol: "tinycloud-share", version: 1, legacy: true, value, migrated: await input.publish(value) };
+function parseNativeShareUrl(value) {
+  const url = new URL(value);
+  if (url.search || url.pathname !== "/viewer") throw new TypeError("native shares must carry tc1 only in the /viewer URL fragment");
+  const fragment = new URLSearchParams(url.hash.slice(1));
+  const token = fragment.get(NATIVE_SHARE_FRAGMENT_PARAMETER);
+  if (!token || fragment.size !== 1) throw new TypeError("missing native share fragment");
+  return token;
 }
-async function createShareV2HolderBindingArtifact(input) {
-  const jcs = canonicalize2(input.message);
-  const signedBytes = new TextEncoder().encode(`${SHARE_V2_PROTOCOL.holderBindingDomain}${jcs}`);
-  const signature = await input.sign(signedBytes);
-  return {
-    name: SHARE_V2_PROTOCOL.holderBindingName,
-    domain: SHARE_V2_PROTOCOL.holderBindingDomain,
-    signerDid: input.holderDid,
-    message: input.message,
-    jcs,
-    messageDigest: await digestText(jcs),
-    signedBytesDigest: await digestBytes(signedBytes),
-    signatureDigest: await digestBytes(signature),
-    signature: {
-      alg: "EdDSA",
-      kid: `${input.holderDid}#${input.holderDid.slice("did:key:".length)}`,
-      value: toBase64Url(signature)
-    }
-  };
-}
-async function digestText(value) {
-  return digestBytes(new TextEncoder().encode(value));
-}
-async function digestBytes(value) {
-  return toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", value)));
-}
-function object2(value, label) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} is invalid`);
-  return value;
-}
-function bytes2(value, label) {
-  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error(`${label} is invalid`);
-  const decoded = fromBase64Url(value);
-  if (decoded.length !== 64 || toBase64Url(decoded) !== value) throw new Error(`${label} is invalid`);
-  return decoded;
-}
-function toBase64(bytes3) {
-  let out = "";
-  for (let i = 0; i < bytes3.length; i += 3) {
-    const b0 = bytes3[i];
-    const b1 = i + 1 < bytes3.length ? bytes3[i + 1] : 0;
-    const b2 = i + 2 < bytes3.length ? bytes3[i + 2] : 0;
-    out += BASE64_ALPHABET[b0 >> 2 & 63];
-    out += BASE64_ALPHABET[(b0 << 4 | b1 >> 4) & 63];
-    out += i + 1 < bytes3.length ? BASE64_ALPHABET[(b1 << 2 | b2 >> 6) & 63] : "=";
-    out += i + 2 < bytes3.length ? BASE64_ALPHABET[b2 & 63] : "=";
-  }
-  return out;
-}
-function fromBase64(value, label) {
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
-    throw new Error(`${label} is invalid`);
-  }
-  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
-  const out = new Uint8Array(value.length / 4 * 3 - padding);
-  let outIdx = 0;
-  for (let i = 0; i < value.length; i += 4) {
-    const v0 = BASE64_ALPHABET.indexOf(value[i]);
-    const v1 = BASE64_ALPHABET.indexOf(value[i + 1]);
-    const v2 = value[i + 2] === "=" ? 0 : BASE64_ALPHABET.indexOf(value[i + 2]);
-    const v3 = value[i + 3] === "=" ? 0 : BASE64_ALPHABET.indexOf(value[i + 3]);
-    const b0 = v0 << 2 | v1 >> 4;
-    const b1 = (v1 & 15) << 4 | v2 >> 2;
-    const b2 = (v2 & 3) << 6 | v3;
-    if (outIdx < out.length) out[outIdx++] = b0;
-    if (outIdx < out.length) out[outIdx++] = b1;
-    if (outIdx < out.length) out[outIdx++] = b2;
-  }
-  if (toBase64(out) !== value) throw new Error(`${label} is invalid`);
-  return out;
-}
-async function digestBytes2(value) {
-  return toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", value)));
-}
-function trustedPublicKey(value) {
-  if (!(value.invitationPublicKey instanceof Uint8Array) || value.invitationPublicKey.length !== 32) {
-    throw new Error("share node trust key is invalid");
-  }
-  return value.invitationPublicKey;
-}
-function nativeAction(action) {
-  return action === "list" ? "tinycloud.kv/list" : action === "edit" ? "tinycloud.kv/put" : "tinycloud.kv/get";
-}
-function policyAttenuationForV3(envelope) {
-  const policy = object2(envelope.policy, "v3 policy");
-  if (!Array.isArray(policy.capabilityCeiling)) throw new Error("v3 policy capability ceiling is invalid");
-  const attenuation = {};
-  for (const raw of policy.capabilityCeiling) {
-    const capability = object2(raw, "v3 policy capability");
-    if (typeof capability.resource !== "string" || attenuation[capability.resource] !== void 0) throw new Error("v3 policy capability is invalid");
-    if (capability.kind === "encryption") {
-      if (capability.action !== "tinycloud.encryption/decrypt") throw new Error("v3 policy capability is invalid");
-      attenuation[capability.resource] = { [capability.action]: [{}] };
-      continue;
-    }
-    if (capability.kind !== "kv" || capability.selector !== "exact" && capability.selector !== "prefix" || !Array.isArray(capability.actions) || capability.actions.length === 0 || capability.actions.some((action) => typeof action !== "string")) throw new Error("v3 policy capability is invalid");
-    attenuation[capability.resource] = Object.fromEntries(capability.actions.map((action) => [action, [{
-      type: "xyz.tinycloud.resource/selector",
-      kind: capability.selector,
-      value: capability.resource
-    }]]));
-  }
-  return attenuation;
-}
-function verifyV3PolicyAuthorization(input) {
-  const compact = verifyCompactUcanAuthorization(input.authorization, input.cid);
-  const fact = compact.payload.fct[0];
-  const factKeys = Object.keys(fact);
-  const legacyShape = factKeys.length === POLICY_SESSION_FACT_KEYS.length && factKeys.every((key) => POLICY_SESSION_FACT_KEYS.includes(key)) && POLICY_SESSION_FACT_KEYS.every((key) => key in fact);
-  const v4Shape = factKeys.length === POLICY_SESSION_FACT_KEYS.length + POLICY_SESSION_V4_AUDIT_FACT_KEYS.length && factKeys.every((key) => POLICY_SESSION_FACT_KEYS.includes(key) || POLICY_SESSION_V4_AUDIT_FACT_KEYS.includes(key)) && POLICY_SESSION_FACT_KEYS.every((key) => key in fact) && POLICY_SESSION_V4_AUDIT_FACT_KEYS.every((key) => key in fact);
-  const binding = object2(input.envelope.attestedEnforcerBinding, "v3 attested enforcer binding");
-  const policy = object2(input.envelope.policy, "v3 policy");
-  const now = Math.floor(Date.now() / 1e3);
-  if (!legacyShape && !v4Shape || POLICY_SESSION_DIGEST_FACT_KEYS.some((key) => !LOWER_SHA256_HEX.test(fact[key])) || v4Shape && (!LOWER_SHA256_HEX.test(fact.credentialIdAuditDigestHex) || !LOWER_SHA256_HEX.test(fact.presentationJtiAuditDigestHex)) || compact.payload.aud !== input.holderDid || compact.payload.iss.split("#", 1)[0] !== fact.nodeAudience || fact.profile !== "policy-session-ucan/v1" || fact.ownerDid !== policy.ownerDid || fact.policyId !== policy.policyId || fact.policyCid !== input.envelope.policyCid || fact.contentSourceDigestHex !== input.envelope.contentSourceDigestHex || fact.enforcerDid !== binding.enforcerDid || fact.nodeAudience !== binding.nodeAudience || fact.recipientDid !== input.holderDid || fact.policyDelegationCid !== input.envelope.policyRoot.cid || fact.enforcementDelegationCid !== input.envelope.enforcementRoot.cid || typeof fact.remainingRedelegationDepth !== "number" || !Number.isInteger(fact.remainingRedelegationDepth) || fact.remainingRedelegationDepth < 0 || fact.remainingRedelegationDepth > 8 || compact.payload.prf.length !== 2 || compact.payload.prf[0] !== input.envelope.policyRoot.cid || compact.payload.prf[1] !== input.envelope.enforcementRoot.cid || compact.payload.nbf > now || compact.payload.exp <= now || compact.payload.exp - compact.payload.nbf > 60 || canonicalize2(compact.payload.att) !== canonicalize2(policyAttenuationForV3(input.envelope))) throw new Error("v3 policy delegation signed binding mismatch");
-  return compact;
-}
-function hex3(value) {
-  return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-function canonicalHashHex2(value) {
-  return hex3(sha2562(new TextEncoder().encode(canonicalize2(value))));
-}
-async function aesGcmDecrypt(key, blob) {
-  if (key.length !== 32 || blob.length < 28) throw new Error("encrypted content is malformed");
-  const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["decrypt"]);
-  return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: blob.slice(0, 12) }, cryptoKey, blob.slice(12)));
-}
-async function aesGcmEncrypt(key, plaintext) {
-  if (key.length !== 32) throw new Error("encrypted content key is malformed");
-  const nonce = crypto.getRandomValues(new Uint8Array(12));
-  const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, cryptoKey, plaintext));
-  const output = new Uint8Array(nonce.length + ciphertext.length);
-  output.set(nonce);
-  output.set(ciphertext, nonce.length);
-  return output;
-}
-function parseV3InlineEncryptedEnvelope(bytes3, expected) {
-  let value;
-  try {
-    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes3));
-  } catch {
-    throw new Error("encrypted content envelope is malformed");
-  }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("encrypted content envelope is malformed");
-  const record2 = value;
-  const allowed = ["v", "networkId", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "metadata"];
-  if (Object.keys(record2).some((key) => !allowed.includes(key)) || record2.v !== 1 || record2.networkId !== expected.encryptionNetwork || record2.alg !== "x25519-aes256gcm/v1" || record2.keyVersion !== expected.contentSource.keyVersion || typeof record2.encryptedSymmetricKey !== "string" || typeof record2.encryptedSymmetricKeyHash !== "string" || record2.encryptedSymmetricKeyHash !== expected.contentSource.encryptedSymmetricKeyDigestHex || record2.encryptedSymmetricKeyHash !== canonicalHashHex2(record2.encryptedSymmetricKey) || typeof record2.ciphertext !== "string" || record2.metadata !== void 0 && (record2.metadata === null || typeof record2.metadata !== "object" || Array.isArray(record2.metadata) || Object.values(record2.metadata).some((entry) => typeof entry !== "string"))) {
-    throw new Error("encrypted content envelope binding is invalid");
-  }
-  return record2;
-}
-function createAddressedAuthorization(input) {
-  const { buildPresentation, ...options } = input;
-  const client = (envelope) => new ShareRecipientClient({
-    ...options,
-    envelope,
-    ...buildPresentation === void 0 ? {} : { buildPresentation: ({ challenge: challenge2, envelope: candidate, policy }) => buildPresentation({ challenge: challenge2, envelope: candidate, policy }) }
-  });
-  return {
-    async begin({ envelope, method }) {
-      const current = client(envelope);
-      if (input.buildPresentation !== void 0) return { state: "ready", value: await current.authorize(envelope) };
-      const challenge2 = await current.beginChallenge(envelope);
-      return { state: "authorization-required", method, resumeToken: challenge2.challengeId };
-    },
-    async resume({ envelope, method, resumeToken, proof }) {
-      if (proof === void 0) return { state: "authorization-required", method, resumeToken };
-      return { state: "ready", value: await client(envelope).resumeWithProof(envelope, resumeToken, proof) };
-    },
-    async verifyResult({ envelope, value, proof }) {
-      try {
-        const wrapper = object2(proof, "share read proof");
-        const response = object2(wrapper.response, "share read response proof");
-        const envelopeAction = nativeAction("read");
-        if (response.type !== "TinyCloudShareInvokeResponse" || response.version !== 2 || response.action !== envelopeAction || response.resource !== envelope.resource.path || typeof response.bodyDigest !== "string" || response.bodyDigest !== value.bodyDigest || response.bodyDigest !== await digestBytes2(value.bytes)) return false;
-        const detached = object2(wrapper.detached, "share read detached proof");
-        if (detached.alg !== "EdDSA" || detached.kid !== input.trustedNode.invitationKid) return false;
-        const unsigned = { ...response };
-        delete unsigned.proof;
-        return ed25519.verify(bytes2(detached.signature, "share read signature"), new TextEncoder().encode(`${SHARE_V2_PROTOCOL.readResponseDomain}${canonicalize2(unsigned)}`), trustedPublicKey(input.trustedNode));
-      } catch {
-        return false;
-      }
-    }
-  };
-}
-var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicyV1Schema, policyCredentialRequirementV1Schema, unifiedPolicyV2Schema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, BEARER_READ_ABILITY, READ_ABILITIES, ED25519_VERIFY_OPTS, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_SIGNATURE_DOMAIN, ENVELOPE_V2_SIGNATURE_DOMAIN, ENVELOPE_V3_SIGNATURE_DOMAIN, POLICY_V1_SIGNATURE_DOMAIN, POLICY_V2_SIGNATURE_DOMAIN, CONTENT_SOURCE_V1_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN, NATIVE_PROJECTION_V1_DOMAIN, ATTESTED_ENFORCER_V2_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, DEFAULT_MAX_CONTENT_BLOB_BYTES, CONTENT_SEALED_OVERHEAD, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_SEALED_OVERHEAD, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base58btc2, base58flickr2, POLICY_V1_DOMAIN, POLICY_V2_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN2, CONTENT_SOURCE_V1_DOMAIN2, NATIVE_PROJECTION_V1_DOMAIN2, ENVELOPE_V3_DOMAIN, textEncoder, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, code2, SHA256_CODE2, MAX_CONTENT_BYTES, POLICY_ENFORCEMENT_DOMAIN, OWNER_SHARE_REGISTRATION_DOMAIN, ENVELOPE_DOMAIN, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN, BASE64_ALPHABET, POLICY_SESSION_FACT_KEYS, POLICY_SESSION_V4_AUDIT_FACT_KEYS, POLICY_SESSION_DIGEST_FACT_KEYS, LOWER_SHA256_HEX, ShareRecipientClient;
+var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicyV1Schema, policyCredentialRequirementV1Schema, unifiedPolicyV2Schema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, ENVELOPE_AAD_LABEL, AAD, ED25519_VERIFY_OPTS2, ENVELOPE_V3_SIGNATURE_DOMAIN, POLICY_V1_SIGNATURE_DOMAIN, POLICY_V2_SIGNATURE_DOMAIN, CONTENT_SOURCE_V1_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN, NATIVE_PROJECTION_V1_DOMAIN, ATTESTED_ENFORCER_V2_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, PUBLIC_INLINE_PARAMETER, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base58btc2, base58flickr2, POLICY_V1_DOMAIN, POLICY_V2_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN2, CONTENT_SOURCE_V1_DOMAIN2, NATIVE_PROJECTION_V1_DOMAIN2, ENVELOPE_V3_DOMAIN, textEncoder, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN, NATIVE_SHARE_FRAGMENT_PARAMETER;
 var init_dist3 = __esm({
   "../share-sdk/dist/index.js"() {
     "use strict";
     init_sha2();
     init_ed25519();
-    init_ed25519();
     init_blake3();
     init_ed25519();
     init_sha256();
-    init_ed25519();
-    init_sha256();
-    init_ed25519();
-    init_ed25519();
-    init_sha256();
-    init_ed25519();
     init_sha256();
     __defProp2 = Object.defineProperty;
     __export2 = (target, all) => {
@@ -24288,8 +22795,8 @@ var init_dist3 = __esm({
       /**
        * Creates a multihash digest.
        */
-      constructor(code222, size2, digest3, bytes3) {
-        this.code = code222;
+      constructor(code22, size2, digest3, bytes3) {
+        this.code = code22;
         this.size = size2;
         this.digest = digest3;
         this.bytes = bytes3;
@@ -24307,8 +22814,8 @@ var init_dist3 = __esm({
        * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
        * @param multihash - (Multi)hash of the of the content.
        */
-      constructor(version3, code222, multihash, bytes3) {
-        this.code = code222;
+      constructor(version3, code22, multihash, bytes3) {
+        this.code = code22;
         this.version = version3;
         this.multihash = multihash;
         this.bytes = bytes3;
@@ -24337,8 +22844,8 @@ var init_dist3 = __esm({
             return this;
           }
           case 1: {
-            const { code: code222, multihash } = this;
-            if (code222 !== DAG_PB_CODE) {
+            const { code: code22, multihash } = this;
+            if (code22 !== DAG_PB_CODE) {
               throw new Error("Cannot convert a non dag-pb CID to CIDv0");
             }
             if (multihash.code !== SHA_256_CODE) {
@@ -24354,8 +22861,8 @@ var init_dist3 = __esm({
       toV1() {
         switch (this.version) {
           case 0: {
-            const { code: code222, digest: digest3 } = this.multihash;
-            const multihash = create(code222, digest3);
+            const { code: code22, digest: digest3 } = this.multihash;
+            const multihash = create(code22, digest3);
             return _CID.createV1(this.code, multihash);
           }
           case 1: {
@@ -24405,12 +22912,12 @@ var init_dist3 = __esm({
         if (value instanceof _CID) {
           return value;
         } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-          const { version: version3, code: code222, multihash, bytes: bytes3 } = value;
-          return new _CID(version3, code222, multihash, bytes3 ?? encodeCID(version3, code222, multihash.bytes));
+          const { version: version3, code: code22, multihash, bytes: bytes3 } = value;
+          return new _CID(version3, code22, multihash, bytes3 ?? encodeCID(version3, code22, multihash.bytes));
         } else if (value[cidSymbol] === true) {
-          const { version: version3, multihash, code: code222 } = value;
+          const { version: version3, multihash, code: code22 } = value;
           const digest3 = decode4(multihash);
-          return _CID.create(version3, code222, digest3);
+          return _CID.create(version3, code22, digest3);
         } else {
           return null;
         }
@@ -24420,8 +22927,8 @@ var init_dist3 = __esm({
        * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
        * @param digest - (Multi)hash of the of the content.
        */
-      static create(version3, code222, digest3) {
-        if (typeof code222 !== "number") {
+      static create(version3, code22, digest3) {
+        if (typeof code22 !== "number") {
           throw new Error("String codecs are no longer supported");
         }
         if (!(digest3.bytes instanceof Uint8Array)) {
@@ -24429,15 +22936,15 @@ var init_dist3 = __esm({
         }
         switch (version3) {
           case 0: {
-            if (code222 !== DAG_PB_CODE) {
+            if (code22 !== DAG_PB_CODE) {
               throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE}) block encoding`);
             } else {
-              return new _CID(version3, code222, digest3, digest3.bytes);
+              return new _CID(version3, code22, digest3, digest3.bytes);
             }
           }
           case 1: {
-            const bytes3 = encodeCID(version3, code222, digest3.bytes);
-            return new _CID(version3, code222, digest3, bytes3);
+            const bytes3 = encodeCID(version3, code22, digest3.bytes);
+            return new _CID(version3, code22, digest3, bytes3);
           }
           default: {
             throw new Error("Invalid version");
@@ -24456,8 +22963,8 @@ var init_dist3 = __esm({
        * @param code - Content encoding format code.
        * @param digest - Multihash of the content.
        */
-      static createV1(code222, digest3) {
-        return _CID.create(1, code222, digest3);
+      static createV1(code22, digest3) {
+        return _CID.create(1, code22, digest3);
       }
       /**
        * Decoded a CID from its binary representation. The byte array must contain
@@ -24886,19 +23393,9 @@ var init_dist3 = __esm({
     }).strict();
     unsignedShareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.superRefine(validateV3Invariants);
     shareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.extend({ signature: signatureSchema }).strict().superRefine(validateV3Invariants);
-    BEARER_READ_ABILITY = "kv/get";
-    READ_ABILITIES = /* @__PURE__ */ new Set([BEARER_READ_ABILITY]);
-    ED25519_VERIFY_OPTS = { zip215: false };
     ENVELOPE_AAD_LABEL = "tinycloud-share-envelope-v1";
-    SEALED_BLOB_VERSION = 1;
     AAD = utf8Bytes(ENVELOPE_AAD_LABEL);
-    KEY_LENGTH = 32;
-    NONCE_LENGTH = 12;
-    TAG_LENGTH = 16;
-    HEADER_LENGTH = 1;
     ED25519_VERIFY_OPTS2 = { zip215: false };
-    ENVELOPE_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v1\0";
-    ENVELOPE_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v2\0";
     ENVELOPE_V3_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
     POLICY_V1_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v1\0";
     POLICY_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v2\0";
@@ -24907,12 +23404,11 @@ var init_dist3 = __esm({
     NATIVE_PROJECTION_V1_DOMAIN = "xyz.tinycloud.policy/NativeProjection/v1\0";
     ATTESTED_ENFORCER_V2_DOMAIN = "xyz.tinycloud.policy/AttestedEnforcerBinding/v2\0";
     KEY_LENGTH2 = 32;
-    INLINE_PREFIX = "#v=2&p=";
+    INLINE_PREFIX = "#tc2=";
+    PUBLIC_INLINE_PARAMETER = "tc2";
     MAX_INLINE_BYTES = 256 * 1024;
     SHARE_RESULT_VERSION = 1;
     DEFAULT_MAX_SEALED_BLOB_BYTES = 100 * 1024 * 1024 + 29;
-    DEFAULT_MAX_CONTENT_BLOB_BYTES = DEFAULT_MAX_SEALED_BLOB_BYTES;
-    CONTENT_SEALED_OVERHEAD = 1 + 12 + 16;
     ShareReceiveError = class extends Error {
       code;
       details;
@@ -24922,13 +23418,11 @@ var init_dist3 = __esm({
         this.code = code32;
         this.details = details;
       }
-      /** Machine output is deliberately code-only; diagnostics belong on stderr. */
       toJSON() {
         return { protocol: "tinycloud-share", version: SHARE_RESULT_VERSION, error: { code: this.code } };
       }
     };
     SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
-    SHARE_SEALED_OVERHEAD = 1 + 12 + 16;
     SHARE_PUBLISH_RESULT_VERSION = 1;
     DEFAULT_SHARE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1e3;
     SharePublishError = class extends Error {
@@ -25404,12 +23898,7 @@ var init_dist3 = __esm({
     DAG_PB_CODE2 = 112;
     SHA_256_CODE2 = 18;
     cidSymbol2 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
-    code2 = 85;
-    SHA256_CODE2 = 18;
     MAX_CONTENT_BYTES = 100 * 1024 * 1024;
-    POLICY_ENFORCEMENT_DOMAIN = "xyz.tinycloud.share/policy-enforcement/v2\0";
-    OWNER_SHARE_REGISTRATION_DOMAIN = "xyz.tinycloud.share/policy-registration/v2\0";
-    ENVELOPE_DOMAIN = "xyz.tinycloud.share/envelope/v2\0";
     ShareNotifyError = class extends Error {
       code = "delivery-failed";
       constructor(message = "share delivery did not complete") {
@@ -25431,249 +23920,188 @@ var init_dist3 = __esm({
     PRESENTATION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
     SESSION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
     INVOCATION_DOMAIN = SHARE_V2_PROTOCOL.invocationDomain;
-    BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    POLICY_SESSION_FACT_KEYS = [
-      "profile",
-      "ownerDid",
-      "policyId",
-      "policyDigestHex",
-      "policyCid",
-      "policyDelegationCid",
-      "enforcementDelegationCid",
-      "contentSourceDigestHex",
-      "capabilityCeilingHashHex",
-      "nativeProjectionHashHex",
-      "enforcerDid",
-      "nodeAudience",
-      "recipientDid",
-      "challengeId",
-      "claimDigestHex",
-      "claimJti",
-      "vpDigestHex",
-      "credentialEvidenceDigestHex",
-      "decisionContextDigestHex",
-      "issuanceAuditDigestHex",
-      "remainingRedelegationDepth"
-    ];
-    POLICY_SESSION_V4_AUDIT_FACT_KEYS = ["credentialIdAuditDigestHex", "presentationJtiAuditDigestHex"];
-    POLICY_SESSION_DIGEST_FACT_KEYS = [
-      "policyDigestHex",
-      "contentSourceDigestHex",
-      "capabilityCeilingHashHex",
-      "nativeProjectionHashHex",
-      "claimDigestHex",
-      "vpDigestHex",
-      "credentialEvidenceDigestHex",
-      "decisionContextDigestHex",
-      "issuanceAuditDigestHex"
-    ];
-    LOWER_SHA256_HEX = /^[0-9a-f]{64}$/;
-    ShareRecipientClient = class {
-      constructor(options) {
-        this.options = options;
-        this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
-        this.signer = options.sign;
-        if (options.policyAuthorization !== void 0) {
-          if (options.envelope.version !== 3) throw new Error("policy delegation fast path requires a v3 envelope");
-          const compact = verifyV3PolicyAuthorization({ ...options.policyAuthorization, envelope: options.envelope, holderDid: options.holderDid });
-          const nodeAudience = compact.payload.fct[0].nodeAudience;
-          this.v3Authorization = options.policyAuthorization.authorization;
-          this.v3NodeAudience = nodeAudience;
-          this.nativeSigner = options.sign;
-          this.session = {
-            sessionId: options.policyAuthorization.cid,
-            expiresAt: new Date(compact.payload.exp * 1e3).toISOString(),
-            actions: options.envelope.actions,
-            resource: options.envelope.resource
-          };
-        }
-      }
-      fetchFn;
-      session;
-      signer;
-      nativeSigner;
-      holderProof;
-      v3Authorization;
-      v3NodeAudience;
-      v3ContentKey;
-      v3ContentEnvelope;
-      async beginChallenge(envelope) {
-        void envelope;
-        throw new Error("v2 Share recipient transport has been removed; use the embedded policy v3 envelope");
-      }
-      async establish(envelope) {
-        void envelope;
-        throw new Error("v2 Share recipient transport has been removed; use the embedded policy v3 envelope");
-      }
-      async authorize(envelope) {
-        if (this.session === void 0) await this.establish(envelope);
-        const response = await this.nativeInvoke({ action: "get", resource: envelope.resource });
-        if (!response.ok) throw new Error("share recipient read was rejected");
-        const value = object2(await response.json(), "share read response");
-        const expectedAction = nativeAction("read");
-        if (value.type !== "TinyCloudShareInvokeResponse" || value.version !== 2 || value.action !== expectedAction || value.resource !== envelope.resource.path || typeof value.content !== "string" || typeof value.bodyDigest !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value.bodyDigest) || !Object.hasOwn(value, "proof")) throw new Error("share read response is invalid");
-        const content = fromBase64Url(value.content);
-        if (await digestBytes2(content) !== value.bodyDigest) throw new Error("share read response integrity is invalid");
-        return { bytes: content, bodyDigest: value.bodyDigest, contentSourceDigest: envelope.contentSourceDigest, binding: { shareId: envelope.shareId, delegationCid: envelope.delegationCid, authorityMaterialHandle: envelope.authorityMaterialHandle, authorityMaterialDigest: envelope.authorityMaterialDigest, resource: { kind: envelope.resource.kind, path: value.resource }, action: value.action }, proof: { response: value, detached: value.proof } };
-      }
-      async establishPolicySession() {
-        if (this.session !== void 0) return this.session;
-        const envelope = this.options.envelope;
-        if (envelope.version === 3) return this.establishV3(envelope);
-        return this.establish(envelope);
-      }
-      async establishV3(envelope) {
-        if (this.options.buildPresentation === void 0) throw new Error("share presentation builder is required");
-        const attestedEnforcer = object2(envelope.attestedEnforcerBinding, "v3 attested enforcer binding");
-        if (attestedEnforcer.enforcerDid !== envelope.target.nodeAudience || typeof attestedEnforcer.nodeAudience !== "string") throw new Error("v3 attested enforcer binding mismatch");
-        try {
-          ed25519PublicKeyFromDidKey(attestedEnforcer.nodeAudience);
-        } catch {
-          throw new Error("v3 attested Node audience is invalid");
-        }
-        const challengeResponse = await this.fetchFn(new URL("/policy/v3/challenges", this.options.nodeOrigin), {
-          method: "POST",
-          redirect: "error",
-          headers: { accept: "application/json", "content-type": "application/json" },
-          body: JSON.stringify({ policyCid: envelope.policyCid, recipientDid: this.options.holderDid, requestedCapabilities: envelope.policy.capabilityCeiling }),
-          ...this.options.signal === void 0 ? {} : { signal: this.options.signal }
-        });
-        if (!challengeResponse.ok) throw new Error(`v3 policy challenge rejected (${challengeResponse.status})`);
-        const challenge2 = object2(await challengeResponse.json(), "v3 policy challenge");
-        if (typeof challenge2.challengeId !== "string" || typeof challenge2.nonce !== "string" || challenge2.policyCid !== envelope.policyCid || challenge2.recipientDid !== this.options.holderDid || challenge2.nodeAudience !== attestedEnforcer.nodeAudience || challenge2.enforcerDid !== void 0 && challenge2.enforcerDid !== attestedEnforcer.enforcerDid || typeof challenge2.expiresAt !== "string" || !Number.isFinite(Date.parse(challenge2.expiresAt)) || Date.parse(challenge2.expiresAt) <= Date.now()) throw new Error("v3 policy challenge binding mismatch");
-        const material = await this.options.buildPresentation({
-          challenge: challenge2,
-          envelope,
-          policy: envelope.policy
-        });
-        if (material.sign === void 0 || material.presentation === void 0) throw new Error("v3 ceremony requires a recipient signer and presentation");
-        const accountless = material.presentation.schema === "xyz.tinycloud.policy/presentation/v4";
-        if (accountless ? material.credentialEnvelope === void 0 || material.requirement === void 0 : material.claim === void 0) {
-          throw new Error(accountless ? "v4 ceremony requires a verified credential and requirement" : "v3 ceremony requires a claim");
-        }
-        this.options.onStage?.("policy-admission");
-        const delegationResponse = await this.fetchFn(new URL("/policy/v3/delegations", this.options.nodeOrigin), {
-          method: "POST",
-          redirect: "error",
-          headers: { accept: "application/json", "content-type": "application/json" },
-          body: JSON.stringify(accountless ? { policyCid: envelope.policyCid, challengeId: challenge2.challengeId, nonce: challenge2.nonce, requirement: material.requirement, credential: material.credentialEnvelope, presentation: material.presentation } : { policyCid: envelope.policyCid, challengeId: challenge2.challengeId, nonce: challenge2.nonce, claim: material.claim, presentation: material.presentation }),
-          ...this.options.signal === void 0 ? {} : { signal: this.options.signal }
-        });
-        if (!delegationResponse.ok) throw new Error(`v3 policy delegation rejected (${delegationResponse.status})`);
-        const delegation = object2(await delegationResponse.json(), "v3 policy delegation");
-        if (delegation.admitted !== true || typeof delegation.sessionCid !== "string" || typeof delegation.authorization !== "string") throw new Error("v3 policy delegation response is not admitted");
-        const compact = verifyV3PolicyAuthorization({ authorization: delegation.authorization, cid: delegation.sessionCid, envelope, holderDid: this.options.holderDid });
-        const fact = compact.payload.fct[0];
-        this.options.onStage?.("delegation-import");
-        const imported = await this.fetchFn(new URL("/delegate", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { Authorization: delegation.authorization }, ...this.options.signal === void 0 ? {} : { signal: this.options.signal } });
-        if (!imported.ok) throw new Error(`ordinary delegation import rejected (${imported.status})`);
-        this.signer = material.sign;
-        this.v3Authorization = delegation.authorization;
-        this.v3NodeAudience = fact.nodeAudience;
-        this.session = { sessionId: delegation.sessionCid, expiresAt: new Date(compact.payload.exp * 1e3).toISOString(), actions: envelope.actions, resource: envelope.resource };
-        return this.session;
-      }
-      /** Decrypt a v3 KV value through a fresh recipient-signed decrypt invocation. */
-      async decryptV3Content(bytes3) {
-        const envelope = this.options.envelope;
-        const signer = this.nativeSigner ?? this.signer;
-        if (envelope.version !== 3 || this.session === void 0 || this.v3Authorization === void 0 || this.v3NodeAudience === void 0 || signer === void 0) throw new Error("v3 policy session signer is required");
-        const encrypted = parseV3InlineEncryptedEnvelope(bytes3, envelope);
-        const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
-        const receiverPublicKey = toBase64(x25519.getPublicKey(receiverPrivateKey));
-        const receiverPublicKeyHash = canonicalHashHex2(receiverPublicKey);
-        const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: this.v3NodeAudience, networkId: encrypted.networkId, alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
-        const bodyHash = hex3(sha2562(new TextEncoder().encode(canonicalize2(body))));
-        const session = verifyCompactUcanAuthorization(this.v3Authorization, this.session.sessionId);
-        const now = Math.floor(Date.now() / 1e3);
-        const invocation = await signCompactUcanAuthorization({
-          issuerDid: this.options.holderDid,
-          audienceDid: this.v3NodeAudience,
-          attenuation: { [encrypted.networkId]: { "tinycloud.encryption/decrypt": [{}] } },
-          facts: [{ type: body.type, targetNode: body.targetNode, networkId: body.networkId, bodyHash, encryptedSymmetricKeyHash: body.encryptedSymmetricKeyHash, receiverPublicKeyHash, alg: body.alg, keyVersion: body.keyVersion }],
-          proofs: [session.cid],
-          notBefore: now,
-          expiresAt: Math.min(now + 60, session.payload.exp),
-          nonce: toBase64Url(crypto.getRandomValues(new Uint8Array(16))),
-          sign: signer
-        });
-        try {
-          this.options.onStage?.("decryption");
-          const response = await this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json", Authorization: invocation.authorization }, body: JSON.stringify(body), ...this.options.signal === void 0 ? {} : { signal: this.options.signal } });
-          if (!response.ok) throw new Error(`v3 decrypt invocation rejected (${response.status})`);
-          const value = object2(await response.json(), "v3 decrypt response");
-          const allowed = ["type", "targetNode", "networkId", "invocationCid", "encryptedSymmetricKeyHash", "receiverPublicKeyHash", "wrappedKey", "alg", "keyVersion", "requestHash", "nodeId", "nodeSignature"];
-          if (Object.keys(value).length !== allowed.length || Object.keys(value).some((key) => !allowed.includes(key)) || value.type !== "tinycloud.encryption.decrypt-result/v1" || value.targetNode !== body.targetNode || value.nodeId !== body.targetNode || value.networkId !== body.networkId || value.invocationCid !== invocation.cid || value.encryptedSymmetricKeyHash !== body.encryptedSymmetricKeyHash || value.receiverPublicKeyHash !== receiverPublicKeyHash || value.alg !== body.alg || value.keyVersion !== body.keyVersion || value.requestHash !== hex3(sha2562(new TextEncoder().encode(`${invocation.cid}${bodyHash}`))) || typeof value.wrappedKey !== "string" || typeof value.nodeSignature !== "string") throw new Error("v3 decrypt response binding is invalid");
-          const unsigned = { ...value };
-          delete unsigned.nodeSignature;
-          const signature = fromBase64(value.nodeSignature, "v3 decrypt response signature");
-          if (signature.length !== 64 || !ed25519.verify(signature, new TextEncoder().encode(canonicalize2(unsigned)), ed25519PublicKeyFromDidKey(body.targetNode), { zip215: false })) throw new Error("v3 decrypt response signature is invalid");
-          const wrapped = fromBase64(value.wrappedKey, "v3 wrapped content key");
-          if (wrapped.length < 61 || wrapped[32] !== 1) throw new Error("v3 wrapped content key is malformed");
-          const shared = x25519.getSharedSecret(receiverPrivateKey, wrapped.slice(0, 32));
-          const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(33));
-          shared.fill(0);
-          if (symmetricKey.length !== 32) throw new Error("v3 content key is malformed");
-          const plaintext = await aesGcmDecrypt(symmetricKey, fromBase64(encrypted.ciphertext, "v3 encrypted content"));
-          this.v3ContentKey?.fill(0);
-          this.v3ContentKey = symmetricKey;
-          this.v3ContentEnvelope = encrypted;
-          return { bytes: plaintext, mediaType: encrypted.metadata?.contentType ?? envelope.metadata.mediaType ?? "application/octet-stream" };
-        } finally {
-          receiverPrivateKey.fill(0);
-        }
-      }
-      /** Re-encrypt edited v3 content with the admitted content key. */
-      async encryptV3Content(bytes3, mediaType) {
-        if (this.options.envelope.version !== 3 || this.v3ContentKey === void 0 || this.v3ContentEnvelope === void 0) throw new Error("v3 content must be decrypted before it can be saved");
-        return new TextEncoder().encode(canonicalize2({ ...this.v3ContentEnvelope, ciphertext: toBase64Url(await aesGcmEncrypt(this.v3ContentKey, bytes3)), metadata: { ...this.v3ContentEnvelope.metadata ?? {}, contentType: mediaType } }));
-      }
-      async resumeWithProof(envelope, resumeToken, proof) {
-        void envelope;
-        void resumeToken;
-        void proof;
-        throw new Error("v2 Share recipient transport has been removed; use the embedded policy v3 envelope");
-      }
-      async nativeInvoke(request) {
-        if (this.session === void 0) throw new Error("share policy session is required");
-        const envelope = this.options.envelope;
-        if (envelope.version === 3) return this.nativeInvokeV3(request, envelope);
-        throw new Error("v2 Share invocation transport has been removed; use the embedded policy v3 envelope");
-      }
-      async nativeInvokeV3(request, envelope) {
-        const signer = this.nativeSigner ?? this.signer;
-        if (this.session === void 0 || this.v3Authorization === void 0 || this.v3NodeAudience === void 0 || signer === void 0) throw new Error("v3 policy session signer is required");
-        const session = verifyCompactUcanAuthorization(this.v3Authorization, this.session.sessionId);
-        if (session.payload.aud !== this.options.holderDid) throw new Error("v3 session recipient mismatch");
-        const action = request.action === "list" ? "tinycloud.kv/list" : request.action === "put" ? "tinycloud.kv/put" : request.action === "metadata" ? "tinycloud.kv/metadata" : "tinycloud.kv/get";
-        const path = typeof request.resource?.path === "string" ? request.resource.path.replace(/^\//, "").replace(/\/$/, "") : envelope.resource.path;
-        const capability = envelope.policy.capabilityCeiling.find((candidate) => candidate.kind === "kv");
-        if (capability === void 0 || !capability.actions.includes(action)) throw new Error("v3 requested capability is not in the signed policy");
-        const marker = "/kv/";
-        const split2 = capability.resource.indexOf(marker);
-        if (split2 < 0) throw new Error("v3 KV resource is invalid");
-        const root = capability.resource.slice(split2 + marker.length).replace(/\/$/, "");
-        if (path !== root && !(capability.selector === "prefix" && path.startsWith(`${root}/`))) throw new Error("v3 KV request is outside the signed selector");
-        const resource = `${capability.resource.slice(0, split2 + marker.length)}${path}`;
-        const now = Math.floor(Date.now() / 1e3);
-        const invocation = await signCompactUcanAuthorization({ issuerDid: this.options.holderDid, audienceDid: this.v3NodeAudience, attenuation: { [resource]: { [action]: [{ type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: resource }] } }, facts: [{ type: "tinycloud.policy.invocation/v1", policyCid: envelope.policyCid, sessionCid: session.cid }], proofs: [session.cid], notBefore: now, expiresAt: Math.min(now + 60, session.payload.exp), nonce: toBase64Url(crypto.getRandomValues(new Uint8Array(16))), sign: signer });
-        const headers = new Headers({ accept: "application/json", Authorization: invocation.authorization });
-        let body;
-        if (action === "tinycloud.kv/put") {
-          if (request.body === void 0) throw new Error("v3 KV put requires bytes");
-          body = Uint8Array.from(request.body);
-          headers.set("content-type", request.contentType ?? "application/octet-stream");
-          if (request.ifMatch !== void 0) headers.set("if-match", request.ifMatch);
-        }
-        this.options.onStage?.("invocation");
-        return this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers, ...body === void 0 ? {} : { body }, ...this.options.signal === void 0 ? {} : { signal: this.options.signal } });
-      }
-    };
+    NATIVE_SHARE_FRAGMENT_PARAMETER = "tc1";
   }
 });
 
 // ../sdk-core/dist/index.js
 import { SiweMessage } from "siwe";
+function jcsCanonicalize(input) {
+  return serialize2(normalizeJson(input, "$"));
+}
+function normalizeJson(input, path = "$") {
+  if (input === null) {
+    return null;
+  }
+  switch (typeof input) {
+    case "boolean":
+      return input;
+    case "number":
+      if (!Number.isFinite(input)) {
+        throw new SignedObjectCanonicalizationError(
+          `${path} must be a finite JSON number`
+        );
+      }
+      return input;
+    case "string":
+      assertUnicodeScalarString(input, path);
+      return input;
+    case "object":
+      return normalizeJsonObjectOrArray(input, path);
+    case "bigint":
+    case "function":
+    case "symbol":
+    case "undefined":
+    default:
+      throw new SignedObjectCanonicalizationError(
+        `${path} is not a JSON value`
+      );
+  }
+}
+function serialize2(value) {
+  if (value === null) {
+    return "null";
+  }
+  switch (typeof value) {
+    case "boolean":
+      return value ? "true" : "false";
+    case "number": {
+      const encoded = JSON.stringify(value);
+      if (encoded === void 0) {
+        throw new SignedObjectCanonicalizationError(
+          "number could not be serialized as JSON"
+        );
+      }
+      return encoded;
+    }
+    case "string":
+      return JSON.stringify(value);
+    case "object":
+      if (Array.isArray(value)) {
+        return `[${value.map((item) => serialize2(item)).join(",")}]`;
+      }
+      return serializeObject(value);
+    default:
+      throw new SignedObjectCanonicalizationError(
+        `unsupported JSON value type ${typeof value}`
+      );
+  }
+}
+function normalizeJsonObjectOrArray(input, path) {
+  assertNoSymbolKeys(input, path);
+  if (Array.isArray(input)) {
+    for (const key of Object.getOwnPropertyNames(input)) {
+      if (key === "length") {
+        continue;
+      }
+      if (!isArrayIndexKey(key, input.length)) {
+        throw new SignedObjectCanonicalizationError(
+          `${path}.${key} is not allowed on a JSON array`
+        );
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(input, key);
+      if (descriptor?.enumerable !== true) {
+        throw new SignedObjectCanonicalizationError(
+          `${path}[${key}] must be an enumerable JSON array item`
+        );
+      }
+      if (!("value" in descriptor)) {
+        throw new SignedObjectCanonicalizationError(
+          `${path}[${key}] must be a JSON data property`
+        );
+      }
+    }
+    const output2 = [];
+    for (let index = 0; index < input.length; index++) {
+      if (!objectHasOwn(input, index)) {
+        throw new SignedObjectCanonicalizationError(
+          `${path}[${index}] must not be a sparse array hole`
+        );
+      }
+      output2.push(normalizeJson(input[index], `${path}[${index}]`));
+    }
+    return output2;
+  }
+  const proto = Object.getPrototypeOf(input);
+  if (proto !== Object.prototype && proto !== null) {
+    throw new SignedObjectCanonicalizationError(
+      `${path} must be a plain JSON object`
+    );
+  }
+  const output = /* @__PURE__ */ Object.create(null);
+  for (const key of Object.getOwnPropertyNames(input)) {
+    assertUnicodeScalarString(key, `${path} key`);
+    if (key === "__proto__" || key === "constructor") {
+      throw new SignedObjectCanonicalizationError(
+        `${path}.${key} is not allowed`
+      );
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (descriptor?.enumerable !== true) {
+      throw new SignedObjectCanonicalizationError(
+        `${path}.${key} must be an enumerable JSON object property`
+      );
+    }
+    if (!("value" in descriptor)) {
+      throw new SignedObjectCanonicalizationError(
+        `${path}.${key} must be a JSON data property`
+      );
+    }
+    const value = descriptor.value;
+    output[key] = normalizeJson(value, `${path}.${key}`);
+  }
+  return output;
+}
+function assertNoSymbolKeys(input, path) {
+  if (Object.getOwnPropertySymbols(input).length > 0) {
+    throw new SignedObjectCanonicalizationError(
+      `${path} must not have symbol properties`
+    );
+  }
+}
+function isArrayIndexKey(key, length22) {
+  if (!/^(0|[1-9]\d*)$/.test(key)) {
+    return false;
+  }
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index < length22;
+}
+function serializeObject(value) {
+  const keys = Object.keys(value).sort(compareUtf16CodeUnits);
+  const parts = keys.map((key) => `${JSON.stringify(key)}:${serialize2(value[key])}`);
+  return `{${parts.join(",")}}`;
+}
+function compareUtf16CodeUnits(a, b) {
+  const max = Math.min(a.length, b.length);
+  for (let index = 0; index < max; index++) {
+    const leftCodeUnit = a.charCodeAt(index);
+    const rightCodeUnit = b.charCodeAt(index);
+    if (leftCodeUnit !== rightCodeUnit) {
+      return leftCodeUnit - rightCodeUnit;
+    }
+  }
+  return a.length - b.length;
+}
+function assertUnicodeScalarString(value, path) {
+  for (let index = 0; index < value.length; index++) {
+    const code32 = value.charCodeAt(index);
+    if (code32 >= 55296 && code32 <= 56319) {
+      const next = value.charCodeAt(index + 1);
+      if (Number.isNaN(next) || next < 56320 || next > 57343) {
+        throw new SignedObjectCanonicalizationError(
+          `${path} contains a lone high surrogate`
+        );
+      }
+      index++;
+      continue;
+    }
+    if (code32 >= 56320 && code32 <= 57343) {
+      throw new SignedObjectCanonicalizationError(
+        `${path} contains a lone low surrogate`
+      );
+    }
+  }
+}
 function equals5(aa, bb) {
   if (aa === bb) {
     return true;
@@ -25970,21 +24398,21 @@ function create3(code32, digest4) {
   const size2 = digest4.byteLength;
   const sizeOffset = encodingLength3(code32);
   const digestOffset = sizeOffset + encodingLength3(size2);
-  const bytes22 = new Uint8Array(digestOffset + size2);
-  encodeTo3(code32, bytes22, 0);
-  encodeTo3(size2, bytes22, sizeOffset);
-  bytes22.set(digest4, digestOffset);
-  return new Digest3(code32, size2, digest4, bytes22);
+  const bytes2 = new Uint8Array(digestOffset + size2);
+  encodeTo3(code32, bytes2, 0);
+  encodeTo3(size2, bytes2, sizeOffset);
+  bytes2.set(digest4, digestOffset);
+  return new Digest3(code32, size2, digest4, bytes2);
 }
 function decode42(multihash) {
-  const bytes22 = coerce4(multihash);
-  const [code32, sizeOffset] = decode32(bytes22);
-  const [size2, digestOffset] = decode32(bytes22.subarray(sizeOffset));
-  const digest4 = bytes22.subarray(sizeOffset + digestOffset);
+  const bytes2 = coerce4(multihash);
+  const [code32, sizeOffset] = decode32(bytes2);
+  const [size2, digestOffset] = decode32(bytes2.subarray(sizeOffset));
+  const digest4 = bytes2.subarray(sizeOffset + digestOffset);
   if (digest4.byteLength !== size2) {
     throw new Error("Incorrect length");
   }
-  return new Digest3(code32, size2, digest4, bytes22);
+  return new Digest3(code32, size2, digest4, bytes2);
 }
 function equals22(a, b) {
   if (a === b) {
@@ -25995,12 +24423,12 @@ function equals22(a, b) {
   }
 }
 function format3(link2, base33) {
-  const { bytes: bytes22, version: version3 } = link2;
+  const { bytes: bytes2, version: version3 } = link2;
   switch (version3) {
     case 0:
-      return toStringV03(bytes22, baseCache3(link2), base33 ?? base58btc3.encoder);
+      return toStringV03(bytes2, baseCache3(link2), base33 ?? base58btc3.encoder);
     default:
-      return toStringV13(bytes22, baseCache3(link2), base33 ?? base323.encoder);
+      return toStringV13(bytes2, baseCache3(link2), base33 ?? base323.encoder);
   }
 }
 function baseCache3(cid2) {
@@ -26042,25 +24470,25 @@ function parseCIDtoBytes3(source, base33) {
     }
   }
 }
-function toStringV03(bytes22, cache22, base33) {
+function toStringV03(bytes2, cache22, base33) {
   const { prefix } = base33;
   if (prefix !== base58btc3.prefix) {
     throw Error(`Cannot string encode V0 in ${base33.name} encoding`);
   }
   const cid2 = cache22.get(prefix);
   if (cid2 == null) {
-    const cid3 = base33.encode(bytes22).slice(1);
+    const cid3 = base33.encode(bytes2).slice(1);
     cache22.set(prefix, cid3);
     return cid3;
   } else {
     return cid2;
   }
 }
-function toStringV13(bytes22, cache22, base33) {
+function toStringV13(bytes2, cache22, base33) {
   const { prefix } = base33;
   const cid2 = cache22.get(prefix);
   if (cid2 == null) {
-    const cid3 = base33.encode(bytes22);
+    const cid3 = base33.encode(bytes2);
     cache22.set(prefix, cid3);
     return cid3;
   } else {
@@ -26070,11 +24498,11 @@ function toStringV13(bytes22, cache22, base33) {
 function encodeCID3(version3, code32, multihash) {
   const codeOffset = encodingLength3(version3);
   const hashOffset = codeOffset + encodingLength3(code32);
-  const bytes22 = new Uint8Array(hashOffset + multihash.byteLength);
-  encodeTo3(version3, bytes22, 0);
-  encodeTo3(code32, bytes22, codeOffset);
-  bytes22.set(multihash, hashOffset);
-  return bytes22;
+  const bytes2 = new Uint8Array(hashOffset + multihash.byteLength);
+  encodeTo3(version3, bytes2, 0);
+  encodeTo3(code32, bytes2, codeOffset);
+  bytes2.set(multihash, hashOffset);
+  return bytes2;
 }
 function encode32(data) {
   return data.reduce((p, c) => {
@@ -26104,7 +24532,7 @@ function digest(input, options2) {
     }
     input = input.subarray(0, options2.truncate);
   }
-  return create3(code22, encode42(input));
+  return create3(code2, encode42(input));
 }
 function from22({ name: name2, code: code32, encode: encode52, minDigestLength, maxDigestLength }) {
   return new Hasher(name2, code32, encode52, minDigestLength, maxDigestLength);
@@ -26120,6 +24548,39 @@ function createDigest(digest4, code32, truncate) {
 }
 function sha(name2) {
   return async (data) => new Uint8Array(await crypto.subtle.digest(name2, data));
+}
+async function revokePolicyRootV3(input) {
+  if (input.reason.length === 0) throw new Error("policy root revocation reason is required");
+  const unsigned = {
+    schema: ROOT_REVOCATION_V1_SCHEMA,
+    targetCid: input.rootCid,
+    targetRole: input.targetRole,
+    ownerDid: input.ownerDid,
+    nodeAudience: input.nodeAudience,
+    revokedAt: (input.now ?? /* @__PURE__ */ new Date()).toISOString(),
+    reason: input.reason,
+    issuerDid: input.issuerDid
+  };
+  const signature = await input.sign(sha2562(new TextEncoder().encode(ROOT_REVOCATION_V1_DOMAIN + jcsCanonicalize(unsigned))));
+  if (signature.length !== 64) throw new Error("policy root revocation signature must be Ed25519");
+  const fetchFn = input.fetch ?? globalThis.fetch.bind(globalThis);
+  const response = await fetchFn(new URL("/revoke", input.nodeOrigin), {
+    method: "POST",
+    redirect: "error",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({ revocation: { ...unsigned, signature: { suite: "Ed25519", signerDid: input.issuerDid, value: encodeBase64Url2(signature) } } })
+  });
+  if (!response.ok) throw new Error(`policy root revocation rejected (${response.status})`);
+  return object2(await response.json(), "policy root revocation");
+}
+function object2(value, label) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value;
+}
+function encodeBase64Url2(value) {
+  return typeof btoa === "function" ? btoa(String.fromCharCode(...value)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_") : Buffer.from(value).toString("base64url");
 }
 function parseStrictRfc33392(value) {
   if (!/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(
@@ -26490,14 +24951,14 @@ function validate(...funcs) {
     }
   };
 }
-function bytesToComponents(bytes22) {
+function bytesToComponents(bytes2) {
   const components = [];
   let i = 0;
-  while (i < bytes22.length) {
-    const code32 = decode62(bytes22, i);
+  while (i < bytes2.length) {
+    const code32 = decode62(bytes2, i);
     const codec = registry.getProtocol(code32);
     const codeLength = encodingLength22(code32);
-    const size2 = sizeForAddr(codec, bytes22, i + codeLength);
+    const size2 = sizeForAddr(codec, bytes2, i + codeLength);
     let sizeLength = 0;
     if (size2 > 0 && codec.size === V) {
       sizeLength = encodingLength22(size2);
@@ -26506,11 +24967,11 @@ function bytesToComponents(bytes22) {
     const component = {
       code: code32,
       name: codec.name,
-      bytes: bytes22.subarray(i, i + componentLength)
+      bytes: bytes2.subarray(i, i + componentLength)
     };
     if (size2 > 0) {
       const valueOffset = i + codeLength + sizeLength;
-      const valueBytes = bytes22.subarray(valueOffset, valueOffset + size2);
+      const valueBytes = bytes2.subarray(valueOffset, valueOffset + size2);
       component.value = codec.bytesToValue?.(valueBytes) ?? toString2(valueBytes);
     }
     components.push(component);
@@ -26520,7 +24981,7 @@ function bytesToComponents(bytes22) {
 }
 function componentsToBytes(components) {
   let length22 = 0;
-  const bytes22 = [];
+  const bytes2 = [];
   for (const component of components) {
     if (component.bytes == null) {
       const codec = registry.getProtocol(component.code);
@@ -26548,10 +25009,10 @@ function componentsToBytes(components) {
       }
       component.bytes = bytes3;
     }
-    bytes22.push(component.bytes);
+    bytes2.push(component.bytes);
     length22 += component.bytes.byteLength;
   }
-  return concat2(bytes22, length22);
+  return concat2(bytes2, length22);
 }
 function stringToComponents(string2) {
   if (string2.charAt(0) !== "/") {
@@ -26625,14 +25086,14 @@ function componentsToString(components) {
     ];
   }).join("/")}`;
 }
-function sizeForAddr(codec, bytes22, offset) {
+function sizeForAddr(codec, bytes2, offset) {
   if (codec.size == null || codec.size === 0) {
     return 0;
   }
   if (codec.size > 0) {
     return codec.size / 8;
   }
-  return decode62(bytes22, offset);
+  return decode62(bytes2, offset);
 }
 function toComponents(addr) {
   if (addr == null) {
@@ -26802,16 +25263,26 @@ async function verifyLocationRecord(input) {
   }
   return false;
 }
-async function fetchLocationRecord(registryUrl, subject, fetchFn = globalThis.fetch) {
+async function fetchLocationRecord(registryUrl, subject, fetchFn = globalThis.fetch, signal) {
   const url = `${registryUrl.replace(/\/$/, "")}/v1/locations/${encodeURIComponent(subject)}`;
-  const response = await fetchFn(url);
+  const response = await fetchFn(url, {
+    redirect: "error",
+    headers: { accept: "application/json" },
+    ...signal === void 0 ? {} : { signal }
+  });
   if (response.status === 404) {
     return null;
   }
   if (!response.ok) {
     throw new Error(`location registry returned HTTP ${response.status}`);
   }
-  const body = await response.json();
+  const text2 = await boundedResponseText(response, "location registry", 64 * 1024);
+  let body;
+  try {
+    body = JSON.parse(text2);
+  } catch {
+    throw new LocationRecordValidationError("registry response is not JSON");
+  }
   if (body.record === void 0) {
     throw new LocationRecordValidationError("registry response missing record");
   }
@@ -26987,6 +25458,38 @@ function multiaddrToHttpUrl(input) {
   }
   return uri;
 }
+async function boundedResponseText(response, label, maxBytes) {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maxBytes)) {
+    throw new LocationRecordValidationError(`${label} response is too large`);
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value === void 0) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => void 0);
+        throw new LocationRecordValidationError(`${label} response is too large`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes2 = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes2.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes2);
+}
 function validateSubject(subject) {
   if (typeof subject !== "string" || subject.length === 0) {
     throw new LocationRecordValidationError(
@@ -27053,12 +25556,12 @@ function ed25519PublicKeyFromDidKey2(did) {
       "did:key must use base58btc multibase"
     );
   }
-  const bytes22 = bases.base58btc.decode(identifier);
-  if (bytes22.length === 34 && bytes22[0] === 237 && bytes22[1] === 1) {
-    return bytes22.slice(2);
+  const bytes2 = bases.base58btc.decode(identifier);
+  if (bytes2.length === 34 && bytes2[0] === 237 && bytes2[1] === 1) {
+    return bytes2.slice(2);
   }
-  if (bytes22.length === 33 && bytes22[0] === 237) {
-    return bytes22.slice(1);
+  if (bytes2.length === 33 && bytes2[0] === 237) {
+    return bytes2.slice(1);
   }
   throw new LocationRecordValidationError(
     "did:key must be an Ed25519 public key"
@@ -27066,7 +25569,7 @@ function ed25519PublicKeyFromDidKey2(did) {
 }
 function decodeBase64Url4(value) {
   const alphabet2 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-  const bytes22 = [];
+  const bytes2 = [];
   let buffer = 0;
   let bits = 0;
   for (const char of value) {
@@ -27080,18 +25583,19 @@ function decodeBase64Url4(value) {
     bits += 6;
     if (bits >= 8) {
       bits -= 8;
-      bytes22.push(buffer >> bits & 255);
+      bytes2.push(buffer >> bits & 255);
     }
   }
-  return Uint8Array.from(bytes22);
+  return Uint8Array.from(bytes2);
 }
-var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, objectHasOwn, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, textEncoder2, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder22, textDecoder, identity_exports2, code22, name, encode42, identity2, sha2_browser_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha25622, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, CompactHeaderSchema, CompactPayloadSchema, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, ResourceSchema, PortableDelegationSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, Parser, MAX_IPV6_LENGTH, MAX_IPV4_LENGTH, parser, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
+var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, SignedObjectProfileError, SignedObjectCanonicalizationError, objectHasOwn, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, textEncoder2, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder22, textDecoder, identity_exports2, code2, name, encode42, identity2, sha2_browser_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha25622, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, ROOT_REVOCATION_V1_SCHEMA, ROOT_REVOCATION_V1_DOMAIN, CompactHeaderSchema, CompactPayloadSchema, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, ResourceSchema, PortableDelegationSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, Parser, MAX_IPV6_LENGTH, MAX_IPV4_LENGTH, parser, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
 var init_dist4 = __esm({
   "../sdk-core/dist/index.js"() {
     "use strict";
     init_zod();
     init_zod();
     init_dist();
+    init_sha256();
     init_zod();
     init_zod();
     init_zod();
@@ -27148,6 +25652,19 @@ var init_dist4 = __esm({
       signature: external_exports.string(),
       ens: EnsDataSchema.optional()
     });
+    SignedObjectProfileError = class extends Error {
+      constructor(code32, message) {
+        super(message);
+        this.name = "SignedObjectProfileError";
+        this.code = code32;
+      }
+    };
+    SignedObjectCanonicalizationError = class extends SignedObjectProfileError {
+      constructor(message) {
+        super("canonicalization-mismatch", message);
+        this.name = "SignedObjectCanonicalizationError";
+      }
+    };
     objectHasOwn = Object.hasOwn ?? Object.prototype.hasOwnProperty.call.bind(
       Object.prototype.hasOwnProperty
     );
@@ -27176,9 +25693,9 @@ var init_dist4 = __esm({
         this.prefix = prefix;
         this.baseEncode = baseEncode;
       }
-      encode(bytes22) {
-        if (bytes22 instanceof Uint8Array) {
-          return `${this.prefix}${this.baseEncode(bytes22)}`;
+      encode(bytes2) {
+        if (bytes2 instanceof Uint8Array) {
+          return `${this.prefix}${this.baseEncode(bytes2)}`;
         } else {
           throw Error("Unknown type, must be binary type");
         }
@@ -27368,7 +25885,7 @@ var init_dist4 = __esm({
       /**
        * Creates a multihash digest.
        */
-      constructor(code32, size2, digest4, bytes22) {
+      constructor(code32, size2, digest4, bytes2) {
         __publicField(this, "code");
         __publicField(this, "size");
         __publicField(this, "digest");
@@ -27376,7 +25893,7 @@ var init_dist4 = __esm({
         this.code = code32;
         this.size = size2;
         this.digest = digest4;
-        this.bytes = bytes22;
+        this.bytes = bytes2;
       }
     };
     cache3 = /* @__PURE__ */ new WeakMap();
@@ -27386,7 +25903,7 @@ var init_dist4 = __esm({
        * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
        * @param multihash - (Multi)hash of the of the content.
        */
-      constructor(version3, code32, multihash, bytes22) {
+      constructor(version3, code32, multihash, bytes2) {
         __publicField(this, "code");
         __publicField(this, "version");
         __publicField(this, "multihash");
@@ -27396,8 +25913,8 @@ var init_dist4 = __esm({
         this.code = code32;
         this.version = version3;
         this.multihash = multihash;
-        this.bytes = bytes22;
-        this["/"] = bytes22;
+        this.bytes = bytes2;
+        this["/"] = bytes2;
       }
       /**
        * Signalling `cid.asCID === cid` has been replaced with `cid['/'] === cid.bytes`
@@ -27489,8 +26006,8 @@ var init_dist4 = __esm({
         if (value instanceof _CID3) {
           return value;
         } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-          const { version: version3, code: code32, multihash, bytes: bytes22 } = value;
-          return new _CID3(version3, code32, multihash, bytes22 ?? encodeCID3(version3, code32, multihash.bytes));
+          const { version: version3, code: code32, multihash, bytes: bytes2 } = value;
+          return new _CID3(version3, code32, multihash, bytes2 ?? encodeCID3(version3, code32, multihash.bytes));
         } else if (value[cidSymbol3] === true) {
           const { version: version3, multihash, code: code32 } = value;
           const digest4 = decode42(multihash);
@@ -27520,8 +26037,8 @@ var init_dist4 = __esm({
             }
           }
           case 1: {
-            const bytes22 = encodeCID3(version3, code32, digest4.bytes);
-            return new _CID3(version3, code32, digest4, bytes22);
+            const bytes2 = encodeCID3(version3, code32, digest4.bytes);
+            return new _CID3(version3, code32, digest4, bytes2);
           }
           default: {
             throw new Error("Invalid version");
@@ -27550,8 +26067,8 @@ var init_dist4 = __esm({
        * An error will be thrown if the bytes provided do not contain a valid
        * binary representation of a CID.
        */
-      static decode(bytes22) {
-        const [cid2, remainder] = _CID3.decodeFirst(bytes22);
+      static decode(bytes2) {
+        const [cid2, remainder] = _CID3.decodeFirst(bytes2);
         if (remainder.length !== 0) {
           throw new Error("Incorrect length");
         }
@@ -27566,17 +26083,17 @@ var init_dist4 = __esm({
        * will be a zero-length byte array if the provided bytes only contained a
        * binary CID representation.
        */
-      static decodeFirst(bytes22) {
-        const specs = _CID3.inspectBytes(bytes22);
+      static decodeFirst(bytes2) {
+        const specs = _CID3.inspectBytes(bytes2);
         const prefixSize = specs.size - specs.multihashSize;
-        const multihashBytes = coerce4(bytes22.subarray(prefixSize, prefixSize + specs.multihashSize));
+        const multihashBytes = coerce4(bytes2.subarray(prefixSize, prefixSize + specs.multihashSize));
         if (multihashBytes.byteLength !== specs.multihashSize) {
           throw new Error("Incorrect length");
         }
-        const digestBytes3 = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
-        const digest4 = new Digest3(specs.multihashCode, specs.digestSize, digestBytes3, multihashBytes);
+        const digestBytes = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
+        const digest4 = new Digest3(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
         const cid2 = specs.version === 0 ? _CID3.createV0(digest4) : _CID3.createV1(specs.codec, digest4);
-        return [cid2, bytes22.subarray(specs.size)];
+        return [cid2, bytes2.subarray(specs.size)];
       }
       /**
        * Inspect the initial bytes of a CID to determine its properties.
@@ -27619,8 +26136,8 @@ var init_dist4 = __esm({
        * a default decoder).
        */
       static parse(source, base33) {
-        const [prefix, bytes22] = parseCIDtoBytes3(source, base33);
-        const cid2 = _CID3.decode(bytes22);
+        const [prefix, bytes2] = parseCIDtoBytes3(source, base33);
+        const cid2 = _CID3.decode(bytes2);
         if (cid2.version === 0 && source[0] !== "Q") {
           throw Error("Version 0 CID string must not include multibase prefix");
         }
@@ -27767,10 +26284,10 @@ var init_dist4 = __esm({
     __export3(identity_exports2, {
       identity: () => identity2
     });
-    code22 = 0;
+    code2 = 0;
     name = "identity";
     encode42 = coerce4;
-    identity2 = { code: code22, name, encode: encode42, digest };
+    identity2 = { code: code2, name, encode: encode42, digest };
     sha2_browser_exports = {};
     __export3(sha2_browser_exports, {
       sha256: () => sha25622,
@@ -27832,6 +26349,8 @@ var init_dist4 = __esm({
     objectHasOwn4 = Object.hasOwn ?? Object.prototype.hasOwnProperty.call.bind(
       Object.prototype.hasOwnProperty
     );
+    ROOT_REVOCATION_V1_SCHEMA = "xyz.tinycloud.policy/root-revocation/v1";
+    ROOT_REVOCATION_V1_DOMAIN = "xyz.tinycloud.policy/RootRevocation/v1\0";
     CompactHeaderSchema = external_exports.object({
       alg: external_exports.literal("EdDSA"),
       jwk: external_exports.object({ alg: external_exports.literal("EdDSA"), crv: external_exports.literal("Ed25519"), kty: external_exports.literal("OKP"), x: external_exports.string().min(1) }).strict(),
@@ -29197,15 +27716,15 @@ var init_dist4 = __esm({
     CODE_MEMORY = 777;
     ip4ToBytes = function(ip) {
       ip = ip.toString().trim();
-      const bytes22 = new Uint8Array(4);
+      const bytes2 = new Uint8Array(4);
       ip.split(/\./g).forEach((byte, index) => {
         const value = parseInt(byte, 10);
         if (isNaN(value) || value < 0 || value > 255) {
           throw new InvalidMultiaddrError("Invalid byte value in IP address");
         }
-        bytes22[index] = value;
+        bytes2[index] = value;
       });
-      return bytes22;
+      return bytes2;
     };
     ip6ToBytes = function(ip) {
       let offset = 0;
@@ -29240,7 +27759,7 @@ var init_dist4 = __esm({
         }
         sections.splice.apply(sections, argv2);
       }
-      const bytes22 = new Uint8Array(offset + 16);
+      const bytes2 = new Uint8Array(offset + 16);
       for (i = 0; i < sections.length; i++) {
         if (sections[i] === "") {
           sections[i] = "0";
@@ -29249,10 +27768,10 @@ var init_dist4 = __esm({
         if (isNaN(word2) || word2 < 0 || word2 > 65535) {
           throw new InvalidMultiaddrError("Invalid byte value in IP address");
         }
-        bytes22[offset++] = word2 >> 8 & 255;
-        bytes22[offset++] = word2 & 255;
+        bytes2[offset++] = word2 >> 8 & 255;
+        bytes2[offset++] = word2 & 255;
       }
-      return bytes22;
+      return bytes2;
     };
     ip4ToString = function(buf) {
       if (buf.byteLength !== 4) {
@@ -30183,7 +28702,7 @@ var init_profiles = __esm({
 });
 
 // src/lib/permissions.ts
-import { appendFile, readFile as readFile4 } from "fs/promises";
+import { appendFile, readFile as readFile3 } from "fs/promises";
 import { join as join5 } from "path";
 import {
   buildPermissionRequestArtifact,
@@ -30491,7 +29010,6 @@ init_profiles();
 
 // src/commands/share.ts
 init_dist3();
-import { readFile as readFile3 } from "fs/promises";
 
 // src/lib/duration.ts
 function parseDuration(input) {
@@ -30558,7 +29076,7 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat, mkdir as mkdir2, mkdtemp, open as open2, readFile as readFile2, realpath, stat as stat2, link, rename as rename2, rm as rm2, unlink } from "fs/promises";
+import { lstat, mkdir as mkdir2, mkdtemp, open, readFile as readFile2, realpath, stat as stat2, link, rename as rename2, rm as rm2, unlink } from "fs/promises";
 import { randomBytes as randomBytes2 } from "crypto";
 import { basename as basename2, join as join4, resolve, sep } from "path";
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
@@ -30590,8 +29108,8 @@ function shareFilename(value) {
 }
 async function readShareInput(input, name2, limit = MAX_SHARE_STDIN_BYTES) {
   if (input === "-") {
-    const bytes3 = await readBoundedStdin(limit);
-    return { bytes: bytes3, filename: shareFilename(name2 ?? "stdin.md") };
+    const bytes2 = await readBoundedStdin(limit);
+    return { bytes: bytes2, filename: shareFilename(name2 ?? "stdin.md") };
   }
   const path = resolve(input);
   const info = await stat2(path);
@@ -30626,7 +29144,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open2(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath(outputDirectory);
   const outputPath = join4(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
@@ -30650,7 +29168,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open2(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -30680,8 +29198,6 @@ async function writeShareOutput(directory, filename, bytes, force) {
 
 // src/commands/share.ts
 var SHARE_ORIGIN = "https://share.tinycloud.xyz";
-var DEFAULT_REGISTRY = `${SHARE_ORIGIN}/api/share/link-only/registry`;
-var DEFAULT_READ_REGISTRY = "https://registry.tinycloud.xyz";
 var shareServices = {};
 function configureShareCommandServices(services) {
   shareServices = services;
@@ -30694,26 +29210,11 @@ function parseShareTarget(value) {
   if (value.includes("@")) return { kind: "email", address: value };
   throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
 }
-function publishServices(insecureLocalRegistry = false) {
-  return {
-    ...shareServices.uploadBlob === void 0 ? {} : { uploadBlob: shareServices.uploadBlob },
-    ...shareServices.authorizeUpload === void 0 ? {} : { authorizeUpload: shareServices.authorizeUpload },
-    ...shareServices.authorizeUpload === void 0 || insecureLocalRegistry ? {} : { authorizationOrigin: SHARE_ORIGIN },
-    ...shareServices.credentials === void 0 ? {} : { credentials: shareServices.credentials },
-    ...shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn }
-  };
-}
-function fetchServices() {
-  return {
-    ...shareServices.fetchFn === void 0 ? {} : { fetchFn: shareServices.fetchFn },
-    ...shareServices.trustedPolicyAuthority === void 0 ? {} : { trustedPolicyAuthority: shareServices.trustedPolicyAuthority }
-  };
-}
 function shareCliError(error) {
   if (error instanceof CLIError) return error;
   if (error instanceof SharePublishError) {
-    const exit = error.code === "upload-auth-required" ? 3 : error.code === "upload-failed" ? 4 : error.code === "max-bytes-exceeded" || error.code === "inline-too-large" ? 7 : error.code === "unsupported-target" || error.code === "invalid-argument" ? 2 : 1;
-    const code4 = error.code === "upload-auth-required" ? "UPLOAD_AUTH_REQUIRED" : error.code === "upload-failed" ? "UNAVAILABLE" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : error.code === "inline-too-large" ? "INLINE_TOO_LARGE" : error.code === "unsupported-target" ? "UNSUPPORTED_LINK" : error.code === "invalid-argument" ? "INVALID_ARGUMENT" : "ERROR";
+    const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
+    const code4 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
     return new CLIError(code4, error.message, exit);
   }
   if (error instanceof ShareReceiveError) {
@@ -30744,6 +29245,15 @@ function inputUrl(value, stdin) {
   if (value === void 0 || value.length === 0) throw new CLIError("INVALID_ARGUMENT", "a share URL or - is required", 2);
   return Promise.resolve(value);
 }
+async function inspectShareInputOnce(value, stdin, expectedOrigin, dependencies = {}) {
+  const link2 = stdin || value === "-" ? await (dependencies.read ?? readBoundedUrlStdin)() : await inputUrl(value, false);
+  try {
+    parseNativeShareUrl(link2);
+  } catch {
+    return (dependencies.inspect ?? inspectShare)(link2, { expectedOrigin });
+  }
+  throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
+}
 function jsonOutput(options, command) {
   return options.json === true || command.optsWithGlobals().json === true;
 }
@@ -30755,9 +29265,9 @@ function expires(value) {
   }
 }
 async function rememberPublishedShare(result) {
-  const record2 = historyRecordForPublishedShare(result);
-  if (shareServices.records !== void 0) await shareServices.records.put(record2);
-  return record2;
+  const record = historyRecordForPublishedShare(result);
+  if (shareServices.records !== void 0) await shareServices.records.put(record);
+  return record;
 }
 function byteLimit(value) {
   if (value === void 0) return void 0;
@@ -30774,19 +29284,6 @@ function requestedActions(values) {
   if (actions.some((value) => value !== "read" && value !== "list" && value !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
   return [...new Set(actions)];
 }
-async function authorizationProof(options) {
-  const encoded = options.authorizationProofFile === void 0 ? void 0 : await readFile3(options.authorizationProofFile, "utf8").catch(() => {
-    throw new CLIError("INVALID_ARGUMENT", "authorization proof file could not be read", 2);
-  });
-  if (encoded === void 0) return void 0;
-  try {
-    const value = JSON.parse(encoded);
-    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("object");
-    return value;
-  } catch {
-    throw new CLIError("INVALID_ARGUMENT", "authorization proof must be a JSON object", 2);
-  }
-}
 function assertAggregateInputLimit(inputs, maxBytes) {
   const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
   let total = 0;
@@ -30797,10 +29294,9 @@ function assertAggregateInputLimit(inputs, maxBytes) {
 }
 function registerShareCommand(program2) {
   const share = program2.command("share").description("Publish and consume TinyCloud Share links");
-  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime", "7d").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--inline", "Embed the sealed envelope in the URL fragment").option("--compact", "Use a CID-addressed compact link (default)").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY).option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests").action(async (files, options, command) => {
+  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime", "7d").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
     try {
       const json = jsonOutput(options, command);
-      if (options.inline && options.compact) throw new CLIError("INVALID_ARGUMENT", "--inline and --compact are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const inputs = await Promise.all(files.map((file) => readShareInput(file, files.length === 1 ? options.name : void 0, maxBytes)));
@@ -30822,13 +29318,9 @@ function registerShareCommand(program2) {
         actions,
         expiresAt: expires(options.expires),
         origin: options.viewerOrigin,
-        inline: options.inline === true,
         ...maxBytes === void 0 ? {} : { maxBytes },
-        registryBaseUrl: options.registry,
-        allowInsecureRegistry: options.insecureRegistry === true,
         notify: options.notify === true,
-        targetAdapter: shareServices.targetAdapter,
-        ...publishServices(options.insecureRegistry === true)
+        targetAdapter: shareServices.targetAdapter
       });
       if ("state" in result) {
         if (json) {
@@ -30838,10 +29330,10 @@ function registerShareCommand(program2) {
         }
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
       }
-      const record2 = await rememberPublishedShare(result);
+      const record = await rememberPublishedShare(result);
       if (options.notify === true && target.kind === "email") {
         if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-        const delivery = await notifyShare({ shareId: record2.shareId, recipient: target.address, record: record2, adapter: shareServices.delivery });
+        const delivery = await notifyShare({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
         if (delivery.state === "partial-failure") process.exitCode = 9;
       }
       if (json) writeJson2(redactPublishedShare(result));
@@ -30850,44 +29342,44 @@ function registerShareCommand(program2) {
       handleError(shareCliError(error));
     }
   });
-  share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
+  share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
     try {
       const json = jsonOutput(options, command);
-      const link2 = await inputUrl(url, options.stdin === true);
-      const result = await inspectShare(link2, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin, ...fetchServices() });
+      const result = await inspectShareInputOnce(url, options.stdin === true, options.viewerOrigin);
       if (json) writeJson2(result);
       else inspectHuman(result);
     } catch (error) {
       handleError(shareCliError(error));
     }
   });
-  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--resume-token <token>", "Resume a previously returned recipient authorization step").option("--authorization-proof-file <path>", "Read the JSON authorization proof from a file").option("--json", "Print versioned redacted JSON").option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY).option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).option("--legacy", "Read a legacy tc1: link (read-only)").action(async (url, options, command) => {
+  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (options.stdout && json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
       const link2 = await inputUrl(url, options.stdin === true);
-      const proof = await authorizationProof(options);
-      if (options.legacy) {
-        if (!isLegacyShareLink(link2) || shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy receive requires an installed read-only tc1 adapter", 2);
-        const bytes = await receiveLegacyShare(link2, shareServices.legacyReader);
+      let nativeLink = false;
+      try {
+        parseNativeShareUrl(link2);
+        nativeLink = true;
+      } catch {
+      }
+      if (nativeLink) {
+        if (shareServices.nativeReader === void 0) throw new CLIError("AUTH_REQUIRED", "native TinyCloud receive is not configured", 3);
+        const native = await shareServices.nativeReader(link2);
+        if (maxBytes !== void 0 && native.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);
         if (options.stdout) {
-          process.stdout.write(Buffer.from(bytes));
+          process.stdout.write(Buffer.from(native.bytes));
           return;
         }
-        const output2 = await writeShareOutput(options.output ?? ".", "share.md", bytes, options.force === true);
-        if (json) writeJson2({ protocol: "tinycloud-share", version: 1, legacy: true, path: output2 });
+        const output2 = await writeShareOutput(options.output ?? ".", native.filename, native.bytes, options.force === true);
+        if (json) writeJson2({ protocol: "tinycloud-share", version: 1, path: output2, transport: "native" });
         else receiveHuman(output2);
         return;
       }
       const result = await receiveShare(link2, {
-        registryBaseUrl: options.registry,
         expectedOrigin: options.viewerOrigin,
-        ...fetchServices(),
-        ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes },
-        ...shareServices.authorization === void 0 ? {} : { authorization: shareServices.authorization },
-        ...options.resumeToken === void 0 ? {} : { authorizationResumeToken: options.resumeToken },
-        ...proof === void 0 ? {} : { authorizationProof: proof }
+        ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes }
       });
       if ("state" in result) {
         if (json) {
@@ -30904,50 +29396,6 @@ function registerShareCommand(program2) {
       const output = await writeShareOutput(options.output ?? ".", result.metadata.display.filename ?? "share.md", result.bytes, options.force === true);
       if (json) receiveJson(result, output);
       else receiveHuman(output);
-    } catch (error) {
-      handleError(shareCliError(error));
-    }
-  });
-  share.command("migrate [url]").description("Read a legacy tc1 link and re-mint a modern Share link").option("--stdin", "Read the complete legacy link from stdin").option("--name <filename>", "Filename for the migrated content", "migrated.md").option("--to <target>", "Modern Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Modern share lifetime", "7d").option("--max-bytes <bytes>", "Bound migrated content bytes").option("--inline", "Embed the sealed envelope in the URL fragment").option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY).option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests").option("--json", "Print versioned redacted JSON").action(async (url, options, command) => {
-    try {
-      const json = jsonOutput(options, command);
-      if (shareServices.legacyReader === void 0) throw new CLIError("UNSUPPORTED_LINK", "legacy migration requires an installed read-only tc1 adapter", 2);
-      const link2 = await inputUrl(url, options.stdin === true);
-      if (!isLegacyShareLink(link2)) throw new CLIError("UNSUPPORTED_LINK", "only tc1: links can be migrated", 2);
-      const maxBytes = byteLimit(options.maxBytes) ?? MAX_SHARE_STDIN_BYTES;
-      const migrated = await migrateShare({
-        link: link2,
-        reader: shareServices.legacyReader,
-        publish: async (bytes) => {
-          if (bytes.byteLength > maxBytes) throw new SharePublishError("max-bytes-exceeded", "legacy content exceeds the configured byte limit");
-          const result = await publishTargetShare({
-            source: bytes,
-            filename: options.name,
-            mediaType: "text/markdown",
-            target: parseShareTarget(options.to),
-            expiresAt: expires(options.expires),
-            origin: options.viewerOrigin,
-            inline: options.inline === true,
-            registryBaseUrl: options.registry,
-            allowInsecureRegistry: options.insecureRegistry === true,
-            notify: options.notify === true,
-            targetAdapter: shareServices.targetAdapter,
-            ...publishServices(options.insecureRegistry === true)
-          });
-          if ("state" in result) throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
-          const record2 = await rememberPublishedShare(result);
-          if (options.notify === true) {
-            const target = parseShareTarget(options.to);
-            if (target.kind !== "email") throw new CLIError("INVALID_ARGUMENT", "--notify requires an exact email target", 2);
-            if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-            const delivery = await notifyShare({ shareId: record2.shareId, recipient: target.address, record: record2, adapter: shareServices.delivery });
-            if (delivery.state === "partial-failure") process.exitCode = 9;
-          }
-          return result;
-        }
-      });
-      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, legacy: true, migrated: redactPublishedShare(migrated.migrated) });
-      else publishHuman(migrated.migrated);
     } catch (error) {
       handleError(shareCliError(error));
     }
@@ -30980,9 +29428,9 @@ function registerShareCommand(program2) {
       const json = jsonOutput(options, command);
       if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const record2 = await shareServices.records.get(id);
-      if (record2 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      const result = await notifyShare({ shareId: id, recipient: options.to, record: record2, adapter: shareServices.delivery });
+      const record = await shareServices.records.get(id);
+      if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      const result = await notifyShare({ shareId: id, recipient: options.to, record, adapter: shareServices.delivery });
       if (json) writeJson2(result);
       else process.stdout.write(`${result.state}
 `);
@@ -30995,9 +29443,9 @@ function registerShareCommand(program2) {
     try {
       const json = jsonOutput(options, command);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const record2 = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
-      if (record2 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      const result = await revokeShare({ record: record2, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
+      const record = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
+      if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      const result = await revokeShare({ record, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
       if (result.state === "unsupported") {
         throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
       }
@@ -31013,7 +29461,7 @@ function registerShareCommand(program2) {
 // src/share/adapters.ts
 init_profiles();
 init_dist3();
-import { readFile as readFile5, writeFile as writeFile2 } from "fs/promises";
+import { readFile as readFile4, writeFile as writeFile2 } from "fs/promises";
 import { join as join6 } from "path";
 import { createHash } from "crypto";
 
@@ -31486,8 +29934,8 @@ var varint4 = {
 var _brrp_varint4 = varint4;
 var varint_default4 = _brrp_varint4;
 function decode33(data, offset = 0) {
-  const code23 = varint_default4.decode(data, offset);
-  return [code23, varint_default4.decode.bytes];
+  const code22 = varint_default4.decode(data, offset);
+  return [code22, varint_default4.decode.bytes];
 }
 function encodeTo4(int, target, offset = 0) {
   varint_default4.encode(int, target, offset);
@@ -31496,25 +29944,25 @@ function encodeTo4(int, target, offset = 0) {
 function encodingLength4(int) {
   return varint_default4.encodingLength(int);
 }
-function create4(code23, digest2) {
+function create4(code22, digest2) {
   const size2 = digest2.byteLength;
-  const sizeOffset = encodingLength4(code23);
+  const sizeOffset = encodingLength4(code22);
   const digestOffset = sizeOffset + encodingLength4(size2);
   const bytes = new Uint8Array(digestOffset + size2);
-  encodeTo4(code23, bytes, 0);
+  encodeTo4(code22, bytes, 0);
   encodeTo4(size2, bytes, sizeOffset);
   bytes.set(digest2, digestOffset);
-  return new Digest4(code23, size2, digest2, bytes);
+  return new Digest4(code22, size2, digest2, bytes);
 }
 function decode43(multihash) {
   const bytes = coerce5(multihash);
-  const [code23, sizeOffset] = decode33(bytes);
+  const [code22, sizeOffset] = decode33(bytes);
   const [size2, digestOffset] = decode33(bytes.subarray(sizeOffset));
   const digest2 = bytes.subarray(sizeOffset + digestOffset);
   if (digest2.byteLength !== size2) {
     throw new Error("Incorrect length");
   }
-  return new Digest4(code23, size2, digest2, bytes);
+  return new Digest4(code22, size2, digest2, bytes);
 }
 function equals23(a, b) {
   if (a === b) {
@@ -31532,8 +29980,8 @@ var Digest4 = class {
   /**
    * Creates a multihash digest.
    */
-  constructor(code23, size2, digest2, bytes) {
-    this.code = code23;
+  constructor(code22, size2, digest2, bytes) {
+    this.code = code22;
     this.size = size2;
     this.digest = digest2;
     this.bytes = bytes;
@@ -31549,11 +29997,11 @@ function format4(link2, base23) {
   }
 }
 var cache4 = /* @__PURE__ */ new WeakMap();
-function baseCache4(cid2) {
-  const baseCache22 = cache4.get(cid2);
+function baseCache4(cid) {
+  const baseCache22 = cache4.get(cid);
   if (baseCache22 == null) {
     const baseCache32 = /* @__PURE__ */ new Map();
-    cache4.set(cid2, baseCache32);
+    cache4.set(cid, baseCache32);
     return baseCache32;
   }
   return baseCache22;
@@ -31569,8 +30017,8 @@ var CID4 = class _CID4 {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param multihash - (Multi)hash of the of the content.
    */
-  constructor(version3, code23, multihash, bytes) {
-    this.code = code23;
+  constructor(version3, code22, multihash, bytes) {
+    this.code = code22;
     this.version = version3;
     this.multihash = multihash;
     this.bytes = bytes;
@@ -31599,8 +30047,8 @@ var CID4 = class _CID4 {
         return this;
       }
       case 1: {
-        const { code: code23, multihash } = this;
-        if (code23 !== DAG_PB_CODE4) {
+        const { code: code22, multihash } = this;
+        if (code22 !== DAG_PB_CODE4) {
           throw new Error("Cannot convert a non dag-pb CID to CIDv0");
         }
         if (multihash.code !== SHA_256_CODE4) {
@@ -31616,8 +30064,8 @@ var CID4 = class _CID4 {
   toV1() {
     switch (this.version) {
       case 0: {
-        const { code: code23, digest: digest2 } = this.multihash;
-        const multihash = create4(code23, digest2);
+        const { code: code22, digest: digest2 } = this.multihash;
+        const multihash = create4(code22, digest2);
         return _CID4.createV1(this.code, multihash);
       }
       case 1: {
@@ -31667,12 +30115,12 @@ var CID4 = class _CID4 {
     if (value instanceof _CID4) {
       return value;
     } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-      const { version: version3, code: code23, multihash, bytes } = value;
-      return new _CID4(version3, code23, multihash, bytes ?? encodeCID4(version3, code23, multihash.bytes));
+      const { version: version3, code: code22, multihash, bytes } = value;
+      return new _CID4(version3, code22, multihash, bytes ?? encodeCID4(version3, code22, multihash.bytes));
     } else if (value[cidSymbol4] === true) {
-      const { version: version3, multihash, code: code23 } = value;
+      const { version: version3, multihash, code: code22 } = value;
       const digest2 = decode43(multihash);
-      return _CID4.create(version3, code23, digest2);
+      return _CID4.create(version3, code22, digest2);
     } else {
       return null;
     }
@@ -31682,8 +30130,8 @@ var CID4 = class _CID4 {
    * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
    * @param digest - (Multi)hash of the of the content.
    */
-  static create(version3, code23, digest2) {
-    if (typeof code23 !== "number") {
+  static create(version3, code22, digest2) {
+    if (typeof code22 !== "number") {
       throw new Error("String codecs are no longer supported");
     }
     if (!(digest2.bytes instanceof Uint8Array)) {
@@ -31691,15 +30139,15 @@ var CID4 = class _CID4 {
     }
     switch (version3) {
       case 0: {
-        if (code23 !== DAG_PB_CODE4) {
+        if (code22 !== DAG_PB_CODE4) {
           throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE4}) block encoding`);
         } else {
-          return new _CID4(version3, code23, digest2, digest2.bytes);
+          return new _CID4(version3, code22, digest2, digest2.bytes);
         }
       }
       case 1: {
-        const bytes = encodeCID4(version3, code23, digest2.bytes);
-        return new _CID4(version3, code23, digest2, bytes);
+        const bytes = encodeCID4(version3, code22, digest2.bytes);
+        return new _CID4(version3, code22, digest2, bytes);
       }
       default: {
         throw new Error("Invalid version");
@@ -31718,8 +30166,8 @@ var CID4 = class _CID4 {
    * @param code - Content encoding format code.
    * @param digest - Multihash of the content.
    */
-  static createV1(code23, digest2) {
-    return _CID4.create(1, code23, digest2);
+  static createV1(code22, digest2) {
+    return _CID4.create(1, code22, digest2);
   }
   /**
    * Decoded a CID from its binary representation. The byte array must contain
@@ -31729,11 +30177,11 @@ var CID4 = class _CID4 {
    * binary representation of a CID.
    */
   static decode(bytes) {
-    const [cid2, remainder] = _CID4.decodeFirst(bytes);
+    const [cid, remainder] = _CID4.decodeFirst(bytes);
     if (remainder.length !== 0) {
       throw new Error("Incorrect length");
     }
-    return cid2;
+    return cid;
   }
   /**
    * Decoded a CID from its binary representation at the beginning of a byte
@@ -31751,10 +30199,10 @@ var CID4 = class _CID4 {
     if (multihashBytes.byteLength !== specs.multihashSize) {
       throw new Error("Incorrect length");
     }
-    const digestBytes3 = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
-    const digest2 = new Digest4(specs.multihashCode, specs.digestSize, digestBytes3, multihashBytes);
-    const cid2 = specs.version === 0 ? _CID4.createV0(digest2) : _CID4.createV1(specs.codec, digest2);
-    return [cid2, bytes.subarray(specs.size)];
+    const digestBytes = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
+    const digest2 = new Digest4(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
+    const cid = specs.version === 0 ? _CID4.createV0(digest2) : _CID4.createV1(specs.codec, digest2);
+    return [cid, bytes.subarray(specs.size)];
   }
   /**
    * Inspect the initial bytes of a CID to determine its properties.
@@ -31798,12 +30246,12 @@ var CID4 = class _CID4 {
    */
   static parse(source, base23) {
     const [prefix, bytes] = parseCIDtoBytes4(source, base23);
-    const cid2 = _CID4.decode(bytes);
-    if (cid2.version === 0 && source[0] !== "Q") {
+    const cid = _CID4.decode(bytes);
+    if (cid.version === 0 && source[0] !== "Q") {
       throw Error("Version 0 CID string must not include multibase prefix");
     }
-    baseCache4(cid2).set(prefix, source);
-    return cid2;
+    baseCache4(cid).set(prefix, source);
+    return cid;
   }
 };
 function parseCIDtoBytes4(source, base23) {
@@ -31841,48 +30289,48 @@ function toStringV04(bytes, cache22, base23) {
   if (prefix !== base58btc4.prefix) {
     throw Error(`Cannot string encode V0 in ${base23.name} encoding`);
   }
-  const cid2 = cache22.get(prefix);
-  if (cid2 == null) {
-    const cid22 = base23.encode(bytes).slice(1);
-    cache22.set(prefix, cid22);
-    return cid22;
-  } else {
+  const cid = cache22.get(prefix);
+  if (cid == null) {
+    const cid2 = base23.encode(bytes).slice(1);
+    cache22.set(prefix, cid2);
     return cid2;
+  } else {
+    return cid;
   }
 }
 function toStringV14(bytes, cache22, base23) {
   const { prefix } = base23;
-  const cid2 = cache22.get(prefix);
-  if (cid2 == null) {
-    const cid22 = base23.encode(bytes);
-    cache22.set(prefix, cid22);
-    return cid22;
-  } else {
+  const cid = cache22.get(prefix);
+  if (cid == null) {
+    const cid2 = base23.encode(bytes);
+    cache22.set(prefix, cid2);
     return cid2;
+  } else {
+    return cid;
   }
 }
 var DAG_PB_CODE4 = 112;
 var SHA_256_CODE4 = 18;
-function encodeCID4(version3, code23, multihash) {
+function encodeCID4(version3, code22, multihash) {
   const codeOffset = encodingLength4(version3);
-  const hashOffset = codeOffset + encodingLength4(code23);
+  const hashOffset = codeOffset + encodingLength4(code22);
   const bytes = new Uint8Array(hashOffset + multihash.byteLength);
   encodeTo4(version3, bytes, 0);
-  encodeTo4(code23, bytes, codeOffset);
+  encodeTo4(code22, bytes, codeOffset);
   bytes.set(multihash, hashOffset);
   return bytes;
 }
 var cidSymbol4 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
 var code3 = 85;
-var SHA256_CODE3 = 18;
+var SHA256_CODE2 = 18;
 function isCanonicalRawCid2(cidString) {
-  let cid2;
+  let cid;
   try {
-    cid2 = CID4.parse(cidString);
+    cid = CID4.parse(cidString);
   } catch {
     return false;
   }
-  return cid2.version === 1 && cid2.code === code3 && cid2.multihash.code === SHA256_CODE3 && cid2.toString() === cidString;
+  return cid.version === 1 && cid.code === code3 && cid.multihash.code === SHA256_CODE2 && cid.toString() === cidString;
 }
 var base643 = rfc46484({
   prefix: "m",
@@ -31908,9 +30356,6 @@ var base64urlpad3 = rfc46484({
   alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=",
   bitsPerChar: 6
 });
-function toBase64Url2(bytes) {
-  return base64url3.baseEncode(bytes);
-}
 function fromBase64Url2(text) {
   const bytes = base64url3.baseDecode(text);
   if (base64url3.baseEncode(bytes) !== text) {
@@ -32288,7 +30733,7 @@ function validateV3Invariants2(value, ctx) {
   if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.enforcerDid !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
   if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
@@ -32334,7 +30779,7 @@ function serializeString2(text) {
   assertNoLoneSurrogates2(text);
   return JSON.stringify(text);
 }
-function serialize2(value) {
+function serialize3(value) {
   if (value === null) return "null";
   switch (typeof value) {
     case "boolean":
@@ -32352,7 +30797,7 @@ function serialize2(value) {
       throw new TypeError(`cannot canonicalize value of type ${typeof value}`);
   }
   if (Array.isArray(value)) {
-    return `[${value.map((item) => serialize2(item)).join(",")}]`;
+    return `[${value.map((item) => serialize3(item)).join(",")}]`;
   }
   if (!isPlainRecord2(value)) {
     throw new TypeError("cannot canonicalize non-plain object");
@@ -32362,28 +30807,21 @@ function serialize2(value) {
   for (const key of keys) {
     const member = value[key];
     if (member === void 0) continue;
-    members.push(`${serializeString2(key)}:${serialize2(member)}`);
+    members.push(`${serializeString2(key)}:${serialize3(member)}`);
   }
   return `{${members.join(",")}}`;
 }
 function canonicalize3(value) {
-  return serialize2(value);
+  return serialize3(value);
 }
 var MAX_INLINE_BYTES2 = 256 * 1024;
 
 // src/share/adapters.ts
+init_dist4();
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
-var ShareAuthorityError = class extends Error {
-  code;
-  constructor(code4, message) {
-    super(message);
-    this.name = "ShareAuthorityError";
-    this.code = code4;
-  }
-};
 async function postAddressedShareDelivery(input) {
   if (input.receipt.request.returnLink !== input.shareUrl) throw new Error("credential invitation is not bound to the share link");
-  return input.fetchFn(`${input.credentialsOrigin}/v1/credential-invitations`, {
+  return input.fetchFn(`${input.emailOrigin}/v1/email`, {
     method: "POST",
     credentials: "omit",
     redirect: "error",
@@ -32397,8 +30835,8 @@ function createEncryptedSessionHistory() {
   const records = /* @__PURE__ */ new Map();
   let keyPromise;
   const key = async () => keyPromise ??= crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-  const encode7 = async (record2) => {
-    const secret = new TextEncoder().encode(JSON.stringify(record2));
+  const encode7 = async (record) => {
+    const secret = new TextEncoder().encode(JSON.stringify(record));
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), secret));
     const value = new Uint8Array(iv.length + encrypted.length);
@@ -32408,8 +30846,8 @@ function createEncryptedSessionHistory() {
   };
   const decode11 = async (value) => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: value.slice(0, 12) }, await key(), value.slice(12))));
   return {
-    async put(record2) {
-      records.set(record2.shareId, await encode7(record2));
+    async put(record) {
+      records.set(record.shareId, await encode7(record));
     },
     async list() {
       return Promise.all([...records.values()].map(decode11));
@@ -32456,7 +30894,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
   };
   const read5 = async () => {
     try {
-      const encoded = new Uint8Array(await readFile5(await path()));
+      const encoded = new Uint8Array(await readFile4(await path()));
       const envelope = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(encoded));
       if (envelope.version !== HISTORY_VERSION) throw new Error("share history is unavailable");
       const salt = unb64(envelope.kdfSalt);
@@ -32469,7 +30907,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
     } catch (error) {
       if (error.code !== "ENOENT") throw new Error("share history is unavailable");
       try {
-        const legacy = new Uint8Array(await readFile5(await legacyPath()));
+        const legacy = new Uint8Array(await readFile4(await legacyPath()));
         if (legacy.length <= 12) return { values: [], salt: crypto.getRandomValues(new Uint8Array(16)) };
         const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: legacy.slice(0, 12) }, await derive(new Uint8Array(0), true), legacy.slice(12));
         const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
@@ -32493,13 +30931,13 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
     return next;
   };
   return {
-    async put(record2) {
+    async put(record) {
       return serial(async () => {
         const state = await read5();
         const values = [...state.values];
-        const index = values.findIndex((value) => value.shareId === record2.shareId);
-        if (index >= 0) values[index] = record2;
-        else values.push(record2);
+        const index = values.findIndex((value) => value.shareId === record.shareId);
+        if (index >= 0) values[index] = record;
+        else values.push(record);
         await write(values, state.salt);
       });
     },
@@ -32507,12 +30945,12 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
       return serial(async () => (await read5()).values);
     },
     async get(shareId) {
-      return serial(async () => (await read5()).values.find((record2) => record2.shareId === shareId));
+      return serial(async () => (await read5()).values.find((record) => record.shareId === shareId));
     },
     async delete(shareId) {
       return serial(async () => {
         const state = await read5();
-        await write(state.values.filter((record2) => record2.shareId !== shareId), state.salt);
+        await write(state.values.filter((record) => record.shareId !== shareId), state.salt);
       });
     }
   };
@@ -32539,44 +30977,65 @@ function createShareAuthorityAdapters(input = {}) {
     const value = await response.json();
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share public config is invalid");
     const object3 = value;
-    const decodePublicKey = (key) => {
-      if (typeof key !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(key)) throw new Error("share node receipt key is invalid");
-      const decoded = new Uint8Array(Buffer.from(key, "base64url"));
-      if (decoded.length !== 32 || Buffer.from(decoded).toString("base64url") !== key) throw new Error("share node receipt key is invalid");
-      return decoded;
-    };
-    const nodeOrigin = canonicalOrigin(input.nodeOrigin ?? object3.nodeOrigin, "node origin");
-    const nodeAudience = typeof object3.nodeAudience === "string" ? object3.nodeAudience : "";
-    const enforcerDid = typeof object3.enforcerDid === "string" ? object3.enforcerDid : nodeAudience;
-    const nodeInvitationKid = typeof object3.nodeInvitationKid === "string" ? object3.nodeInvitationKid : "";
-    if (!nodeAudience.startsWith("did:web:") || !nodeInvitationKid.startsWith(`${nodeAudience}#`) || !enforcerDid.startsWith("did:key:") && enforcerDid !== nodeAudience) throw new Error("share node trust binding is invalid");
+    if (object3.version !== "tinycloud.share/config-v2") throw new Error("share public config version is unsupported");
     return {
       shareOrigin: canonicalOrigin(object3.shareOrigin, "origin"),
       registryOrigin: canonicalOrigin(object3.registryOrigin, "registry origin"),
-      nodeOrigin,
-      emailOrigin: canonicalOrigin(input.emailOrigin ?? object3.emailOrigin, "email origin"),
-      credentialsOrigin: canonicalOrigin(object3.credentialsOrigin, "credentials origin"),
-      nodeAudience,
-      enforcerDid,
-      nodeInvitationKid,
-      nodeInvitationPublicKey: decodePublicKey(object3.nodeInvitationPublicKey)
+      emailOrigin: canonicalOrigin(input.emailOrigin ?? object3.emailOrigin, "email origin")
     };
   })();
   let nodePromise;
   const authenticatedNode = async () => nodePromise ??= (async () => {
-    const config = await publicConfig();
     const profile = await (input.profileName?.() ?? selectedProfileName());
-    const context = await ProfileManager.resolveContext({ profile, host: config.nodeOrigin });
+    const context = await ProfileManager.resolveContext({ profile, ...input.nodeOrigin === void 0 ? {} : { host: input.nodeOrigin } });
     const { ensureAuthenticated: ensureAuthenticated2 } = await Promise.resolve().then(() => (init_sdk(), sdk_exports));
     return ensureAuthenticated2(context);
   })();
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
-    if (targetInput.origin !== config.shareOrigin || node.spaceId === void 0) throw new Error("addressed publication is not bound to the configured Share service");
+    if (targetInput.origin !== config.shareOrigin || node.spaceId === void 0) throw new Error("share publication is not bound to the configured Share service");
+    const activeNode = await node.activeNodeIdentity();
     const shareId = crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === void 0 || targetInput.files.length === 0 ? [{ bytes: targetInput.source, filename: targetInput.filename, mediaType: targetInput.mediaType }] : targetInput.files;
     const resourceKind = targetInput.resourceKind ?? "exact";
+    if (targetInput.target.kind === "bearer") {
+      if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
+      const file2 = files[0];
+      const resourcePath2 = `xyz.tinycloud.share/shares/${shareId}/${targetInput.filename}`;
+      const written = await node.kvForSpace(node.spaceId).put(resourcePath2, file2.bytes.slice(), {
+        contentType: targetInput.mediaType ?? file2.mediaType ?? "application/octet-stream"
+      });
+      if (!written.ok) throw new Error("native bearer source upload was rejected");
+      const native = await createNativeShare(node.sharing, {
+        path: resourcePath2,
+        expiresAt: targetInput.expiresAt,
+        viewerOrigin: config.shareOrigin
+      });
+      if (native.spaceId !== node.spaceId) throw new Error("native bearer delegation authority does not match the authenticated owner space");
+      const result = {
+        protocol: "tinycloud-share",
+        version: SHARE_PUBLISH_RESULT_VERSION,
+        url: native.url,
+        link: { kind: "native", cid: native.delegationCid },
+        metadata: {
+          protocol: "tinycloud-share",
+          version: 1,
+          shareId: native.delegationCid,
+          origin: config.shareOrigin,
+          target: { kind: "bearer", origin: activeNode.origin, nodeAudience: activeNode.nodeDid, spaceId: native.spaceId },
+          resource: { kind: "exact", path: resourcePath2 },
+          actions: ["read"],
+          expiresAt: native.expiresAt.toISOString(),
+          display: { filename: targetInput.filename },
+          recipientMatcher: { kind: "bearer" },
+          enforcementDelegationCid: native.delegationCid
+        }
+      };
+      Object.defineProperty(result, "toJSON", { enumerable: false, value: () => redactPublishedShare(result) });
+      Object.defineProperty(result, "url", { enumerable: false, value: native.url });
+      return result;
+    }
     if (resourceKind !== "exact" || files.length !== 1) throw new Error("addressed publication requires a single exact source file");
     const file = files[0];
     const resourcePath = `shares/${shareId}/${targetInput.filename}`;
@@ -32604,9 +31063,9 @@ function createShareAuthorityAdapters(input = {}) {
     return publishAddressedShare({
       shareId,
       shareOrigin: config.shareOrigin,
-      nodeOrigin: config.nodeOrigin,
-      nodeAudience: config.nodeAudience,
-      enforcerDid: config.enforcerDid,
+      nodeOrigin: activeNode.origin,
+      nodeAudience: activeNode.nodeDid,
+      enforcerDid: activeNode.nodeDid,
       spaceId: node.spaceId,
       target: targetInput.target,
       resource: { kind: resourceKind, path: resourcePath },
@@ -32617,187 +31076,78 @@ function createShareAuthorityAdapters(input = {}) {
       mediaType,
       byteLength,
       expiresAt: targetInput.expiresAt,
-      inline: targetInput.inline,
       // App-neutral owner authority: the Node SDK owns every Policy/v3
       // transport hop, so the CLI supplies only owner signing material.
       authority: {
-        ownerDid: node.did,
+        ownerDid: node.credentialHolderDid,
         createOwnerRoot: (request) => node.createUnifiedOwnerRoot(request),
         sign: (bytes) => node.signSessionBytes(bytes),
         registerPolicy: (request) => node.registerPolicy(request)
-      },
-      upload: targetInput.upload ?? {}
-    });
-  } };
-  const canonicalAuthorization = async () => {
-    const [config, profileName] = await Promise.all([publicConfig(), input.profileName?.() ?? selectedProfileName()]);
-    const profile = await ProfileManager.getProfile(profileName).catch(() => {
-      throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an initialized profile");
-    });
-    const session = await ProfileManager.getSession(profileName);
-    const node = await authenticatedNode();
-    const holderDid = node.sessionDid;
-    if (profile.authMethod !== "openkey" || session === null || typeof holderDid !== "string" || !holderDid.startsWith("did:key:")) {
-      throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an active OpenKey session");
-    }
-    const delegationHeader = session.delegationHeader;
-    const credential = typeof delegationHeader === "object" && delegationHeader !== null ? delegationHeader.Authorization : void 0;
-    const delegationCid = session.delegationCid;
-    if (typeof credential !== "string" || credential.length === 0 || typeof delegationCid !== "string" || delegationCid.length === 0) {
-      throw new ShareAuthorityError("AUTH_REQUIRED", "share recipient authorization requires an active OpenKey delegation");
-    }
-    const addressed = createAddressedAuthorization({
-      nodeOrigin: config.nodeOrigin,
-      trustedNode: { invitationKid: config.nodeInvitationKid, invitationPublicKey: config.nodeInvitationPublicKey },
-      holderDid,
-      sign: async (bytes) => {
-        return node.signSessionBytes(bytes);
-      },
-      buildPresentation: async ({ challenge: challenge2, envelope }) => {
-        const authority = envelope.ownerAuthority;
-        if (authority === void 0) throw new Error("addressed-owner-authority-missing");
-        const nativeAction2 = (action2) => action2 === "list" ? "tinycloud.kv/list" : action2 === "edit" ? "tinycloud.kv/put" : "tinycloud.kv/get";
-        const actions = [...new Set(envelope.actions.map(nativeAction2))].sort();
-        const action = envelope.actions.includes("list") ? "tinycloud.kv/list" : envelope.actions.includes("edit") ? "tinycloud.kv/put" : "tinycloud.kv/get";
-        const policyCid = envelope.authorizationTarget.kind === "policy" ? envelope.authorizationTarget.policyCid : "";
-        const enforcerDid = challenge2.enforcerDid;
-        if (typeof enforcerDid !== "string" || enforcerDid.length === 0) throw new ShareAuthorityError("UNAVAILABLE", "share authority returned an unbound challenge");
-        const credentialDigest = base64UrlSha256(new TextEncoder().encode(credential));
-        const jti = toBase64Url2(crypto.getRandomValues(new Uint8Array(16)));
-        const presentation = {
-          type: "TinyCloudSharePolicyPresentation",
-          version: 2,
-          challengeId: challenge2.challengeId,
-          nonce: challenge2.nonce,
-          shareCid: authority.shareCid,
-          shareId: envelope.shareId,
-          delegationCid: envelope.delegationCid,
-          policyCid,
-          authorityMaterialHandle: envelope.authorityMaterialHandle,
-          authorityMaterialDigest: envelope.authorityMaterialDigest,
-          contentSource: envelope.contentSource,
-          contentSourceDigest: envelope.contentSourceDigest,
-          holderDid,
-          targetOrigin: envelope.target.origin,
-          nodeAudience: envelope.target.nodeAudience,
-          enforcerDid,
-          credentialDigest,
-          action,
-          actions,
-          resource: envelope.resource.path.replace(/\/$/, ""),
-          requestBodyDigest: challenge2.requestBodyDigest,
-          issuedAt: (/* @__PURE__ */ new Date()).toISOString(),
-          expiresAt: challenge2.expiresAt,
-          jti
-        };
-        const signature = toBase64Url2(await node.signSessionBytes(new TextEncoder().encode(`${SHARE_V2_PROTOCOL.sessionDomain}${canonicalize3(presentation)}`)));
-        const proof = { alg: "EdDSA", kid: `${holderDid}#${holderDid.slice("did:key:".length)}`, signature };
-        const holderBinding = await createShareV2HolderBindingArtifact({
-          holderDid,
-          sign: (bytes) => node.signSessionBytes(bytes),
-          message: {
-            type: SHARE_V2_PROTOCOL.holderBindingType,
-            version: SHARE_V2_PROTOCOL.holderBindingVersion,
-            holderDid,
-            challengeId: challenge2.challengeId,
-            challengeNonce: challenge2.nonce,
-            shareId: envelope.shareId,
-            policyCid,
-            credentialDigest,
-            delegationCid,
-            targetOrigin: envelope.target.origin,
-            nodeAudience: envelope.target.nodeAudience,
-            enforcerDid,
-            expiresAt: challenge2.expiresAt,
-            jti
-          }
-        });
-        return {
-          holderDid,
-          credential,
-          credentialDigest,
-          presentation,
-          presentationProof: proof,
-          proof,
-          holderBinding,
-          sign: (bytes) => node.signSessionBytes(bytes)
-        };
       }
     });
-    const matchesRecipient = (envelope) => envelope.authorizationTarget.kind !== "recipientDid" || envelope.authorizationTarget.did === holderDid && envelope.recipientMatcher.kind === "recipientDid" && envelope.recipientMatcher.value === holderDid;
-    return {
-      async begin(request) {
-        return matchesRecipient(request.envelope) ? addressed.begin(request) : { state: "denied", reason: "rejected" };
-      },
-      async resume(request) {
-        return matchesRecipient(request.envelope) ? addressed.resume(request) : { state: "denied", reason: "rejected" };
-      },
-      verifyResult: addressed.verifyResult
-    };
-  };
-  const authorization = input.authorize ?? {
-    async begin(request) {
-      return (await canonicalAuthorization()).begin(request);
-    },
-    async resume(request) {
-      return (await canonicalAuthorization()).resume(request);
-    },
-    verifyResult: async (request) => (await canonicalAuthorization()).verifyResult?.(request) ?? false
-  };
+  } };
   const delivery = { deliver: input.deliver ?? (async (request) => {
-    const record2 = request.record;
-    if (record2 === void 0 || record2.link === void 0 || record2.deliveryMaterial === void 0) throw new Error("share delivery history is incomplete");
+    const record = request.record;
+    if (record === void 0 || record.link === void 0 || record.deliveryMaterial === void 0) throw new Error("share delivery history is incomplete");
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
     const receipt = await node.authorizeShareDeliveryV3({
-      envelope: record2.deliveryMaterial.envelope,
-      sealedEnvelope: record2.deliveryMaterial.sealedEnvelope,
-      envelopeKey: record2.deliveryMaterial.envelopeKey,
-      shareCid: record2.deliveryMaterial.shareCid,
-      resourcePath: record2.resource.path,
+      envelope: record.deliveryMaterial.envelope,
+      shareCid: record.deliveryMaterial.shareCid,
+      resourcePath: record.resource.path,
       recipientEmail: request.recipient,
-      shareUrl: record2.link,
-      documentName: record2.filename ?? "share.md",
-      expiresAt: new Date(Math.min(Date.parse(record2.expiresAt), Date.now() + 5 * 60 * 1e3)).toISOString(),
-      nodeProof: { kid: config.nodeInvitationKid, publicKey: config.nodeInvitationPublicKey },
-      credentialsAudience: config.credentialsOrigin
+      shareUrl: record.link,
+      documentName: record.filename ?? "share.md",
+      expiresAt: new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1e3)).toISOString(),
+      deliveryAudience: config.emailOrigin
     });
     const response = await postAddressedShareDelivery({
-      credentialsOrigin: config.credentialsOrigin,
+      emailOrigin: config.emailOrigin,
       receipt,
-      shareUrl: record2.link,
+      shareUrl: record.link,
       fetchFn,
       signal: request.signal
     });
     if (!response.ok) throw new Error("share delivery was not accepted");
     return response.status === 208 ? "already-delivered" : "delivered";
   }) };
-  const revocation = { revokeDelegation: input.revokeDelegation ?? (async (request) => {
-    const result = await (await authenticatedNode()).revokeDelegation(request.delegationCid);
-    if (!result.ok) throw new Error("share delegation revocation was rejected");
-  }) };
-  const legacyReader = {
-    async read(link2) {
-      const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
-      const node = new TinyCloudNode2({ host: (await publicConfig()).nodeOrigin, autoDiscoverLocalNode: false });
-      const received = await node.sharing.receive(link2, { autoSubdelegate: false, useSessionKey: false });
-      if (!received.ok) throw new Error("legacy share could not be verified");
-      const value = await received.data.kv.get(received.data.path, { binary: true });
-      if (!value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("legacy share content could not be read");
-      return value.data.data.slice();
-    }
+  const revocation = {
+    revokeDelegation: input.revokeDelegation ?? (async (request) => {
+      const result = await (await authenticatedNode()).revokeDelegation(request.delegationCid);
+      if (!result.ok) throw new Error("share delegation revocation was rejected");
+    }),
+    revokePolicyRoot: input.revokePolicyRoot ?? (async (request) => {
+      const node = await authenticatedNode();
+      const activeNode = await node.activeNodeIdentity();
+      if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.credentialHolderDid) {
+        throw new Error("share Policy/v3 revocation is not bound to the active owner node");
+      }
+      await revokePolicyRootV3({
+        nodeOrigin: activeNode.origin,
+        rootCid: request.rootCid,
+        targetRole: request.targetRole,
+        ownerDid: node.credentialHolderDid,
+        issuerDid: node.credentialHolderDid,
+        nodeAudience: activeNode.nodeDid,
+        reason: "share revoked",
+        sign: (digest2) => node.signSessionBytes(digest2)
+      });
+    })
   };
-  const policyAuthority = {
-    async resolve(request) {
-      const config = await publicConfig();
-      return createRegisteredPolicyAuthority({
-        nodeProof: { kid: config.nodeInvitationKid, publicKey: config.nodeInvitationPublicKey },
-        expectedTarget: { origin: config.nodeOrigin, nodeAudience: config.nodeAudience, enforcerDid: config.enforcerDid }
-      }).resolve(request);
-    }
+  const nativeReader = async (link2) => {
+    const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
+    const token = parseNativeShareUrl(link2);
+    const decoder = new TinyCloudNode2({ autoDiscoverLocalNode: false });
+    const decoded = decoder.sharing.decodeLink(token);
+    if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
+    const client = new TinyCloudNode2({ host: canonicalOrigin(decoded.host, "owner node origin"), autoDiscoverLocalNode: false });
+    const received = await client.sharing.receive(token, { autoSubdelegate: false, useSessionKey: false });
+    if (!received.ok) throw new Error("native share could not be verified");
+    const value = await received.data.kv.get("", { binary: true });
+    if (!value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("native share content could not be read");
+    return { bytes: value.data.data.slice(), filename: received.data.path.split("/").at(-1) || "share.md" };
   };
   return {
     targetAdapter,
-    authorization,
     records: input.profileName === void 0 ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName, async (bytes) => {
       const profileName = await input.profileName();
       const context = await ProfileManager.resolveContext({ profile: profileName });
@@ -32806,30 +31156,12 @@ function createShareAuthorityAdapters(input = {}) {
     }),
     delivery,
     revocation,
-    legacyReader,
-    policyAuthority
+    nativeReader
   };
 }
 async function selectedProfileName() {
   const config = await ProfileManager.getConfig();
   return process.env.TC_PROFILE ?? config.defaultProfile;
-}
-function base64UrlSha256(value) {
-  return createHash("sha256").update(value).digest("base64url");
-}
-function createProductionUploadAuthorizer(input = {}) {
-  const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
-  if (origin !== DEFAULT_SHARE_ORIGIN) throw new ShareAuthorityError("UNAVAILABLE", "share upload authorization is restricted to the canonical Share origin");
-  return async (upload) => {
-    const profileName = await (input.profileName?.() ?? selectedProfileName());
-    if (input.testOnly === true) {
-      const suppliedSession = input.sessionAuthorization === void 0 ? void 0 : await input.sessionAuthorization();
-      if (suppliedSession !== void 0) return suppliedSession;
-      const acquired = await input.acquireUploadAuthorization?.({ profileName, upload });
-      if (acquired !== void 0) return acquired;
-    }
-    throw new ShareAuthorityError("UNAVAILABLE", "Node-specific registry upload authorization is retired; use an inline share");
-  };
 }
 
 // src/index.ts
@@ -32849,15 +31181,6 @@ function selectedShareProfile() {
     if (value?.startsWith("--profile=")) return value.slice("--profile=".length);
   }
   return process.env.TC_PROFILE;
-}
-function selectedShareHost() {
-  const args = process.argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const value = args[index];
-    if (value === "--host" || value === "-H") return args[index + 1];
-    if (value?.startsWith("--host=")) return value.slice("--host=".length);
-  }
-  return process.env.TC_HOST;
 }
 program.name("tc").description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version2).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output");
 program.hook("preAction", async (thisCommand) => {
@@ -32888,21 +31211,11 @@ program.hook("preAction", async (thisCommand) => {
   }
 });
 configureShareCommandServices({
-  fetchFn: globalThis.fetch,
-  // Node-specific registry upload authorization is retired. The adapter keeps
-  // the explicit contract seam while production callers use inline links.
-  authorizeUpload: createProductionUploadAuthorizer({
-    fetchFn: globalThis.fetch,
-    profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
-    nodeOrigin: async () => selectedShareHost() ?? (await ProfileManager.resolveContext({ profile: selectedShareProfile() })).host
-  }),
   targetAdapter: shareAuthority.targetAdapter,
-  authorization: shareAuthority.authorization,
-  trustedPolicyAuthority: shareAuthority.policyAuthority,
   records: shareAuthority.records,
   delivery: shareAuthority.delivery,
   revocation: shareAuthority.revocation,
-  legacyReader: shareAuthority.legacyReader
+  nativeReader: shareAuthority.nativeReader
 });
 var argv = process.argv.slice(2);
 var globalOptionsWithValues = /* @__PURE__ */ new Set(["--profile", "-p", "--host", "-H"]);
@@ -32962,7 +31275,6 @@ try {
 @noble/curves/esm/abstract/modular.js:
 @noble/curves/esm/abstract/curve.js:
 @noble/curves/esm/abstract/edwards.js:
-@noble/curves/esm/abstract/montgomery.js:
 @noble/curves/esm/ed25519.js:
 @noble/curves/esm/abstract/utils.js:
 @noble/curves/esm/abstract/modular.js:

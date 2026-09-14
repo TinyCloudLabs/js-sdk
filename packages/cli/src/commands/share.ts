@@ -1,14 +1,11 @@
 import { Command } from "commander";
-import { readFile } from "node:fs/promises";
 import {
   inspectShare,
   receiveShare,
   SharePublishError,
   ShareReceiveError,
   publishTargetShare,
-  isLegacyShareLink,
-  receiveLegacyShare,
-  migrateShare,
+  parseNativeShareUrl,
   listShares,
   showShare,
   notifyShare,
@@ -17,11 +14,7 @@ import {
   historyRecordForPublishedShare,
   type ShareTarget,
   type TargetPublishAdapter,
-  type LegacyShareReader,
   type PublishedShare,
-  type SharePublishOptions,
-  type ShareFetchOptions,
-  type ShareUpload,
   type ShareDeliveryAdapter,
   type ShareRevocationAdapter,
   type SenderShareRecord,
@@ -34,19 +27,10 @@ import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, re
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, writeShareOutput } from "../share/io.js";
 
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
-const DEFAULT_REGISTRY = `${SHARE_ORIGIN}/api/share/link-only/registry`;
-const DEFAULT_READ_REGISTRY = "https://registry.tinycloud.xyz";
 
 export interface ShareCommandServices {
   readonly targetAdapter?: TargetPublishAdapter;
-  readonly legacyReader?: LegacyShareReader<Uint8Array>;
-  /** Production callers inject the existing authenticated Share upload path. */
-  readonly uploadBlob?: ShareUpload;
-  readonly authorizeUpload?: NonNullable<SharePublishOptions["authorizeUpload"]>;
-  readonly authorization?: NonNullable<ShareFetchOptions["authorization"]>;
-  readonly trustedPolicyAuthority?: NonNullable<ShareFetchOptions["trustedPolicyAuthority"]>;
-  readonly credentials?: "omit" | "same-origin" | "include";
-  readonly fetchFn?: typeof globalThis.fetch;
+  readonly nativeReader?: (link: string) => Promise<{ readonly bytes: Uint8Array; readonly filename: string }>;
   readonly records?: SenderShareRecordStorage;
   readonly delivery?: ShareDeliveryAdapter;
   readonly revocation?: ShareRevocationAdapter;
@@ -69,28 +53,11 @@ export function parseShareTarget(value: string): ShareTarget {
   throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
 }
 
-function publishServices(insecureLocalRegistry = false): Pick<SharePublishOptions, "uploadBlob" | "authorizeUpload" | "authorizationOrigin" | "credentials" | "fetchFn"> {
-  return {
-    ...(shareServices.uploadBlob === undefined ? {} : { uploadBlob: shareServices.uploadBlob }),
-    ...(shareServices.authorizeUpload === undefined ? {} : { authorizeUpload: shareServices.authorizeUpload }),
-    ...(shareServices.authorizeUpload === undefined || insecureLocalRegistry ? {} : { authorizationOrigin: SHARE_ORIGIN }),
-    ...(shareServices.credentials === undefined ? {} : { credentials: shareServices.credentials }),
-    ...(shareServices.fetchFn === undefined ? {} : { fetchFn: shareServices.fetchFn }),
-  };
-}
-
-function fetchServices(): Pick<ShareFetchOptions, "fetchFn" | "trustedPolicyAuthority"> {
-  return {
-    ...(shareServices.fetchFn === undefined ? {} : { fetchFn: shareServices.fetchFn }),
-    ...(shareServices.trustedPolicyAuthority === undefined ? {} : { trustedPolicyAuthority: shareServices.trustedPolicyAuthority }),
-  };
-}
-
 function shareCliError(error: unknown): CLIError {
   if (error instanceof CLIError) return error;
   if (error instanceof SharePublishError) {
-    const exit = error.code === "upload-auth-required" ? 3 : error.code === "upload-failed" ? 4 : error.code === "max-bytes-exceeded" || error.code === "inline-too-large" ? 7 : error.code === "unsupported-target" || error.code === "invalid-argument" ? 2 : 1;
-    const code = error.code === "upload-auth-required" ? "UPLOAD_AUTH_REQUIRED" : error.code === "upload-failed" ? "UNAVAILABLE" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : error.code === "inline-too-large" ? "INLINE_TOO_LARGE" : error.code === "unsupported-target" ? "UNSUPPORTED_LINK" : error.code === "invalid-argument" ? "INVALID_ARGUMENT" : "ERROR";
+    const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
+    const code = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
     return new CLIError(code, error.message, exit);
   }
   if (error instanceof ShareReceiveError) {
@@ -126,6 +93,27 @@ function inputUrl(value: string | undefined, stdin: boolean): Promise<string> {
   if (stdin || value === "-") return readBoundedUrlStdin();
   if (value === undefined || value.length === 0) throw new CLIError("INVALID_ARGUMENT", "a share URL or - is required", 2);
   return Promise.resolve(value);
+}
+
+/** @internal Command seam that guarantees stdin is consumed exactly once. */
+export async function inspectShareInputOnce(
+  value: string | undefined,
+  stdin: boolean,
+  expectedOrigin: string,
+  dependencies: {
+    readonly read?: () => Promise<string>;
+    readonly inspect?: typeof inspectShare;
+  } = {},
+): ReturnType<typeof inspectShare> {
+  const link = stdin || value === "-"
+    ? await (dependencies.read ?? readBoundedUrlStdin)()
+    : await inputUrl(value, false);
+  try {
+    parseNativeShareUrl(link);
+  } catch {
+    return (dependencies.inspect ?? inspectShare)(link, { expectedOrigin });
+  }
+  throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
 }
 
 function jsonOutput(options: { readonly json?: boolean }, command: Command): boolean {
@@ -167,20 +155,6 @@ function requestedActions(values: readonly string[] | undefined): readonly ("rea
   return [...new Set(actions)] as ("read" | "list" | "edit")[];
 }
 
-async function authorizationProof(options: { readonly authorizationProofFile?: string }): Promise<unknown> {
-  const encoded = options.authorizationProofFile === undefined
-    ? undefined
-    : await readFile(options.authorizationProofFile, "utf8").catch(() => { throw new CLIError("INVALID_ARGUMENT", "authorization proof file could not be read", 2); });
-  if (encoded === undefined) return undefined;
-  try {
-    const value = JSON.parse(encoded) as unknown;
-    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("object");
-    return value;
-  } catch {
-    throw new CLIError("INVALID_ARGUMENT", "authorization proof must be a JSON object", 2);
-  }
-}
-
 function assertAggregateInputLimit(inputs: readonly { readonly bytes: Uint8Array }[], maxBytes: number | undefined): void {
   const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
   let total = 0;
@@ -204,16 +178,11 @@ export function registerShareCommand(program: Command): void {
     .option("--action <actions...>", "Addressed permission: read, list, or edit")
     .option("--prefix", "Publish multiple inputs beneath one addressed prefix")
     .option("--binary", "Allow non-UTF-8 bearer content")
-    .option("--inline", "Embed the sealed envelope in the URL fragment")
-    .option("--compact", "Use a CID-addressed compact link (default)")
     .option("--json", "Print versioned redacted JSON")
-    .option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY)
     .option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN)
-    .option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests")
     .action(async (files: string[], options, command: Command) => {
       try {
         const json = jsonOutput(options, command);
-        if (options.inline && options.compact) throw new CLIError("INVALID_ARGUMENT", "--inline and --compact are mutually exclusive", 2);
         const maxBytes = byteLimit(options.maxBytes);
         if (files.length === 0 || (files.includes("-") && files.length > 1)) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
         const inputs = await Promise.all(files.map((file) => readShareInput(file, files.length === 1 ? options.name : undefined, maxBytes)));
@@ -235,13 +204,9 @@ export function registerShareCommand(program: Command): void {
           actions,
           expiresAt: expires(options.expires),
           origin: options.viewerOrigin,
-          inline: options.inline === true,
           ...(maxBytes === undefined ? {} : { maxBytes }),
-          registryBaseUrl: options.registry,
-          allowInsecureRegistry: options.insecureRegistry === true,
           notify: options.notify === true,
           targetAdapter: shareServices.targetAdapter,
-          ...publishServices(options.insecureRegistry === true),
         });
         if ("state" in result) {
           if (json) {
@@ -266,16 +231,16 @@ export function registerShareCommand(program: Command): void {
     .description("Verify a share link and print safe metadata")
     .option("--stdin", "Read the complete URL from stdin")
     .option("--json", "Print versioned redacted JSON")
-    .option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY)
     .option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN)
     .action(async (url: string | undefined, options, command: Command) => {
       try {
         const json = jsonOutput(options, command);
-        const link = await inputUrl(url, options.stdin === true);
-        const result = await inspectShare(link, { registryBaseUrl: options.registry, expectedOrigin: options.viewerOrigin, ...fetchServices() });
+        const result = await inspectShareInputOnce(url, options.stdin === true, options.viewerOrigin);
         if (json) writeJson(result);
         else inspectHuman(result);
-      } catch (error) { handleError(shareCliError(error)); }
+      } catch (error) {
+        handleError(shareCliError(error));
+      }
     });
 
   share.command("receive [url]")
@@ -285,35 +250,28 @@ export function registerShareCommand(program: Command): void {
     .option("--stdout", "Write verified plaintext bytes to stdout")
     .option("--force", "Allow replacing an existing non-symlink output")
     .option("--max-bytes <bytes>", "Bound received content bytes")
-    .option("--resume-token <token>", "Resume a previously returned recipient authorization step")
-    .option("--authorization-proof-file <path>", "Read the JSON authorization proof from a file")
     .option("--json", "Print versioned redacted JSON")
-    .option("--registry <url>", "Registry read endpoint", DEFAULT_READ_REGISTRY)
     .option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN)
-    .option("--legacy", "Read a legacy tc1: link (read-only)")
     .action(async (url: string | undefined, options, command: Command) => {
       try {
         const json = jsonOutput(options, command);
         if (options.stdout && json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
         const maxBytes = byteLimit(options.maxBytes);
         const link = await inputUrl(url, options.stdin === true);
-        const proof = await authorizationProof(options);
-        if (options.legacy) {
-          if (!isLegacyShareLink(link) || shareServices.legacyReader === undefined) throw new CLIError("UNSUPPORTED_LINK", "legacy receive requires an installed read-only tc1 adapter", 2);
-          const bytes = await receiveLegacyShare(link, shareServices.legacyReader);
-          if (options.stdout) { process.stdout.write(Buffer.from(bytes)); return; }
-          const output = await writeShareOutput(options.output ?? ".", "share.md", bytes, options.force === true);
-          if (json) writeJson({ protocol: "tinycloud-share", version: 1, legacy: true, path: output }); else receiveHuman(output);
+        let nativeLink = false;
+        try { parseNativeShareUrl(link); nativeLink = true; } catch { /* addressed Policy/v3 link */ }
+        if (nativeLink) {
+          if (shareServices.nativeReader === undefined) throw new CLIError("AUTH_REQUIRED", "native TinyCloud receive is not configured", 3);
+          const native = await shareServices.nativeReader(link);
+          if (maxBytes !== undefined && native.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);
+          if (options.stdout) { process.stdout.write(Buffer.from(native.bytes)); return; }
+          const output = await writeShareOutput(options.output ?? ".", native.filename, native.bytes, options.force === true);
+          if (json) writeJson({ protocol: "tinycloud-share", version: 1, path: output, transport: "native" }); else receiveHuman(output);
           return;
         }
         const result = await receiveShare(link, {
-          registryBaseUrl: options.registry,
           expectedOrigin: options.viewerOrigin,
-          ...fetchServices(),
           ...(maxBytes === undefined ? {} : { maxContentBlobBytes: maxBytes }),
-          ...(shareServices.authorization === undefined ? {} : { authorization: shareServices.authorization }),
-          ...(options.resumeToken === undefined ? {} : { authorizationResumeToken: options.resumeToken }),
-          ...(proof === undefined ? {} : { authorizationProof: proof }),
         });
         if ("state" in result) {
           if (json) {
@@ -330,62 +288,6 @@ export function registerShareCommand(program: Command): void {
         const output = await writeShareOutput(options.output ?? ".", result.metadata.display.filename ?? "share.md", result.bytes, options.force === true);
         if (json) receiveJson(result, output);
         else receiveHuman(output);
-      } catch (error) { handleError(shareCliError(error)); }
-    });
-
-  share.command("migrate [url]")
-    .description("Read a legacy tc1 link and re-mint a modern Share link")
-    .option("--stdin", "Read the complete legacy link from stdin")
-    .option("--name <filename>", "Filename for the migrated content", "migrated.md")
-    .option("--to <target>", "Modern Share target", "anyone")
-    .option("--notify", "Request idempotent email delivery for addressed targets")
-    .option("--expires <duration>", "Modern share lifetime", "7d")
-    .option("--max-bytes <bytes>", "Bound migrated content bytes")
-    .option("--inline", "Embed the sealed envelope in the URL fragment")
-    .option("--registry <url>", "Authenticated registry upload endpoint", DEFAULT_REGISTRY)
-    .option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN)
-    .option("--insecure-registry", "Allow an explicit localhost HTTP registry for hermetic tests")
-    .option("--json", "Print versioned redacted JSON")
-    .action(async (url: string | undefined, options, command: Command) => {
-      try {
-        const json = jsonOutput(options, command);
-        if (shareServices.legacyReader === undefined) throw new CLIError("UNSUPPORTED_LINK", "legacy migration requires an installed read-only tc1 adapter", 2);
-        const link = await inputUrl(url, options.stdin === true);
-        if (!isLegacyShareLink(link)) throw new CLIError("UNSUPPORTED_LINK", "only tc1: links can be migrated", 2);
-        const maxBytes = byteLimit(options.maxBytes) ?? MAX_SHARE_STDIN_BYTES;
-        const migrated = await migrateShare({
-          link,
-          reader: shareServices.legacyReader!,
-          publish: async (bytes): Promise<PublishedShare> => {
-            if (bytes.byteLength > maxBytes) throw new SharePublishError("max-bytes-exceeded", "legacy content exceeds the configured byte limit");
-            const result = await publishTargetShare({
-              source: bytes,
-              filename: options.name,
-              mediaType: "text/markdown",
-              target: parseShareTarget(options.to),
-              expiresAt: expires(options.expires),
-              origin: options.viewerOrigin,
-              inline: options.inline === true,
-              registryBaseUrl: options.registry,
-              allowInsecureRegistry: options.insecureRegistry === true,
-              notify: options.notify === true,
-              targetAdapter: shareServices.targetAdapter,
-              ...publishServices(options.insecureRegistry === true),
-            });
-            if ("state" in result) throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
-            const record = await rememberPublishedShare(result);
-            if (options.notify === true) {
-              const target = parseShareTarget(options.to);
-              if (target.kind !== "email") throw new CLIError("INVALID_ARGUMENT", "--notify requires an exact email target", 2);
-              if (shareServices.delivery === undefined) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-              const delivery = await notifyShare({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
-              if (delivery.state === "partial-failure") process.exitCode = 9;
-            }
-            return result;
-          },
-        });
-        if (json) writeJson({ protocol: "tinycloud-share", version: 1, legacy: true, migrated: redactPublishedShare(migrated.migrated) });
-        else publishHuman(migrated.migrated);
       } catch (error) { handleError(shareCliError(error)); }
     });
 

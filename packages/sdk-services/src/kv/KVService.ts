@@ -215,7 +215,11 @@ export class KVService extends BaseService implements IKVService {
    */
   private getFullPath(key: string, prefixOverride?: string): string {
     const prefix = prefixOverride ?? this._config.prefix ?? "";
-    return prefix ? `${prefix}/${key}` : key;
+    // A delegated share may scope this service to one exact key.  In that
+    // case `get("")` means that key itself, not a synthetic child with a
+    // trailing slash.  This also keeps the service's prefix semantics useful
+    // for exact (rather than prefix) capabilities.
+    return prefix ? (key === "" ? prefix : `${prefix}/${key}`) : key;
   }
 
   /**

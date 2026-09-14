@@ -47,7 +47,6 @@
     { "command": "delegation revoke <cid>", "status": "legacy" },
     { "command": "share", "status": "legacy" },
     { "command": "share inspect [url]", "status": "legacy" },
-    { "command": "share migrate [url]", "status": "legacy" },
     { "command": "share notify <id>", "status": "legacy" },
     { "command": "share publish <files>", "status": "legacy" },
     { "command": "share receive [url]", "status": "legacy" },

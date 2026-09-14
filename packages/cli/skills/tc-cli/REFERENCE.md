@@ -5,7 +5,7 @@ This release has **Commander coverage tracked, not complete parity**:
 
 - 1 migrated registration(s).
 - 1 partially migrated registration(s).
-- 117 legacy registration(s) remain Commander-owned.
+- 116 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
@@ -111,21 +111,27 @@ printf '%s' "$SHARE_URL" | tc share receive - --output .
 printf '%s' "$SHARE_URL" | tc share receive - --stdout
 ```
 
-Human publish output is exactly one canonical URL. Inspect never prints
-plaintext or secret-bearing fields. Receive verifies the link before writing,
+Human publish output is exactly one canonical URL. Bearer shares use
+`/viewer#tc1=<opaque TinyCloud delegation>`; addressed shares use the public,
+fragment-free `/viewer?tc2=<signed Policy/v3 envelope>` form. Inspect never
+prints plaintext or secret-bearing fields. Receive invokes the owner node,
 uses a sanitized single-segment filename, and refuses overwrite unless
-`--force` is explicit. Modern commands accept compact-v1 and inline-v2 links;
-legacy `tc1:` links are not accepted by these commands.
+`--force` is explicit. Pre-cutover blob-backed and legacy link forms are not
+accepted.
 
 ### Share Publish Options
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `file` | Markdown file or `-` for bounded stdin | required |
+| `files` | One or more files, or `-` for bounded stdin | required |
 | `--name <filename>` | Safe filename for stdin | `stdin.md` |
-| `--to <target>` | Bearer target (`anyone`) | `anyone` |
+| `--to <target>` | `anyone`, recipient DID, email, or `domain:<name>` | `anyone` |
+| `--notify` | Send the addressed link through the email-only API | off |
 | `--expires <duration>` | Duration: `1h`, `7d`, `1w`, or ISO date | `7d` |
-| `--inline` | Use the explicit inline-v2 link | off |
+| `--media-type <type>` | Media type for a single input | inferred |
+| `--action <actions...>` | Addressed permission: `read`, `list`, or `edit` | `read` |
+| `--prefix` | Publish multiple inputs beneath one addressed prefix | off |
+| `--binary` | Allow non-UTF-8 bearer content | off |
 | `--json` | Emit versioned redacted JSON | off |
 
 ## KV Put Input Sources (mutually exclusive)

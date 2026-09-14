@@ -723,32 +723,19 @@ describe("TinyCloudNode sharing", () => {
     const common = {
       resourcePath: "shares/test/readme.md",
       recipientEmail: "recipient@example.test",
-      shareUrl: "https://share.tinycloud.xyz/s/cid#k=secret",
+      shareUrl: "https://share.tinycloud.xyz/viewer?tc2=opaque",
       documentName: "readme.md",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       nodeProof: { kid: "did:web:node.example#key", publicKey: new Uint8Array(32) },
-      credentialsAudience: "https://witness.credentials.org",
+      deliveryAudience: "https://api.share.tinycloud.xyz",
     };
     await expect(node.authorizeShareDeliveryV3({
       ...common,
       envelope: { version: 3 },
-      sealedEnvelope: "sealed",
-      envelopeKey: "key",
       shareCid: "cid",
     })).rejects.toThrow();
     expect(calls).toEqual(["https://node.example/policy/v3/deliveries/authorize"]);
 
-    await expect(node.authorizeShareDelivery({
-      ...common,
-      envelopeCid: "cid",
-      shareCid: "cid",
-      shareId: "share-id",
-      registrationCid: "registration",
-      policyCid: "policy",
-      delegationCid: "delegation",
-      enforcementDelegationCid: "enforcement",
-      idempotencyKey: "delivery-idempotency",
-    })).rejects.toThrow("Policy/v2 share delivery is retired");
     expect(calls).toHaveLength(1);
   });
 });

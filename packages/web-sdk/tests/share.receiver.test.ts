@@ -13,7 +13,7 @@ import { BrowserSessionStorage } from "../src/adapters/BrowserSessionStorage";
 import type { CredentialAcquisitionTransport, CredentialRequestState } from "../src/credentials/types";
 import { SessionReceiverCredentialCustody } from "../src/share/receiver-credentials";
 import { createOrRestoreShareReceiverSession, SHARE_RECEIVER_SESSION_STORAGE_KEY } from "../src/share/receiver-session";
-import { ReceivedShareImpl, selectShareReceiverAccountSession, validateShareReceiverExpectedOrigin, validateShareReceiverRegistryBaseUrl, validateShareReceiverServiceTrust } from "../src/share/service";
+import { ReceivedShareImpl, selectShareReceiverAccountSession, validateShareReceiverExpectedOrigin, validateShareReceiverServiceTrust } from "../src/share/service";
 import type { ShareReceivedContent } from "../src/share/types";
 
 function memoryStorage() {
@@ -65,22 +65,13 @@ test("receiver session replaces mismatched private key material and non-canonica
   expect(replacedTimestamp.holderDid).not.toBe(replacedMismatchedKey.holderDid);
 });
 
-test("share registry permits explicit loopback HTTP only", () => {
-  expect(validateShareReceiverRegistryBaseUrl("https://registry.example/")).toBe("https://registry.example");
-  expect(validateShareReceiverRegistryBaseUrl("http://127.0.0.1:8787/")).toBe("http://127.0.0.1:8787");
-  expect(validateShareReceiverRegistryBaseUrl("http://localhost:8787/api/")).toBe("http://localhost:8787/api");
-  expect(() => validateShareReceiverRegistryBaseUrl("http://registry.example")).toThrow("invalid");
-  expect(() => validateShareReceiverRegistryBaseUrl("http://user@localhost:8787")).toThrow("invalid");
-  expect(() => validateShareReceiverRegistryBaseUrl("http://localhost:8787?token=secret")).toThrow("invalid");
-});
-
 test("share links are bound to the configured out-of-band Share origin", () => {
-  expect(validateShareReceiverExpectedOrigin("https://share.example/s/claim#secret", "https://share.example")).toBe("https://share.example");
-  expect(validateShareReceiverExpectedOrigin("http://localhost:5173/s/claim#secret", "http://localhost:5173")).toBe("http://localhost:5173");
-  expect(validateShareReceiverExpectedOrigin("http://127.0.0.1:5173/s/claim#secret", "http://127.0.0.1:5173")).toBe("http://127.0.0.1:5173");
-  expect(() => validateShareReceiverExpectedOrigin("https://attacker.example/s/claim#secret", "https://share.example")).toThrow("configured Share deployment");
-  expect(() => validateShareReceiverExpectedOrigin("http://share.example/s/claim#secret", "https://share.example")).toThrow("configured Share deployment");
-  expect(() => validateShareReceiverExpectedOrigin("https://share.example/s/claim#secret", "https://share.example/path")).toThrow("configured Share deployment");
+  expect(validateShareReceiverExpectedOrigin("https://share.example/viewer?tc2=policy", "https://share.example")).toBe("https://share.example");
+  expect(validateShareReceiverExpectedOrigin("http://localhost:5173/viewer?tc2=policy", "http://localhost:5173")).toBe("http://localhost:5173");
+  expect(validateShareReceiverExpectedOrigin("http://127.0.0.1:5173/viewer?tc2=policy", "http://127.0.0.1:5173")).toBe("http://127.0.0.1:5173");
+  expect(() => validateShareReceiverExpectedOrigin("https://attacker.example/viewer?tc2=policy", "https://share.example")).toThrow("configured Share deployment");
+  expect(() => validateShareReceiverExpectedOrigin("http://share.example/viewer?tc2=policy", "https://share.example")).toThrow("configured Share deployment");
+  expect(() => validateShareReceiverExpectedOrigin("https://share.example/viewer?tc2=policy", "https://share.example/path")).toThrow("configured Share deployment");
 });
 
 test("auto identity restores an existing account session before falling back to guest receive", async () => {
@@ -133,25 +124,19 @@ test("browser persistence exposes the latest valid account without a wallet prov
   expect(storage.activeAddress()).toBeUndefined();
 });
 
-test("Share trust requires a did:key target and keeps invitation verification identity separate", () => {
+test("Share trust is carried by the envelope's attested Node binding, not deployment-wide keys", () => {
   const enforcerDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(new Uint8Array(32).fill(7)));
-  const trustedNode = { invitationKid: "did:web:node.example#share-invitations", invitationPublicKey: new Uint8Array(32).fill(9) };
-  expect(validateShareReceiverServiceTrust(
-    { target: { nodeAudience: enforcerDid } } as any,
-    { expectedEnforcerDid: enforcerDid, trustedNode },
-  )).toBe(trustedNode);
+  const nodeDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(new Uint8Array(32).fill(9)));
+  expect(validateShareReceiverServiceTrust({
+    target: { nodeAudience: nodeDid },
+    attestedEnforcerBinding: { enforcerDid, nodeAudience: nodeDid },
+  } as any)).toBeUndefined();
   expect(() => validateShareReceiverServiceTrust(
-    { target: { nodeAudience: enforcerDid } } as any,
-    { expectedEnforcerDid: "did:web:node.example", trustedNode },
-  )).toThrow("enforcer DID");
+    { target: { nodeAudience: enforcerDid }, attestedEnforcerBinding: { enforcerDid, nodeAudience: nodeDid } } as any,
+  )).toThrow("Node DID");
   expect(() => validateShareReceiverServiceTrust(
-    { target: { nodeAudience: didKeyFromEd25519PublicKey(ed25519.getPublicKey(new Uint8Array(32).fill(8))) } } as any,
-    { expectedEnforcerDid: enforcerDid, trustedNode },
-  )).toThrow("enforcer DID");
-  expect(() => validateShareReceiverServiceTrust(
-    { target: { nodeAudience: enforcerDid } } as any,
-    { expectedEnforcerDid: enforcerDid, trustedNode: { ...trustedNode, invitationKid: "did:web:node.example" } },
-  )).toThrow("invitation");
+    { target: { nodeAudience: "did:web:node.example" }, attestedEnforcerBinding: { enforcerDid, nodeAudience: "did:web:node.example" } } as any,
+  )).toThrow("did:key");
 });
 
 test("receiver credential custody is bounded, holder-scoped, and expires with the credential", async () => {

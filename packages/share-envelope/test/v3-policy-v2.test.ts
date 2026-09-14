@@ -77,7 +77,7 @@ describe("ShareEnvelopeV3 Policy/v2", () => {
       resource: { kind: "exact", path: "shares/report.txt" },
       target: {
         origin: "https://node.example.test",
-        nodeAudience: ownerDid,
+        nodeAudience: nodeDid,
         spaceId,
       },
       policy,
@@ -104,7 +104,7 @@ describe("ShareEnvelopeV3 Policy/v2", () => {
 
     const roundTripped = shareEnvelopeV3Schema.parse(JSON.parse(JSON.stringify(envelope)));
     expect(roundTripped.policy).toEqual(policy);
-    expect(roundTripped.target.nodeAudience).toBe(ownerDid);
+    expect(roundTripped.target.nodeAudience).toBe(nodeDid);
     expect(roundTripped.attestedEnforcerBinding.enforcerDid).toBe(ownerDid);
     expect(roundTripped.attestedEnforcerBinding.nodeAudience).toBe(nodeDid);
     expect(roundTripped.attestedEnforcerBinding.signature.signerDid).toBe(nodeDid);
@@ -126,7 +126,7 @@ describe("ShareEnvelopeV3 Policy/v2", () => {
     }).success).toBe(false);
     expect(shareEnvelopeV3Schema.safeParse({
       ...envelope,
-      target: { ...envelope.target, nodeAudience: nodeDid },
+      target: { ...envelope.target, nodeAudience: ownerDid },
     }).success).toBe(false);
   });
 });

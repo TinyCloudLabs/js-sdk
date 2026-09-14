@@ -132,6 +132,7 @@ import {
   canonicalizeAddress,
   pkhDid,
   resolveTinyCloudHosts,
+  publishLocationRecord,
   type LocalNodeIdentityStore,
   principalDidEquals,
   parseNetworkId,
@@ -149,7 +150,6 @@ import {
   registerPolicyV3,
   type RegisterPolicyV3Input,
   type RegisterPolicyV3Receipt,
-  type ShareDeliveryAuthorizationReceipt,
   type ShareDeliveryAuthorizationV3Receipt,
   CREDENTIAL_INVITATION_REQUEST_DOMAIN,
   validateShareDeliveryAuthorizationV3Bytes,
@@ -179,7 +179,6 @@ import { NodeSecretsService } from "./NodeSecretsService";
 export type {
   RegisterPolicyV3Input,
   RegisterPolicyV3Receipt,
-  ShareDeliveryAuthorizationReceipt,
   ShareDeliveryAuthorizationV3Receipt,
 } from "@tinycloud/sdk-core";
 
@@ -1418,6 +1417,34 @@ export class TinyCloudNode {
   get hosts(): string[] {
     const authHosts = this.auth?.hosts ?? [];
     return authHosts.length > 0 ? authHosts : [this.config.host!];
+  }
+
+  /** The registry-resolved Node endpoint and the identity returned by that exact Node. */
+  async activeNodeIdentity(): Promise<{ readonly origin: string; readonly nodeDid: string }> {
+    const host = this.hosts[0];
+    if (host === undefined) throw new Error("TinyCloud node host has not been resolved");
+    const parsed = new URL(host);
+    if ((parsed.protocol !== "https:" && !(parsed.protocol === "http:" && (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost"))) || parsed.origin !== host) {
+      throw new Error("TinyCloud node host is not a canonical origin");
+    }
+    const nodeDid = await this.fetchNodeId();
+    if (!nodeDid.startsWith("did:key:z")) throw new Error("TinyCloud node identity is not a did:key");
+    return Object.freeze({ origin: parsed.origin, nodeDid });
+  }
+
+  /** Publish the active owner Node as a session-signed registry record. */
+  async publishActiveNodeLocation(
+    registryUrl: string,
+    fetchFn: typeof fetch = globalThis.fetch.bind(globalThis),
+  ) {
+    const node = await this.activeNodeIdentity();
+    return publishLocationRecord({
+      registryUrl,
+      subject: this.credentialHolderDid,
+      nodeOrigin: node.origin,
+      signer: { type: "did:key", signBytes: (bytes) => this.signSessionBytes(bytes) },
+      fetch: fetchFn,
+    });
   }
 
   /**
@@ -4317,51 +4344,22 @@ export class TinyCloudNode {
     });
   }
 
-  /** @deprecated Policy/v2 delivery transport is retired. Use authorizeShareDeliveryV3. */
-  async authorizeShareDelivery(input: {
-    readonly envelopeCid: string;
-    readonly shareCid: string;
-    readonly shareId: string;
-    readonly registrationCid: string;
-    readonly policyCid: string;
-    readonly delegationCid: string;
-    readonly enforcementDelegationCid: string;
-    readonly resourcePath: string;
-    readonly recipientEmail: string;
-    readonly shareUrl: string;
-    readonly documentName: string;
-    readonly idempotencyKey: string;
-    readonly expiresAt: string;
-    /** The enrolled receipt key from the node trust bundle. */
-    readonly nodeProof: { readonly kid: string; readonly publicKey: Uint8Array };
-    /** The trusted OpenCredentials witness origin from the same trust bundle as `nodeProof`. */
-    readonly credentialsAudience: string;
-  }): Promise<ShareDeliveryAuthorizationReceipt> {
-    void input;
-    throw new Error("Policy/v2 share delivery is retired; use authorizeShareDeliveryV3");
-  }
-
   /** Authorize one short-lived v3 delivery against the signed v3 envelope and registered roots. */
   async authorizeShareDeliveryV3(input: {
     readonly envelope: Record<string, CanonicalJson | undefined>;
-    readonly sealedEnvelope: string;
-    readonly envelopeKey: string;
     readonly shareCid: string;
     readonly resourcePath: string;
     readonly recipientEmail: string;
     readonly shareUrl: string;
     readonly documentName: string;
     readonly expiresAt: string;
-    readonly nodeProof: { readonly kid: string; readonly publicKey: Uint8Array };
-    readonly credentialsAudience: string;
+    readonly deliveryAudience: string;
   }): Promise<ShareDeliveryAuthorizationV3Receipt> {
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
     if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
     const body = {
       envelope: input.envelope,
-      sealedEnvelope: input.sealedEnvelope,
-      envelopeKey: input.envelopeKey,
       shareCid: input.shareCid,
       recipientEmail: input.recipientEmail,
       shareUrl: input.shareUrl,
@@ -4381,9 +4379,8 @@ export class TinyCloudNode {
     const verified = validateShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
       request,
       senderKeyDid: this.credentialHolderDid,
-      credentialsAudience: input.credentialsAudience,
+      deliveryAudience: input.deliveryAudience,
     });
-    void input.nodeProof;
     const requestDigest = new Uint8Array(await crypto.subtle.digest(
       "SHA-256",
       new TextEncoder().encode(`${CREDENTIAL_INVITATION_REQUEST_DOMAIN}${canonicalizeEncryptionJson(verified.request as any)}`),

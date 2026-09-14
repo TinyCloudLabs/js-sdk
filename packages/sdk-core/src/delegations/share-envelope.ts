@@ -912,23 +912,35 @@ export function parsePublishedShareLink(link: string, options: { readonly truste
   try { url = new URL(link); } catch { throw new ShareEnvelopeError("invalid-link", "share link must be an absolute URL"); }
   const origin = normalizeOrigin(url.origin);
   if (options.trustedOrigins !== undefined && !options.trustedOrigins.map(normalizeOrigin).includes(origin)) throw new ShareEnvelopeError("origin-mismatch", "share link origin is not trusted");
-  if (url.search !== "" || url.username !== "" || url.password !== "") throw new ShareEnvelopeError("invalid-link", "share link is not canonical");
-  if (url.pathname === "/s/inline" && url.hash.startsWith("#v=2&p=")) {
+  if (url.username !== "" || url.password !== "") throw new ShareEnvelopeError("invalid-link", "share link is not canonical");
+  if (url.pathname === "/viewer") {
+    const secretPayload = url.search === "" && url.hash.startsWith("#tc2=")
+      ? url.hash.slice("#tc2=".length)
+      : undefined;
+    const publicPayload = url.hash === "" && url.searchParams.size === 1
+      ? url.searchParams.get("tc2") ?? undefined
+      : undefined;
+    if (secretPayload === undefined && publicPayload === undefined) throw new ShareEnvelopeError("invalid-link", "published share link is invalid");
+    if (publicPayload !== undefined && url.search !== `?tc2=${publicPayload}`) throw new ShareEnvelopeError("invalid-link", "published share link is not canonical");
     let payload: Record<string, unknown>;
     try {
-      const bytes = base64UrlToBytes(url.hash.slice("#v=2&p=".length));
+      const bytes = base64UrlToBytes(secretPayload ?? publicPayload!);
       if (bytes.length > (options.maxInlineBytes ?? DEFAULT_MAX_INLINE_BYTES) * 2) throw new Error("inline payload too large");
-      const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      const value = JSON.parse(text) as unknown;
       if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("inline payload shape");
+      if (canonicalJson(value) !== text) throw new Error("inline payload is not canonical JSON");
       payload = value as Record<string, unknown>;
     } catch (error) { throw new ShareEnvelopeError("invalid-link", error instanceof Error ? error.message : "invalid inline payload"); }
-    if (payload.v !== 2 || typeof payload.c !== "string" || typeof payload.cid !== "string" || (payload.k !== undefined && typeof payload.k !== "string") || Object.keys(payload).some((key) => !["v", "c", "cid", "k"].includes(key))) throw new ShareEnvelopeError("invalid-link", "inline payload fields are invalid");
+    const payloadKeys = Object.keys(payload);
+    if (payload.v !== 2 || typeof payload.c !== "string" || typeof payload.cid !== "string" || (payload.k !== undefined && typeof payload.k !== "string") || payloadKeys.some((key) => !["v", "c", "cid", "k"].includes(key)) || (publicPayload !== undefined && (payloadKeys.length !== 3 || payload.k !== undefined))) throw new ShareEnvelopeError("invalid-link", "inline payload fields are invalid");
     const sealed = base64UrlToBytes(payload.c);
     if (!verifyPublishedShareCid(payload.cid, sealed)) throw new ShareEnvelopeError("cid-mismatch", "inline payload CID does not match");
     const key = payload.k === undefined ? undefined : base64UrlToBytes(payload.k);
     if (key !== undefined && key.length !== 32) throw new ShareEnvelopeError("invalid-link", "inline payload key is invalid");
     return { origin, cid: payload.cid, ...(key === undefined ? {} : { key }), sealed };
   }
+  if (url.search !== "") throw new ShareEnvelopeError("invalid-link", "share link is not canonical");
   const match = /^\/s\/([a-z2-7]+)$/.exec(url.pathname);
   if (match === null || !url.hash.startsWith("#k=")) throw new ShareEnvelopeError("invalid-link", "published share link is invalid");
   const key = base64UrlToBytes(url.hash.slice(3));
@@ -943,13 +955,13 @@ export function parsePublishedShareLink(link: string, options: { readonly truste
 export function parseShareUrl(link: string, options: { readonly trustedOrigins?: readonly string[]; readonly maxInlineBytes?: number } = {}): ShareLinkLocation {
   let url: URL;
   try { url = new URL(link); } catch { throw new ShareEnvelopeError("invalid-link", "share link must be an absolute URL"); }
-  if (url.search !== "") throw new ShareEnvelopeError("invalid-link", "share links must not contain query parameters");
   const origin = normalizeOrigin(url.origin);
   if (options.trustedOrigins !== undefined && !options.trustedOrigins.map(normalizeOrigin).includes(origin)) throw new ShareEnvelopeError("origin-mismatch", "share link origin is not trusted");
-  if (url.pathname === "/s/inline" && url.hash.startsWith("#v=2&p=")) {
+  if (url.pathname === "/viewer" && (url.hash.startsWith("#tc2=") || url.searchParams.has("tc2"))) {
     const published = parsePublishedShareLink(link, options);
     return { kind: "inline", origin, cid: published.cid, key: published.key, url: `${url.origin}${url.pathname}`, protocol: "share-envelope-v2" };
   }
+  if (url.search !== "") throw new ShareEnvelopeError("invalid-link", "share links must not contain query parameters");
   const match = url.pathname.match(/^\/s\/(i\/)?([^/]+)$/);
   if (!match) throw new ShareEnvelopeError("invalid-link", "share link path is invalid");
   const fragmentParams = url.hash === "" ? undefined : new URLSearchParams(url.hash.slice(1));
@@ -969,7 +981,7 @@ export function parseShareUrl(link: string, options: { readonly trustedOrigins?:
 }
 
 export function isV2ShareLink(link: string): boolean {
-  try { return new URL(link).pathname.startsWith("/s/"); } catch { return link.startsWith(INLINE_PREFIX); }
+  try { const url = new URL(link); return url.pathname.startsWith("/s/") || url.pathname === "/viewer"; } catch { return link.startsWith(INLINE_PREFIX); }
 }
 
 export async function encryptShareBytes(bytes: Uint8Array, key: Uint8Array): Promise<Uint8Array> {

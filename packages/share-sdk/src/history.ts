@@ -88,13 +88,11 @@ export function historyRecordForPublishedShare(result: PublishedShare, now: Date
 }
 
 /**
- * "direct" revokes only this share's enforcement delegation. "ancestor"
- * revokes the owner delegation the share descends from, which transitively
- * denies every share built on it (see `revocation_in_ancestry` in
- * `tinycloud-node-server/src/share_v2.rs`). Both are existing CIDs that a
- * caller passes to the node's generic `tinycloud.delegation/revoke`
- * invocation (`DelegationManager.revoke` / `TinyCloudNode.revokeDelegation`)
- * -- there is no share-v2-specific revoke route.
+ * "direct" selects the Policy/v3 enforcement root; "ancestor" selects its
+ * policy-authority sibling. Addressed shares revoke that signed root through
+ * the Node Policy/v3 endpoint, which cuts off existing sessions as well as
+ * fresh admission and delivery. Bearer shares retain ordinary delegation
+ * revocation.
  */
 export type SenderShareRevocationScope = "direct" | "ancestor";
 
