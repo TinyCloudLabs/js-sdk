@@ -1,5 +1,28 @@
 # @tinycloud/cli
 
+## 1.0.0-beta.10
+
+### Major Changes
+
+- c690844: Complete the TC-498/TC-500 native-sharing beta cutover. The legacy
+  broker-backed Share APIs, link/transport compatibility paths, and retired CLI
+  Share flags are intentionally removed. Use owner-Node native bearer
+  delegations or signed Policy/v3 addressed shares; this release does not retain
+  a parallel legacy broker authority plane.
+
+### Patch Changes
+
+- c690844: Reject addressed-share ciphertext whose exact owner-KV bytes do not match the
+  signed source digest before key unwrap or rendering. Revoke addressed shares
+  through the existing signed Policy/v3 root-revocation path, which cuts off
+  active sessions as well as fresh admission and delivery.
+- Updated dependencies [c690844]
+- Updated dependencies [c690844]
+  - @tinycloud/share-envelope@1.0.0-beta.3
+  - @tinycloud/share-sdk@1.0.0-beta.3
+  - @tinycloud/node-sdk@3.0.0-beta.9
+  - @tinycloud/operations@0.3.3-beta.7
+
 ## 0.9.1-beta.9
 
 ### Patch Changes

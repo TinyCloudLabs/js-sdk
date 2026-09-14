@@ -1,5 +1,15 @@
 # @tinycloud/share-envelope
 
+## 1.0.0-beta.3
+
+### Major Changes
+
+- c690844: Complete the TC-498/TC-500 native-sharing beta cutover. The legacy
+  broker-backed Share APIs, link/transport compatibility paths, and retired CLI
+  Share flags are intentionally removed. Use owner-Node native bearer
+  delegations or signed Policy/v3 addressed shares; this release does not retain
+  a parallel legacy broker authority plane.
+
 ## 0.2.1-beta.2
 
 ### Patch Changes

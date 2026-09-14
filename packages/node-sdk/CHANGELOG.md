@@ -1,5 +1,20 @@
 # @tinycloudlabs/node-sdk
 
+## 3.0.0-beta.9
+
+### Major Changes
+
+- c690844: Complete the TC-498/TC-500 native-sharing beta cutover. The legacy
+  broker-backed Share APIs, link/transport compatibility paths, and retired CLI
+  Share flags are intentionally removed. Use owner-Node native bearer
+  delegations or signed Policy/v3 addressed shares; this release does not retain
+  a parallel legacy broker authority plane.
+
+### Patch Changes
+
+- Updated dependencies [c690844]
+  - @tinycloud/sdk-core@3.0.0-beta.9
+
 ## 3.0.0-beta.8
 
 ### Patch Changes

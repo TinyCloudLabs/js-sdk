@@ -37,6 +37,8 @@
     "tc-500-accountless-share-receive",
     "tc-500-browser-compact-ucan",
     "tc-500-embedded-policy-runtime",
+    "tc-500-native-sharing-cutover",
+    "tc-500-owner-kv-integrity",
     "tc-500-production-receiver-followup",
     "tc-500-received-share-metadata",
     "tc-500-share-release-correction",
