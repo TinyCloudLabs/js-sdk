@@ -18602,6 +18602,14 @@ function targetKind2(record) {
   if (record.targetKind !== void 0) return record.targetKind;
   return record.recipientMatcher.kind === "exactEmail" ? "email" : record.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
 }
+function policyNodeAudience(record) {
+  const envelope = record.deliveryMaterial?.envelope;
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record.target.nodeAudience;
+  const binding = envelope.attestedEnforcerBinding;
+  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record.target.nodeAudience;
+  const nodeAudience = binding.nodeAudience;
+  return typeof nodeAudience === "string" ? nodeAudience : record.target.nodeAudience;
+}
 async function revokeShare(input) {
   const target = targetKind2(input.record);
   if (input.adapter === void 0) return { state: "unsupported", target, reason: "node revocation authority is required", code: "unsupported-target" };
@@ -18619,7 +18627,7 @@ async function revokeShare(input) {
       targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
       ownerDid: input.record.ownerDid,
       nodeOrigin: input.record.target.origin,
-      nodeAudience: input.record.target.nodeAudience
+      nodeAudience: policyNodeAudience(input.record)
     });
   }
   const revokedAt = (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();

@@ -307,7 +307,7 @@ export function createShareAuthorityAdapters(input: {
       // App-neutral owner authority: the Node SDK owns every Policy/v3
       // transport hop, so the CLI supplies only owner signing material.
       authority: {
-        ownerDid: node.did,
+        ownerDid: node.credentialHolderDid,
         createOwnerRoot: (request) => node.createUnifiedOwnerRoot(request),
         sign: (bytes) => node.signSessionBytes(bytes),
         registerPolicy: (request) => node.registerPolicy(request),
@@ -350,15 +350,15 @@ export function createShareAuthorityAdapters(input: {
     revokePolicyRoot: input.revokePolicyRoot ?? (async (request) => {
       const node = await authenticatedNode();
       const activeNode = await node.activeNodeIdentity();
-      if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.did) {
+      if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.credentialHolderDid) {
         throw new Error("share Policy/v3 revocation is not bound to the active owner node");
       }
       await revokePolicyRootV3({
         nodeOrigin: activeNode.origin,
         rootCid: request.rootCid,
         targetRole: request.targetRole,
-        ownerDid: node.did,
-        issuerDid: node.did,
+        ownerDid: node.credentialHolderDid,
+        issuerDid: node.credentialHolderDid,
         nodeAudience: activeNode.nodeDid,
         reason: "share revoked",
         sign: (digest) => node.signSessionBytes(digest),

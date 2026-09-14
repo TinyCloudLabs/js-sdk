@@ -18699,6 +18699,14 @@ function targetKind2(record) {
   if (record.targetKind !== void 0) return record.targetKind;
   return record.recipientMatcher.kind === "exactEmail" ? "email" : record.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
 }
+function policyNodeAudience(record) {
+  const envelope = record.deliveryMaterial?.envelope;
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record.target.nodeAudience;
+  const binding = envelope.attestedEnforcerBinding;
+  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record.target.nodeAudience;
+  const nodeAudience = binding.nodeAudience;
+  return typeof nodeAudience === "string" ? nodeAudience : record.target.nodeAudience;
+}
 async function revokeShare(input) {
   const target = targetKind2(input.record);
   if (input.adapter === void 0) return { state: "unsupported", target, reason: "node revocation authority is required", code: "unsupported-target" };
@@ -18716,7 +18724,7 @@ async function revokeShare(input) {
       targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
       ownerDid: input.record.ownerDid,
       nodeOrigin: input.record.target.origin,
-      nodeAudience: input.record.target.nodeAudience
+      nodeAudience: policyNodeAudience(input.record)
     });
   }
   const revokedAt = (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
@@ -31071,7 +31079,7 @@ function createShareAuthorityAdapters(input = {}) {
       // App-neutral owner authority: the Node SDK owns every Policy/v3
       // transport hop, so the CLI supplies only owner signing material.
       authority: {
-        ownerDid: node.did,
+        ownerDid: node.credentialHolderDid,
         createOwnerRoot: (request) => node.createUnifiedOwnerRoot(request),
         sign: (bytes) => node.signSessionBytes(bytes),
         registerPolicy: (request) => node.registerPolicy(request)
@@ -31110,15 +31118,15 @@ function createShareAuthorityAdapters(input = {}) {
     revokePolicyRoot: input.revokePolicyRoot ?? (async (request) => {
       const node = await authenticatedNode();
       const activeNode = await node.activeNodeIdentity();
-      if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.did) {
+      if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.credentialHolderDid) {
         throw new Error("share Policy/v3 revocation is not bound to the active owner node");
       }
       await revokePolicyRootV3({
         nodeOrigin: activeNode.origin,
         rootCid: request.rootCid,
         targetRole: request.targetRole,
-        ownerDid: node.did,
-        issuerDid: node.did,
+        ownerDid: node.credentialHolderDid,
+        issuerDid: node.credentialHolderDid,
         nodeAudience: activeNode.nodeDid,
         reason: "share revoked",
         sign: (digest2) => node.signSessionBytes(digest2)
