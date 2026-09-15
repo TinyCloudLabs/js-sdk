@@ -13,4 +13,6 @@ Seal Policy/v3 recipient metadata as the canonical AES-256-GCM
 share link. Delivery authorization now binds that sealed blob and its
 fragment-only key, rather than accepting a plaintext `?tc2` envelope. Remove
 the public plaintext Policy/v3 inline URL codec; only sealed fragment links
-are accepted for addressed shares.
+are accepted for addressed shares. Add the reusable app-neutral
+OpenCredentials invitation client and bind notification retries to the signed
+delivery JTI/nonce used by Node and OpenCredentials deduplication.

@@ -64,7 +64,7 @@ mock.module("../config/profiles.js", () => ({
 }));
 mock.module("../lib/sdk.js", () => ({ ensureAuthenticated: async () => node }));
 
-const { createShareAuthorityAdapters, postAddressedShareDelivery } = await import("./adapters.js");
+const { createShareAuthorityAdapters } = await import("./adapters.js");
 
 describe("TinyCloud share authority adapter", () => {
   it("routes addressed delivery through Policy/v3 with no retired Node delivery fallback", async () => {
@@ -150,38 +150,12 @@ describe("TinyCloud share authority adapter", () => {
     }
   });
 
-  it("posts the exact signed delivery receipt only to the credentials invitation endpoint", async () => {
-    const credentialsOrigin = "https://credentials.example";
-    const request = { returnLink: "https://share.example/s/inline#v=2&p=eyJjIjoiQVEiLCJjaWQiOiJjaWQiLCJrIjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwidiI6Mn0" };
-    const admission = { schema: "xyz.tinycloud.policy/delivery-admission/v0" };
-    const proof = { alg: "EdDSA", kid: "did:web:node.example#key", signature: "test-signature" };
-    const shareUrl = request.returnLink;
-    const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
-
-    const response = await postAddressedShareDelivery({
-      credentialsOrigin,
-      receipt: { request, admission, proof },
-      shareUrl,
-      fetchFn: (async (input, init) => {
-        calls.push({ url: String(input), init });
-        return new Response(null, { status: 202 });
-      }) as typeof globalThis.fetch,
-    });
-
-    expect(response.status).toBe(202);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe(`${credentialsOrigin}/v1/credential-invitations`);
-    expect(calls[0]?.init).toMatchObject({
-      method: "POST",
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-    });
-    expect(calls[0]?.init).not.toHaveProperty("referrer");
-    expect(calls[0]?.init?.headers).toEqual({ accept: "application/json", "content-type": "application/json" });
-    const body = JSON.parse(String(calls[0]?.init?.body));
-    expect(body).toEqual({ request, admission, proof });
-    expect(Object.keys(body).sort()).toEqual(["admission", "proof", "request"]);
+  it("uses the reusable Share SDK invitation client and forwards notify idempotency to Node", async () => {
+    const source = await readFile(new URL("./adapters.ts", import.meta.url), "utf8");
+    expect(source).toContain("deliverCredentialInvitation({");
+    expect(source).toContain("idempotencyKey: request.idempotencyKey");
+    expect(source).not.toContain("credential-invitations");
+    expect(source).not.toContain("postAddressedShareDelivery");
   });
 
 });

@@ -18849,10 +18849,10 @@ var init_dist3 = __esm({
           return obj[e];
         });
       };
-      util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object3) => {
+      util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object4) => {
         const keys = [];
-        for (const key in object3) {
-          if (Object.prototype.hasOwnProperty.call(object3, key)) {
+        for (const key in object4) {
+          if (Object.prototype.hasOwnProperty.call(object4, key)) {
             keys.push(key);
           }
         }

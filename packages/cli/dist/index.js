@@ -18764,6 +18764,110 @@ async function defaultIdempotencyKey(shareId, recipient) {
   ));
   return `tinycloud-share:${shareId}:${toBase64Url(digest3)}`;
 }
+function canonicalOrigin(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new CredentialInvitationError(
+      "invalid-origin",
+      "credential invitation origin is invalid"
+    );
+  }
+  if (url.origin !== value || url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "" || url.protocol !== "https:")
+    throw new CredentialInvitationError(
+      "invalid-origin",
+      "credential invitation origin is invalid"
+    );
+  return url.origin;
+}
+function object2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+async function validateReceipt(receipt, shareUrl) {
+  if (!object2(receipt) || !object2(receipt.request) || !object2(receipt.admission) || !object2(receipt.proof)) {
+    throw new CredentialInvitationError(
+      "invalid-receipt",
+      "credential invitation receipt is invalid"
+    );
+  }
+  if (receipt.request.returnLink !== shareUrl) {
+    throw new CredentialInvitationError(
+      "invalid-receipt",
+      "credential invitation is not bound to the share link"
+    );
+  }
+  let link2;
+  try {
+    link2 = new URL(shareUrl);
+  } catch {
+    throw new CredentialInvitationError(
+      "invalid-receipt",
+      "credential invitation share link is invalid"
+    );
+  }
+  if (link2.search !== "" || link2.pathname !== "/s/inline") {
+    throw new CredentialInvitationError(
+      "invalid-receipt",
+      "credential invitation share link must be sealed inline"
+    );
+  }
+  try {
+    await parseSealedInlineShareUrl(shareUrl);
+  } catch {
+    throw new CredentialInvitationError(
+      "invalid-receipt",
+      "credential invitation share link is invalid"
+    );
+  }
+}
+async function deliverCredentialInvitation(input) {
+  const credentialsOrigin = canonicalOrigin(input.credentialsOrigin);
+  await validateReceipt(input.receipt, input.shareUrl);
+  const fetchFn = input.fetchFn ?? globalThis.fetch;
+  let response;
+  try {
+    response = await fetchFn(`${credentialsOrigin}/v1/credential-invitations`, {
+      method: "POST",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input.receipt),
+      ...input.signal === void 0 ? {} : { signal: input.signal }
+    });
+  } catch {
+    throw new CredentialInvitationError(
+      "transport",
+      "credential invitation delivery is unavailable"
+    );
+  }
+  if (response.status !== 202) {
+    throw new CredentialInvitationError(
+      "rejected",
+      "credential invitation delivery was not accepted"
+    );
+  }
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw new CredentialInvitationError(
+      "invalid-response",
+      "credential invitation response is invalid"
+    );
+  }
+  if (!object2(body) || Object.keys(body).length !== 1 || body.status !== "accepted") {
+    throw new CredentialInvitationError(
+      "invalid-response",
+      "credential invitation response is invalid"
+    );
+  }
+  return { status: "accepted" };
+}
 function targetKind2(record) {
   if (record.targetKind !== void 0) return record.targetKind;
   return record.recipientMatcher.kind === "exactEmail" ? "email" : record.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
@@ -18846,7 +18950,7 @@ function parseNativeShareUrl(value) {
   if (!token || fragment.size !== 1) throw new TypeError("missing native share fragment");
   return token;
 }
-var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicyV1Schema, policyCredentialRequirementV1Schema, unifiedPolicyV2Schema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_V3_SIGNATURE_DOMAIN, POLICY_V1_SIGNATURE_DOMAIN, POLICY_V2_SIGNATURE_DOMAIN, CONTENT_SOURCE_V1_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN, NATIVE_PROJECTION_V1_DOMAIN, ATTESTED_ENFORCER_V2_DOMAIN, KEY_LENGTH2, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base58btc2, base58flickr2, POLICY_V1_DOMAIN, POLICY_V2_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN2, CONTENT_SOURCE_V1_DOMAIN2, NATIVE_PROJECTION_V1_DOMAIN2, ENVELOPE_V3_DOMAIN, textEncoder, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN, NATIVE_SHARE_FRAGMENT_PARAMETER;
+var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicyV1Schema, policyCredentialRequirementV1Schema, unifiedPolicyV2Schema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_V3_SIGNATURE_DOMAIN, POLICY_V1_SIGNATURE_DOMAIN, POLICY_V2_SIGNATURE_DOMAIN, CONTENT_SOURCE_V1_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN, NATIVE_PROJECTION_V1_DOMAIN, ATTESTED_ENFORCER_V2_DOMAIN, KEY_LENGTH2, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base58btc2, base58flickr2, POLICY_V1_DOMAIN, POLICY_V2_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN2, CONTENT_SOURCE_V1_DOMAIN2, NATIVE_PROJECTION_V1_DOMAIN2, ENVELOPE_V3_DOMAIN, textEncoder, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, CredentialInvitationError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN, NATIVE_SHARE_FRAGMENT_PARAMETER;
 var init_dist3 = __esm({
   "../share-sdk/dist/index.js"() {
     "use strict";
@@ -19001,10 +19105,10 @@ var init_dist3 = __esm({
           return obj[e];
         });
       };
-      util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object3) => {
+      util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object4) => {
         const keys = [];
-        for (const key in object3) {
-          if (Object.prototype.hasOwnProperty.call(object3, key)) {
+        for (const key in object4) {
+          if (Object.prototype.hasOwnProperty.call(object4, key)) {
             keys.push(key);
           }
         }
@@ -23978,6 +24082,13 @@ var init_dist3 = __esm({
         this.name = "ShareNotifyError";
       }
     };
+    CredentialInvitationError = class extends Error {
+      constructor(code32, message) {
+        super(message);
+        this.code = code32;
+        this.name = "CredentialInvitationError";
+      }
+    };
     SHARE_V2_PROTOCOL = Object.freeze({
       challengeDomain: "xyz.tinycloud.share/policy-challenge/v2\0",
       sessionDomain: "xyz.tinycloud.share/policy-session/v2\0",
@@ -24643,9 +24754,9 @@ async function revokePolicyRootV3(input) {
     body: JSON.stringify({ revocation: { ...unsigned, signature: { suite: "Ed25519", signerDid: input.issuerDid, value: encodeBase64Url2(signature) } } })
   });
   if (!response.ok) throw new Error(`policy root revocation rejected (${response.status})`);
-  return object2(await response.json(), "policy root revocation");
+  return object22(await response.json(), "policy root revocation");
 }
-function object2(value, label) {
+function object22(value, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
   }
@@ -30891,18 +31002,6 @@ var MAX_INLINE_BYTES2 = 256 * 1024;
 // src/share/adapters.ts
 init_dist4();
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
-async function postAddressedShareDelivery(input) {
-  if (input.receipt.request.returnLink !== input.shareUrl) throw new Error("credential invitation is not bound to the share link");
-  return input.fetchFn(`${input.credentialsOrigin}/v1/credential-invitations`, {
-    method: "POST",
-    credentials: "omit",
-    redirect: "error",
-    referrerPolicy: "no-referrer",
-    headers: { accept: "application/json", "content-type": "application/json" },
-    body: JSON.stringify(input.receipt),
-    signal: input.signal
-  });
-}
 function createEncryptedSessionHistory() {
   const records = /* @__PURE__ */ new Map();
   let keyPromise;
@@ -31030,7 +31129,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
 function createShareAuthorityAdapters(input = {}) {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
-  const canonicalOrigin = (value, label) => {
+  const canonicalOrigin2 = (value, label) => {
     if (typeof value !== "string") throw new Error(`share ${label} is unavailable`);
     const parsed = new URL(value);
     const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
@@ -31051,9 +31150,9 @@ function createShareAuthorityAdapters(input = {}) {
     const object3 = value;
     if (object3.version !== "tinycloud.share/config-v2") throw new Error("share public config version is unsupported");
     return {
-      shareOrigin: canonicalOrigin(object3.shareOrigin, "origin"),
-      registryOrigin: canonicalOrigin(object3.registryOrigin, "registry origin"),
-      credentialsOrigin: canonicalOrigin(input.credentialsOrigin ?? object3.credentialsOrigin, "credentials origin")
+      shareOrigin: canonicalOrigin2(object3.shareOrigin, "origin"),
+      registryOrigin: canonicalOrigin2(object3.registryOrigin, "registry origin"),
+      credentialsOrigin: canonicalOrigin2(input.credentialsOrigin ?? object3.credentialsOrigin, "credentials origin")
     };
   })();
   let nodePromise;
@@ -31172,17 +31271,17 @@ function createShareAuthorityAdapters(input = {}) {
       shareUrl: record.link,
       documentName: record.filename ?? "share.md",
       expiresAt: new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1e3)).toISOString(),
-      deliveryAudience: config.credentialsOrigin
+      deliveryAudience: config.credentialsOrigin,
+      idempotencyKey: request.idempotencyKey
     });
-    const response = await postAddressedShareDelivery({
+    await deliverCredentialInvitation({
       credentialsOrigin: config.credentialsOrigin,
       receipt,
       shareUrl: record.link,
       fetchFn,
       signal: request.signal
     });
-    if (!response.ok) throw new Error("share delivery was not accepted");
-    return response.status === 208 ? "already-delivered" : "delivered";
+    return "delivered";
   }) };
   const revocation = {
     revokeDelegation: input.revokeDelegation ?? (async (request) => {
@@ -31213,7 +31312,7 @@ function createShareAuthorityAdapters(input = {}) {
     const decoder = new TinyCloudNode2({ autoDiscoverLocalNode: false });
     const decoded = decoder.sharing.decodeLink(token);
     if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
-    const client = new TinyCloudNode2({ host: canonicalOrigin(decoded.host, "owner node origin"), autoDiscoverLocalNode: false });
+    const client = new TinyCloudNode2({ host: canonicalOrigin2(decoded.host, "owner node origin"), autoDiscoverLocalNode: false });
     const received = await client.sharing.receive(token, { autoSubdelegate: false, useSessionKey: false });
     if (!received.ok) throw new Error("native share could not be verified");
     const value = await received.data.kv.get("", { binary: true });

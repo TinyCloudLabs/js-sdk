@@ -16,6 +16,7 @@ import {
   type ShareRevocationAdapter,
   type TargetPublishOutcome,
   type TargetPublishInput,
+  deliverCredentialInvitation,
 } from "@tinycloud/share-sdk";
 import { canonicalize } from "@tinycloud/share-envelope";
 import { revokePolicyRootV3 } from "@tinycloud/sdk-core";
@@ -30,30 +31,10 @@ export class ShareAuthorityError extends Error {
     this.code = code;
   }
 }
-
 interface SharePublicConfig {
   readonly shareOrigin: string;
   readonly registryOrigin: string;
   readonly credentialsOrigin: string;
-}
-
-export async function postAddressedShareDelivery(input: {
-  readonly credentialsOrigin: string;
-  readonly receipt: { readonly request: { readonly returnLink: string }; readonly admission: unknown; readonly proof: unknown };
-  readonly shareUrl: string;
-  readonly fetchFn: typeof globalThis.fetch;
-  readonly signal?: AbortSignal;
-}): Promise<Response> {
-  if (input.receipt.request.returnLink !== input.shareUrl) throw new Error("credential invitation is not bound to the share link");
-  return input.fetchFn(`${input.credentialsOrigin}/v1/credential-invitations`, {
-    method: "POST",
-    credentials: "omit",
-    redirect: "error",
-    referrerPolicy: "no-referrer",
-    headers: { accept: "application/json", "content-type": "application/json" },
-    body: JSON.stringify(input.receipt),
-    signal: input.signal,
-  });
 }
 
 /**
@@ -333,16 +314,16 @@ export function createShareAuthorityAdapters(input: {
       documentName: record.filename ?? "share.md",
       expiresAt: new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1000)).toISOString(),
       deliveryAudience: config.credentialsOrigin,
+      idempotencyKey: request.idempotencyKey,
     });
-    const response = await postAddressedShareDelivery({
+    await deliverCredentialInvitation({
       credentialsOrigin: config.credentialsOrigin,
       receipt,
       shareUrl: record.link,
       fetchFn,
       signal: request.signal,
     });
-    if (!response.ok) throw new Error("share delivery was not accepted");
-    return response.status === 208 ? "already-delivered" : "delivered";
+    return "delivered";
   }) };
   const revocation: ShareRevocationAdapter = {
     revokeDelegation: input.revokeDelegation ?? (async (request) => {

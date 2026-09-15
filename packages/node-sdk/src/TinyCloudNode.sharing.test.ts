@@ -53,7 +53,6 @@ function makeWasmBindings(): IWasmBindings {
 afterEach(() => {
   globalThis.fetch = originalFetch;
 });
-
 describe("TinyCloudNode sharing", () => {
   test("root sharing delegates SQL actions under the SQL service", async () => {
     const wasmBindings = makeWasmBindings();
@@ -731,15 +730,24 @@ describe("TinyCloudNode sharing", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       nodeProof: { kid: "did:web:node.example#key", publicKey: new Uint8Array(32) },
       deliveryAudience: "https://witness.credentials.org",
+      idempotencyKey: "tinycloud-share:share-1:stable-recipient-digest",
     };
     await expect(node.authorizeShareDeliveryV3({
       ...common,
       envelope: { version: 3 },
       shareCid: "cid",
     })).rejects.toThrow();
-    expect(calls.map((call) => call.url)).toEqual(["https://node.example/policy/v3/deliveries/authorize"]);
+    await expect(node.authorizeShareDeliveryV3({
+      ...common,
+      envelope: { version: 3 },
+      shareCid: "cid",
+    })).rejects.toThrow();
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://node.example/policy/v3/deliveries/authorize",
+      "https://node.example/policy/v3/deliveries/authorize",
+    ]);
 
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
     const { requestBodyDigest, ...unsigned } = calls[0]!.body;
     expect(unsigned).toMatchObject({
       sealedEnvelope: common.sealedEnvelope,
@@ -752,5 +760,8 @@ describe("TinyCloudNode sharing", () => {
       new TextEncoder().encode(canonicalizeEncryptionJson(unsigned)),
     ));
     expect(requestBodyDigest).toBe(Buffer.from(digest).toString("base64url"));
+    expect(calls[1]!.body.jti).toBe(unsigned.jti);
+    expect(calls[1]!.body.requestBodyDigest).toBe(requestBodyDigest);
+    expect(unsigned.jti).toMatch(/^[A-Za-z0-9_-]{22}$/);
   });
 });

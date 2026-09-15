@@ -16,6 +16,8 @@ export { authorizeShare, authorizationMethodForTarget } from "./authorization.js
 export type { ShareAuthorizationMethod, ShareAuthorizationRequired, ShareAuthorizationDenied, ShareAuthorizationReady, ShareAuthorizationResult, ShareAuthorizationAdapter, ShareAuthorizedContent } from "./authorization.js";
 export { notifyShare, recipientMatchesShareRecord, ShareNotifyError } from "./notify.js";
 export type { ShareNotifyState, ShareNotifyResult, ShareNotifyInput, ShareDeliveryAdapter } from "./notify.js";
+export { deliverCredentialInvitation, CredentialInvitationError } from "./credential-invitation.js";
+export type { CredentialInvitationErrorCode, CredentialInvitationReceipt, CredentialInvitationResult } from "./credential-invitation.js";
 export { listShares, showShare, revokeShare } from "./lifecycle.js";
 export type { ShareHistoryView, SharePolicyRootRevocation, ShareRevocationResult, ShareRevocationAdapter } from "./lifecycle.js";
 export { normalizeShareTarget, publishTargetShare, targetAuthorizationMethod } from "./targets.js";
