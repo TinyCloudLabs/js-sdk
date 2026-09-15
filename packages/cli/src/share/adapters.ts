@@ -195,8 +195,6 @@ export function createShareAuthorityAdapters(input: {
     const { ensureAuthenticated } = await import("../lib/sdk.js");
     return ensureAuthenticated(context);
   })();
-  // A Node delivery JTI may only authorize one exact request body, including its expiry.
-  const deliveryAuthorizationExpiries = new Map<string, string>();
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
@@ -306,11 +304,14 @@ export function createShareAuthorityAdapters(input: {
       || request.idempotencyKey === undefined
     ) throw new Error("share delivery history is incomplete");
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
-    let authorizationExpiresAt = deliveryAuthorizationExpiries.get(request.idempotencyKey);
-    if (authorizationExpiresAt === undefined) {
-      authorizationExpiresAt = new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1000)).toISOString();
-      deliveryAuthorizationExpiries.set(request.idempotencyKey, authorizationExpiresAt);
-    }
+    // Bind the JTI to a process-stable body for the full Node retry window.
+    // `registeredAt` is persisted before notification starts, so a recreated
+    // adapter derives the same expiry without retaining unbounded local state.
+    const authorizationExpiresAt = new Date(Math.min(
+      Date.parse(record.expiresAt),
+      Date.parse(record.registeredAt) + 5 * 60 * 1000,
+    )).toISOString();
+    if (Date.parse(authorizationExpiresAt) <= Date.now()) throw new Error("share delivery authorization retry window has expired");
     const receipt = await node.authorizeShareDeliveryV3({
       envelope: record.deliveryMaterial.envelope as Parameters<typeof node.authorizeShareDeliveryV3>[0]["envelope"],
       sealedEnvelope: record.deliveryMaterial.sealedEnvelope,

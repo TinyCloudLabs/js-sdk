@@ -17860,6 +17860,7 @@ async function parseSealedInlineShareUrl(url, options = {}) {
   if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("sealed inline share URL must be canonical HTTPS without userinfo");
   if (!isCanonicalHttpsOrigin(parsed.origin) || options.expectedOrigin !== void 0 && parsed.origin !== options.expectedOrigin) throw new TypeError("sealed inline share URL origin is not trusted");
   if (parsed.pathname !== "/s/inline" || parsed.search !== "") throw new TypeError("not a Node sealed-inline share URL");
+  if (url !== `${parsed.origin}/s/inline${parsed.hash}`) throw new TypeError("sealed inline share URL is not lexically canonical");
   const prefix = "#v=2&p=";
   if (!parsed.hash.startsWith(prefix)) throw new TypeError("sealed inline URL is missing its canonical fragment");
   const encoded = parsed.hash.slice(prefix.length);
@@ -31162,7 +31163,6 @@ function createShareAuthorityAdapters(input = {}) {
     const { ensureAuthenticated: ensureAuthenticated2 } = await Promise.resolve().then(() => (init_sdk(), sdk_exports));
     return ensureAuthenticated2(context);
   })();
-  const deliveryAuthorizationExpiries = /* @__PURE__ */ new Map();
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
@@ -31262,11 +31262,11 @@ function createShareAuthorityAdapters(input = {}) {
     const record = request.record;
     if (record === void 0 || record.link === void 0 || record.deliveryMaterial === void 0 || request.idempotencyKey === void 0) throw new Error("share delivery history is incomplete");
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
-    let authorizationExpiresAt = deliveryAuthorizationExpiries.get(request.idempotencyKey);
-    if (authorizationExpiresAt === void 0) {
-      authorizationExpiresAt = new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1e3)).toISOString();
-      deliveryAuthorizationExpiries.set(request.idempotencyKey, authorizationExpiresAt);
-    }
+    const authorizationExpiresAt = new Date(Math.min(
+      Date.parse(record.expiresAt),
+      Date.parse(record.registeredAt) + 5 * 60 * 1e3
+    )).toISOString();
+    if (Date.parse(authorizationExpiresAt) <= Date.now()) throw new Error("share delivery authorization retry window has expired");
     const receipt = await node.authorizeShareDeliveryV3({
       envelope: record.deliveryMaterial.envelope,
       sealedEnvelope: record.deliveryMaterial.sealedEnvelope,

@@ -148,6 +148,25 @@ describe("share link codec", () => {
     });
   });
 
+  it("rejects non-canonical lexical aliases of a sealed-inline URL", async () => {
+    const url = await encodeSealedInlineShareUrl({
+      origin: ORIGIN,
+      ciphertext: utf8Bytes("sealed bytes"),
+      key32: generateKey(),
+    });
+    const suffix = url.slice(ORIGIN.length);
+    for (const alias of [
+      `https://SHARE.tinycloud.xyz${suffix}`,
+      `https://share.tinycloud.xyz:443${suffix}`,
+      `https://share.tinycloud.xyz:0443${suffix}`,
+      `https://%73hare.tinycloud.xyz${suffix}`,
+      `HTTPS://share.tinycloud.xyz${suffix}`,
+      `${ORIGIN}/s/inline?${new URL(url).hash}`,
+    ]) {
+      await expect(parseSealedInlineShareUrl(alias, { expectedOrigin: ORIGIN })).rejects.toThrow(TypeError);
+    }
+  });
+
   it("rejects sealed-inline fragment, key, and CID tampering", async () => {
     const key32 = generateKey();
     const ciphertext = utf8Bytes("sealed bytes");
