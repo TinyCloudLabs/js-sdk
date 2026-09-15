@@ -1,5 +1,26 @@
 # @tinycloudlabs/web-sdk
 
+## 3.0.0-beta.10
+
+### Major Changes
+
+- b852650: Seal Policy/v3 recipient metadata as the canonical AES-256-GCM
+  `version || nonce || ciphertext+tag` blob before constructing an addressed
+  share link. Delivery authorization now binds that sealed blob and its
+  fragment-only key, rather than accepting a plaintext `?tc2` envelope. Remove
+  the public plaintext Policy/v3 inline URL codec; only sealed fragment links
+  are accepted for addressed shares. Add the reusable app-neutral
+  OpenCredentials invitation client and bind notification retries to the signed
+  delivery JTI/nonce used by Node and OpenCredentials deduplication.
+
+### Patch Changes
+
+- Updated dependencies [b852650]
+  - @tinycloud/share-envelope@1.0.0-beta.4
+  - @tinycloud/share-sdk@1.0.0-beta.4
+  - @tinycloud/sdk-core@3.0.0-beta.10
+  - @tinycloud/node-sdk@3.0.0-beta.10
+
 ## 3.0.0-beta.9
 
 ### Major Changes
