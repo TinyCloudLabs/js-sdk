@@ -195,6 +195,8 @@ export function createShareAuthorityAdapters(input: {
     const { ensureAuthenticated } = await import("../lib/sdk.js");
     return ensureAuthenticated(context);
   })();
+  // A Node delivery JTI may only authorize one exact request body, including its expiry.
+  const deliveryAuthorizationExpiries = new Map<string, string>();
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
@@ -301,8 +303,14 @@ export function createShareAuthorityAdapters(input: {
       record === undefined
       || record.link === undefined
       || record.deliveryMaterial === undefined
+      || request.idempotencyKey === undefined
     ) throw new Error("share delivery history is incomplete");
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
+    let authorizationExpiresAt = deliveryAuthorizationExpiries.get(request.idempotencyKey);
+    if (authorizationExpiresAt === undefined) {
+      authorizationExpiresAt = new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1000)).toISOString();
+      deliveryAuthorizationExpiries.set(request.idempotencyKey, authorizationExpiresAt);
+    }
     const receipt = await node.authorizeShareDeliveryV3({
       envelope: record.deliveryMaterial.envelope as Parameters<typeof node.authorizeShareDeliveryV3>[0]["envelope"],
       sealedEnvelope: record.deliveryMaterial.sealedEnvelope,
@@ -312,7 +320,7 @@ export function createShareAuthorityAdapters(input: {
       recipientEmail: request.recipient,
       shareUrl: record.link,
       documentName: record.filename ?? "share.md",
-      expiresAt: new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1000)).toISOString(),
+      expiresAt: authorizationExpiresAt,
       deliveryAudience: config.credentialsOrigin,
       idempotencyKey: request.idempotencyKey,
     });

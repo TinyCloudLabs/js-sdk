@@ -31162,6 +31162,7 @@ function createShareAuthorityAdapters(input = {}) {
     const { ensureAuthenticated: ensureAuthenticated2 } = await Promise.resolve().then(() => (init_sdk(), sdk_exports));
     return ensureAuthenticated2(context);
   })();
+  const deliveryAuthorizationExpiries = /* @__PURE__ */ new Map();
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
@@ -31259,8 +31260,13 @@ function createShareAuthorityAdapters(input = {}) {
   } };
   const delivery = { deliver: input.deliver ?? (async (request) => {
     const record = request.record;
-    if (record === void 0 || record.link === void 0 || record.deliveryMaterial === void 0) throw new Error("share delivery history is incomplete");
+    if (record === void 0 || record.link === void 0 || record.deliveryMaterial === void 0 || request.idempotencyKey === void 0) throw new Error("share delivery history is incomplete");
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
+    let authorizationExpiresAt = deliveryAuthorizationExpiries.get(request.idempotencyKey);
+    if (authorizationExpiresAt === void 0) {
+      authorizationExpiresAt = new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1e3)).toISOString();
+      deliveryAuthorizationExpiries.set(request.idempotencyKey, authorizationExpiresAt);
+    }
     const receipt = await node.authorizeShareDeliveryV3({
       envelope: record.deliveryMaterial.envelope,
       sealedEnvelope: record.deliveryMaterial.sealedEnvelope,
@@ -31270,7 +31276,7 @@ function createShareAuthorityAdapters(input = {}) {
       recipientEmail: request.recipient,
       shareUrl: record.link,
       documentName: record.filename ?? "share.md",
-      expiresAt: new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1e3)).toISOString(),
+      expiresAt: authorizationExpiresAt,
       deliveryAudience: config.credentialsOrigin,
       idempotencyKey: request.idempotencyKey
     });
