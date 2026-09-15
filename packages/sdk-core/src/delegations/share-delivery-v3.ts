@@ -8,6 +8,10 @@ export const DELIVERY_ADMISSION_DOMAIN = "xyz.tinycloud.policy/delivery-admissio
 
 export interface ShareDeliveryAuthorizationV3Request {
   readonly envelope: Record<string, unknown>;
+  /** Base64url canonical sealed envelope bytes, bound by the Node before delivery. */
+  readonly sealedEnvelope: string;
+  /** Base64url 32-byte AES-GCM key; this is the #k fragment value in the return link. */
+  readonly envelopeKey: string;
   readonly shareCid: string;
   readonly recipientEmail: string;
   readonly shareUrl: string;

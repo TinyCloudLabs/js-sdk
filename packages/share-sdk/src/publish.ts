@@ -45,8 +45,20 @@ export interface PublishedShareMetadata {
 
 /** Sender-only Policy/v3 material retained in encrypted history for delivery retries. */
 export interface PublishedShareDeliveryMaterial {
+  /**
+   * The signed plaintext policy envelope. It is retained only in encrypted
+   * sender history so a delivery can be retried; it never travels in a URL.
+   */
   readonly envelope: Readonly<Record<string, unknown>>;
+  /** CIDv1/raw/sha2-256 of `sealedEnvelope`, and the CID in the share URL. */
   readonly shareCid: string;
+  /**
+   * Canonical `version || nonce || AES-256-GCM ciphertext+tag`, base64url.
+   * Node reopens this exact value before authorizing email delivery.
+   */
+  readonly sealedEnvelope: string;
+  /** 32-byte AES-GCM key for `sealedEnvelope`, base64url and fragment-only in the URL. */
+  readonly envelopeKey: string;
 }
 
 export interface PublishedShare {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { generateKey } from "../src/aead.js";
 import { computeCid } from "../src/cid.js";
-import { encodeInlineShareUrl, encodePublicInlineShareUrl, encodeShareUrl, parseCompactOrInlineShareUrl, parseShareUrl } from "../src/link.js";
+import { encodeSealedInlineShareUrl, encodeShareUrl, parseSealedInlineShareUrl, parseShareUrl } from "../src/link.js";
 import { utf8Bytes } from "../src/bytes.js";
 
 const ORIGIN = "https://share.tinycloud.xyz";
@@ -133,37 +133,55 @@ describe("share link codec", () => {
     expect(() => parseShareUrl(`${ORIGIN}/s/${sha512Cid}#k=${goodKeyPart}`)).toThrow(TypeError);
   });
 
-  it("round-trips the explicit v2 inline fragment without a query string", async () => {
-    const key32 = generateKey();
-    const ciphertext = utf8Bytes("sealed envelope bytes");
-    const url = await encodeInlineShareUrl({ origin: ORIGIN, ciphertext, key32 });
-    const parsed = parseCompactOrInlineShareUrl(url);
-    expect(parsed.kind).toBe("inline");
-    if (parsed.kind !== "inline") throw new Error("expected inline");
-    expect(parsed.ciphertext).toEqual(ciphertext);
-    expect(parsed.key32).toEqual(key32);
-    expect(new URL(url).search).toBe("");
-  });
-
-  it("round-trips a public addressed envelope without a fragment or key", async () => {
-    const plaintext = utf8Bytes('{"signed":"policy-envelope"}');
-    const url = await encodePublicInlineShareUrl({ origin: ORIGIN, plaintext });
+  it("emits Node's canonical sealed-inline form with no loggable metadata", async () => {
+    const key32 = Uint8Array.from({ length: 32 }, (_, index) => index);
+    const ciphertext = utf8Bytes("\x01sealed recipient policy envelope");
+    const url = await encodeSealedInlineShareUrl({ origin: ORIGIN, ciphertext, key32 });
     const parsedUrl = new URL(url);
-    const parsed = parseCompactOrInlineShareUrl(url);
-    expect(parsedUrl.pathname).toBe("/viewer");
-    expect(parsedUrl.hash).toBe("");
-    expect([...parsedUrl.searchParams.keys()]).toEqual(["tc2"]);
-    expect(parsed.kind).toBe("inline");
-    if (parsed.kind !== "inline") throw new Error("expected inline");
-    expect(parsed.ciphertext).toEqual(plaintext);
-    expect(parsed.key32).toBeUndefined();
-    expect(() => parseCompactOrInlineShareUrl(`${url}#tc2=secret`)).toThrow(TypeError);
-    expect(() => parseCompactOrInlineShareUrl(`${url}&k=secret`)).toThrow(TypeError);
+    expect(parsedUrl.pathname).toBe("/s/inline");
+    expect(parsedUrl.search).toBe("");
+    expect(parsedUrl.hash).toMatch(/^#v=2&p=[A-Za-z0-9_-]+$/);
+    expect(url).not.toContain("alice@example.com");
+    await expect(parseSealedInlineShareUrl(url, { expectedOrigin: ORIGIN })).resolves.toMatchObject({
+      ciphertext,
+      key32,
+    });
   });
 
-  it("rejects inline payload tampering and untrusted origins", async () => {
-    const url = await encodeInlineShareUrl({ origin: ORIGIN, ciphertext: utf8Bytes("x"), key32: generateKey() });
-    expect(() => parseCompactOrInlineShareUrl(url.replace("share.tinycloud.xyz", "evil.example"), { expectedOrigin: ORIGIN })).toThrow(TypeError);
-    expect(() => parseCompactOrInlineShareUrl(url.replace("#tc2=", "#tc2=!"))).toThrow(TypeError);
+  it("rejects non-canonical lexical aliases of a sealed-inline URL", async () => {
+    const url = await encodeSealedInlineShareUrl({
+      origin: ORIGIN,
+      ciphertext: utf8Bytes("sealed bytes"),
+      key32: generateKey(),
+    });
+    const suffix = url.slice(ORIGIN.length);
+    for (const alias of [
+      `https://SHARE.tinycloud.xyz${suffix}`,
+      `https://share.tinycloud.xyz:443${suffix}`,
+      `https://share.tinycloud.xyz:0443${suffix}`,
+      `https://%73hare.tinycloud.xyz${suffix}`,
+      `HTTPS://share.tinycloud.xyz${suffix}`,
+      `${ORIGIN}/s/inline?${new URL(url).hash}`,
+    ]) {
+      await expect(parseSealedInlineShareUrl(alias, { expectedOrigin: ORIGIN })).rejects.toThrow(TypeError);
+    }
+  });
+
+  it("rejects sealed-inline fragment, key, and CID tampering", async () => {
+    const key32 = generateKey();
+    const ciphertext = utf8Bytes("sealed bytes");
+    const url = await encodeSealedInlineShareUrl({ origin: ORIGIN, ciphertext, key32 });
+    const payload = url.slice(url.indexOf("#v=2&p=") + "#v=2&p=".length);
+    const malformed = `${url.slice(0, url.indexOf(payload))}${payload.slice(0, -1)}${payload.endsWith("A") ? "B" : "A"}`;
+    await expect(parseSealedInlineShareUrl(malformed)).rejects.toThrow(TypeError);
+    const wrongKey = await encodeSealedInlineShareUrl({ origin: ORIGIN, ciphertext, key32: new Uint8Array(32) });
+    await expect(parseSealedInlineShareUrl(wrongKey)).resolves.toMatchObject({ ciphertext });
+    await expect(parseSealedInlineShareUrl(`${url}?recipient=alice@example.com`)).rejects.toThrow(TypeError);
+  });
+
+  it("fails closed on retired plaintext query URLs", async () => {
+    const legacy = `${ORIGIN}/viewer?tc2=eyJyZWNpcGllbnQiOiJhbGljZUBleGFtcGxlLmNvbSJ9`;
+    expect(() => parseShareUrl(legacy)).toThrow(TypeError);
+    await expect(parseSealedInlineShareUrl(legacy)).rejects.toThrow(TypeError);
   });
 });

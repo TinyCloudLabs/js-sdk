@@ -52,6 +52,7 @@ export function validateShareReceiverExpectedOrigin(shareUrl: string, expectedOr
   const expected = new URL(expectedOrigin);
   const allowed = (url: URL) => url.protocol === "https:" || url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost");
   if (!allowed(link) || !allowed(expected) || expected.origin !== expectedOrigin || link.origin !== expected.origin) throw new Error("share URL origin does not match the configured Share deployment");
+  if (link.search !== "") throw new Error("share URL must not carry a query string");
   return expected.origin;
 }
 

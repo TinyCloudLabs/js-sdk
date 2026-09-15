@@ -16,6 +16,7 @@ import {
   type ShareRevocationAdapter,
   type TargetPublishOutcome,
   type TargetPublishInput,
+  deliverCredentialInvitation,
 } from "@tinycloud/share-sdk";
 import { canonicalize } from "@tinycloud/share-envelope";
 import { revokePolicyRootV3 } from "@tinycloud/sdk-core";
@@ -30,30 +31,10 @@ export class ShareAuthorityError extends Error {
     this.code = code;
   }
 }
-
 interface SharePublicConfig {
   readonly shareOrigin: string;
   readonly registryOrigin: string;
-  readonly emailOrigin: string;
-}
-
-export async function postAddressedShareDelivery(input: {
-  readonly emailOrigin: string;
-  readonly receipt: { readonly request: { readonly returnLink: string }; readonly admission: unknown; readonly proof: unknown };
-  readonly shareUrl: string;
-  readonly fetchFn: typeof globalThis.fetch;
-  readonly signal?: AbortSignal;
-}): Promise<Response> {
-  if (input.receipt.request.returnLink !== input.shareUrl) throw new Error("credential invitation is not bound to the share link");
-  return input.fetchFn(`${input.emailOrigin}/v1/email`, {
-    method: "POST",
-    credentials: "omit",
-    redirect: "error",
-    referrerPolicy: "no-referrer",
-    headers: { accept: "application/json", "content-type": "application/json" },
-    body: JSON.stringify(input.receipt),
-    signal: input.signal,
-  });
+  readonly credentialsOrigin: string;
 }
 
 /**
@@ -164,7 +145,7 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
 export function createShareAuthorityAdapters(input: {
   readonly origin?: string;
   readonly nodeOrigin?: string;
-  readonly emailOrigin?: string;
+  readonly credentialsOrigin?: string;
   readonly profileName?: () => Promise<string>;
   readonly fetchFn?: typeof globalThis.fetch;
   /** Injected in-process authority for tests or a host-specific deployment. */
@@ -204,7 +185,7 @@ export function createShareAuthorityAdapters(input: {
     return {
       shareOrigin: canonicalOrigin(object.shareOrigin, "origin"),
       registryOrigin: canonicalOrigin(object.registryOrigin, "registry origin"),
-      emailOrigin: canonicalOrigin(input.emailOrigin ?? object.emailOrigin, "email origin"),
+      credentialsOrigin: canonicalOrigin(input.credentialsOrigin ?? object.credentialsOrigin, "credentials origin"),
     };
   })();
   let nodePromise: Promise<Awaited<ReturnType<typeof import("../lib/sdk.js")["ensureAuthenticated"]>>> | undefined;
@@ -320,27 +301,38 @@ export function createShareAuthorityAdapters(input: {
       record === undefined
       || record.link === undefined
       || record.deliveryMaterial === undefined
+      || request.idempotencyKey === undefined
     ) throw new Error("share delivery history is incomplete");
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
+    // Bind the JTI to a process-stable body for the full Node retry window.
+    // `registeredAt` is persisted before notification starts, so a recreated
+    // adapter derives the same expiry without retaining unbounded local state.
+    const authorizationExpiresAt = new Date(Math.min(
+      Date.parse(record.expiresAt),
+      Date.parse(record.registeredAt) + 5 * 60 * 1000,
+    )).toISOString();
+    if (Date.parse(authorizationExpiresAt) <= Date.now()) throw new Error("share delivery authorization retry window has expired");
     const receipt = await node.authorizeShareDeliveryV3({
       envelope: record.deliveryMaterial.envelope as Parameters<typeof node.authorizeShareDeliveryV3>[0]["envelope"],
+      sealedEnvelope: record.deliveryMaterial.sealedEnvelope,
+      envelopeKey: record.deliveryMaterial.envelopeKey,
       shareCid: record.deliveryMaterial.shareCid,
       resourcePath: record.resource.path,
       recipientEmail: request.recipient,
       shareUrl: record.link,
       documentName: record.filename ?? "share.md",
-      expiresAt: new Date(Math.min(Date.parse(record.expiresAt), Date.now() + 5 * 60 * 1000)).toISOString(),
-      deliveryAudience: config.emailOrigin,
+      expiresAt: authorizationExpiresAt,
+      deliveryAudience: config.credentialsOrigin,
+      idempotencyKey: request.idempotencyKey,
     });
-    const response = await postAddressedShareDelivery({
-      emailOrigin: config.emailOrigin,
+    await deliverCredentialInvitation({
+      credentialsOrigin: config.credentialsOrigin,
       receipt,
       shareUrl: record.link,
       fetchFn,
       signal: request.signal,
     });
-    if (!response.ok) throw new Error("share delivery was not accepted");
-    return response.status === 208 ? "already-delivered" : "delivered";
+    return "delivered";
   }) };
   const revocation: ShareRevocationAdapter = {
     revokeDelegation: input.revokeDelegation ?? (async (request) => {

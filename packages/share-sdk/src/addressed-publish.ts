@@ -1,6 +1,6 @@
 import { sha256 } from "@noble/hashes/sha256";
 import {
-  canonicalize, computeCid, encodePublicInlineShareUrl,
+  canonicalize, computeCid, encodeSealedInlineShareUrl, generateKey, seal,
   shareEnvelopeV3Schema, toBase64Url, unsignedShareEnvelopeV3Schema,
   type PolicyCredentialRequirementV1, type ShareAction, type UnifiedContentSource,
   type UnifiedPolicy, type UnifiedPolicyCapability, type UnifiedRoot,
@@ -96,10 +96,7 @@ export interface AddressedSharePublishOptions {
   readonly deliveryEmail?: string;
   readonly expiresAt: Date;
   /** Sender-history material required by Node's Policy/v3 delivery authorization. */
-  readonly onDeliveryMaterial?: (input: {
-    readonly envelope: Readonly<Record<string, unknown>>;
-    readonly shareCid: string;
-  }) => void;
+  readonly onDeliveryMaterial?: (input: PublishedShareDeliveryMaterial) => void;
   readonly authority: AddressedPublishAuthority;
 }
 
@@ -273,12 +270,26 @@ export async function publishAddressedShare(options: AddressedSharePublishOption
   const envelope = { ...unsigned, signature: { signerDid: options.authority.ownerDid, algorithm: "Ed25519" as const, value: toBase64Url(envelopeSignature) } };
   shareEnvelopeV3Schema.parse(envelope);
   const envelopeBytes = textEncoder.encode(canonicalize(envelope));
-  const envelopeCid = await computeCid(envelopeBytes);
-  const url = await encodePublicInlineShareUrl({ origin: options.shareOrigin, plaintext: envelopeBytes });
-  const deliveryMaterial = { envelope, shareCid: envelopeCid };
+  // The recipient envelope carries email and policy metadata.  Seal it before
+  // assigning its CID or constructing a URL: neither metadata nor the key
+  // may occur in a query parameter or any other loggable URL component.
+  const envelopeKeyBytes = generateKey();
+  const sealed = await seal(envelopeBytes, envelopeKeyBytes);
+  const envelopeKey = toBase64Url(envelopeKeyBytes);
+  const url = await encodeSealedInlineShareUrl({
+    origin: options.shareOrigin,
+    ciphertext: sealed.blob,
+    key32: envelopeKeyBytes,
+  });
+  const deliveryMaterial = {
+    envelope,
+    shareCid: sealed.cid,
+    sealedEnvelope: toBase64Url(sealed.blob),
+    envelopeKey,
+  };
   options.onDeliveryMaterial?.(deliveryMaterial);
   return publicationResult({
-    options, url, envelopeCid, matcher, policyCid: created.policyCid,
+    options, url, envelopeCid: sealed.cid, matcher, policyCid: created.policyCid,
     policyRootCid: policyRoot.cid, enforcementRootCid: enforcementRoot.cid,
     enforcerDid: registration.attestedEnforcerBinding.enforcerDid,
     expiry, deliveryMaterial,

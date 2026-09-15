@@ -4347,6 +4347,10 @@ export class TinyCloudNode {
   /** Authorize one short-lived v3 delivery against the signed v3 envelope and registered roots. */
   async authorizeShareDeliveryV3(input: {
     readonly envelope: Record<string, CanonicalJson | undefined>;
+    /** Canonical sealed recipient envelope: version || nonce || ciphertext+tag. */
+    readonly sealedEnvelope: string;
+    /** Base64url 32-byte envelope key; it must also be the URL fragment key. */
+    readonly envelopeKey: string;
     readonly shareCid: string;
     readonly resourcePath: string;
     readonly recipientEmail: string;
@@ -4354,17 +4358,29 @@ export class TinyCloudNode {
     readonly documentName: string;
     readonly expiresAt: string;
     readonly deliveryAudience: string;
+    /** Stable caller retry identity. It is hashed into the protocol's 16-byte JTI. */
+    readonly idempotencyKey: string;
   }): Promise<ShareDeliveryAuthorizationV3Receipt> {
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
     if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
+    const idempotencyBytes = new TextEncoder().encode(input.idempotencyKey);
+    if (idempotencyBytes.byteLength === 0 || idempotencyBytes.byteLength > 512) {
+      throw new Error("Share delivery idempotency key is invalid");
+    }
+    // Node and OpenCredentials deduplicate on the signed 16-byte JTI/nonce.
+    // Never send the caller's opaque retry key over the wire: it can contain
+    // application identifiers and has no protocol meaning beyond this binding.
+    const jtiDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", idempotencyBytes));
     const body = {
       envelope: input.envelope,
+      sealedEnvelope: input.sealedEnvelope,
+      envelopeKey: input.envelopeKey,
       shareCid: input.shareCid,
       recipientEmail: input.recipientEmail,
       shareUrl: input.shareUrl,
       documentName: input.documentName,
-      jti: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
+      jti: base64UrlEncode(jtiDigest.slice(0, 16)),
       expiresAt: new Date(input.expiresAt).toISOString().replace(/\.\d{3}Z$/, "Z"),
     };
     const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));

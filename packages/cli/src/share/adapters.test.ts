@@ -1,11 +1,16 @@
 import { describe, expect, it, mock } from "bun:test";
 import { readFile } from "node:fs/promises";
+import { encodeSealedInlineShareUrl } from "@tinycloud/share-envelope";
+import { notifyShare, type SenderShareRecord } from "@tinycloud/share-sdk";
 
 const transportDid = "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX";
 const credentialHolderDid = "did:key:z6Mko9hTggMwjSTEaJaPUfE6tqcy2xvU6BnNq3e3o8qVBiyH";
 const nodeDid = "did:key:z6MkvRXNYcE7MMduynWTgeKbDaT1iijDSC8pZqXZc8rHPrf2";
 const ownerRootInputs: Array<{ readonly ownerDid: string; readonly role: string }> = [];
 const sessionSignatures: Uint8Array[] = [];
+const deliveryAuthorizationInputs: Array<Record<string, unknown>> = [];
+let deliveryAuthorization: { readonly key: string; readonly body: string; readonly receipt: Record<string, unknown> } | undefined;
+let deliveryAuthorizationConflicts = 0;
 
 const node = {
   did: transportDid,
@@ -57,6 +62,25 @@ const node = {
       signature: { suite: "Ed25519" as const, signerDid: nodeDid, value: "AQ" },
     },
   }),
+  authorizeShareDeliveryV3: async (input: Record<string, unknown> & { readonly expiresAt: string; readonly idempotencyKey: string; readonly shareUrl: string }) => {
+    const captured = { ...input };
+    const body = JSON.stringify(captured);
+    deliveryAuthorizationInputs.push(captured);
+    if (deliveryAuthorization?.key === input.idempotencyKey) {
+      if (deliveryAuthorization.body !== body) {
+        deliveryAuthorizationConflicts += 1;
+        throw new Error("V3 share delivery authorization failed: 409");
+      }
+      return deliveryAuthorization.receipt;
+    }
+    const receipt = {
+      request: { returnLink: input.shareUrl },
+      admission: {},
+      proof: { signature: "stable-replay-proof" },
+    };
+    deliveryAuthorization = { key: input.idempotencyKey, body, receipt };
+    return receipt;
+  },
 };
 
 mock.module("../config/profiles.js", () => ({
@@ -64,7 +88,7 @@ mock.module("../config/profiles.js", () => ({
 }));
 mock.module("../lib/sdk.js", () => ({ ensureAuthenticated: async () => node }));
 
-const { createShareAuthorityAdapters, postAddressedShareDelivery } = await import("./adapters.js");
+const { createShareAuthorityAdapters } = await import("./adapters.js");
 
 describe("TinyCloud share authority adapter", () => {
   it("routes addressed delivery through Policy/v3 with no retired Node delivery fallback", async () => {
@@ -102,7 +126,7 @@ describe("TinyCloud share authority adapter", () => {
             version: "tinycloud.share/config-v2",
             shareOrigin: "https://share.example",
             registryOrigin: "https://registry.example",
-            emailOrigin: "https://email.example",
+            credentialsOrigin: "https://credentials.example",
           });
         }) as typeof globalThis.fetch,
       });
@@ -150,38 +174,96 @@ describe("TinyCloud share authority adapter", () => {
     }
   });
 
-  it("posts the exact signed delivery receipt only to api.share", async () => {
-    const emailOrigin = "https://email.example";
-    const request = { returnLink: "https://share.example/viewer?tc2=public-policy" };
-    const admission = { schema: "xyz.tinycloud.policy/delivery-admission/v0" };
-    const proof = { alg: "EdDSA", kid: "did:web:node.example#key", signature: "test-signature" };
-    const shareUrl = request.returnLink;
-    const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
+  it("uses the reusable Share SDK invitation client and forwards notify idempotency to Node", async () => {
+    const source = await readFile(new URL("./adapters.ts", import.meta.url), "utf8");
+    expect(source).toContain("deliverCredentialInvitation({");
+    expect(source).toContain("idempotencyKey: request.idempotencyKey");
+    expect(source).not.toContain("credential-invitations");
+    expect(source).not.toContain("postAddressedShareDelivery");
+  });
 
-    const response = await postAddressedShareDelivery({
-      emailOrigin,
-      receipt: { request, admission, proof },
-      shareUrl,
-      fetchFn: (async (input, init) => {
-        calls.push({ url: String(input), init });
-        return new Response(null, { status: 202 });
-      }) as typeof globalThis.fetch,
-    });
+  it("keeps a lost-response retry identical after the clock advances and the adapter is recreated", async () => {
+    deliveryAuthorizationInputs.length = 0;
+    deliveryAuthorization = undefined;
+    deliveryAuthorizationConflicts = 0;
+    const originalNow = Date.now;
+    let now = Date.parse("2026-09-15T01:00:00.000Z");
+    Date.now = () => now;
+    let invitationAttempts = 0;
+    const invitationBodies: string[] = [];
+    try {
+      const link = await encodeSealedInlineShareUrl({
+        origin: "https://share.example",
+        ciphertext: new Uint8Array([1, 2, 3]),
+        key32: new Uint8Array(32).fill(7),
+      });
+      const record: SenderShareRecord = {
+        shareId: "share-retry",
+        target: { origin: "https://node.example", nodeAudience: nodeDid, spaceId: "tinycloud:test-space" },
+        resource: { kind: "exact", path: "shares/share-retry/readme.md" },
+        actions: ["tinycloud.kv/get"],
+        recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+        registeredAt: "2026-09-15T01:00:00.000Z",
+        expiresAt: "2030-01-01T00:00:00.000Z",
+        link,
+        filename: "readme.md",
+        deliveryMaterial: {
+          envelope: { version: 3 },
+          sealedEnvelope: "AQ",
+          envelopeKey: "A".repeat(43),
+          shareCid: "bafkreibm6jg3ux5qucnwb24kinphs4b5fbc7n5t3lti2skm4du5qjn4fli",
+        },
+      };
+      const createDelivery = () => createShareAuthorityAdapters({
+        origin: "https://share.example",
+        profileName: async () => "test",
+        fetchFn: (async (input: string | URL | Request, init?: RequestInit) => {
+          const url = String(input);
+          if (url.endsWith("/.well-known/tinycloud-share/config.json")) {
+            return Response.json({
+              version: "tinycloud.share/config-v2",
+              shareOrigin: "https://share.example",
+              registryOrigin: "https://registry.example",
+              credentialsOrigin: "https://credentials.example",
+            });
+          }
+          expect(url).toBe("https://credentials.example/v1/credential-invitations");
+          invitationAttempts += 1;
+          invitationBodies.push(String(init?.body));
+          if (invitationAttempts === 1) {
+            throw new Error("response lost after Node authorization");
+          }
+          return Response.json({ status: "accepted" }, { status: 202 });
+        }) as typeof globalThis.fetch,
+      }).delivery;
 
-    expect(response.status).toBe(202);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe(`${emailOrigin}/v1/email`);
-    expect(calls[0]?.init).toMatchObject({
-      method: "POST",
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-    });
-    expect(calls[0]?.init).not.toHaveProperty("referrer");
-    expect(calls[0]?.init?.headers).toEqual({ accept: "application/json", "content-type": "application/json" });
-    const body = JSON.parse(String(calls[0]?.init?.body));
-    expect(body).toEqual({ request, admission, proof });
-    expect(Object.keys(body).sort()).toEqual(["admission", "proof", "request"]);
+      const first = await notifyShare({
+        shareId: record.shareId,
+        recipient: "alice@example.com",
+        record,
+        adapter: createDelivery(),
+        maxAttempts: 1,
+      });
+      expect(first).toMatchObject({ state: "partial-failure", attempts: 1 });
+
+      now += 2_000;
+      await expect(notifyShare({
+        shareId: record.shareId,
+        recipient: "alice@example.com",
+        record,
+        adapter: createDelivery(),
+        maxAttempts: 1,
+      })).resolves.toMatchObject({ state: "delivered", attempts: 1, idempotencyKey: first.idempotencyKey });
+
+      expect(deliveryAuthorizationInputs).toHaveLength(2);
+      expect(deliveryAuthorizationInputs[1]).toEqual(deliveryAuthorizationInputs[0]);
+      expect(deliveryAuthorizationInputs[0]?.expiresAt).toBe("2026-09-15T01:05:00.000Z");
+      expect(Date.parse(String(deliveryAuthorizationInputs[1]?.expiresAt)) - now).toBe(298_000);
+      expect(deliveryAuthorizationConflicts).toBe(0);
+      expect(invitationBodies[1]).toBe(invitationBodies[0]);
+    } finally {
+      Date.now = originalNow;
+    }
   });
 
 });

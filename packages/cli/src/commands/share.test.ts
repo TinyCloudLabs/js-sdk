@@ -28,14 +28,14 @@ describe("tc share command contract", () => {
     let reads = 0;
     let inspected = "";
     const result = await inspectShareInputOnce(undefined, true, "https://share.example", {
-      read: async () => { reads += 1; return "https://share.example/viewer?tc2=addressed"; },
+      read: async () => { reads += 1; return "https://share.example/s/inline#v=2&p=sealed"; },
       inspect: (async (link) => {
         inspected = link;
         return { protocol: "tinycloud-share", version: 1 } as never;
       }) as never,
     });
     expect(reads).toBe(1);
-    expect(inspected).toBe("https://share.example/viewer?tc2=addressed");
+    expect(inspected).toBe("https://share.example/s/inline#v=2&p=sealed");
     expect(result).toMatchObject({ protocol: "tinycloud-share", version: 1 });
   });
 });

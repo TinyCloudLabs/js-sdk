@@ -10,6 +10,7 @@ import {
   intersectShareCapabilities,
   parsePublishedShareEnvelope,
   parseShareUrl,
+  isV2ShareLink,
   ShareEnvelopeError,
   normalizeShareRecipientTarget,
   shareCapabilityAllows,
@@ -130,6 +131,11 @@ describe("ShareRecipientClient", () => {
       { spaceId: SPACE, resource: { kind: "prefix", path: "docs/" }, actions: ["read", "list", "edit"] },
       { spaceId: SPACE, resource: { kind: "exact", path: "docs/readme.md" }, actions: ["read", "edit"] },
     )).toMatchObject({ resource: { kind: "exact", path: "docs/readme.md" }, actions: ["edit", "read"] });
+  });
+
+  test("fails closed on retired plaintext viewer query links", () => {
+    expect(() => parseShareUrl("https://share.example.test/viewer?tc2=eyJyZWNpcGllbnQiOiJhbGljZUBleGFtcGxlLmNvbSJ9", { trustedOrigins: [ORIGIN] })).toThrow(ShareEnvelopeError);
+    expect(isV2ShareLink("https://share.example.test/s/inline?tc2=eyJyZWNpcGllbnQiOiJhbGljZUBleGFtcGxlLmNvbSJ9")).toBe(false);
   });
 
   test("rejects unknown published envelope and nested authorization fields before signature use", () => {

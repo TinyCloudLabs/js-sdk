@@ -65,13 +65,15 @@ test("receiver session replaces mismatched private key material and non-canonica
   expect(replacedTimestamp.holderDid).not.toBe(replacedMismatchedKey.holderDid);
 });
 
-test("share links are bound to the configured out-of-band Share origin", () => {
-  expect(validateShareReceiverExpectedOrigin("https://share.example/viewer?tc2=policy", "https://share.example")).toBe("https://share.example");
-  expect(validateShareReceiverExpectedOrigin("http://localhost:5173/viewer?tc2=policy", "http://localhost:5173")).toBe("http://localhost:5173");
-  expect(validateShareReceiverExpectedOrigin("http://127.0.0.1:5173/viewer?tc2=policy", "http://127.0.0.1:5173")).toBe("http://127.0.0.1:5173");
-  expect(() => validateShareReceiverExpectedOrigin("https://attacker.example/viewer?tc2=policy", "https://share.example")).toThrow("configured Share deployment");
-  expect(() => validateShareReceiverExpectedOrigin("http://share.example/viewer?tc2=policy", "https://share.example")).toThrow("configured Share deployment");
-  expect(() => validateShareReceiverExpectedOrigin("https://share.example/viewer?tc2=policy", "https://share.example/path")).toThrow("configured Share deployment");
+test("share links are bound to the configured out-of-band Share origin and have no query", () => {
+  const fragment = "#v=2&p=eyJ2IjoyLCJjIjoiQVEiLCJjaWQiOiJiYWZrcmVpZzJ6N21icDZ2N3FodHViUHhseWx6anRvdnV4c250NW5vcDcyeDVvcmhrZGEydWRnd2FydSIsImsiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIn0";
+  expect(validateShareReceiverExpectedOrigin(`https://share.example/s/inline${fragment}`, "https://share.example")).toBe("https://share.example");
+  expect(validateShareReceiverExpectedOrigin(`http://localhost:5173/s/inline${fragment}`, "http://localhost:5173")).toBe("http://localhost:5173");
+  expect(validateShareReceiverExpectedOrigin(`http://127.0.0.1:5173/s/inline${fragment}`, "http://127.0.0.1:5173")).toBe("http://127.0.0.1:5173");
+  expect(() => validateShareReceiverExpectedOrigin(`https://attacker.example/s/inline${fragment}`, "https://share.example")).toThrow("configured Share deployment");
+  expect(() => validateShareReceiverExpectedOrigin(`http://share.example/s/inline${fragment}`, "https://share.example")).toThrow("configured Share deployment");
+  expect(() => validateShareReceiverExpectedOrigin(`https://share.example/s/inline${fragment}`, "https://share.example/path")).toThrow("configured Share deployment");
+  expect(() => validateShareReceiverExpectedOrigin("https://share.example/viewer?tc2=plaintext", "https://share.example")).toThrow("must not carry a query string");
 });
 
 test("auto identity restores an existing account session before falling back to guest receive", async () => {

@@ -17692,6 +17692,45 @@ function validateV3Invariants(value, ctx) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain exact decrypt network" });
   }
 }
+function assertKey(key32) {
+  if (key32.length !== KEY_LENGTH) {
+    throw new TypeError(`key must be ${KEY_LENGTH} bytes, got ${key32.length}`);
+  }
+}
+async function importAesKey(key32, usage) {
+  assertKey(key32);
+  return globalThis.crypto.subtle.importKey(
+    "raw",
+    key32,
+    "AES-GCM",
+    false,
+    [usage]
+  );
+}
+async function open(blob, key32) {
+  if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
+    throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
+  }
+  if (blob[0] !== SEALED_BLOB_VERSION) {
+    throw new TypeError(`unknown sealed blob version: ${blob[0]}`);
+  }
+  const nonce = blob.subarray(HEADER_LENGTH, HEADER_LENGTH + NONCE_LENGTH);
+  const ciphertext = blob.subarray(HEADER_LENGTH + NONCE_LENGTH);
+  return decryptEnvelope(nonce, ciphertext, key32);
+}
+async function decryptEnvelope(nonce, ciphertext, key32) {
+  if (nonce.length !== NONCE_LENGTH) {
+    throw new TypeError(`nonce must be ${NONCE_LENGTH} bytes, got ${nonce.length}`);
+  }
+  const key = await importAesKey(key32, "decrypt");
+  return new Uint8Array(
+    await globalThis.crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: nonce, additionalData: AAD },
+      key,
+      ciphertext
+    )
+  );
+}
 function isPlainRecord(value) {
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
@@ -17891,50 +17930,46 @@ function assertCanonicalCid(cidString) {
     throw new TypeError(`not a canonical CIDv1 raw sha2-256 base32 CID: ${cidString}`);
   }
 }
-function parseInlineShareUrl(url, options = {}) {
+async function parseSealedInlineShareUrl(url, options = {}) {
   const parsed = new URL(url);
-  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("inline share URL must be canonical HTTPS without userinfo");
-  if (!isCanonicalHttpsOrigin(parsed.origin) || options.expectedOrigin !== void 0 && parsed.origin !== options.expectedOrigin) throw new TypeError("inline share URL origin is not trusted");
-  if (parsed.pathname !== "/viewer") throw new TypeError("not a TinyCloud policy share URL");
-  const secretPayload = parsed.search === "" && parsed.hash.startsWith(INLINE_PREFIX) ? parsed.hash.slice(INLINE_PREFIX.length) : void 0;
-  const publicPayload = parsed.hash === "" && parsed.searchParams.size === 1 ? parsed.searchParams.get(PUBLIC_INLINE_PARAMETER) ?? void 0 : void 0;
-  if (secretPayload === void 0 && publicPayload === void 0) throw new TypeError("not a canonical TinyCloud policy share URL");
-  if (publicPayload !== void 0 && parsed.search !== `?${PUBLIC_INLINE_PARAMETER}=${publicPayload}`) throw new TypeError("public inline URL is not canonical");
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("sealed inline share URL must be canonical HTTPS without userinfo");
+  if (!isCanonicalHttpsOrigin(parsed.origin) || options.expectedOrigin !== void 0 && parsed.origin !== options.expectedOrigin) throw new TypeError("sealed inline share URL origin is not trusted");
+  if (parsed.pathname !== "/s/inline" || parsed.search !== "") throw new TypeError("not a Node sealed-inline share URL");
+  if (url !== `${parsed.origin}/s/inline${parsed.hash}`) throw new TypeError("sealed inline share URL is not lexically canonical");
+  const prefix = "#v=2&p=";
+  if (!parsed.hash.startsWith(prefix)) throw new TypeError("sealed inline URL is missing its canonical fragment");
+  const encoded = parsed.hash.slice(prefix.length);
+  if (encoded.length === 0 || parsed.hash !== `${prefix}${encoded}`) throw new TypeError("sealed inline URL fragment is not canonical");
   let payloadBytes;
   try {
-    payloadBytes = fromBase64Url(secretPayload ?? publicPayload);
+    payloadBytes = fromBase64Url(encoded);
   } catch {
-    throw new TypeError("inline payload is not canonical base64url");
+    throw new TypeError("sealed inline payload is not canonical base64url");
   }
-  if (payloadBytes.byteLength === 0 || payloadBytes.byteLength > MAX_INLINE_BYTES * 2) throw new TypeError("inline payload is too large");
+  if (payloadBytes.byteLength === 0 || payloadBytes.byteLength > MAX_INLINE_BYTES * 2) throw new TypeError("sealed inline payload is too large");
+  const payloadText = new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes);
   let value;
   try {
-    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes));
+    value = JSON.parse(payloadText);
   } catch {
-    throw new TypeError("inline payload is not valid JSON");
+    throw new TypeError("sealed inline payload is not valid JSON");
   }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("inline payload must be an object");
-  if (canonicalize2(value) !== new TextDecoder("utf-8").decode(payloadBytes)) throw new TypeError("inline payload is not canonical JSON");
+  if (typeof value !== "object" || value === null || Array.isArray(value) || canonicalize2(value) !== payloadText) throw new TypeError("sealed inline payload is not canonical JSON");
   const record = value;
-  const keys = Object.keys(record);
-  if (!keys.every((key) => key === "v" || key === "c" || key === "cid" || key === "k") || record.v !== 2 || typeof record.c !== "string" || typeof record.cid !== "string" || publicPayload !== void 0 && (keys.length !== 3 || record.k !== void 0)) throw new TypeError("inline payload has invalid fields");
+  if (Object.keys(record).length !== 4 || record.v !== 2 || typeof record.c !== "string" || typeof record.cid !== "string" || typeof record.k !== "string") throw new TypeError("sealed inline payload has invalid fields");
   let ciphertext;
-  try {
-    ciphertext = fromBase64Url(record.c);
-  } catch {
-    throw new TypeError("inline ciphertext is not canonical base64url");
-  }
-  if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES) throw new TypeError("inline ciphertext is outside the allowed size");
-  assertCanonicalCid(record.cid);
-  if (record.k !== void 0 && typeof record.k !== "string") throw new TypeError("inline key must be base64url");
   let key32;
   try {
-    key32 = record.k === void 0 ? void 0 : fromBase64Url(record.k);
+    ciphertext = fromBase64Url(record.c);
+    key32 = fromBase64Url(record.k);
   } catch {
-    throw new TypeError("inline key is not canonical base64url");
+    throw new TypeError("sealed inline payload has invalid base64url material");
   }
-  if (key32 !== void 0 && key32.length !== KEY_LENGTH2) throw new TypeError("inline key must be 32 bytes");
-  return { kind: "inline", ciphertextCid: record.cid, ciphertext, ...key32 === void 0 ? {} : { key32 } };
+  if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES) throw new TypeError("sealed inline ciphertext is outside the allowed size");
+  if (key32.byteLength !== KEY_LENGTH2) throw new TypeError("sealed inline key must be 32 bytes");
+  assertCanonicalCid(record.cid);
+  if (await computeCid(ciphertext) !== record.cid) throw new TypeError("sealed inline ciphertext does not match its CID");
+  return { kind: "inline", ciphertextCid: record.cid, ciphertext, key32 };
 }
 function metadataFor(envelope, origin) {
   const kind = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : "emailDomain";
@@ -17960,19 +17995,17 @@ async function resolvePolicyShare(link2, options) {
   let parsed;
   try {
     url = new URL(link2);
-    if (url.pathname !== "/viewer" || url.hash !== "" || url.searchParams.size !== 1 || !url.searchParams.has("tc2")) throw new Error("not public Policy/v3");
-    parsed = parseInlineShareUrl(link2, { ...options.expectedOrigin === void 0 ? {} : { expectedOrigin: options.expectedOrigin } });
-    if (parsed.key32 !== void 0) throw new Error("secret inline transport is retired");
+    parsed = await parseSealedInlineShareUrl(link2, { ...options.expectedOrigin === void 0 ? {} : { expectedOrigin: options.expectedOrigin } });
   } catch {
     throw new ShareReceiveError("invalid-link", "share link format is invalid");
   }
   const limit = options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES;
-  if (!Number.isSafeInteger(limit) || limit <= 0 || parsed.ciphertext.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "public policy envelope exceeds the configured byte limit");
-  if (await computeCid(parsed.ciphertext) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "public envelope bytes do not match the link CID");
+  if (!Number.isSafeInteger(limit) || limit <= 0 || parsed.ciphertext.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "sealed policy envelope exceeds the configured byte limit");
+  if (await computeCid(parsed.ciphertext) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "sealed envelope bytes do not match the link CID");
   options.signal?.throwIfAborted();
   let envelope;
   try {
-    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(parsed.ciphertext);
+    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(await open(parsed.ciphertext, parsed.key32));
     const value = JSON.parse(encoded);
     if (canonicalize2(value) !== encoded) throw new Error("non-canonical envelope");
     envelope = shareEnvelopeV3Schema.parse(value);
@@ -18663,7 +18696,7 @@ function parseNativeShareUrl(value) {
   if (!token || fragment.size !== 1) throw new TypeError("missing native share fragment");
   return token;
 }
-var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicyV1Schema, policyCredentialRequirementV1Schema, unifiedPolicyV2Schema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, ENVELOPE_AAD_LABEL, AAD, ED25519_VERIFY_OPTS2, ENVELOPE_V3_SIGNATURE_DOMAIN, POLICY_V1_SIGNATURE_DOMAIN, POLICY_V2_SIGNATURE_DOMAIN, CONTENT_SOURCE_V1_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN, NATIVE_PROJECTION_V1_DOMAIN, ATTESTED_ENFORCER_V2_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, PUBLIC_INLINE_PARAMETER, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base58btc2, base58flickr2, textEncoder, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN, NATIVE_SHARE_FRAGMENT_PARAMETER;
+var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicyV1Schema, policyCredentialRequirementV1Schema, unifiedPolicyV2Schema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_V3_SIGNATURE_DOMAIN, POLICY_V1_SIGNATURE_DOMAIN, POLICY_V2_SIGNATURE_DOMAIN, CONTENT_SOURCE_V1_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN, NATIVE_PROJECTION_V1_DOMAIN, ATTESTED_ENFORCER_V2_DOMAIN, KEY_LENGTH2, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base58btc2, base58flickr2, textEncoder, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN, NATIVE_SHARE_FRAGMENT_PARAMETER;
 var init_dist3 = __esm({
   "../share-sdk/dist/index.js"() {
     "use strict";
@@ -18817,10 +18850,10 @@ var init_dist3 = __esm({
           return obj[e];
         });
       };
-      util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object3) => {
+      util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object4) => {
         const keys = [];
-        for (const key in object3) {
-          if (Object.prototype.hasOwnProperty.call(object3, key)) {
+        for (const key in object4) {
+          if (Object.prototype.hasOwnProperty.call(object4, key)) {
             keys.push(key);
           }
         }
@@ -23279,7 +23312,12 @@ var init_dist3 = __esm({
     unsignedShareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.superRefine(validateV3Invariants);
     shareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.extend({ signature: signatureSchema }).strict().superRefine(validateV3Invariants);
     ENVELOPE_AAD_LABEL = "tinycloud-share-envelope-v1";
+    SEALED_BLOB_VERSION = 1;
     AAD = utf8Bytes(ENVELOPE_AAD_LABEL);
+    KEY_LENGTH = 32;
+    NONCE_LENGTH = 12;
+    TAG_LENGTH = 16;
+    HEADER_LENGTH = 1;
     ED25519_VERIFY_OPTS2 = { zip215: false };
     ENVELOPE_V3_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
     POLICY_V1_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v1\0";
@@ -23289,8 +23327,6 @@ var init_dist3 = __esm({
     NATIVE_PROJECTION_V1_DOMAIN = "xyz.tinycloud.policy/NativeProjection/v1\0";
     ATTESTED_ENFORCER_V2_DOMAIN = "xyz.tinycloud.policy/AttestedEnforcerBinding/v2\0";
     KEY_LENGTH2 = 32;
-    INLINE_PREFIX = "#tc2=";
-    PUBLIC_INLINE_PARAMETER = "tc2";
     MAX_INLINE_BYTES = 256 * 1024;
     SHARE_RESULT_VERSION = 1;
     DEFAULT_MAX_SEALED_BLOB_BYTES = 100 * 1024 * 1024 + 29;
@@ -28392,7 +28428,7 @@ var init_profiles = __esm({
 // src/commands/account.ts
 init_profiles();
 init_constants();
-import open from "open";
+import open2 from "open";
 import { readFile as readFile3 } from "fs/promises";
 
 // src/lib/sdk.ts
@@ -29763,7 +29799,7 @@ function registerAccountCommand(program) {
     billing.command(name2).description(`${name2 === "status" ? "Show" : "Open"} account billing page`).option("--open", "Open account.tinycloud.xyz in your browser").action(async (options) => {
       try {
         if (options.open) {
-          await open(ACCOUNT_BILLING_URL);
+          await open2(ACCOUNT_BILLING_URL);
         }
         outputJson({ url: ACCOUNT_BILLING_URL, opened: Boolean(options.open) });
       } catch (error) {
@@ -30055,8 +30091,8 @@ async function callbackFlow(did, options = {}) {
       }
       if (openBrowser) {
         try {
-          const open3 = (await import("open")).default;
-          await open3(authUrl);
+          const open4 = (await import("open")).default;
+          await open4(authUrl);
         } catch {
           server.close();
           throw new Error("Failed to open browser");
@@ -33923,8 +33959,8 @@ function registerSecretsCommand(program, openKeyAcquisition) {
   });
   secrets.command("manage").description("Open the TinyCloud Secrets Manager in your browser").action(async () => {
     try {
-      const open3 = (await import("open")).default;
-      await open3("https://secrets.tinycloud.xyz");
+      const open4 = (await import("open")).default;
+      await open4("https://secrets.tinycloud.xyz");
       outputJson({ opened: "https://secrets.tinycloud.xyz" });
     } catch (error) {
       handleError(error);
@@ -33973,7 +34009,7 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat, mkdir as mkdir3, mkdtemp, open as open2, readFile as readFile9, realpath, stat as stat2, link, rename as rename2, rm as rm2, unlink } from "fs/promises";
+import { lstat, mkdir as mkdir3, mkdtemp, open as open3, readFile as readFile9, realpath, stat as stat2, link, rename as rename2, rm as rm2, unlink } from "fs/promises";
 import { randomBytes as randomBytes4 } from "crypto";
 import { basename as basename2, join as join6, resolve as resolve2, sep } from "path";
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
@@ -34041,7 +34077,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve2(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open2(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open3(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath(outputDirectory);
   const outputPath = join6(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
@@ -34065,7 +34101,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open2(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open3(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
