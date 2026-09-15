@@ -96,10 +96,7 @@ export interface AddressedSharePublishOptions {
   readonly deliveryEmail?: string;
   readonly expiresAt: Date;
   /** Sender-history material required by Node's Policy/v3 delivery authorization. */
-  readonly onDeliveryMaterial?: (input: {
-    readonly envelope: Readonly<Record<string, unknown>>;
-    readonly shareCid: string;
-  }) => void;
+  readonly onDeliveryMaterial?: (input: PublishedShareDeliveryMaterial) => void;
   readonly authority: AddressedPublishAuthority;
 }
 

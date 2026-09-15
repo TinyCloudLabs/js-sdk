@@ -9,14 +9,14 @@ import {
   parseSealedInlineShareUrl,
   verifyCid,
 } from "@tinycloud/share-envelope";
-import { historyRecordForPublishedShare, inspectShare, publishAddressedShare, type AddressedPolicyRegistrationInput } from "../src/index.js";
+import { historyRecordForPublishedShare, inspectShare, publishAddressedShare, type AddressedPolicyRegistrationInput, type AddressedSharePublishOptions } from "../src/index.js";
 
 const ownerSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const ownerDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(ownerSeed)]))}`;
 const nodeSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 33);
 const nodeDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(nodeSeed)]))}`;
 
-async function fixture() {
+async function fixture(onDeliveryMaterial?: AddressedSharePublishOptions["onDeliveryMaterial"]) {
   let registration: AddressedPolicyRegistrationInput | undefined;
   const published = await publishAddressedShare({
     shareId: "addressedroundtrip0001",
@@ -43,6 +43,7 @@ async function fixture() {
     mediaType: "text/markdown",
     byteLength: 8,
     expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    ...(onDeliveryMaterial === undefined ? {} : { onDeliveryMaterial }),
     authority: {
       ownerDid,
       async createOwnerRoot(input) {
@@ -95,6 +96,18 @@ describe("canonical addressed publication", () => {
     expect(record.deliveryMaterial).toEqual(published.deliveryMaterial);
     expect(record.deliveryMaterial?.shareCid).toBe(published.link.cid);
     expect(record.deliveryMaterial?.envelope).toMatchObject({ version: 3, policyCid: published.metadata.policyCid });
+  });
+
+  it("publishes sealed delivery material through the typed callback", async () => {
+    let observed: Parameters<NonNullable<AddressedSharePublishOptions["onDeliveryMaterial"]>>[0] | undefined;
+    const { published } = await fixture((material) => {
+      const sealedEnvelope: string = material.sealedEnvelope;
+      const envelopeKey: string = material.envelopeKey;
+      expect(sealedEnvelope).toMatch(/^[A-Za-z0-9_-]+$/);
+      expect(envelopeKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      observed = material;
+    });
+    expect(observed).toEqual(published.deliveryMaterial);
   });
 
   it("seals the signed policy envelope and keeps the key and recipient out of loggable URL components", async () => {

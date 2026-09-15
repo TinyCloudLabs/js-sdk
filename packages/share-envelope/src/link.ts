@@ -35,14 +35,6 @@ export interface ParseShareUrlOptions {
   expectedOrigin?: string;
 }
 
-export interface InlineShareUrlParts {
-  readonly origin: string;
-  /** The complete sealed envelope blob. It is kept in the fragment only. */
-  readonly ciphertext: Uint8Array;
-  /** The AES key that opens the sealed envelope. Omit only for policy-safe public envelopes. */
-  readonly key32?: Uint8Array;
-}
-
 /**
  * Node Policy/v3 delivery transport. The complete sealed envelope and its
  * key stay in the fragment, so neither reaches HTTP request logs.
@@ -55,25 +47,13 @@ export interface SealedInlineShareUrlParts {
   readonly key32: Uint8Array;
 }
 
-export interface PublicInlineShareUrlParts {
-  readonly origin: string;
-  /** Canonical signed policy envelope bytes. This is authorization metadata, not content. */
-  readonly plaintext: Uint8Array;
-}
-
-export interface ParsedInlineShareUrl {
+export interface ParsedSealedInlineShareUrl {
   readonly kind: "inline";
   readonly ciphertextCid: string;
   readonly ciphertext: Uint8Array;
-  readonly key32?: Uint8Array;
-}
-
-export interface ParsedSealedInlineShareUrl extends ParsedInlineShareUrl {
   readonly key32: Uint8Array;
 }
 
-const INLINE_PREFIX = "#tc2=";
-const PUBLIC_INLINE_PARAMETER = "tc2";
 const MAX_INLINE_BYTES = 256 * 1024;
 
 function assertCanonicalCid(cidString: string): void {
@@ -167,81 +147,6 @@ export function parseShareUrl(
   return { ciphertextCid, key32 };
 }
 
-/**
- * Encode an explicit v2 inline fallback. The entire payload is in the
- * fragment, so it is never sent in an HTTP request. The payload is canonical
- * JSON and contains only sealed bytes, their CID, and (when encrypted) the
- * envelope key; callers must never place recipient or holder material here.
- */
-export async function encodeInlineShareUrl(parts: InlineShareUrlParts): Promise<string> {
-  if (!isCanonicalHttpsOrigin(parts.origin)) throw new TypeError("origin must be a canonical https origin");
-  if (parts.ciphertext.byteLength === 0 || parts.ciphertext.byteLength > MAX_INLINE_BYTES) throw new RangeError("inline ciphertext is outside the allowed size");
-  if (parts.key32 !== undefined && parts.key32.length !== KEY_LENGTH) throw new TypeError("inline key must be 32 bytes");
-  const ciphertextCid = await computeCid(parts.ciphertext);
-  const payload = canonicalize({
-    v: 2,
-    c: toBase64Url(parts.ciphertext),
-    cid: ciphertextCid,
-    ...(parts.key32 === undefined ? {} : { k: toBase64Url(parts.key32) }),
-  });
-  const payloadBytes = new TextEncoder().encode(payload);
-  if (payloadBytes.byteLength > MAX_INLINE_BYTES * 2) throw new RangeError("inline URL is too large");
-  return `${parts.origin}/viewer${INLINE_PREFIX}${toBase64Url(payloadBytes)}`;
-}
-
-/**
- * Encode a public addressed-share invitation. Policy enforcement, rather than
- * secrecy of the envelope, protects the owner-node content. Keeping this link
- * out of the fragment lets an email delivery service see the exact link it is
- * authorized to send without ever receiving bearer capability material.
- */
-export async function encodePublicInlineShareUrl(parts: PublicInlineShareUrlParts): Promise<string> {
-  if (!isCanonicalHttpsOrigin(parts.origin)) throw new TypeError("origin must be a canonical https origin");
-  if (parts.plaintext.byteLength === 0 || parts.plaintext.byteLength > MAX_INLINE_BYTES) throw new RangeError("public inline envelope is outside the allowed size");
-  const ciphertextCid = await computeCid(parts.plaintext);
-  const payloadBytes = new TextEncoder().encode(canonicalize({
-    v: 2,
-    c: toBase64Url(parts.plaintext),
-    cid: ciphertextCid,
-  }));
-  if (payloadBytes.byteLength > MAX_INLINE_BYTES * 2) throw new RangeError("inline URL is too large");
-  return `${parts.origin}/viewer?${PUBLIC_INLINE_PARAMETER}=${toBase64Url(payloadBytes)}`;
-}
-
-export function parseInlineShareUrl(url: string, options: ParseShareUrlOptions = {}): ParsedInlineShareUrl {
-  const parsed = new URL(url);
-  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("inline share URL must be canonical HTTPS without userinfo");
-  if (!isCanonicalHttpsOrigin(parsed.origin) || (options.expectedOrigin !== undefined && parsed.origin !== options.expectedOrigin)) throw new TypeError("inline share URL origin is not trusted");
-  if (parsed.pathname !== "/viewer") throw new TypeError("not a TinyCloud policy share URL");
-  const secretPayload = parsed.search === "" && parsed.hash.startsWith(INLINE_PREFIX)
-    ? parsed.hash.slice(INLINE_PREFIX.length)
-    : undefined;
-  const publicPayload = parsed.hash === "" && parsed.searchParams.size === 1
-    ? parsed.searchParams.get(PUBLIC_INLINE_PARAMETER) ?? undefined
-    : undefined;
-  if (secretPayload === undefined && publicPayload === undefined) throw new TypeError("not a canonical TinyCloud policy share URL");
-  if (publicPayload !== undefined && parsed.search !== `?${PUBLIC_INLINE_PARAMETER}=${publicPayload}`) throw new TypeError("public inline URL is not canonical");
-  let payloadBytes: Uint8Array;
-  try { payloadBytes = fromBase64Url(secretPayload ?? publicPayload!); } catch { throw new TypeError("inline payload is not canonical base64url"); }
-  if (payloadBytes.byteLength === 0 || payloadBytes.byteLength > MAX_INLINE_BYTES * 2) throw new TypeError("inline payload is too large");
-  let value: unknown;
-  try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes)) as unknown; } catch { throw new TypeError("inline payload is not valid JSON"); }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("inline payload must be an object");
-  if (canonicalize(value) !== new TextDecoder("utf-8").decode(payloadBytes)) throw new TypeError("inline payload is not canonical JSON");
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record);
-  if (!keys.every((key) => key === "v" || key === "c" || key === "cid" || key === "k") || record.v !== 2 || typeof record.c !== "string" || typeof record.cid !== "string" || (publicPayload !== undefined && (keys.length !== 3 || record.k !== undefined))) throw new TypeError("inline payload has invalid fields");
-  let ciphertext: Uint8Array;
-  try { ciphertext = fromBase64Url(record.c); } catch { throw new TypeError("inline ciphertext is not canonical base64url"); }
-  if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES) throw new TypeError("inline ciphertext is outside the allowed size");
-  assertCanonicalCid(record.cid);
-  if (record.k !== undefined && typeof record.k !== "string") throw new TypeError("inline key must be base64url");
-  let key32: Uint8Array | undefined;
-  try { key32 = record.k === undefined ? undefined : fromBase64Url(record.k); } catch { throw new TypeError("inline key is not canonical base64url"); }
-  if (key32 !== undefined && key32.length !== KEY_LENGTH) throw new TypeError("inline key must be 32 bytes");
-  return { kind: "inline", ciphertextCid: record.cid, ciphertext, ...(key32 === undefined ? {} : { key32 }) };
-}
-
 /** Parse only Node's sealed-inline `/s/inline#v=2&p=…` form. */
 export async function parseSealedInlineShareUrl(
   url: string,
@@ -277,12 +182,4 @@ export async function parseSealedInlineShareUrl(
   assertCanonicalCid(record.cid);
   if (await computeCid(ciphertext) !== record.cid) throw new TypeError("sealed inline ciphertext does not match its CID");
   return { kind: "inline", ciphertextCid: record.cid, ciphertext, key32 };
-}
-
-export function parseCompactOrInlineShareUrl(url: string, options: ParseShareUrlOptions = {}):
-  | { readonly kind: "compact"; readonly ciphertextCid: string; readonly key32: Uint8Array }
-  | ParsedInlineShareUrl {
-  const parsed = new URL(url);
-  if (parsed.pathname === "/viewer" && (parsed.hash.startsWith(INLINE_PREFIX) || parsed.searchParams.has(PUBLIC_INLINE_PARAMETER))) return parseInlineShareUrl(url, options);
-  return { kind: "compact", ...parseShareUrl(url, options) };
 }
