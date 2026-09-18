@@ -1,4 +1,5 @@
 export * from "./browser";
+export * from "./element";
 export * from "./interpreter";
 export * from "./renderer";
 export * from "./service";

@@ -1,5 +1,6 @@
 import {
   CredentialError,
+  admitPolicyCredentialV3,
   canonicalDigest,
   credentialError,
   credentialRequirementDigest,
@@ -8,6 +9,7 @@ import {
   sha256Base64Url,
   validateCredentialFlowDescriptor,
   validateCredentialRequirement,
+  verifyStorageReceipt,
   verifyIssuedCredential,
   type CredentialFlowDescriptor,
   type CredentialIssuerMetadata,
@@ -17,10 +19,11 @@ import {
   type VerifiedCredential,
 } from "@tinycloud/sdk-core";
 import { BrowserCredentialInteraction, BrowserCredentialRedirectStore } from "./browser";
+import { CredentialAcquisitionController } from "./element";
 import { interpretCredentialFlow } from "./interpreter";
 import { findStoredCredential, storeCredential } from "./storage";
 import { OpenCredentialsHttpTransport } from "./transport";
-import type { CredentialClient, CredentialsAcquireOptions, CredentialsEnsureOptions, CredentialsEnsureResult, CredentialsOperationOptions } from "./types";
+import type { CredentialClient, CredentialsAcquireOptions, CredentialsEnsureOptions, CredentialsEnsureResult, CredentialsOperationOptions, CredentialsPolicyAdmissionOptions, CredentialsPolicyAdmissionResult } from "./types";
 
 function randomVerifier(): string { return encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))); }
 
@@ -98,6 +101,7 @@ export class CredentialsService {
     const redirectStore = options.redirectStore ?? (options.interaction === "redirect" && typeof window !== "undefined" ? new BrowserCredentialRedirectStore() : undefined);
     const timed = withTimeout(options.signal, options.timeoutMs ?? 120_000);
     let surface: Awaited<ReturnType<NonNullable<CredentialsAcquireOptions["browser"]>["start"]>> | undefined;
+    let controller: CredentialAcquisitionController | undefined;
     let completed = false;
     try {
       const resume = await redirectStore?.load();
@@ -109,8 +113,24 @@ export class CredentialsService {
       const verifier = resume?.verifier ?? randomVerifier();
       const created = resume ?? await transport.create({ descriptor, descriptorDigest, requirement, requirementDigest, holderDid, openerOrigin, completionVerifierChallenge: await sha256Base64Url(verifier), signal: timed.signal });
       if (!resume && redirectStore) await redirectStore.save({ type: "TinyCloudCredentialRedirectResume", version: 1, requestId: created.requestId, locator: created.locator, verifier, expiresAt: created.expiresAt, correlationId: created.correlationId, holderDid, descriptorDigest, requirementDigest, openerOrigin });
-      const interaction = resume ? undefined : options.browser ?? (options.interaction === "headless" ? undefined : new BrowserCredentialInteraction(options.interaction ?? "popup"));
-      if (interaction) surface = await interaction.start({ interaction: descriptor.interaction, locator: created.locator, signal: timed.signal });
+      const requestedInteraction = options.interaction ?? "popup";
+      // A redirect continuation is already rendered by the issuer. An inline
+      // host owns its local UI, so it must be started again after resumption.
+      let interaction = resume && requestedInteraction !== "inline" ? undefined : options.browser;
+      if (!resume && !interaction && requestedInteraction !== "headless") {
+        if (requestedInteraction === "inline") {
+          controller = new CredentialAcquisitionController({ descriptor, mountTarget: options.mountTarget, theme: options.theme });
+          interaction = { kind: "inline", start: (input) => controller!.start(input) };
+        }
+        else
+        interaction = new BrowserCredentialInteraction(requestedInteraction);
+      }
+      if (!resume && interaction && interaction.kind !== requestedInteraction) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential interaction adapter does not match the requested interaction");
+      if (interaction) {
+        surface = interaction.kind === "inline"
+          ? await interaction.start({ signal: timed.signal })
+          : await interaction.start({ interaction: descriptor.interaction, locator: created.locator, signal: timed.signal });
+      }
       const signing = options.signing ?? {
         autoSign: async (_binding: unknown, bytes: Uint8Array) => this.client.autoSignCredentialBytes?.(bytes),
         requestApproval: async (_binding: unknown, bytes: Uint8Array) => {
@@ -118,12 +138,13 @@ export class CredentialsService {
           return this.client.approveCredentialBytes(bytes);
         },
       };
-      await interpretCredentialFlow({ descriptor, requirement, requestId: created.requestId, verifier, holderDid, descriptorDigest, requirementDigest, openerOrigin, transport, signing, handlers: surface ? undefined : options.stepHandlers, signal: timed.signal, onProgress: options.onProgress, onWait: surface ? async () => { if (surface!.closed()) throw new CredentialError("CANCELED", "Credential popup was closed"); await surface!.wake(); } : undefined });
-      options.onProgress?.({ state: "verifying", correlationId: created.correlationId });
+      await interpretCredentialFlow({ descriptor, requirement, requestId: created.requestId, verifier, holderDid, descriptorDigest, requirementDigest, openerOrigin, transport, signing, handlers: options.stepHandlers, proofHandler: surface?.requestProof, signal: timed.signal, onProgress: (event) => { if (event.state === "signing") controller?.progress("signing"); options.onProgress?.(event); }, onWait: surface ? async () => { if (surface!.closed()) throw new CredentialError("CANCELED", "Credential interaction was closed"); await surface!.wake(); } : undefined });
+      controller?.progress("verifying"); options.onProgress?.({ state: "verifying", correlationId: created.correlationId });
       const envelope = await transport.result(created.requestId, verifier, timed.signal);
       const verified = await verifyIssuedCredential({ envelope, descriptor, descriptorDigest, requirement, holderDid, issuerMetadata: await transport.issuerMetadata(timed.signal), now: options.now?.(), checkStatus: (status, signal) => transport.checkStatus(status, signal), signal: timed.signal });
       completed = true; await redirectStore?.clear(); return verified;
     } catch (cause) {
+      controller?.fail();
       if (timed.signal.aborted && timed.signal.reason instanceof CredentialError) throw timed.signal.reason;
       throw credentialError(cause);
     } finally { surface?.close(); if (completed) await redirectStore?.clear(); timed.clear(); }
@@ -143,5 +164,75 @@ export class CredentialsService {
     const saved = await this.store(verified, requirement, options);
     options.onProgress?.({ state: "success" });
     return { status: "acquired", credential: verified, record: saved.record, receipt: saved.receipt };
+  }
+
+  async admitPolicy(
+    options: CredentialsPolicyAdmissionOptions,
+  ): Promise<CredentialsPolicyAdmissionResult> {
+    const holderDid = active(this.client);
+    const requirement = validateCredentialRequirement(options.requirement);
+    const requirementDigest = await credentialRequirementDigest(requirement);
+    const { credential, record, receipt } = options.ensured;
+    const space = await credentialSpace(this.client);
+    if (
+      credential.holderDid !== holderDid ||
+      credential.subjectDid !== holderDid ||
+      record.holderDid !== holderDid ||
+      record.ownerDid !== space.ownerDid ||
+      record.requirementDigest !== requirementDigest ||
+      record.credential !== credential.credential ||
+      record.credentialDigest !== credential.credentialDigest ||
+      record.descriptorDigest !== credential.descriptorDigest ||
+      record.issuerDid !== credential.issuerDid ||
+      record.issuerKid !== credential.issuerKid
+    ) {
+      throw new CredentialError(
+        "HOLDER_MISMATCH",
+        "Stored credential provenance does not match the active TinyCloud session",
+      );
+    }
+    if (
+      receipt !== undefined &&
+      !(await verifyStorageReceipt(
+        record,
+        receipt,
+        space.ownerDid,
+        holderDid,
+      ))
+    ) {
+      throw new CredentialError(
+        "VERIFIED_NOT_SAVED",
+        "Credential storage receipt is invalid",
+      );
+    }
+    const admission = await admitPolicyCredentialV3({
+      policy: options.policy,
+      policyCid: options.policyCid,
+      policyRootCid: options.policyRootCid,
+      enforcementRootCid: options.enforcementRootCid,
+      nodeOrigin: options.nodeOrigin,
+      requirement,
+      credential,
+      credentialSpaceOwnerDid: space.ownerDid,
+      accountAuthorizationCid: this.client.accountAuthorizationCid(),
+      credentialSpaceId: space.spaceId,
+      requestedCapabilities: options.requestedCapabilities,
+      sign: (digest) => this.client.signSessionBytes(digest),
+      fetch: options.fetch,
+      now: options.now,
+      jti: options.jti,
+    });
+    if (this.client.activateCompactRuntimeDelegation === undefined) {
+      throw new CredentialError(
+        "ACTIVE_SESSION_REQUIRED",
+        "Active TinyCloud delegation activation is unavailable",
+      );
+    }
+    const installed = await this.client.activateCompactRuntimeDelegation({
+      authorization: admission.session.authorization,
+      cid: admission.session.cid,
+      host: options.nodeOrigin,
+    });
+    return Object.freeze({ ...admission, installed });
   }
 }

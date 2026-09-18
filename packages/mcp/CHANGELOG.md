@@ -1,5 +1,49 @@
 # @tinycloud/mcp
 
+## 0.3.3-beta.2
+
+### Patch Changes
+
+- Updated dependencies [0052312]
+  - @tinycloud/node-sdk@2.11.1-beta.1
+  - @tinycloud/operations@0.3.3-beta.2
+
+## 0.3.3-beta.1
+
+### Patch Changes
+
+- Republish the 2.11-compatible dependency graph after the first TC-493 beta
+  incorrectly consumed an unrelated pending major changeset.
+- Updated dependencies
+  - @tinycloud/operations@0.3.3-beta.1
+
+## 0.3.3-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@2.11.1-beta.0
+- @tinycloud/operations@0.3.3-beta.0
+
+## 0.3.2
+
+### Patch Changes
+
+- Updated dependencies [746cb02]
+- Updated dependencies [d1d675b]
+- Updated dependencies [44ecf56]
+- Updated dependencies [b38dd12]
+- Updated dependencies [68faad4]
+- Updated dependencies [cc75957]
+- Updated dependencies [a7e3668]
+- Updated dependencies [e525137]
+- Updated dependencies [ba9c983]
+- Updated dependencies [f0842d8]
+- Updated dependencies [d894c57]
+- Updated dependencies [7805213]
+  - @tinycloud/node-sdk@2.11.0
+  - @tinycloud/operations@0.3.2
+  - @tinycloud/node-sdk-wasm@1.7.6
+
 ## 0.3.2-beta.10
 
 ### Patch Changes

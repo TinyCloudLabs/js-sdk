@@ -394,9 +394,12 @@ export type ShareEnvelopeV2 = z.infer<typeof shareEnvelopeV2Schema>;
  * artifact as an ordinary delegation claim.
  */
 const unifiedResourceSchema = z.string().refine((value) => {
-  const match = /^tinycloud:\/\/([^/]+)\/kv\/(.+)$/.exec(value);
-  if (match === null || /[:?#%]/.test(match[1]!)) return false;
-  const path = match[2]!;
+  const marker = value.indexOf("/kv/");
+  if (marker < 1) return false;
+  const space = value.slice(0, marker);
+  const legacy = space.startsWith("tinycloud://");
+  if (legacy ? /[:/?#%]/.test(space.slice("tinycloud://".length)) : !space.startsWith("tinycloud:") || /[/?#%]/.test(space)) return false;
+  const path = value.slice(marker + 4);
   return !path.startsWith("/") && !path.endsWith("/") && !path.includes("//") && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }, { message: "expected canonical TinyCloud KV resource" });
 const unifiedEncryptionNetworkSchema = z.string().refine((value) => {
@@ -434,7 +437,7 @@ const unifiedContentSourceSchema = z.object({
   mode: z.union([z.literal("mutable"), z.literal("immutable")]),
   initialCiphertextDigestHex: z.string().regex(/^[0-9a-f]{64}$/).optional(),
 }).strict();
-const unifiedPolicySchema = z.object({
+export const unifiedPolicyV1Schema = z.object({
   schema: z.literal("xyz.tinycloud.policy/policy/v1"),
   policyId: z.string().regex(/^pol_[a-z2-7]+$/),
   ownerDid: z.string().min(1),
@@ -444,6 +447,31 @@ const unifiedPolicySchema = z.object({
   capabilityCeiling: z.array(unifiedCapabilitySchema).min(2),
   signature: z.object({ suite: z.string().min(1), signerDid: z.string().min(1), value: z.string().min(1) }).strict(),
 }).strict();
+export const policyCredentialRequirementV1Schema = z.object({
+  type: z.literal("TinyCloudPolicyCredentialRequirement"),
+  version: z.literal(1),
+  requirementDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  descriptorDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  issuerDid: z.string().min(1),
+  issuerKid: z.string().min(1),
+  profile: z.object({ id: z.string().min(1), version: z.literal(1) }).strict(),
+  credentialType: z.object({ id: z.string().min(1), version: z.literal(1) }).strict(),
+}).strict();
+export const unifiedPolicyV2Schema = z.object({
+  schema: z.literal("xyz.tinycloud.policy/policy/v2"),
+  policyId: z.string().regex(/^pol_[a-z2-7]+$/),
+  ownerDid: z.string().min(1),
+  createdAt: z.string().datetime({ offset: true }),
+  expiresAt: z.string().datetime({ offset: true }).optional(),
+  contentSource: unifiedContentSourceSchema,
+  capabilityCeiling: z.array(unifiedCapabilitySchema).min(2),
+  credentialRequirement: policyCredentialRequirementV1Schema,
+  signature: z.object({ suite: z.literal("Ed25519"), signerDid: z.string().min(1), value: z.string().min(1) }).strict(),
+}).strict();
+export const unifiedPolicySchema = z.discriminatedUnion("schema", [
+  unifiedPolicyV1Schema,
+  unifiedPolicyV2Schema,
+]);
 const unifiedRootSchema = z.object({
   cid: z.string().min(1),
   authorization: z.string().regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
@@ -519,6 +547,9 @@ export const unsignedShareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.s
 export const shareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.extend({ signature: signatureSchema }).strict().superRefine(validateV3Invariants);
 export type UnifiedPolicyCapability = z.infer<typeof unifiedCapabilitySchema>;
 export type UnifiedContentSource = z.infer<typeof unifiedContentSourceSchema>;
+export type PolicyCredentialRequirementV1 = z.infer<typeof policyCredentialRequirementV1Schema>;
+export type UnifiedPolicyV1 = z.infer<typeof unifiedPolicyV1Schema>;
+export type UnifiedPolicyV2 = z.infer<typeof unifiedPolicyV2Schema>;
 export type UnifiedPolicy = z.infer<typeof unifiedPolicySchema>;
 export type UnifiedRoot = z.infer<typeof unifiedRootSchema>;
 export type UnsignedShareEnvelopeV3 = z.infer<typeof unsignedShareEnvelopeV3Schema>;

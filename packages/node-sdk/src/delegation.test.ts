@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { ed25519 } from "@noble/curves/ed25519";
+import { base58btc } from "multiformats/bases/base58";
+import {
+  parseCompactUcanAuthorization,
+  signCompactUcanAuthorization,
+} from "@tinycloud/sdk-core";
 
 import {
+  activateCompactRuntimeDelegation,
   activateValidatedRuntimeDelegation,
   grantAuthRequest,
   type AuthRequestArtifact,
@@ -121,6 +128,69 @@ describe("grantAuthRequest", () => {
 });
 
 describe("activateValidatedRuntimeDelegation", () => {
+  test("projects authority only from signed compact bytes before ordinary activation", async () => {
+    const privateKey = new Uint8Array(32).fill(47);
+    const issuerDid = `did:key:${base58btc.encode(
+      Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(privateKey)]),
+    )}`;
+    const recipientKey = new Uint8Array(32).fill(48);
+    const recipientDid = `did:key:${base58btc.encode(
+      Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(recipientKey)]),
+    )}`;
+    const resource = "tinycloud://space/kv/docs/report.md";
+    const now = Math.floor(Date.now() / 1000);
+    const compact = await signCompactUcanAuthorization({
+      issuerDid,
+      audienceDid: recipientDid,
+      attenuation: {
+        [resource]: {
+          "tinycloud.kv/get": [
+            {
+              type: "xyz.tinycloud.resource/selector",
+              kind: "exact",
+              value: resource,
+            },
+          ],
+        },
+      },
+      facts: [{ remainingRedelegationDepth: 0 }],
+      proofs: ["bafy-parent"],
+      notBefore: now,
+      expiresAt: now + 60,
+      nonce: "compact-runtime-470",
+      sign: async (bytes) => ed25519.sign(bytes, privateKey),
+    });
+    const installed: PortableDelegation[] = [];
+    const node: RuntimeDelegationActivator = {
+      sessionDid: recipientDid,
+      computeDelegationCid: (authorization) =>
+        parseCompactUcanAuthorization(authorization).cid,
+      async useRuntimeDelegation(candidate) {
+        installed.push(candidate);
+      },
+      getRuntimePermissionDelegations: () => installed,
+    };
+
+    const activated = await activateCompactRuntimeDelegation(node, {
+      authorization: compact.authorization,
+      cid: compact.cid,
+      host: "https://node.example",
+      ownerAddress: "0xowner",
+      chainId: 1,
+    });
+
+    expect(activated.audience).toBe(recipientDid);
+    expect(activated.delegation).toMatchObject({
+      cid: compact.cid,
+      delegatorDID: compact.payload.iss,
+      delegateDID: recipientDid,
+      parentCid: "bafy-parent",
+      disableSubDelegation: true,
+      host: "https://node.example",
+    });
+    expect(installed).toHaveLength(1);
+  });
+
   test("preserves provenance metadata on the installed delegation", async () => {
     const authorizationPayload = {
       iss: "did:key:signed-delegator",

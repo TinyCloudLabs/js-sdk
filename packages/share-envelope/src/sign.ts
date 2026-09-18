@@ -36,6 +36,7 @@ export const ENVELOPE_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v1\0";
 export const ENVELOPE_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v2\0";
 export const ENVELOPE_V3_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
 const POLICY_V1_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v1\0";
+const POLICY_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v2\0";
 const CONTENT_SOURCE_V1_DOMAIN = "xyz.tinycloud.policy/ContentSource/v1\0";
 const POLICY_CAPABILITY_V1_DOMAIN = "xyz.tinycloud.policy/PolicyCapability/v1\0";
 const NATIVE_PROJECTION_V1_DOMAIN = "xyz.tinycloud.policy/NativeProjection/v1\0";
@@ -204,7 +205,10 @@ export async function verifyEnvelopeV3(envelope: ShareEnvelopeV3, options: Verif
   const unsignedPolicy = { ...policy } as Record<string, unknown>;
   delete unsignedPolicy.policyId;
   delete unsignedPolicy.signature;
-  const policyDigest = sha256(new TextEncoder().encode(`${POLICY_V1_SIGNATURE_DOMAIN}${canonicalize(unsignedPolicy)}`));
+  const policySignatureDomain = policy.schema === "xyz.tinycloud.policy/policy/v2"
+    ? POLICY_V2_SIGNATURE_DOMAIN
+    : POLICY_V1_SIGNATURE_DOMAIN;
+  const policyDigest = sha256(new TextEncoder().encode(`${policySignatureDomain}${canonicalize(unsignedPolicy)}`));
   const policySignature = policy.signature;
   if (policySignature.suite !== "Ed25519" || policySignature.signerDid !== policy.ownerDid) return false;
   let policyPublicKey: Uint8Array;
@@ -216,7 +220,7 @@ export async function verifyEnvelopeV3(envelope: ShareEnvelopeV3, options: Verif
     return false;
   }
   if (policySignatureBytes.length !== 64 || !ed25519.verify(policySignatureBytes, policyDigest, policyPublicKey, ED25519_VERIFY_OPTS)) return false;
-  const policyIdDigest = sha256(new TextEncoder().encode(`${POLICY_V1_SIGNATURE_DOMAIN}${canonicalize(unsignedPolicy)}`));
+  const policyIdDigest = policyDigest;
   if (policy.policyId !== `pol_${base32Lower(policyIdDigest)}`) return false;
   const policyBytes = new TextEncoder().encode(canonicalize(policy));
   if ((await computeCid(policyBytes)) !== parsed.policyCid) return false;
@@ -226,7 +230,7 @@ export async function verifyEnvelopeV3(envelope: ShareEnvelopeV3, options: Verif
   const capabilityCeilingHashHex = hex(sha256(new TextEncoder().encode(`${POLICY_CAPABILITY_V1_DOMAIN}${canonicalize(sortedCapabilities)}`)));
   const nativeProjection = sortedCapabilities.map((capability) => capability.kind === "encryption"
     ? { service: "tinycloud.encryption", space: capability.resource, path: capability.resource, actions: [capability.action] }
-    : { service: "tinycloud.kv", space: capability.resource.slice("tinycloud://".length).split("/")[0], path: capability.resource.split("/kv/")[1], actions: [...capability.actions], caveat: { type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: capability.resource } })
+    : { service: "tinycloud.kv", space: capability.resource.slice(0, capability.resource.indexOf("/kv/")), path: capability.resource.split("/kv/")[1], actions: [...capability.actions], caveat: { type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: capability.resource } })
     .sort((left, right) => canonicalize(left).localeCompare(canonicalize(right)));
   const nativeProjectionHashHex = hex(sha256(new TextEncoder().encode(`${NATIVE_PROJECTION_V1_DOMAIN}${canonicalize(nativeProjection)}`)));
   const expectedAttenuation = Object.fromEntries(sortedCapabilities.map((capability) => capability.kind === "encryption"
@@ -234,8 +238,10 @@ export async function verifyEnvelopeV3(envelope: ShareEnvelopeV3, options: Verif
     : [capability.resource, Object.fromEntries(capability.actions.map((action) => [action, [{ kind: capability.selector, type: "xyz.tinycloud.resource/selector", value: capability.resource }]]))]));
   const kv = policy.capabilityCeiling.find((capability) => capability.kind === "kv");
   const expectedKvActions = parsed.actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]);
-  const resource = /^tinycloud:\/\/([^/]+)\/kv\/(.+)$/.exec(parsed.contentSource.kvResource);
-  if (parsed.shareId !== parsed.contentSource.shareId || resource === null || resource[1] !== parsed.target.spaceId || resource[2] !== parsed.resource.path.replace(/\/$/, "") || parsed.resource.kind !== parsed.contentSource.selector || kv?.kind !== "kv" || expectedKvActions.some((action) => !kv.actions.includes(action as never)) || parsed.encryptionNetwork !== parsed.contentSource.encryptionNetwork || parsed.contentSource.keyVersion <= 0 || (policy.expiresAt !== undefined && Date.parse(parsed.expiry) > Date.parse(policy.expiresAt))) return false;
+  const marker = parsed.contentSource.kvResource.indexOf("/kv/");
+  const resourceSpace = marker < 1 ? "" : parsed.contentSource.kvResource.slice(0, marker);
+  const resourcePath = marker < 1 ? "" : parsed.contentSource.kvResource.slice(marker + 4);
+  if (parsed.shareId !== parsed.contentSource.shareId || resourceSpace !== parsed.target.spaceId || resourcePath !== parsed.resource.path.replace(/\/$/, "") || parsed.resource.kind !== parsed.contentSource.selector || kv?.kind !== "kv" || expectedKvActions.some((action) => !kv.actions.includes(action as never)) || parsed.encryptionNetwork !== parsed.contentSource.encryptionNetwork || parsed.contentSource.keyVersion <= 0 || (policy.expiresAt !== undefined && Date.parse(parsed.expiry) > Date.parse(policy.expiresAt))) return false;
   const binding = parsed.attestedEnforcerBinding;
   const { signature: bindingSignature, ...unsignedBinding } = binding;
   const expectedBindingDigestHex = hex(sha256(new TextEncoder().encode(canonicalize({ enforcerDid: binding.enforcerDid, nodeAudience: binding.nodeAudience }))));

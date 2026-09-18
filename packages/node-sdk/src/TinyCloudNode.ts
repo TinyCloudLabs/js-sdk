@@ -151,7 +151,12 @@ import {
   validateOwnerSharePolicyRegistrationBytes,
   type ShareDeliveryAuthorizationReceipt,
   validateShareDeliveryAuthorizationBytes,
+  type ShareDeliveryAuthorizationV3Receipt,
+  validateShareDeliveryAuthorizationV3Bytes,
+  type JsonValue,
   verifyEip191MessageSignature,
+  signCompactUcanRootAuthorization,
+  type UnifiedPolicyCapability,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -176,6 +181,7 @@ export type {
   RegisterOwnerSharePolicyParams,
   OwnerSharePolicyRegistrationReceipt,
   ShareDeliveryAuthorizationReceipt,
+  ShareDeliveryAuthorizationV3Receipt,
 } from "@tinycloud/sdk-core";
 
 /** Default TinyCloud host */
@@ -271,6 +277,49 @@ const ROOT_DELEGATION_ACTIONS: string[] = [
 const DEFAULT_SESSION_EXPIRATION_MS = EXPIRY.SESSION_MS;
 
 export type CreateOwnerDelegationParams = CoreCreateOwnerDelegationParams;
+
+export interface UnifiedOwnerRootInput {
+  readonly ownerDid: string;
+  readonly role: "policy-authority" | "policy-enforcement";
+  readonly audienceDid: string;
+  readonly policyId: string;
+  readonly policyDigestHex: string;
+  readonly policyCid: string;
+  readonly contentSourceDigestHex: string;
+  readonly capabilityCeilingHashHex: string;
+  readonly nativeProjectionHashHex: string;
+  readonly notBefore: Date;
+  readonly expiresAt: Date;
+  readonly nodeAudience: string;
+  readonly capabilities: readonly UnifiedPolicyCapability[];
+}
+
+export interface UnifiedOwnerRootReceipt {
+  readonly cid: string;
+  readonly delegationHeader: { readonly Authorization: string };
+  readonly delegateDID: string;
+  readonly spaceId: string;
+  readonly path: string;
+  readonly actions: readonly string[];
+  readonly expiry: Date;
+}
+
+function unifiedRootAttenuation(
+  capabilities: readonly UnifiedPolicyCapability[],
+): Record<string, Record<string, readonly Record<string, unknown>[]>> {
+  const attenuation: Record<string, Record<string, readonly Record<string, unknown>[]>> = {};
+  for (const capability of capabilities) {
+    if (attenuation[capability.resource] !== undefined) throw new Error("unified owner root contains a duplicate resource");
+    attenuation[capability.resource] = capability.kind === "encryption"
+      ? { [capability.action]: [{}] }
+      : Object.fromEntries(capability.actions.map((action) => [action, [{
+          type: "xyz.tinycloud.resource/selector",
+          kind: capability.selector,
+          value: capability.resource,
+        }]]));
+  }
+  return attenuation;
+}
 
 export function decodeAuthorizationBytes(authorization: string): Uint8Array {
   const encoded = authorization.replace(/^Bearer /i, "");
@@ -985,6 +1034,13 @@ export class TinyCloudNode {
    */
   private readonly confirmedHostedSpaceIds = new Set<string>();
 
+  /** Serializes account-registry writes for the active node instance. */
+  private accountRegistryTail: Promise<void> = Promise.resolve();
+  private pendingAccountRegistrySync?: {
+    session: TinyCloudSession;
+    promise: Promise<void>;
+  };
+
   /**
    * TinyCloudSession captured by {@link restoreSession} when there's no
    * auth-layer signer available (session-only mode used by OpenKey-backed
@@ -1516,6 +1572,10 @@ export class TinyCloudNode {
         "Cannot signIn() in session-only mode. Provide a privateKey in config to create your own space."
       );
     }
+
+    // Do not replace the active session while its best-effort registry sync is
+    // still issuing writes with that session's authority.
+    await this.accountRegistryTail;
 
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
@@ -2128,26 +2188,66 @@ export class TinyCloudNode {
   }
 
   private scheduleAccountRegistrySync(): void {
-    void this.withAccountRegistryRetry(async () => {
-      void this.account.index.ensure();
-      await this.writeManifestRegistryRecords();
+    const session = this.currentTinyCloudSession();
+    if (!session || this.pendingAccountRegistrySync?.session === session) {
+      return;
+    }
 
-      if (this.currentSessionCanListSpaces()) {
-        const spaces = await this.account.spaces.syncAccessible();
-        if (!spaces.ok) {
-          throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+    const promise = this.enqueueAccountRegistryOperation(session, async () => {
+      await this.withAccountRegistryRetry(async () => {
+        if (this.currentTinyCloudSession() !== session) {
+          return;
         }
-      }
-      // Else: the current session carries a recap that does not grant
-      // `tinycloud.space/list` (every manifest/recap session, and the default
-      // non-manifest recap alike — its abilities table has no `space` service).
-      // `syncAccessible()` depends on `tinycloud.space/list`, which such a
-      // session does not hold — see {@link isOwnedSpaceRegistered} — so the
-      // owned-space listing is a doomed request that 401s on the wire
-      // (`Unauthorized Action: …/space/ tinycloud.space/list`). The account
-      // spaces registry is instead maintained by bootstrap seeding +
-      // `spaces.register()`, so we skip the invoke entirely rather than emit it.
+
+        await this.account.index.ensure();
+        if (this.currentTinyCloudSession() !== session) {
+          return;
+        }
+
+        await this.writeManifestRegistryRecords();
+
+        if (this.currentTinyCloudSession() !== session) {
+          return;
+        }
+
+        if (this.currentSessionCanListSpaces()) {
+          const spaces = await this.account.spaces.syncAccessible();
+          if (!spaces.ok) {
+            throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+          }
+        }
+        // Else: the current session carries a recap that does not grant
+        // `tinycloud.space/list` (every manifest/recap session, and the default
+        // non-manifest recap alike — its abilities table has no `space` service).
+        // `syncAccessible()` depends on `tinycloud.space/list`, which such a
+        // session does not hold — see {@link isOwnedSpaceRegistered} — so the
+        // owned-space listing is a doomed request that 401s on the wire
+        // (`Unauthorized Action: …/space/ tinycloud.space/list`). The account
+        // spaces registry is instead maintained by bootstrap seeding +
+        // `spaces.register()`, so we skip the invoke entirely rather than emit it.
+      });
     });
+
+    this.pendingAccountRegistrySync = { session, promise };
+    const clearPendingSync = () => {
+      if (this.pendingAccountRegistrySync?.promise === promise) {
+        this.pendingAccountRegistrySync = undefined;
+      }
+    };
+    void promise.then(clearPendingSync, clearPendingSync);
+  }
+
+  private enqueueAccountRegistryOperation(
+    session: TinyCloudSession,
+    task: () => Promise<void>,
+  ): Promise<void> {
+    const operation = this.accountRegistryTail.then(async () => {
+      if (this.currentTinyCloudSession() === session) {
+        await task();
+      }
+    });
+    this.accountRegistryTail = operation.catch(() => {});
+    return operation;
   }
 
   /**
@@ -2331,7 +2431,8 @@ export class TinyCloudNode {
    * @returns The hosted space URI.
    */
   async hostOwnedSpace(name: string): Promise<string> {
-    if (!this.auth || !this.auth.tinyCloudSession) {
+    const session = this.auth?.tinyCloudSession;
+    if (!this.auth || !session) {
       throw new Error("Not signed in. Call signIn() first.");
     }
 
@@ -2355,7 +2456,7 @@ export class TinyCloudNode {
     // hosted for this session.
     const activation = await activateSessionWithHost(
       host,
-      this.auth.tinyCloudSession.delegationHeader,
+      session.delegationHeader,
     );
     if (!activation.success || activation.skipped?.includes(spaceId)) {
       throw new Error(
@@ -2365,16 +2466,20 @@ export class TinyCloudNode {
       );
     }
 
-    void this.account.spaces
-      .register({
-        spaceId,
-        name,
-        ownerDid: this.did,
-        type: "owned",
-        permissions: ["*"],
-        status: "active",
-      })
-      .catch(() => {});
+    try {
+      await this.enqueueAccountRegistryOperation(session, async () => {
+        await this.account.spaces.register({
+          spaceId,
+          name,
+          ownerDid: this.did,
+          type: "owned",
+          permissions: ["*"],
+          status: "active",
+        });
+      });
+    } catch {
+      // Registry write is best-effort; the space is hosted regardless.
+    }
 
     return spaceId;
   }
@@ -2412,33 +2517,17 @@ export class TinyCloudNode {
       throw new Error("Not signed in. Call signIn() first.");
     }
 
+    // signIn schedules its registry sync before returning. Let that operation
+    // finish before this explicit read/host/write sequence begins.
+    await this.accountRegistryTail;
+
     const spaceId = this.ownedSpaceId(name);
 
     if (await this.isOwnedSpaceRegistered(spaceId)) {
       return spaceId;
     }
 
-    const hosted = await this.hostOwnedSpace(name);
-
-    // hostOwnedSpace registers best-effort and fire-and-forget; await an
-    // explicit registry write here so the canonical `account/spaces/{id}`
-    // record is durably present and a subsequent ensure short-circuits on the
-    // registry instead of re-hosting. The host already succeeded, so a failed
-    // registry write must not fail this call.
-    try {
-      await this.account.spaces.register({
-        spaceId,
-        name,
-        ownerDid: this.did,
-        type: "owned",
-        permissions: ["*"],
-        status: "active",
-      });
-    } catch {
-      // Registry write is best-effort; the space is hosted regardless.
-    }
-
-    return hosted;
+    return this.hostOwnedSpace(name);
   }
 
   /** Resolve and authenticate the owner encoded by an owned-space URI. */
@@ -3128,6 +3217,47 @@ export class TinyCloudNode {
     const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
     if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
     return signBytesWithJwk(bytes, session.jwk);
+  }
+
+  /** Author a proofless Policy/v3 owner root with the authenticated holder key. */
+  async createUnifiedOwnerRoot(input: UnifiedOwnerRootInput): Promise<UnifiedOwnerRootReceipt> {
+    const ownerDid = this.credentialHolderDid;
+    if (input.ownerDid !== ownerDid) throw new Error("unified owner root signer does not match owner DID");
+    const facts = {
+      role: input.role,
+      mode: input.role === "policy-authority" ? "policy-source" : "conditional-mint",
+      ownerDid,
+      policyId: input.policyId,
+      policyDigestHex: input.policyDigestHex,
+      policyCid: input.policyCid,
+      contentSourceDigestHex: input.contentSourceDigestHex,
+      capabilityCeilingHashHex: input.capabilityCeilingHashHex,
+      nativeProjectionHashHex: input.nativeProjectionHashHex,
+      nodeAudience: input.nodeAudience,
+      ...(input.role === "policy-enforcement" ? { enforcerDid: input.audienceDid } : {}),
+    };
+    const root = await signCompactUcanRootAuthorization({
+      issuerDid: ownerDid,
+      audienceDid: input.audienceDid,
+      attenuation: unifiedRootAttenuation(input.capabilities),
+      facts: [facts],
+      notBefore: Math.floor(input.notBefore.getTime() / 1000),
+      expiresAt: Math.floor(input.expiresAt.getTime() / 1000),
+      nonce: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
+      sign: (bytes) => this.signSessionBytes(bytes),
+    });
+    const kv = input.capabilities.find((capability) => capability.kind === "kv");
+    const resource = kv?.resource ?? "";
+    const marker = resource.indexOf("/kv/");
+    return {
+      cid: root.cid,
+      delegationHeader: { Authorization: root.authorization },
+      delegateDID: input.audienceDid,
+      spaceId: marker === -1 ? "" : resource.slice("tinycloud://".length, marker),
+      path: marker === -1 ? resource : resource.slice(marker + 4),
+      actions: kv?.actions ?? [],
+      expiry: input.expiresAt,
+    };
   }
 
   /** Apply only an already-enabled signing policy to the exact credential request. */
@@ -4255,6 +4385,50 @@ export class TinyCloudNode {
     if (!response.ok) throw new Error(`Share delivery authorization failed: ${response.status}`);
     const responseBytes = new Uint8Array(await response.arrayBuffer());
     return validateShareDeliveryAuthorizationBytes(responseBytes, { request, nodeProof: input.nodeProof, credentialsAudience: input.credentialsAudience });
+  }
+
+  /** Authorize one short-lived v3 delivery against the signed v3 envelope and registered roots. */
+  async authorizeShareDeliveryV3(input: {
+    readonly envelope: JsonValue;
+    readonly sealedEnvelope: string;
+    readonly envelopeKey: string;
+    readonly shareCid: string;
+    readonly resourcePath: string;
+    readonly recipientEmail: string;
+    readonly shareUrl: string;
+    readonly documentName: string;
+    readonly expiresAt: string;
+    readonly nodeProof: { readonly kid: string; readonly publicKey: Uint8Array };
+    readonly credentialsAudience: string;
+  }): Promise<ShareDeliveryAuthorizationV3Receipt> {
+    const session = this.currentTinyCloudSession();
+    const serviceSession = this._serviceContext?.session;
+    if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
+    const body = {
+      envelope: input.envelope,
+      sealedEnvelope: input.sealedEnvelope,
+      envelopeKey: input.envelopeKey,
+      shareCid: input.shareCid,
+      recipientEmail: input.recipientEmail,
+      shareUrl: input.shareUrl,
+      documentName: input.documentName,
+      jti: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
+      expiresAt: input.expiresAt,
+    };
+    const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));
+    const request = { ...body, requestBodyDigest };
+    const authorization = authorizationHeader(this.invokeAnyWithRuntimePermissions(serviceSession, [{ spaceId: session.spaceId, service: "kv", path: input.resourcePath, action: "tinycloud.kv/get" }]));
+    const response = await fetch(`${this.config.host!}/share/v3/deliveries/authorize`, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json", authorization },
+      body: canonicalizeEncryptionJson(request),
+    });
+    if (!response.ok) throw new Error(`V3 share delivery authorization failed: ${response.status}`);
+    return validateShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
+      request,
+      nodeProof: input.nodeProof,
+      credentialsAudience: input.credentialsAudience,
+    });
   }
 
   private async createRootDelegationForSharing(params: {

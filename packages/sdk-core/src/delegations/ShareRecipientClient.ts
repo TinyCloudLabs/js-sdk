@@ -423,9 +423,9 @@ export class ShareRecipientClient {
       const authority = Object.entries(session.att).find(([parentResource, abilities]) => {
         if (!(action in abilities)) return false;
         if (serviceName === "encryption") return parentResource.startsWith("urn:tinycloud:encryption:") && parentResource === cleanPath;
-        const match = /^tinycloud:\/\/[^/]+\/kv\/(.+)$/.exec(parentResource);
-        if (match === null) return false;
-        const parentPath = match[1]!;
+        const marker = parentResource.indexOf("/kv/");
+        if (marker < 1) return false;
+        const parentPath = parentResource.slice(marker + 4);
         const caveats = abilities[action] ?? [];
         const prefix = caveats.some((value) => isRecord(value) && value.kind === "prefix");
         return cleanPath === parentPath || (prefix && cleanPath.startsWith(`${parentPath}/`));
@@ -454,10 +454,10 @@ export class ShareRecipientClient {
   private policySessionProjection(delegation: PortableDelegation): { readonly spaceId: string } {
     const session = parsePolicySessionUcan(delegation.delegationHeader.Authorization);
     if (session.cid !== delegation.cid || session.aud !== delegation.delegateDID) throw new ShareAccessError("SHARE_SESSION_INVALID");
-    const kvResource = Object.keys(session.att).find((resource) => /^tinycloud:\/\/[^/]+\/kv\/.+$/.test(resource));
-    const match = kvResource === undefined ? undefined : /^tinycloud:\/\/([^/]+)\/kv\/(.+)$/.exec(kvResource);
-    if (match === undefined || match === null) throw new ShareAccessError("SHARE_SESSION_INVALID");
-    return { spaceId: match[1]! };
+    const kvResource = Object.keys(session.att).find((resource) => resource.indexOf("/kv/") > 0);
+    const marker = kvResource?.indexOf("/kv/") ?? -1;
+    if (kvResource === undefined || marker < 1) throw new ShareAccessError("SHARE_SESSION_INVALID");
+    return { spaceId: kvResource.slice(0, marker) };
   }
 
   private createKV(origin: string, session: ServiceSession, invokeOverride?: InvokeFunction): IKVService {

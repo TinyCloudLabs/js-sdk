@@ -7,7 +7,7 @@ import {
   type CredentialProgressEvent,
   type CredentialRequirement,
 } from "@tinycloud/sdk-core";
-import type { CredentialAcquisitionTransport, CredentialSigningAdapter, PrimitiveStepHandler } from "./types";
+import type { CredentialAcquisitionTransport, CredentialSigningAdapter, InlineCredentialProofHandler, PrimitiveStepHandler } from "./types";
 
 const delay = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
   const timer = setTimeout(resolve, ms);
@@ -26,6 +26,11 @@ export async function interpretCredentialFlow(input: {
   readonly openerOrigin: string;
   readonly transport: CredentialAcquisitionTransport;
   readonly signing: CredentialSigningAdapter;
+  /**
+   * Fallback for a host-owned surface. It receives every declared proof step,
+   * including primitives added by a later protocol version.
+   */
+  readonly proofHandler?: InlineCredentialProofHandler;
   readonly handlers?: Partial<Record<"collect_input" | "mailbox_otp", PrimitiveStepHandler>>;
   readonly signal?: AbortSignal;
   readonly onProgress?: (event: CredentialProgressEvent) => void;
@@ -67,9 +72,24 @@ export async function interpretCredentialFlow(input: {
     } else {
       input.onProgress?.({ state: next.type === "collect_input" ? "collecting" : "proving", stepId: next.id, correlationId: state.correlationId });
       const handler = input.handlers?.[next.type];
-      if (!handler) { await (input.onWait?.() ?? delay(state.retryAfterMs ?? 50, input.signal)); continue; }
+      const inlineHandler = input.proofHandler;
+      if (!handler && !inlineHandler) { await (input.onWait?.() ?? delay(state.retryAfterMs ?? 50, input.signal)); continue; }
       if (next.constraints.challengeRequired === true) await input.transport.beginStep(input.requestId, input.verifier, next.type, input.signal);
-      const proof = await handler({ descriptor: input.descriptor, requirement: input.requirement, stepId: next.id, constraints: next.constraints, signal: input.signal });
+      const proof = handler
+        ? await handler({ descriptor: input.descriptor, requirement: input.requirement, stepId: next.id, constraints: next.constraints, signal: input.signal })
+        : await inlineHandler!({
+          stepId: next.id,
+          constraints: next.constraints,
+          display: {
+            title: input.descriptor.display.title,
+            description: input.descriptor.display.description,
+            consent: input.descriptor.display.consent,
+            progressLabel: input.descriptor.accessibility.progressLabel,
+            errorLiveRegion: input.descriptor.accessibility.errorLiveRegion,
+          },
+          inputs: input.descriptor.inputs.map(({ id, label, schema }) => ({ id, label, schema })),
+          signal: input.signal,
+        });
       await input.transport.submitStep(input.requestId, input.verifier, next.id, proof, input.signal);
     }
     completed.add(next.id);
