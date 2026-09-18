@@ -224,9 +224,13 @@ jobs:
         with:
           name: reviewed-cli
           path: cli-release/
+      - name: Verify publish artifact path
+        env:
+          CLI_TARBALL: ${{ steps.pack.outputs.filename }}
+        run: npm publish "./cli-release/$CLI_TARBALL" --dry-run --ignore-scripts --access public --tag latest --registry https://registry.npmjs.org
       - name: Publish that artifact only
         if: ${{ !inputs.dry_run }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           CLI_TARBALL: ${{ steps.pack.outputs.filename }}
-        run: npm publish "cli-release/$CLI_TARBALL" --access public --tag latest
+        run: npm publish "./cli-release/$CLI_TARBALL" --ignore-scripts --access public --tag latest --registry https://registry.npmjs.org
