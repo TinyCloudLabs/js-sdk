@@ -11,6 +11,12 @@ This release has **Commander coverage tracked, not complete parity**:
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
 <!-- END GENERATED TINYCloud operations coverage -->
 
+## Selected context and scoped authentication
+
+`tc --profile PROFILE --host HOST context --space SPACE` always emits JSON for the selected context. It reports local session state, not proven access. Use actual storage reads to verify authority.
+
+`tc auth login --method openkey --manifest FILE --expiry 7d [--owner PRIMARY_DID]` requests one manifest space on first login. `--paste` supports manual terminal return; `--no-popup` prints the browser URL. Read [AUTH.md](AUTH.md) before same-account setup.
+
 ## Global Options
 
 | Flag | Description |
@@ -20,6 +26,7 @@ This release has **Commander coverage tracked, not complete parity**:
 | `-v, --verbose` | Verbose output |
 | `-q, --quiet` | Suppress non-essential output |
 | `--no-cache` | Disable caching |
+| `--json` | Force machine-readable output |
 
 ## Delegations
 
@@ -154,4 +161,6 @@ legacy `tc1:` links are not accepted by these commands.
 - **Session key**: `did:key:z6Mk...#z6Mk...` — generated at init
 - **Owner DID**: `did:pkh:eip155:{chainId}:{address}` — after auth
 
-All output is JSON. Errors go to stderr as `{error: {code, message}}`.
+Use `--json` for machine-readable output; interactive commands can render human output. General command errors go to stderr as `{error: {code, message, hint?}}`. Inspect the structured code, not only the exit status.
+
+General storage/auth exit codes are 0 success, 1 operation error, 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, and 7 node error. The Share commands use their own exit-code meanings (see `tc share --help`); do not apply those meanings to KV/SQL errors.

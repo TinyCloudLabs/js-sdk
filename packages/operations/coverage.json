@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "source": "packages/cli/src/command-registry.ts",
   "commands": [
+    { "command": "context", "status": "excluded", "reason": "Read-only local CLI context diagnostics; performs no storage operation." },
     { "command": "init", "status": "legacy" },
     { "command": "auth", "status": "legacy" },
     { "command": "auth login", "status": "legacy" },

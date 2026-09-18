@@ -368,14 +368,17 @@ var init_errors = __esm({
         this.metadata = metadata;
         this.name = "CLIError";
       }
+      code;
+      exitCode;
+      metadata;
     };
   }
 });
 
-// ../../node_modules/zod/v3/helpers/util.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/helpers/util.js
 var util, objectUtil, ZodParsedType, getParsedType;
 var init_util = __esm({
-  "../../node_modules/zod/v3/helpers/util.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/helpers/util.js"() {
     "use strict";
     (function(util3) {
       util3.assertEqual = (_) => {
@@ -407,10 +410,10 @@ var init_util = __esm({
           return obj[e];
         });
       };
-      util3.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object2) => {
+      util3.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object) => {
         const keys = [];
-        for (const key in object2) {
-          if (Object.prototype.hasOwnProperty.call(object2, key)) {
+        for (const key in object) {
+          if (Object.prototype.hasOwnProperty.call(object, key)) {
             keys.push(key);
           }
         }
@@ -510,10 +513,10 @@ var init_util = __esm({
   }
 });
 
-// ../../node_modules/zod/v3/ZodError.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/ZodError.js
 var ZodIssueCode, quotelessJson, ZodError;
 var init_ZodError = __esm({
-  "../../node_modules/zod/v3/ZodError.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/ZodError.js"() {
     "use strict";
     init_util();
     ZodIssueCode = util.arrayToEnum([
@@ -635,10 +638,10 @@ var init_ZodError = __esm({
   }
 });
 
-// ../../node_modules/zod/v3/locales/en.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/locales/en.js
 var errorMap, en_default;
 var init_en = __esm({
-  "../../node_modules/zod/v3/locales/en.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/locales/en.js"() {
     "use strict";
     init_ZodError();
     init_util();
@@ -746,7 +749,7 @@ var init_en = __esm({
   }
 });
 
-// ../../node_modules/zod/v3/errors.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/errors.js
 function setErrorMap(map) {
   overrideErrorMap = map;
 }
@@ -755,14 +758,14 @@ function getErrorMap() {
 }
 var overrideErrorMap;
 var init_errors2 = __esm({
-  "../../node_modules/zod/v3/errors.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/errors.js"() {
     "use strict";
     init_en();
     overrideErrorMap = en_default;
   }
 });
 
-// ../../node_modules/zod/v3/helpers/parseUtil.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/helpers/parseUtil.js
 function addIssueToContext(ctx, issueData) {
   const overrideMap = getErrorMap();
   const issue = makeIssue({
@@ -784,7 +787,7 @@ function addIssueToContext(ctx, issueData) {
 }
 var makeIssue, EMPTY_PATH, ParseStatus, INVALID, DIRTY, OK, isAborted, isDirty, isValid, isAsync;
 var init_parseUtil = __esm({
-  "../../node_modules/zod/v3/helpers/parseUtil.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/helpers/parseUtil.js"() {
     "use strict";
     init_errors2();
     init_en();
@@ -880,17 +883,17 @@ var init_parseUtil = __esm({
   }
 });
 
-// ../../node_modules/zod/v3/helpers/typeAliases.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/helpers/typeAliases.js
 var init_typeAliases = __esm({
-  "../../node_modules/zod/v3/helpers/typeAliases.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/helpers/typeAliases.js"() {
     "use strict";
   }
 });
 
-// ../../node_modules/zod/v3/helpers/errorUtil.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 var init_errorUtil = __esm({
-  "../../node_modules/zod/v3/helpers/errorUtil.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/helpers/errorUtil.js"() {
     "use strict";
     (function(errorUtil3) {
       errorUtil3.errToObj = (message) => typeof message === "string" ? { message } : message || {};
@@ -899,7 +902,7 @@ var init_errorUtil = __esm({
   }
 });
 
-// ../../node_modules/zod/v3/types.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/types.js
 function processCreateParams(params) {
   if (!params)
     return {};
@@ -1093,7 +1096,7 @@ function custom(check, _params = {}, fatal) {
 }
 var ParseInputLazyPath, handleResult, ZodType, cuidRegex, cuid2Regex, ulidRegex, uuidRegex, nanoidRegex, jwtRegex, durationRegex, emailRegex, _emojiRegex, emojiRegex, ipv4Regex, ipv4CidrRegex, ipv6Regex, ipv6CidrRegex, base64Regex, base64urlRegex, dateRegexSource, dateRegex, ZodString, ZodNumber, ZodBigInt, ZodBoolean, ZodDate, ZodSymbol, ZodUndefined, ZodNull, ZodAny, ZodUnknown, ZodNever, ZodVoid, ZodArray, ZodObject, ZodUnion, getDiscriminator, ZodDiscriminatedUnion, ZodIntersection, ZodTuple, ZodRecord, ZodMap, ZodSet, ZodFunction, ZodLazy, ZodLiteral, ZodEnum, ZodNativeEnum, ZodPromise, ZodEffects, ZodOptional, ZodNullable, ZodDefault, ZodCatch, ZodNaN, BRAND, ZodBranded, ZodPipeline, ZodReadonly, late, ZodFirstPartyTypeKind, instanceOfType, stringType, numberType, nanType, bigIntType, booleanType, dateType, symbolType, undefinedType, nullType, anyType, unknownType, neverType, voidType, arrayType, objectType, strictObjectType, unionType, discriminatedUnionType, intersectionType, tupleType, recordType, mapType, setType, functionType, lazyType, literalType, enumType, nativeEnumType, promiseType, effectsType, optionalType, nullableType, preprocessType, pipelineType, ostring, onumber, oboolean, coerce, NEVER;
 var init_types = __esm({
-  "../../node_modules/zod/v3/types.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/types.js"() {
     "use strict";
     init_ZodError();
     init_errors2();
@@ -4356,7 +4359,7 @@ var init_types = __esm({
   }
 });
 
-// ../../node_modules/zod/v3/external.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
   BRAND: () => BRAND,
@@ -4468,7 +4471,7 @@ __export(external_exports, {
   void: () => voidType
 });
 var init_external = __esm({
-  "../../node_modules/zod/v3/external.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/v3/external.js"() {
     "use strict";
     init_errors2();
     init_parseUtil();
@@ -4479,26 +4482,26 @@ var init_external = __esm({
   }
 });
 
-// ../../node_modules/zod/index.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/index.js
 var init_zod = __esm({
-  "../../node_modules/zod/index.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/zod/index.js"() {
     "use strict";
     init_external();
     init_external();
   }
 });
 
-// ../../node_modules/@noble/hashes/esm/cryptoNode.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/cryptoNode.js
 import * as nc from "crypto";
 var crypto2;
 var init_cryptoNode = __esm({
-  "../../node_modules/@noble/hashes/esm/cryptoNode.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/cryptoNode.js"() {
     "use strict";
     crypto2 = nc && typeof nc === "object" && "webcrypto" in nc ? nc.webcrypto : nc && typeof nc === "object" && "randomBytes" in nc ? nc : void 0;
   }
 });
 
-// ../../node_modules/@noble/hashes/esm/utils.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -4531,9 +4534,6 @@ function aoutput(out, instance) {
     throw new Error("digestInto() expects output buffer of length at least " + min);
   }
 }
-function u8(arr) {
-  return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
-}
 function u32(arr) {
   return new Uint32Array(arr.buffer, arr.byteOffset, Math.floor(arr.byteLength / 4));
 }
@@ -4561,11 +4561,11 @@ function bytesToHex(bytes) {
   abytes(bytes);
   if (hasHexBuiltin)
     return bytes.toHex();
-  let hex2 = "";
+  let hex = "";
   for (let i = 0; i < bytes.length; i++) {
-    hex2 += hexes[bytes[i]];
+    hex += hexes[bytes[i]];
   }
-  return hex2;
+  return hex;
 }
 function asciiToBase16(ch) {
   if (ch >= asciis._0 && ch <= asciis._9)
@@ -4576,21 +4576,21 @@ function asciiToBase16(ch) {
     return ch - (asciis.a - 10);
   return;
 }
-function hexToBytes(hex2) {
-  if (typeof hex2 !== "string")
-    throw new Error("hex string expected, got " + typeof hex2);
+function hexToBytes(hex) {
+  if (typeof hex !== "string")
+    throw new Error("hex string expected, got " + typeof hex);
   if (hasHexBuiltin)
-    return Uint8Array.fromHex(hex2);
-  const hl = hex2.length;
+    return Uint8Array.fromHex(hex);
+  const hl = hex.length;
   const al = hl / 2;
   if (hl % 2)
     throw new Error("hex string expected, got unpadded hex of length " + hl);
   const array = new Uint8Array(al);
   for (let ai = 0, hi = 0; ai < al; ai++, hi += 2) {
-    const n1 = asciiToBase16(hex2.charCodeAt(hi));
-    const n2 = asciiToBase16(hex2.charCodeAt(hi + 1));
+    const n1 = asciiToBase16(hex.charCodeAt(hi));
+    const n2 = asciiToBase16(hex.charCodeAt(hi + 1));
     if (n1 === void 0 || n2 === void 0) {
-      const char = hex2[hi] + hex2[hi + 1];
+      const char = hex[hi] + hex[hi + 1];
       throw new Error('hex string expected, got non-hex character "' + char + '" at index ' + hi);
     }
     array[ai] = n1 * 16 + n2;
@@ -4631,14 +4631,6 @@ function createHasher(hashCons) {
   hashC.create = () => hashCons();
   return hashC;
 }
-function createXOFer(hashCons) {
-  const hashC = (msg, opts) => hashCons(opts).update(toBytes(msg)).digest();
-  const tmp = hashCons({});
-  hashC.outputLen = tmp.outputLen;
-  hashC.blockLen = tmp.blockLen;
-  hashC.create = (opts) => hashCons(opts);
-  return hashC;
-}
 function randomBytes(bytesLength = 32) {
   if (crypto2 && typeof crypto2.getRandomValues === "function") {
     return crypto2.getRandomValues(new Uint8Array(bytesLength));
@@ -4648,13 +4640,12 @@ function randomBytes(bytesLength = 32) {
   }
   throw new Error("crypto.getRandomValues must be defined");
 }
-var isLE, swap8IfBE, swap32IfBE, hasHexBuiltin, hexes, asciis, Hash;
+var isLE, swap32IfBE, hasHexBuiltin, hexes, asciis, Hash;
 var init_utils = __esm({
-  "../../node_modules/@noble/hashes/esm/utils.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/utils.js"() {
     "use strict";
     init_cryptoNode();
     isLE = /* @__PURE__ */ (() => new Uint8Array(new Uint32Array([287454020]).buffer)[0] === 68)();
-    swap8IfBE = isLE ? (n) => n : (n) => byteSwap(n);
     swap32IfBE = isLE ? (u) => u : byteSwap32;
     hasHexBuiltin = /* @__PURE__ */ (() => (
       // @ts-ignore
@@ -4667,7 +4658,7 @@ var init_utils = __esm({
   }
 });
 
-// ../../node_modules/@noble/hashes/esm/_md.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/_md.js
 function setBigUint64(view, byteOffset, value, isLE2) {
   if (typeof view.setBigUint64 === "function")
     return view.setBigUint64(byteOffset, value, isLE2);
@@ -4688,7 +4679,7 @@ function Maj(a, b, c) {
 }
 var HashMD, SHA256_IV, SHA512_IV;
 var init_md = __esm({
-  "../../node_modules/@noble/hashes/esm/_md.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/_md.js"() {
     "use strict";
     init_utils();
     HashMD = class extends Hash {
@@ -4812,7 +4803,7 @@ var init_md = __esm({
   }
 });
 
-// ../../node_modules/@noble/hashes/esm/_u64.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/_u64.js
 function fromBig(n, le = false) {
   if (le)
     return { h: Number(n & U32_MASK64), l: Number(n >> _32n & U32_MASK64) };
@@ -4834,7 +4825,7 @@ function add(Ah, Al, Bh, Bl) {
 }
 var U32_MASK64, _32n, shrSH, shrSL, rotrSH, rotrSL, rotrBH, rotrBL, rotlSH, rotlSL, rotlBH, rotlBL, add3L, add3H, add4L, add4H, add5L, add5H;
 var init_u64 = __esm({
-  "../../node_modules/@noble/hashes/esm/_u64.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/_u64.js"() {
     "use strict";
     U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
     _32n = /* @__PURE__ */ BigInt(32);
@@ -4857,10 +4848,10 @@ var init_u64 = __esm({
   }
 });
 
-// ../../node_modules/@noble/hashes/esm/sha2.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/sha2.js
 var SHA256_K, SHA256_W, SHA256, K512, SHA512_Kh, SHA512_Kl, SHA512_W_H, SHA512_W_L, SHA512, sha256, sha512;
 var init_sha2 = __esm({
-  "../../node_modules/@noble/hashes/esm/sha2.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/sha2.js"() {
     "use strict";
     init_md();
     init_u64();
@@ -5204,7 +5195,7 @@ var init_sha2 = __esm({
   }
 });
 
-// ../../node_modules/@noble/curves/esm/utils.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/curves/esm/utils.js
 function _abool2(value, title = "") {
   if (typeof value !== "boolean") {
     const prefix = title && `"${title}"`;
@@ -5224,10 +5215,10 @@ function _abytes2(value, length4, title = "") {
   }
   return value;
 }
-function hexToNumber(hex2) {
-  if (typeof hex2 !== "string")
-    throw new Error("hex string expected, got " + typeof hex2);
-  return hex2 === "" ? _0n : BigInt("0x" + hex2);
+function hexToNumber(hex) {
+  if (typeof hex !== "string")
+    throw new Error("hex string expected, got " + typeof hex);
+  return hex === "" ? _0n : BigInt("0x" + hex);
 }
 function bytesToNumberBE(bytes) {
   return hexToNumber(bytesToHex(bytes));
@@ -5242,16 +5233,16 @@ function numberToBytesBE(n, len) {
 function numberToBytesLE(n, len) {
   return numberToBytesBE(n, len).reverse();
 }
-function ensureBytes(title, hex2, expectedLength) {
+function ensureBytes(title, hex, expectedLength) {
   let res;
-  if (typeof hex2 === "string") {
+  if (typeof hex === "string") {
     try {
-      res = hexToBytes(hex2);
+      res = hexToBytes(hex);
     } catch (e) {
       throw new Error(title + " must be hex string or Uint8Array, cause: " + e);
     }
-  } else if (isBytes(hex2)) {
-    res = Uint8Array.from(hex2);
+  } else if (isBytes(hex)) {
+    res = Uint8Array.from(hex);
   } else {
     throw new Error(title + " must be hex string or Uint8Array");
   }
@@ -5284,11 +5275,11 @@ function bitLen(n) {
     ;
   return len;
 }
-function _validateObject(object2, fields, optFields = {}) {
-  if (!object2 || typeof object2 !== "object")
+function _validateObject(object, fields, optFields = {}) {
+  if (!object || typeof object !== "object")
     throw new Error("expected valid options object");
   function checkField(fieldName, expectedType, isOpt) {
-    const val = object2[fieldName];
+    const val = object[fieldName];
     if (isOpt && val === void 0)
       return;
     const current = typeof val;
@@ -5311,7 +5302,7 @@ function memoized(fn) {
 }
 var _0n, _1n, isPosBig, bitMask, notImplemented;
 var init_utils2 = __esm({
-  "../../node_modules/@noble/curves/esm/utils.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/curves/esm/utils.js"() {
     "use strict";
     init_utils();
     init_utils();
@@ -5325,7 +5316,7 @@ var init_utils2 = __esm({
   }
 });
 
-// ../../node_modules/@noble/curves/esm/abstract/modular.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/curves/esm/abstract/modular.js
 function mod(a, b) {
   const result = a % b;
   return result >= _0n2 ? result : b + result;
@@ -5622,7 +5613,7 @@ function Field(ORDER, bitLenOrOpts, isLE2 = false, opts = {}) {
 }
 var _0n2, _1n2, _2n, _3n, _4n, _5n, _7n, _8n, _9n, _16n, isNegativeLE, FIELD_FIELDS;
 var init_modular = __esm({
-  "../../node_modules/@noble/curves/esm/abstract/modular.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/curves/esm/abstract/modular.js"() {
     "use strict";
     init_utils2();
     _0n2 = BigInt(0);
@@ -5658,7 +5649,7 @@ var init_modular = __esm({
   }
 });
 
-// ../../node_modules/@noble/curves/esm/abstract/curve.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/curves/esm/abstract/curve.js
 function negateCt(condition, item) {
   const neg = item.negate();
   return condition ? neg : item;
@@ -5791,7 +5782,7 @@ function _createCurveFields(type, CURVE, curveOpts = {}, FpFnLE) {
 }
 var _0n3, _1n3, pointPrecomputes, pointWindowSizes, wNAF;
 var init_curve = __esm({
-  "../../node_modules/@noble/curves/esm/abstract/curve.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/curves/esm/abstract/curve.js"() {
     "use strict";
     init_utils2();
     init_modular();
@@ -5929,7 +5920,7 @@ var init_curve = __esm({
   }
 });
 
-// ../../node_modules/@noble/curves/esm/abstract/edwards.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/curves/esm/abstract/edwards.js
 function isEdValidXY(Fp2, CURVE, x, y) {
   const x2 = Fp2.sqr(x);
   const y2 = Fp2.sqr(y);
@@ -6410,7 +6401,7 @@ function twistedEdwards(c) {
 }
 var _0n4, _1n4, _2n2, _8n2, PrimeEdwardsPoint;
 var init_edwards = __esm({
-  "../../node_modules/@noble/curves/esm/abstract/edwards.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/curves/esm/abstract/edwards.js"() {
     "use strict";
     init_utils2();
     init_curve();
@@ -6489,7 +6480,7 @@ var init_edwards = __esm({
   }
 });
 
-// ../../node_modules/@noble/curves/esm/ed25519.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/curves/esm/ed25519.js
 function ed25519_pow_2_252_3(x) {
   const _10n = BigInt(10), _20n = BigInt(20), _40n = BigInt(40), _80n = BigInt(80);
   const P = ed25519_CURVE_p;
@@ -6567,7 +6558,7 @@ function ristretto255_map(bytes) {
 }
 var _0n5, _1n5, _2n3, _3n2, _5n2, _8n3, ed25519_CURVE_p, ed25519_CURVE, ED25519_SQRT_M1, Fp, Fn, ed25519Defaults, ed25519, SQRT_M1, SQRT_AD_MINUS_ONE, INVSQRT_A_MINUS_D, ONE_MINUS_D_SQ, D_MINUS_ONE_SQ, invertSqrt, MAX_255B, bytes255ToNumberLE, _RistrettoPoint;
 var init_ed25519 = __esm({
-  "../../node_modules/@noble/curves/esm/ed25519.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/curves/esm/ed25519.js"() {
     "use strict";
     init_sha2();
     init_utils();
@@ -6628,8 +6619,8 @@ var init_ed25519 = __esm({
         return new __RistrettoPoint(ep);
       }
       /** @deprecated use `import { ristretto255_hasher } from '@noble/curves/ed25519.js';` */
-      static hashToCurve(hex2) {
-        return ristretto255_map(ensureBytes("ristrettoHash", hex2, 64));
+      static hashToCurve(hex) {
+        return ristretto255_map(ensureBytes("ristrettoHash", hex, 64));
       }
       static fromBytes(bytes) {
         abytes(bytes, 32);
@@ -6662,8 +6653,8 @@ var init_ed25519 = __esm({
        * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-decode).
        * @param hex Ristretto-encoded 32 bytes. Not every 32-byte string is valid ristretto encoding
        */
-      static fromHex(hex2) {
-        return __RistrettoPoint.fromBytes(ensureBytes("ristrettoHex", hex2, 32));
+      static fromHex(hex) {
+        return __RistrettoPoint.fromBytes(ensureBytes("ristrettoHex", hex, 32));
       }
       static msm(points, scalars) {
         return pippenger(__RistrettoPoint, ed25519.Point.Fn, points, scalars);
@@ -6724,7 +6715,7 @@ var init_ed25519 = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/data/isHex.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/data/isHex.js
 function isHex(value, { strict = true } = {}) {
   if (!value)
     return false;
@@ -6733,34 +6724,34 @@ function isHex(value, { strict = true } = {}) {
   return strict ? /^0x[0-9a-fA-F]*$/.test(value) : value.startsWith("0x");
 }
 var init_isHex = __esm({
-  "../../node_modules/viem/_esm/utils/data/isHex.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/data/isHex.js"() {
     "use strict";
   }
 });
 
-// ../../node_modules/viem/_esm/utils/data/size.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/data/size.js
 function size(value) {
   if (isHex(value, { strict: false }))
     return Math.ceil((value.length - 2) / 2);
   return value.length;
 }
 var init_size = __esm({
-  "../../node_modules/viem/_esm/utils/data/size.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/data/size.js"() {
     "use strict";
     init_isHex();
   }
 });
 
-// ../../node_modules/viem/_esm/errors/version.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/errors/version.js
 var version;
 var init_version = __esm({
-  "../../node_modules/viem/_esm/errors/version.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/errors/version.js"() {
     "use strict";
-    version = "2.45.1";
+    version = "2.56.8";
   }
 });
 
-// ../../node_modules/viem/_esm/errors/base.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/errors/base.js
 function walk(err2, fn) {
   if (fn?.(err2))
     return err2;
@@ -6770,7 +6761,7 @@ function walk(err2, fn) {
 }
 var errorConfig, BaseError;
 var init_base = __esm({
-  "../../node_modules/viem/_esm/errors/base.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/errors/base.js"() {
     "use strict";
     init_version();
     errorConfig = {
@@ -6851,10 +6842,10 @@ var init_base = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/errors/data.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/errors/data.js
 var SizeExceedsPaddingSizeError;
 var init_data = __esm({
-  "../../node_modules/viem/_esm/errors/data.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/errors/data.js"() {
     "use strict";
     init_base();
     SizeExceedsPaddingSizeError = class extends BaseError {
@@ -6865,7 +6856,7 @@ var init_data = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/data/pad.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/data/pad.js
 function pad(hexOrBytes, { dir, size: size2 = 32 } = {}) {
   if (typeof hexOrBytes === "string")
     return padHex(hexOrBytes, { dir, size: size2 });
@@ -6874,14 +6865,14 @@ function pad(hexOrBytes, { dir, size: size2 = 32 } = {}) {
 function padHex(hex_, { dir, size: size2 = 32 } = {}) {
   if (size2 === null)
     return hex_;
-  const hex2 = hex_.replace("0x", "");
-  if (hex2.length > size2 * 2)
+  const hex = hex_.replace("0x", "");
+  if (hex.length > size2 * 2)
     throw new SizeExceedsPaddingSizeError({
-      size: Math.ceil(hex2.length / 2),
+      size: Math.ceil(hex.length / 2),
       targetSize: size2,
       type: "hex"
     });
-  return `0x${hex2[dir === "right" ? "padEnd" : "padStart"](size2 * 2, "0")}`;
+  return `0x${hex[dir === "right" ? "padEnd" : "padStart"](size2 * 2, "0")}`;
 }
 function padBytes(bytes, { dir, size: size2 = 32 } = {}) {
   if (size2 === null)
@@ -6900,16 +6891,16 @@ function padBytes(bytes, { dir, size: size2 = 32 } = {}) {
   return paddedBytes;
 }
 var init_pad = __esm({
-  "../../node_modules/viem/_esm/utils/data/pad.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/data/pad.js"() {
     "use strict";
     init_data();
   }
 });
 
-// ../../node_modules/viem/_esm/errors/encoding.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/errors/encoding.js
 var IntegerOutOfRangeError, SizeOverflowError;
 var init_encoding = __esm({
-  "../../node_modules/viem/_esm/errors/encoding.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/errors/encoding.js"() {
     "use strict";
     init_base();
     IntegerOutOfRangeError = class extends BaseError {
@@ -6925,7 +6916,7 @@ var init_encoding = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/encoding/fromHex.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/encoding/fromHex.js
 function assertSize(hexOrBytes, { size: size2 }) {
   if (size(hexOrBytes) > size2)
     throw new SizeOverflowError({
@@ -6933,21 +6924,21 @@ function assertSize(hexOrBytes, { size: size2 }) {
       maxSize: size2
     });
 }
-function hexToBigInt(hex2, opts = {}) {
+function hexToBigInt(hex, opts = {}) {
   const { signed } = opts;
   if (opts.size)
-    assertSize(hex2, { size: opts.size });
-  const value = BigInt(hex2);
+    assertSize(hex, { size: opts.size });
+  const value = BigInt(hex);
   if (!signed)
     return value;
-  const size2 = (hex2.length - 2) / 2;
+  const size2 = Math.ceil((hex.length - 2) / 2);
   const max = (1n << BigInt(size2) * 8n - 1n) - 1n;
   if (value <= max)
     return value;
   return value - BigInt(`0x${"f".padStart(size2 * 2, "f")}`) - 1n;
 }
-function hexToNumber2(hex2, opts = {}) {
-  const value = hexToBigInt(hex2, opts);
+function hexToNumber2(hex, opts = {}) {
+  const value = hexToBigInt(hex, opts);
   const number = Number(value);
   if (!Number.isSafeInteger(number))
     throw new IntegerOutOfRangeError({
@@ -6960,14 +6951,14 @@ function hexToNumber2(hex2, opts = {}) {
   return number;
 }
 var init_fromHex = __esm({
-  "../../node_modules/viem/_esm/utils/encoding/fromHex.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/encoding/fromHex.js"() {
     "use strict";
     init_encoding();
     init_size();
   }
 });
 
-// ../../node_modules/viem/_esm/utils/encoding/toHex.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/encoding/toHex.js
 function toHex(value, opts = {}) {
   if (typeof value === "number" || typeof value === "bigint")
     return numberToHex(value, opts);
@@ -6979,24 +6970,24 @@ function toHex(value, opts = {}) {
   return bytesToHex2(value, opts);
 }
 function boolToHex(value, opts = {}) {
-  const hex2 = `0x${Number(value)}`;
+  const hex = `0x${Number(value)}`;
   if (typeof opts.size === "number") {
-    assertSize(hex2, { size: opts.size });
-    return pad(hex2, { size: opts.size });
+    assertSize(hex, { size: opts.size });
+    return pad(hex, { size: opts.size });
   }
-  return hex2;
+  return hex;
 }
 function bytesToHex2(value, opts = {}) {
   let string2 = "";
   for (let i = 0; i < value.length; i++) {
     string2 += hexes2[value[i]];
   }
-  const hex2 = `0x${string2}`;
+  const hex = `0x${string2}`;
   if (typeof opts.size === "number") {
-    assertSize(hex2, { size: opts.size });
-    return pad(hex2, { dir: "right", size: opts.size });
+    assertSize(hex, { size: opts.size });
+    return pad(hex, { dir: "right", size: opts.size });
   }
-  return hex2;
+  return hex;
 }
 function numberToHex(value_, opts = {}) {
   const { signed, size: size2 } = opts;
@@ -7021,10 +7012,10 @@ function numberToHex(value_, opts = {}) {
       value: `${value_}${suffix}`
     });
   }
-  const hex2 = `0x${(signed && value < 0 ? (1n << BigInt(size2 * 8)) + BigInt(value) : value).toString(16)}`;
+  const hex = `0x${(signed && value < 0 ? (1n << BigInt(size2 * 8)) + BigInt(value) : value).toString(16)}`;
   if (size2)
-    return pad(hex2, { size: size2 });
-  return hex2;
+    return pad(hex, { size: size2 });
+  return hex;
 }
 function stringToHex(value_, opts = {}) {
   const value = encoder.encode(value_);
@@ -7032,7 +7023,7 @@ function stringToHex(value_, opts = {}) {
 }
 var hexes2, encoder;
 var init_toHex = __esm({
-  "../../node_modules/viem/_esm/utils/encoding/toHex.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/encoding/toHex.js"() {
     "use strict";
     init_encoding();
     init_pad();
@@ -7042,7 +7033,7 @@ var init_toHex = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/encoding/toBytes.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/encoding/toBytes.js
 function toBytes2(value, opts = {}) {
   if (typeof value === "number" || typeof value === "bigint")
     return numberToBytes(value, opts);
@@ -7071,12 +7062,12 @@ function charCodeToBase16(char) {
   return void 0;
 }
 function hexToBytes2(hex_, opts = {}) {
-  let hex2 = hex_;
+  let hex = hex_;
   if (opts.size) {
-    assertSize(hex2, { size: opts.size });
-    hex2 = pad(hex2, { dir: "right", size: opts.size });
+    assertSize(hex, { size: opts.size });
+    hex = pad(hex, { dir: "right", size: opts.size });
   }
-  let hexString = hex2.slice(2);
+  let hexString = hex.slice(2);
   if (hexString.length % 2)
     hexString = `0${hexString}`;
   const length4 = hexString.length / 2;
@@ -7092,8 +7083,8 @@ function hexToBytes2(hex_, opts = {}) {
   return bytes;
 }
 function numberToBytes(value, opts) {
-  const hex2 = numberToHex(value, opts);
-  return hexToBytes2(hex2);
+  const hex = numberToHex(value, opts);
+  return hexToBytes2(hex);
 }
 function stringToBytes(value, opts = {}) {
   const bytes = encoder2.encode(value);
@@ -7105,7 +7096,7 @@ function stringToBytes(value, opts = {}) {
 }
 var encoder2, charCodeMap;
 var init_toBytes = __esm({
-  "../../node_modules/viem/_esm/utils/encoding/toBytes.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/encoding/toBytes.js"() {
     "use strict";
     init_base();
     init_isHex();
@@ -7124,7 +7115,7 @@ var init_toBytes = __esm({
   }
 });
 
-// ../../node_modules/@noble/hashes/esm/sha3.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/sha3.js
 function keccakP(s, rounds = 24) {
   const B = new Uint32Array(5 * 2);
   for (let round = 24 - rounds; round < 24; round++) {
@@ -7167,7 +7158,7 @@ function keccakP(s, rounds = 24) {
 }
 var _0n6, _1n6, _2n4, _7n2, _256n, _0x71n, SHA3_PI, SHA3_ROTL, _SHA3_IOTA, IOTAS, SHA3_IOTA_H, SHA3_IOTA_L, rotlH, rotlL, Keccak, gen, keccak_256;
 var init_sha3 = __esm({
-  "../../node_modules/@noble/hashes/esm/sha3.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/sha3.js"() {
     "use strict";
     init_u64();
     init_utils();
@@ -7313,7 +7304,7 @@ var init_sha3 = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/hash/keccak256.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/hash/keccak256.js
 function keccak256(value, to_) {
   const to = to_ || "hex";
   const bytes = keccak_256(isHex(value, { strict: false }) ? toBytes2(value) : value);
@@ -7322,7 +7313,7 @@ function keccak256(value, to_) {
   return toHex(bytes);
 }
 var init_keccak256 = __esm({
-  "../../node_modules/viem/_esm/utils/hash/keccak256.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/hash/keccak256.js"() {
     "use strict";
     init_sha3();
     init_isHex();
@@ -7331,10 +7322,10 @@ var init_keccak256 = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/errors/address.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/errors/address.js
 var InvalidAddressError;
 var init_address = __esm({
-  "../../node_modules/viem/_esm/errors/address.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/errors/address.js"() {
     "use strict";
     init_base();
     InvalidAddressError = class extends BaseError {
@@ -7351,10 +7342,10 @@ var init_address = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/lru.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/lru.js
 var LruMap;
 var init_lru = __esm({
-  "../../node_modules/viem/_esm/utils/lru.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/lru.js"() {
     "use strict";
     LruMap = class extends Map {
       constructor(size2) {
@@ -7369,18 +7360,20 @@ var init_lru = __esm({
       }
       get(key) {
         const value = super.get(key);
-        if (super.has(key) && value !== void 0) {
-          this.delete(key);
+        if (super.has(key)) {
+          super.delete(key);
           super.set(key, value);
         }
         return value;
       }
       set(key, value) {
+        if (super.has(key))
+          super.delete(key);
         super.set(key, value);
         if (this.maxSize && this.size > this.maxSize) {
-          const firstKey = this.keys().next().value;
-          if (firstKey)
-            this.delete(firstKey);
+          const firstKey = super.keys().next().value;
+          if (firstKey !== void 0)
+            super.delete(firstKey);
         }
         return this;
       }
@@ -7388,7 +7381,7 @@ var init_lru = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/address/getAddress.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/address/getAddress.js
 function checksumAddress(address_, chainId) {
   if (checksumAddressCache.has(`${address_}.${chainId}`))
     return checksumAddressCache.get(`${address_}.${chainId}`);
@@ -7414,7 +7407,7 @@ function getAddress(address, chainId) {
 }
 var checksumAddressCache;
 var init_getAddress = __esm({
-  "../../node_modules/viem/_esm/utils/address/getAddress.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/address/getAddress.js"() {
     "use strict";
     init_address();
     init_toBytes();
@@ -7425,7 +7418,7 @@ var init_getAddress = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/address/isAddress.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/address/isAddress.js
 function isAddress(address, options) {
   const { strict = true } = options ?? {};
   const cacheKey2 = `${address}.${strict}`;
@@ -7445,7 +7438,7 @@ function isAddress(address, options) {
 }
 var addressRegex, isAddressCache;
 var init_isAddress = __esm({
-  "../../node_modules/viem/_esm/utils/address/isAddress.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/address/isAddress.js"() {
     "use strict";
     init_lru();
     init_getAddress();
@@ -7454,7 +7447,7 @@ var init_isAddress = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/data/concat.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/data/concat.js
 function concat(values) {
   if (typeof values[0] === "string")
     return concatHex(values);
@@ -7477,28 +7470,28 @@ function concatHex(values) {
   return `0x${values.reduce((acc, x) => acc + x.replace("0x", ""), "")}`;
 }
 var init_concat = __esm({
-  "../../node_modules/viem/_esm/utils/data/concat.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/data/concat.js"() {
     "use strict";
   }
 });
 
-// ../../node_modules/viem/_esm/accounts/utils/publicKeyToAddress.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/accounts/utils/publicKeyToAddress.js
 function publicKeyToAddress(publicKey) {
   const address = keccak256(`0x${publicKey.substring(4)}`).substring(26);
   return checksumAddress(`0x${address}`);
 }
 var init_publicKeyToAddress = __esm({
-  "../../node_modules/viem/_esm/accounts/utils/publicKeyToAddress.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/accounts/utils/publicKeyToAddress.js"() {
     "use strict";
     init_getAddress();
     init_keccak256();
   }
 });
 
-// ../../node_modules/@noble/hashes/esm/hmac.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/hmac.js
 var HMAC, hmac;
 var init_hmac = __esm({
-  "../../node_modules/@noble/hashes/esm/hmac.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@noble/hashes/esm/hmac.js"() {
     "use strict";
     init_utils();
     HMAC = class extends Hash {
@@ -7570,7 +7563,7 @@ var init_hmac = __esm({
   }
 });
 
-// ../../node_modules/viem/node_modules/@noble/curves/esm/abstract/utils.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/abstract/utils.js
 function isBytes2(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -7583,23 +7576,23 @@ function abool(title, value) {
     throw new Error(title + " boolean expected, got " + value);
 }
 function numberToHexUnpadded(num2) {
-  const hex2 = num2.toString(16);
-  return hex2.length & 1 ? "0" + hex2 : hex2;
+  const hex = num2.toString(16);
+  return hex.length & 1 ? "0" + hex : hex;
 }
-function hexToNumber3(hex2) {
-  if (typeof hex2 !== "string")
-    throw new Error("hex string expected, got " + typeof hex2);
-  return hex2 === "" ? _0n7 : BigInt("0x" + hex2);
+function hexToNumber3(hex) {
+  if (typeof hex !== "string")
+    throw new Error("hex string expected, got " + typeof hex);
+  return hex === "" ? _0n7 : BigInt("0x" + hex);
 }
 function bytesToHex3(bytes) {
   abytes2(bytes);
   if (hasHexBuiltin2)
     return bytes.toHex();
-  let hex2 = "";
+  let hex = "";
   for (let i = 0; i < bytes.length; i++) {
-    hex2 += hexes3[bytes[i]];
+    hex += hexes3[bytes[i]];
   }
-  return hex2;
+  return hex;
 }
 function asciiToBase162(ch) {
   if (ch >= asciis2._0 && ch <= asciis2._9)
@@ -7610,21 +7603,21 @@ function asciiToBase162(ch) {
     return ch - (asciis2.a - 10);
   return;
 }
-function hexToBytes3(hex2) {
-  if (typeof hex2 !== "string")
-    throw new Error("hex string expected, got " + typeof hex2);
+function hexToBytes3(hex) {
+  if (typeof hex !== "string")
+    throw new Error("hex string expected, got " + typeof hex);
   if (hasHexBuiltin2)
-    return Uint8Array.fromHex(hex2);
-  const hl = hex2.length;
+    return Uint8Array.fromHex(hex);
+  const hl = hex.length;
   const al = hl / 2;
   if (hl % 2)
     throw new Error("hex string expected, got unpadded hex of length " + hl);
   const array = new Uint8Array(al);
   for (let ai = 0, hi = 0; ai < al; ai++, hi += 2) {
-    const n1 = asciiToBase162(hex2.charCodeAt(hi));
-    const n2 = asciiToBase162(hex2.charCodeAt(hi + 1));
+    const n1 = asciiToBase162(hex.charCodeAt(hi));
+    const n2 = asciiToBase162(hex.charCodeAt(hi + 1));
     if (n1 === void 0 || n2 === void 0) {
-      const char = hex2[hi] + hex2[hi + 1];
+      const char = hex[hi] + hex[hi + 1];
       throw new Error('hex string expected, got non-hex character "' + char + '" at index ' + hi);
     }
     array[ai] = n1 * 16 + n2;
@@ -7644,16 +7637,16 @@ function numberToBytesBE2(n, len) {
 function numberToBytesLE2(n, len) {
   return numberToBytesBE2(n, len).reverse();
 }
-function ensureBytes2(title, hex2, expectedLength) {
+function ensureBytes2(title, hex, expectedLength) {
   let res;
-  if (typeof hex2 === "string") {
+  if (typeof hex === "string") {
     try {
-      res = hexToBytes3(hex2);
+      res = hexToBytes3(hex);
     } catch (e) {
       throw new Error(title + " must be hex string or Uint8Array, cause: " + e);
     }
-  } else if (isBytes2(hex2)) {
-    res = Uint8Array.from(hex2);
+  } else if (isBytes2(hex)) {
+    res = Uint8Array.from(hex);
   } else {
     throw new Error(title + " must be hex string or Uint8Array");
   }
@@ -7743,15 +7736,15 @@ function createHmacDrbg(hashLen, qByteLen, hmacFn) {
   };
   return genUntil;
 }
-function validateObject2(object2, validators, optValidators = {}) {
+function validateObject2(object, validators, optValidators = {}) {
   const checkField = (fieldName, type, isOptional) => {
     const checkVal = validatorFns[type];
     if (typeof checkVal !== "function")
       throw new Error("invalid validator function");
-    const val = object2[fieldName];
+    const val = object[fieldName];
     if (isOptional && val === void 0)
       return;
-    if (!checkVal(val, object2)) {
+    if (!checkVal(val, object)) {
       throw new Error("param " + String(fieldName) + " is invalid. Expected " + type + ", got " + val);
     }
   };
@@ -7759,7 +7752,7 @@ function validateObject2(object2, validators, optValidators = {}) {
     checkField(fieldName, type, false);
   for (const [fieldName, type] of Object.entries(optValidators))
     checkField(fieldName, type, true);
-  return object2;
+  return object;
 }
 function memoized2(fn) {
   const map = /* @__PURE__ */ new WeakMap();
@@ -7774,7 +7767,7 @@ function memoized2(fn) {
 }
 var _0n7, _1n7, hasHexBuiltin2, hexes3, asciis2, isPosBig2, bitMask2, u8n, u8fr, validatorFns;
 var init_utils3 = __esm({
-  "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/utils.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/abstract/utils.js"() {
     "use strict";
     _0n7 = /* @__PURE__ */ BigInt(0);
     _1n7 = /* @__PURE__ */ BigInt(1);
@@ -7794,13 +7787,13 @@ var init_utils3 = __esm({
       stringOrUint8Array: (val) => typeof val === "string" || isBytes2(val),
       isSafeInteger: (val) => Number.isSafeInteger(val),
       array: (val) => Array.isArray(val),
-      field: (val, object2) => object2.Fp.isValid(val),
+      field: (val, object) => object.Fp.isValid(val),
       hash: (val) => typeof val === "function" && Number.isSafeInteger(val.outputLen)
     };
   }
 });
 
-// ../../node_modules/viem/node_modules/@noble/curves/esm/abstract/modular.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/abstract/modular.js
 function mod2(a, b) {
   const result = a % b;
   return result >= _0n8 ? result : b + result;
@@ -8049,7 +8042,7 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
 }
 var _0n8, _1n8, _2n5, _3n3, _4n2, _5n3, _8n4, FIELD_FIELDS2;
 var init_modular2 = __esm({
-  "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/modular.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/abstract/modular.js"() {
     "use strict";
     init_utils();
     init_utils3();
@@ -8082,7 +8075,7 @@ var init_modular2 = __esm({
   }
 });
 
-// ../../node_modules/viem/node_modules/@noble/curves/esm/abstract/curve.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/abstract/curve.js
 function constTimeNegate(condition, item) {
   const neg = item.negate();
   return condition ? neg : item;
@@ -8313,7 +8306,7 @@ function validateBasic(curve) {
 }
 var _0n9, _1n9, pointPrecomputes2, pointWindowSizes2;
 var init_curve2 = __esm({
-  "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/curve.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/abstract/curve.js"() {
     "use strict";
     init_modular2();
     init_utils3();
@@ -8324,7 +8317,7 @@ var init_curve2 = __esm({
   }
 });
 
-// ../../node_modules/viem/node_modules/@noble/curves/esm/abstract/weierstrass.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/abstract/weierstrass.js
 function validateSigVerOpts(opts) {
   if (opts.lowS !== void 0)
     abool("lowS", opts.lowS);
@@ -8494,8 +8487,8 @@ function weierstrassPoints(opts) {
      * Converts hash string or Uint8Array to Point.
      * @param hex short/long ECDSA hex
      */
-    static fromHex(hex2) {
-      const P = Point2.fromAffine(fromBytes2(ensureBytes2("pointHex", hex2)));
+    static fromHex(hex) {
+      const P = Point2.fromAffine(fromBytes2(ensureBytes2("pointHex", hex)));
       P.assertValidity();
       return P;
     }
@@ -8850,15 +8843,15 @@ function weierstrass(curveDef) {
       Object.freeze(this);
     }
     // pair (bytes of r, bytes of s)
-    static fromCompact(hex2) {
+    static fromCompact(hex) {
       const l = nByteLength;
-      hex2 = ensureBytes2("compactSignature", hex2, l * 2);
-      return new Signature(slcNum(hex2, 0, l), slcNum(hex2, l, 2 * l));
+      hex = ensureBytes2("compactSignature", hex, l * 2);
+      return new Signature(slcNum(hex, 0, l), slcNum(hex, l, 2 * l));
     }
     // DER encoded ECDSA signature
     // https://bitcoin.stackexchange.com/questions/57644/what-are-the-parts-of-a-bitcoin-transaction-input-script
-    static fromDER(hex2) {
-      const { r, s } = DER.toSig(ensureBytes2("DER", hex2));
+    static fromDER(hex) {
+      const { r, s } = DER.toSig(ensureBytes2("DER", hex));
       return new Signature(r, s);
     }
     /**
@@ -9201,7 +9194,7 @@ function mapToCurveSimpleSWU(Fp2, opts) {
 }
 var DERErr, DER, _0n10, _1n10, _2n6, _3n4, _4n3;
 var init_weierstrass = __esm({
-  "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/weierstrass.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/abstract/weierstrass.js"() {
     "use strict";
     init_curve2();
     init_modular2();
@@ -9275,12 +9268,12 @@ var init_weierstrass = __esm({
           const { Err: E } = DER;
           if (num2 < _0n10)
             throw new E("integer: negative integers are not allowed");
-          let hex2 = numberToHexUnpadded(num2);
-          if (Number.parseInt(hex2[0], 16) & 8)
-            hex2 = "00" + hex2;
-          if (hex2.length & 1)
+          let hex = numberToHexUnpadded(num2);
+          if (Number.parseInt(hex[0], 16) & 8)
+            hex = "00" + hex;
+          if (hex.length & 1)
             throw new E("unexpected DER parsing assertion: unpadded hex");
-          return hex2;
+          return hex;
         },
         decode(data) {
           const { Err: E } = DER;
@@ -9291,9 +9284,9 @@ var init_weierstrass = __esm({
           return bytesToNumberBE2(data);
         }
       },
-      toSig(hex2) {
+      toSig(hex) {
         const { Err: E, _int: int, _tlv: tlv } = DER;
-        const data = ensureBytes2("signature", hex2);
+        const data = ensureBytes2("signature", hex);
         const { v: seqBytes, l: seqLeftBytes } = tlv.decode(48, data);
         if (seqLeftBytes.length)
           throw new E("invalid signature: left bytes after parsing");
@@ -9319,7 +9312,7 @@ var init_weierstrass = __esm({
   }
 });
 
-// ../../node_modules/viem/node_modules/@noble/curves/esm/_shortw_utils.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/_shortw_utils.js
 function getHash(hash) {
   return {
     hash,
@@ -9332,7 +9325,7 @@ function createCurve(curveDef, defHash) {
   return { ...create4(defHash), create: create4 };
 }
 var init_shortw_utils = __esm({
-  "../../node_modules/viem/node_modules/@noble/curves/esm/_shortw_utils.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/_shortw_utils.js"() {
     "use strict";
     init_hmac();
     init_utils();
@@ -9340,7 +9333,7 @@ var init_shortw_utils = __esm({
   }
 });
 
-// ../../node_modules/viem/node_modules/@noble/curves/esm/abstract/hash-to-curve.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/abstract/hash-to-curve.js
 function i2osp(value, length4) {
   anum(value);
   anum(length4);
@@ -9488,7 +9481,7 @@ function createHasher2(Point2, mapToCurve, defaults) {
 }
 var os2ip;
 var init_hash_to_curve = __esm({
-  "../../node_modules/viem/node_modules/@noble/curves/esm/abstract/hash-to-curve.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/abstract/hash-to-curve.js"() {
     "use strict";
     init_modular2();
     init_utils3();
@@ -9496,7 +9489,7 @@ var init_hash_to_curve = __esm({
   }
 });
 
-// ../../node_modules/viem/node_modules/@noble/curves/esm/secp256k1.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/secp256k1.js
 var secp256k1_exports = {};
 __export(secp256k1_exports, {
   encodeToCurve: () => encodeToCurve,
@@ -9600,7 +9593,7 @@ function schnorrVerify(signature, message, publicKey) {
 }
 var secp256k1P, secp256k1N, _0n11, _1n11, _2n7, divNearest, Fpk1, secp256k1, TAGGED_HASH_PREFIXES, pointToBytes, numTo32b, modP, modN, Point, GmulAdd, num, schnorr, isoMap, mapSWU, secp256k1_hasher, hashToCurve, encodeToCurve;
 var init_secp256k1 = __esm({
-  "../../node_modules/viem/node_modules/@noble/curves/esm/secp256k1.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/node_modules/@noble/curves/esm/secp256k1.js"() {
     "use strict";
     init_sha2();
     init_utils();
@@ -9728,7 +9721,7 @@ var init_secp256k1 = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/signature/recoverPublicKey.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/recoverPublicKey.js
 async function recoverPublicKey({ hash, signature }) {
   const hashHex = isHex(hash) ? hash : toHex(hash);
   const { secp256k1: secp256k12 } = await Promise.resolve().then(() => (init_secp256k1(), secp256k1_exports));
@@ -9759,7 +9752,7 @@ function toRecoveryBit(yParityOrV) {
   throw new Error("Invalid yParityOrV value");
 }
 var init_recoverPublicKey = __esm({
-  "../../node_modules/viem/_esm/utils/signature/recoverPublicKey.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/recoverPublicKey.js"() {
     "use strict";
     init_isHex();
     init_size();
@@ -9768,29 +9761,19 @@ var init_recoverPublicKey = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/signature/recoverAddress.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/recoverAddress.js
 async function recoverAddress({ hash, signature }) {
   return publicKeyToAddress(await recoverPublicKey({ hash, signature }));
 }
 var init_recoverAddress = __esm({
-  "../../node_modules/viem/_esm/utils/signature/recoverAddress.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/recoverAddress.js"() {
     "use strict";
     init_publicKeyToAddress();
     init_recoverPublicKey();
   }
 });
 
-// ../../node_modules/@noble/hashes/esm/sha256.js
-var sha2562;
-var init_sha256 = __esm({
-  "../../node_modules/@noble/hashes/esm/sha256.js"() {
-    "use strict";
-    init_sha2();
-    sha2562 = sha256;
-  }
-});
-
-// ../../node_modules/viem/_esm/utils/address/isAddressEqual.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/address/isAddressEqual.js
 function isAddressEqual(a, b) {
   if (!isAddress(a, { strict: false }))
     throw new InvalidAddressError({ address: a });
@@ -9799,23 +9782,23 @@ function isAddressEqual(a, b) {
   return a.toLowerCase() === b.toLowerCase();
 }
 var init_isAddressEqual = __esm({
-  "../../node_modules/viem/_esm/utils/address/isAddressEqual.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/address/isAddressEqual.js"() {
     "use strict";
     init_address();
     init_isAddress();
   }
 });
 
-// ../../node_modules/viem/_esm/constants/strings.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/constants/strings.js
 var presignMessagePrefix;
 var init_strings = __esm({
-  "../../node_modules/viem/_esm/constants/strings.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/constants/strings.js"() {
     "use strict";
     presignMessagePrefix = "Ethereum Signed Message:\n";
   }
 });
 
-// ../../node_modules/viem/_esm/utils/signature/toPrefixedMessage.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/toPrefixedMessage.js
 function toPrefixedMessage(message_) {
   const message = (() => {
     if (typeof message_ === "string")
@@ -9828,7 +9811,7 @@ function toPrefixedMessage(message_) {
   return concat([prefix, message]);
 }
 var init_toPrefixedMessage = __esm({
-  "../../node_modules/viem/_esm/utils/signature/toPrefixedMessage.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/toPrefixedMessage.js"() {
     "use strict";
     init_strings();
     init_concat();
@@ -9837,36 +9820,36 @@ var init_toPrefixedMessage = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/utils/signature/hashMessage.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/hashMessage.js
 function hashMessage(message, to_) {
   return keccak256(toPrefixedMessage(message), to_);
 }
 var init_hashMessage = __esm({
-  "../../node_modules/viem/_esm/utils/signature/hashMessage.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/hashMessage.js"() {
     "use strict";
     init_keccak256();
     init_toPrefixedMessage();
   }
 });
 
-// ../../node_modules/viem/_esm/utils/signature/recoverMessageAddress.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/recoverMessageAddress.js
 async function recoverMessageAddress({ message, signature }) {
   return recoverAddress({ hash: hashMessage(message), signature });
 }
 var init_recoverMessageAddress = __esm({
-  "../../node_modules/viem/_esm/utils/signature/recoverMessageAddress.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/recoverMessageAddress.js"() {
     "use strict";
     init_hashMessage();
     init_recoverAddress();
   }
 });
 
-// ../../node_modules/viem/_esm/utils/signature/verifyMessage.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/verifyMessage.js
 async function verifyMessage({ address, message, signature }) {
   return isAddressEqual(getAddress(address), await recoverMessageAddress({ message, signature }));
 }
 var init_verifyMessage = __esm({
-  "../../node_modules/viem/_esm/utils/signature/verifyMessage.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/utils/signature/verifyMessage.js"() {
     "use strict";
     init_getAddress();
     init_isAddressEqual();
@@ -9874,367 +9857,15 @@ var init_verifyMessage = __esm({
   }
 });
 
-// ../../node_modules/viem/_esm/index.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/index.js
 var init_esm = __esm({
-  "../../node_modules/viem/_esm/index.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/viem/_esm/index.js"() {
     "use strict";
     init_verifyMessage();
   }
 });
 
-// ../../node_modules/@noble/hashes/esm/_blake.js
-function G1s(a, b, c, d, x) {
-  a = a + b + x | 0;
-  d = rotr(d ^ a, 16);
-  c = c + d | 0;
-  b = rotr(b ^ c, 12);
-  return { a, b, c, d };
-}
-function G2s(a, b, c, d, x) {
-  a = a + b + x | 0;
-  d = rotr(d ^ a, 8);
-  c = c + d | 0;
-  b = rotr(b ^ c, 7);
-  return { a, b, c, d };
-}
-var init_blake = __esm({
-  "../../node_modules/@noble/hashes/esm/_blake.js"() {
-    "use strict";
-    init_utils();
-  }
-});
-
-// ../../node_modules/@noble/hashes/esm/blake2.js
-function compress(s, offset, msg, rounds, v0, v1, v2, v3, v42, v5, v62, v7, v8, v9, v10, v11, v12, v13, v14, v15) {
-  let j = 0;
-  for (let i = 0; i < rounds; i++) {
-    ({ a: v0, b: v42, c: v8, d: v12 } = G1s(v0, v42, v8, v12, msg[offset + s[j++]]));
-    ({ a: v0, b: v42, c: v8, d: v12 } = G2s(v0, v42, v8, v12, msg[offset + s[j++]]));
-    ({ a: v1, b: v5, c: v9, d: v13 } = G1s(v1, v5, v9, v13, msg[offset + s[j++]]));
-    ({ a: v1, b: v5, c: v9, d: v13 } = G2s(v1, v5, v9, v13, msg[offset + s[j++]]));
-    ({ a: v2, b: v62, c: v10, d: v14 } = G1s(v2, v62, v10, v14, msg[offset + s[j++]]));
-    ({ a: v2, b: v62, c: v10, d: v14 } = G2s(v2, v62, v10, v14, msg[offset + s[j++]]));
-    ({ a: v3, b: v7, c: v11, d: v15 } = G1s(v3, v7, v11, v15, msg[offset + s[j++]]));
-    ({ a: v3, b: v7, c: v11, d: v15 } = G2s(v3, v7, v11, v15, msg[offset + s[j++]]));
-    ({ a: v0, b: v5, c: v10, d: v15 } = G1s(v0, v5, v10, v15, msg[offset + s[j++]]));
-    ({ a: v0, b: v5, c: v10, d: v15 } = G2s(v0, v5, v10, v15, msg[offset + s[j++]]));
-    ({ a: v1, b: v62, c: v11, d: v12 } = G1s(v1, v62, v11, v12, msg[offset + s[j++]]));
-    ({ a: v1, b: v62, c: v11, d: v12 } = G2s(v1, v62, v11, v12, msg[offset + s[j++]]));
-    ({ a: v2, b: v7, c: v8, d: v13 } = G1s(v2, v7, v8, v13, msg[offset + s[j++]]));
-    ({ a: v2, b: v7, c: v8, d: v13 } = G2s(v2, v7, v8, v13, msg[offset + s[j++]]));
-    ({ a: v3, b: v42, c: v9, d: v14 } = G1s(v3, v42, v9, v14, msg[offset + s[j++]]));
-    ({ a: v3, b: v42, c: v9, d: v14 } = G2s(v3, v42, v9, v14, msg[offset + s[j++]]));
-  }
-  return { v0, v1, v2, v3, v4: v42, v5, v6: v62, v7, v8, v9, v10, v11, v12, v13, v14, v15 };
-}
-var BLAKE2;
-var init_blake2 = __esm({
-  "../../node_modules/@noble/hashes/esm/blake2.js"() {
-    "use strict";
-    init_blake();
-    init_utils();
-    BLAKE2 = class extends Hash {
-      constructor(blockLen, outputLen) {
-        super();
-        this.finished = false;
-        this.destroyed = false;
-        this.length = 0;
-        this.pos = 0;
-        anumber(blockLen);
-        anumber(outputLen);
-        this.blockLen = blockLen;
-        this.outputLen = outputLen;
-        this.buffer = new Uint8Array(blockLen);
-        this.buffer32 = u32(this.buffer);
-      }
-      update(data) {
-        aexists(this);
-        data = toBytes(data);
-        abytes(data);
-        const { blockLen, buffer, buffer32 } = this;
-        const len = data.length;
-        const offset = data.byteOffset;
-        const buf = data.buffer;
-        for (let pos = 0; pos < len; ) {
-          if (this.pos === blockLen) {
-            swap32IfBE(buffer32);
-            this.compress(buffer32, 0, false);
-            swap32IfBE(buffer32);
-            this.pos = 0;
-          }
-          const take = Math.min(blockLen - this.pos, len - pos);
-          const dataOffset = offset + pos;
-          if (take === blockLen && !(dataOffset % 4) && pos + take < len) {
-            const data32 = new Uint32Array(buf, dataOffset, Math.floor((len - pos) / 4));
-            swap32IfBE(data32);
-            for (let pos32 = 0; pos + blockLen < len; pos32 += buffer32.length, pos += blockLen) {
-              this.length += blockLen;
-              this.compress(data32, pos32, false);
-            }
-            swap32IfBE(data32);
-            continue;
-          }
-          buffer.set(data.subarray(pos, pos + take), this.pos);
-          this.pos += take;
-          this.length += take;
-          pos += take;
-        }
-        return this;
-      }
-      digestInto(out) {
-        aexists(this);
-        aoutput(out, this);
-        const { pos, buffer32 } = this;
-        this.finished = true;
-        clean(this.buffer.subarray(pos));
-        swap32IfBE(buffer32);
-        this.compress(buffer32, 0, true);
-        swap32IfBE(buffer32);
-        const out32 = u32(out);
-        this.get().forEach((v, i) => out32[i] = swap8IfBE(v));
-      }
-      digest() {
-        const { buffer, outputLen } = this;
-        this.digestInto(buffer);
-        const res = buffer.slice(0, outputLen);
-        this.destroy();
-        return res;
-      }
-      _cloneInto(to) {
-        const { buffer, length: length4, finished, destroyed, outputLen, pos } = this;
-        to || (to = new this.constructor({ dkLen: outputLen }));
-        to.set(...this.get());
-        to.buffer.set(buffer);
-        to.destroyed = destroyed;
-        to.finished = finished;
-        to.length = length4;
-        to.pos = pos;
-        to.outputLen = outputLen;
-        return to;
-      }
-      clone() {
-        return this._cloneInto();
-      }
-    };
-  }
-});
-
-// ../../node_modules/@noble/hashes/esm/blake3.js
-var B3_Flags, B3_IV, B3_SIGMA, BLAKE3, blake3;
-var init_blake3 = __esm({
-  "../../node_modules/@noble/hashes/esm/blake3.js"() {
-    "use strict";
-    init_md();
-    init_u64();
-    init_blake2();
-    init_utils();
-    B3_Flags = {
-      CHUNK_START: 1,
-      CHUNK_END: 2,
-      PARENT: 4,
-      ROOT: 8,
-      KEYED_HASH: 16,
-      DERIVE_KEY_CONTEXT: 32,
-      DERIVE_KEY_MATERIAL: 64
-    };
-    B3_IV = SHA256_IV.slice();
-    B3_SIGMA = /* @__PURE__ */ (() => {
-      const Id = Array.from({ length: 16 }, (_, i) => i);
-      const permute = (arr) => [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8].map((i) => arr[i]);
-      const res = [];
-      for (let i = 0, v = Id; i < 7; i++, v = permute(v))
-        res.push(...v);
-      return Uint8Array.from(res);
-    })();
-    BLAKE3 = class _BLAKE3 extends BLAKE2 {
-      constructor(opts = {}, flags = 0) {
-        super(64, opts.dkLen === void 0 ? 32 : opts.dkLen);
-        this.chunkPos = 0;
-        this.chunksDone = 0;
-        this.flags = 0 | 0;
-        this.stack = [];
-        this.posOut = 0;
-        this.bufferOut32 = new Uint32Array(16);
-        this.chunkOut = 0;
-        this.enableXOF = true;
-        const { key, context } = opts;
-        const hasContext = context !== void 0;
-        if (key !== void 0) {
-          if (hasContext)
-            throw new Error('Only "key" or "context" can be specified at same time');
-          const k = toBytes(key).slice();
-          abytes(k, 32);
-          this.IV = u32(k);
-          swap32IfBE(this.IV);
-          this.flags = flags | B3_Flags.KEYED_HASH;
-        } else if (hasContext) {
-          const ctx = toBytes(context);
-          const contextKey = new _BLAKE3({ dkLen: 32 }, B3_Flags.DERIVE_KEY_CONTEXT).update(ctx).digest();
-          this.IV = u32(contextKey);
-          swap32IfBE(this.IV);
-          this.flags = flags | B3_Flags.DERIVE_KEY_MATERIAL;
-        } else {
-          this.IV = B3_IV.slice();
-          this.flags = flags;
-        }
-        this.state = this.IV.slice();
-        this.bufferOut = u8(this.bufferOut32);
-      }
-      // Unused
-      get() {
-        return [];
-      }
-      set() {
-      }
-      b2Compress(counter, flags, buf, bufPos = 0) {
-        const { state: s, pos } = this;
-        const { h, l } = fromBig(BigInt(counter), true);
-        const { v0, v1, v2, v3, v4: v42, v5, v6: v62, v7, v8, v9, v10, v11, v12, v13, v14, v15 } = compress(B3_SIGMA, bufPos, buf, 7, s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], B3_IV[0], B3_IV[1], B3_IV[2], B3_IV[3], h, l, pos, flags);
-        s[0] = v0 ^ v8;
-        s[1] = v1 ^ v9;
-        s[2] = v2 ^ v10;
-        s[3] = v3 ^ v11;
-        s[4] = v42 ^ v12;
-        s[5] = v5 ^ v13;
-        s[6] = v62 ^ v14;
-        s[7] = v7 ^ v15;
-      }
-      compress(buf, bufPos = 0, isLast = false) {
-        let flags = this.flags;
-        if (!this.chunkPos)
-          flags |= B3_Flags.CHUNK_START;
-        if (this.chunkPos === 15 || isLast)
-          flags |= B3_Flags.CHUNK_END;
-        if (!isLast)
-          this.pos = this.blockLen;
-        this.b2Compress(this.chunksDone, flags, buf, bufPos);
-        this.chunkPos += 1;
-        if (this.chunkPos === 16 || isLast) {
-          let chunk = this.state;
-          this.state = this.IV.slice();
-          for (let last, chunks = this.chunksDone + 1; isLast || !(chunks & 1); chunks >>= 1) {
-            if (!(last = this.stack.pop()))
-              break;
-            this.buffer32.set(last, 0);
-            this.buffer32.set(chunk, 8);
-            this.pos = this.blockLen;
-            this.b2Compress(0, this.flags | B3_Flags.PARENT, this.buffer32, 0);
-            chunk = this.state;
-            this.state = this.IV.slice();
-          }
-          this.chunksDone++;
-          this.chunkPos = 0;
-          this.stack.push(chunk);
-        }
-        this.pos = 0;
-      }
-      _cloneInto(to) {
-        to = super._cloneInto(to);
-        const { IV, flags, state, chunkPos, posOut, chunkOut, stack, chunksDone } = this;
-        to.state.set(state.slice());
-        to.stack = stack.map((i) => Uint32Array.from(i));
-        to.IV.set(IV);
-        to.flags = flags;
-        to.chunkPos = chunkPos;
-        to.chunksDone = chunksDone;
-        to.posOut = posOut;
-        to.chunkOut = chunkOut;
-        to.enableXOF = this.enableXOF;
-        to.bufferOut32.set(this.bufferOut32);
-        return to;
-      }
-      destroy() {
-        this.destroyed = true;
-        clean(this.state, this.buffer32, this.IV, this.bufferOut32);
-        clean(...this.stack);
-      }
-      // Same as b2Compress, but doesn't modify state and returns 16 u32 array (instead of 8)
-      b2CompressOut() {
-        const { state: s, pos, flags, buffer32, bufferOut32: out32 } = this;
-        const { h, l } = fromBig(BigInt(this.chunkOut++));
-        swap32IfBE(buffer32);
-        const { v0, v1, v2, v3, v4: v42, v5, v6: v62, v7, v8, v9, v10, v11, v12, v13, v14, v15 } = compress(B3_SIGMA, 0, buffer32, 7, s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], B3_IV[0], B3_IV[1], B3_IV[2], B3_IV[3], l, h, pos, flags);
-        out32[0] = v0 ^ v8;
-        out32[1] = v1 ^ v9;
-        out32[2] = v2 ^ v10;
-        out32[3] = v3 ^ v11;
-        out32[4] = v42 ^ v12;
-        out32[5] = v5 ^ v13;
-        out32[6] = v62 ^ v14;
-        out32[7] = v7 ^ v15;
-        out32[8] = s[0] ^ v8;
-        out32[9] = s[1] ^ v9;
-        out32[10] = s[2] ^ v10;
-        out32[11] = s[3] ^ v11;
-        out32[12] = s[4] ^ v12;
-        out32[13] = s[5] ^ v13;
-        out32[14] = s[6] ^ v14;
-        out32[15] = s[7] ^ v15;
-        swap32IfBE(buffer32);
-        swap32IfBE(out32);
-        this.posOut = 0;
-      }
-      finish() {
-        if (this.finished)
-          return;
-        this.finished = true;
-        clean(this.buffer.subarray(this.pos));
-        let flags = this.flags | B3_Flags.ROOT;
-        if (this.stack.length) {
-          flags |= B3_Flags.PARENT;
-          swap32IfBE(this.buffer32);
-          this.compress(this.buffer32, 0, true);
-          swap32IfBE(this.buffer32);
-          this.chunksDone = 0;
-          this.pos = this.blockLen;
-        } else {
-          flags |= (!this.chunkPos ? B3_Flags.CHUNK_START : 0) | B3_Flags.CHUNK_END;
-        }
-        this.flags = flags;
-        this.b2CompressOut();
-      }
-      writeInto(out) {
-        aexists(this, false);
-        abytes(out);
-        this.finish();
-        const { blockLen, bufferOut } = this;
-        for (let pos = 0, len = out.length; pos < len; ) {
-          if (this.posOut >= blockLen)
-            this.b2CompressOut();
-          const take = Math.min(blockLen - this.posOut, len - pos);
-          out.set(bufferOut.subarray(this.posOut, this.posOut + take), pos);
-          this.posOut += take;
-          pos += take;
-        }
-        return out;
-      }
-      xofInto(out) {
-        if (!this.enableXOF)
-          throw new Error("XOF is not possible after digest call");
-        return this.writeInto(out);
-      }
-      xof(bytes) {
-        anumber(bytes);
-        return this.xofInto(new Uint8Array(bytes));
-      }
-      digestInto(out) {
-        aoutput(out, this);
-        if (this.finished)
-          throw new Error("digest() was already called");
-        this.enableXOF = false;
-        this.writeInto(out);
-        this.destroy();
-        return out;
-      }
-      digest() {
-        return this.digestInto(new Uint8Array(this.outputLen));
-      }
-    };
-    blake3 = /* @__PURE__ */ createXOFer((opts) => new BLAKE3(opts));
-  }
-});
-
-// ../bootstrap/dist/index.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@tinycloud/bootstrap/dist/index.js
 function actionKey(action) {
   if (action === "*") return "ALL";
   return action.toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -10389,7 +10020,7 @@ function composeBootstrapSpaceManifest(space) {
 }
 var CAPABILITIES, KV, SQL, DUCKDB, CAPABILITIES2, HOOKS, ENCRYPTION, SPACE, CAPABILITY_REGISTRY, DEFAULT_MANIFEST_SPACE, ACCOUNT_REGISTRY_SPACE, ACCOUNT_REGISTRY_PATH, SECRETS_SPACE, BOOTSTRAP_DEFAULT_SPACE, BOOTSTRAP_PUBLIC_SPACE, BOOTSTRAP_ENCRYPTION_NETWORK_NAME, BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE, DEFAULT_EXPIRY_MS, VAULT_PERMISSION_SERVICE, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, NETWORK_CREATE_ACTION, BOOTSTRAP_SPACE_NAMES, TINYCLOUD_DEFAULT_SPACE_MANIFEST, TINYCLOUD_APPLICATIONS_SPACE_MANIFEST, TINYCLOUD_ACCOUNT_SPACE_MANIFEST, TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST, TINYCLOUD_PUBLIC_SPACE_MANIFEST, BOOTSTRAP_SPACE_MANIFESTS, BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS, ACCOUNT_INDEX_SCHEMA, SECRET_RECORDS_SCHEMA, BOOTSTRAP_MANIFEST, ACCOUNT_MANIFEST_PERMISSIONS, BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST, BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST, BOOTSTRAP_SESSION_REQUESTS, ACCOUNT_SESSION_RAW_ALLOWLIST, BOOTSTRAP_ALLOWLIST;
 var init_dist = __esm({
-  "../bootstrap/dist/index.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@tinycloud/bootstrap/dist/index.js"() {
     "use strict";
     CAPABILITIES = [
       { urn: "tinycloud.kv/get", service: "tinycloud.kv", status: "active" },
@@ -10778,9 +10409,9 @@ var init_dist = __esm({
   }
 });
 
-// ../../node_modules/ms/index.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/ms/index.js
 var require_ms = __commonJS({
-  "../../node_modules/ms/index.js"(exports, module) {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/ms/index.js"(exports, module) {
     "use strict";
     var s = 1e3;
     var m = s * 60;
@@ -10895,9 +10526,9 @@ var require_ms = __commonJS({
   }
 });
 
-// ../sdk-services/dist/internal/decrypt-transport-response-error.cjs
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@tinycloud/sdk-services/dist/internal/decrypt-transport-response-error.cjs
 var require_decrypt_transport_response_error = __commonJS({
-  "../sdk-services/dist/internal/decrypt-transport-response-error.cjs"(exports, module) {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@tinycloud/sdk-services/dist/internal/decrypt-transport-response-error.cjs"(exports, module) {
     "use strict";
     var __defProp4 = Object.defineProperty;
     var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
@@ -10932,7 +10563,7 @@ var require_decrypt_transport_response_error = __commonJS({
   }
 });
 
-// ../sdk-services/dist/index.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@tinycloud/sdk-services/dist/index.js
 function ok(data) {
   return { ok: true, data };
 }
@@ -12592,7 +12223,7 @@ function encErr(error) {
 }
 var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HooksService, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, HEX, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
 var init_dist2 = __esm({
-  "../sdk-services/dist/index.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@tinycloud/sdk-services/dist/index.js"() {
     "use strict";
     init_zod();
     init_dist();
@@ -16795,10 +16426,7 @@ var init_dist2 = __esm({
           const descriptor = usable.data;
           const networkPublicKey = base64Decode2(descriptor.publicEncryptionKey);
           const result = encryptToNetwork(this.crypto, {
-            // Discovery returns the node's canonical network identifier. Persist
-            // that spelling in the envelope so a later response can be compared
-            // byte-for-byte (notably for checksummed did:pkh principals).
-            networkId: descriptor.networkId,
+            networkId,
             networkPublicKey,
             plaintext,
             ...options?.aad !== void 0 ? { aad: options.aad } : {},
@@ -16960,7 +16588,7 @@ var init_dist2 = __esm({
   }
 });
 
-// ../share-sdk/dist/index.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@tinycloud/share-sdk/dist/index.js
 function setErrorMap2(map) {
   overrideErrorMap2 = map;
 }
@@ -18031,49 +17659,6 @@ function serialize(value) {
 function canonicalize2(value) {
   return serialize(value);
 }
-function verifyCompactUcanAuthorization(authorization, expectedCid) {
-  if (/\s/.test(authorization)) throw new TypeError("compact Authorization contains whitespace");
-  const segments = authorization.split(".");
-  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) throw new TypeError("compact Authorization must contain three segments");
-  const [headerSegment, payloadSegment, signatureSegment] = segments;
-  const headerBytes = decodeBase64Url(headerSegment);
-  const payloadBytes = decodeBase64Url(payloadSegment);
-  const signature = decodeBase64Url(signatureSegment);
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  const header = JSON.parse(decoder.decode(headerBytes));
-  const payload = JSON.parse(decoder.decode(payloadBytes));
-  if (canonicalize2(header) !== decoder.decode(headerBytes) || canonicalize2(payload) !== decoder.decode(payloadBytes)) throw new TypeError("compact Authorization JSON is not canonical");
-  assertExactKeys(header, ["alg", "jwk", "typ", "ucv"], "protected header");
-  const jwk = object(header.jwk, "protected JWK");
-  assertExactKeys(jwk, ["alg", "crv", "kty", "x"], "protected JWK");
-  if (header.alg !== "EdDSA" || header.typ !== "JWT" || header.ucv !== "0.10.0" || jwk.alg !== "EdDSA" || jwk.crv !== "Ed25519" || jwk.kty !== "OKP" || typeof jwk.x !== "string") throw new TypeError("compact Authorization header is invalid");
-  assertExactKeys(payload, ["att", "aud", "exp", "fct", "iss", "nbf", "nnc", "prf"], "UCAN payload");
-  if (typeof payload.iss !== "string" || typeof payload.aud !== "string" || typeof payload.nnc !== "string" || !Number.isInteger(payload.nbf) || !Number.isInteger(payload.exp) || payload.nbf >= payload.exp || !Array.isArray(payload.prf) || payload.prf.some((proof) => typeof proof !== "string") || !Array.isArray(payload.fct) || payload.fct.length !== 1) throw new TypeError("compact Authorization payload is invalid");
-  const principal = payload.iss.split("#", 1)[0];
-  const publicKey = ed25519PublicKeyFromDidKey(principal);
-  if (!equal(publicKey, decodeBase64Url(jwk.x))) throw new TypeError("compact Authorization JWK does not bind issuer");
-  if (!ed25519.verify(signature, new TextEncoder().encode(`${headerSegment}.${payloadSegment}`), publicKey, { zip215: false })) throw new TypeError("compact Authorization signature is invalid");
-  const cid2 = CID.createV1(85, create(30, blake3(new TextEncoder().encode(authorization)))).toString();
-  if (expectedCid !== void 0 && cid2 !== expectedCid) throw new TypeError("compact Authorization CID mismatch");
-  return { authorization, cid: cid2, header, payload };
-}
-function object(value, label) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
-  return value;
-}
-function assertExactKeys(value, keys, label) {
-  if (Object.keys(value).length !== keys.length || Object.keys(value).some((key) => !keys.includes(key))) throw new TypeError(`${label} has unknown or missing fields`);
-}
-function decodeBase64Url(value) {
-  if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) throw new TypeError("compact Authorization segment is not base64url");
-  const bytes3 = typeof Buffer !== "undefined" ? new Uint8Array(Buffer.from(value, "base64url")) : Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=")), (character) => character.charCodeAt(0));
-  const encoded = typeof Buffer !== "undefined" ? Buffer.from(bytes3).toString("base64url") : btoa(String.fromCharCode(...bytes3)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  if (encoded !== value) throw new TypeError("compact Authorization segment is not canonical");
-  return bytes3;
-}
-function equal(left, right) {
-  return left.length === right.length && left.every((byte, index) => byte === right[index]);
-}
 function signingBytes(unsigned) {
   const domain = utf8Bytes(ENVELOPE_SIGNATURE_DOMAIN);
   const body = utf8Bytes(canonicalize2(unsigned));
@@ -18084,14 +17669,6 @@ function signingBytes(unsigned) {
 }
 function signingBytesV2(unsigned) {
   const domain = utf8Bytes(ENVELOPE_V2_SIGNATURE_DOMAIN);
-  const body = utf8Bytes(canonicalize2(unsigned));
-  const bytes3 = new Uint8Array(domain.length + body.length);
-  bytes3.set(domain);
-  bytes3.set(body, domain.length);
-  return bytes3;
-}
-function signingBytesV3(unsigned) {
-  const domain = utf8Bytes(ENVELOPE_V3_SIGNATURE_DOMAIN);
   const body = utf8Bytes(canonicalize2(unsigned));
   const bytes3 = new Uint8Array(domain.length + body.length);
   bytes3.set(domain);
@@ -18144,92 +17721,6 @@ async function verifyEnvelopeV2(envelope, options) {
   if (parsed.signature.signerDid !== options.expectedSignerDid || !verifyEnvelopeV2SignatureOnly(parsed)) return false;
   if (parsed.authorizationTarget.kind === "policy") return await computeCid(fromBase64Url(parsed.authorizationTarget.policyBytes)) === parsed.authorizationTarget.policyCid;
   return true;
-}
-function verifyEnvelopeV3SignatureOnly(envelope) {
-  const parsed = shareEnvelopeV3Schema.parse(envelope);
-  const { signature, ...unsigned } = parsed;
-  return ed25519.verify(fromBase64Url(signature.value), sha2562(signingBytesV3(unsigned)), ed25519PublicKeyFromDidKey(signature.signerDid), ED25519_VERIFY_OPTS2);
-}
-async function verifyEnvelopeV3(envelope, options) {
-  const parsed = shareEnvelopeV3Schema.parse(envelope);
-  if (parsed.signature.signerDid !== options.expectedSignerDid || parsed.signature.signerDid !== parsed.policy.ownerDid || !verifyEnvelopeV3SignatureOnly(parsed)) return false;
-  const { policy } = parsed;
-  const unsignedPolicy = { ...policy };
-  delete unsignedPolicy.policyId;
-  delete unsignedPolicy.signature;
-  const policySignatureDomain = policy.schema === "xyz.tinycloud.policy/policy/v2" ? POLICY_V2_SIGNATURE_DOMAIN : POLICY_V1_SIGNATURE_DOMAIN;
-  const policyDigest = sha2562(new TextEncoder().encode(`${policySignatureDomain}${canonicalize2(unsignedPolicy)}`));
-  const policySignature = policy.signature;
-  if (policySignature.suite !== "Ed25519" || policySignature.signerDid !== policy.ownerDid) return false;
-  let policyPublicKey;
-  let policySignatureBytes;
-  try {
-    policyPublicKey = ed25519PublicKeyFromDidKey(policy.ownerDid);
-    policySignatureBytes = fromBase64Url(policySignature.value);
-  } catch {
-    return false;
-  }
-  if (policySignatureBytes.length !== 64 || !ed25519.verify(policySignatureBytes, policyDigest, policyPublicKey, ED25519_VERIFY_OPTS2)) return false;
-  const policyIdDigest = policyDigest;
-  if (policy.policyId !== `pol_${base32Lower(policyIdDigest)}`) return false;
-  const policyBytes = new TextEncoder().encode(canonicalize2(policy));
-  if (await computeCid(policyBytes) !== parsed.policyCid) return false;
-  const sourceDigest = sha2562(new TextEncoder().encode(`${CONTENT_SOURCE_V1_DOMAIN}${canonicalize2(policy.contentSource)}`));
-  if (hex(sourceDigest) !== parsed.contentSourceDigestHex) return false;
-  const sortedCapabilities = [...policy.capabilityCeiling].sort((left, right) => canonicalize2(left).localeCompare(canonicalize2(right)));
-  const capabilityCeilingHashHex = hex(sha2562(new TextEncoder().encode(`${POLICY_CAPABILITY_V1_DOMAIN}${canonicalize2(sortedCapabilities)}`)));
-  const nativeProjection = sortedCapabilities.map((capability) => capability.kind === "encryption" ? { service: "tinycloud.encryption", space: capability.resource, path: capability.resource, actions: [capability.action] } : { service: "tinycloud.kv", space: capability.resource.slice(0, capability.resource.indexOf("/kv/")), path: capability.resource.split("/kv/")[1], actions: [...capability.actions], caveat: { type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: capability.resource } }).sort((left, right) => canonicalize2(left).localeCompare(canonicalize2(right)));
-  const nativeProjectionHashHex = hex(sha2562(new TextEncoder().encode(`${NATIVE_PROJECTION_V1_DOMAIN}${canonicalize2(nativeProjection)}`)));
-  const expectedAttenuation = Object.fromEntries(sortedCapabilities.map((capability) => capability.kind === "encryption" ? [capability.resource, { [capability.action]: [{}] }] : [capability.resource, Object.fromEntries(capability.actions.map((action) => [action, [{ kind: capability.selector, type: "xyz.tinycloud.resource/selector", value: capability.resource }]]))]));
-  const kv = policy.capabilityCeiling.find((capability) => capability.kind === "kv");
-  const expectedKvActions = parsed.actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]);
-  const marker = parsed.contentSource.kvResource.indexOf("/kv/");
-  const resourceSpace = marker < 1 ? "" : parsed.contentSource.kvResource.slice(0, marker);
-  const resourcePath = marker < 1 ? "" : parsed.contentSource.kvResource.slice(marker + 4);
-  if (parsed.shareId !== parsed.contentSource.shareId || resourceSpace !== parsed.target.spaceId || resourcePath !== parsed.resource.path.replace(/\/$/, "") || parsed.resource.kind !== parsed.contentSource.selector || kv?.kind !== "kv" || expectedKvActions.some((action) => !kv.actions.includes(action)) || parsed.encryptionNetwork !== parsed.contentSource.encryptionNetwork || parsed.contentSource.keyVersion <= 0 || policy.expiresAt !== void 0 && Date.parse(parsed.expiry) > Date.parse(policy.expiresAt)) return false;
-  const binding = parsed.attestedEnforcerBinding;
-  const { signature: bindingSignature, ...unsignedBinding } = binding;
-  const expectedBindingDigestHex = hex(sha2562(new TextEncoder().encode(canonicalize2({ enforcerDid: binding.enforcerDid, nodeAudience: binding.nodeAudience }))));
-  if (binding.enforcerDid !== parsed.target.nodeAudience || binding.nodeAudience !== parsed.target.nodeAudience || binding.attestationBindingDigestHex !== expectedBindingDigestHex || bindingSignature.signerDid !== binding.enforcerDid || bindingSignature.suite !== "Ed25519" || Date.parse(binding.issuedAt) > Date.now() || Date.parse(binding.expiresAt) <= Date.now() || Date.parse(binding.expiresAt) < Date.parse(parsed.expiry)) return false;
-  try {
-    const digest4 = sha2562(new TextEncoder().encode(`${ATTESTED_ENFORCER_V2_DOMAIN}${canonicalize2(unsignedBinding)}`));
-    if (!ed25519.verify(fromBase64Url(bindingSignature.value), digest4, ed25519PublicKeyFromDidKey(binding.enforcerDid), ED25519_VERIFY_OPTS2)) return false;
-  } catch {
-    return false;
-  }
-  if (parsed.policyRoot.role !== "policy-authority" || parsed.enforcementRoot.role !== "policy-enforcement" || parsed.policyRoot.cid === parsed.enforcementRoot.cid) return false;
-  try {
-    const policyRoot = verifyCompactUcanAuthorization(parsed.policyRoot.authorization, parsed.policyRoot.cid);
-    const enforcementRoot = verifyCompactUcanAuthorization(parsed.enforcementRoot.authorization, parsed.enforcementRoot.cid);
-    const policyFact = policyRoot.payload.fct[0];
-    const enforcementFact = enforcementRoot.payload.fct[0];
-    const common = ["ownerDid", "policyId", "policyDigestHex", "policyCid", "contentSourceDigestHex", "capabilityCeilingHashHex", "nativeProjectionHashHex", "nodeAudience"];
-    const policyKeys = [...common, "role", "mode"];
-    const enforcementKeys = [...policyKeys, "enforcerDid"];
-    if (Object.keys(policyFact).length !== policyKeys.length || policyKeys.some((key) => !(key in policyFact)) || Object.keys(enforcementFact).length !== enforcementKeys.length || enforcementKeys.some((key) => !(key in enforcementFact)) || policyRoot.payload.prf.length !== 0 || enforcementRoot.payload.prf.length !== 0 || policyRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || enforcementRoot.payload.iss.split("#", 1)[0] !== policy.ownerDid || policyRoot.payload.nbf !== enforcementRoot.payload.nbf || policyRoot.payload.exp !== enforcementRoot.payload.exp || canonicalize2(policyRoot.payload.att) !== canonicalize2(expectedAttenuation) || canonicalize2(enforcementRoot.payload.att) !== canonicalize2(expectedAttenuation) || policyFact.role !== "policy-authority" || policyFact.mode !== "policy-source" || "enforcerDid" in policyFact || enforcementFact.role !== "policy-enforcement" || enforcementFact.mode !== "conditional-mint" || policyRoot.payload.aud !== `did:tinycloud:policy:${hex(policyIdDigest)}` || enforcementRoot.payload.aud !== parsed.target.nodeAudience || enforcementFact.enforcerDid !== parsed.target.nodeAudience || common.some((key) => policyFact[key] !== enforcementFact[key]) || policyFact.ownerDid !== policy.ownerDid || policyFact.policyId !== policy.policyId || policyFact.policyDigestHex !== hex(policyIdDigest) || policyFact.policyCid !== parsed.policyCid || policyFact.contentSourceDigestHex !== parsed.contentSourceDigestHex || policyFact.capabilityCeilingHashHex !== capabilityCeilingHashHex || policyFact.nativeProjectionHashHex !== nativeProjectionHashHex || policyFact.nodeAudience !== parsed.target.nodeAudience || policyRoot.payload.exp * 1e3 < Date.parse(parsed.expiry)) return false;
-  } catch {
-    return false;
-  }
-  return true;
-}
-function hex(bytes3) {
-  return [...bytes3].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-function base32Lower(bytes3) {
-  const alphabet2 = "abcdefghijklmnopqrstuvwxyz234567";
-  let output = "";
-  let buffer = 0;
-  let bits = 0;
-  for (const byte of bytes3) {
-    buffer = buffer << 8 | byte;
-    bits += 8;
-    while (bits >= 5) {
-      output += alphabet2[buffer >>> bits - 5 & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) output += alphabet2[buffer << 5 - bits & 31];
-  return output;
 }
 function assertCanonicalCid(cidString) {
   const cid2 = CID.parse(cidString);
@@ -18409,7 +17900,7 @@ function registryFetcher(options, limit, tooLargeCode = "max-bytes-exceeded", st
   };
 }
 function metadataFor(envelope, origin) {
-  if (envelope.version === 2 || envelope.version === 3) {
+  if (envelope.version === 2) {
     const targetKind3 = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : envelope.recipientMatcher.kind === "emailDomain" ? "emailDomain" : "bearer";
     return {
       protocol: "tinycloud-share",
@@ -18425,7 +17916,7 @@ function metadataFor(envelope, origin) {
         ...envelope.display.filename === void 0 ? {} : { filename: envelope.display.filename },
         ...envelope.display.mode === void 0 ? {} : { mode: envelope.display.mode }
       },
-      ...envelope.version === 2 && envelope.content !== void 0 ? { content: { cid: envelope.content.cid } } : {}
+      ...envelope.content === void 0 ? {} : { content: { cid: envelope.content.cid } }
     };
   }
   return {
@@ -18450,10 +17941,8 @@ function parseEnvelope(bytes3) {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes3);
     const value = JSON.parse(text);
     if (canonicalize2(value) !== text) throw new Error("share envelope is not canonical JSON");
-    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-      const version2 = value.version;
-      if (version2 === 3) return shareEnvelopeV3Schema.parse(value);
-      if (version2 === 2) return shareEnvelopeV2Schema.parse(value);
+    if (typeof value === "object" && value !== null && !Array.isArray(value) && value.version === 2) {
+      return shareEnvelopeV2Schema.parse(value);
     }
     return shareEnvelopeSchema.parse(value);
   } catch {
@@ -18525,19 +18014,6 @@ async function verifyV2Envelope(envelope, linkOrigin, options) {
     if (options.trustedSignerDid === void 0 || envelope.signature.signerDid !== options.trustedSignerDid) throw new ShareReceiveError("signature-invalid", "an addressed signer trust root is required");
   }
 }
-async function verifyV3Envelope(envelope, linkOrigin, options) {
-  if (options.expectedOrigin !== void 0 && linkOrigin !== options.expectedOrigin) {
-    throw new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted origin");
-  }
-  try {
-    if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: envelope.policy.ownerDid })) throw new Error("signature");
-  } catch {
-    throw new ShareReceiveError("signature-invalid", "share signature is invalid");
-  }
-  const expiry = Date.parse(envelope.expiry);
-  if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
-  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
-}
 async function verifyV1PolicyEnvelope(envelope, linkOrigin, options) {
   if (envelope.authorizationTarget.kind !== "policy") throw new ShareReceiveError("unsupported-target", "share target is not an addressed policy", { reason: "policy-target" });
   if (envelope.target.origin !== linkOrigin || options.expectedOrigin !== void 0 && (linkOrigin !== options.expectedOrigin || envelope.target.origin !== options.expectedOrigin)) {
@@ -18569,18 +18045,12 @@ async function inspectShare(link2, options = {}) {
   const resolved = await resolveShareEnvelope(link2, options);
   if (resolved.envelope.version === 1 && resolved.envelope.authorizationTarget.kind === "policy") await verifyV1PolicyEnvelope(resolved.envelope, resolved.origin, options);
   else if (resolved.envelope.version === 1) await verifyResolved(resolved.envelope, resolved.origin, options);
-  else if (resolved.envelope.version === 2) await verifyV2Envelope(resolved.envelope, resolved.origin, options);
-  else await verifyV3Envelope(resolved.envelope, resolved.origin, options);
-  if (resolved.envelope.version === 2 || resolved.envelope.version === 3 || resolved.envelope.authorizationTarget.kind === "policy") options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
+  else await verifyV2Envelope(resolved.envelope, resolved.origin, options);
+  if (resolved.envelope.version === 2 || resolved.envelope.authorizationTarget.kind === "policy") options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
   return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: resolved.kind } };
 }
 async function receiveShare(link2, options = {}) {
   const resolved = await resolveShareEnvelope(link2, options);
-  if (resolved.envelope.version === 3) {
-    await verifyV3Envelope(resolved.envelope, resolved.origin, options);
-    options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
-    return { state: "authorization-required", method: resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim" };
-  }
   if (resolved.envelope.version === 2) {
     await verifyV2Envelope(resolved.envelope, resolved.origin, options);
     options.onResolvedAddressedEnvelope?.(resolved.envelope, resolved.cid);
@@ -19528,16 +18998,13 @@ async function migrateShare(input) {
   const value = await receiveLegacyShare(input.link, input.reader);
   return { protocol: "tinycloud-share", version: 1, legacy: true, value, migrated: await input.publish(value) };
 }
-var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicyV1Schema, policyCredentialRequirementV1Schema, unifiedPolicyV2Schema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, BEARER_READ_ABILITY, READ_ABILITIES, ED25519_VERIFY_OPTS, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_SIGNATURE_DOMAIN, ENVELOPE_V2_SIGNATURE_DOMAIN, ENVELOPE_V3_SIGNATURE_DOMAIN, POLICY_V1_SIGNATURE_DOMAIN, POLICY_V2_SIGNATURE_DOMAIN, CONTENT_SOURCE_V1_DOMAIN, POLICY_CAPABILITY_V1_DOMAIN, NATIVE_PROJECTION_V1_DOMAIN, ATTESTED_ENFORCER_V2_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, DEFAULT_MAX_CONTENT_BLOB_BYTES, CONTENT_SEALED_OVERHEAD, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_SEALED_OVERHEAD, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, base58btc2, base58flickr2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN;
+var __defProp2, __export2, external_exports2, util2, objectUtil2, ZodParsedType2, getParsedType2, ZodIssueCode2, quotelessJson2, ZodError2, errorMap2, en_default2, overrideErrorMap2, makeIssue2, EMPTY_PATH2, ParseStatus2, INVALID2, DIRTY2, OK2, isAborted2, isDirty2, isValid2, isAsync2, errorUtil2, ParseInputLazyPath2, handleResult2, ZodType2, cuidRegex2, cuid2Regex2, ulidRegex2, uuidRegex2, nanoidRegex2, jwtRegex2, durationRegex2, emailRegex2, _emojiRegex2, emojiRegex2, ipv4Regex2, ipv4CidrRegex2, ipv6Regex2, ipv6CidrRegex2, base64Regex2, base64urlRegex2, dateRegexSource2, dateRegex2, ZodString2, ZodNumber2, ZodBigInt2, ZodBoolean2, ZodDate2, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodArray2, ZodObject2, ZodUnion2, getDiscriminator2, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodFunction2, ZodLazy2, ZodLiteral2, ZodEnum2, ZodNativeEnum2, ZodPromise2, ZodEffects2, ZodOptional2, ZodNullable2, ZodDefault2, ZodCatch2, ZodNaN2, BRAND2, ZodBranded2, ZodPipeline2, ZodReadonly2, late2, ZodFirstPartyTypeKind2, instanceOfType2, stringType2, numberType2, nanType2, bigIntType2, booleanType2, dateType2, symbolType2, undefinedType2, nullType2, anyType2, unknownType2, neverType2, voidType2, arrayType2, objectType2, strictObjectType2, unionType2, discriminatedUnionType2, intersectionType2, tupleType2, recordType2, mapType2, setType2, functionType2, lazyType2, literalType2, enumType2, nativeEnumType2, promiseType2, effectsType2, optionalType2, nullableType2, preprocessType2, pipelineType2, ostring2, onumber2, oboolean2, coerce2, NEVER2, empty, src, _brrp__multiformats_scope_baseX, base_x_default, Encoder, Decoder, ComposedDecoder, Codec, base32, base32upper, base32pad, base32padupper, base32hex, base32hexupper, base32hexpad, base32hexpadupper, base32z, base36, base36upper, base58btc, base58flickr, encode_1, MSB, REST, MSBALL, INT, decode2, MSB$1, REST$1, N1, N2, N3, N4, N5, N6, N7, N8, N9, length, varint, _brrp_varint, varint_default, Digest, cache, CID, DAG_PB_CODE, SHA_256_CODE, cidSymbol, code, SHA256_CODE, base64, base64pad, base64url, base64urlpad, ED25519_MULTICODEC_PREFIX, PUBLIC_KEY_LENGTH, base64UrlString, sessionJwkCommonFields, okpPrivateJwkSchema, ecPrivateJwkSchema, sessionJwkSchema, policyTargetSchema, bearerKeyTargetSchema, recipientDidTargetSchema, authorizationTargetSchema, resourceSelectorSchema, targetSchema, displaySchema, contentPointerSchema, signatureSchema, unsignedShareEnvelopeSchema, shareEnvelopeSchema, recipientMatcherSchema, shareActionSchema, kvContentSourceSchema, sqlContentSourceSchema, contentSourceSchema, v2TargetSchema, shareDecryptionSchema, ownerAuthoritySchema, contentMetadataSchema, unsignedShareEnvelopeV2BaseSchema, unsignedShareEnvelopeV2Schema, shareEnvelopeV2Schema, unifiedResourceSchema, unifiedEncryptionNetworkSchema, unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema, unifiedCapabilitySchema, unifiedContentSourceSchema, unifiedPolicySchema, unifiedRootSchema, attestedEnforcerBindingV2Schema, v3TargetSchema, unsignedShareEnvelopeV3BaseSchema, unsignedShareEnvelopeV3Schema, shareEnvelopeV3Schema, BEARER_READ_ABILITY, READ_ABILITIES, ED25519_VERIFY_OPTS, ENVELOPE_AAD_LABEL, SEALED_BLOB_VERSION, AAD, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, ED25519_VERIFY_OPTS2, ENVELOPE_SIGNATURE_DOMAIN, ENVELOPE_V2_SIGNATURE_DOMAIN, KEY_LENGTH2, INLINE_PREFIX, MAX_INLINE_BYTES, SHARE_RESULT_VERSION, DEFAULT_MAX_SEALED_BLOB_BYTES, DEFAULT_MAX_CONTENT_BLOB_BYTES, CONTENT_SEALED_OVERHEAD, ShareReceiveError, SHARE_CONTENT_LIMIT, SHARE_SEALED_OVERHEAD, SHARE_PUBLISH_RESULT_VERSION, DEFAULT_SHARE_LIFETIME_MS, SharePublishError, empty2, src2, _brrp__multiformats_scope_baseX2, base_x_default2, Encoder2, Decoder2, ComposedDecoder2, Codec2, base322, base32upper2, base32pad2, base32padupper2, base32hex2, base32hexupper2, base32hexpad2, base32hexpadupper2, base32z2, base362, base36upper2, base58btc2, base58flickr2, encode_12, MSB2, REST2, MSBALL2, INT2, decode6, MSB$12, REST$12, N12, N22, N32, N42, N52, N62, N72, N82, N92, length2, varint2, _brrp_varint2, varint_default2, Digest2, cache2, CID2, DAG_PB_CODE2, SHA_256_CODE2, cidSymbol2, MAX_CONTENT_BYTES, ShareNotifyError, SHARE_V2_PROTOCOL, DOMAIN, PRESENTATION_DOMAIN, SESSION_DOMAIN, INVOCATION_DOMAIN;
 var init_dist3 = __esm({
-  "../share-sdk/dist/index.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@tinycloud/share-sdk/dist/index.js"() {
     "use strict";
     init_sha2();
     init_ed25519();
     init_ed25519();
-    init_blake3();
-    init_ed25519();
-    init_sha256();
     init_ed25519();
     __defProp2 = Object.defineProperty;
     __export2 = (target, all) => {
@@ -24025,12 +23492,9 @@ var init_dist3 = __esm({
     unsignedShareEnvelopeV2Schema = unsignedShareEnvelopeV2BaseSchema.superRefine(validateV2Invariants);
     shareEnvelopeV2Schema = unsignedShareEnvelopeV2BaseSchema.extend({ signature: signatureSchema }).strict().superRefine(validateV2Invariants);
     unifiedResourceSchema = external_exports2.string().refine((value) => {
-      const marker = value.indexOf("/kv/");
-      if (marker < 1) return false;
-      const space = value.slice(0, marker);
-      const legacy = space.startsWith("tinycloud://");
-      if (legacy ? /[:/?#%]/.test(space.slice("tinycloud://".length)) : !space.startsWith("tinycloud:") || /[/?#%]/.test(space)) return false;
-      const path = value.slice(marker + 4);
+      const match = /^tinycloud:\/\/([^/]+)\/kv\/(.+)$/.exec(value);
+      if (match === null || /[:?#%]/.test(match[1])) return false;
+      const path = match[2];
       return !path.startsWith("/") && !path.endsWith("/") && !path.includes("//") && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
     }, { message: "expected canonical TinyCloud KV resource" });
     unifiedEncryptionNetworkSchema = external_exports2.string().refine((value) => {
@@ -24068,7 +23532,7 @@ var init_dist3 = __esm({
       mode: external_exports2.union([external_exports2.literal("mutable"), external_exports2.literal("immutable")]),
       initialCiphertextDigestHex: external_exports2.string().regex(/^[0-9a-f]{64}$/).optional()
     }).strict();
-    unifiedPolicyV1Schema = external_exports2.object({
+    unifiedPolicySchema = external_exports2.object({
       schema: external_exports2.literal("xyz.tinycloud.policy/policy/v1"),
       policyId: external_exports2.string().regex(/^pol_[a-z2-7]+$/),
       ownerDid: external_exports2.string().min(1),
@@ -24078,31 +23542,6 @@ var init_dist3 = __esm({
       capabilityCeiling: external_exports2.array(unifiedCapabilitySchema).min(2),
       signature: external_exports2.object({ suite: external_exports2.string().min(1), signerDid: external_exports2.string().min(1), value: external_exports2.string().min(1) }).strict()
     }).strict();
-    policyCredentialRequirementV1Schema = external_exports2.object({
-      type: external_exports2.literal("TinyCloudPolicyCredentialRequirement"),
-      version: external_exports2.literal(1),
-      requirementDigest: external_exports2.string().regex(/^[A-Za-z0-9_-]{43}$/),
-      descriptorDigest: external_exports2.string().regex(/^[A-Za-z0-9_-]{43}$/),
-      issuerDid: external_exports2.string().min(1),
-      issuerKid: external_exports2.string().min(1),
-      profile: external_exports2.object({ id: external_exports2.string().min(1), version: external_exports2.literal(1) }).strict(),
-      credentialType: external_exports2.object({ id: external_exports2.string().min(1), version: external_exports2.literal(1) }).strict()
-    }).strict();
-    unifiedPolicyV2Schema = external_exports2.object({
-      schema: external_exports2.literal("xyz.tinycloud.policy/policy/v2"),
-      policyId: external_exports2.string().regex(/^pol_[a-z2-7]+$/),
-      ownerDid: external_exports2.string().min(1),
-      createdAt: external_exports2.string().datetime({ offset: true }),
-      expiresAt: external_exports2.string().datetime({ offset: true }).optional(),
-      contentSource: unifiedContentSourceSchema,
-      capabilityCeiling: external_exports2.array(unifiedCapabilitySchema).min(2),
-      credentialRequirement: policyCredentialRequirementV1Schema,
-      signature: external_exports2.object({ suite: external_exports2.literal("Ed25519"), signerDid: external_exports2.string().min(1), value: external_exports2.string().min(1) }).strict()
-    }).strict();
-    unifiedPolicySchema = external_exports2.discriminatedUnion("schema", [
-      unifiedPolicyV1Schema,
-      unifiedPolicyV2Schema
-    ]);
     unifiedRootSchema = external_exports2.object({
       cid: external_exports2.string().min(1),
       authorization: external_exports2.string().regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
@@ -24158,13 +23597,6 @@ var init_dist3 = __esm({
     ED25519_VERIFY_OPTS2 = { zip215: false };
     ENVELOPE_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v1\0";
     ENVELOPE_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v2\0";
-    ENVELOPE_V3_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
-    POLICY_V1_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v1\0";
-    POLICY_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v2\0";
-    CONTENT_SOURCE_V1_DOMAIN = "xyz.tinycloud.policy/ContentSource/v1\0";
-    POLICY_CAPABILITY_V1_DOMAIN = "xyz.tinycloud.policy/PolicyCapability/v1\0";
-    NATIVE_PROJECTION_V1_DOMAIN = "xyz.tinycloud.policy/NativeProjection/v1\0";
-    ATTESTED_ENFORCER_V2_DOMAIN = "xyz.tinycloud.policy/AttestedEnforcerBinding/v2\0";
     KEY_LENGTH2 = 32;
     INLINE_PREFIX = "#v=2&p=";
     MAX_INLINE_BYTES = 256 * 1024;
@@ -24681,7 +24113,7 @@ var init_dist3 = __esm({
   }
 });
 
-// ../sdk-core/dist/index.js
+// ../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@tinycloud/sdk-core/dist/index.js
 import { SiweMessage } from "siwe";
 function equals5(aa, bb) {
   if (aa === bb) {
@@ -25763,13 +25195,13 @@ function createInMemoryLocalNodeIdentityStore() {
     }
   };
 }
-function locationPayloadForRecord(record2) {
+function locationPayloadForRecord(record) {
   return {
-    version: record2.version,
-    subject: record2.subject,
-    multiaddrs: [...record2.multiaddrs],
-    updated_at: record2.updated_at,
-    sequence: record2.sequence
+    version: record.version,
+    subject: record.subject,
+    multiaddrs: [...record.multiaddrs],
+    updated_at: record.updated_at,
+    sequence: record.sequence
   };
 }
 function canonicalLocationPayload(payload) {
@@ -25820,13 +25252,13 @@ function validateLocationRecord(input) {
   return { ...payload, signature };
 }
 async function verifyLocationRecord(input) {
-  const record2 = validateLocationRecord(input);
-  const payload = canonicalLocationPayload(locationPayloadForRecord(record2));
-  if (record2.subject.startsWith("did:pkh:")) {
-    return verifyPkhSignature(record2.subject, payload, record2.signature);
+  const record = validateLocationRecord(input);
+  const payload = canonicalLocationPayload(locationPayloadForRecord(record));
+  if (record.subject.startsWith("did:pkh:")) {
+    return verifyPkhSignature(record.subject, payload, record.signature);
   }
-  if (record2.subject.startsWith("did:key:")) {
-    return verifyDidKeySignature(record2.subject, payload, record2.signature);
+  if (record.subject.startsWith("did:key:")) {
+    return verifyDidKeySignature(record.subject, payload, record.signature);
   }
   return false;
 }
@@ -25933,18 +25365,18 @@ async function fetchRegistryLocalLinkCandidates(options2, fetchFn, existingCandi
   }
   const registryUrl = options2.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL;
   try {
-    const record2 = await fetchLocationRecord(registryUrl, options2.subject, fetchFn);
-    if (!record2) {
+    const record = await fetchLocationRecord(registryUrl, options2.subject, fetchFn);
+    if (!record) {
       return [];
     }
     const shouldVerify = options2.verifyRecords ?? true;
-    if (shouldVerify && !await verifyLocationRecord(record2)) {
+    if (shouldVerify && !await verifyLocationRecord(record)) {
       debugLog(
         `registry record signature invalid for ${options2.subject}; skipping local-link lookup`
       );
       return [];
     }
-    return extractLocalLinkUrls(record2).filter((url) => !existingCandidates.some((c) => c.url === url)).map((url) => ({
+    return extractLocalLinkUrls(record).filter((url) => !existingCandidates.some((c) => c.url === url)).map((url) => ({
       source: "local-link",
       url,
       timeoutMs: LOCAL_LINK_PROBE_TIMEOUT_MS
@@ -25953,12 +25385,12 @@ async function fetchRegistryLocalLinkCandidates(options2, fetchFn, existingCandi
     return [];
   }
 }
-function extractLocalLinkUrls(record2) {
-  if (!record2) {
+function extractLocalLinkUrls(record) {
+  if (!record) {
     return [];
   }
   const urls = [];
-  for (const addr of record2.multiaddrs) {
+  for (const addr of record.multiaddrs) {
     let url;
     try {
       url = multiaddrToHttpUrl(addr);
@@ -26113,9 +25545,9 @@ function decodeBase64Url3(value) {
   }
   return Uint8Array.from(bytes2);
 }
-var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, objectHasOwn, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode42, identity2, sha2_browser_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha25622, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, CompactHeaderSchema, CompactPayloadSchema, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, ResourceSchema, PortableDelegationSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, Parser, MAX_IPV6_LENGTH, MAX_IPV4_LENGTH, parser, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
+var import_ms, __defProp3, __typeError, __defNormalProp, __export3, __publicField, __accessCheck, __privateGet, __privateAdd, __privateSet, EnsDataSchema, SiweConfigSchema, ClientSessionSchema, objectHasOwn, base32_exports, empty3, src3, _brrp__multiformats_scope_baseX3, base_x_default3, Encoder3, Decoder3, ComposedDecoder3, Codec3, base323, base32upper3, base32pad3, base32padupper3, base32hex3, base32hexupper3, base32hexpad3, base32hexpadupper3, base32z3, base36_exports, base363, base36upper3, base58_exports, base58btc3, base58flickr3, encode_13, MSB3, REST3, MSBALL3, INT3, decode22, MSB$13, REST$13, N13, N23, N33, N43, N53, N63, N73, N83, N93, length3, varint3, _brrp_varint3, varint_default3, Digest3, cache3, _a, CID3, DAG_PB_CODE3, SHA_256_CODE3, cidSymbol3, textEncoder, objectHasOwn2, CEILING_SERVICES, GRANTABLE_ACTIONS, base10_exports, base10, base16_exports, base16, base16upper, base2_exports, base22, base256emoji_exports, alphabet, alphabetBytesToChars, alphabetCharsToBytes, base256emoji, base64_exports, base642, base64pad2, base64url2, base64urlpad2, base8_exports, base8, identity_exports, identity, textEncoder2, textDecoder, identity_exports2, code2, name, encode42, identity2, sha2_browser_exports, DEFAULT_MIN_DIGEST_LENGTH, Hasher, sha2562, sha5122, bases, hashes, textEncoder3, objectHasOwn3, TRANSCRIPT_SHARE_BOOTSTRAP_SCHEMA, OWNER_NODE_ENDPOINT_SCHEMA, W3C_VC_CREDENTIAL_VERIFIER, objectHasOwn4, CompactHeaderSchema, CompactPayloadSchema, POLICY_ENGINE_CHALLENGE_RESPONSE_SCHEMA, POLICY_ENGINE_DENIAL_SCHEMA, POLICY_ENGINE_GRANT_PRESENTATION_DENIAL_CODES, JsonValueSchema, Rfc3339Schema, SignedRecordSchema, PolicyEngineSchema, OwnerNodeSchema, ResourceHintSchema, BootstrapSchema, SignatureSchema, ChallengeSchema, ChallengeResponseSchema, DenialSchema, ErrorEnvelopeDenialSchema, WireDelegationSchema, ResolveResponseSchema, DelegateReceiptSchema, SqlReadResponseSchema, KvReadResponseSchema, LISTEN_SQL_STATEMENT_CATALOG, LISTEN_SQL_STATEMENT_BY_NAME, JWKSchema, KeyTypeSchema, KeyInfoSchema, DelegationErrorSchema, DelegationSchema, DelegationStatusSchema, DelegationRevocationReceiptSchema, AccountDelegationResourceSchema, AccountDelegationDateSchema, AccountDelegationRecordSchema, AccountDelegationPageSchema, AccountDelegationQueryOptionsSchema, CapabilityEntrySchema, DelegationRecordSchema, CreateDelegationParamsSchema, DelegationChainSchema, DelegationChainV2Schema, DelegationDirectionSchema, DelegationFiltersSchema, SpaceOwnershipSchema, SpaceInfoSchema, ShareSchemaSchema, ShareLinkSchema, ShareLinkDataSchema, IngestOptionsSchema, GenerateShareParamsSchema, DelegationManagerConfigSchema, KeyProviderSchema, DelegationApiResponseSchema, DelegatedResourceSchema, CreateDelegationWasmParamsSchema, CreateDelegationWasmResultSchema, EPHEMERAL_MS, SIGNED_READ_URL_MS, SESSION_MS, SHARE_MS, APP_MS, MAX_MS, EXPIRY, DEFAULT_SIGNED_READ_URL_EXPIRY_MS2, EncodedShareDataSchema, ReceiveOptionsSchema, SharingServiceConfigSchema, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, SERVICE_SHORT_TO_LONG, SERVICE_LONG_TO_SHORT, DEFAULT_MAX_INLINE_BYTES, MAX_SHARE_CONTENT_BYTES, MAX_SEALED_SHARE_CONTENT_BYTES, MAX_SHARE_ARTIFACT_BYTES, PUBLISHED_AAD, ShareRecipientTargetSchema, ShareResourceSchema, ShareActionSchema, ShareRecipientPolicySchema, ShareRecipientClientOptionsSchema, ShareNativeActionSchema, ShareWireActionSchema, ShareContentSourceSchema, ShareAddressedRecipientSchema, ShareAddressedDelegationRequestV2Schema, ShareAddressedDelegationEnvelopeV2Schema, ShareAddressedDelegationResponseV2Schema, ShareNativeResponseEntrySchema, ShareNativeResponseBase, ShareNativeResponseSchema, ResourceSchema, PortableDelegationSchema, MAX_NATIVE_CURSOR_BYTES, DEFAULT_EXPIRY_MS2, MAX_CONTENT_BYTES2, ethereumAddressPattern, EnsDataSchema2, PersistedTinyCloudSessionSchema, PersistedSessionDataSchema, TinyCloudSessionSchema, SpaceConfigSchema, SpaceServiceConfigSchema, SpaceDelegationParamsSchema, ServerDelegationInfoSchema, ServerDelegationsResponseSchema, ServerOwnedSpaceSchema, ServerOwnedSpacesResponseSchema, ServerCreateSpaceResponseSchema, ServerSpaceInfoResponseSchema, AutoApproveSpaceCreationHandler, defaultSpaceCreationHandler, N122, N222, N322, N422, N522, N622, N722, MSB22, REST22, string, ascii, BASES, bases_default, InvalidMultiaddrError, ValidationError, InvalidParametersError, UnknownProtocolError, Parser, MAX_IPV6_LENGTH, MAX_IPV4_LENGTH, parser, CODE_IP4, CODE_TCP, CODE_UDP, CODE_DCCP, CODE_IP6, CODE_IP6ZONE, CODE_IPCIDR, CODE_DNS, CODE_DNS4, CODE_DNS6, CODE_DNSADDR, CODE_SCTP, CODE_UDT, CODE_UTP, CODE_UNIX, CODE_P2P, CODE_ONION, CODE_ONION3, CODE_GARLIC64, CODE_GARLIC32, CODE_TLS, CODE_SNI, CODE_NOISE, CODE_QUIC, CODE_QUIC_V1, CODE_WEBTRANSPORT, CODE_CERTHASH, CODE_HTTP, CODE_HTTP_PATH, CODE_HTTPS, CODE_WS, CODE_WSS, CODE_P2P_WEBSOCKET_STAR, CODE_P2P_STARDUST, CODE_P2P_WEBRTC_STAR, CODE_P2P_WEBRTC_DIRECT, CODE_WEBRTC_DIRECT, CODE_WEBRTC, CODE_P2P_CIRCUIT, CODE_MEMORY, ip4ToBytes, ip6ToBytes, ip4ToString, ip6ToString, decoders, anybaseDecoder, validatePort, V, Registry, registry, codecs, inspect, symbol, _a2, _components, _string, _bytes, _Multiaddr, Multiaddr, ASSUME_HTTP_CODES, interpreters, word, boundry, v4, v6segment, v6, v46Exact, v4exact, v6exact, ipRegex, toString3, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, LOCAL_LOOPBACK_PROBE_TIMEOUT_MS, LOCAL_LINK_PROBE_TIMEOUT_MS, LOCAL_LINK_HOST_SUFFIX, LocationRecordValidationError, defaultLocalNodeIdentityStore, DNS_LABEL_REGEX;
 var init_dist4 = __esm({
-  "../sdk-core/dist/index.js"() {
+  "../../../../../../../../../../private/var/folders/_8/tx250x013nq_sc_t_jbb4y9h0000gn/T/tinycloud-cli-skills-deps-g1fexu42/node_modules/@tinycloud/sdk-core/dist/index.js"() {
     "use strict";
     init_zod();
     init_zod();
@@ -26801,7 +26233,7 @@ var init_dist4 = __esm({
     identity2 = { code: code2, name, encode: encode42, digest };
     sha2_browser_exports = {};
     __export3(sha2_browser_exports, {
-      sha256: () => sha25622,
+      sha256: () => sha2562,
       sha512: () => sha5122
     });
     DEFAULT_MIN_DIGEST_LENGTH = 20;
@@ -26838,7 +26270,7 @@ var init_dist4 = __esm({
         }
       }
     };
-    sha25622 = from22({
+    sha2562 = from22({
       name: "sha2-256",
       code: 18,
       encode: sha("SHA-256")
@@ -30037,12 +29469,12 @@ async function loadPermissionRequest(source, profile) {
   }
   return resolvePermissionSpaces(raw.permissions, profile);
 }
-async function loadManifestPermissions(source, profile) {
+async function loadManifestPermissions(source, profile, options = {}) {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw);
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest);
-    return resolvePermissionSpaces(resolved.resources, profile);
+    return resolvePermissionSpaces(resolved.resources, profile, options);
   }
   if (typeof manifest.app_id === "string") {
     const permissions = (manifest.permissions ?? []).filter((entry) => entry !== null && typeof entry === "object").map((entry) => {
@@ -30061,7 +29493,7 @@ async function loadManifestPermissions(source, profile) {
       };
     });
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile));
-    return resolvePermissionSpaces(permissions, profile);
+    return resolvePermissionSpaces(permissions, profile, options);
   }
   throw new CLIError(
     "INVALID_MANIFEST",
@@ -30131,9 +29563,9 @@ function compactPermission(permission) {
   const actions = permission.actions.map((action) => action.startsWith(`${service}/`) ? action.slice(service.length + 1) : action).join(",");
   return `${service}:${space}:${permission.path}:${actions}`;
 }
-async function resolvePermissionSpaces(entries, profile) {
+async function resolvePermissionSpaces(entries, profile, options = {}) {
   const profileConfig = await ProfileManager.getProfile(profile);
-  const allowLogicalSpaces = resolveProfilePosture(profileConfig) === "delegate-session";
+  const allowLogicalSpaces = options.allowLogicalSpaces || resolveProfilePosture(profileConfig) === "delegate-session";
   const resolved = [];
   for (const entry of entries) {
     const service = normalizeService(entry.service);
@@ -30957,6 +30389,69 @@ Open this URL in a browser to authenticate:
   });
 }
 
+// src/auth/scoped-login.ts
+init_errors();
+init_constants();
+function normalizeSpace(space) {
+  return space.replace(/(eip155:\d+:)(0x[0-9a-fA-F]{40})/, (_, prefix, address) => prefix + address.toLowerCase());
+}
+function validateLoginPermissions(permissions) {
+  if (!permissions.length || permissions.some(
+    (p) => !p.service?.startsWith("tinycloud.") || !p.space || !p.space.startsWith("tinycloud:") && !/^[A-Za-z0-9_-]+$/.test(p.space) || typeof p.path !== "string" || !p.actions?.length || p.actions.some((action) => !action.startsWith(`${p.service}/`))
+  ) || new Set(permissions.map((p) => normalizeSpace(p.space))).size !== 1) {
+    throw new CLIError("INVALID_LOGIN_SCOPE", "First login requires non-empty permissions in one TinyCloud space. Request additional spaces after login.", ExitCode.USAGE_ERROR);
+  }
+}
+async function verifyScopedLogin(data, key, sessionDid, requested, expectedOwner) {
+  let proof;
+  try {
+    if (typeof data.siwe !== "string" || typeof data.signature !== "string" || typeof data.address !== "string" || !Number.isSafeInteger(data.chainId) || typeof data.spaceId !== "string" || typeof data.delegationCid !== "string" || !data.delegationHeader || typeof data.delegationHeader !== "object" || typeof data.verificationMethod !== "string" || data.verificationMethod.split("#")[0] !== sessionDid.split("#")[0]) throw new Error();
+    const { NodeWasmBindings: NodeWasmBindings2 } = await import("@tinycloud/node-sdk");
+    proof = new NodeWasmBindings2().validatePersistedSession({
+      delegationHeader: data.delegationHeader,
+      delegationCid: data.delegationCid,
+      spaceId: data.spaceId,
+      jwk: key,
+      address: data.address,
+      chainId: data.chainId,
+      siwe: data.siwe,
+      signature: data.signature
+    });
+    if (!proof.verifiedRecap?.length || !proof.expiresAt || !Number.isFinite(Date.parse(proof.expiresAt))) throw new Error();
+  } catch (error) {
+    if (/expir/i.test(error instanceof Error ? error.message : String(error))) {
+      throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No scoped session was saved.", ExitCode.AUTH_REQUIRED);
+    }
+    throw new CLIError("OPENKEY_PROOF_INVALID", "OpenKey did not return a complete, verifiable session proof. No scoped session was saved.", ExitCode.AUTH_REQUIRED);
+  }
+  if (Date.parse(proof.expiresAt) <= Date.now()) {
+    throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No scoped session was saved.", ExitCode.AUTH_REQUIRED);
+  }
+  const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
+  if (expectedOwner && normalizeSpace(expectedOwner) !== normalizeSpace(ownerDid)) {
+    throw new CLIError("OPENKEY_OWNER_MISMATCH", "The approved signing identity differs from the expected owner. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
+  }
+  const spaceId = data.spaceId;
+  const allowed = new Set(requested.flatMap((permission) => {
+    const expectedSpace = permission.space.startsWith("tinycloud:") ? permission.space : `tinycloud:${ownerDid.slice(4)}:${permission.space}`;
+    if (normalizeSpace(expectedSpace) !== normalizeSpace(spaceId)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved space differs from the requested space. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
+    }
+    return permission.actions.map((action) => JSON.stringify([permission.service, normalizeSpace(expectedSpace), permission.path, action]));
+  }));
+  const permissions = proof.verifiedRecap.map((entry) => {
+    const service = entry.service.startsWith("tinycloud.") ? entry.service : `tinycloud.${entry.service}`;
+    const actions = entry.actions.map((action) => action.includes("/") ? action : `${service}/${action}`);
+    for (const action of actions) {
+      if (!allowed.has(JSON.stringify([service, normalizeSpace(entry.space), entry.path, action]))) {
+        throw new CLIError("OPENKEY_GRANT_BROADENED", "The signed grant contains authority beyond the login manifest. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
+      }
+    }
+    return { service, space: entry.space, path: entry.path, actions };
+  });
+  return { ...data, jwk: key, ownerDid, permissions, expiresAt: proof.expiresAt, expiry: proof.expiresAt, expirationTime: proof.expiresAt };
+}
+
 // src/auth/local-key.ts
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
@@ -31060,10 +30555,17 @@ async function promptAuthMethod() {
 }
 function registerAuthCommand(program) {
   const auth = program.command("auth").description("Authentication management");
-  auth.command("login").description("Authenticate with TinyCloud").option("--paste", "Use manual paste mode instead of browser callback").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").action(async (options, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--paste", "Use manual paste mode instead of browser callback").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", "Request only this manifest's permissions during OpenKey login (one space)").option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d").option("--owner <did>", "Require this existing primary DID for scoped login").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
+      if ((options.manifest || options.expiry || options.owner) && options.method === "local") {
+        throw new CLIError("INVALID_ARGUMENT", "--manifest, --expiry and --owner require OpenKey login.", ExitCode.USAGE_ERROR);
+      }
+      if (options.owner && !options.manifest) {
+        throw new CLIError("INVALID_ARGUMENT", "--owner requires --manifest so the signed identity is verified.", ExitCode.USAGE_ERROR);
+      }
+      const permissions = options.manifest ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true }) : void 0;
       let method;
       if (options.method) {
         if (options.method !== "local" && options.method !== "openkey") {
@@ -31075,14 +30577,17 @@ function registerAuthCommand(program) {
         }
         method = options.method;
       } else {
-        method = await promptAuthMethod();
+        method = options.manifest || options.expiry ? "openkey" : await promptAuthMethod();
       }
       if (method === "local") {
         await handleLocalAuth(ctx.profile, ctx.host);
       } else {
         await handleOpenKeyAuth(ctx.profile, ctx.host, {
           paste: options.paste,
-          noPopup: options.popup === false
+          noPopup: options.popup === false,
+          permissions,
+          expiry: parseExpiryOption(options.expiry),
+          expectedOwner: options.owner
         });
       }
     } catch (error) {
@@ -32183,7 +31688,8 @@ async function handleOpenKeyAuth(profileName, host, options = {}) {
     profile: profileName,
     did: profile.did,
     spaceId: delegationData.spaceId,
-    authMethod: "openkey"
+    authMethod: "openkey",
+    ...options.permissions ? { scoped: true, ownerDid: profile.ownerDid, host, permissions: delegationData.permissions, expiresAt: delegationData.expiresAt, activation: delegationData.hostActivated === true ? "confirmed-by-openkey" : "unverified" } : {}
   });
 }
 function mergePrivateJwkIntoSession(session, key) {
@@ -32215,18 +31721,23 @@ async function refreshOpenKeySession(profileName, host, options = {}) {
     );
   }
   const profile = await ProfileManager.getProfile(profileName);
+  if (options.permissions !== void 0) validateLoginPermissions(options.permissions);
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
   const delegationData = await acquireOpenKey(profile.did, {
     paste: options.paste,
     noPopup: options.noPopup,
     jwk: key,
     host,
-    openkeyHost: resolveOpenKeyHost(profile)
+    openkeyHost: resolveOpenKeyHost(profile),
+    permissions: options.permissions,
+    expiry: options.expiry,
+    ...options.permissions ? { reason: "Allow this local TinyCloud profile to use the permissions in the installed application manifest." } : {}
   });
-  const sanitizedSession = mergePrivateJwkIntoSession(delegationData, key);
+  const sanitizedSession = options.permissions ? await verifyScopedLogin(delegationData, key, profile.sessionDid ?? profile.did, options.permissions, options.expectedOwner ?? profile.ownerDid) : mergePrivateJwkIntoSession(delegationData, key);
   await ProfileManager.setSession(profileName, sanitizedSession);
   const updatedProfile = {
     ...profile,
+    host,
     sessionDid: profile.sessionDid ?? profile.did,
     posture: profile.posture ?? "owner-openkey",
     operatorType: profile.operatorType ?? "human",
@@ -32368,6 +31879,99 @@ complete -c tc -l verbose -s v -d "Enable verbose output"
 complete -c tc -l no-cache -d "Disable caching"
 complete -c tc -l quiet -s q -d "Suppress non-essential output"
 `;
+}
+
+// package.json
+var package_default = {
+  name: "@tinycloud/cli",
+  version: "0.10.0",
+  description: "TinyCloud CLI - manage data, delegations, and nodes from the terminal",
+  author: "TinyCloud, Inc.",
+  license: "EGPL",
+  type: "module",
+  main: "dist/index.js",
+  types: "dist/index.d.ts",
+  bin: {
+    tc: "./bin/tc"
+  },
+  files: [
+    "dist",
+    "bin",
+    "skills"
+  ],
+  engines: {
+    node: ">=20"
+  },
+  scripts: {
+    build: "tsup",
+    clean: "rm -rf dist",
+    dev: "tsup --watch",
+    "generate:reference": "bun scripts/generate-reference.ts",
+    "check:generated": "bun scripts/generate-reference.ts --check",
+    "check:coverage": "bun scripts/check-coverage.ts",
+    "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts",
+    "check:skill-pack": "node scripts/check-skill-pack.mjs",
+    "test:scoped-login": "bun test src/auth/scoped-login.test.ts",
+    "test:packed": "node scripts/test-packed-cli.mjs"
+  },
+  dependencies: {
+    "@tinycloud/share-sdk": "0.2.0",
+    "@tinycloud/share-envelope": "0.2.0",
+    "@tinycloud/node-sdk": "2.11.0",
+    "@tinycloud/node-sdk-wasm": "1.7.6",
+    "@tinycloud/operations": "0.3.2",
+    chalk: "^5.3.0",
+    commander: "^14.0.0",
+    open: "^11.0.0",
+    ora: "^9.3.0",
+    siwe: "^3.0.0"
+  },
+  devDependencies: {
+    "@types/node": "^20",
+    tsup: "^8.0.0",
+    typescript: "^5.9.3"
+  }
+};
+
+// src/commands/context.ts
+init_profiles();
+init_space();
+init_formatter();
+init_errors();
+function registerContextCommand(program) {
+  program.command("context").description("Report selected identity, host, space and local session state as JSON (does not test access)").option("--space <name|uri>", "Resolve this space in the selected profile").action(async (options, cmd) => {
+    try {
+      const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
+      const profile = await ProfileManager.getProfile(ctx.profile);
+      const session = await ProfileManager.getSession(ctx.profile);
+      const spaceId = await resolveSpaceUri(options.space, ctx.profile) ?? (typeof session?.spaceId === "string" ? session.spaceId : profile.spaceId ?? null);
+      const expiryValues = [
+        session?.expiresAt,
+        session?.expiry,
+        session?.expirationTime,
+        typeof session?.siwe === "string" ? session.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1] : void 0
+      ];
+      const expiry = expiryValues.find((value) => typeof value === "string" && Number.isFinite(Date.parse(value)));
+      const expiresAt = typeof expiry === "string" ? new Date(expiry).toISOString() : null;
+      outputJson({
+        schemaVersion: 1,
+        cliVersion: package_default.version,
+        profile: ctx.profile,
+        ownerDid: profile.ownerDid ?? null,
+        sessionDid: profile.sessionDid ?? profile.did,
+        host: ctx.host,
+        spaceId,
+        session: {
+          state: session === null ? "missing" : expiresAt === null ? "unknown-expiry" : Date.parse(expiresAt) <= Date.now() ? "expired" : "present",
+          expiresAt,
+          evidence: "local-metadata"
+        },
+        access: "not-tested"
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
 }
 
 // src/commands/delegation.ts
@@ -36121,6 +35725,7 @@ function registerVarsCommand(program) {
 // src/command-registry.ts
 function registerTinyCloudCommands(program) {
   registerInitCommand(program);
+  registerContextCommand(program);
   registerAuthCommand(program);
   registerKvCommand(program);
   registerSpaceCommand(program);

@@ -3,6 +3,14 @@ name: Raw Publish
 on:
   workflow_dispatch:
     inputs:
+      cli_only:
+        description: Publish only the reviewed CLI from public dependencies
+        type: boolean
+        default: false
+      cli_version:
+        description: Expected exact CLI version (required for cli_only)
+        type: string
+        default: ""
       tag:
         description: 'npm dist-tag override (leave empty to auto-detect from version)'
         type: string
@@ -15,6 +23,7 @@ on:
 
 jobs:
   publish:
+    if: ${{ !inputs.cli_only }}
     name: Raw Publish
     runs-on: ubuntu-latest
     steps:
@@ -156,3 +165,72 @@ jobs:
               (cd "$dir" && npm pack --dry-run)
             fi
           done
+
+  publish-cli:
+    if: ${{ inputs.cli_only }}
+    name: Publish reviewed CLI only
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.20.0'
+          registry-url: https://registry.npmjs.org
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: '1.4.0'
+      - name: Validate exact CLI release and public dependencies
+        env:
+          EXPECTED_CLI_VERSION: ${{ inputs.cli_version }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const pkg = JSON.parse(fs.readFileSync('packages/cli/package.json', 'utf8'));
+          assert.equal(pkg.name, '@tinycloud/cli');
+          assert.match(process.env.EXPECTED_CLI_VERSION ?? '', /^\d+\.\d+\.\d+$/);
+          assert.equal(pkg.version, process.env.EXPECTED_CLI_VERSION);
+          for (const version of Object.values(pkg.dependencies)) assert.ok(!version.startsWith('workspace:'));
+          JS
+      - name: Install CLI build dependencies from the public registry
+        run: |
+          CLI_BUILD_DIR=$(mktemp -d)
+          cp packages/cli/package.json "$CLI_BUILD_DIR/package.json"
+          npm install --prefix "$CLI_BUILD_DIR" --ignore-scripts --no-audit --no-fund
+          ln -s "$CLI_BUILD_DIR/node_modules" node_modules
+      - name: Validate and build only the CLI
+        working-directory: packages/cli
+        run: |
+          bun test src/auth/scoped-login.test.ts src/commands/context.test.ts
+          bun run check:generated
+          bun run check:coverage
+          bun run build
+          bun run check:skill-pack
+          bun run test:packed
+      - name: Pack exact artifact
+        id: pack
+        working-directory: packages/cli
+        run: |
+          mkdir -p ../../cli-release
+          npm pack --ignore-scripts --json --pack-destination ../../cli-release > ../../cli-release/pack.json
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const [pack] = JSON.parse(fs.readFileSync('../../cli-release/pack.json', 'utf8'));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `filename=${pack.filename}\n`);
+          JS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reviewed-cli
+          path: cli-release/
+      - name: Verify publish artifact path
+        env:
+          CLI_TARBALL: ${{ steps.pack.outputs.filename }}
+        run: npm publish "./cli-release/$CLI_TARBALL" --dry-run --ignore-scripts --access public --tag latest --registry https://registry.npmjs.org
+      - name: Publish that artifact only
+        if: ${{ !inputs.dry_run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          CLI_TARBALL: ${{ steps.pack.outputs.filename }}
+        run: npm publish "./cli-release/$CLI_TARBALL" --ignore-scripts --access public --tag latest --registry https://registry.npmjs.org

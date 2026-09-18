@@ -32,6 +32,7 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
+import { validateLoginPermissions, verifyScopedLogin } from "../auth/scoped-login.js";
 import {
   generateLocalIdentity,
   deriveAddress,
@@ -106,10 +107,23 @@ export function registerAuthCommand(program: Command): void {
     .option("--paste", "Use manual paste mode instead of browser callback")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
+    .option("--manifest <fileOrBase64>", "Request only this manifest's permissions during OpenKey login (one space)")
+    .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d")
+    .option("--owner <did>", "Require this existing primary DID for scoped login")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
+
+        if ((options.manifest || options.expiry || options.owner) && options.method === "local") {
+          throw new CLIError("INVALID_ARGUMENT", "--manifest, --expiry and --owner require OpenKey login.", ExitCode.USAGE_ERROR);
+        }
+        if (options.owner && !options.manifest) {
+          throw new CLIError("INVALID_ARGUMENT", "--owner requires --manifest so the signed identity is verified.", ExitCode.USAGE_ERROR);
+        }
+        const permissions = options.manifest
+          ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true })
+          : undefined;
 
         // Determine auth method
         let method: AuthMethod;
@@ -123,7 +137,7 @@ export function registerAuthCommand(program: Command): void {
           }
           method = options.method;
         } else {
-          method = await promptAuthMethod();
+          method = options.manifest || options.expiry ? "openkey" : await promptAuthMethod();
         }
 
         if (method === "local") {
@@ -132,6 +146,9 @@ export function registerAuthCommand(program: Command): void {
           await handleOpenKeyAuth(ctx.profile, ctx.host, {
             paste: options.paste,
             noPopup: options.popup === false,
+            permissions,
+            expiry: parseExpiryOption(options.expiry),
+            expectedOwner: options.owner,
           });
         }
       } catch (error) {
@@ -1598,7 +1615,7 @@ async function handleLocalAuth(
 async function handleOpenKeyAuth(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean } = {},
+  options: OpenKeyLoginOptions = {},
 ): Promise<void> {
   const { profile, delegationData } = await refreshOpenKeySession(profileName, host, options);
 
@@ -1608,6 +1625,7 @@ async function handleOpenKeyAuth(
     did: profile.did,
     spaceId: delegationData.spaceId,
     authMethod: "openkey",
+    ...(options.permissions ? { scoped: true, ownerDid: profile.ownerDid, host, permissions: delegationData.permissions, expiresAt: delegationData.expiresAt, activation: delegationData.hostActivated === true ? "confirmed-by-openkey" : "unverified" } : {}),
   });
 }
 
@@ -1650,10 +1668,19 @@ export function mergePrivateJwkIntoSession(
   };
 }
 
+interface OpenKeyLoginOptions {
+  paste?: boolean;
+  noPopup?: boolean;
+  permissions?: PermissionEntry[];
+  expiry?: string | number;
+  expectedOwner?: string;
+  openKeyAcquisition?: OpenKeyAcquisition;
+}
+
 export async function refreshOpenKeySession(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean; openKeyAcquisition?: OpenKeyAcquisition } = {},
+  options: OpenKeyLoginOptions = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown> }> {
   const key = await ProfileManager.getKey(profileName);
   if (!key) {
@@ -1666,6 +1693,7 @@ export async function refreshOpenKeySession(
 
   // Get DID from profile
   const profile = await ProfileManager.getProfile(profileName);
+  if (options.permissions !== undefined) validateLoginPermissions(options.permissions);
 
   // Start browser auth flow
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
@@ -1675,6 +1703,9 @@ export async function refreshOpenKeySession(
     jwk: key,
     host,
     openkeyHost: resolveOpenKeyHost(profile),
+    permissions: options.permissions,
+    expiry: options.expiry,
+    ...(options.permissions ? { reason: "Allow this local TinyCloud profile to use the permissions in the installed application manifest." } : {}),
   });
 
   // Defensive: OpenKey only ever receives the public JWK (see
@@ -1682,7 +1713,9 @@ export async function refreshOpenKeySession(
   // public-only. Persisting that verbatim shadows the full keypair in
   // key.json and breaks anything that needs the WASM signer (kv/sql). Merge
   // the private parameter from key.json back in before writing session.json.
-  const sanitizedSession = mergePrivateJwkIntoSession(delegationData, key);
+  const sanitizedSession = options.permissions
+    ? await verifyScopedLogin(delegationData, key, profile.sessionDid ?? profile.did, options.permissions, options.expectedOwner ?? profile.ownerDid)
+    : mergePrivateJwkIntoSession(delegationData, key);
 
   // Store session
   await ProfileManager.setSession(profileName, sanitizedSession);
@@ -1690,6 +1723,7 @@ export async function refreshOpenKeySession(
   // Update profile with owner DID if present
   const updatedProfile = {
     ...profile,
+    host,
     sessionDid: profile.sessionDid ?? profile.did,
     posture: profile.posture ?? "owner-openkey",
     operatorType: profile.operatorType ?? "human",

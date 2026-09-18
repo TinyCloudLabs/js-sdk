@@ -1,5 +1,16 @@
 # @tinycloud/cli
 
+## 0.10.0
+
+### Minor Changes
+
+- 6b3b814: Bundle the general `tc-cli` skill and its references in the npm package for cross-agent installation. Add manifest-scoped first OpenKey login with signed-authority, owner, session-key, expiry and scope verification, plus nonsecret selected-context JSON diagnostics.
+
+### Release Notes
+
+- Published from `75c3b8d13d316234bc3c61ac9b1da440ec75affa` through the isolated CLI-only release workflow. This release intentionally uses the public stable dependency versions from CLI 0.9.0: node-sdk 2.11.0, operations 0.3.2, node-sdk-wasm 1.7.6, share-sdk 0.2.0, and share-envelope 0.2.0.
+- The source integration preserves later `release/2.11.x` maintenance changes. It does not republish 0.10.0 or include the already-shipped feature as a pending changeset.
+
 ## 0.9.1-beta.2
 
 ### Patch Changes

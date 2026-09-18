@@ -10,6 +10,14 @@ npm install -g @tinycloud/cli
 
 Requires Node.js >= 20.
 
+## Agent skills
+
+The package includes the general `tc-cli` skill and its references. Follow [skill installation](skills/tc-cli/INSTALL.md) for a pinned, cross-agent installation with OpenCode, Codex and Claude Code, including updates and removal. The combined installation requires Node.js >=22.20.0.
+
+For existing app data, initialize a separate local profile with `tc init --name PROFILE --host HOST --key-only`, then use `tc --profile PROFILE --host HOST auth login --method openkey --manifest FILE --expiry 7d`. Select the existing app's signing identity in OpenKey. See [scoped authentication](skills/tc-cli/AUTH.md); ordinary login without a manifest retains broad default-space consent.
+
+`tc --profile PROFILE --host HOST context --space SPACE` emits the effective selected context without keys or signed session material. Its local status does not replace an actual authorized read.
+
 ## Operations coverage
 
 The migrated `tc secrets get` path is owned by `@tinycloud/operations` and
