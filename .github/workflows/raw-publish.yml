@@ -3,6 +3,10 @@ name: Raw Publish
 on:
   workflow_dispatch:
     inputs:
+      rollback_cli_latest:
+        description: Restore only CLI latest from 0.10.0 to 0.9.0; disables all publishing
+        type: boolean
+        default: false
       cli_only:
         description: Publish only the reviewed CLI from public dependencies
         type: boolean
@@ -23,7 +27,7 @@ on:
 
 jobs:
   publish:
-    if: ${{ !inputs.cli_only }}
+    if: ${{ !inputs.cli_only && !inputs.rollback_cli_latest }}
     name: Raw Publish
     runs-on: ubuntu-latest
     steps:
@@ -167,7 +171,7 @@ jobs:
           done
 
   publish-cli:
-    if: ${{ inputs.cli_only }}
+    if: ${{ inputs.cli_only && !inputs.rollback_cli_latest }}
     name: Publish reviewed CLI only
     runs-on: ubuntu-latest
     permissions:
@@ -234,3 +238,36 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           CLI_TARBALL: ${{ steps.pack.outputs.filename }}
         run: npm publish "./cli-release/$CLI_TARBALL" --ignore-scripts --access public --tag latest --registry https://registry.npmjs.org
+
+  rollback-cli-latest:
+    if: ${{ inputs.rollback_cli_latest }}
+    name: Restore CLI latest to 0.9.0 only
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.20.0'
+          registry-url: https://registry.npmjs.org
+      - name: Verify versions and restore only the latest tag
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          const registry = '--registry=https://registry.npmjs.org';
+          const view = (...args) => JSON.parse(execFileSync('npm', ['view', ...args, '--json', registry], { encoding: 'utf8' }));
+          assert.ok(['true', 'false'].includes(process.env.DRY_RUN), 'dry_run must be explicit boolean input');
+          const before = view('@tinycloud/cli', 'dist-tags');
+          assert.equal(before.latest, '0.10.0', 'Refusing rollback: CLI latest is not 0.10.0');
+          assert.equal(view('@tinycloud/cli@0.9.0', 'version'), '0.9.0', 'Rollback target 0.9.0 must exist');
+          if (process.env.DRY_RUN === 'true') {
+            console.log('Verified rollback target: would move only @tinycloud/cli latest from 0.10.0 to 0.9.0.');
+          } else {
+            execFileSync('npm', ['dist-tag', 'add', '@tinycloud/cli@0.9.0', 'latest', registry], { stdio: 'inherit' });
+            assert.deepEqual(view('@tinycloud/cli', 'dist-tags'), { ...before, latest: '0.9.0' }, 'Verify latest restored and all other dist-tags unchanged');
+          }
+          JS
