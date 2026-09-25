@@ -39,6 +39,12 @@ describe("email-domain publication guards", () => {
     for (const other of ["sub.tinycloud.xyz", "tinycloud.xyz.evil", "evil.example"]) {
       await expect(publishAddressedShare(options({ credentialRequirement: commitmentFor(other) }))).rejects.toThrow("not bound to the email domain");
     }
+    // The exact-email profile (looser mailbox rules, no domain limits) or an
+    // unknown descriptor cannot back a domain share, nor can unknown actions.
+    const exactProfile = { ...commitmentFor("tinycloud.xyz"), profile: { id: "tinycloud.email-proof/v1", version: 1 } } as never;
+    await expect(publishAddressedShare(options({ credentialRequirement: exactProfile }))).rejects.toThrow("email-domain credential profile");
+    await expect(publishAddressedShare(options({ credentialRequirement: { ...commitmentFor("tinycloud.xyz"), descriptorDigest: "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0" } }))).rejects.toThrow("email-domain credential profile");
+    await expect(publishAddressedShare(options({ policyActions: ["tinycloud.kv/get", "tinycloud.kv/delete" as never] }))).rejects.toThrow("view-only");
     // A well-formed domain share proceeds to the owner's authority.
     await expect(publishAddressedShare(options({}))).rejects.toThrow("authority must not be reached");
   });
