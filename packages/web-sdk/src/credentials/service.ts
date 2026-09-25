@@ -20,7 +20,7 @@ import {
 } from "@tinycloud/sdk-core";
 import { BrowserCredentialInteraction, BrowserCredentialRedirectStore } from "./browser";
 import { CredentialAcquisitionController } from "./element";
-import { interpretCredentialFlow } from "./interpreter";
+import { interpretCredentialFlow, mailboxSubject } from "./interpreter";
 import { findStoredCredential, storeCredential } from "./storage";
 import { OpenCredentialsHttpTransport } from "./transport";
 import type { CredentialClient, CredentialsAcquireOptions, CredentialsEnsureOptions, CredentialsEnsureResult, CredentialsOperationOptions, CredentialsPolicyAdmissionOptions, CredentialsPolicyAdmissionResult } from "./types";
@@ -126,7 +126,7 @@ export class CredentialsService {
       let interaction = resume && requestedInteraction !== "inline" ? undefined : options.browser;
       if (!resume && !interaction && requestedInteraction !== "headless") {
         if (requestedInteraction === "inline") {
-          controller = new CredentialAcquisitionController({ descriptor, mountTarget: options.mountTarget, theme: options.theme });
+          controller = new CredentialAcquisitionController({ descriptor, mountTarget: options.mountTarget, theme: options.theme, subject: mailboxSubject(requirement) });
           interaction = { kind: "inline", start: (input) => controller!.start(input) };
         }
         else

@@ -16,6 +16,12 @@ function serverError(value: unknown, response: Response): CredentialError | unde
   const body = value as Record<string, unknown>;
   const keys = Object.keys(body).sort();
   if (keys.join(",") !== "code,correlationId,recoverable,state,type" || body.type !== "tinycloud.credentials/error/v1" || typeof body.code !== "string" || typeof body.recoverable !== "boolean" || typeof body.state !== "string" || typeof body.correlationId !== "string") return undefined;
+  // A rejected proof is retryable only while the issuer still has attempts
+  // left for this challenge; once exhausted the acquisition cannot finish.
+  if (body.code === "PROOF_REJECTED") return body.recoverable
+    ? new CredentialError("PROOF_REJECTED", "The proof was not accepted", { state: body.state, correlationId: body.correlationId })
+    : new CredentialError("VERIFICATION_FAILED", "The proof attempt limit was reached", { state: "proof_attempts_exhausted", correlationId: body.correlationId });
+  if (body.code === "CHALLENGE_EXPIRED") return new CredentialError("REQUEST_EXPIRED", "The credential challenge expired", { state: body.state, correlationId: body.correlationId });
   if (!SERVER_CODES.has(body.code as any)) return undefined;
   const code = body.code as "REQUEST_EXPIRED" | "ISSUER_UNREADY" | "UNSUPPORTED_PROFILE" | "UNSUPPORTED_VERSION" | "SIGNATURE_REJECTED";
   return new CredentialError(code, `OpenCredentials rejected the request: ${code}`, {

@@ -204,6 +204,7 @@ function receivedShareForImport(onProgress?: (event: unknown) => void): Received
       display: { filename: "received.txt" },
     },
     {} as never,
+    createEmailCredentialRequirement({ email: "reader@example.com", profile: { id: "tinycloud.email-proof/v1", version: 1 }, credentialType: { id: "opencredentials.email/v1", version: 1 } }),
     {} as never,
     async () => new Uint8Array(64),
     {
@@ -307,4 +308,22 @@ test("share import requires authenticated metadata readback after writing", asyn
   await expect(receivedShareForImport().importInto(accountClient, { namespace: "files-for-you" }))
     .rejects.toThrow("readback failed");
   expect(reads).toBe(2);
+});
+
+test("the displayed recipient is the exact email the owner's signed policy commits to", async () => {
+  const { verifiedShareRequirement, ReceivedShareImpl: Received } = await import("../src/share/service");
+  const profile = { id: "tinycloud.email-proof/v1", version: 1 as const };
+  const credentialType = { id: "opencredentials.email/v1", version: 1 as const };
+  const committed = createEmailCredentialRequirement({ email: "Reader@example.com", profile, credentialType });
+  const envelopeFor = async (recipientMatcher: unknown) => ({
+    recipientMatcher,
+    policy: { schema: "xyz.tinycloud.policy/policy/v2", credentialRequirement: { requirementDigest: await canonicalDigest(committed), profile, credentialType } },
+  }) as never;
+  const requirement = await verifiedShareRequirement(await envelopeFor({ kind: "exactEmail", value: "Reader@example.com" }));
+  const received = new Received({ kind: "receiver", holderDid: "did:key:z6MkReceiver", custody: "session", origin: "https://share.example" }, {} as never, {} as never, requirement, {} as never, async () => new Uint8Array(64), { identity: "receiver", interaction: { kind: "inline", mountTarget: "#credentials" } }, fetch, "https://credentials.org/.well-known/opencredentials");
+  expect(received.recipient).toEqual({ kind: "exactEmail", email: "Reader@example.com" });
+  for (const substituted of ["reader@example.com", "Reader@example.co", "Reader@example.com.evil", "Reader@sub.example.com", "Reader@exa\u0301mple.com"]) {
+    await expect(verifiedShareRequirement(await envelopeFor({ kind: "exactEmail", value: substituted }))).rejects.toThrow("does not match its policy commitment");
+  }
+  await expect(verifiedShareRequirement(await envelopeFor({ kind: "emailDomain", value: "example.com" }))).rejects.toThrow("requires an exact-email share");
 });
