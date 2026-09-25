@@ -79,12 +79,26 @@ test("the interpreter stops re-prompting once the declared attempt budget is spe
 });
 
 let dom: JSDOM;
-const globals = ["window", "document", "HTMLElement", "customElements", "Node", "Event", "InputEvent", "SVGElement"] as const;
+// Only the globals the element reads; events are constructed from `dom.window`.
+const globals = ["window", "document", "HTMLElement", "customElements"] as const;
+const previous = new Map<string, { readonly present: boolean; readonly value: unknown }>();
 beforeAll(() => {
   dom = new JSDOM("<!doctype html><body><div id=mount></div></body>", { pretendToBeVisual: true });
-  for (const name of globals) (globalThis as Record<string, unknown>)[name] = (dom.window as unknown as Record<string, unknown>)[name];
+  const scope = globalThis as Record<string, unknown>;
+  for (const name of globals) {
+    previous.set(name, { present: name in scope, value: scope[name] });
+    scope[name] = (dom.window as unknown as Record<string, unknown>)[name];
+  }
 });
-afterAll(() => { for (const name of globals) delete (globalThis as Record<string, unknown>)[name]; dom.window.close(); });
+afterAll(() => {
+  const scope = globalThis as Record<string, unknown>;
+  for (const name of globals) {
+    const saved = previous.get(name)!;
+    if (saved.present) scope[name] = saved.value;
+    else delete scope[name];
+  }
+  dom.window.close();
+});
 
 async function mountedElement() {
   // A fresh module instance binds the element to this test's jsdom globals even
