@@ -72,6 +72,12 @@ async function acquisitionInputs(
     if (surface?.requestInputs === undefined) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential inputs must be supplied or collected inline");
     collected = await surface.requestInputs({ inputs: missing.map(({ id, label, schema }) => ({ id, label, schema })), ...(domain === undefined ? {} : { mailboxDomain: domain }), signal });
   }
+  // Inputs the requirement already names must be exactly those values; an
+  // unrelated address must never receive a code.
+  for (const field of descriptor.inputs) {
+    const committed = requirement.claims[field.id];
+    if (committed !== undefined && collected[field.id] !== committed) throw new CredentialError("REQUEST_SUBSTITUTED", "Credential inputs differ from the requirement");
+  }
   const ids = descriptor.inputs.map((field) => field.id).sort();
   if (Object.keys(collected).sort().join("\0") !== ids.join("\0") || Object.values(collected).some((value) => typeof value !== "string" || value.length === 0)) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential inputs do not match the descriptor");
   if (domain !== undefined) {

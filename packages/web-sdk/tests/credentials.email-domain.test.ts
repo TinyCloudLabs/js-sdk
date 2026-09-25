@@ -59,7 +59,14 @@ test("domains and mailboxes have one canonical ASCII form, and membership is exa
     "\"alice\"@tinycloud.xyz",
     "álice@tinycloud.xyz",
     "tinycloud.xyz",
+    // Legacy routing syntax could deliver the code outside the domain.
+    "attacker%evil.example@tinycloud.xyz",
+    "evil.example!attacker@tinycloud.xyz",
+    ".alice@tinycloud.xyz",
+    "al..ice@tinycloud.xyz",
+    "a,b@tinycloud.xyz",
   ]) expect(mailboxBelongsToDomain(outside, "tinycloud.xyz")).toBe(false);
+  expect(mailboxBelongsToDomain("first.last+tag@tinycloud.xyz", "tinycloud.xyz")).toBe(true);
 });
 
 class RecordingTransport implements Partial<CredentialAcquisitionTransport> {
@@ -99,6 +106,21 @@ test("a mailbox outside the exact domain never starts an acquisition", async () 
     await expect(run).rejects.toMatchObject({ code: "VERIFICATION_FAILED", details: { state: "mailbox_domain_mismatch" } });
     expect(transport.created).toEqual([]);
   }
+});
+
+test("a caller cannot substitute a different mailbox for an exact-email requirement", async () => {
+  const transport = new RecordingTransport();
+  const exact = createEmailCredentialRequirement({ email: "reader@example.com", profile: { id: exactDescriptor.profile, version: 1 }, credentialType });
+  await expect(new CredentialsService(client()).acquire(exact, { descriptor: exactDescriptor, interaction: "headless", inputs: { email: "attacker@example.net" }, transport: transport as unknown as CredentialAcquisitionTransport, openerOrigin: "https://share.example" })).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
+  expect(transport.created).toEqual([]);
+});
+
+test("an issuer rate limit is a recoverable stop, not a verification failure", async () => {
+  const { OpenCredentialsHttpTransport } = await import("../src/credentials/transport");
+  const transport = new OpenCredentialsHttpTransport(domainDescriptor, async (url) => String(url).endsWith("/challenge")
+    ? new Response(JSON.stringify({ type: "tinycloud.credentials/error/v1", code: "RATE_LIMITED", recoverable: true, state: "rate_limited", correlationId: "C".repeat(16) }), { status: 429 })
+    : new Response("{}", { status: 500 }));
+  await expect(transport.beginStep("R".repeat(32), "V".repeat(43), "mailbox_otp")).rejects.toMatchObject({ code: "ISSUER_UNREADY", recoverable: true, details: { state: "rate_limited" } });
 });
 
 test("an exact-email acquisition still sends its committed mailbox without asking", async () => {
@@ -150,7 +172,8 @@ test("the SDK view asks for a mailbox at the invited domain and refuses look-ali
   const pending = surface.requestInputs!({ inputs: [{ id: "email", label: "Email address", schema: domainDescriptor.inputs[0]!.schema }], mailboxDomain: "tinycloud.xyz" });
   await Promise.resolve();
   expect(root.querySelector("h2")?.textContent).toBe("Enter your email");
-  expect(root.querySelector(".lede")?.textContent).toContain("anyone with an address at @tinycloud.xyz");
+  expect(root.querySelector(".lede")?.textContent).toBe("Use your own address at @tinycloud.xyz. We’ll send an 8-digit code there.");
+  expect(root.querySelector("#mailbox-hint")?.textContent).toContain("shared with the file owner’s TinyCloud node");
   const input = root.querySelector<HTMLInputElement>("input#mailbox")!;
   expect([input.type, input.autocomplete, input.inputMode, input.placeholder]).toEqual(["email", "email", "email", "name@tinycloud.xyz"]);
   const submit = (value: string) => { input.value = value; root.querySelector("form")!.dispatchEvent(new dom.window.Event("submit", { cancelable: true })); };

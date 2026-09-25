@@ -281,7 +281,7 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
     const at = document.createElement("strong");
     at.className = "subject";
     at.textContent = `@${domain}`;
-    shell.lede.replaceChildren("This invitation is open to anyone with an address at ", at, `. We’ll send an ${MAILBOX_OTP_LENGTH}-digit code to the address you enter.`);
+    shell.lede.replaceChildren("Use your own address at ", at, `. We’ll send an ${MAILBOX_OTP_LENGTH}-digit code there.`);
     const form = document.createElement("form");
     form.noValidate = true;
     const label = document.createElement("label");
@@ -305,7 +305,7 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
     const hint = document.createElement("p");
     hint.className = "hint";
     hint.id = "mailbox-hint";
-    hint.textContent = `Use your own address at @${domain}. The code proves you can read that inbox.`;
+    hint.textContent = "The code proves you can read that inbox. The address you verify is shared with the file owner’s TinyCloud node.";
     const error = document.createElement("p");
     error.className = "error";
     error.id = "mailbox-error";

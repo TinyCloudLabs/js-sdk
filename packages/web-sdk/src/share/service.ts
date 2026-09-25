@@ -176,6 +176,9 @@ export class ReceivedShareImpl implements ReceivedShare {
       discoveryUrl: this.credentialDiscoveryUrl,
       fetch: this.fetchFn,
       signal: this.options.signal,
+      // Entering an address, waiting for real mail, and typing the code must
+      // fit; this matches the issuer's ten-minute request lifetime.
+      timeoutMs: 10 * 60_000,
     });
     // The mailbox comes from the verified, holder-bound credential.
     this.options.onProgress?.({ state: "credential-acquisition", status: "completed", ...(ensured.credential.claims.email === undefined ? {} : { mailbox: ensured.credential.claims.email }) });

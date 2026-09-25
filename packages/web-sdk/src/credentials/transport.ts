@@ -21,6 +21,7 @@ function serverError(value: unknown, response: Response): CredentialError | unde
   if (body.code === "PROOF_REJECTED") return body.recoverable
     ? new CredentialError("PROOF_REJECTED", "The proof was not accepted", { state: body.state, correlationId: body.correlationId })
     : new CredentialError("VERIFICATION_FAILED", "The proof attempt limit was reached", { state: "proof_attempts_exhausted", correlationId: body.correlationId });
+  if (body.code === "RATE_LIMITED") return new CredentialError("ISSUER_UNREADY", "Too many verification codes were requested", { state: "rate_limited", correlationId: body.correlationId, retryAfterMs: Number(response.headers.get("retry-after")) * 1000 || undefined });
   if (body.code === "CHALLENGE_EXPIRED") return new CredentialError("REQUEST_EXPIRED", "The credential challenge expired", { state: body.state, correlationId: body.correlationId });
   if (!SERVER_CODES.has(body.code as any)) return undefined;
   const code = body.code as "REQUEST_EXPIRED" | "ISSUER_UNREADY" | "UNSUPPORTED_PROFILE" | "UNSUPPORTED_VERSION" | "SIGNATURE_REJECTED";

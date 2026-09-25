@@ -32,7 +32,9 @@ export function canonicalMailbox(value: string): { readonly email: string; reado
   if (at <= 0 || at !== email.lastIndexOf("@")) return undefined;
   const local = email.slice(0, at);
   const domain = email.slice(at + 1);
-  if (local.length > 64 || !/^[\x21-\x7e]+$/.test(local) || /["\\]/.test(local) || !isCanonicalEmailDomain(domain)) return undefined;
+  // Lowercase RFC 5322 dot-atom without `%` or `!`, matching the issuer:
+  // legacy percent-hack or bang-path routing could deliver elsewhere.
+  if (local.length > 64 || !/^[a-z0-9#$&'*+/=?^_`{|}~-]+(?:\.[a-z0-9#$&'*+/=?^_`{|}~-]+)*$/.test(local) || !isCanonicalEmailDomain(domain)) return undefined;
   return Object.freeze({ email, domain });
 }
 

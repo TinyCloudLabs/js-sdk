@@ -220,10 +220,25 @@ function publicationResult(input: {
 }
 
 /** Canonical application-neutral Policy/v3 addressed publisher shared by browser and CLI. */
+/**
+ * A domain share admits every mailbox at the domain, so it is view-only,
+ * never emailed, and its credential requirement must name exactly that
+ * domain (the receiving SDK recomputes the same digest).
+ */
+function assertEmailDomainPolicy(options: AddressedSharePublishOptions, domain: string): void {
+  if (options.actions.includes("edit") || options.policyActions.includes("tinycloud.kv/put")) throw new TypeError("email-domain shares are view-only");
+  if (options.deliveryEmail !== undefined) throw new TypeError("email-domain shares are not emailed");
+  const commitment = options.credentialRequirement;
+  if (commitment === undefined) throw new TypeError("email-domain shares require a credential requirement");
+  const expected = { type: "TinyCloudCredentialRequirement", version: 1, profile: commitment.profile, credentialType: commitment.credentialType, claims: { emailDomain: domain }, maxAgeSeconds: 300 };
+  if (toBase64Url(sha256(textEncoder.encode(canonicalize(expected)))) !== commitment.requirementDigest) throw new TypeError("credential requirement is not bound to the email domain");
+}
+
 export async function publishAddressedShare(options: AddressedSharePublishOptions): Promise<PublishedShare> {
   assertSafeInput(options);
   const target = normalizeShareTarget(options.target);
   if (target.kind === "bearer") throw new TypeError("addressed target is required");
+  if (target.kind === "emailDomain") assertEmailDomainPolicy(options, target.domain);
   const expiry = rfc3339Seconds(options.expiresAt);
   const matcher = targetMatcher(target);
   const capabilities = sortCanonical<UnifiedPolicyCapability>([
