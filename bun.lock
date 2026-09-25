@@ -23,7 +23,7 @@
     },
     "apps/manage-key-reference-clients": {
       "name": "@tinycloud/manage-key-reference-clients",
-      "version": "0.0.1-beta.10",
+      "version": "0.0.1-beta.11",
       "dependencies": {
         "@tinycloud/node-sdk": "workspace:*",
         "@tinycloud/sdk-core": "workspace:*",
@@ -37,7 +37,7 @@
     },
     "apps/node-demo": {
       "name": "@tinycloud/node-demo",
-      "version": "0.0.31-beta.9",
+      "version": "0.0.31-beta.10",
       "dependencies": {
         "@tinycloud/node-sdk": "workspace:*",
         "@tinycloud/node-sdk-wasm": "workspace:*",
@@ -52,7 +52,7 @@
     },
     "apps/openkey-example": {
       "name": "tinycloud-openkey-example-app",
-      "version": "0.0.29-beta.11",
+      "version": "0.0.29-beta.12",
       "dependencies": {
         "@openkey/sdk": "^0.8.7",
         "@radix-ui/react-accordion": "^1.2.3",
@@ -102,7 +102,7 @@
     },
     "apps/openkey-vite": {
       "name": "openkey-vite",
-      "version": "0.0.27-beta.11",
+      "version": "0.0.27-beta.12",
       "dependencies": {
         "@openkey/sdk": "0.8.7",
         "@radix-ui/react-accordion": "^1.2.3",
@@ -196,14 +196,14 @@
     },
     "packages/cli": {
       "name": "@tinycloud/cli",
-      "version": "1.0.0-beta.12",
+      "version": "1.0.0-beta.13",
       "bin": {
         "tc": "./bin/tc",
       },
       "dependencies": {
-        "@tinycloud/node-sdk": "3.0.0-beta.10",
+        "@tinycloud/node-sdk": "3.0.0-beta.11",
         "@tinycloud/node-sdk-wasm": "1.7.6",
-        "@tinycloud/operations": "0.3.3-beta.8",
+        "@tinycloud/operations": "0.3.3-beta.9",
         "@tinycloud/share-envelope": "1.0.0-beta.4",
         "@tinycloud/share-sdk": "1.0.0-beta.4",
         "chalk": "^5.3.0",
@@ -220,7 +220,7 @@
     },
     "packages/mcp": {
       "name": "@tinycloud/mcp",
-      "version": "0.3.3-beta.9",
+      "version": "0.3.3-beta.10",
       "bin": {
         "tinycloud-mcp": "./bin/tinycloud-mcp",
         "tinycloud-mcp-http": "./bin/tinycloud-mcp-http",
@@ -228,9 +228,9 @@
       "dependencies": {
         "@modelcontextprotocol/node": "2.0.0-beta.4",
         "@modelcontextprotocol/server": "2.0.0-beta.4",
-        "@tinycloud/node-sdk": "3.0.0-beta.10",
+        "@tinycloud/node-sdk": "3.0.0-beta.11",
         "@tinycloud/node-sdk-wasm": "1.7.6",
-        "@tinycloud/operations": "0.3.3-beta.8",
+        "@tinycloud/operations": "0.3.3-beta.9",
         "jose": "6.1.3",
       },
       "devDependencies": {
@@ -242,10 +242,10 @@
     },
     "packages/node-sdk": {
       "name": "@tinycloud/node-sdk",
-      "version": "3.0.0-beta.11",
+      "version": "3.0.0-beta.12",
       "dependencies": {
         "@tinycloud/node-sdk-wasm": "1.7.6",
-        "@tinycloud/sdk-core": "3.0.0-beta.10",
+        "@tinycloud/sdk-core": "3.0.0-beta.11",
         "@tinycloud/sdk-services": "3.0.0-beta.10",
         "siwe": "^3.0.0",
       },
@@ -257,10 +257,10 @@
     },
     "packages/operations": {
       "name": "@tinycloud/operations",
-      "version": "0.3.3-beta.9",
+      "version": "0.3.3-beta.10",
       "dependencies": {
-        "@tinycloud/node-sdk": "3.0.0-beta.10",
-        "@tinycloud/sdk-core": "3.0.0-beta.10",
+        "@tinycloud/node-sdk": "3.0.0-beta.11",
+        "@tinycloud/sdk-core": "3.0.0-beta.11",
         "node-sql-parser": "5.4.0",
         "zod": "^3.22.0",
         "zod-to-json-schema": "^3.22.0",
@@ -273,7 +273,7 @@
     },
     "packages/sdk-core": {
       "name": "@tinycloud/sdk-core",
-      "version": "3.0.0-beta.11",
+      "version": "3.0.0-beta.12",
       "dependencies": {
         "@multiformats/multiaddr": "^13.0.1",
         "@multiformats/multiaddr-to-uri": "^12.0.0",
@@ -343,10 +343,10 @@
     },
     "packages/server": {
       "name": "@tinycloud/server",
-      "version": "2.4.12-beta.9",
+      "version": "2.4.12-beta.10",
       "dependencies": {
-        "@tinycloud/node-sdk": "3.0.0-beta.10",
-        "@tinycloud/sdk-core": "3.0.0-beta.10",
+        "@tinycloud/node-sdk": "3.0.0-beta.11",
+        "@tinycloud/sdk-core": "3.0.0-beta.11",
         "viem": "^2.21.53",
       },
       "devDependencies": {
@@ -373,7 +373,7 @@
     },
     "packages/share-sdk": {
       "name": "@tinycloud/share-sdk",
-      "version": "1.0.0-beta.4",
+      "version": "1.0.0-beta.5",
       "dependencies": {
         "@noble/curves": "^1.9.2",
         "@noble/hashes": "^1.8.0",
@@ -389,10 +389,10 @@
     },
     "packages/vfs": {
       "name": "@tinycloud/vfs",
-      "version": "0.1.14-beta.9",
+      "version": "0.1.14-beta.10",
       "dependencies": {
         "@platformatic/vfs": "^0.4.0",
-        "@tinycloud/node-sdk": "3.0.0-beta.10",
+        "@tinycloud/node-sdk": "3.0.0-beta.11",
       },
       "devDependencies": {
         "@types/node": "^20",
@@ -402,12 +402,12 @@
     },
     "packages/web-sdk": {
       "name": "@tinycloud/web-sdk",
-      "version": "3.0.0-beta.11",
+      "version": "3.0.0-beta.12",
       "dependencies": {
         "@multiformats/multiaddr": "^13.0.1",
         "@multiformats/multiaddr-to-uri": "^12.0.0",
-        "@tinycloud/node-sdk": "3.0.0-beta.10",
-        "@tinycloud/sdk-core": "3.0.0-beta.10",
+        "@tinycloud/node-sdk": "3.0.0-beta.11",
+        "@tinycloud/sdk-core": "3.0.0-beta.11",
         "@tinycloud/share-envelope": "1.0.0-beta.4",
         "@tinycloud/share-sdk": "1.0.0-beta.4",
         "@tinycloud/web-sdk-wasm": "1.7.6",
