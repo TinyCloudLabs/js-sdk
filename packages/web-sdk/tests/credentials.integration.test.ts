@@ -1,7 +1,7 @@
 import { afterAll, expect, mock, test } from "bun:test";
 import { basename, dirname, join, resolve } from "node:path";
 import { createHermeticEncryptedNode } from "../../node-sdk/src/test-support/hermetic-encrypted-node";
-import { createOpenKeyCallbackSigningStrategy, type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
+import { createEmailDomainCredentialRequirement, createOpenKeyCallbackSigningStrategy, type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
 import { BrowserCredentialInteraction, BrowserCredentialRedirectStore, InlineCredentialInteraction } from "../src/credentials/browser";
 import { CredentialsService } from "../src/credentials/service";
 import { OpenCredentialsHttpTransport } from "../src/credentials/transport";
@@ -266,3 +266,49 @@ test("an initialized OpenKey session reports normal approval rejection as recove
     openKey.stop();
   }
 }, 120_000);
+
+test("an email-domain credential proves a recipient-chosen mailbox and carries the issuer-derived domain", async () => {
+  const ownerDid = initialized.delegate.did;
+  const spaceId = `${ownerDid.replace(/^did:/, "tinycloud:")}:credentials`;
+  initialized.provisionKvSpace(spaceId);
+  const service = new CredentialsService({
+    get sessionDid() { return initialized.delegate.sessionDid; },
+    get credentialHolderDid() { return initialized.delegate.credentialHolderDid; },
+    get credentialHolderKid() { return initialized.delegate.credentialHolderKid; },
+    session: () => initialized.delegate.session as any,
+    signSessionBytes: (bytes: Uint8Array) => initialized.delegate.signSessionBytes(bytes),
+    autoSignCredentialBytes: (bytes: Uint8Array) => initialized.delegate.autoSignCredentialBytes(bytes),
+    approveCredentialBytes: (bytes: Uint8Array) => initialized.delegate.approveCredentialBytes(bytes),
+    ensureOwnedSpaceHosted: async () => spaceId,
+    credentialSpaceOwnerDid: (space: string) => initialized.delegate.credentialSpaceOwnerDid(space),
+    kvForSpace: (space: string) => initialized.delegate.kvForSpace(space),
+  });
+  const catalog = await (await fetch(new URL("/.well-known/opencredentials", acquisition.url))).json() as { profiles: { profile: string; descriptor: CredentialFlowDescriptor; descriptorDigest: string }[] };
+  const entry = catalog.profiles.find((profile) => profile.profile === "tinycloud.email-domain-proof/v1")!;
+  const domainDescriptor = entry.descriptor;
+  const golden = (await Bun.file(new URL("../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url)).json() as { vectors: { name: string; digest: string }[] }).vectors.find((vector) => vector.name === "email-domain-proof-v1")!;
+  expect(entry.descriptorDigest).toBe(golden.digest);
+  const creates: unknown[] = [];
+  const transport = new OpenCredentialsHttpTransport(domainDescriptor, async (input, init) => {
+    const requested = new URL(String(input));
+    if (requested.pathname === "/v1/acquisitions" && init?.method === "POST") creates.push(JSON.parse(String(init.body)).inputs);
+    return fetch(new URL(requested.pathname, acquisition.url), init);
+  });
+  const requirement = createEmailDomainCredentialRequirement({ domain: "tinycloud.test", profile: { id: "tinycloud.email-domain-proof/v1", version: 1 }, credentialType: { id: "opencredentials.email/v1", version: 1 } });
+  const inline = (mailbox: string) => new InlineCredentialInteraction(async () => ({
+    wake: async () => undefined, close: () => undefined, closed: () => false,
+    requestInputs: async ({ mailboxDomain }) => { expect(mailboxDomain).toBe("tinycloud.test"); return { email: mailbox }; },
+    requestProof: async ({ stepId }) => { expect(stepId).toBe("mailbox_otp"); return { otp: "24681357" }; },
+  }));
+
+  // A subdomain mailbox is refused locally; no acquisition is created.
+  await expect(service.ensure(requirement, { descriptor: domainDescriptor, interaction: "inline", browser: inline("reader@sub.tinycloud.test"), transport, openerOrigin: "https://app.test" })).rejects.toMatchObject({ code: "VERIFICATION_FAILED" });
+  expect(creates).toEqual([]);
+
+  const acquired = await service.ensure(requirement, { descriptor: domainDescriptor, interaction: "inline", browser: inline("Reader@Tinycloud.test"), transport, openerOrigin: "https://app.test" });
+  expect(creates).toEqual([{ email: "reader@tinycloud.test" }]);
+  expect(acquired.status).toBe("acquired");
+  expect(acquired.credential.claims).toEqual({ email: "reader@tinycloud.test", emailDomain: "tinycloud.test" });
+  expect(acquired.credential.profile).toEqual({ id: "tinycloud.email-domain-proof/v1", version: 1 });
+  expect(acquired.credential.holderDid).toBe(initialized.delegate.credentialHolderDid);
+});

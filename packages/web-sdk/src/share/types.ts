@@ -8,7 +8,7 @@ export type ShareReceiverIdentity =
 
 export type ShareReceiveProgress =
   | { readonly state: "identity-selection"; readonly status: "started" | "completed"; readonly identity?: ShareReceiverIdentity }
-  | { readonly state: "credential-acquisition"; readonly status: "started" | "completed" }
+  | { readonly state: "credential-acquisition"; readonly status: "started" | "completed"; readonly mailbox?: string }
   | { readonly state: "policy-admission"; readonly status: "started" | "completed" }
   | { readonly state: "delegation-import"; readonly status: "started" | "completed" }
   | { readonly state: "invocation"; readonly status: "started" | "completed" }
@@ -56,7 +56,10 @@ export interface ShareImportAccountClient {
  * sealed invitation and is checked against the policy's credential
  * requirement commitment before `receive` returns, so a host may display it.
  */
-export type ShareReceiverRecipient = { readonly kind: "exactEmail"; readonly email: string };
+export type ShareReceiverRecipient =
+  | { readonly kind: "exactEmail"; readonly email: string }
+  /** Anyone who proves a mailbox whose issuer-derived domain equals `domain` exactly. */
+  | { readonly kind: "emailDomain"; readonly domain: string };
 
 export interface ReceivedShare {
   readonly identity: ShareReceiverIdentity;

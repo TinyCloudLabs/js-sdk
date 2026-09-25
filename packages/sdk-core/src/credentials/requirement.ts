@@ -1,9 +1,14 @@
 import { canonicalDigest } from "./digest";
+import { isCanonicalEmailDomain } from "./email-domain";
 import { CredentialError } from "./errors";
 import type { CredentialFlowDescriptor, CredentialRequirement, StoredCredentialRecord, VerifiedCredential } from "./types";
 
 const ID = /^[a-z0-9][a-z0-9._-]{0,127}(?:\/v1)?$/;
 export const EMAIL_CREDENTIAL_MAX_AGE_SECONDS = 3600 as const;
+/** Matches the issuer's 300-second status freshness for mailbox proofs. */
+export const EMAIL_DOMAIN_CREDENTIAL_MAX_AGE_SECONDS = 300 as const;
+/** Claim names: the identifier alphabet plus camelCase (`emailDomain`). */
+const CLAIM_NAME = /^[a-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export function createEmailCredentialRequirement(input: {
   readonly email: string;
@@ -20,6 +25,23 @@ export function createEmailCredentialRequirement(input: {
   });
 }
 
+/** Requirement satisfied by any proved mailbox whose issuer-derived domain equals `domain` exactly. */
+export function createEmailDomainCredentialRequirement(input: {
+  readonly domain: string;
+  readonly profile: CredentialRequirement["profile"];
+  readonly credentialType: CredentialRequirement["credentialType"];
+}): CredentialRequirement {
+  if (!isCanonicalEmailDomain(input.domain)) throw new CredentialError("UNSUPPORTED_PROFILE", "Email domain is not canonical");
+  return validateCredentialRequirement({
+    type: "TinyCloudCredentialRequirement",
+    version: 1,
+    profile: input.profile,
+    credentialType: input.credentialType,
+    claims: { emailDomain: input.domain },
+    maxAgeSeconds: EMAIL_DOMAIN_CREDENTIAL_MAX_AGE_SECONDS,
+  });
+}
+
 export function validateCredentialRequirement(value: unknown): CredentialRequirement {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential requirement is invalid");
   const raw = value as Record<string, unknown>;
@@ -33,7 +55,7 @@ export function validateCredentialRequirement(value: unknown): CredentialRequire
   if (typeof raw.claims !== "object" || raw.claims === null || Array.isArray(raw.claims)) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential claims are invalid");
   const claims: Record<string, string> = {};
   for (const [key, value] of Object.entries(raw.claims as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))) {
-    if (!ID.test(key) || typeof value !== "string" || value.length === 0 || value.length > 4096) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential claim is invalid");
+    if (!CLAIM_NAME.test(key) || typeof value !== "string" || value.length === 0 || value.length > 4096) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential claim is invalid");
     claims[key] = value;
   }
   if (raw.maxAgeSeconds !== undefined && (!Number.isSafeInteger(raw.maxAgeSeconds) || (raw.maxAgeSeconds as number) < 1)) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential freshness is invalid");

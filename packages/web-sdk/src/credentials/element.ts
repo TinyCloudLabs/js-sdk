@@ -1,5 +1,5 @@
-import { CredentialError, type CredentialFlowDescriptor } from "@tinycloud/sdk-core";
-import type { CredentialAcquisitionTheme, CredentialInteractionSurface, CredentialProofSubject, InlineCredentialProofRequest, PrimitiveStepResult } from "./types";
+import { CredentialError, canonicalMailbox, type CredentialFlowDescriptor } from "@tinycloud/sdk-core";
+import type { CredentialAcquisitionTheme, CredentialInputRequest, CredentialInteractionSurface, CredentialProofSubject, InlineCredentialProofRequest, PrimitiveStepResult } from "./types";
 
 export const TINYCLOUD_CREDENTIAL_ACQUISITION_TAG = "tinycloud-credential-acquisition";
 
@@ -137,9 +137,11 @@ function minutes(seconds: number | undefined): string | undefined {
 export class TinyCloudCredentialAcquisitionElement extends ElementBase {
   private root?: ShadowRoot;
   private resolver?: (proof: PrimitiveStepResult) => void;
+  private inputResolver?: (inputs: Readonly<Record<string, string>>) => void;
   private rejecter?: (reason: unknown) => void;
   private closed = false;
   private subject?: CredentialProofSubject;
+  private mailboxDomain?: string;
   private codeTtlSeconds?: number;
 
   connectedCallback(): void {
@@ -160,8 +162,9 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
   }
 
   /** Context known before the first proof request, used for the opening state. */
-  prepare(input: { readonly subject?: CredentialProofSubject; readonly codeTtlSeconds?: number }): void {
+  prepare(input: { readonly subject?: CredentialProofSubject; readonly mailboxDomain?: string; readonly codeTtlSeconds?: number }): void {
     this.subject = input.subject;
+    this.mailboxDomain = input.mailboxDomain;
     this.codeTtlSeconds = input.codeTtlSeconds;
   }
 
@@ -169,6 +172,20 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
     if (this.closed) throw cancelled();
     this.renderPrompt(request);
     return new Promise<PrimitiveStepResult>((resolve, reject) => { this.resolver = resolve; this.rejecter = reject; });
+  }
+
+  /** Collects inputs the requirement does not carry, such as the recipient's own mailbox. */
+  async requestInputs(request: CredentialInputRequest): Promise<Readonly<Record<string, string>>> {
+    if (this.closed) throw cancelled();
+    const shell = this.renderShell();
+    shell.live.replaceChildren();
+    const form = request.mailboxDomain !== undefined && request.inputs.length === 1 && request.inputs[0]!.id === "email"
+      ? this.mailboxEntryForm(request.mailboxDomain, shell)
+      : this.collectForm(request, shell);
+    shell.body.replaceChildren(form);
+    form.querySelector<HTMLButtonElement>("[data-cancel]")!.addEventListener("click", () => this.cancel(), { once: true });
+    queueMicrotask(() => form.querySelector<HTMLInputElement>("input")?.focus());
+    return new Promise((resolve, reject) => { this.inputResolver = resolve; this.rejecter = reject; });
   }
 
   report(state: "signing" | "verifying" | "saving" | "success" | "recovery", message?: string): void {
@@ -198,6 +215,7 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
     this.closed = true;
     this.rejecter?.(cancelled());
     this.resolver = undefined;
+    this.inputResolver = undefined;
     this.rejecter = undefined;
   }
 
@@ -212,7 +230,7 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
     card.setAttribute("aria-labelledby", "title");
     const mark = document.createElement("div");
     mark.className = "mark";
-    mark.append(svg(this.subject === undefined ? SHIELD_ICON : MAIL_ICON));
+    mark.append(svg(this.subject === undefined && this.mailboxDomain === undefined ? SHIELD_ICON : MAIL_ICON));
     const title = document.createElement("h2");
     title.id = "title";
     const lede = document.createElement("p");
@@ -226,7 +244,10 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
     live.dataset.live = "";
     live.setAttribute("role", "status");
     live.setAttribute("aria-live", "polite");
-    if (this.subject === undefined) {
+    if (this.subject === undefined && this.mailboxDomain !== undefined) {
+      title.textContent = "Verify your email";
+      live.append(spinner(), "Preparing email verification…");
+    } else if (this.subject === undefined) {
       title.textContent = "Credential check";
       live.append(spinner(), "Preparing credential acquisition…");
     } else {
@@ -246,6 +267,99 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
     shell.body.replaceChildren(form);
     form.querySelector<HTMLButtonElement>("[data-cancel]")!.addEventListener("click", () => this.cancel(), { once: true });
     queueMicrotask(() => form.querySelector<HTMLInputElement>("input")?.focus());
+  }
+
+  private settleInputs(inputs: Readonly<Record<string, string>>): void {
+    const resolve = this.inputResolver;
+    this.inputResolver = undefined;
+    this.rejecter = undefined;
+    resolve?.(inputs);
+  }
+
+  private mailboxEntryForm(domain: string, shell: ReturnType<TinyCloudCredentialAcquisitionElement["renderShell"]>): HTMLFormElement {
+    shell.title.textContent = "Enter your email";
+    const at = document.createElement("strong");
+    at.className = "subject";
+    at.textContent = `@${domain}`;
+    shell.lede.replaceChildren("This invitation is open to anyone with an address at ", at, `. We’ll send an ${MAILBOX_OTP_LENGTH}-digit code to the address you enter.`);
+    const form = document.createElement("form");
+    form.noValidate = true;
+    const label = document.createElement("label");
+    label.className = "label";
+    label.htmlFor = "mailbox";
+    label.textContent = "Email address";
+    const input = document.createElement("input");
+    input.className = "field";
+    input.id = "mailbox";
+    input.name = "email";
+    input.type = "email";
+    input.inputMode = "email";
+    input.autocomplete = "email";
+    input.required = true;
+    input.spellcheck = false;
+    input.placeholder = `name@${domain}`;
+    input.setAttribute("autocapitalize", "off");
+    input.setAttribute("autocorrect", "off");
+    input.setAttribute("enterkeyhint", "send");
+    input.setAttribute("aria-describedby", "mailbox-hint mailbox-error");
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.id = "mailbox-hint";
+    hint.textContent = `Use your own address at @${domain}. The code proves you can read that inbox.`;
+    const error = document.createElement("p");
+    error.className = "error";
+    error.id = "mailbox-error";
+    error.hidden = true;
+    const { actions } = this.actions("Send code");
+    form.append(label, input, hint, error, actions);
+    const showError = (message: string) => {
+      error.replaceChildren(svg(ALERT_ICON, undefined, 16), message);
+      error.hidden = false;
+      error.setAttribute("role", "alert");
+      input.setAttribute("aria-invalid", "true");
+      input.focus();
+    };
+    input.addEventListener("input", () => { error.hidden = true; error.removeAttribute("role"); input.removeAttribute("aria-invalid"); });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const mailbox = canonicalMailbox(input.value);
+      if (mailbox === undefined) { showError(`Enter an email address like name@${domain}.`); return; }
+      // Exact equality only: subdomains and look-alike suffixes are other domains.
+      if (mailbox.domain !== domain) { showError(`This invitation needs an address at @${domain}. @${mailbox.domain} is a different domain.`); return; }
+      this.subject = { kind: "email", value: mailbox.email };
+      this.renderShell();
+      this.settleInputs({ email: mailbox.email });
+    });
+    return form;
+  }
+
+  private collectForm(request: CredentialInputRequest, shell: ReturnType<TinyCloudCredentialAcquisitionElement["renderShell"]>): HTMLFormElement {
+    shell.title.textContent = "Credential check";
+    const form = document.createElement("form");
+    form.noValidate = true;
+    for (const field of request.inputs) {
+      const label = document.createElement("label");
+      label.className = "label";
+      label.textContent = field.label;
+      const input = document.createElement("input");
+      input.className = "field";
+      input.required = true;
+      input.name = field.id;
+      input.type = field.schema.format === "email" ? "email" : "text";
+      input.autocomplete = "off";
+      label.append(input);
+      form.append(label);
+    }
+    const { actions } = this.actions("Continue");
+    form.append(actions);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const values: Record<string, string> = {};
+      new FormData(form).forEach((value, key) => { values[key] = String(value).trim(); });
+      if (Object.values(values).some((value) => value.length === 0)) { shell.live.textContent = "Complete the required field to continue."; return; }
+      this.settleInputs(values);
+    });
+    return form;
   }
 
   private settle(proof: PrimitiveStepResult): void {
@@ -446,7 +560,7 @@ export function defineTinyCloudCredentialAcquisitionElement(): void {
 /** Controller that turns the SDK element into the safe low-level inline interaction surface. */
 export class CredentialAcquisitionController {
   private element?: TinyCloudCredentialAcquisitionElement;
-  constructor(private readonly options: { readonly descriptor: CredentialFlowDescriptor; readonly mountTarget?: Element | string; readonly theme?: CredentialAcquisitionTheme; readonly subject?: CredentialProofSubject }) {}
+  constructor(private readonly options: { readonly descriptor: CredentialFlowDescriptor; readonly mountTarget?: Element | string; readonly theme?: CredentialAcquisitionTheme; readonly subject?: CredentialProofSubject; readonly mailboxDomain?: string }) {}
 
   async start(input: { readonly signal?: AbortSignal }): Promise<CredentialInteractionSurface> {
     if (typeof document === "undefined") throw new CredentialError("UNSUPPORTED_PROFILE", "Inline credential acquisition requires a browser document");
@@ -454,11 +568,11 @@ export class CredentialAcquisitionController {
     const target = this.target();
     const element = document.createElement(TINYCLOUD_CREDENTIAL_ACQUISITION_TAG) as TinyCloudCredentialAcquisitionElement;
     element.configure(this.options.theme);
-    element.prepare({ subject: this.options.subject, codeTtlSeconds: this.options.descriptor.lifecycle.challengeTtlSeconds });
+    element.prepare({ subject: this.options.subject, mailboxDomain: this.options.mailboxDomain, codeTtlSeconds: this.options.descriptor.lifecycle.challengeTtlSeconds });
     target.append(element);
     this.element = element;
     input.signal?.addEventListener("abort", () => element.cancel(), { once: true });
-    return { wake: async () => undefined, close: () => element.remove(), closed: () => element.isClosed(), requestProof: (request) => element.requestProof(request) };
+    return { wake: async () => undefined, close: () => element.remove(), closed: () => element.isClosed(), requestProof: (request) => element.requestProof(request), requestInputs: (request) => element.requestInputs(request) };
   }
 
   progress(state: "signing" | "verifying" | "saving" | "success" | "recovery"): void { this.element?.report(state); }

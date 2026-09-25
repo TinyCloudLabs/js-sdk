@@ -325,5 +325,7 @@ test("the displayed recipient is the exact email the owner's signed policy commi
   for (const substituted of ["reader@example.com", "Reader@example.co", "Reader@example.com.evil", "Reader@sub.example.com", "Reader@exa\u0301mple.com"]) {
     await expect(verifiedShareRequirement(await envelopeFor({ kind: "exactEmail", value: substituted }))).rejects.toThrow("does not match its policy commitment");
   }
-  await expect(verifiedShareRequirement(await envelopeFor({ kind: "emailDomain", value: "example.com" }))).rejects.toThrow("requires an exact-email share");
+  // A domain matcher cannot stand in for an exact-email commitment.
+  await expect(verifiedShareRequirement(await envelopeFor({ kind: "emailDomain", value: "example.com" }))).rejects.toThrow("does not match its policy commitment");
+  await expect(verifiedShareRequirement(await envelopeFor({ kind: "recipientDid", value: "did:key:z6Mk" }))).rejects.toThrow("requires an exact-email or email-domain share");
 });

@@ -121,6 +121,19 @@ export interface CredentialInteractionSurface {
    * acquisition locator, request verifier, or transport capability.
    */
   readonly requestProof?: InlineCredentialProofHandler;
+  /**
+   * Collects descriptor inputs the requirement does not already supply, such
+   * as the recipient's own mailbox for an email-domain requirement. It
+   * receives only the input schema and the public domain constraint.
+   */
+  readonly requestInputs?: (request: CredentialInputRequest) => Promise<Readonly<Record<string, string>>>;
+}
+
+export interface CredentialInputRequest {
+  readonly inputs: readonly { readonly id: string; readonly label: string; readonly schema: CredentialFlowDescriptor["inputs"][number]["schema"] }[];
+  /** The exact canonical domain the entered mailbox must belong to. */
+  readonly mailboxDomain?: string;
+  readonly signal?: AbortSignal;
 }
 
 /** A browser-owned interaction that navigates to the OpenCredentials locator. */
@@ -173,7 +186,7 @@ export interface CredentialRequestState {
 }
 
 export interface CredentialAcquisitionTransport {
-  create(input: { readonly descriptor: CredentialFlowDescriptor; readonly descriptorDigest: string; readonly requirement: CredentialRequirement; readonly requirementDigest: string; readonly holderDid: string; readonly openerOrigin: string; readonly completionVerifierChallenge: string; readonly signal?: AbortSignal }): Promise<{ readonly requestId: string; readonly locator: string; readonly expiresAt: string; readonly correlationId: string }>;
+  create(input: { readonly descriptor: CredentialFlowDescriptor; readonly descriptorDigest: string; readonly requirement: CredentialRequirement; readonly requirementDigest: string; readonly holderDid: string; readonly openerOrigin: string; readonly completionVerifierChallenge: string; readonly inputs?: Readonly<Record<string, string>>; readonly signal?: AbortSignal }): Promise<{ readonly requestId: string; readonly locator: string; readonly expiresAt: string; readonly correlationId: string }>;
   state(requestId: string, verifier: string, signal?: AbortSignal): Promise<CredentialRequestState>;
   beginStep(requestId: string, verifier: string, stepId: "collect_input" | "mailbox_otp", signal?: AbortSignal): Promise<void>;
   submitStep(requestId: string, verifier: string, stepId: string, proof: PrimitiveStepResult, signal?: AbortSignal): Promise<void>;
@@ -212,6 +225,12 @@ export interface CredentialsAcquireOptions extends CredentialsOperationOptions {
   readonly openerOrigin?: string;
   /** Same-origin, request-scoped persistence used to resume a full-page redirect. */
   readonly redirectStore?: CredentialRedirectStore;
+  /**
+   * Acquisition inputs the requirement does not carry (for example a
+   * recipient-chosen mailbox for an email-domain requirement). When omitted,
+   * an inline surface collects them.
+   */
+  readonly inputs?: Readonly<Record<string, string>>;
 }
 
 export interface CredentialAcquisitionTheme {

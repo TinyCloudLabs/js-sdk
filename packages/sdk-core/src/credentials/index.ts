@@ -3,6 +3,7 @@ export * from "./descriptor";
 export * from "./digest";
 export * from "./errors";
 export * from "./requirement";
+export * from "./email-domain";
 export * from "./storage";
 export * from "./types";
 export * from "./verification";
