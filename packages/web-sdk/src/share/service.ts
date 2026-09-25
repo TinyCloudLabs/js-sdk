@@ -2,7 +2,9 @@ import {
   admitPolicyCredentialV4,
   credentialRequirementDigest,
   createEmailCredentialRequirement,
+  createEmailDomainCredentialRequirement,
   encodeBase64Url,
+  isCanonicalEmailDomain,
   verifyOwnerNodeBinding,
   type CredentialRequirement,
   type UnifiedPolicyV2,
@@ -84,9 +86,20 @@ function policyV2For(envelope: ShareEnvelopeV3): UnifiedPolicyV2 {
 }
 
 function requirementFor(envelope: ShareEnvelopeV3): CredentialRequirement {
-  if (envelope.recipientMatcher.kind !== "exactEmail") throw new Error("accountless receive currently requires an exact-email share");
   const commitment = policyV2For(envelope).credentialRequirement;
-  return createEmailCredentialRequirement({ email: envelope.recipientMatcher.value, profile: commitment.profile, credentialType: commitment.credentialType });
+  const matcher = envelope.recipientMatcher;
+  if (matcher.kind === "exactEmail") return createEmailCredentialRequirement({ email: matcher.value, profile: commitment.profile, credentialType: commitment.credentialType });
+  if (matcher.kind === "emailDomain") {
+    if (!isCanonicalEmailDomain(matcher.value)) throw new Error("share email domain is not canonical");
+    return createEmailDomainCredentialRequirement({ domain: matcher.value, profile: commitment.profile, credentialType: commitment.credentialType });
+  }
+  throw new Error("accountless receive requires an exact-email or email-domain share");
+}
+
+function recipientFor(requirement: CredentialRequirement): ShareReceiverRecipient {
+  const { email, emailDomain } = requirement.claims;
+  if (email !== undefined) return Object.freeze({ kind: "exactEmail", email });
+  return Object.freeze({ kind: "emailDomain", domain: emailDomain! });
 }
 
 /**
@@ -136,7 +149,7 @@ export class ReceivedShareImpl implements ReceivedShare {
     private readonly fetchFn: typeof fetch,
     private readonly credentialDiscoveryUrl: string,
   ) {
-    this.recipient = Object.freeze({ kind: "exactEmail", email: requirement.claims.email! });
+    this.recipient = recipientFor(requirement);
   }
 
   get shareId(): string { return this.metadata.shareId; }
@@ -163,8 +176,12 @@ export class ReceivedShareImpl implements ReceivedShare {
       discoveryUrl: this.credentialDiscoveryUrl,
       fetch: this.fetchFn,
       signal: this.options.signal,
+      // Entering an address, waiting for real mail, and typing the code must
+      // fit; this matches the issuer's ten-minute request lifetime.
+      timeoutMs: 10 * 60_000,
     });
-    this.options.onProgress?.({ state: "credential-acquisition", status: "completed" });
+    // The mailbox comes from the verified, holder-bound credential.
+    this.options.onProgress?.({ state: "credential-acquisition", status: "completed", ...(ensured.credential.claims.email === undefined ? {} : { mailbox: ensured.credential.claims.email }) });
     aborted(this.options.signal);
     let previousStage: "policy-admission" | "delegation-import" | "invocation" | "decryption" | undefined;
     const common = {

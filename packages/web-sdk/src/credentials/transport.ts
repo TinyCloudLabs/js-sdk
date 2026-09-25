@@ -21,6 +21,7 @@ function serverError(value: unknown, response: Response): CredentialError | unde
   if (body.code === "PROOF_REJECTED") return body.recoverable
     ? new CredentialError("PROOF_REJECTED", "The proof was not accepted", { state: body.state, correlationId: body.correlationId })
     : new CredentialError("VERIFICATION_FAILED", "The proof attempt limit was reached", { state: "proof_attempts_exhausted", correlationId: body.correlationId });
+  if (body.code === "RATE_LIMITED") return new CredentialError("ISSUER_UNREADY", "Too many verification codes were requested", { state: "rate_limited", correlationId: body.correlationId, retryAfterMs: Number(response.headers.get("retry-after")) * 1000 || undefined });
   if (body.code === "CHALLENGE_EXPIRED") return new CredentialError("REQUEST_EXPIRED", "The credential challenge expired", { state: body.state, correlationId: body.correlationId });
   if (!SERVER_CODES.has(body.code as any)) return undefined;
   const code = body.code as "REQUEST_EXPIRED" | "ISSUER_UNREADY" | "UNSUPPORTED_PROFILE" | "UNSUPPORTED_VERSION" | "SIGNATURE_REJECTED";
@@ -52,8 +53,8 @@ export class OpenCredentialsHttpTransport implements CredentialAcquisitionTransp
     }
     if (response.status === 204) return undefined; try { return await response.json(); } catch (cause) { throw new CredentialError("VERIFICATION_FAILED", "OpenCredentials response is invalid", { cause }); }
   }
-  async create(input: { descriptor: CredentialFlowDescriptor; descriptorDigest: string; requirement: CredentialRequirement; requirementDigest: string; holderDid: string; openerOrigin: string; completionVerifierChallenge: string; signal?: AbortSignal }) {
-    const body = object(await this.request("request", { method: "POST", body: { protocol: input.descriptor.protocol, profile: input.descriptor.profile, profileVersion: input.descriptor.profileVersion, descriptorDigest: input.descriptorDigest, requirementDigest: input.requirementDigest, holderDid: input.holderDid, inputs: input.requirement.claims, audience: "tinycloud://credentials", openerOrigin: input.openerOrigin, completionOrigin: input.openerOrigin, completionContext: "sdk-acquisition", completionVerifierChallenge: input.completionVerifierChallenge }, signal: input.signal }), "create response");
+  async create(input: { descriptor: CredentialFlowDescriptor; descriptorDigest: string; requirement: CredentialRequirement; requirementDigest: string; holderDid: string; openerOrigin: string; completionVerifierChallenge: string; inputs?: Readonly<Record<string, string>>; signal?: AbortSignal }) {
+    const body = object(await this.request("request", { method: "POST", body: { protocol: input.descriptor.protocol, profile: input.descriptor.profile, profileVersion: input.descriptor.profileVersion, descriptorDigest: input.descriptorDigest, requirementDigest: input.requirementDigest, holderDid: input.holderDid, inputs: input.inputs ?? input.requirement.claims, audience: "tinycloud://credentials", openerOrigin: input.openerOrigin, completionOrigin: input.openerOrigin, completionContext: "sdk-acquisition", completionVerifierChallenge: input.completionVerifierChallenge }, signal: input.signal }), "create response");
     if (body.type !== "tinycloud.credentials/acquisition-request/v1" || body.protocol !== input.descriptor.protocol || body.next !== "challenge" || body.endpoint !== "challenge") throw new CredentialError("VERIFICATION_FAILED", "create response is invalid");
     const requestId = opaque(body.requestId, "requestId"); return { requestId, locator: requestId, expiresAt: timestamp(body.expiresAt, "expiresAt"), correlationId: requestId };
   }

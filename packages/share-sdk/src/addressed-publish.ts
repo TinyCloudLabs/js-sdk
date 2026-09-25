@@ -220,10 +220,36 @@ function publicationResult(input: {
 }
 
 /** Canonical application-neutral Policy/v3 addressed publisher shared by browser and CLI. */
+/**
+ * A domain share admits every mailbox at the domain, so it is view-only,
+ * never emailed, and its credential requirement must name exactly that
+ * domain (the receiving SDK recomputes the same digest).
+ */
+const EMAIL_DOMAIN_PROFILE = { id: "tinycloud.email-domain-proof/v1", version: 1 } as const;
+const EMAIL_CREDENTIAL_TYPE = { id: "opencredentials.email/v1", version: 1 } as const;
+/** Digest of the OpenCredentials email-domain descriptor (pinned by issuer and SDK tests). */
+const EMAIL_DOMAIN_DESCRIPTOR_DIGEST = "33X5mAkZZgApdD3xh_T-3KS5moop0J2Nloi2nqWsdWY";
+
+function assertEmailDomainPolicy(options: AddressedSharePublishOptions, domain: string): void {
+  if (!options.actions.every((action) => action === "read" || action === "list")
+    || !options.policyActions.every((action) => action === "tinycloud.kv/get" || action === "tinycloud.kv/list" || action === "tinycloud.kv/metadata")) throw new TypeError("email-domain shares are view-only");
+  if (options.deliveryEmail !== undefined) throw new TypeError("email-domain shares are not emailed");
+  const commitment = options.credentialRequirement;
+  if (commitment === undefined) throw new TypeError("email-domain shares require a credential requirement");
+  // Only the domain profile derives emailDomain under the canonical mailbox
+  // rules and challenge limits; pin it rather than trusting the caller.
+  if (canonicalize(commitment.profile) !== canonicalize(EMAIL_DOMAIN_PROFILE)
+    || canonicalize(commitment.credentialType) !== canonicalize(EMAIL_CREDENTIAL_TYPE)
+    || commitment.descriptorDigest !== EMAIL_DOMAIN_DESCRIPTOR_DIGEST) throw new TypeError("email-domain shares require the email-domain credential profile");
+  const expected = { type: "TinyCloudCredentialRequirement", version: 1, profile: EMAIL_DOMAIN_PROFILE, credentialType: EMAIL_CREDENTIAL_TYPE, claims: { emailDomain: domain }, maxAgeSeconds: 300 };
+  if (toBase64Url(sha256(textEncoder.encode(canonicalize(expected)))) !== commitment.requirementDigest) throw new TypeError("credential requirement is not bound to the email domain");
+}
+
 export async function publishAddressedShare(options: AddressedSharePublishOptions): Promise<PublishedShare> {
   assertSafeInput(options);
   const target = normalizeShareTarget(options.target);
   if (target.kind === "bearer") throw new TypeError("addressed target is required");
+  if (target.kind === "emailDomain") assertEmailDomainPolicy(options, target.domain);
   const expiry = rfc3339Seconds(options.expiresAt);
   const matcher = targetMatcher(target);
   const capabilities = sortCanonical<UnifiedPolicyCapability>([

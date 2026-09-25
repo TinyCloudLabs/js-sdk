@@ -2,6 +2,7 @@ import {
   CredentialError,
   admitPolicyCredentialV3,
   canonicalDigest,
+  canonicalMailbox,
   credentialError,
   credentialRequirementDigest,
   descriptorSatisfiesRequirement,
@@ -23,7 +24,7 @@ import { CredentialAcquisitionController } from "./element";
 import { interpretCredentialFlow, mailboxSubject } from "./interpreter";
 import { findStoredCredential, storeCredential } from "./storage";
 import { OpenCredentialsHttpTransport } from "./transport";
-import type { CredentialClient, CredentialsAcquireOptions, CredentialsEnsureOptions, CredentialsEnsureResult, CredentialsOperationOptions, CredentialsPolicyAdmissionOptions, CredentialsPolicyAdmissionResult } from "./types";
+import type { CredentialClient, CredentialInputRequest, CredentialsAcquireOptions, CredentialsEnsureOptions, CredentialsEnsureResult, CredentialsOperationOptions, CredentialsPolicyAdmissionOptions, CredentialsPolicyAdmissionResult } from "./types";
 
 function randomVerifier(): string { return encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))); }
 
@@ -47,6 +48,44 @@ function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): { sign
   signal?.addEventListener("abort", onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(new CredentialError("REQUEST_EXPIRED", "Credential acquisition timed out")), timeoutMs);
   return { signal: controller.signal, clear: () => { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); } };
+}
+
+/**
+ * Acquisition inputs: the requirement's own claims when they cover every
+ * descriptor input (exact email), otherwise inputs collected from the
+ * recipient. An email-domain requirement only accepts a canonical mailbox
+ * whose domain equals the required domain exactly; the issuer derives the
+ * signed domain from that mailbox and the owner's Node checks it again.
+ */
+async function acquisitionInputs(
+  descriptor: CredentialFlowDescriptor,
+  requirement: CredentialRequirement,
+  supplied: Readonly<Record<string, string>> | undefined,
+  surface: { readonly requestInputs?: (request: CredentialInputRequest) => Promise<Readonly<Record<string, string>>> } | undefined,
+  signal: AbortSignal,
+): Promise<Readonly<Record<string, string>>> {
+  const missing = descriptor.inputs.filter((field) => requirement.claims[field.id] === undefined);
+  if (supplied === undefined && missing.length === 0) return requirement.claims;
+  const domain = requirement.claims.emailDomain;
+  let collected = supplied;
+  if (collected === undefined) {
+    if (surface?.requestInputs === undefined) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential inputs must be supplied or collected inline");
+    collected = await surface.requestInputs({ inputs: missing.map(({ id, label, schema }) => ({ id, label, schema })), ...(domain === undefined ? {} : { mailboxDomain: domain }), signal });
+  }
+  // Inputs the requirement already names must be exactly those values; an
+  // unrelated address must never receive a code.
+  for (const field of descriptor.inputs) {
+    const committed = requirement.claims[field.id];
+    if (committed !== undefined && collected[field.id] !== committed) throw new CredentialError("REQUEST_SUBSTITUTED", "Credential inputs differ from the requirement");
+  }
+  const ids = descriptor.inputs.map((field) => field.id).sort();
+  if (Object.keys(collected).sort().join("\0") !== ids.join("\0") || Object.values(collected).some((value) => typeof value !== "string" || value.length === 0)) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential inputs do not match the descriptor");
+  if (domain !== undefined) {
+    const mailbox = canonicalMailbox(collected.email ?? "");
+    if (mailbox === undefined || mailbox.domain !== domain) throw new CredentialError("VERIFICATION_FAILED", "Mailbox is not at the required email domain", { state: "mailbox_domain_mismatch" });
+    return Object.freeze({ ...collected, email: mailbox.email });
+  }
+  return collected;
 }
 
 export class CredentialsService {
@@ -118,26 +157,26 @@ export class CredentialsService {
       }
       if (resume && Date.parse(resume.expiresAt) <= Date.now()) { await redirectStore!.clear(); throw new CredentialError("REQUEST_EXPIRED", "Redirect continuation expired"); }
       const verifier = resume?.verifier ?? randomVerifier();
-      const created = resume ?? await transport.create({ descriptor, descriptorDigest, requirement, requirementDigest, holderDid, openerOrigin, completionVerifierChallenge: await sha256Base64Url(verifier), signal: timed.signal });
-      if (!resume && redirectStore) await redirectStore.save({ type: "TinyCloudCredentialRedirectResume", version: 1, requestId: created.requestId, locator: created.locator, verifier, expiresAt: created.expiresAt, correlationId: created.correlationId, holderDid, descriptorDigest, requirementDigest, openerOrigin });
       const requestedInteraction = options.interaction ?? "popup";
       // A redirect continuation is already rendered by the issuer. An inline
       // host owns its local UI, so it must be started again after resumption.
       let interaction = resume && requestedInteraction !== "inline" ? undefined : options.browser;
       if (!resume && !interaction && requestedInteraction !== "headless") {
         if (requestedInteraction === "inline") {
-          controller = new CredentialAcquisitionController({ descriptor, mountTarget: options.mountTarget, theme: options.theme, subject: mailboxSubject(requirement) });
+          controller = new CredentialAcquisitionController({ descriptor, mountTarget: options.mountTarget, theme: options.theme, subject: mailboxSubject(requirement), ...(requirement.claims.emailDomain === undefined ? {} : { mailboxDomain: requirement.claims.emailDomain }) });
           interaction = { kind: "inline", start: (input) => controller!.start(input) };
         }
         else
         interaction = new BrowserCredentialInteraction(requestedInteraction);
       }
       if (!resume && interaction && interaction.kind !== requestedInteraction) throw new CredentialError("UNSUPPORTED_PROFILE", "Credential interaction adapter does not match the requested interaction");
-      if (interaction) {
-        surface = interaction.kind === "inline"
-          ? await interaction.start({ signal: timed.signal })
-          : await interaction.start({ interaction: descriptor.interaction, locator: created.locator, signal: timed.signal });
-      }
+      // An inline surface starts before the request exists so it can collect
+      // inputs (such as a recipient-chosen mailbox) the requirement lacks.
+      if (interaction?.kind === "inline") surface = await interaction.start({ signal: timed.signal });
+      const inputs = resume ? undefined : await acquisitionInputs(descriptor, requirement, options.inputs, surface, timed.signal);
+      const created = resume ?? await transport.create({ descriptor, descriptorDigest, requirement, requirementDigest, holderDid, openerOrigin, completionVerifierChallenge: await sha256Base64Url(verifier), ...(inputs === undefined ? {} : { inputs }), signal: timed.signal });
+      if (!resume && redirectStore) await redirectStore.save({ type: "TinyCloudCredentialRedirectResume", version: 1, requestId: created.requestId, locator: created.locator, verifier, expiresAt: created.expiresAt, correlationId: created.correlationId, holderDid, descriptorDigest, requirementDigest, openerOrigin });
+      if (interaction && interaction.kind !== "inline") surface = await interaction.start({ interaction: descriptor.interaction, locator: created.locator, signal: timed.signal });
       const signing = options.signing ?? {
         autoSign: async (_binding: unknown, bytes: Uint8Array) => this.client.autoSignCredentialBytes?.(bytes),
         requestApproval: async (_binding: unknown, bytes: Uint8Array) => {

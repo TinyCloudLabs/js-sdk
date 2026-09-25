@@ -241,6 +241,133 @@
         }
       },
       "digest": "7UoA6-MTjKThr4wbNdsjasZ6Pxk8XT4Kz-9aN-Uhn9I"
+    },
+    {
+      "name": "email-domain-proof-v1",
+      "descriptor": {
+        "accessibility": {
+          "errorLiveRegion": "assertive",
+          "progressLabel": "Credential acquisition progress"
+        },
+        "claims": [
+          {
+            "matching": "normalized_exact",
+            "name": "email",
+            "selectiveDisclosure": true
+          },
+          {
+            "matching": "normalized_exact",
+            "name": "emailDomain",
+            "selectiveDisclosure": true
+          }
+        ],
+        "contractVersion": 1,
+        "display": {
+          "consent": "Prove control of your mailbox at the invited domain",
+          "description": "Prove control of your mailbox at the invited domain",
+          "securityTextLocked": true,
+          "title": "Email address"
+        },
+        "endpoints": {
+          "challenge": "challenge",
+          "holderBinding": "holder_binding",
+          "holderSignature": "holder_signature",
+          "issue": "issue",
+          "proof": "proof",
+          "request": "request",
+          "result": "result",
+          "state": "state"
+        },
+        "format": {
+          "id": "vc+sd-jwt",
+          "vct": "opencredentials.email/v1"
+        },
+        "holderBinding": {
+          "alg": "EdDSA",
+          "domain": "tinycloud.credentials/holder-binding/v1",
+          "required": true,
+          "version": 1
+        },
+        "inputs": [
+          {
+            "autocomplete": "off",
+            "id": "email",
+            "label": "Email address",
+            "prefill": "privacy_hint_only",
+            "schema": {
+              "format": "email",
+              "maxLength": 320,
+              "minLength": 3,
+              "type": "string"
+            }
+          }
+        ],
+        "interaction": {
+          "origin": "https://credentials.org",
+          "pathTemplate": "/credentials/acquire/{requestId}"
+        },
+        "issuer": {
+          "did": "did:web:issuer.credentials.org",
+          "kid": "did:web:issuer.credentials.org#controller",
+          "origin": "https://witness.credentials.org"
+        },
+        "lifecycle": {
+          "challengeConsumption": "atomic_once",
+          "challengeTtlSeconds": 300,
+          "maxProofAttempts": 5,
+          "requestTtlSeconds": 600,
+          "retry": "bounded"
+        },
+        "presentation": {
+          "stateVersion": "tinycloud.credentials/ux-states/v1",
+          "states": [
+            "collecting",
+            "challenging",
+            "proving",
+            "signing",
+            "issuing",
+            "verifying",
+            "saving",
+            "success",
+            "recovery"
+          ]
+        },
+        "profile": "tinycloud.email-domain-proof/v1",
+        "profileVersion": 1,
+        "protocol": "tinycloud.credentials/acquisition/v1",
+        "revocation": {
+          "supported": false
+        },
+        "status": {
+          "freshnessSeconds": 300,
+          "type": "none"
+        },
+        "steps": [
+          {
+            "type": "collect_input",
+            "version": 1
+          },
+          {
+            "type": "mailbox_otp",
+            "version": 1
+          },
+          {
+            "type": "holder_signature",
+            "version": 1
+          }
+        ],
+        "subjectRelationship": "holder_is_subject",
+        "theme": {
+          "allowed": [
+            "accentColor",
+            "fontFamily",
+            "borderRadius"
+          ],
+          "tokenVersion": "tinycloud.credentials/tokens/v1"
+        },
+        "type": "tinycloud.credentials/descriptor/v1"
+      },
+      "digest": "33X5mAkZZgApdD3xh_T-3KS5moop0J2Nloi2nqWsdWY"
     }
   ]
 }
