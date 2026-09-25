@@ -92,7 +92,19 @@ export interface InlineCredentialProofRequest {
     readonly label: string;
     readonly schema: CredentialFlowDescriptor["inputs"][number]["schema"];
   }[];
+  /** Present when this step's previous proof was rejected and may be retried. */
+  readonly feedback?: { readonly kind: "rejected"; readonly attemptsRemaining: number };
   readonly signal?: AbortSignal;
+}
+
+/**
+ * The mailbox a `mailbox_otp` code is sent to, copied from the digest-bound
+ * credential requirement. Only the SDK-owned inline view receives it; host
+ * proof handlers never see requirement values.
+ */
+export interface CredentialProofSubject {
+  readonly kind: "email";
+  readonly value: string;
 }
 
 export type InlineCredentialProofHandler = (input: InlineCredentialProofRequest) => Promise<PrimitiveStepResult>;

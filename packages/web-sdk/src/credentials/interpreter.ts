@@ -7,12 +7,18 @@ import {
   type CredentialProgressEvent,
   type CredentialRequirement,
 } from "@tinycloud/sdk-core";
-import type { CredentialAcquisitionTransport, CredentialSigningAdapter, InlineCredentialProofHandler, PrimitiveStepHandler } from "./types";
+import type { CredentialAcquisitionTransport, CredentialProofSubject, CredentialSigningAdapter, InlineCredentialProofHandler, InlineCredentialProofRequest, PrimitiveStepHandler } from "./types";
 
 const delay = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
   const timer = setTimeout(resolve, ms);
   signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
 });
+
+/** The mailbox named by an email requirement, which the issuer delivers the code to. */
+export function mailboxSubject(requirement: CredentialRequirement): CredentialProofSubject | undefined {
+  const email = requirement.claims.email;
+  return typeof email === "string" && email.length > 0 ? Object.freeze({ kind: "email" as const, value: email }) : undefined;
+}
 
 /** Finite step interpreter. Dispatch is exclusively by registered primitive and version. */
 export async function interpretCredentialFlow(input: {
@@ -75,22 +81,41 @@ export async function interpretCredentialFlow(input: {
       const inlineHandler = input.proofHandler;
       if (!handler && !inlineHandler) { await (input.onWait?.() ?? delay(state.retryAfterMs ?? 50, input.signal)); continue; }
       if (next.constraints.challengeRequired === true) await input.transport.beginStep(input.requestId, input.verifier, next.type, input.signal);
-      const proof = handler
-        ? await handler({ descriptor: input.descriptor, requirement: input.requirement, stepId: next.id, constraints: next.constraints, signal: input.signal })
-        : await inlineHandler!({
-          stepId: next.id,
-          constraints: next.constraints,
-          display: {
-            title: input.descriptor.display.title,
-            description: input.descriptor.display.description,
-            consent: input.descriptor.display.consent,
-            progressLabel: input.descriptor.accessibility.progressLabel,
-            errorLiveRegion: input.descriptor.accessibility.errorLiveRegion,
-          },
-          inputs: input.descriptor.inputs.map(({ id, label, schema }) => ({ id, label, schema })),
-          signal: input.signal,
-        });
-      await input.transport.submitStep(input.requestId, input.verifier, next.id, proof, input.signal);
+      if (handler) {
+        const proof = await handler({ descriptor: input.descriptor, requirement: input.requirement, stepId: next.id, constraints: next.constraints, signal: input.signal });
+        await input.transport.submitStep(input.requestId, input.verifier, next.id, proof, input.signal);
+      } else {
+        let feedback: InlineCredentialProofRequest["feedback"];
+        // A mistyped code is re-entered against the same challenge; the issuer
+        // counts every attempt and reports when the bounded budget is spent.
+        for (let attempt = 1; ; attempt += 1) {
+          const proof = await inlineHandler!({
+            stepId: next.id,
+            constraints: next.constraints,
+            display: {
+              title: input.descriptor.display.title,
+              description: input.descriptor.display.description,
+              consent: input.descriptor.display.consent,
+              progressLabel: input.descriptor.accessibility.progressLabel,
+              errorLiveRegion: input.descriptor.accessibility.errorLiveRegion,
+            },
+            inputs: input.descriptor.inputs.map(({ id, label, schema }) => ({ id, label, schema })),
+            ...(feedback === undefined ? {} : { feedback }),
+            signal: input.signal,
+          });
+          try {
+            await input.transport.submitStep(input.requestId, input.verifier, next.id, proof, input.signal);
+            break;
+          } catch (cause) {
+            if (!(cause instanceof CredentialError) || cause.code !== "PROOF_REJECTED") throw cause;
+            const attemptsRemaining = input.descriptor.lifecycle.maxProofAttempts - attempt;
+            // Once this view stops re-prompting, the rejection is final: a
+            // host must not silently start a new acquisition on its behalf.
+            if (next.type !== "mailbox_otp" || attemptsRemaining <= 0) throw new CredentialError("VERIFICATION_FAILED", "The proof was not accepted", { state: attemptsRemaining <= 0 ? "proof_attempts_exhausted" : "proof_rejected", cause });
+            feedback = { kind: "rejected", attemptsRemaining };
+          }
+        }
+      }
     }
     completed.add(next.id);
   }

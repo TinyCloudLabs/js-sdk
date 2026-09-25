@@ -139,7 +139,7 @@ test("hosted redirect journey resumes an initialized SDK once and durably stores
       }),
     ]);
     expect(page.url()).toMatch(/^https:\/\/credentials\.org\/credentials\/acquire\/[A-Za-z0-9_-]{32}$/);
-    await page.getByLabel("Verification code").fill("246810");
+    await page.getByLabel("Verification code").fill("24681357");
     await Promise.all([
       page.waitForURL((next) => next.origin === "https://app.example" && next.pathname === "/"),
       page.getByRole("button", { name: "Verify code" }).click(),

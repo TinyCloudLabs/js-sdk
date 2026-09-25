@@ -51,8 +51,16 @@ export interface ShareImportAccountClient {
   kvForSpace(spaceId: string): IKVService;
 }
 
+/**
+ * The recipient an invitation is addressed to. It comes from the signed,
+ * sealed invitation and is checked against the policy's credential
+ * requirement commitment before `receive` returns, so a host may display it.
+ */
+export type ShareReceiverRecipient = { readonly kind: "exactEmail"; readonly email: string };
+
 export interface ReceivedShare {
   readonly identity: ShareReceiverIdentity;
+  readonly recipient: ShareReceiverRecipient;
   readonly metadata: ShareMetadata;
   readonly shareId: string;
   get(): Promise<ShareReceivedContent>;

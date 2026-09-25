@@ -21,6 +21,7 @@ import type {
   ShareReceivedContent,
   ShareReceiverClient,
   ShareReceiverIdentity,
+  ShareReceiverRecipient,
 } from "./types";
 
 const DEFAULT_CREDENTIAL_DISCOVERY = "https://credentials.org/.well-known/opencredentials";
@@ -88,6 +89,17 @@ function requirementFor(envelope: ShareEnvelopeV3): CredentialRequirement {
   return createEmailCredentialRequirement({ email: envelope.recipientMatcher.value, profile: commitment.profile, credentialType: commitment.credentialType });
 }
 
+/**
+ * @internal Binds the invitation's addressed recipient to the owner-signed
+ * policy's credential commitment. A matcher that does not hash to the
+ * committed requirement is rejected before anything is displayed or sent.
+ */
+export async function verifiedShareRequirement(envelope: ShareEnvelopeV3): Promise<CredentialRequirement> {
+  const requirement = requirementFor(envelope);
+  if (await credentialRequirementDigest(requirement) !== policyV2For(envelope).credentialRequirement.requirementDigest) throw new Error("share credential requirement does not match its policy commitment");
+  return requirement;
+}
+
 function guestCredentialClient(session: ShareReceiverSession, storage: ReceiverSessionStorage): CredentialClient {
   const unavailable = (): never => { throw new Error("account credential storage is unavailable to a receiver session"); };
   return {
@@ -111,16 +123,21 @@ export class ReceivedShareImpl implements ReceivedShare {
   private content?: ShareReceivedContent;
   private getPromise?: Promise<ShareReceivedContent>;
 
+  readonly recipient: ShareReceiverRecipient;
+
   constructor(
     readonly identity: ShareReceiverIdentity,
     readonly metadata: ShareMetadata,
     private readonly envelope: ShareEnvelopeV3,
+    private readonly requirement: CredentialRequirement,
     private readonly credentials: CredentialsService,
     private readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>,
     private readonly options: ShareReceiveOptions,
     private readonly fetchFn: typeof fetch,
     private readonly credentialDiscoveryUrl: string,
-  ) {}
+  ) {
+    this.recipient = Object.freeze({ kind: "exactEmail", email: requirement.claims.email! });
+  }
 
   get shareId(): string { return this.metadata.shareId; }
 
@@ -137,9 +154,8 @@ export class ReceivedShareImpl implements ReceivedShare {
 
   private async load(): Promise<ShareReceivedContent> {
     aborted(this.options.signal);
-    const requirement = requirementFor(this.envelope);
+    const requirement = this.requirement;
     const policy = policyV2For(this.envelope);
-    if (await credentialRequirementDigest(requirement) !== policy.credentialRequirement.requirementDigest) throw new Error("share credential requirement does not match its policy commitment");
     this.options.onProgress?.({ state: "credential-acquisition", status: "started" });
     const ensured = await this.credentials.ensure(requirement, {
       interaction: "inline",
@@ -297,6 +313,9 @@ export class ShareReceiverService {
     aborted(options.signal);
     if (envelope === undefined) throw new Error("accountless receive requires a verified v3 share");
     validateShareReceiverServiceTrust(envelope);
+    // Bind the displayed recipient to the owner's signed policy before any
+    // host can present it or any credential is requested.
+    const requirement = await verifiedShareRequirement(envelope);
     await verifyOwnerNodeBinding({
       registryUrl: this.config.registryOrigin,
       ownerDid: envelope.policy.ownerDid,
@@ -323,6 +342,6 @@ export class ShareReceiverService {
       sign = (bytes) => receiver.sign(bytes);
     }
     options.onProgress?.({ state: "identity-selection", status: "completed", identity });
-    return new ReceivedShareImpl(identity, inspection.metadata, envelope, credentials, sign, options, this.fetchFn, this.config.credentialDiscoveryUrl ?? DEFAULT_CREDENTIAL_DISCOVERY);
+    return new ReceivedShareImpl(identity, inspection.metadata, envelope, requirement, credentials, sign, options, this.fetchFn, this.config.credentialDiscoveryUrl ?? DEFAULT_CREDENTIAL_DISCOVERY);
   }
 }

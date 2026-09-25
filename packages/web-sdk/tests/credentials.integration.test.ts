@@ -103,7 +103,7 @@ test("an initialized active session ensures an email credential through an inlin
       closed: () => false,
       requestProof: async ({ stepId }) => {
         expect(stepId).toBe("mailbox_otp");
-        return { otp: "246810" };
+        return { otp: "24681357" };
       },
     };
   });
@@ -190,7 +190,7 @@ test("a locator-only redirect returns after hosted proof and a restored SDK sess
       };
       const initial = await hosted("/state");
       const challenge = await hosted("/challenge", { method: "POST", body: JSON.stringify({ step: "mailbox_otp", stepVersion: 1 }) });
-      await hosted("/proof", { method: "POST", body: JSON.stringify({ step: "mailbox_otp", stepVersion: 1, challengeNonce: challenge.challengeNonce, proof: { otp: "246810" } }) });
+      await hosted("/proof", { method: "POST", body: JSON.stringify({ step: "mailbox_otp", stepVersion: 1, challengeNonce: challenge.challengeNonce, proof: { otp: "24681357" } }) });
       const afterProof = await hosted("/state");
       expect(initial.state).toBe("challenge_required");
       expect(afterProof.state).toBe("holder_binding_required");
