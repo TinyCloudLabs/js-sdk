@@ -73,7 +73,7 @@ test("a rejected mailbox code is re-entered against the same challenge with the 
 
 test("the interpreter stops re-prompting once the declared attempt budget is spent", async () => {
   const { run, transport, requests } = await runRejections(email.lifecycle.maxProofAttempts);
-  await expect(run).rejects.toMatchObject({ code: "PROOF_REJECTED" });
+  await expect(run).rejects.toMatchObject({ code: "VERIFICATION_FAILED", recoverable: false, details: { state: "proof_attempts_exhausted" } });
   expect(requests).toHaveLength(email.lifecycle.maxProofAttempts);
   expect(transport.challenges).toBe(1);
 });

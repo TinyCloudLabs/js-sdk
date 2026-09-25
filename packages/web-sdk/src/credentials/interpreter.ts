@@ -107,8 +107,11 @@ export async function interpretCredentialFlow(input: {
             await input.transport.submitStep(input.requestId, input.verifier, next.id, proof, input.signal);
             break;
           } catch (cause) {
+            if (!(cause instanceof CredentialError) || cause.code !== "PROOF_REJECTED") throw cause;
             const attemptsRemaining = input.descriptor.lifecycle.maxProofAttempts - attempt;
-            if (!(cause instanceof CredentialError) || cause.code !== "PROOF_REJECTED" || next.type !== "mailbox_otp" || attemptsRemaining <= 0) throw cause;
+            // Once this view stops re-prompting, the rejection is final: a
+            // host must not silently start a new acquisition on its behalf.
+            if (next.type !== "mailbox_otp" || attemptsRemaining <= 0) throw new CredentialError("VERIFICATION_FAILED", "The proof was not accepted", { state: attemptsRemaining <= 0 ? "proof_attempts_exhausted" : "proof_rejected", cause });
             feedback = { kind: "rejected", attemptsRemaining };
           }
         }
