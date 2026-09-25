@@ -31,8 +31,8 @@ export function normalizeMailboxCode(value: string): string {
 // Host pages theme the view through inherited `--tinycloud-credential-*`
 // properties; the private `--_*` tokens only supply light and dark defaults.
 const STYLES = `
-:host{--_accent:var(--tinycloud-credential-accent,#2a56f6);--_accent-ink:var(--tinycloud-credential-accent-text,#fff);--_surface:var(--tinycloud-credential-background,#fff);--_text:var(--tinycloud-credential-text,#1a1c21);--_muted:var(--tinycloud-credential-muted,#536176);--_line:var(--tinycloud-credential-line,#cfd8e6);--_field:var(--tinycloud-credential-field,#f8f9fb);--_danger:var(--tinycloud-credential-danger,#9f1d2d);--_success:var(--tinycloud-credential-success,#17663a);--_radius:var(--tinycloud-credential-radius,12px);--_mono:var(--tinycloud-credential-mono,ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace);--_ease:cubic-bezier(.16,1,.3,1);display:block;color:var(--_text);font:inherit;font-family:var(--tinycloud-credential-font,inherit);line-height:1.5}
-@media (prefers-color-scheme:dark){:host{--_accent:var(--tinycloud-credential-accent,#6a91ff);--_accent-ink:var(--tinycloud-credential-accent-text,#081021);--_surface:var(--tinycloud-credential-background,#12151e);--_text:var(--tinycloud-credential-text,#e2e8f0);--_muted:var(--tinycloud-credential-muted,#a4afbf);--_line:var(--tinycloud-credential-line,#2c3445);--_field:var(--tinycloud-credential-field,#0b0e14);--_danger:var(--tinycloud-credential-danger,#ff9da8);--_success:var(--tinycloud-credential-success,#7ddc9f)}}
+:host{--_accent:var(--tinycloud-credential-accent,#2a56f6);--_accent-ink:var(--tinycloud-credential-accent-text,#fff);--_surface:var(--tinycloud-credential-background,#fff);--_text:var(--tinycloud-credential-text,#1a1c21);--_muted:var(--tinycloud-credential-muted,#536176);--_line:var(--tinycloud-credential-line,#cfd8e6);--_field:var(--tinycloud-credential-field,#f8f9fb);--_field-line:var(--tinycloud-credential-field-line,#7a8497);--_danger:var(--tinycloud-credential-danger,#9f1d2d);--_success:var(--tinycloud-credential-success,#17663a);--_radius:var(--tinycloud-credential-radius,12px);--_mono:var(--tinycloud-credential-mono,ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace);--_ease:cubic-bezier(.16,1,.3,1);display:block;color:var(--_text);font:inherit;font-family:var(--tinycloud-credential-font,inherit);line-height:1.5}
+@media (prefers-color-scheme:dark){:host{--_accent:var(--tinycloud-credential-accent,#6a91ff);--_accent-ink:var(--tinycloud-credential-accent-text,#081021);--_surface:var(--tinycloud-credential-background,#12151e);--_text:var(--tinycloud-credential-text,#e2e8f0);--_muted:var(--tinycloud-credential-muted,#a4afbf);--_line:var(--tinycloud-credential-line,#2c3445);--_field:var(--tinycloud-credential-field,#0b0e14);--_field-line:var(--tinycloud-credential-field-line,#626d80);--_danger:var(--tinycloud-credential-danger,#ff9da8);--_success:var(--tinycloud-credential-success,#7ddc9f)}}
 *,*::before,*::after{box-sizing:border-box}
 [hidden]{display:none!important}
 .card{width:100%;max-width:30rem;padding:clamp(20px,5vw,28px);border:1px solid var(--_line);border-radius:var(--_radius);background:var(--_surface);color:var(--_text)}
@@ -47,16 +47,16 @@ form{margin:20px 0 0}
 .otp input{position:absolute;inset:0;z-index:1;width:100%;height:100%;margin:0;padding:0;border:0;outline:0;background:transparent;color:transparent;-webkit-text-fill-color:transparent;caret-color:transparent;font:16px/1 var(--_mono);letter-spacing:-.5em;cursor:text}
 .otp input::selection{background:transparent}
 .otp input:disabled{cursor:progress}
-.slots{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) 10px repeat(4,minmax(0,1fr));gap:6px}
-.slot{display:grid;min-width:0;min-height:48px;aspect-ratio:5/6;place-items:center;border:1px solid var(--_line);border-radius:8px;background:var(--_field);font:600 clamp(1.15rem,4.6vw,1.45rem)/1 var(--_mono);font-variant-numeric:tabular-nums;transition:border-color 160ms ease-out,box-shadow 160ms ease-out,background-color 160ms ease-out}
-.slot[data-filled]{border-color:color-mix(in srgb,var(--_text) 34%,var(--_line))}
-.divider{align-self:center;justify-self:center;width:8px;height:2px;border-radius:1px;background:var(--_line)}
+.slots{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) 8px repeat(4,minmax(0,1fr));gap:clamp(3px,1.2vw,6px)}
+.slot{display:grid;min-width:0;height:clamp(48px,13vw,56px);place-items:center;border:1px solid var(--_field-line);border-radius:8px;background:var(--_field);font:600 clamp(1.15rem,4.6vw,1.45rem)/1 var(--_mono);font-variant-numeric:tabular-nums;transition:border-color 160ms ease-out,box-shadow 160ms ease-out,background-color 160ms ease-out}
+.slot[data-filled]{border-color:color-mix(in srgb,var(--_text) 55%,var(--_field-line))}
+.divider{align-self:center;justify-self:center;width:6px;height:2px;border-radius:1px;background:var(--_field-line)}
 .otp:focus-within .slot[data-active]{border-color:var(--_accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--_accent) 24%,transparent)}
 .otp:focus-within .slot[data-active]:not([data-filled])::after{content:"";width:2px;height:1.1em;border-radius:1px;background:var(--_text);animation:caret 1.1s steps(1) infinite}
 .otp[data-invalid] .slot{border-color:var(--_danger)}
 .otp[data-invalid] .slots{animation:nudge 320ms var(--_ease)}
 .otp[data-busy] .slot{opacity:.62}
-.field{display:block;width:100%;min-height:48px;padding:10px 12px;border:1px solid var(--_line);border-radius:8px;background:var(--_field);color:var(--_text);font:inherit;font-size:max(16px,1rem)}
+.field{display:block;width:100%;min-height:48px;padding:10px 12px;border:1px solid var(--_field-line);border-radius:8px;background:var(--_field);color:var(--_text);font:inherit;font-size:max(16px,1rem)}
 .field:focus-visible{border-color:var(--_accent);outline:0;box-shadow:0 0 0 3px color-mix(in srgb,var(--_accent) 24%,transparent)}
 .hint{max-width:44ch;margin:10px 0 0;color:var(--_muted);font-size:.875rem;text-wrap:pretty}
 .error{display:flex;gap:8px;align-items:flex-start;max-width:44ch;margin:10px 0 0;color:var(--_danger);font-size:.875rem;font-weight:550}
@@ -68,7 +68,8 @@ button{display:inline-flex;gap:8px;align-items:center;justify-content:center;min
 .primary:active:not(:disabled){transform:translateY(1px)}
 .primary:disabled{cursor:progress;opacity:.72}
 .quiet{padding:6px 2px;border:0;background:transparent;color:var(--_text);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:4px}
-.quiet:hover{text-decoration-thickness:2px}
+.quiet:hover:not(:disabled){text-decoration-thickness:2px}
+.quiet:disabled{cursor:default;opacity:.5}
 button:focus-visible{outline:2px solid var(--_accent);outline-offset:3px}
 .status{display:flex;gap:10px;align-items:center;min-height:1.5em;margin:16px 0 0;color:var(--_muted);font-size:.875rem}
 .status:empty{display:none}
@@ -230,7 +231,7 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
       live.append(spinner(), "Preparing credential acquisition…");
     } else {
       title.textContent = "Verify your email";
-      lede.append(`We’re sending a ${MAILBOX_OTP_LENGTH}-digit code to `, ...codeLabel(this.subject), ".");
+      lede.append(`We’re sending an ${MAILBOX_OTP_LENGTH}-digit code to `, ...codeLabel(this.subject), ".");
       live.append(spinner(), "Sending your code…");
     }
     card.append(mark, title, lede, body, live);
@@ -253,7 +254,7 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
     this.rejecter = undefined;
   }
 
-  private actions(label: string): { readonly actions: HTMLDivElement; readonly submit: HTMLButtonElement } {
+  private actions(label: string): { readonly actions: HTMLDivElement; readonly submit: HTMLButtonElement; readonly cancel: HTMLButtonElement } {
     const actions = document.createElement("div");
     actions.className = "actions";
     const submit = document.createElement("button");
@@ -266,7 +267,7 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
     cancel.dataset.cancel = "";
     cancel.textContent = "Cancel";
     actions.append(submit, cancel);
-    return { actions, submit };
+    return { actions, submit, cancel };
   }
 
   private mailboxForm(request: InlineCredentialProofRequest, shell: ReturnType<TinyCloudCredentialAcquisitionElement["renderShell"]>): HTMLFormElement {
@@ -318,7 +319,7 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
     error.className = "error";
     error.id = "otp-error";
     error.hidden = true;
-    const { actions, submit } = this.actions("Verify email");
+    const { actions, submit, cancel } = this.actions("Verify email");
     form.append(label, field, hint, error, actions);
 
     const showError = (message: string) => {
@@ -358,6 +359,7 @@ export class TinyCloudCredentialAcquisitionElement extends ElementBase {
       input.readOnly = true;
       field.dataset.busy = "";
       submit.disabled = true;
+      cancel.disabled = true;
       submit.replaceChildren(spinner(), "Verifying…");
       shell.live.replaceChildren(spinner(), "Checking your code…");
       this.settle({ otp: code });

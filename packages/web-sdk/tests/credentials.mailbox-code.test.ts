@@ -160,6 +160,7 @@ test("the SDK view names the verified mailbox and exposes one accessible one-tim
   expect(await pending).toEqual({ otp: "12345678" });
   expect(input.readOnly).toBe(true);
   expect(root.querySelector("button[type=submit]")?.textContent).toBe("Verifying…");
+  expect(root.querySelector<HTMLButtonElement>("[data-cancel]")?.disabled).toBe(true);
   expect(root.querySelector("#otp-error")?.hasAttribute("hidden")).toBe(true);
 });
 
