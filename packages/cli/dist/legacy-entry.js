@@ -26638,7 +26638,7 @@ var init_dist4 = __esm({
     });
     EPHEMERAL_MS = 60 * 60 * 1e3;
     SIGNED_READ_URL_MS = 5 * 60 * 1e3;
-    SESSION_MS = 7 * 24 * 60 * 60 * 1e3;
+    SESSION_MS = 30 * 24 * 60 * 60 * 1e3;
     SHARE_MS = 7 * 24 * 60 * 60 * 1e3;
     APP_MS = 30 * 24 * 60 * 60 * 1e3;
     MAX_MS = 10 * 365 * 24 * 60 * 60 * 1e3;

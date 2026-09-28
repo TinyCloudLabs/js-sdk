@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 3.0.0-beta.13
+
+### Patch Changes
+
+- 036ce34: Raise the default sign-in session lifetime (`EXPIRY.SESSION_MS`) from 7 days to 30 days. `TinyCloudNode`, `NodeUserAuthorization`, `TinyCloudWeb`, and the `delegateTo` default expiry inherit the new value when `sessionExpirationMs` / `expiry` is not set. Long-running backend services and agents now re-sign in less often; revocation remains the control for ending a session early, and delegations minted from a session stay bounded by the session's expiry. Share-link (`EXPIRY.SHARE_MS`, 7 days), app manifest, ephemeral, and signed-read-URL defaults are unchanged.
+
 ## 3.0.0-beta.12
 
 ### Minor Changes
