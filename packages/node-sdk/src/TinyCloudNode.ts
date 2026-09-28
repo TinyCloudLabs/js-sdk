@@ -697,7 +697,7 @@ export interface TinyCloudNodeConfig {
   prefix?: string;
   /** Domain for SIWE messages (default: derived from host) */
   domain?: string;
-  /** Session expiration time in milliseconds (default: 1 hour) */
+  /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
   /** Whether to automatically create space if it doesn't exist (default: false) */
   autoCreateSpace?: boolean;
@@ -752,7 +752,8 @@ export interface TinyCloudNodeConfig {
  * Options for {@link TinyCloudNode.delegateTo}.
  *
  * `expiry` accepts either an ms-format duration string (e.g. `"7d"`, `"1h"`)
- * or a raw number of milliseconds. When omitted, the default is 1 hour.
+ * or a raw number of milliseconds. When omitted, the default is
+ * `EXPIRY.SESSION_MS` (30 days), still capped at the session's own expiry.
  *
  * `forceWalletSign` bypasses the derivability check and sends the
  * delegation through the legacy wallet-signed SIWE path, which always
@@ -4169,7 +4170,7 @@ export class TinyCloudNode {
    * @internal
    */
   private getSessionExpiry(): Date {
-    // Default to 1 hour from now if not explicitly set
+    // Default to the SESSION tier (30 days) if not explicitly set
     const expirationMs = this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS;
     return new Date(Date.now() + expirationMs);
   }
