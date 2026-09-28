@@ -167,7 +167,7 @@ export interface Config extends ClientConfig {
    */
   spaceCreationTimeoutMs?: number;
 
-  /** Session expiration time in milliseconds (default: 1 hour) */
+  /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
 
   /** Persist browser sessions so signIn() can restore before prompting. Default true. */
