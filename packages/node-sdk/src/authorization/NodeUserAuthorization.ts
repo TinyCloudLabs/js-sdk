@@ -160,7 +160,7 @@ export interface NodeUserAuthorizationConfig {
   spacePrefix?: string;
   /** Default actions for sessions */
   defaultActions?: Record<string, Record<string, string[]>>;
-  /** Session expiration time in milliseconds (default: 1 hour) */
+  /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
   /** Automatically create space if it doesn't exist (default: false) */
   autoCreateSpace?: boolean;
