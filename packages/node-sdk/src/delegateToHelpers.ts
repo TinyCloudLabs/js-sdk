@@ -74,7 +74,7 @@ export const DEFAULT_DELEGATION_EXPIRY_MS = EXPIRY.SESSION_MS;
 /**
  * Resolve the `expiry` option of {@link DelegateToOptions} into a concrete
  * millisecond duration from now. Default is {@link DEFAULT_DELEGATION_EXPIRY_MS}
- * (7 days).
+ * (30 days, the SESSION tier).
  *
  * Accepts:
  *  - `undefined` → {@link DEFAULT_DELEGATION_EXPIRY_MS}

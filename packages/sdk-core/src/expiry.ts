@@ -36,14 +36,21 @@ const EPHEMERAL_MS = 60 * 60 * 1000; // 1 hour
 const SIGNED_READ_URL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * The user's currently-active sign-in session. Recovery is trivial
- * (re-sign-in). Length tracks how long the user/agent is expected to
- * be working without re-prompt.
+ * The user's currently-active sign-in session. Recovery is re-sign-in.
+ * Length tracks how long the user/agent is expected to be working
+ * without re-prompt.
+ *
+ * Sized at 30 days so long-running backend services, agents, and other
+ * persistent identities re-sign in rarely: every forced re-sign-in is a
+ * point where an unattended process can fail. Revocation, not expiry, is
+ * the control for cutting off a session early. Delegations minted from a
+ * session are still bounded by it (TinyCloud Node enforces child expiry
+ * <= parent expiry).
  *
  * Use for: TinyCloudNode session expiry, runtime permission grants
  * (which are capped by the session anyway).
  */
-const SESSION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const SESSION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 /**
  * Ad-hoc third-party delegations the caller often forgets to revoke.
