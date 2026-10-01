@@ -31,6 +31,8 @@ export {
   // Delegation creation types
   SpaceDelegationParams,
   CreateDelegationFunction,
+  // Space hosting type
+  HostSpaceFunction,
 } from "./SpaceService";
 
 // Validation schemas and types
