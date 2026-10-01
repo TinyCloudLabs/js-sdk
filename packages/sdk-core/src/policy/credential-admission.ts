@@ -606,6 +606,8 @@ export interface AdmitPolicyCredentialV3Input
   readonly accountAuthorizationCid: string;
   /** Recipient-owned `credentials` space covered by the account authorization. */
   readonly credentialSpaceId: string;
+  /** See {@link AdmitPolicyCredentialV4Input.requestedExpiresAt}. */
+  readonly requestedExpiresAt?: string | null;
   readonly fetch?: typeof fetch;
   readonly signal?: AbortSignal;
 }
@@ -648,24 +650,21 @@ export async function admitPolicyCredentialV3(
     policy,
     challenge,
   });
-  const response = await fetchFn(
+  const response = await postPolicyDelegation(
+    fetchFn,
     new URL(`${policyRuntimeBasePath(input.policyRuntimePath)}/delegations`, nodeOrigin),
     {
-      method: "POST",
-      redirect: "error",
-      signal: input.signal,
-      headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({
-        policyCid: input.policyCid,
-        challengeId: challenge.challengeId,
-        nonce: challenge.nonce,
-        requirement: validateCredentialRequirement(input.requirement),
-        credential: envelopeFromVerified(input.credential),
-        accountAuthorizationCid,
-        credentialSpaceId,
-        presentation,
-      }),
+      policyCid: input.policyCid,
+      challengeId: challenge.challengeId,
+      nonce: challenge.nonce,
+      requirement: validateCredentialRequirement(input.requirement),
+      credential: envelopeFromVerified(input.credential),
+      accountAuthorizationCid,
+      credentialSpaceId,
+      presentation,
     },
+    requestedSessionExpiry(input.requestedExpiresAt, policy),
+    input.signal,
   );
   if (!response.ok) throw new Error(`policy delegation rejected (${response.status})`);
   const value = record(await response.json(), "policy delegation");
@@ -707,6 +706,13 @@ export interface AdmitPolicyCredentialV4Input
   readonly nodeOrigin: string;
   /** Path to the embedded Node policy runtime. Defaults to `/policy/v3`. */
   readonly policyRuntimePath?: string;
+  /**
+   * How long the minted session should last. Defaults to the policy's own
+   * expiry, the longest the Node will grant; it caps the session at the
+   * policy, its roots and any account authorization. `null` asks for the
+   * legacy 60-second session.
+   */
+  readonly requestedExpiresAt?: string | null;
   readonly fetch?: typeof fetch;
   readonly signal?: AbortSignal;
 }
@@ -750,20 +756,20 @@ export async function admitPolicyCredentialV4(
     policy,
     challenge,
   });
-  const response = await fetchFn(new URL(`${policyRuntimeBasePath(input.policyRuntimePath)}/delegations`, nodeOrigin), {
-    method: "POST",
-    redirect: "error",
-    signal: input.signal,
-    headers: { accept: "application/json", "content-type": "application/json" },
-    body: JSON.stringify({
+  const response = await postPolicyDelegation(
+    fetchFn,
+    new URL(`${policyRuntimeBasePath(input.policyRuntimePath)}/delegations`, nodeOrigin),
+    {
       policyCid: input.policyCid,
       challengeId: challenge.challengeId,
       nonce: challenge.nonce,
       requirement: validateCredentialRequirement(input.requirement),
       credential: envelopeFromVerified(input.credential),
       presentation,
-    }),
-  });
+    },
+    requestedSessionExpiry(input.requestedExpiresAt, policy),
+    input.signal,
+  );
   if (!response.ok) throw new Error(`policy delegation rejected (${response.status})`);
   const value = record(await response.json(), "policy delegation");
   if (
@@ -798,6 +804,48 @@ export async function admitPolicyCredentialV4(
   if (!importResponse.ok) throw new Error(`delegation import rejected (${importResponse.status})`);
   input.signal?.throwIfAborted();
   return Object.freeze({ challenge, presentation, session, delegationImported: true as const });
+}
+
+/**
+ * The expiry to ask for, as whole-second RFC 3339 (the only form the Node
+ * accepts), or undefined for the legacy 60-second session. A value within a
+ * minute of now is not worth a request that clock skew could turn into a 400.
+ * @internal
+ */
+export function requestedSessionExpiry(
+  requested: string | null | undefined,
+  policy: UnifiedPolicyV2,
+): string | undefined {
+  const value = requested === undefined ? policy.expiresAt : requested;
+  if (value === null || value === undefined) return undefined;
+  const seconds = Math.floor(Date.parse(value) / 1000);
+  if (!Number.isFinite(seconds) || seconds <= Math.floor(Date.now() / 1000) + 60) return undefined;
+  return new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/**
+ * POST a mint request. Nodes before 1.17.3 reject the unknown
+ * `requestedExpiresAt` field with 422 before reading the request, so the
+ * challenge is still unspent and the legacy request can follow.
+ * @internal
+ */
+export async function postPolicyDelegation(
+  fetchFn: typeof fetch,
+  url: URL,
+  body: Readonly<Record<string, unknown>>,
+  requestedExpiresAt: string | undefined,
+  signal: AbortSignal | undefined,
+): Promise<Response> {
+  const send = (payload: Readonly<Record<string, unknown>>) => fetchFn(url, {
+    method: "POST",
+    redirect: "error",
+    signal,
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (requestedExpiresAt === undefined) return send(body);
+  const response = await send({ ...body, requestedExpiresAt });
+  return response.status === 422 ? send(body) : response;
 }
 
 function policyRuntimeBasePath(value: string | undefined): string {

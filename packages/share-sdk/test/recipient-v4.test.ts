@@ -5,9 +5,23 @@ import {
   canonicalize,
   didKeyFromEd25519PublicKey,
   signCompactUcanAuthorization,
+  toBase64Url,
   verifyCompactUcanAuthorization,
 } from "@tinycloud/share-envelope";
 import { ShareRecipientClient } from "../src/recipient.js";
+
+/** RFC 3339 at whole seconds, as envelopes carry their expiry. */
+function wholeSeconds(seconds: number): string {
+  return new Date(seconds * 1000).toISOString().replace(".000Z", "Z");
+}
+
+/** Sign a compact UCAN of any lifetime; the library signer stops at 60 seconds. */
+function signLongLived(key: Uint8Array, payload: Record<string, unknown>) {
+  const encode = (value: unknown) => toBase64Url(new TextEncoder().encode(canonicalize(value)));
+  const header = encode({ alg: "EdDSA", jwk: { alg: "EdDSA", crv: "Ed25519", kty: "OKP", x: toBase64Url(ed25519.getPublicKey(key)) }, typ: "JWT", ucv: "0.10.0" });
+  const body = encode(payload);
+  return verifyCompactUcanAuthorization(`${header}.${body}.${toBase64Url(ed25519.sign(new TextEncoder().encode(`${header}.${body}`), key))}`);
+}
 
 function policySessionFacts(input: {
   policyCid: string;
@@ -139,6 +153,7 @@ describe("TC-500 accountless v4 recipient", () => {
       encryptionNetwork,
       contentSource: { keyVersion: 1, encryptedSymmetricKeyDigestHex: "unused" },
       metadata: { mediaType: "text/plain" },
+      expiry: wholeSeconds(now + 3600),
     } as any;
     let signerCalls = 0;
     const sign = async (bytes: Uint8Array) => { signerCalls += 1; return ed25519.sign(bytes, receiverKey); };
@@ -157,7 +172,9 @@ describe("TC-500 accountless v4 recipient", () => {
     await client.establishPolicySession();
     const response = await client.nativeInvoke({ action: "get", resource: envelope.resource });
     expect(response.ok).toBe(true);
-    expect(Object.keys(delegationRequest!).sort()).toEqual(["challengeId", "credential", "nonce", "policyCid", "presentation", "requirement"]);
+    // TC-531: the receiver asks for a session as long as the share.
+    expect(Object.keys(delegationRequest!).sort()).toEqual(["challengeId", "credential", "nonce", "policyCid", "presentation", "requestedExpiresAt", "requirement"]);
+    expect(delegationRequest!.requestedExpiresAt).toBe(envelope.expiry);
     expect(delegationRequest).toMatchObject({ credential, presentation, requirement });
     expect(JSON.stringify(delegationRequest)).not.toMatch(/account|wallet|chain|credentialSpace|holderBinding|proof/i);
     expect(importedAuthorization).toBe(session.authorization);
@@ -225,6 +242,7 @@ describe("TC-500 accountless v4 recipient", () => {
       policyRoot: { cid: policyRoot },
       enforcementRoot: { cid: enforcementRoot },
       contentSourceDigestHex: "1".repeat(64),
+      expiry: wholeSeconds(now + 3600),
     } as any;
     const createSession = async (input: {
       key: Uint8Array;
@@ -283,5 +301,97 @@ describe("TC-500 accountless v4 recipient", () => {
       nodeAudience: nodeDid,
       attenuation: { ...expectedAttenuation, "tinycloud://owner-space/kv/private": { "tinycloud.kv/get": [{}] } },
     }));
+  });
+
+  describe("TC-531 durable and re-delegated access", () => {
+    const keyFor = (fill: number) => new Uint8Array(32).fill(fill);
+    const didFor = (key: Uint8Array) => didKeyFromEd25519PublicKey(ed25519.getPublicKey(key));
+    const nodeKey = keyFor(61);
+    const receiverKey = keyFor(62);
+    const delegateKey = keyFor(63);
+    const enforcerDid = didFor(keyFor(64));
+    const nodeDid = didFor(nodeKey);
+    const receiverDid = didFor(receiverKey);
+    const delegateDid = didFor(delegateKey);
+    const policyRoot = "bafy-policy-root-531";
+    const enforcementRoot = "bafy-enforcement-root-531";
+    const policyCid = "bafy-policy-531";
+    const resource = "tinycloud://owner-space/kv/shares/tc-531/document.txt";
+    const attenuation = { [resource]: { "tinycloud.kv/get": [{ type: "xyz.tinycloud.resource/selector", kind: "exact", value: resource }] } };
+    const now = Math.floor(Date.now() / 1000);
+    const envelope = {
+      version: 3,
+      actions: ["read"],
+      resource: { kind: "exact", path: "shares/tc-531/document.txt" },
+      target: { origin: "https://node.example", nodeAudience: enforcerDid },
+      attestedEnforcerBinding: { enforcerDid, nodeAudience: nodeDid },
+      policyCid,
+      policy: { ownerDid: "did:key:z6MkOwner", policyId: "pol_tc500", capabilityCeiling: [{ kind: "kv", resource, selector: "exact", actions: ["tinycloud.kv/get"] }] },
+      policyRoot: { cid: policyRoot },
+      enforcementRoot: { cid: enforcementRoot },
+      contentSourceDigestHex: "1".repeat(64),
+      expiry: wholeSeconds(now + 7200),
+    } as any;
+    const facts = policySessionFacts({ policyCid, policyRoot, enforcementRoot, enforcerDid, nodeAudience: nodeDid, recipientDid: receiverDid });
+    const session = (lifetime: number) => signLongLived(nodeKey, {
+      att: attenuation, aud: receiverDid, exp: now + lifetime, fct: [facts],
+      // Minted a little earlier, so a child can start strictly after it and still be valid now.
+      iss: `${nodeDid}#${nodeDid.slice("did:key:".length)}`, nbf: now - 10, nnc: "session-531", prf: [policyRoot, enforcementRoot],
+    });
+    const client = (holderDid: string, policyAuthorization: { authorization: string; cid: string; descendants?: { authorization: string; cid: string }[] }, fetchFn?: typeof fetch) => new ShareRecipientClient({
+      nodeOrigin: "https://node.example",
+      holderDid,
+      envelope,
+      sign: async (bytes) => ed25519.sign(bytes, holderDid === delegateDid ? delegateKey : receiverKey),
+      policyAuthorization,
+      ...(fetchFn === undefined ? {} : { fetchFn }),
+    });
+
+    test("accepts a session as long as the share and never longer", () => {
+      const hour = session(3600);
+      expect(client(receiverDid, { authorization: hour.authorization, cid: hour.cid })).toBeDefined();
+      const outlivesShare = session(7201);
+      expect(() => client(receiverDid, { authorization: outlivesShare.authorization, cid: outlivesShare.cid })).toThrow("signed binding");
+      const noExpiry = { ...envelope, expiry: "not a time" };
+      expect(() => new ShareRecipientClient({ nodeOrigin: "https://node.example", holderDid: receiverDid, envelope: noExpiry, policyAuthorization: { authorization: hour.authorization, cid: hour.cid } })).toThrow("signed binding");
+    });
+
+    test("opens through a verified re-delegation and invokes with the delegate's key", async () => {
+      const s0 = session(3600);
+      const child = (overrides: Record<string, unknown> = {}, key = receiverKey) => signLongLived(key, {
+        att: attenuation, aud: delegateDid, exp: now + 3599, fct: [{ ...facts, remainingRedelegationDepth: 7 }],
+        iss: `${receiverDid}#${receiverDid.slice("did:key:".length)}`, nbf: now - 9, nnc: "delegate-531", prf: [s0.cid],
+        ...overrides,
+      });
+      const d1 = child();
+      let invocation = "";
+      const fetchFn: typeof fetch = async (input, init) => {
+        expect(new URL(String(input)).pathname).toBe("/invoke");
+        invocation = new Headers(init?.headers).get("Authorization") ?? "";
+        return new Response(new Uint8Array([1]));
+      };
+      const delegated = client(delegateDid, { authorization: s0.authorization, cid: s0.cid, descendants: [{ authorization: d1.authorization, cid: d1.cid }] }, fetchFn);
+      expect((await delegated.establishPolicySession()).sessionId).toBe(d1.cid);
+      expect((await delegated.nativeInvoke({ action: "get", resource: envelope.resource })).ok).toBe(true);
+      const signed = verifyCompactUcanAuthorization(invocation);
+      expect(signed.payload.iss.split("#", 1)[0]).toBe(delegateDid);
+      expect(signed.payload.prf).toEqual([d1.cid]);
+
+      // The chain has to end at the key that uses it.
+      expect(() => client(receiverDid, { authorization: s0.authorization, cid: s0.cid, descendants: [{ authorization: d1.authorization, cid: d1.cid }] })).toThrow("does not end at this holder");
+      // Every link must extend its parent exactly.
+      for (const broken of [
+        child({ prf: ["bafy-some-other-parent"] }),
+        child({ exp: now + 3600 }),
+        child({ nbf: now - 10 }),
+        child({ fct: [{ ...facts, remainingRedelegationDepth: 8 }] }),
+        child({ fct: [{ ...facts, remainingRedelegationDepth: 7, ownerDid: "did:key:z6MkAttacker" }] }),
+        child({ att: { ...attenuation, "tinycloud://owner-space/kv/private": { "tinycloud.kv/get": [{}] } } }),
+        // Issued by a key other than the parent's audience.
+        child({ iss: `${delegateDid}#${delegateDid.slice("did:key:".length)}` }, delegateKey),
+      ]) {
+        expect(() => client(delegateDid, { authorization: s0.authorization, cid: s0.cid, descendants: [{ authorization: broken.authorization, cid: broken.cid }] })).toThrow("does not extend its parent");
+      }
+    });
   });
 });

@@ -21,6 +21,37 @@ export interface ShareReceiveOptions {
   readonly interaction: { readonly kind: "inline"; readonly mountTarget: Element | string };
   readonly signal?: AbortSignal;
   readonly onProgress?: (event: ShareReceiveProgress) => void;
+  /**
+   * Open through access another recipient delegated to this identity's key,
+   * instead of proving a credential.
+   */
+  readonly delegation?: ShareDelegation;
+}
+
+/** One signed link of a share's delegation chain. The owner's Node holds it too. */
+export interface ShareDelegationLink {
+  readonly authorization: string;
+  readonly cid: string;
+}
+
+/**
+ * A share's access re-delegated to another key: the admitted session first,
+ * then each re-delegation in order. It holds no secret; only the key it names
+ * can use it.
+ */
+export interface ShareDelegation {
+  readonly shareId: string;
+  readonly delegateDid: string;
+  readonly expiresAt: string;
+  readonly chain: readonly ShareDelegationLink[];
+}
+
+export interface ShareDelegateOptions {
+  /** DID of the key that should hold this share's access, such as an account session key. */
+  readonly to: string;
+  /** Defaults to the longest the current access allows. */
+  readonly expiresAt?: Date;
+  readonly signal?: AbortSignal;
 }
 
 export interface ShareReceivedContent {
@@ -68,6 +99,12 @@ export interface ReceivedShare {
   readonly shareId: string;
   get(): Promise<ShareReceivedContent>;
   importInto(accountClient: ShareImportAccountClient, options: ShareImportOptions): Promise<ShareImportResult>;
+  /**
+   * Re-delegate this share's access, including decryption, to another key.
+   * Proves the credential first if this share has not been opened yet. The
+   * delegate opens it with `receive(url, { delegation })`.
+   */
+  delegate(options: ShareDelegateOptions): Promise<ShareDelegation>;
 }
 
 export interface ShareReceiverClient extends ShareImportAccountClient {

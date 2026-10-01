@@ -5621,10 +5621,11 @@ export class TinyCloudNode {
     //    we don't mutate caller-owned data.
     const expandedEntries = this.expandPermissionEntries(permissions);
 
-    // 4. Compute expiration. `options.expiry` overrides the default 1h.
-    //    ms-format ("7d") or raw millisecond count both accepted. Cap
-    //    at the session's own expiry so we never emit a UCAN whose
-    //    validity exceeds the parent chain.
+    // 4. Compute expiration. `options.expiry` overrides the default
+    //    (DEFAULT_DELEGATION_EXPIRY_MS); ms-format ("7d") or a raw
+    //    millisecond count are both accepted. Cap at the session's own
+    //    expiry so we never emit a UCAN whose validity exceeds the parent
+    //    chain, which makes the default the longest the session allows.
     const now = new Date();
     const expiryMs = resolveExpiryMs(options?.expiry);
     const expirationTime = new Date(now.getTime() + expiryMs);
@@ -6956,9 +6957,8 @@ export class TinyCloudNode {
     const { abilities, rawAbilities } = this.buildActivationAbilities(delegation);
 
     const now = new Date();
-    // Use delegation expiry or 1 hour, whichever is sooner
-    const maxExpiry = new Date(now.getTime() + 60 * 60 * 1000);
-    const expirationTime = delegation.expiry < maxExpiry ? delegation.expiry : maxExpiry;
+    // The activated session lasts as long as the delegation it is proven by.
+    const expirationTime = delegation.expiry;
 
     // Prepare the session with:
     // - THIS user's address (we are the invoker)
@@ -7056,7 +7056,7 @@ export class TinyCloudNode {
       delegateDID: string;
       /** Whether to prevent the recipient from creating further sub-delegations */
       disableSubDelegation?: boolean;
-      /** Expiration time in milliseconds from now (must be before parent's expiry) */
+      /** Expiration in milliseconds from now; defaults to the parent's own expiry, the longest allowed. */
       expiryMs?: number;
       /** Explicit multi-resource projection, including encryption networks. */
       resources?: Array<{
@@ -7106,10 +7106,11 @@ export class TinyCloudNode {
       );
     }
 
-    // Calculate expiry - cap at parent's expiry
+    // Default to the longest a sub-delegation may last: its parent's expiry.
     const now = new Date();
-    const expiryMs = params.expiryMs ?? 60 * 60 * 1000;
-    const requestedExpiry = new Date(now.getTime() + expiryMs);
+    const requestedExpiry = params.expiryMs === undefined
+      ? parentDelegation.expiry
+      : new Date(now.getTime() + params.expiryMs);
     // Sub-delegation cannot outlive parent, so cap at parent's expiry
     const actualExpiry =
       requestedExpiry > parentDelegation.expiry ? parentDelegation.expiry : requestedExpiry;

@@ -133,6 +133,43 @@ describe("TinyCloudNode sharing", () => {
     expect((globalThis.fetch as any).mock.calls[0][0]).toBe("https://node.example/delegate");
   });
 
+  test("TC-531: a sub-delegation defaults to its parent's expiry, the longest it may last", async () => {
+    const wasmBindings = makeWasmBindings();
+    globalThis.fetch = mock(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ activated: ["share-delegation-cid"], skipped: [] }),
+      text: async () => "",
+    })) as unknown as typeof fetch;
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer: { signMessage: mock(async () => "signature") } as any,
+      wasmBindings,
+    });
+    (node as any)._address = OWNER;
+    (node as any)._chainId = 1;
+    const parentExpiry = new Date(Date.now() + 3 * 24 * 60 * 60_000);
+    const parent = {
+      cid: "parent-cid",
+      delegationHeader: { Authorization: "parent.header.signature" },
+      spaceId: SPACE,
+      path: "docs",
+      actions: ["tinycloud.kv/get"],
+      expiry: parentExpiry,
+      delegateDID: "did:key:z6MkReceiver",
+      ownerAddress: OWNER,
+      chainId: 1,
+    };
+    const longest = await node.createSubDelegation(parent, { path: "docs", actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkChild" });
+    expect(longest.expiry.getTime()).toBe(parentExpiry.getTime());
+    expect((wasmBindings.prepareSession as any).mock.calls[0][0].expirationTime).toBe(parentExpiry.toISOString());
+
+    const before = Date.now();
+    const hour = await node.createSubDelegation(parent, { path: "docs", actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkChild", expiryMs: 60 * 60_000 });
+    expect(hour.expiry.getTime()).toBeGreaterThanOrEqual(before + 60 * 60_000);
+    expect(hour.expiry.getTime()).toBeLessThan(parentExpiry.getTime());
+  });
+
   test("rejects every meaningful parent caveat branch before sub-delegation signing", async () => {
     const wasmBindings = makeWasmBindings();
     const signer = { signMessage: mock(async () => "signature") };

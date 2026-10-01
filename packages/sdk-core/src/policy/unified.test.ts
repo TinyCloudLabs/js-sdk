@@ -15,6 +15,7 @@ import {
   policyDigestHex,
   policyIdForDigestHex,
   ROOT_STATUS_V1_DOMAIN,
+  signCompactPolicyDescendant,
   signCompactUcanAuthorization,
   signCompactUcanRootAuthorization,
   projectUnifiedPolicyCapability,
@@ -347,5 +348,67 @@ describe("TC-405 unified policy contracts", () => {
       unknownAuditFact: "c".repeat(64),
     });
     expect(() => parsePolicySessionUcan(unknown)).toThrow("incomplete");
+  });
+
+  test("TC-531: descendants default to the parent's whole window and can be signed by a callback", async () => {
+    const vector = (await Bun.file(
+      `${import.meta.dir}/../../test-fixtures/policy-engine-vectors/unified-policy/compact-authorization.json`,
+    ).json()) as any;
+    const s1 = parseCompactUcanAuthorization(vector.s1.authorization);
+    const recipientKey = new Uint8Array(32).fill(9);
+    const base = {
+      parentAuthorization: vector.s0.authorization,
+      parentCid: vector.s0.cid,
+      issuerDid: vector.principals.recipientDid,
+      audienceDid: s1.payload.aud,
+      attenuation: s1.payload.att,
+      now: s1.payload.nbf,
+      nonce: s1.payload.nnc,
+    };
+    // A caller-owned signer produces the exact bytes of the private-key path.
+    const callbackSigned = await signCompactPolicyDescendant({
+      ...base,
+      expiresAt: s1.payload.exp,
+      sign: async (bytes) => ed25519.sign(bytes, recipientKey),
+    });
+    expect(callbackSigned.authorization).toBe(vector.s1.authorization);
+    // Without an expiry, the descendant lasts as long as its parent allows.
+    const session = parsePolicySessionUcan(vector.s0.authorization);
+    const longest = createCompactPolicyDescendant({ ...base, privateKey: recipientKey });
+    expect(longest.payload.exp).toBe(session.exp - 1);
+    expect(longest.payload.nbf).toBe(s1.payload.nbf);
+    expect(longest.payload.fct[0]!.remainingRedelegationDepth).toBe(session.fact.remainingRedelegationDepth - 1);
+    // A requested expiry is honoured but never exceeds the parent.
+    expect(createCompactPolicyDescendant({ ...base, privateKey: recipientKey, expiresAt: session.exp + 3600 }).payload.exp).toBe(session.exp - 1);
+    // A signer that is not the issuer's key is refused.
+    await expect(signCompactPolicyDescendant({
+      ...base,
+      sign: async (bytes) => ed25519.sign(bytes, new Uint8Array(32).fill(10)),
+    })).rejects.toThrow("signature is invalid");
+  });
+
+  test("TC-531: accepts long-lived sessions up to the 31-day root bound", async () => {
+    const vector = (await Bun.file(
+      `${import.meta.dir}/../../test-fixtures/policy-engine-vectors/unified-policy/compact-authorization.json`,
+    ).json()) as any;
+    const parsed = parseCompactUcanAuthorization(vector.s0.authorization);
+    const nodeKey = new Uint8Array(32).fill(29);
+    const nodeDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(nodeKey)]))}`;
+    // Signed directly: the compact invocation signer stops at 60 seconds.
+    const sessionLasting = (seconds: number) => {
+      const encode = (value: unknown) => Buffer.from(jcsCanonicalize(value)).toString("base64url");
+      const header = encode({ alg: "EdDSA", jwk: { alg: "EdDSA", crv: "Ed25519", kty: "OKP", x: Buffer.from(ed25519.getPublicKey(nodeKey)).toString("base64url") }, typ: "JWT", ucv: "0.10.0" });
+      const payload = encode({
+        ...parsed.payload,
+        exp: parsed.payload.nbf + seconds,
+        fct: [{ ...parsed.payload.fct[0]!, nodeAudience: nodeDid }],
+        iss: `${nodeDid}#${nodeDid.slice("did:key:".length)}`,
+      });
+      const signature = Buffer.from(ed25519.sign(new TextEncoder().encode(`${header}.${payload}`), nodeKey)).toString("base64url");
+      return `${header}.${payload}.${signature}`;
+    };
+    expect(parsePolicySessionUcan(sessionLasting(3600)).exp - parsed.payload.nbf).toBe(3600);
+    expect(parsePolicySessionUcan(sessionLasting(31 * 24 * 60 * 60)).exp).toBe(parsed.payload.nbf + 31 * 24 * 60 * 60);
+    expect(() => parsePolicySessionUcan(sessionLasting(31 * 24 * 60 * 60 + 1))).toThrow("fact is invalid");
   });
 });
