@@ -216,6 +216,14 @@ describe("CLI kv put --space", () => {
     expect(recorded.deletes).toEqual([]);
   });
 
+  test("list refuses an unaddressable --prefix before resolving authentication", async () => {
+    await runKv(["list", "--prefix", "with space/"]);
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({ code: "USAGE_ERROR", exitCode: 2 });
+    expect(recorded.resolveSpace).toEqual([]);
+  });
+
 
   test("routes through kvForSpace when --space is provided", async () => {
     await runKv(["put", "note", "hello", "--space", "applications"]);

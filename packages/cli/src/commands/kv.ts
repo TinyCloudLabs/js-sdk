@@ -239,6 +239,7 @@ export function registerKvCommand(program: Command): void {
     .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
     .action(async (options, cmd) => {
       try {
+        if (options.prefix) assertAddressableKey(options.prefix);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
