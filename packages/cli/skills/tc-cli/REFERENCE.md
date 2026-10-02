@@ -151,7 +151,7 @@ tc share publish ./note.md --json                                  # bearer link
 tc share publish ./note.md --to email:alice@example.com --notify   # addressed: exact email, emailed invitation
 tc share publish ./note.md --to did:pkh:eip155:1:0xRecipient...    # addressed: one DID
 tc share publish ./note.md --to domain:example.com                 # addressed: any verified address at the domain
-cat note.md | tc share publish - --name note.md --expires 7d
+cat note.md | tc share publish - --name note.md
 
 printf '%s' "$SHARE_URL" | tc share inspect - --json               # verify, print safe metadata
 printf '%s' "$SHARE_URL" | tc share receive - --stdout             # bearer link: verified bytes
@@ -167,6 +167,8 @@ tc share revoke <id>
 
 The fragment after `#` is the read authority. It never reaches a server in a query string or HTTP request; keep complete URLs out of logs. Human publish output is exactly one URL. Inspect never prints plaintext or secret-bearing fields. Receive uses a sanitized single-segment filename and refuses overwrite unless `--force`. `revoke` revokes addressed shares at the owner node and reports bearer retention honestly. Pre-cutover blob-backed and plaintext `?tc2` links are not accepted.
 
+Share publication without `--expires` requests a seven-day lifetime. For a session-only profile, the CLI clamps that request to the verified SIWE session expiry, prints a notice to stderr, and reports `"expiryClamped": true` in JSON. Explicit lifetimes beyond the session end, or with less than 60 seconds left after second-precision rounding, fail with `SESSION_LIFETIME_EXCEEDED`. Expired/invalid restored sessions and missing owner authority return `AUTH_REQUIRED`; rejected KV upload or delegation scopes return `PERMISSION_DENIED`. JSON publish output includes `expiryClamped: false` when no clamp was needed.
+
 ### Share Publish Options
 
 | Flag | Description | Default |
@@ -175,7 +177,7 @@ The fragment after `#` is the read authority. It never reaches a server in a que
 | `--name <filename>` | Safe filename for stdin | `stdin.md` |
 | `--to <target>` | `anyone`, recipient DID, email, or `domain:<name>` | `anyone` |
 | `--notify` | Send the addressed link through the email-only API | off |
-| `--expires <duration>` | Duration: `1h`, `7d`, `1w`, or ISO date | `7d` |
+| `--expires <duration>` | Duration: `1h`, `7d`, `1w`, or ISO date | implicit `7d`, clamped for session-only profiles |
 | `--media-type <type>` | Media type for a single input | inferred |
 | `--action <actions...>` | Addressed permission: `read`, `list`, or `edit` | `read` |
 | `--prefix` | Publish multiple inputs beneath one addressed prefix | off |

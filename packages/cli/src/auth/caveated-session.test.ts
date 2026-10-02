@@ -99,10 +99,10 @@ describe("a scoped session with signed caveats", () => {
     // The publish path restores and uploads; SharingService then fails closed
     // on caveated authority, since it cannot reproduce the caveats on a child
     // delegation (sdk-core SharingService.findSuitableKeyForDelegation).
-    await expect(publishBearer(nodeAndShareDouble())).rejects.toThrow("does not authorize this sharing delegation");
+    await expect(publishBearer(nodeAndShareDouble())).rejects.toMatchObject({ failure: { kind: "scope-denied", capability: "sharing delegation" } });
   });
 
-  test("an unrestricted session restored without a signer publishes a bearer share", async () => {
+  test("an unrestricted OpenKey session restored without a signer publishes a bearer share", async () => {
     await login();
     const published = await publishBearer(nodeAndShareDouble());
     expect(published).toMatchObject({ protocol: "tinycloud-share", metadata: { target: { kind: "bearer", spaceId } } });

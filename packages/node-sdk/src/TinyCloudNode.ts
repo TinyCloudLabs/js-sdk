@@ -1561,11 +1561,10 @@ export class TinyCloudNode {
 
   /**
    * Get the space ID for this user.
-   * Available after signIn(), or after restoreSession() without a signer
-   * (session-only mode, e.g. an OpenKey-delegated CLI profile).
+   * Available after signIn().
    */
   get spaceId(): string | undefined {
-    return this.currentTinyCloudSession()?.spaceId;
+    return this.auth?.tinyCloudSession?.spaceId;
   }
 
   /**

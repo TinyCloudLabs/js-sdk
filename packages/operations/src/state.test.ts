@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -351,7 +352,7 @@ test("waits rather than reclaiming an ownerless lock younger than the stale thre
 
 const holdFixture = new URL("../test-support/hold-profile-lock.ts", import.meta.url).pathname;
 const cycleFixture = new URL("../test-support/cycle-profile-lock.ts", import.meta.url).pathname;
-const LOCK_BARRIERS = ["OWNERLESS", "PUBLISH", "RELEASE", "RECOVERY"].map((name) => `TC_TEST_PROFILE_LOCK_${name}_BARRIER_DIR`);
+const LOCK_BARRIERS = ["OWNERLESS", "PUBLISH", "RELEASE", "RECOVERY", "CLAIM"].map((name) => `TC_TEST_PROFILE_LOCK_${name}_BARRIER_DIR`);
 
 /** Environment for a lock child process: this test's TC_HOME, no inherited barriers. */
 function lockChildEnv(home: string, extra: Record<string, string> = {}): Record<string, string | undefined> {
@@ -364,6 +365,7 @@ interface LockHolder {
   readonly pid: number;
   readonly readyPath: string;
   release(): Promise<void>;
+  kill(): void;
   finished(): Promise<[number, string]>;
 }
 
@@ -383,6 +385,7 @@ function spawnLockHolder(home: string, holders: string, profile: string, name: s
     pid: child.pid,
     readyPath,
     release: () => writeFile(releasePath, "release\n", "utf8"),
+    kill: () => child.kill("SIGKILL"),
     finished: async () => {
       const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
       return [exit, stderr];
@@ -545,6 +548,43 @@ test("a releasing holder's rmdir cannot hand the lock to two writers", async () 
   const [contenderExit, contenderError] = await contender.finished();
   expect(contenderExit, contenderError).toBe(0);
   expect(await violations(holders)).toEqual([]);
+}, 30_000);
+
+test("a holder killed after claiming its owner record leaves a lock the next writer reclaims once aged", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const lockPath = profileLockPath(profile);
+  const barrier = join(home, "claim-barrier");
+  await mkdir(barrier, { recursive: true });
+
+  // H releases: renames owner.json to its `.release-*` claim, then is killed.
+  const killed = spawnLockHolder(home, holders, profile, "killed", { timeoutMs: 10_000, staleAfterMs: 30_000, holdUntilReleased: false, env: { TC_TEST_PROFILE_LOCK_CLAIM_BARRIER_DIR: barrier } });
+  await waitForProfileLockProtocol(join(barrier, `ready-${killed.pid}-${profile}`), "H holding its claimed owner record");
+  killed.kill();
+  await killed.finished();
+  const left = await readdir(lockPath);
+  expect(left).toHaveLength(1);
+  expect(left[0]).toMatch(/^\.release-[0-9a-f-]+\.json$/);
+  // A crashed acquirer's staged owner file, long abandoned.
+  const staged = join(profilePath(profile), `.lock-owner-${randomUUID()}.tmp`);
+  await writeFile(staged, "{}\n", "utf8");
+  const aMinuteAgo = new Date(Date.now() - 60_000);
+  await utimes(staged, aMinuteAgo, aMinuteAgo);
+
+  // While the claim is fresh the lock is not reclaimed...
+  await expect(withProfileLock(profile, async () => undefined, { timeoutMs: 200, staleAfterMs: 30_000, retryMs: 5 }))
+    .rejects.toBeInstanceOf(ProfileLockTimeoutError);
+  // ...once aged, the next writer removes the claim, the directory and the staged file.
+  await ageLock(profile);
+  const next = spawnLockHolder(home, holders, profile, "next", { timeoutMs: 10_000, staleAfterMs: 30_000 });
+  await waitForProfileLockProtocol(next.readyPath, "the next writer reclaiming");
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: next.pid });
+  expect(await exists(staged)).toBe(false);
+  await next.release();
+  const [exit, stderr] = await next.finished();
+  expect(exit, stderr).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+  expect(await exists(lockPath)).toBe(false);
 }, 30_000);
 
 test("many processes reclaiming eagerly from an aged empty lock never overlap or leave staging files", async () => {

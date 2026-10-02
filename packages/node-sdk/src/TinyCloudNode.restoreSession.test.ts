@@ -225,7 +225,6 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       actions: ["tinycloud.kv/get"],
       caveats: [caveat],
     }]);
-    expect(node.spaceId).toBe(proof.spaceId);
   });
 
   test("cryptographically binds persisted SIWE authority before trusting its recap, expiry, CID, or header", async () => {

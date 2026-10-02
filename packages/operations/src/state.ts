@@ -5,6 +5,7 @@ import {
   link,
   mkdir,
   readFile,
+  readdir,
   rename,
   rmdir,
   rm,
@@ -26,6 +27,7 @@ const TEST_LOCK_RECOVERY_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DI
 const TEST_LOCK_OWNERLESS_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_OWNERLESS_BARRIER_DIR";
 const TEST_LOCK_PUBLISH_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_PUBLISH_BARRIER_DIR";
 const TEST_LOCK_RELEASE_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RELEASE_BARRIER_DIR";
+const TEST_LOCK_CLAIM_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_CLAIM_BARRIER_DIR";
 const invocationStateRoot = new AsyncLocalStorage<string>();
 /** One acquisition of a profile lock; `active` is cleared before release. */
 interface HeldProfileLock {
@@ -434,6 +436,7 @@ async function releaseProfileLock(profile: string, lockPath: string, token: stri
     if (isErrno(error, "ENOENT")) return;
     throw error;
   }
+  await waitForTestBarrier(TEST_LOCK_CLAIM_BARRIER_DIR, profile);
 
   const claimed = await readJson<{ token?: unknown }>(claimPath).catch(() => null);
   if (claimed?.token !== token) {
@@ -495,11 +498,14 @@ async function signalTestLockContention(profile: string): Promise<void> {
 
 /**
  * Reclaims a lock directory with no owner record that is older than the
- * stale threshold: one left by a crash, or by an older release. It is only
- * ever `rmdir`ed, which succeeds only while it is empty, so a published lock
- * (it holds owner.json) is never removed. If the directory was a contender's
- * lock not yet published, that contender's `link` fails with ENOENT and it
- * retries without holding anything.
+ * stale threshold: one left by a crash, or by an older release. A holder or
+ * recoverer killed after claiming owner.json (renaming it to `.release-*` or
+ * `.stale-*`) leaves only that claim file behind; such claim files are
+ * removed first. owner.json is never touched, and the directory itself is
+ * only `rmdir`ed, which succeeds only while it is empty, so a published lock
+ * is never removed. If the directory was a contender's lock not yet
+ * published, that contender's `link` fails with ENOENT and it retries
+ * without holding anything.
  */
 async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfterMs: number): Promise<boolean> {
   try {
@@ -510,10 +516,37 @@ async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfte
   }
   await waitForTestBarrier(TEST_LOCK_OWNERLESS_BARRIER_DIR, profile);
   try {
+    const entries = await readdir(lockPath);
+    if (entries.includes("owner.json")) return false;
+    for (const name of entries.filter((entry) => ABANDONED_CLAIM.test(entry))) {
+      await rm(join(lockPath, name), { force: true });
+    }
     await rmdir(lockPath);
-    return true;
   } catch {
     return false;
+  }
+  await removeAgedOwnerFiles(lockPath, staleAfterMs);
+  return true;
+}
+
+/** Owner records claimed for release or stale recovery (see releaseProfileLock, recoverStaleLock). */
+const ABANDONED_CLAIM = /^\.(?:release|stale)-[0-9a-f-]+\.json$/;
+/** Owner files staged by publishProfileLock beside `.lock`. */
+const STAGED_OWNER = /^\.lock-owner-[0-9a-f-]+\.tmp$/;
+
+/**
+ * Removes owner files a crashed acquirer staged beside `.lock`. A live
+ * acquirer's staged file exists only for its write and link, so only files
+ * older than the stale threshold are removed. Runs after a recovery, never
+ * on the uncontended path.
+ */
+async function removeAgedOwnerFiles(lockPath: string, staleAfterMs: number): Promise<void> {
+  const directory = dirname(lockPath);
+  const names = await readdir(directory).catch(() => []);
+  for (const name of names.filter((entry) => STAGED_OWNER.test(entry))) {
+    const path = join(directory, name);
+    const aged = await stat(path).then(({ mtimeMs }) => Date.now() - mtimeMs >= staleAfterMs, () => false);
+    if (aged) await rm(path, { force: true }).catch(() => undefined);
   }
 }
 
@@ -553,6 +586,7 @@ async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs:
 
   await rm(claimPath, { force: true });
   await rmdir(lockPath).catch(() => undefined);
+  await removeAgedOwnerFiles(lockPath, staleAfterMs);
   return true;
 }
 

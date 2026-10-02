@@ -35,7 +35,8 @@ describe("tc share command contract", () => {
       profileName: "remote",
     }));
     expect(sessionAuth.code).toBe("AUTH_REQUIRED");
-    expect(sessionAuth.message).toContain("tc --profile remote auth login");
+    expect(sessionAuth.message).toContain("tc --profile remote auth login --device --manifest builtin:share-publishing");
+    expect(sessionAuth.message).toContain("tc --profile remote enable share");
     expect(sessionAuth.message).not.toContain("--method local");
 
     const scope = shareCliError(new SharePublishAuthorityError({
@@ -48,6 +49,18 @@ describe("tc share command contract", () => {
     expect(scope.code).toBe("PERMISSION_DENIED");
     expect(scope.message).toContain("tinycloud.kv/put");
     expect(scope.message).toContain("tc --profile wallet auth login --method local");
+    expect(scope.message).not.toContain("builtin:share-publishing");
+
+    const openKeyScope = shareCliError(new SharePublishAuthorityError({
+      kind: "scope-denied",
+      capability: "sharing delegation",
+      requiredAction: "tinycloud.kv/get",
+      localKey: false,
+      profileName: "publisher",
+    }));
+    expect(openKeyScope.code).toBe("PERMISSION_DENIED");
+    expect(openKeyScope.message).toContain("builtin:share-publishing scope");
+    expect(openKeyScope.message).toContain("tc --profile publisher auth login --device --manifest builtin:share-publishing");
 
     const beyondSession = shareCliError(new SharePublishAuthorityError({
       kind: "lifetime-exceeds-session",
@@ -74,7 +87,7 @@ describe("tc share command contract", () => {
     }));
     expect(sessionTooClose.code).toBe("AUTH_REQUIRED");
     expect(sessionTooClose.message).toContain("log in again");
-    expect(sessionTooClose.message).toContain("tc --profile remote auth login");
+    expect(sessionTooClose.message).toContain("tc --profile remote auth login --device --manifest builtin:share-publishing");
 
     const originMismatch = shareCliError(new SharePublishAuthorityError({ kind: "origin-mismatch" }));
     expect(originMismatch.code).toBe("ORIGIN_MISMATCH");
