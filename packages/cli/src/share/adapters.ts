@@ -46,23 +46,26 @@ function throwKvUploadFailure(error: unknown): never {
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
 }
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
+const URI_SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+/**
+ * The SDK puts KV keys unescaped into the Node resource URI, so a stored name
+ * keeps only URI-safe characters. It stays readable and keeps its extension
+ * because the share viewer titles and renders bearer links by this segment;
+ * the original filename travels separately as display metadata.
+ */
 function safeStorageFilename(filename: string): string {
-  return `file-${Buffer.from(filename, "utf8").toString("base64url")}`;
+  if (URI_SAFE_FILENAME.test(filename)) return filename;
+  const dot = filename.lastIndexOf(".");
+  const extension = dot > 0 && /^[A-Za-z0-9]{1,16}$/.test(filename.slice(dot + 1)) ? filename.slice(dot + 1) : "";
+  const stem = (extension === "" ? filename : filename.slice(0, dot))
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .slice(0, 100)
+    .replace(/^[-.]+|[-.]+$/g, "");
+  return `${stem === "" ? "share" : stem}${extension === "" ? "" : `.${extension}`}`;
 }
-
-function displayFilenameFromStoragePath(path: string): string {
-  const segment = path.split("/").at(-1) ?? "";
-  if (!segment.startsWith("file-")) return segment || "share.md";
-  try {
-    const encoded = segment.slice(5);
-    const filename = Buffer.from(encoded, "base64url").toString("utf8");
-    if (Buffer.from(filename, "utf8").toString("base64url") === encoded) return filename;
-  } catch {
-    // Unrecognized storage segments are not valid encoded filenames.
-  }
-  return segment || "share.md";
-}
-
 
 export class ShareAuthorityError extends Error {
   readonly code: "AUTH_REQUIRED" | "UNAVAILABLE";
@@ -540,7 +543,7 @@ export function createShareAuthorityAdapters(input: {
     if (!received.ok) throw new Error("native share could not be verified");
     const value = await received.data.kv.get<Uint8Array>("", { binary: true });
     if (!value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("native share content could not be read");
-    return { bytes: value.data.data.slice(), filename: displayFilenameFromStoragePath(received.data.path) };
+    return { bytes: value.data.data.slice(), filename: received.data.path.split("/").at(-1) || "share.md" };
   };
   return {
     targetAdapter,

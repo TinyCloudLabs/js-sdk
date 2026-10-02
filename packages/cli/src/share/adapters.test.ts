@@ -209,7 +209,7 @@ describe("TinyCloud share authority adapter", () => {
     })).rejects.toMatchObject({ failure: { kind: "origin-mismatch" } });
     expect(uploadedSpaces).toEqual([restoredSpaceId]);
   });
-  it("publishes special filenames at a reversible safe path and preserves display metadata", async () => {
+  it("publishes special filenames at a readable URI-safe path and preserves display metadata", async () => {
     const { targetAdapter } = createShareAuthorityAdapters({
       origin: "https://share.example",
       profileName: async () => "test",
@@ -220,8 +220,17 @@ describe("TinyCloud share authority adapter", () => {
         credentialsOrigin: "https://credentials.example",
       })) as unknown as typeof globalThis.fetch,
     });
-    const filenames = ["Edge test (A) - read.md", "Résumé 東京.md", "question?#percent%.md"];
-    for (const filename of filenames) {
+    const storedAs = {
+      "report.md": "report.md",
+      "Q3.v2_final-draft.html": "Q3.v2_final-draft.html",
+      "Edge test (A) - read.md": "Edge-test-A-read.md",
+      "Résumé 東京.md": "Resume.md",
+      "question?#percent%.md": "question-percent.md",
+      "東京.html": "share.html",
+      "my notes.tar.gz": "my-notes.tar.gz",
+      "no extension here": "no-extension-here",
+    };
+    for (const [filename, stored] of Object.entries(storedAs)) {
       for (const target of [{ kind: "bearer" as const }, { kind: "email" as const, address: "alice@example.com" }]) {
         const published = await targetAdapter.publish({
           source: new TextEncoder().encode("filename round trip"),
@@ -234,8 +243,8 @@ describe("TinyCloud share authority adapter", () => {
         if ("state" in published) throw new Error("expected publication");
         expect(published.metadata.display.filename).toBe(filename);
         const path = published.metadata.resource.path;
-        expect(path).toMatch(/^(?:xyz\.tinycloud\.share\/)?shares?\/[a-f0-9]+\/file-[A-Za-z0-9_-]+$/);
-        expect(Buffer.from(path.split("/").at(-1)!.slice(5), "base64url").toString("utf8")).toBe(filename);
+        expect(path).toMatch(/^(?:xyz\.tinycloud\.share\/)?shares?\/[a-f0-9]+\/[A-Za-z0-9][A-Za-z0-9._-]*$/);
+        expect(path.split("/").at(-1)).toBe(stored);
         expect(uploadedPaths.at(-1)).toBe(path);
       }
     }
