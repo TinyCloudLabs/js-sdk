@@ -1,13 +1,16 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
-import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
+import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
-import { permissionTuples, sessionExpiresAt, SIGNED_RECAP } from "./scoped-login.js";
+import { normalizePkhIdentifier } from "../lib/space.js";
+import { keyToDID } from "./local-key.js";
+import { CLOCK_SKEW_MS, isLocalOwnerProfile, permissionTuples, sessionExpiresAt, SIGNED_RECAP } from "./scoped-login.js";
 
 /** Scoped and device logins never turn a local-owner-key profile into a mixed OpenKey profile. */
 export function assertNotLocalOwner(profileName: string, profile: ProfileConfig | null, flow: string): void {
-  if (profile === null || resolveProfilePosture(profile) !== "local-owner-key") return;
+  if (profile === null || !isLocalOwnerProfile(profile)) return;
   throw new CLIError(
     "LOCAL_OWNER_PROFILE",
     `Profile "${profileName}" holds a local owner key. ${flow} would turn it into an OpenKey profile while keeping that key. Use a separate profile: \`tc init --name publisher --key-only\`, then \`tc --profile publisher auth login --device --manifest ...\`.`,
@@ -39,27 +42,59 @@ export async function readProfileSnapshot(profileName: string): Promise<ProfileS
 }
 
 /**
+ * Whether profile, key and session describe one login. A crash between the
+ * commit's writes (or an older release) can leave a session beside the wrong
+ * key or profile; such state is never silently replaced.
+ */
+function inconsistency(snapshot: ProfileSnapshot): string | undefined {
+  const { profile, key, session } = snapshot;
+  if (session === null) return undefined;
+  const sessionKeyDid = typeof session.verificationMethod === "string" ? session.verificationMethod.split("#")[0] : undefined;
+  if (sessionKeyDid !== undefined && key !== null && keyToDID(key).split("#")[0] !== sessionKeyDid) return "the session belongs to another key";
+  if (sessionKeyDid !== undefined && typeof profile?.sessionDid === "string" && profile.sessionDid.split("#")[0] !== sessionKeyDid) {
+    return "the session belongs to another session DID than the profile records";
+  }
+  if (typeof session.spaceId === "string" && typeof profile?.spaceId === "string" &&
+    normalizePkhIdentifier(session.spaceId) !== normalizePkhIdentifier(profile.spaceId)) return "the session's space differs from the profile's";
+  if (typeof session.ownerDid === "string" && typeof profile?.ownerDid === "string" &&
+    normalizePkhIdentifier(session.ownerDid) !== normalizePkhIdentifier(profile.ownerDid)) return "the session's owner differs from the profile's";
+  return undefined;
+}
+
+/**
  * A live session may be replaced only by a scope that keeps everything it
- * holds, for the same owner (renewal, or widening a narrowed approval).
- * Only signed-recap permissions are trusted to describe what a session holds.
+ * holds, for the same owner, and lasts at least as long (renewal, or
+ * widening a narrowed approval). Only signed-recap permissions are trusted to
+ * describe what a session holds; inconsistent state is never replaced
+ * implicitly. Callers skip this with --replace-session.
  */
 export function assertSessionReplaceable(
   profileName: string,
-  session: Record<string, unknown> | null,
+  snapshot: ProfileSnapshot,
   ownerDid: string | undefined,
   scope: readonly PermissionEntry[],
+  newExpiresAt?: string,
 ): void {
+  const problem = inconsistency(snapshot);
+  if (problem !== undefined) {
+    throw new CLIError(
+      "PROFILE_STATE_INCONSISTENT",
+      `Profile "${profileName}" is inconsistent (${problem}), possibly from an interrupted write. Nothing was saved. Check \`tc --profile ${profileName} context\`, then pass --replace-session to replace this state, or use a new profile.`,
+      ExitCode.ERROR,
+    );
+  }
+  const { session } = snapshot;
   if (session === null) return;
   const expiresAt = sessionExpiresAt(session);
   if (expiresAt !== null && Date.parse(expiresAt) <= Date.now()) return;
-  if (ownerDid !== undefined && session.permissionsSource === SIGNED_RECAP && Array.isArray(session.permissions)) {
-    const next = permissionTuples(scope, ownerDid);
-    if ([...permissionTuples(session.permissions as PermissionEntry[], ownerDid)].every((tuple) => next.has(tuple))) return;
-  }
+  const keepsScope = ownerDid !== undefined && session.permissionsSource === SIGNED_RECAP && Array.isArray(session.permissions) &&
+    [...permissionTuples(session.permissions as PermissionEntry[], ownerDid)].every((tuple) => permissionTuples(scope, ownerDid).has(tuple));
+  const shortens = newExpiresAt !== undefined && expiresAt !== null && Date.parse(newExpiresAt) < Date.parse(expiresAt) - CLOCK_SKEW_MS;
+  if (keepsScope && !shortens) return;
   const space = typeof session.spaceId === "string" ? session.spaceId : "an unknown space";
   throw new CLIError(
     "SESSION_IN_USE",
-    `Profile "${profileName}" has a live session for ${space}${expiresAt ? ` until ${expiresAt}` : ""} that this login would narrow or replace, dropping that authority. Nothing was saved. ` +
+    `Profile "${profileName}" has a live session for ${space}${expiresAt ? ` until ${expiresAt}` : ""} that this login would ${keepsScope ? "shorten" : "narrow or replace"}, dropping that authority. Nothing was saved. ` +
       "Keep the user's existing profiles: use a new profile name (`tc init --name publisher --key-only`, then `tc --profile publisher auth login --device --manifest ...`), or pass --replace-session to replace this session.",
     ExitCode.USAGE_ERROR,
   );
@@ -86,10 +121,29 @@ export interface LoginCommit {
 }
 
 /**
+ * The commit happens after the owner approved, so wait out a crashed holder:
+ * longer than the store's 30 s stale-lock threshold, after which a dead
+ * holder's lock is reclaimed.
+ */
+const COMMIT_LOCK_TIMEOUT_MS = 45_000;
+
+/** Put back the state read under the lock; `null` removes the file. */
+async function restore(profileName: string, state: ProfileSnapshot): Promise<void> {
+  if (state.key === null) await ProfileManager.removeKey(profileName);
+  else await ProfileManager.setKey(profileName, state.key);
+  if (state.session === null) await ProfileManager.clearSession(profileName);
+  else await ProfileManager.setSession(profileName, state.session);
+  if (state.profile === null) await ProfileManager.removeProfileConfig(profileName);
+  else await ProfileManager.setProfile(profileName, state.profile);
+}
+
+/**
  * Compare-and-commit under the profile lock: re-read the profile, key and
  * session, refuse if they changed since `snapshot` (another login, a key
  * rotation, a logout), re-check that the approved scope keeps the live
- * session's authority, then write key, session and profile together.
+ * session's authority, then write key, session and profile. If any write
+ * fails, the state read under the lock is restored before the lock is
+ * released, so no reader sees a new session beside an old profile.
  */
 export async function commitLogin(profileName: string, snapshot: ProfileSnapshot, commit: LoginCommit): Promise<void> {
   await ProfileManager.withLock(profileName, async () => {
@@ -106,10 +160,23 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
       );
     }
     if (commit.approved && !commit.approved.replaceSession) {
-      assertSessionReplaceable(profileName, current.session, commit.approved.ownerDid, commit.approved.scope);
+      const newExpiresAt = sessionExpiresAt(commit.session) ?? undefined;
+      assertSessionReplaceable(profileName, current, commit.approved.ownerDid, commit.approved.scope, newExpiresAt);
     }
-    await ProfileManager.setKey(profileName, commit.key);
-    await ProfileManager.setSession(profileName, commit.session);
-    await ProfileManager.setProfile(profileName, commit.profile);
+    try {
+      await ProfileManager.setKey(profileName, commit.key);
+      await ProfileManager.setSession(profileName, commit.session);
+      await ProfileManager.setProfile(profileName, commit.profile);
+    } catch (error) {
+      await restore(profileName, current).catch(() => undefined);
+      throw error;
+    }
+  }, { timeoutMs: COMMIT_LOCK_TIMEOUT_MS }).catch((error: unknown) => {
+    if (!(error instanceof ProfileLockTimeoutError)) throw error;
+    throw new CLIError(
+      "PROFILE_LOCK_TIMEOUT",
+      `Another tc process kept profile "${profileName}" locked for ${COMMIT_LOCK_TIMEOUT_MS / 1000} s, so the approved login was not saved. Wait for it to finish (a crashed process's lock is reclaimed after 30 s) and run the login again.`,
+      ExitCode.ERROR,
+    );
   });
 }

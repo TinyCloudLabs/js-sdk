@@ -12,45 +12,54 @@ export const CLOCK_SKEW_MS = 30_000;
 export const SIGNED_RECAP = "signed-recap";
 
 /**
- * A requested `--expiry`: a lifetime counted from approval, or an absolute
- * deadline. Absolute deadlines stay timestamps so time spent waiting for
- * consent never extends them.
+ * A requested `--expiry`, as a lifetime. OpenKey signs approval time plus a
+ * lifetime, so an absolute deadline cannot be honored once approval takes
+ * longer than the clock-skew allowance; only durations are accepted.
  */
-export type RequestedExpiry = { readonly durationMs: number } | { readonly notAfter: number };
+export interface RequestedExpiry {
+  readonly durationMs: number;
+}
 
-/** Parse a `--expiry` value: `30m`/`7d`/`1w`, raw milliseconds, or an ISO date. */
+/** Parse an OpenKey login `--expiry`: `30m`/`7d`/`1w` or raw milliseconds. */
 export function parseRequestedExpiry(value: string | number): RequestedExpiry {
   if (typeof value === "number") return { durationMs: value };
   if (/^\d+(m|h|d|w)$/.test(value)) return { durationMs: parseDuration(value) };
-  const notAfter = Date.parse(value);
-  if (!Number.isFinite(notAfter)) {
-    throw new CLIError("INVALID_EXPIRY", `Invalid --expiry "${value}". Use a duration like 1h or 7d, milliseconds, or an ISO date.`, ExitCode.USAGE_ERROR);
-  }
-  if (notAfter <= Date.now()) {
-    throw new CLIError("INVALID_EXPIRY", `--expiry "${value}" is in the past.`, ExitCode.USAGE_ERROR);
-  }
-  return { notAfter };
+  throw new CLIError(
+    "INVALID_EXPIRY",
+    Number.isFinite(Date.parse(value))
+      ? `--expiry "${value}" is a date. OpenKey signs approval time plus a lifetime, so use a duration such as 2h or 7d.`
+      : `Invalid --expiry "${value}". Use a duration such as 1h or 7d, or milliseconds.`,
+    ExitCode.USAGE_ERROR,
+  );
 }
 
 /** Latest signed expiry the request allows, evaluated when the approval arrives. */
 export function expiryLimit(expiry: RequestedExpiry): number {
-  return ("notAfter" in expiry ? expiry.notAfter : Date.now() + expiry.durationMs) + CLOCK_SKEW_MS;
+  return Date.now() + expiry.durationMs + CLOCK_SKEW_MS;
 }
 
 /** OpenKey's minimum delegation lifetime; it raises anything shorter. */
 const OPENKEY_MIN_LIFETIME_SECONDS = 60;
 
 /**
- * `--expiry` as OpenKey's `/delegate?expiry=` accepts it (`<seconds>s`).
- * OpenKey rejects ISO dates only after the owner opens the page and raises
- * lifetimes under a minute, so convert or refuse here, before consent.
+ * `--expiry` as OpenKey's `/delegate?expiry=` accepts it (`<seconds>s`);
+ * OpenKey raises lifetimes under a minute, so refuse those before consent.
  */
 export function openKeyExpiryParam(expiry: RequestedExpiry): string {
-  const seconds = Math.floor(("notAfter" in expiry ? expiry.notAfter - Date.now() : expiry.durationMs) / 1000);
+  const seconds = Math.floor(expiry.durationMs / 1000);
   if (seconds < OPENKEY_MIN_LIFETIME_SECONDS) {
-    throw new CLIError("INVALID_EXPIRY", "--expiry must leave at least 1 minute: OpenKey does not sign shorter sessions.", ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_EXPIRY", "--expiry must be at least 1 minute: OpenKey does not sign shorter sessions.", ExitCode.USAGE_ERROR);
   }
   return `${seconds}s`;
+}
+
+/**
+ * Whether a profile holds a local owner key. An explicit posture does not
+ * hide `authMethod: "local"` or a stored private key, which `tc auth login
+ * --method local` leaves on any profile it signs in.
+ */
+export function isLocalOwnerProfile(profile: ProfileConfig): boolean {
+  return resolveProfilePosture(profile) === "local-owner-key" || profile.authMethod === "local" || typeof profile.privateKey === "string";
 }
 
 /**
@@ -60,7 +69,31 @@ export function openKeyExpiryParam(expiry: RequestedExpiry): string {
  * key itself, is not pinned to an OpenKey identity.
  */
 export function pinnedOwner(profile: ProfileConfig | null | undefined): string | undefined {
-  return profile && resolveProfilePosture(profile) !== "local-owner-key" ? profile.ownerDid : undefined;
+  return profile && !isLocalOwnerProfile(profile) ? profile.ownerDid : undefined;
+}
+
+/**
+ * Session fields that state authority. They are set only from a verified
+ * proof, never copied from an OpenKey callback.
+ */
+const TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime"];
+
+/** A callback-supplied session with every authority claim removed. */
+export function withoutTrustFields(session: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(session).filter(([name]) => !TRUST_FIELDS.includes(name)));
+}
+
+/** A session whose authority fields come only from the verified proof. */
+export function withVerifiedAuthority(session: Record<string, unknown>, signed: SignedSession): Record<string, unknown> & SignedSession {
+  return {
+    ...withoutTrustFields(session),
+    ownerDid: signed.ownerDid,
+    permissions: signed.permissions,
+    permissionsSource: SIGNED_RECAP,
+    expiresAt: signed.expiresAt,
+    expiry: signed.expiresAt,
+    expirationTime: signed.expiresAt,
+  };
 }
 
 /** The owner a login must match: the profile's pinned owner, or `--owner`. They must agree when both exist. */
@@ -212,5 +245,5 @@ export function verifyScopedLogin(
   // cannot override the verified values. Never accept a returned private key.
   // `permissionsSource` marks `permissions` as the signed recap, so a later
   // login may rely on it to tell whether replacing this session drops authority.
-  return { ...data, jwk: key, ...signed, permissionsSource: SIGNED_RECAP, expiry: signed.expiresAt, expirationTime: signed.expiresAt };
+  return withVerifiedAuthority({ ...data, jwk: key }, signed);
 }

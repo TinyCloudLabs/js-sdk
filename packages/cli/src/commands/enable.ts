@@ -11,7 +11,7 @@ export function registerEnableCommand(program: Command): void {
 
   enable.command("share")
     .description("Approve Share publishing scope through OpenKey device authorization (same as `tc auth login --device --manifest builtin:share-publishing`). Use a dedicated profile, e.g. `tc init --name publisher --key-only && tc --profile publisher enable share`; keep existing profiles for their apps.")
-    .option("--replace-session", "Replace this profile's live session even though its scope differs (prefer a new profile)")
+    .option("--replace-session", "Replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .action(async (options, command) => {
       try {
         const globalOptions = command.optsWithGlobals();

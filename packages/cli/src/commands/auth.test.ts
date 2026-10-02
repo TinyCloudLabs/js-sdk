@@ -178,6 +178,14 @@ function makeProfile(overrides: Partial<ProfileLike> = {}): ProfileLike {
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     // Real logins commit under the profile lock; these mocks keep state in memory.
+    updateProfile: async (name: string, update: (profile: ProfileLike) => ProfileLike) => {
+      const current = profiles.get(name);
+      if (!current) throw new Error(`Profile "${name}" does not exist.`);
+      const next = update(current);
+      profiles.set(name, next);
+      recorded.setProfiles.push({ profile: name, data: next });
+      return next;
+    },
     withLock: async <T>(_name: string, action: () => Promise<T>) => action(),
     resolveContext: async () => ({
       profile: activeProfile,
@@ -468,7 +476,8 @@ describe("CLI auth rotate command", () => {
       },
     ]);
     expect(recorded.startAuthFlows[0]?.options.jwk).not.toBe(oldJwk);
-    expect(sessions.get("default")).toEqual(openKeyDelegation);
+    // The callback state plus the authority fields verification set.
+    expect(sessions.get("default")).toMatchObject({ ...openKeyDelegation, permissionsSource: "signed-recap" });
     expect(profiles.get("default")).toEqual(expect.objectContaining({
       did: "did:key:new-openkey",
       sessionDid: "did:key:new-openkey",

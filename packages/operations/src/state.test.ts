@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -333,19 +333,73 @@ test("times out rather than reclaiming a lock held by a live process", async () 
   )).rejects.toBeInstanceOf(ProfileLockTimeoutError);
 });
 
-test("times out rather than reclaiming an ownerless stale-looking lock", async () => {
+test("waits rather than reclaiming an ownerless lock younger than the stale threshold", async () => {
   await isolatedHome();
   const profile = "delegate";
   await mkdir(profileLockPath(profile), { recursive: true });
 
+  // A live acquirer may be between mkdir and publishing its owner file.
   await expect(upsertProfileRecord(
     profile,
     "auth-requests",
     "req-ownerless-timeout",
     request("req-ownerless-timeout"),
     (candidate) => candidate.requestId,
-    { timeoutMs: 30, retryMs: 2, staleAfterMs: 1 },
+    { timeoutMs: 30, retryMs: 2, staleAfterMs: 60_000 },
   )).rejects.toBeInstanceOf(ProfileLockTimeoutError);
+});
+
+test("reclaims an ownerless lock directory older than the stale threshold", async () => {
+  await isolatedHome();
+  const profile = "delegate";
+  await mkdir(profileLockPath(profile), { recursive: true });
+  // The holder crashed between mkdir and publishing its owner file a minute ago.
+  const aMinuteAgo = new Date(Date.now() - 60_000);
+  await utimes(profileLockPath(profile), aMinuteAgo, aMinuteAgo);
+
+  const records = await upsertProfileRecord(
+    profile,
+    "auth-requests",
+    "req-ownerless-reclaimed",
+    request("req-ownerless-reclaimed"),
+    (candidate) => candidate.requestId,
+    { timeoutMs: 1_000, retryMs: 2, staleAfterMs: 30_000 },
+  );
+  expect(records.map((record) => record.requestId)).toEqual(["req-ownerless-reclaimed"]);
+});
+
+test("lock ownership ends with the critical section: deferred work waits for the lock", async () => {
+  await isolatedHome();
+  const profile = "delegate";
+  const deferredStart = Promise.withResolvers<void>();
+  let deferred: Promise<string> | undefined;
+  await withProfileLock(profile, async () => {
+    // Started inside the section, runs after it returned.
+    deferred = deferredStart.promise.then(() => withProfileLock(profile, async () => "entered", { timeoutMs: 50, retryMs: 2 }));
+  });
+  const holderReleased = Promise.withResolvers<void>();
+  const holding = withProfileLock(profile, async () => {
+    deferredStart.resolve();
+    await deferred!.catch(() => undefined);
+    holderReleased.resolve();
+  });
+  await expect(deferred!).rejects.toBeInstanceOf(ProfileLockTimeoutError);
+  await holderReleased.promise;
+  await holding;
+});
+
+test("a lock held in one state root does not stand in for another root's lock", async () => {
+  const rootA = await mkdtemp(join(tmpdir(), "tc-lock-root-a-"));
+  const rootB = await mkdtemp(join(tmpdir(), "tc-lock-root-b-"));
+  try {
+    const innerLockSeen = await withTinyCloudStateRoot(rootA, () => withProfileLock("delegate", () =>
+      withTinyCloudStateRoot(rootB, () => withProfileLock("delegate", () =>
+        stat(profileLockPath("delegate")).then(() => true, () => false)))));
+    expect(innerLockSeen).toBe(true);
+  } finally {
+    await rm(rootA, { recursive: true, force: true });
+    await rm(rootB, { recursive: true, force: true });
+  }
 });
 
 test("two child processes append distinct records without losing either update", async () => {

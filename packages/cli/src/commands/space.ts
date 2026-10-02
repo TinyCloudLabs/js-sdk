@@ -161,8 +161,7 @@ it directly with \`tc space host <name>\` (no request needed).
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
 
-        const profile = await ProfileManager.getProfile(ctx.profile);
-        await ProfileManager.setProfile(ctx.profile, { ...profile, spaceName: name });
+        await ProfileManager.updateProfile(ctx.profile, (profile) => ({ ...profile, spaceName: name }));
 
         outputJson({ profile: ctx.profile, spaceName: name, switched: true });
       } catch (error) {

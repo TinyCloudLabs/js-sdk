@@ -219,9 +219,8 @@ Examples:
           );
         }
 
-        const p = await ProfileManager.getProfile(profileName);
         const defaultSpace = options.unset ? undefined : (name as string);
-        await ProfileManager.setProfile(profileName, { ...p, defaultSpace });
+        await ProfileManager.updateProfile(profileName, (p) => ({ ...p, defaultSpace }));
 
         outputJson({ profile: profileName, defaultSpace: defaultSpace ?? null, updated: true });
       } catch (error) {

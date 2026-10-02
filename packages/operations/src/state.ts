@@ -7,6 +7,7 @@ import {
   rename,
   rmdir,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -22,8 +23,13 @@ const PRIVATE_FILE_MODE = 0o600;
 const PRIVATE_DIR_MODE = 0o700;
 const TEST_LOCK_RECOVERY_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR";
 const invocationStateRoot = new AsyncLocalStorage<string>();
-/** Profile locks held by the current async call chain (see withProfileLock). */
-const heldProfileLocks = new AsyncLocalStorage<ReadonlySet<string>>();
+/** One acquisition of a profile lock; `active` is cleared before release. */
+interface HeldProfileLock {
+  readonly lockPath: string;
+  active: boolean;
+}
+/** Profile lock acquisitions held by the current async call chain (see withProfileLock). */
+const heldProfileLocks = new AsyncLocalStorage<readonly HeldProfileLock[]>();
 
 export type ProfileStoreName =
   | "session"
@@ -220,8 +226,11 @@ export async function readProfileStore<T>(
  *
  * Reentrant within one async call chain: a critical section that already
  * holds a profile's lock (for example a login's compare-and-commit) can call
- * store writers that take the same lock without deadlocking. Other call
- * chains and other processes still wait for the lock.
+ * store writers that take the same lock without deadlocking. Ownership is
+ * keyed by the resolved lock path (so switching state roots inside a lock
+ * still takes the other root's lock) and lasts exactly as long as the
+ * acquisition: it is revoked before release, so work deferred past the
+ * critical section waits for the lock like any other caller.
  */
 export async function withProfileLock<T>(
   profile: string,
@@ -229,12 +238,15 @@ export async function withProfileLock<T>(
   options: ProfileLockOptions = {},
 ): Promise<T> {
   const normalizedProfile = validateProfileName(profile);
-  const held = heldProfileLocks.getStore();
-  if (held?.has(normalizedProfile)) return action();
+  const lockPath = profileLockPath(normalizedProfile);
+  const held = (heldProfileLocks.getStore() ?? []).filter((ownership) => ownership.active);
+  if (held.some((ownership) => ownership.lockPath === lockPath)) return action();
   const release = await acquireProfileLock(normalizedProfile, options);
+  const ownership: HeldProfileLock = { lockPath, active: true };
   try {
-    return await heldProfileLocks.run(new Set([...(held ?? []), normalizedProfile]), action);
+    return await heldProfileLocks.run([...held, ownership], action);
   } finally {
+    ownership.active = false;
     await release();
   }
 }
@@ -431,10 +443,28 @@ async function signalTestLockContention(profile: string): Promise<void> {
     .catch(() => undefined);
 }
 
+/**
+ * A lock directory whose holder crashed between `mkdir` and publishing its
+ * owner file. A live acquirer publishes within milliseconds, so an empty
+ * directory older than the stale threshold is dead; `rmdir` removes it only
+ * while it is still empty, so a late owner file keeps the lock.
+ */
+async function recoverOwnerlessLock(lockPath: string, staleAfterMs: number): Promise<boolean> {
+  try {
+    const { mtimeMs } = await stat(lockPath);
+    if (Date.now() - mtimeMs < staleAfterMs) return false;
+    await rmdir(lockPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs: number): Promise<boolean> {
   const ownerPath = join(lockPath, "owner.json");
   const owner = await readJson<{ pid?: unknown; createdAt?: unknown; token?: unknown }>(ownerPath)
     .catch(() => null);
+  if (owner === null) return recoverOwnerlessLock(lockPath, staleAfterMs);
   if (!isStaleOwner(owner, staleAfterMs)) return false;
 
   // Claim the observed metadata file, rather than renaming/removing the lock

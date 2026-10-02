@@ -46,6 +46,8 @@ import {
   verifyScopedLogin,
   verifySignedSession,
   openKeyExpiryParam,
+  withoutTrustFields,
+  withVerifiedAuthority,
 } from "../auth/scoped-login.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -129,7 +131,7 @@ export function registerAuthCommand(program: Command): void {
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`tc share publish\``)
     .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
     .option("--owner <did>", "Require this existing primary DID (did:pkh:eip155:CHAIN:ADDRESS) for scoped login")
-    .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow it (prefer a new profile)")
+    .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .action(async (options, cmd) => {
       try {
         if (options.device && options.paste) {
@@ -992,8 +994,10 @@ async function importRequestBoundDelegationWithBootstrap(
     await bootstrapDelegatedSession(ctx, delegation);
     await importRequestBoundDelegation(ctx, artifact);
   } catch (error) {
-    await ProfileManager.clearSession(ctx.profile);
-    await ProfileManager.setProfile(ctx.profile, profile);
+    await ProfileManager.withLock(ctx.profile, async () => {
+      await ProfileManager.clearSession(ctx.profile);
+      await ProfileManager.setProfile(ctx.profile, profile);
+    });
     throw error;
   }
 }
@@ -1503,16 +1507,21 @@ async function rotateAuthKey(
     return generateKey();
   });
 
-  await ProfileManager.setKey(profileName, jwk);
-  await ProfileManager.clearSession(profileName);
-  await ProfileManager.setProfile(profileName, {
-    ...profile,
-    host,
-    did,
-    sessionDid: did,
-    posture: profile.posture ?? "owner-openkey",
-    operatorType: profile.operatorType ?? "human",
-    authMethod: "openkey",
+  // One transaction: a concurrent login commit either lands before (and this
+  // rotation then discards its session) or sees the new key and refuses.
+  await ProfileManager.withLock(profileName, async () => {
+    const current = await ProfileManager.getProfile(profileName);
+    await ProfileManager.setKey(profileName, jwk);
+    await ProfileManager.clearSession(profileName);
+    await ProfileManager.setProfile(profileName, {
+      ...current,
+      host,
+      did,
+      sessionDid: did,
+      posture: current.posture ?? "owner-openkey",
+      operatorType: current.operatorType ?? "human",
+      authMethod: "openkey",
+    });
   });
 
   const result = await refreshOpenKeySession(profileName, host, {
@@ -1546,26 +1555,27 @@ async function persistCurrentLocalSession(
 ): Promise<void> {
   if (!session) return;
 
-  await ProfileManager.setSession(profileName, {
-    authMethod: "local",
-    address: session.address,
-    chainId: session.chainId,
-    spaceId: session.spaceId,
-    delegationHeader: session.delegationHeader,
-    delegationCid: session.delegationCid,
-    jwk: session.jwk,
-    verificationMethod: session.verificationMethod,
-    siwe: session.siwe,
-    signature: session.signature,
-  });
-
-  if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId) {
-    await ProfileManager.setProfile(profileName, {
-      ...profile,
-      sessionDid: session.verificationMethod,
+  await ProfileManager.withLock(profileName, async () => {
+    await ProfileManager.setSession(profileName, {
+      authMethod: "local",
+      address: session.address,
+      chainId: session.chainId,
       spaceId: session.spaceId,
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      jwk: session.jwk,
+      verificationMethod: session.verificationMethod,
+      siwe: session.siwe,
+      signature: session.signature,
     });
-  }
+    if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId) {
+      await ProfileManager.updateProfile(profileName, (current) => ({
+        ...current,
+        sessionDid: session.verificationMethod,
+        spaceId: session.spaceId,
+      }));
+    }
+  });
 }
 
 type LocalAuthResult = {
@@ -1583,7 +1593,8 @@ async function handleLocalAuth(
   host: string,
   options: { emitOutput?: boolean; forceSessionKey?: boolean } = {},
 ): Promise<LocalAuthResult> {
-  const profile = await ProfileManager.getProfile(profileName).catch(() => null);
+  const snapshot = await readProfileSnapshot(profileName);
+  const profile = snapshot.profile;
   const posture = profile ? resolveProfilePosture(profile) : null;
 
   let privateKey: string;
@@ -1621,15 +1632,17 @@ async function handleLocalAuth(
   }
 
   // We also need a session key (Ed25519 JWK) for the profile
-  const hasKey = await ProfileManager.getKey(profileName);
+  const hasKey = snapshot.key;
+  let key: object;
   if (options.forceSessionKey || !hasKey) {
     const { jwk, did: generatedSessionDid } = await withSpinner("Generating session key...", async () => {
       return generateKey();
     });
-    await ProfileManager.setKey(profileName, jwk);
+    key = jwk;
     sessionDid = generatedSessionDid;
-  } else if (!sessionDid) {
-    sessionDid = keyToDID(hasKey);
+  } else {
+    key = hasKey;
+    sessionDid ??= keyToDID(hasKey);
   }
 
   // Sign in using the private key
@@ -1637,8 +1650,7 @@ async function handleLocalAuth(
     return localKeySignIn({ privateKey, host });
   });
 
-  // Store session data
-  await ProfileManager.setSession(profileName, {
+  const session = {
     authMethod: "local",
     address,
     chainId: DEFAULT_CHAIN_ID,
@@ -1649,7 +1661,7 @@ async function handleLocalAuth(
     verificationMethod: sessionResult.verificationMethod,
     siwe: sessionResult.siwe,
     signature: sessionResult.signature,
-  });
+  };
   sessionDid = sessionResult.verificationMethod;
 
   // Update profile
@@ -1671,7 +1683,7 @@ async function handleLocalAuth(
     address,
   } satisfies ProfileConfig;
 
-  await ProfileManager.setProfile(profileName, updatedProfile);
+  await commitLogin(profileName, snapshot, { key, session, profile: updatedProfile });
 
   if (options.emitOutput ?? true) {
     outputJson({
@@ -1765,7 +1777,8 @@ export async function refreshOpenKeySession(
   const openKeyExpiry = expiry === undefined ? undefined : openKeyExpiryParam(expiry);
   const expectedOwner = expectedOwnerFor(profileName, profile, options.expectedOwner);
   if (options.permissions !== undefined && options.replaceSession !== true) {
-    assertSessionReplaceable(profileName, snapshot.session, expectedOwner, options.permissions);
+    const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
+    assertSessionReplaceable(profileName, snapshot, expectedOwner, options.permissions, estimatedExpiry);
   }
 
   // Start browser auth flow
@@ -1796,12 +1809,17 @@ export async function refreshOpenKeySession(
     sanitizedSession = verifyScopedLogin(delegationData, key, sessionDid, options.permissions, { expectedOwner, expiry });
     verifiedOwner = sanitizedSession.ownerDid as string;
   } else {
+    // Authority fields (owner, permissions, expiry, trust marker) come only
+    // from a verified proof; an unverified callback contributes none of them.
     const carriesProof = typeof delegationData.siwe === "string" && typeof delegationData.signature === "string";
+    const merged = mergePrivateJwkIntoSession(delegationData, key);
     if (carriesProof || expiry !== undefined || expectedOwner !== undefined) {
-      verifiedOwner = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry }).ownerDid;
+      const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
+      verifiedOwner = signed.ownerDid;
+      sanitizedSession = withVerifiedAuthority(merged, signed);
+    } else {
+      sanitizedSession = withoutTrustFields(merged);
     }
-    const { ownerDid: _unsignedOwner, ...merged } = mergePrivateJwkIntoSession(delegationData, key);
-    sanitizedSession = verifiedOwner === undefined ? merged : { ...merged, ownerDid: verifiedOwner };
   }
 
   const updatedProfile: ProfileConfig = {

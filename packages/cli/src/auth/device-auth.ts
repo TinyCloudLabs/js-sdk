@@ -354,11 +354,9 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
   validateLoginPermissions(input.permissions);
   const expiry = input.expiry ?? { durationMs: DEVICE_DELEGATION_MAX_SECONDS * 1000 };
-  // OpenKey takes a lifetime; an absolute deadline becomes the time left now
-  // and is still enforced as the deadline itself when the approval arrives.
-  const ttlSeconds = "notAfter" in expiry ? Math.floor((expiry.notAfter - Date.now()) / 1000) : Math.floor(expiry.durationMs / 1000);
+  const ttlSeconds = Math.floor(expiry.durationMs / 1000);
   if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > DEVICE_DELEGATION_MAX_SECONDS) {
-    throw new CLIError("INVALID_EXPIRY", "Device authorization --expiry must be between 1 minute and 30 days from now.", ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_EXPIRY", "Device authorization --expiry must be between 1 minute and 30 days.", ExitCode.USAGE_ERROR);
   }
   const reason = input.reason?.trim().slice(0, DEVICE_REASON_MAX_LENGTH);
   const openkeyHost = canonicalOrigin(input.openkeyHost ?? DEFAULT_OPENKEY_DEVICE_API_HOST, "OpenKey host");
@@ -508,7 +506,10 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   // Every profile that recorded an owner stays with that owner.
   const expectedOwner = expectedOwnerFor(input.profileName, existing, input.expectedOwner);
   // Early refusal on the request; the commit re-checks the approved scope.
-  if (input.replaceSession !== true) assertSessionReplaceable(input.profileName, snapshot.session, expectedOwner, input.permissions);
+  if (input.replaceSession !== true) {
+    const estimatedExpiry = new Date(Date.now() + (input.expiry?.durationMs ?? DEVICE_DELEGATION_MAX_SECONDS * 1000)).toISOString();
+    assertSessionReplaceable(input.profileName, snapshot, expectedOwner, input.permissions, estimatedExpiry);
+  }
   const key = snapshot.key ?? generateKey().jwk;
   const sessionDid = keyToDID(key);
   const result = await acquireDeviceDelegation({

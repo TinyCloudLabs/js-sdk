@@ -25,17 +25,14 @@ export function profileLocalNodeIdentityStore(
       return profile?.pinnedLocalNodeDids?.[url];
     },
     set: async (url, nodeDid) => {
-      const profile = await ProfileManager.getProfile(profileName).catch(
-        () => null,
-      );
-      if (!profile) return;
-      await ProfileManager.setProfile(profileName, {
+      if (!await ProfileManager.profileExists(profileName)) return;
+      await ProfileManager.updateProfile(profileName, (profile) => ({
         ...profile,
         pinnedLocalNodeDids: {
           ...profile.pinnedLocalNodeDids,
           [url]: nodeDid,
         },
-      });
+      }));
     },
   };
 }

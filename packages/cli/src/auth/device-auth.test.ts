@@ -268,21 +268,16 @@ describe("OpenKey device authorization", () => {
     expect(openkey.startBodies).toEqual([]);
   });
 
-  test("an absolute --expiry deadline is not stretched by the time approval takes", async () => {
-    // Approval arrives 20 minutes in and signs a 40-minute session (ends at +60).
+  test("a lifetime counts from approval, so a slow approval is not refused", async () => {
+    // Approval arrives 20 minutes in and signs a 40-minute session.
     const t0 = Date.now();
-    const delayedApproval = async (expiry: DeviceAuthorizationInput["expiry"]) => {
-      const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested, lifetimeMs: 40 * 60_000 }));
-      try {
-        return await acquire(openkey, { expiry, wait: async () => { setSystemTime(new Date(t0 + 20 * 60_000)); } });
-      } finally {
-        setSystemTime();
-      }
-    };
-    // A 45-minute lifetime counts from approval (+65): accepted.
-    expect((await delayedApproval({ durationMs: 45 * 60_000 })).declined).toEqual([]);
-    // A deadline 45 minutes after the request (+45) stays fixed: refused.
-    await expect(delayedApproval({ notAfter: t0 + 45 * 60_000 })).rejects.toMatchObject({ code: "DEVICE_AUTH_BINDING_MISMATCH" });
+    const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested, lifetimeMs: 40 * 60_000 }));
+    try {
+      const result = await acquire(openkey, { expiry: { durationMs: 45 * 60_000 }, wait: async () => { setSystemTime(new Date(t0 + 20 * 60_000)); } });
+      expect(result.declined).toEqual([]);
+    } finally {
+      setSystemTime();
+    }
   });
 
   test("names OpenKey when its device API is unreachable", async () => {
@@ -437,6 +432,67 @@ describe("device login persistence", () => {
     });
     await expect(login(openkey)).rejects.toMatchObject({ code: "PROFILE_CHANGED_DURING_LOGIN" });
     expect(await ProfileManager.getSession("agent")).toEqual(appSession);
+  });
+
+  test("treats a profile signed in with a local key as local-owner even under an owner-openkey posture", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { ...baseProfile, posture: "owner-openkey", authMethod: "local", privateKey: "0xlocal" });
+    const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
+    await expect(login(openkey)).rejects.toMatchObject({ code: "LOCAL_OWNER_PROFILE" });
+    expect(openkey.urls).toEqual([]);
+  });
+
+  test("a same-scope renewal that would end earlier needs --replace-session", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { ...baseProfile, ownerDid });
+    await login(fakeOpenKey((start, id) => approved(start, id, { signed: requested, lifetimeMs: 6 * 3600_000 })), { expiry: { durationMs: 6 * 3600_000 } });
+
+    // Requesting a shorter lifetime is refused before consent...
+    const shorter = fakeOpenKey((start, id) => approved(start, id, { signed: requested, lifetimeMs: 3600_000 }));
+    await expect(login(shorter, { expiry: { durationMs: 3600_000 } })).rejects.toMatchObject({ code: "SESSION_IN_USE" });
+    expect(shorter.urls).toEqual([]);
+    // ...and an approval that signs a shorter session is refused before saving.
+    const shortened = fakeOpenKey((start, id) => approved(start, id, { signed: requested, lifetimeMs: 3600_000 }));
+    await expect(login(shortened, { expiry: { durationMs: 12 * 3600_000 } })).rejects.toMatchObject({ code: "SESSION_IN_USE" });
+    expect(shortened.polls).toBe(1);
+    await login(fakeOpenKey((start, id) => approved(start, id, { signed: requested, lifetimeMs: 3600_000 })), { expiry: { durationMs: 3600_000 }, replaceSession: true });
+  });
+
+  test("concurrent profile updates are read-modify-write transactions: none is erased", async () => {
+    await ProfileManager.setProfile("agent", baseProfile);
+    const names = Array.from({ length: 8 }, (_, index) => `node-${index}`);
+    await Promise.all(names.map((name) => ProfileManager.updateProfile("agent", (profile) => ({
+      ...profile,
+      pinnedLocalNodeDids: { ...profile.pinnedLocalNodeDids, [name]: `did:key:${name}` },
+    }))));
+    expect(Object.keys((await ProfileManager.getProfile("agent")).pinnedLocalNodeDids ?? {}).sort()).toEqual(names);
+  });
+
+  test("a key rotation waits for a commit in progress instead of being overwritten by it", async () => {
+    const oldKey = { ...key, kid: "old" };
+    const rotatedKey = { ...key, kid: "rotated" };
+    await ProfileManager.setKey("agent", oldKey);
+    const inside = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    // A login commit holds the lock and rewrites the key it snapshotted.
+    const commit = ProfileManager.withLock("agent", async () => {
+      inside.resolve();
+      await finish.promise;
+      await ProfileManager.setKey("agent", oldKey);
+    });
+    await inside.promise;
+    // The store writes a signal file when a writer finds the lock held.
+    const contention = join(home, "lock-contention");
+    process.env.NODE_ENV = "test";
+    process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH = contention;
+    const rotation = ProfileManager.setKey("agent", rotatedKey);
+    while (!await stat(contention).then(() => true, () => false)) { /* each stat yields to the rotation */ }
+    delete process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH;
+    expect(await ProfileManager.getKey("agent")).toEqual(oldKey);
+    finish.resolve();
+    await commit;
+    await rotation;
+    expect(await ProfileManager.getKey("agent")).toEqual(rotatedKey);
   });
 
   test("treats an unreadable profile as an error instead of a missing one", async () => {

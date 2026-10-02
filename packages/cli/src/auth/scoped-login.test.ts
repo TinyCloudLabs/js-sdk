@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,18 +100,20 @@ describe("scoped first login", () => {
     expect(await ProfileManager.getSession("scoped")).not.toBeNull();
   });
 
-  test("an ISO --expiry stays an absolute deadline while consent is pending", async () => {
-    // Consent takes 20 minutes and OpenKey signs 40 minutes from then (+60).
+  test("refuses an ISO --expiry before consent; a duration survives a slow consent", async () => {
+    let calls = 0;
+    const deadline = new Date(Date.now() + 2 * 3600_000).toISOString();
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, expiry: deadline, openKeyAcquisition: async () => { calls++; return proof(); } }))
+      .rejects.toMatchObject({ code: "INVALID_EXPIRY", message: expect.stringContaining("duration") });
+    expect(calls).toBe(0);
+
+    // Consent takes 20 minutes and OpenKey signs 40 minutes from then.
     const t0 = Date.now();
     const delayedConsent = async () => {
       setSystemTime(new Date(t0 + 20 * 60_000));
       return proof({ lifetimeMs: 40 * 60_000 });
     };
     try {
-      await expect(refreshOpenKeySession("scoped", host, { permissions: requested, expiry: new Date(t0 + 45 * 60_000).toISOString(), openKeyAcquisition: delayedConsent }))
-        .rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
-      setSystemTime();
-      // The same 45 minutes as a duration counts from approval (+65): accepted.
       await refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "45m", openKeyAcquisition: delayedConsent });
     } finally {
       setSystemTime();
@@ -185,14 +187,61 @@ describe("scoped first login", () => {
 
   test("sends --expiry to OpenKey as seconds and refuses less than a minute before consent", async () => {
     const received: Array<{ expiry?: unknown }> = [];
-    const deadline = new Date(Date.now() + 2 * 3600_000).toISOString();
-    await refreshOpenKeySession("scoped", host, { permissions: requested, expiry: deadline, openKeyAcquisition: async (_did, options) => { received.push(options ?? {}); return proof(); } });
-    expect(received[0]!.expiry).toMatch(/^(7199|7200)s$/);
+    await refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "2h", openKeyAcquisition: async (_did, options) => { received.push(options ?? {}); return proof(); } });
+    expect(received[0]!.expiry).toBe("7200s");
     let calls = 0;
-    for (const expiry of [new Date(Date.now() + 30_000).toISOString(), 30_000]) {
-      await expect(refreshOpenKeySession("scoped", host, { permissions: requested, expiry, openKeyAcquisition: async () => { calls++; return proof(); } }))
-        .rejects.toMatchObject({ code: "INVALID_EXPIRY" });
-    }
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, expiry: 30_000, openKeyAcquisition: async () => { calls++; return proof(); } }))
+      .rejects.toMatchObject({ code: "INVALID_EXPIRY" });
     expect(calls).toBe(0);
+  });
+
+  test("an unscoped callback cannot forge the signed-scope marker, owner or expiry", async () => {
+    const valid = await proof();
+    const ownerless = await ProfileManager.getProfile("scoped");
+    const forged = { permissionsSource: "signed-recap", permissions: [], ownerDid: "did:pkh:eip155:1:0x2222222222222222222222222222222222222222", expiresAt: "2099-01-01T00:00:00.000Z" };
+    await refreshOpenKeySession("scoped", host, { openKeyAcquisition: async () => ({ ...valid, ...forged }) });
+    const saved = await ProfileManager.getSession("scoped") as Record<string, unknown>;
+    expect(saved).toMatchObject({ ownerDid, permissionsSource: "signed-recap", permissions: [{ ...requested[0], space: spaceId }] });
+    expect(saved.expiresAt).not.toBe(forged.expiresAt);
+    // The saved scope is the verified one, so a scoped login for other data cannot replace it.
+    const other = [{ ...requested[0]!, path: "other/" }];
+    await expect(refreshOpenKeySession("scoped", host, { permissions: other, openKeyAcquisition: async () => proof() })).rejects.toMatchObject({ code: "SESSION_IN_USE" });
+
+    // A callback without a proof, on a profile with no recorded owner and no
+    // --expiry, contributes no authority fields at all.
+    await ProfileManager.clearSession("scoped");
+    await ProfileManager.setProfile("scoped", ownerless);
+    const { siwe: _siwe, signature: _signature, ...unproven } = valid;
+    await refreshOpenKeySession("scoped", host, { openKeyAcquisition: async () => ({ ...unproven, ...forged }) });
+    const legacy = await ProfileManager.getSession("scoped") as Record<string, unknown>;
+    for (const field of ["permissionsSource", "permissions", "ownerDid", "expiresAt"]) expect(legacy[field]).toBeUndefined();
+  });
+
+  test("restores profile, key and session when a commit write fails", async () => {
+    const before = { profile: await ProfileManager.getProfile("scoped"), key: await ProfileManager.getKey("scoped") };
+    const failing = spyOn(ProfileManager, "setProfile").mockImplementationOnce(async () => {
+      throw Object.assign(new Error("EIO: i/o error, write"), { code: "EIO" });
+    });
+    try {
+      await expect(refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => proof() })).rejects.toMatchObject({ code: "EIO" });
+    } finally {
+      failing.mockRestore();
+    }
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+    expect(await ProfileManager.getProfile("scoped")).toEqual(before.profile);
+    expect(await ProfileManager.getKey("scoped")).toEqual(before.key);
+  });
+
+  test("an inconsistent profile left by an interrupted write needs --replace-session", async () => {
+    // A live session that belongs to another key (a crash between commit writes).
+    const otherManager = wasm.createSessionManager();
+    const stray = { ...await proof(), verificationMethod: otherManager.getDID("default"), jwk: JSON.parse(otherManager.jwk("default")!), expiresAt: new Date(Date.now() + 3600_000).toISOString() };
+    await ProfileManager.setSession("scoped", stray);
+    let calls = 0;
+    const acquire = async () => { calls++; return proof(); };
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: acquire })).rejects.toMatchObject({ code: "PROFILE_STATE_INCONSISTENT" });
+    expect(calls).toBe(0);
+    await refreshOpenKeySession("scoped", host, { permissions: requested, replaceSession: true, openKeyAcquisition: acquire });
+    expect(await ProfileManager.getSession("scoped")).toMatchObject({ verificationMethod: did });
   });
 });
