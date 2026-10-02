@@ -175,9 +175,15 @@ export function scopeCovers(granted: readonly PermissionEntry[], held: readonly 
   });
 }
 
-/** A verified ReCap caveat as plain JSON (the WASM verifier returns objects as `Map`s). */
+/**
+ * A verified ReCap caveat as plain JSON. The WASM verifier (serde-wasm-bindgen)
+ * returns JSON objects as `Map`s and JSON `null` as `undefined`; both are
+ * converted back, as node-sdk does on restore, so login, renewal and restore
+ * compare the same signed values.
+ */
 function plainCaveat(value: unknown): unknown {
-  if (value === null || typeof value === "boolean" || typeof value === "string") return value;
+  if (value === undefined || value === null) return null;
+  if (typeof value === "boolean" || typeof value === "string") return value;
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (Array.isArray(value)) return value.map(plainCaveat);
   if (value instanceof Map) {
