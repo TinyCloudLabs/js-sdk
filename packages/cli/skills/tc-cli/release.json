@@ -1,6 +1,6 @@
 {
   "name": "tc-cli",
-  "cli": ">=1.0.0-beta.16 <2.0.0",
+  "cli": ">=1.0.0-beta.17 <2.0.0",
   "node": ">=20",
   "installer": {
     "package": "skills",
