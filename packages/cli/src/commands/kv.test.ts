@@ -49,6 +49,12 @@ function errorFor(key: string) {
   if (key.startsWith("MISSING:")) {
     return { ok: false, error: { code: "KV_NOT_FOUND", message: "Key not found: " + key } };
   }
+  if (key.startsWith("QUOTA-NO-SIZES:")) {
+    return { ok: false, error: { code: "STORAGE_QUOTA_EXCEEDED", message: "server quota text", service: "kv", meta: { status: 402 } } };
+  }
+  if (key.startsWith("QUOTA:")) {
+    return { ok: false, error: { code: "STORAGE_QUOTA_EXCEEDED", message: "server quota text", service: "kv", meta: { status: 402, usedBytes: 387_382_794, limitBytes: 8_119_195 } } };
+  }
   return null;
 }
 
@@ -111,7 +117,7 @@ mock.module("../output/formatter.js", () => ({
   withSpinner: async (_message: string, fn: () => unknown) => await fn(),
   shouldOutputJson: () => true,
   formatTable: () => "",
-  formatBytes: () => "",
+  formatBytes: (bytes: number) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`,
   formatTimeAgo: () => "",
 }));
 
@@ -183,6 +189,41 @@ describe("CLI kv put --space", () => {
       { handle: "primary", key: "note", value: "hello" },
     ]);
   });
+  test("rejects keys containing spaces before resolving authentication", async () => {
+    await runKv(["put", "with space.txt", "hello"]);
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({
+      code: "USAGE_ERROR",
+      exitCode: 2,
+      message: "KV keys cannot contain spaces or control characters; use a URL-safe key",
+    });
+    expect(recorded.resolveSpace).toEqual([]);
+    expect(recorded.puts).toEqual([]);
+  });
+
+  test("get, head and delete refuse unaddressable keys before resolving authentication", async () => {
+    await runKv(["get", "with space.txt"]);
+    await runKv(["head", "tab\tkey"]);
+    await runKv(["delete", "line\nkey"]);
+
+    expect(recorded.errors).toHaveLength(3);
+    for (const error of recorded.errors) {
+      expect(error).toMatchObject({ code: "USAGE_ERROR", exitCode: 2 });
+    }
+    expect(recorded.resolveSpace).toEqual([]);
+    expect(recorded.gets).toEqual([]);
+    expect(recorded.deletes).toEqual([]);
+  });
+
+  test("list refuses an unaddressable --prefix before resolving authentication", async () => {
+    await runKv(["list", "--prefix", "with space/"]);
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({ code: "USAGE_ERROR", exitCode: 2 });
+    expect(recorded.resolveSpace).toEqual([]);
+  });
+
 
   test("routes through kvForSpace when --space is provided", async () => {
     await runKv(["put", "note", "hello", "--space", "applications"]);
@@ -202,6 +243,28 @@ describe("CLI kv put --space", () => {
       },
     ]);
   });
+  test("reports quota exhaustion with used and limit sizes", async () => {
+    await runKv(["put", "QUOTA:report", "hello"]);
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({
+      code: "STORAGE_QUOTA_EXCEEDED",
+      exitCode: 1,
+      message: "storage quota exceeded (369.4 MB used of 7.7 MB limit); nothing was written",
+    });
+  });
+
+  test("reports quota exhaustion without echoing server text when the sizes are missing", async () => {
+    await runKv(["put", "QUOTA-NO-SIZES:report", "hello"]);
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({
+      code: "STORAGE_QUOTA_EXCEEDED",
+      exitCode: 1,
+      message: "storage quota exceeded; nothing was written",
+    });
+  });
+
 });
 
 describe("CLI kv delete --space", () => {

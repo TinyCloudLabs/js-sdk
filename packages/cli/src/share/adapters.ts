@@ -31,7 +31,43 @@ function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get
   const action = meta.requiredAction;
   return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" ? action : undefined;
 }
+function isByteCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+/** A quota refusal stays one even when the Node's text carried no sizes; its text never reaches output. */
+function throwKvUploadFailure(error: unknown): never {
+  if (typeof error === "object" && error !== null && "code" in error && error.code === "STORAGE_QUOTA_EXCEEDED") {
+    const meta = ("meta" in error && typeof error.meta === "object" && error.meta !== null ? error.meta : {}) as { usedBytes?: unknown; limitBytes?: unknown };
+    const { usedBytes, limitBytes } = meta;
+    throw new SharePublishAuthorityError(isByteCount(usedBytes) && isByteCount(limitBytes)
+      ? { kind: "storage-quota-exceeded", usedBytes, limitBytes }
+      : { kind: "storage-quota-exceeded" });
+  }
+  throw new SharePublishAuthorityError({ kind: "upload-failed" });
+}
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
+const URI_SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+/**
+ * The SDK puts KV keys unescaped into the Node resource URI, so a stored name
+ * keeps only URI-safe characters, and never `..`, which share links refuse.
+ * It stays readable and keeps a plain extension because the share viewer
+ * titles and renders bearer links by this segment; a name without one never
+ * gains one. The original filename travels separately as display metadata.
+ */
+function safeStorageFilename(filename: string): string {
+  if (URI_SAFE_FILENAME.test(filename) && !filename.includes("..")) return filename;
+  const dot = filename.lastIndexOf(".");
+  const extension = dot >= 0 && /^[A-Za-z0-9]{1,16}$/.test(filename.slice(dot + 1)) ? filename.slice(dot + 1) : "";
+  const stem = (extension === "" ? filename : filename.slice(0, dot))
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(extension === "" ? /[^A-Za-z0-9_-]+/g : /[^A-Za-z0-9._-]+/g, "-")
+    .replace(/\.{2,}/g, ".")
+    .replace(/-{2,}/g, "-")
+    .slice(0, 100)
+    .replace(/^[^A-Za-z0-9]+|[-.]+$/g, "");
+  return `${stem === "" ? "share" : stem}${extension === "" ? "" : `.${extension}`}`;
+}
 
 export class ShareAuthorityError extends Error {
   readonly code: "AUTH_REQUIRED" | "UNAVAILABLE";
@@ -283,7 +319,7 @@ export function createShareAuthorityAdapters(input: {
     if (targetInput.target.kind === "bearer") {
       if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
       const file = files[0]!;
-      const resourcePath = `xyz.tinycloud.share/shares/${shareId}/${targetInput.filename}`;
+      const resourcePath = `xyz.tinycloud.share/shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
       const written = await node.kvForSpace(ownerSpaceId).put(resourcePath, file.bytes.slice(), {
         contentType: targetInput.mediaType ?? file.mediaType ?? "application/octet-stream",
       });
@@ -299,7 +335,7 @@ export function createShareAuthorityAdapters(input: {
             profileName: activeProfileName,
           });
         }
-        throw new Error("native bearer source upload failed");
+        throwKvUploadFailure(written.error);
       }
       let native: NativeShareResult;
       try {
@@ -350,7 +386,7 @@ export function createShareAuthorityAdapters(input: {
     // need a shared key the envelope does not carry.
     if (resourceKind !== "exact" || files.length !== 1) throw new Error("addressed publication requires a single exact source file");
     const file = files[0]!;
-    const resourcePath = `shares/${shareId}/${targetInput.filename}`;
+    const resourcePath = `shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
     const byteLength = file.bytes.byteLength;
     if (!Number.isSafeInteger(byteLength) || byteLength > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
     const mediaType = targetInput.mediaType ?? file.mediaType ?? "application/octet-stream";
@@ -395,7 +431,7 @@ export function createShareAuthorityAdapters(input: {
           profileName: activeProfileName,
         });
       }
-      throw new Error("addressed source upload failed");
+      throwKvUploadFailure(stored.error);
     }
     const contentSource = {
       shareId,

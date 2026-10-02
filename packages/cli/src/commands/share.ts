@@ -24,6 +24,7 @@ import {
   type ShareErrorCode,
 } from "@tinycloud/share-sdk";
 import { parseDuration } from "../lib/duration.js";
+import { formatBytes } from "../output/formatter.js";
 import { CLIError, handleError } from "../output/errors.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, writeShareOutput } from "../share/io.js";
@@ -85,7 +86,7 @@ export function shareCliError(error: unknown): CLIError {
       const requiredAction = failure.requiredAction === undefined ? "" : ` (${failure.requiredAction})`;
       const renew = localKey
         ? `renew it with ${loginHint} using the required capability`
-        : `request the builtin:share-publishing scope with ${loginHint}`;
+        : `verify the session includes the builtin:share-publishing scope; if it does not, request it with ${loginHint}`;
       return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; ${renew}`, 5);
     }
     if (failure.kind === "lifetime-exceeds-session") {
@@ -109,6 +110,15 @@ export function shareCliError(error: unknown): CLIError {
     }
     if (failure.kind === "registry-rejected") {
       return new CLIError("REGISTRY_REJECTED", "the TinyCloud location registry rejected this session's location record, so nothing was shared; retrying will not help. Log in again, and report the problem if it persists", 6);
+    }
+    if (failure.kind === "storage-quota-exceeded") {
+      const sizes = failure.usedBytes === undefined || failure.limitBytes === undefined
+        ? ""
+        : ` (${formatBytes(failure.usedBytes)} used of ${formatBytes(failure.limitBytes)} limit)`;
+      return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded${sizes}; nothing was shared`, 4);
+    }
+    if (failure.kind === "upload-failed") {
+      return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
   }
   // Fixed SDK refusals (invalid or mismatched recipient); never remote text.

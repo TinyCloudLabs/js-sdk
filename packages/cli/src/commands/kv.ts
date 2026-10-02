@@ -26,6 +26,32 @@ async function throwKvError(
   throw new CLIError(error.code, error.message, ExitCode.ERROR);
 }
 
+function isByteCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** A quota refusal stays one even when the Node's text carried no sizes; its text never reaches output. */
+function storageQuotaError(error: { code: string; meta?: unknown }): CLIError | undefined {
+  if (error.code !== "STORAGE_QUOTA_EXCEEDED") return undefined;
+  const { usedBytes, limitBytes } = (typeof error.meta === "object" && error.meta !== null ? error.meta : {}) as { usedBytes?: unknown; limitBytes?: unknown };
+  const sizes = isByteCount(usedBytes) && isByteCount(limitBytes) ? ` (${formatBytes(usedBytes)} used of ${formatBytes(limitBytes)} limit)` : "";
+  return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded${sizes}; nothing was written`, ExitCode.ERROR);
+}
+
+/**
+ * The SDK puts KV keys unescaped into the Node resource URI, and the Node
+ * refuses a space or control character there with a 401. Fail before
+ * authenticating instead of reporting that as a permission problem.
+ */
+function assertAddressableKey(key: string): void {
+  for (let i = 0; i < key.length; i++) {
+    const code = key.charCodeAt(i);
+    if (code <= 0x20 || code === 0x7f) {
+      throw new CLIError("USAGE_ERROR", "KV keys cannot contain spaces or control characters; use a URL-safe key", ExitCode.USAGE_ERROR);
+    }
+  }
+}
+
 /**
  * Read all data from stdin.
  */
@@ -68,6 +94,7 @@ export function registerKvCommand(program: Command): void {
     .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
     .action(async (key: string, options, cmd) => {
       try {
+        assertAddressableKey(key);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
@@ -135,6 +162,7 @@ export function registerKvCommand(program: Command): void {
     .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
     .action(async (key: string, value: string | undefined, options, cmd) => {
       try {
+        assertAddressableKey(key);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
@@ -167,6 +195,8 @@ export function registerKvCommand(program: Command): void {
         const result = await withSpinner(`Writing ${key}...`, () => kv.put(key, putValue)) as any;
 
         if (!result.ok) {
+          const quota = storageQuotaError(result.error);
+          if (quota) throw quota;
           await throwKvError(result.error, spaceUri, ctx.profile);
         }
 
@@ -183,6 +213,7 @@ export function registerKvCommand(program: Command): void {
     .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
     .action(async (key: string, options, cmd) => {
       try {
+        assertAddressableKey(key);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
@@ -208,6 +239,7 @@ export function registerKvCommand(program: Command): void {
     .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
     .action(async (options, cmd) => {
       try {
+        if (options.prefix) assertAddressableKey(options.prefix);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
@@ -253,6 +285,7 @@ export function registerKvCommand(program: Command): void {
     .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
     .action(async (key: string, options, cmd) => {
       try {
+        assertAddressableKey(key);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
