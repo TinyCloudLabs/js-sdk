@@ -74,6 +74,15 @@ describe("scoped first login", () => {
     expect(await ProfileManager.getSession("scoped")).toBeNull();
   });
 
+  test("refuses a signed session that outlives the requested --expiry", async () => {
+    const oneHour = await proof();
+    for (const expiry of ["1m", 60_000]) {
+      await expect(refreshOpenKeySession("scoped", host, { permissions: requested, expiry, openKeyAcquisition: async () => oneHour }))
+        .rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    }
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+  });
+
   test("rejects empty or multi-space first-login requests before opening consent", async () => {
     let calls = 0;
     const acquire = async () => { calls++; return proof(); };

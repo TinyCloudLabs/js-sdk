@@ -16,6 +16,7 @@ import { CLIError } from "../output/errors.js";
 import { generateKey, keyToDID } from "./local-key.js";
 import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./browser-auth.js";
 import {
+  CLOCK_SKEW_MS,
   permissionTuples,
   permissionsFromTuples,
   validateLoginPermissions,
@@ -25,7 +26,15 @@ import {
 /** OpenKey caps device-approved delegations at 30 days. */
 export const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
 const DEVICE_REASON_MAX_LENGTH = 200;
-const CLOCK_SKEW_MS = 30_000;
+
+/**
+ * OpenKey device API origin for a profile: TC_OPENKEY_HOST, then the
+ * profile's self-hosted `openkeyHost`. Undefined means the production device
+ * API (`api.openkey.so`), which differs from the browser approval origin.
+ */
+export function resolveDeviceApiHost(profile: Pick<ProfileConfig, "openkeyHost"> | null | undefined): string | undefined {
+  return process.env.TC_OPENKEY_HOST ?? profile?.openkeyHost;
+}
 
 type DeviceStartResponse = {
   transactionId: string;
@@ -280,33 +289,35 @@ async function verifyApproval(input: {
   const invalid = validateDelegationCallbackPayload(delegation);
   if (invalid) throw invalidResponse(`OpenKey returned an invalid delegation: ${invalid}`);
 
-  // Signed authority: owner, space, session key, expiry, and a recap that
+  // Signed authority: owner, space, session key, lifetime, and a recap that
   // stays inside the request.
-  const session = await verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, input.expectedOwner);
+  const session = await verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
+    expectedOwner: input.expectedOwner,
+    maxLifetimeMs: input.ttlSeconds * 1000,
+  });
   const { ownerDid } = session;
   if (Math.abs(Date.parse(session.expiresAt) - expiresAt) > 1000) {
     throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "The signed session expiry differs from the approved expiry. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
 
-  // Approved set: binding and relayed delegation agree exactly, the set is a
-  // subset of the request, and the signed recap does not exceed it.
+  // The signed ReCap is the authority. OpenKey's unsigned statements of the
+  // approved set (binding and relayed delegation) must match it exactly, so
+  // neither can over- or under-report what was granted.
+  const signed = permissionTuples(session.permissions, ownerDid);
+  if (
+    !sameTuples(signed, permissionTuples(permissionList(binding.permissions, "approved"), ownerDid)) ||
+    !sameTuples(signed, permissionTuples(permissionList(delegation.permissions, "delegated"), ownerDid))
+  ) {
+    throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey's approved permissions differ from the signed grant. No session was saved.", ExitCode.PERMISSION_DENIED);
+  }
   const requested = permissionTuples(input.requested, ownerDid);
-  const approved = permissionTuples(permissionList(binding.permissions, "approved"), ownerDid);
-  if (!sameTuples(approved, permissionTuples(permissionList(delegation.permissions, "delegated"), ownerDid))) {
-    throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey's approved permissions differ from the delegated permissions. No session was saved.", ExitCode.PERMISSION_DENIED);
-  }
-  for (const tuple of [...approved, ...permissionTuples(session.permissions, ownerDid)]) {
-    if (!requested.has(tuple) || !approved.has(tuple)) {
-      throw new CLIError("OPENKEY_GRANT_BROADENED", "OpenKey returned authority beyond the requested manifest. No session was saved.", ExitCode.PERMISSION_DENIED);
-    }
-  }
   return {
     session,
     ownerDid,
     spaceId: delegation.spaceId as string,
     expiresAt: session.expiresAt,
-    approved: permissionsFromTuples(approved),
-    declined: permissionsFromTuples([...requested].filter((tuple) => !approved.has(tuple))),
+    approved: permissionsFromTuples(signed),
+    declined: permissionsFromTuples([...requested].filter((tuple) => !signed.has(tuple))),
   };
 }
 
@@ -461,7 +472,7 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   const existing = await ProfileManager.getProfile(input.profileName).catch(() => null);
   const key = await ProfileManager.getKey(input.profileName) ?? generateKey().jwk;
   const sessionDid = keyToDID(key);
-  const openkeyHost = input.openkeyHost ?? existing?.openkeyHost;
+  const openkeyHost = input.openkeyHost ?? resolveDeviceApiHost(existing);
   const result = await acquireDeviceDelegation({
     ...input,
     sessionDid,
@@ -484,7 +495,6 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
     posture: "owner-openkey",
     operatorType: existing?.operatorType ?? "human",
     authMethod: "openkey",
-    ...(openkeyHost ? { openkeyHost } : {}),
   };
   await ProfileManager.setKey(input.profileName, key);
   await ProfileManager.setSession(input.profileName, result.session);

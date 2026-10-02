@@ -38,14 +38,14 @@ tc --profile agent context --json
 
 | `auth login` flag | Description |
 |------|-------------|
-| `--device` | Approve on another device (phone) through OpenKey device authorization. Requires `--manifest`. Prints `Approve on your phone: URL (code XXXX-XXXX)` to stderr and waits for the whole approval window |
+| `--device` | Approve on another device (phone) through OpenKey device authorization. Requires `--manifest`; KV-scoped manifests only (no `tinycloud.sql`). Prints `Approve on your phone: URL (code XXXX-XXXX)` to stderr and waits for the whole approval window |
 | `--manifest <file>` | Request only this manifest's permissions (one space). File path, `base64:<json>`, or `builtin:share-publishing` |
 | `--expiry <duration>` | Session lifetime, e.g. `1h`, `7d`. Device login: at most `30d`, default `30d` |
 | `--owner <did>` | Refuse approval by any identity other than this `did:pkh` |
 | `--method openkey\|local` | Browser OpenKey flow or local Ethereum key |
 | `--paste`, `--no-popup` | Browser flow without a local callback / without opening a browser |
 
-Device login JSON lists approved `permissions`, owner-unchecked `declined` capabilities, `ownerDid`, `spaceId` and `expiresAt`. `tc auth request --manifest FILE --grant --device` adds another space to a logged-in profile the same way. `tc enable share` is shorthand for device login with `builtin:share-publishing`. Errors: `MANIFEST_REQUIRED`, `SCOPE_REJECTED` (OpenKey refused a capability; the message names it), `DEVICE_AUTH_DENIED`, `DEVICE_AUTH_EXPIRED`, `OPENKEY_OWNER_MISMATCH`, `OPENKEY_GRANT_BROADENED`. See [AUTH.md](AUTH.md).
+Device login JSON lists the signed, approved `permissions`, owner-unchecked `declined` capabilities, `ownerDid`, `spaceId` and `expiresAt`. `tc auth request --manifest FILE --grant --device` adds another space to a logged-in profile the same way. `tc enable share` is shorthand for device login with `builtin:share-publishing`. OpenKey refuses `tinycloud.sql` and other abilities outside its device policy; use browser login (`--method openkey --manifest`) for those. Errors: `MANIFEST_REQUIRED`, `SCOPE_REJECTED` (OpenKey refused a capability; the message names it), `DEVICE_AUTH_DENIED`, `DEVICE_AUTH_EXPIRED`, `DEVICE_AUTH_BINDING_MISMATCH` (OpenKey's approval metadata disagrees with the signed grant), `OPENKEY_OWNER_MISMATCH`, `OPENKEY_GRANT_BROADENED`, `OPENKEY_EXPIRY_EXCEEDED` (the signed session outlives `--expiry`). Owner addresses compare case-insensitively (EIP-55 or lowercase); chain id and space name compare exactly. See [AUTH.md](AUTH.md).
 
 `builtin:share-publishing` requests, in the owner's `default` space, KV `get`/`put`/`list`/`del` on `xyz.tinycloud.share/shares/` (bearer links) and KV `get`/`metadata`/`put`/`list`/`del` on `shares/` (addressed links). Nothing else.
 

@@ -20,7 +20,6 @@ export function registerEnableCommand(program: Command): void {
           shareOrigin: DEFAULT_SHARE_ORIGIN,
           permissions: sharePublishingPermissions(),
           reason: "Allow this TinyCloud CLI profile to publish Share links.",
-          openkeyHost: process.env.TC_OPENKEY_HOST,
         });
         const value = {
           enabled: true,

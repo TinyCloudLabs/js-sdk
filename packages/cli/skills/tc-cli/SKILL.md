@@ -35,9 +35,11 @@ tc init --name PROFILE --key-only
 tc --profile PROFILE auth login --device --manifest builtin:share-publishing
 ```
 
-`builtin:share-publishing` covers `tc share publish`. For app data, pass the app's installed manifest file instead. For an existing app account, the owner approves with their existing OpenKey identity; do not create another account.
+`builtin:share-publishing` covers `tc share publish`. Device login carries KV-scoped manifests only: OpenKey refuses `tinycloud.sql` (and other abilities its device policy excludes) with `SCOPE_REJECTED`. For app data that needs SQL, the owner signs in through the browser with the app's manifest instead (see [AUTH.md](AUTH.md)). For an existing app account, the owner approves with their existing OpenKey identity; do not create another account.
 
 ## Read general data
+
+SQL commands need a profile whose session the owner granted through browser login; a device-login session has no SQL authority.
 
 ```bash
 tc --profile PROFILE kv get KEY --space SPACE --json

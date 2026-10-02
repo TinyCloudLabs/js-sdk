@@ -14,6 +14,7 @@ TC="$(npm prefix --global)/bin/tc"
 ```
 
 - `--manifest FILE` (required with `--device`) is an app manifest (`app_id`, `space`, `permissions`) given as a file path or `base64:<json>`. `builtin:share-publishing` is the built-in manifest for `tc share publish`; [REFERENCE.md](REFERENCE.md#context-and-login) lists exactly what it requests, and the owner's consent page shows every capability. One space per login.
+- Device login is for KV-scoped manifests. OpenKey refuses `tinycloud.sql` and any other ability its device policy excludes with `SCOPE_REJECTED`; request SQL through [browser login with a manifest](#browser-login-with-a-manifest) on a machine with a browser.
 - `--expiry DURATION` sets the session lifetime (`1h`, `7d`; at most `30d`, default `30d`).
 - `--owner did:pkh:eip155:CHAIN:ADDRESS` refuses an approval by any other identity. A profile already bound to an OpenKey owner is held to that owner automatically.
 

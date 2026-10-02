@@ -1,10 +1,16 @@
 import { NodeWasmBindings, type PermissionEntry } from "@tinycloud/node-sdk";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
+import { normalizePkhIdentifier } from "../lib/space.js";
 
-/** Lowercase only the EIP-155 address segment; space names stay case-sensitive. */
-export function normalizeSpace(space: string): string {
-  return space.replace(/(eip155:\d+:)(0x[0-9a-fA-F]{40})/, (_, prefix, address) => prefix + address.toLowerCase());
+/** Tolerated clock difference between OpenKey and this machine. */
+export const CLOCK_SKEW_MS = 30_000;
+
+export interface ScopedLoginExpectations {
+  /** Primary DID the approving identity must match, when known. */
+  expectedOwner?: string;
+  /** Requested session lifetime; a signed expiry beyond now + this (+ skew) is refused. */
+  maxLifetimeMs?: number;
 }
 
 /** Bind a logical space name (e.g. `default`) to the owner's space URI. */
@@ -16,7 +22,7 @@ export function ownerSpaceId(space: string, ownerDid: string): string {
 export function permissionTuples(permissions: readonly PermissionEntry[], ownerDid: string): Set<string> {
   return new Set(permissions.flatMap((permission) => {
     const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
-    const space = normalizeSpace(ownerSpaceId(permission.space ?? "", ownerDid));
+    const space = normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
     return permission.actions.map((action) =>
       JSON.stringify([service, space, permission.path, action.includes("/") ? action : `${service}/${action}`]));
   }));
@@ -41,7 +47,7 @@ export function validateLoginPermissions(permissions: PermissionEntry[]): void {
     (!p.space.startsWith("tinycloud:") && !/^[A-Za-z0-9_-]+$/.test(p.space)) ||
     typeof p.path !== "string" || !p.actions?.length ||
     p.actions.some((action) => !action.startsWith(`${p.service}/`)),
-  ) || new Set(permissions.map((p) => normalizeSpace(p.space ?? ""))).size !== 1) {
+  ) || new Set(permissions.map((p) => normalizePkhIdentifier(p.space ?? ""))).size !== 1) {
     throw new CLIError("INVALID_LOGIN_SCOPE", "First login requires non-empty permissions in one TinyCloud space. Request additional spaces after login.", ExitCode.USAGE_ERROR);
   }
 }
@@ -52,7 +58,7 @@ export async function verifyScopedLogin(
   key: object,
   sessionDid: string,
   requested: PermissionEntry[],
-  expectedOwner?: string,
+  expected: ScopedLoginExpectations = {},
 ): Promise<Record<string, unknown> & { ownerDid: string; permissions: PermissionEntry[]; expiresAt: string }> {
   let recap: PermissionEntry[];
   let expiresAt: string;
@@ -78,16 +84,20 @@ export async function verifyScopedLogin(
     }
     throw new CLIError("OPENKEY_PROOF_INVALID", "OpenKey did not return a complete, verifiable session proof. No scoped session was saved.", ExitCode.AUTH_REQUIRED);
   }
-  if (Date.parse(expiresAt) <= Date.now()) {
+  const signedExpiry = Date.parse(expiresAt);
+  if (signedExpiry <= Date.now()) {
     throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No scoped session was saved.", ExitCode.AUTH_REQUIRED);
   }
+  if (expected.maxLifetimeMs !== undefined && signedExpiry > Date.now() + expected.maxLifetimeMs + CLOCK_SKEW_MS) {
+    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", "The signed session outlives the requested --expiry. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
+  }
   const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
-  if (expectedOwner && normalizeSpace(expectedOwner) !== normalizeSpace(ownerDid)) {
+  if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
     throw new CLIError("OPENKEY_OWNER_MISMATCH", "The approved signing identity differs from the expected owner. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
   }
   const spaceId = data.spaceId as string;
   for (const permission of requested) {
-    if (normalizeSpace(ownerSpaceId(permission.space ?? "", ownerDid)) !== normalizeSpace(spaceId)) {
+    if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid)) !== normalizePkhIdentifier(spaceId)) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved space differs from the requested space. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
     }
   }

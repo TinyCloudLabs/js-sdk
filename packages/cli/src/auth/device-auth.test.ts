@@ -72,15 +72,18 @@ async function signedDelegation(signed: PermissionEntry[], publicJwk: object, cl
 interface FakeOpenKey {
   readonly fetchFn: typeof globalThis.fetch;
   readonly startBodies: Record<string, unknown>[];
+  readonly urls: string[];
   readonly polls: number;
 }
 
 /** OpenKey device API double: `approve` builds the token-endpoint answer from the start request. */
 function fakeOpenKey(approve: (start: Record<string, unknown>, transactionId: string) => Promise<Response> | Response, options: { start?: Response } = {}): FakeOpenKey {
   const startBodies: Record<string, unknown>[] = [];
+  const urls: string[] = [];
   const transactionId = randomBytes(18).toString("base64url");
   let polls = 0;
   const fetchFn = Object.assign(async (url: string | URL | Request, init?: RequestInit) => {
+    urls.push(String(url));
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     if (String(url).endsWith("/api/device-authorizations")) {
       startBodies.push(body);
@@ -96,7 +99,7 @@ function fakeOpenKey(approve: (start: Record<string, unknown>, transactionId: st
     polls += 1;
     return approve(startBodies[0]!, transactionId);
   }, { preconnect: () => undefined }) as typeof globalThis.fetch;
-  return { fetchFn, startBodies, get polls() { return polls; } };
+  return { fetchFn, startBodies, urls, get polls() { return polls; } };
 }
 
 async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string }) {
@@ -169,6 +172,25 @@ describe("OpenKey device authorization", () => {
     const broad = [{ ...bearerOnly[0]!, path: "" }];
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: broad, claimed: bearerOnly }));
     await expect(acquire(openkey)).rejects.toMatchObject({ code: "OPENKEY_GRANT_BROADENED" });
+  });
+
+  test("rejects OpenKey metadata that claims more than the signed grant", async () => {
+    // Signed ReCap covers only bearer links; binding and relay claim both prefixes.
+    const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: bearerOnly, claimed: requested }));
+    await expect(acquire(openkey)).rejects.toMatchObject({ code: "DEVICE_AUTH_BINDING_MISMATCH" });
+  });
+
+  test("compares owner addresses case-insensitively but space names exactly", async () => {
+    expect(address).not.toBe(address.toLowerCase());
+    const checksumSpace = `tinycloud:pkh:eip155:1:${address}:default`;
+    const lowerSpace = `tinycloud:pkh:eip155:1:${address.toLowerCase()}:default`;
+    const asUri = (space: string) => requested.map((permission) => ({ ...permission, space }));
+    const accepted = fakeOpenKey((start, id) => approved(start, id, { signed: requested, claimed: asUri(checksumSpace), binding: asUri(lowerSpace) }));
+    const result = await acquire(accepted, { permissions: asUri(lowerSpace), expectedOwner: ownerDid.toLowerCase() });
+    expect(result.declined).toEqual([]);
+
+    const renamed = fakeOpenKey((start, id) => approved(start, id, { signed: requested, binding: asUri(lowerSpace.replace(/:default$/, ":Default")) }));
+    await expect(acquire(renamed)).rejects.toMatchObject({ code: "DEVICE_AUTH_BINDING_MISMATCH" });
   });
 
   test("rejects an approval whose binding and relayed delegation disagree", async () => {
@@ -254,5 +276,17 @@ describe("device login persistence", () => {
       .rejects.toMatchObject({ code: "DEVICE_AUTH_BINDING_MISMATCH" });
     expect(await ProfileManager.getProfile("agent")).toEqual(before);
     expect(await ProfileManager.getSession("agent")).toBeNull();
+  });
+
+  test("uses the profile's self-hosted OpenKey for the device API and keeps it", async () => {
+    delete process.env.TC_OPENKEY_HOST;
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z", openkeyHost: "https://openkey.example" });
+    const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
+
+    await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
+
+    expect(new Set(openkey.urls.map((url) => new URL(url).origin))).toEqual(new Set(["https://openkey.example"]));
+    expect((await ProfileManager.getProfile("agent")).openkeyHost).toBe("https://openkey.example");
   });
 });

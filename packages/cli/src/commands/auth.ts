@@ -37,6 +37,7 @@ import {
   DEVICE_DELEGATION_MAX_SECONDS,
   loginWithDeviceAuthorization,
   mergePrivateJwkIntoSession,
+  resolveDeviceApiHost,
 } from "../auth/device-auth.js";
 import { validateLoginPermissions, verifyScopedLogin } from "../auth/scoped-login.js";
 import { parseDuration } from "../lib/duration.js";
@@ -52,6 +53,7 @@ import {
 } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
 import { bootstrapDelegatedSession, ensureAuthenticated } from "../lib/sdk.js";
+import { normalizePkhIdentifier } from "../lib/space.js";
 import {
   appendAdditionalDelegation,
   appendPermissionRequestArtifact,
@@ -113,7 +115,7 @@ export function registerAuthCommand(program: Command): void {
   auth
     .command("login")
     .description("Authenticate with TinyCloud")
-    .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires --manifest")
+    .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL needs browser login)")
     .option("--paste", "Use manual paste mode instead of browser callback")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
@@ -154,7 +156,6 @@ export function registerAuthCommand(program: Command): void {
             delegationTtlSeconds: deviceTtlSeconds(options.expiry, DEVICE_DELEGATION_MAX_SECONDS),
             reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
             expectedOwner: options.owner,
-            openkeyHost: process.env.TC_OPENKEY_HOST,
           });
           reportDeclined(result.declined);
           outputJson({
@@ -312,7 +313,7 @@ export function registerAuthCommand(program: Command): void {
     .option("--grant", "Grant the requested permissions immediately with this owner profile")
     .option("--yes", "Skip local-key TTY confirmation", false)
     .option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey")
-    .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization")
+    .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -384,7 +385,7 @@ export function registerAuthCommand(program: Command): void {
                 delegationTtlSeconds: deviceTtlSeconds(options.expiry, 7 * 24 * 60 * 60),
                 reason,
                 expectedOwner: profile.ownerDid,
-                openkeyHost: process.env.TC_OPENKEY_HOST,
+                openkeyHost: resolveDeviceApiHost(profile),
               });
               declined.push(...approval.declined);
               delegationData = approval.session;
@@ -1271,7 +1272,7 @@ export function groupPermissionsBySpace(permissions: PermissionEntry[]): Permiss
     // into one OpenKey round-trip even when one cap's address is checksummed and
     // another is lowercase. The space NAME stays case-sensitive, so genuinely
     // different names are NOT merged. Entries keep their original space string.
-    const key = normalizeSpaceForCompare(permission.space ?? "");
+    const key = normalizePkhIdentifier(permission.space ?? "");
     const group = groups.get(key) ?? [];
     group.push(permission);
     groups.set(key, group);
@@ -1289,26 +1290,8 @@ function isRawPermission(permission: PermissionEntry): boolean {
     permission.path.startsWith("urn:tinycloud:encryption:");
 }
 
-/**
- * Normalize a space identifier for case-insensitive comparison of its
- * embedded Ethereum address ONLY.
- *
- * Space URIs are `tinycloud:pkh:eip155:<chain>:<0xADDR>:<name>`. Ethereum
- * addresses are case-insensitive, but OpenKey returns the EIP-55 checksummed
- * form (mixed case) while the CLI builds the lowercase form, so a byte-for-byte
- * compare spuriously fails. Lowercase ONLY the `eip155:<chain>:0x<addr>` address
- * segment and leave everything else — crucially the space NAME, which repo
- * parsers treat as case-sensitive — byte-exact.
- */
-function normalizeSpaceForCompare(space: string): string {
-  return space.replace(
-    /(eip155:\d+:)(0x[0-9a-fA-F]{40})/,
-    (_match, prefix: string, addr: string) => prefix + addr.toLowerCase(),
-  );
-}
-
 export function returnedSpaceMatchesExpected(returnedSpace: string, expectedSpace: string): boolean {
-  if (normalizeSpaceForCompare(returnedSpace) === normalizeSpaceForCompare(expectedSpace)) {
+  if (normalizePkhIdentifier(returnedSpace) === normalizePkhIdentifier(expectedSpace)) {
     return true;
   }
 
@@ -1331,7 +1314,7 @@ export function portableFromOpenKeyDelegation(
   const expectedSpaces = new Set(
     permissions
       .filter((permission) => !isRawPermission(permission))
-      .map((permission) => normalizeSpaceForCompare(permission.space ?? "")),
+      .map((permission) => normalizePkhIdentifier(permission.space ?? "")),
   );
   const matchesExpectedSpace = expectedSpaces.size === 1 &&
     returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]!);
@@ -1352,7 +1335,7 @@ export function portableFromOpenKeyDelegation(
     permissions.flatMap((p) =>
       isRawPermission(p)
         ? p.actions.map((a) => `${p.service}|${p.space ?? ""}|${p.path}|${a}`)
-        : p.actions.map((a) => `${p.service}|${normalizeSpaceForCompare(p.space ?? "")}|${p.path}|${a}`),
+        : p.actions.map((a) => `${p.service}|${normalizePkhIdentifier(p.space ?? "")}|${p.path}|${a}`),
     ),
   );
   const returnedPermissions = Array.isArray(data.permissions)
@@ -1381,7 +1364,7 @@ export function portableFromOpenKeyDelegation(
         actions: [],
       })
         ? permSpace
-        : normalizeSpaceForCompare(permSpace);
+        : normalizePkhIdentifier(permSpace);
       for (const action of permission.actions) {
         const key = `${rawService}|${rawSpace}|${permission.path}|${action}`;
         if (!requestedPairs.has(key)) {
@@ -1712,17 +1695,20 @@ async function handleOpenKeyAuth(
   });
 }
 
+/** Milliseconds of a parsed `--expiry` (duration string, ISO date, or raw ms). */
+function lifetimeMilliseconds(expiry: string | number): number {
+  try {
+    return typeof expiry === "number" ? expiry : parseDuration(expiry);
+  } catch (error) {
+    throw new CLIError("INVALID_EXPIRY", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+  }
+}
+
 /** Device lifetime in seconds from `--expiry` (duration or milliseconds). */
 function deviceTtlSeconds(raw: unknown, fallbackSeconds: number): number {
   const parsed = parseExpiryOption(raw);
   if (parsed === undefined) return fallbackSeconds;
-  let milliseconds: number;
-  try {
-    milliseconds = typeof parsed === "number" ? parsed : parseDuration(parsed);
-  } catch (error) {
-    throw new CLIError("INVALID_EXPIRY", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
-  }
-  const seconds = Math.floor(milliseconds / 1000);
+  const seconds = Math.floor(lifetimeMilliseconds(parsed) / 1000);
   if (seconds < 60 || seconds > DEVICE_DELEGATION_MAX_SECONDS) {
     throw new CLIError("INVALID_EXPIRY", "Device authorization --expiry must be between 1m and 30d.", ExitCode.USAGE_ERROR);
   }
@@ -1764,6 +1750,8 @@ export async function refreshOpenKeySession(
   // Get DID from profile
   const profile = await ProfileManager.getProfile(profileName);
   if (options.permissions !== undefined) validateLoginPermissions(options.permissions);
+  // Parse before consent so an invalid --expiry never opens OpenKey.
+  const maxLifetimeMs = options.expiry === undefined ? undefined : lifetimeMilliseconds(options.expiry);
 
   // Start browser auth flow
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
@@ -1784,13 +1772,10 @@ export async function refreshOpenKeySession(
   // persisting it verbatim would shadow key.json and break the WASM signer
   // (kv/sql). Merge the private parameter back in before writing session.json.
   const sanitizedSession = options.permissions
-    ? await verifyScopedLogin(
-        delegationData,
-        key,
-        profile.sessionDid ?? profile.did,
-        options.permissions,
-        options.expectedOwner ?? (profile.authMethod === "openkey" ? profile.ownerDid : undefined),
-      )
+    ? await verifyScopedLogin(delegationData, key, profile.sessionDid ?? profile.did, options.permissions, {
+        expectedOwner: options.expectedOwner ?? (profile.authMethod === "openkey" ? profile.ownerDid : undefined),
+        maxLifetimeMs,
+      })
     : mergePrivateJwkIntoSession(delegationData, key);
 
   // Store session
