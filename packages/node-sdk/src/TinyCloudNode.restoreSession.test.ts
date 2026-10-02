@@ -201,6 +201,8 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       ...expired,
       now: new Date(expired.expiresAt).toISOString(),
     } as any)).toThrow();
+    await expect(new TinyCloudNode({ wasmBindings: wasm }).restoreSession(expired))
+      .rejects.toMatchObject({ name: "InvalidRestoredSessionError", code: "AUTH_EXPIRED" });
     const node = new TinyCloudNode({
       host: RESTORE_HOST,
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
@@ -236,6 +238,38 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       ...proof,
       expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
     })).rejects.toThrow("does not match its signed SIWE authority");
+  });
+
+  test("preserves string-valued WASM restore errors", async () => {
+    const proof = await signedRestorableSession();
+    const wasm = new NodeWasmBindings();
+    (wasm as any).validatePersistedSession = () => {
+      throw "WASM validation rejected the persisted session";
+    };
+
+    await expect(new TinyCloudNode({ wasmBindings: wasm }).restoreSession(proof))
+      .rejects.toMatchObject({
+        name: "InvalidRestoredSessionError",
+        message: "WASM validation rejected the persisted session",
+      });
+  });
+
+  test("classifies malformed persisted identity fields as AUTH_EXPIRED", async () => {
+    const proof = await signedRestorableSession();
+    const node = new TinyCloudNode({ signer: new PrivateKeySigner(PROOF_PRIVATE_KEY), wasmBindings: new NodeWasmBindings() });
+    const invalidSessions = [
+      { ...proof, chainId: -1 },
+      { ...proof, signature: undefined },
+      { ...proof, verificationMethod: "did:key:z6MkWrong#z6MkWrong" },
+      { ...proof, jwk: { ...proof.jwk, alg: null } },
+    ];
+
+    for (const session of invalidSessions) {
+      await expect(node.restoreSession(session as any)).rejects.toMatchObject({
+        name: "InvalidRestoredSessionError",
+        code: "AUTH_EXPIRED",
+      });
+    }
   });
 
   test("replaces auth, host, core publicKV, spaces, and all live keys on repeated cross-host restore", async () => {

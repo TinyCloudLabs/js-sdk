@@ -530,6 +530,14 @@ export class UnsupportedSessionRestoreError extends Error {
     this.name = "UnsupportedSessionRestoreError";
   }
 }
+export class InvalidRestoredSessionError extends Error {
+  readonly code = "AUTH_EXPIRED" as const;
+
+  constructor(message = "Persisted session authority is invalid or expired.") {
+    super(message);
+    this.name = "InvalidRestoredSessionError";
+  }
+}
 
 function canonicalRestoredVerificationMethod(
   canonicalVerificationMethod: string,
@@ -544,12 +552,10 @@ function canonicalRestoredVerificationMethod(
 }
 
 function persistedExpiry(value: unknown): Date {
-  if (typeof value !== "string") {
-    throw new Error("Persisted session without a SIWE expiration must include expiresAt.");
-  }
+  if (typeof value !== "string") throw new InvalidRestoredSessionError("Persisted session must include expiresAt.");
   const expiry = new Date(value);
   if (!Number.isFinite(expiry.getTime()) || expiry.getTime() <= Date.now()) {
-    throw new Error("Persisted session expiry is invalid or expired.");
+    throw new InvalidRestoredSessionError();
   }
   return expiry;
 }
@@ -2319,7 +2325,7 @@ export class TinyCloudNode {
         // 2026-07-03 recap-storm incident). Warn once and stop; generic errors
         // still get the full retry budget below.
         const message = error instanceof Error ? error.message : String(error);
-        if (/Unauthorized Action|\b401\b/.test(message)) {
+        if (/Unauthorized Action|\b(?:401|403)\b/.test(message)) {
           console.warn(
             "TinyCloud account registry sync stopped: authorization verdict is not retryable",
             error,
@@ -2665,12 +2671,17 @@ export class TinyCloudNode {
 
     // Build every part of the restored state against a disposable manager.
     // Nothing live is touched until the commit below.
-    const restoredJwk = clonePersistedSessionJwk(sessionData.jwk);
+    let restoredJwk: object;
+    try {
+      restoredJwk = clonePersistedSessionJwk(sessionData.jwk);
+    } catch {
+      throw new InvalidRestoredSessionError("Persisted session has an invalid private Ed25519 session key.");
+    }
     if (
       sessionData.chainId !== undefined &&
       (!Number.isSafeInteger(sessionData.chainId) || sessionData.chainId <= 0)
     ) {
-      throw new Error("Persisted session chain ID must be a positive safe integer.");
+      throw new InvalidRestoredSessionError("Persisted session chain ID must be a positive safe integer.");
     }
     const stagedManager = this.wasmBindings.createSessionManager();
     const stagedReplace = stagedManager.replaceSessionKey;
@@ -2686,34 +2697,33 @@ export class TinyCloudNode {
     let stagedKeyId: string;
     let stagedJwk: object;
     let canonicalVerificationMethod: string;
-    try {
-      // Replacing a primary signer without a complete key inventory silently
-      // loses receive/share keys. Require the capability rather than guessing.
-      const keyIds = liveKeys.call(this.sessionManager);
-      if (!Array.isArray(keyIds) || !keyIds.every((keyId) => typeof keyId === "string")) {
-        throw new UnsupportedSessionRestoreError("it cannot reliably enumerate every live session signer");
-      }
-      for (const keyId of keyIds) {
-        if (keyId === this.sessionKeyId) continue;
-        const jwk = this.sessionManager.jwk(keyId);
-        if (!jwk) throw new Error("missing live session key");
-        stagedReplace.call(stagedManager, clonePersistedSessionJwk(JSON.parse(jwk)), keyId);
-      }
-      stagedKeyId = stagedReplace.call(stagedManager, restoredJwk, this.sessionKeyId);
-      const stagedJwkJson = stagedManager.jwk(stagedKeyId);
-      if (!stagedJwkJson) throw new Error("missing restored session key");
-      stagedJwk = clonePersistedSessionJwk(JSON.parse(stagedJwkJson));
-      canonicalVerificationMethod = stagedManager.getDID(stagedKeyId);
-    } catch (error) {
-      if (error instanceof UnsupportedSessionRestoreError) throw error;
-      throw new Error("Persisted session has an invalid private Ed25519 session key.");
+    // Replacing a primary signer without a complete key inventory silently
+    // loses receive/share keys. Require the capability rather than guessing.
+    const keyIds = liveKeys.call(this.sessionManager);
+    if (!Array.isArray(keyIds) || !keyIds.every((keyId) => typeof keyId === "string")) {
+      throw new UnsupportedSessionRestoreError("it cannot reliably enumerate every live session signer");
     }
+    for (const keyId of keyIds) {
+      if (keyId === this.sessionKeyId) continue;
+      const jwk = this.sessionManager.jwk(keyId);
+      if (!jwk) throw new Error("missing live session key");
+      stagedReplace.call(stagedManager, clonePersistedSessionJwk(JSON.parse(jwk)), keyId);
+    }
+    try {
+      stagedKeyId = stagedReplace.call(stagedManager, restoredJwk, this.sessionKeyId);
+    } catch {
+      throw new InvalidRestoredSessionError("Persisted session has an invalid private Ed25519 session key.");
+    }
+    const stagedJwkJson = stagedManager.jwk(stagedKeyId);
+    if (!stagedJwkJson) throw new Error("missing restored session key");
+    stagedJwk = clonePersistedSessionJwk(JSON.parse(stagedJwkJson));
+    canonicalVerificationMethod = stagedManager.getDID(stagedKeyId);
     const restoredVerificationMethod = canonicalRestoredVerificationMethod(
       canonicalVerificationMethod,
       sessionData.verificationMethod,
     );
     if (!restoredVerificationMethod) {
-      throw new Error(
+      throw new InvalidRestoredSessionError(
         "Persisted session verification method does not match its private Ed25519 session key.",
       );
     }
@@ -2725,28 +2735,37 @@ export class TinyCloudNode {
     ];
     const hasPersistedProof = proofValues.every((value) => value !== undefined);
     if (!hasPersistedProof && (proofValues.some((value) => value !== undefined) || sessionData.expiresAt !== undefined)) {
-      throw new Error("Persisted session authority metadata is incomplete.");
+      throw new InvalidRestoredSessionError("Persisted session authority metadata is incomplete.");
     }
 
-    const restoredAddress = hasPersistedProof
-      ? canonicalizeAddress(sessionData.address!)
-      : undefined;
+    let restoredAddress: string | undefined;
+    try {
+      restoredAddress = hasPersistedProof ? canonicalizeAddress(sessionData.address!) : undefined;
+    } catch {
+      throw new InvalidRestoredSessionError("Persisted session has an invalid wallet address.");
+    }
     let stagedSessionExpiry = new Date(0);
     let stagedRecap: WasmRecapEntry[] = [];
     if (hasPersistedProof) {
       if (typeof this.wasmBindings.validatePersistedSession !== "function") {
         throw new UnsupportedSessionRestoreError("it cannot verify persisted SIWE authority");
       }
-      const verified = this.wasmBindings.validatePersistedSession({
-        delegationHeader: sessionData.delegationHeader,
-        delegationCid: sessionData.delegationCid,
-        spaceId: sessionData.spaceId,
-        jwk: stagedJwk,
-        address: restoredAddress!,
-        chainId: sessionData.chainId!,
-        siwe: sessionData.siwe!,
-        signature: sessionData.signature!,
-      });
+      const verified = (() => {
+        try {
+          return this.wasmBindings.validatePersistedSession!({
+            delegationHeader: sessionData.delegationHeader,
+            delegationCid: sessionData.delegationCid,
+            spaceId: sessionData.spaceId,
+            jwk: stagedJwk,
+            address: restoredAddress!,
+            chainId: sessionData.chainId!,
+            siwe: sessionData.siwe!,
+            signature: sessionData.signature!,
+          });
+        } catch (error) {
+          throw new InvalidRestoredSessionError(error instanceof Error ? error.message : String(error));
+        }
+      })();
       const exactRecap = verified.verifiedRecap;
       if (!Array.isArray(exactRecap) || !exactRecap.every((entry) =>
         entry !== null && typeof entry === "object" &&
@@ -2776,7 +2795,7 @@ export class TinyCloudNode {
         ? undefined
         : persistedExpiry(sessionData.expiresAt);
       if (signedExpiry && persistedPolicyExpiry && !sameInstant(signedExpiry, persistedPolicyExpiry)) {
-        throw new Error("Persisted session expiry does not match its signed SIWE authority.");
+        throw new InvalidRestoredSessionError("Persisted session expiry does not match its signed SIWE authority.");
       }
       stagedSessionExpiry = signedExpiry ?? persistedPolicyExpiry ?? persistedExpiry(undefined);
     }
@@ -3020,7 +3039,7 @@ export class TinyCloudNode {
       const delegations: Delegation[] = input.recap.map((entry) => ({
           cid: session.delegationCid,
           delegateDID: session.verificationMethod,
-          spaceId: entry.space,
+          spaceId: this.spaceIdsEqual(entry.space, session.spaceId) ? session.spaceId : entry.space,
           path: entry.path,
           actions: [...entry.actions],
           caveats: cloneRecapCaveats(entry.caveats),
@@ -6447,22 +6466,16 @@ export class TinyCloudNode {
       this.pathContains(granted.path, requested.path);
   }
 
-  // Space IDs are `tinycloud:pkh:eip155:<chain>:<0xADDR>:<name>`. The embedded
-  // EIP-155 address is case-insensitive, but the CLI canonicalizes it to
-  // lowercase when building a space URI while stored runtime delegations keep
-  // the EIP-55 checksummed form — so a byte-for-byte compare spuriously rejects
-  // an otherwise-valid grant. Lowercase ONLY the `eip155:<chain>:0x<addr>`
-  // segment and leave everything else (crucially the case-sensitive space NAME)
-  // byte-exact. Mirrors the CLI's `normalizeSpaceForCompare` (OPENKEY_SCOPE_MISMATCH fix).
+  // Space IDs are `tinycloud:pkh:eip155:<chain>:<0xADDR>:<name>`. Compare
+  // only the embedded EIP-155 address without case sensitivity; chain, name,
+  // and all non-PKH space identifiers remain byte-exact.
   private spaceIdsEqual(a: string, b: string): boolean {
     return this.normalizeSpaceAddress(a) === this.normalizeSpaceAddress(b);
   }
 
   private normalizeSpaceAddress(space: string): string {
-    return space.replace(
-      /(eip155:\d+:)(0x[0-9a-fA-F]{40})/,
-      (_match, prefix: string, addr: string) => prefix + addr.toLowerCase(),
-    );
+    const match = /^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.+)$/.exec(space);
+    return match === null ? space : `${match[1]}${match[2]!.toLowerCase()}${match[3]}`;
   }
 
   private actionContains(grantedAction: string, requestedAction: string): boolean {

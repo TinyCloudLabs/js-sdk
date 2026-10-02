@@ -903,6 +903,41 @@ describe("KVService.put serialization", () => {
     expect(requestInit?.body).toBe("hello-artifact");
   });
 
+  test.each([401, 403])("preserves KV upload authorization text for status %i", async (status) => {
+    const serverMessage = "Unauthorized Action: vault/API_KEY / tinycloud.kv/put";
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        response(false, status, serverMessage, status === 401 ? "Unauthorized" : "Forbidden")
+      )
+    );
+
+    const result = await service.put("vault/API_KEY", "value");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+    expect(result.error.message).toBe(serverMessage);
+    expect(result.error.meta).toMatchObject({
+      status,
+      resource: "vault/API_KEY",
+      requiredAction: "tinycloud.kv/put",
+    });
+  });
+
+  test("provides key and status when authorization response body is empty", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(false, 403, "", "Forbidden")));
+
+    const result = await service.put("vault/record", "value");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+    expect(result.error.message).toBe('Failed to put key "vault/record": 403 - Forbidden');
+    expect(result.error.meta?.status).toBe(403);
+  });
+
   test("JSON-encodes plain objects", async () => {
     let requestInit: FetchRequestInit | undefined;
     const service = new KVService({});

@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from "bun:test";
+import { afterEach, describe, expect, it, mock } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { encodeSealedInlineShareUrl } from "@tinycloud/share-envelope";
 import { notifyShare, type SenderShareRecord } from "@tinycloud/share-sdk";
@@ -12,12 +12,32 @@ const deliveryAuthorizationInputs: Array<Record<string, unknown>> = [];
 let deliveryAuthorization: { readonly key: string; readonly body: string; readonly receipt: Record<string, unknown> } | undefined;
 let deliveryAuthorizationConflicts = 0;
 
+let nodeSpaceId: string | undefined = "tinycloud:test-space";
+let restoredSpaceId: string | undefined = "tinycloud:test-space";
+let nativeSpaceId = "tinycloud:test-space";
+const uploadedSpaces: string[] = [];
+const encryptionSpaces: string[] = [];
+let sessionOnly = true;
+let uploadErrorCode: string | undefined;
+let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
+let authenticationError: unknown;
 const node = {
   did: transportDid,
   credentialHolderDid,
-  spaceId: "tinycloud:test-space",
+  get spaceId() { return nodeSpaceId; },
+  get isSessionOnly() { return sessionOnly; },
+  get restorableSession() {
+    return restoredSpaceId === undefined ? undefined : {
+      spaceId: restoredSpaceId,
+      siwe: `share.example wants you to sign in with your Ethereum account:\n0x0000000000000000000000000000000000000001\n\nSign in to TinyCloud\n\nURI: https://share.example\nVersion: 1\nChain ID: 1\nNonce: 12345678\nIssued At: 2025-01-01T00:00:00.000Z\nExpiration Time: ${sessionExpiresAt}`,
+      signature: "signed-proof",
+    };
+  },
   activeNodeIdentity: async () => ({ origin: "https://node.example", nodeDid }),
-  getEncryptionNetworkIdForSpace: () => `urn:tinycloud:encryption:${credentialHolderDid}:default`,
+  getEncryptionNetworkIdForSpace: (spaceId: string) => {
+    encryptionSpaces.push(spaceId);
+    return `urn:tinycloud:encryption:${credentialHolderDid}:default`;
+  },
   encryption: {
     encryptToNetwork: async (networkId: string) => ({
       ok: true as const,
@@ -33,11 +53,20 @@ const node = {
       },
     }),
   },
-  kvForSpace: () => ({ put: async () => ({ ok: true as const }) }),
+  kvForSpace: (spaceId: string) => ({
+    put: async () => {
+      uploadedSpaces.push(spaceId);
+      return uploadErrorCode === undefined
+        ? { ok: true as const }
+        : { ok: false as const, error: { code: uploadErrorCode, message: "secret server response", service: "kv", meta: { status: 403, requiredAction: "tinycloud.kv/put" } } };
+    },
+  }),
+  sharing: {
+    generate: async ({ expiry }: { readonly expiry: Date }) => ({ ok: true, data: { token: "opaque-share-token", delegation: { cid: "bafy-native-share" }, expiresAt: expiry } }),
+    decodeLink: () => ({ spaceId: nativeSpaceId, path: "xyz.tinycloud.share/shares/report.md" }),
+  },
   createUnifiedOwnerRoot: async (input: { readonly ownerDid: string; readonly role: "policy-authority" | "policy-enforcement" }) => {
-    // Match TinyCloudNode.createUnifiedOwnerRoot's holder-identity guard. A
-    // transport DID here must fail, so this real adapter path catches it.
-    if (input.ownerDid !== credentialHolderDid) throw new Error("unified owner root signer does not match owner DID");
+    // Capture every addressed owner-root request for the contract assertions.
     ownerRootInputs.push(input);
     return {
       cid: input.role === "policy-authority" ? "bafy-policy-root" : "bafy-enforcement-root",
@@ -58,7 +87,7 @@ const node = {
       nodeAudience: nodeDid,
       attestationBindingDigestHex: "2".repeat(64),
       issuedAt: "2026-01-01T00:00:00.000Z",
-      expiresAt: "2030-01-01T00:00:00.000Z",
+      expiresAt: "2100-01-01T00:00:00.000Z",
       signature: { suite: "Ed25519" as const, signerDid: nodeDid, value: "AQ" },
     },
   }),
@@ -82,15 +111,225 @@ const node = {
     return receipt;
   },
 };
-
 mock.module("../config/profiles.js", () => ({
-  ProfileManager: { resolveContext: async () => ({ profile: "test", host: "https://node.example" }) },
+  ProfileManager: {
+    resolveContext: async () => ({ profile: "test", host: "https://node.example" }),
+    getProfile: async () => ({ authMethod: "openkey" }),
+  },
 }));
-mock.module("../lib/sdk.js", () => ({ ensureAuthenticated: async () => node }));
+mock.module("../lib/sdk.js", () => ({
+  ensureAuthenticated: async () => {
+    if (authenticationError !== undefined) throw authenticationError;
+    return node;
+  },
+}));
 
 const { createShareAuthorityAdapters } = await import("./adapters.js");
 
+afterEach(() => {
+  nodeSpaceId = "tinycloud:test-space";
+  restoredSpaceId = "tinycloud:test-space";
+  nativeSpaceId = "tinycloud:test-space";
+  sessionOnly = true;
+  uploadErrorCode = undefined;
+  uploadedSpaces.length = 0;
+  encryptionSpaces.length = 0;
+  ownerRootInputs.length = 0;
+  sessionSignatures.length = 0;
+  deliveryAuthorizationInputs.length = 0;
+  deliveryAuthorization = undefined;
+  deliveryAuthorizationConflicts = 0;
+  sessionExpiresAt = "2099-01-01T00:00:00.000Z";
+  authenticationError = undefined;
+});
+
 describe("TinyCloud share authority adapter", () => {
+  it("publishes bearer shares from the restored owner space and preserves origin binding", async () => {
+    nodeSpaceId = undefined;
+    restoredSpaceId = "tinycloud:restored-owner-space";
+    nativeSpaceId = restoredSpaceId;
+    uploadedSpaces.length = 0;
+    const { targetAdapter } = createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async () => Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      })) as unknown as typeof globalThis.fetch,
+    });
+
+    const published = await targetAdapter.publish({
+      source: new TextEncoder().encode("restored-session share"),
+      filename: "report.md",
+      target: { kind: "bearer" },
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      origin: "https://share.example",
+    });
+
+    expect("state" in published).toBe(false);
+    if ("state" in published) throw new Error("expected bearer publish success");
+    expect(uploadedSpaces).toEqual([restoredSpaceId]);
+    expect(published.metadata.target.spaceId).toBe(restoredSpaceId);
+    expect(published.metadata.origin).toBe("https://share.example");
+    await expect(targetAdapter.publish({
+      source: new TextEncoder().encode("wrong origin"),
+      filename: "report.md",
+      target: { kind: "bearer" },
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      origin: "https://attacker.example",
+    })).rejects.toMatchObject({ failure: { kind: "origin-mismatch" } });
+    expect(uploadedSpaces).toEqual([restoredSpaceId]);
+  });
+  it("clamps implicit lifetime to signed session expiry and rejects explicit overrun", async () => {
+    const { targetAdapter } = createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async () => Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      })) as unknown as typeof globalThis.fetch,
+    });
+    const base = {
+      source: new TextEncoder().encode("expiry-bound share"),
+      filename: "report.md",
+      target: { kind: "bearer" as const },
+      origin: "https://share.example",
+    };
+    const implicit = await targetAdapter.publish({ ...base, expiresAt: new Date("2100-01-01T00:00:00.000Z"), expiryWasExplicit: false });
+    expect("state" in implicit).toBe(false);
+    if ("state" in implicit) throw new Error("expected publication");
+    expect(implicit.metadata.expiryClamped).toBe(true);
+    expect(implicit.metadata.expiresAt).toBe("2099-01-01T00:00:00.000Z");
+    await expect(targetAdapter.publish({ ...base, expiresAt: new Date("2100-01-01T00:00:00.000Z"), expiryWasExplicit: true }))
+      .rejects.toMatchObject({ failure: { kind: "lifetime-exceeds-session", reason: "beyond-session", sessionExpiresAt: new Date("2099-01-01T00:00:00.000Z") } });
+    const nearExpiry = new Date(Date.now() + 600).toISOString();
+    sessionExpiresAt = nearExpiry;
+    uploadedSpaces.length = 0;
+    await expect(targetAdapter.publish({
+      ...base,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      expiryWasExplicit: false,
+    })).rejects.toMatchObject({ failure: { kind: "lifetime-exceeds-session", reason: "session-too-close" } });
+    sessionExpiresAt = new Date(Date.now() + 50_000).toISOString();
+    for (const lifetimeMs of [30_000, 70_000]) {
+      await expect(targetAdapter.publish({
+        ...base,
+        expiresAt: new Date(Date.now() + lifetimeMs),
+        expiryWasExplicit: true,
+      })).rejects.toMatchObject({
+        failure: { kind: "lifetime-exceeds-session", reason: "session-too-close" },
+      });
+    }
+    expect(uploadedSpaces).toEqual([]);
+  });
+  it("allows signer-backed local-key shares to outlive the restored session", async () => {
+    sessionOnly = false;
+    const { targetAdapter } = createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "local",
+      fetchFn: (async () => Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      })) as unknown as typeof globalThis.fetch,
+    });
+    const published = await targetAdapter.publish({
+      source: new TextEncoder().encode("wallet-signed share"),
+      filename: "report.md",
+      target: { kind: "bearer" },
+      expiresAt: new Date("2100-01-01T00:00:00.000Z"),
+      expiryWasExplicit: true,
+      origin: "https://share.example",
+    });
+
+    expect("state" in published).toBe(false);
+    if ("state" in published) throw new Error("expected local-key publication");
+    expect(published.metadata.expiryClamped).toBeUndefined();
+    expect(published.metadata.expiresAt).toBe("2100-01-01T00:00:00.000Z");
+    await expect(targetAdapter.publish({
+      source: new TextEncoder().encode("too-short local share"),
+      filename: "report.md",
+      target: { kind: "bearer" },
+      expiresAt: new Date(Date.now() + 30_000),
+      expiryWasExplicit: true,
+      origin: "https://share.example",
+    })).rejects.toMatchObject({ failure: { kind: "lifetime-exceeds-session", reason: "below-minimum" } });
+  });
+
+
+  it("types KV upload authorization failures without exposing server text", async () => {
+    uploadErrorCode = "AUTH_UNAUTHORIZED";
+    const { targetAdapter } = createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async () => Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      })) as unknown as typeof globalThis.fetch,
+    });
+    await expect(targetAdapter.publish({
+      source: new TextEncoder().encode("denied share"),
+      filename: "report.md",
+      target: { kind: "bearer" },
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      origin: "https://share.example",
+    })).rejects.toMatchObject({
+      failure: { kind: "scope-denied", capability: "KV upload", requiredAction: "tinycloud.kv/put" },
+      message: "scope-denied",
+    });
+  });
+
+  it("reports absent restored owner authority as authentication required", async () => {
+    nodeSpaceId = "tinycloud:transport-space";
+    restoredSpaceId = undefined;
+    const { targetAdapter } = createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async () => Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      })) as unknown as typeof globalThis.fetch,
+    });
+    await expect(targetAdapter.publish({
+      source: new TextEncoder().encode("unbound share"),
+      filename: "report.md",
+      target: { kind: "bearer" },
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      origin: "https://share.example",
+    })).rejects.toMatchObject({ failure: { kind: "owner-space-unresolved", localKey: false } });
+    expect(uploadedSpaces).toEqual([]);
+  });
+
+  it("converts expired restored-session authorization into AUTH_REQUIRED", async () => {
+    authenticationError = Object.assign(new Error("persisted SIWE is expired or not yet valid"), { code: "AUTH_EXPIRED" });
+    const { targetAdapter } = createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async () => Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      })) as unknown as typeof globalThis.fetch,
+    });
+    await expect(targetAdapter.publish({
+      source: new TextEncoder().encode("expired session"),
+      filename: "report.md",
+      target: { kind: "bearer" },
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      origin: "https://share.example",
+    })).rejects.toMatchObject({ failure: { kind: "owner-space-unresolved", localKey: false } });
+  });
+
   it("routes addressed delivery through Policy/v3 with no retired Node delivery fallback", async () => {
     const source = await readFile(new URL("./adapters.ts", import.meta.url), "utf8");
     expect(source).toContain("node.authorizeShareDeliveryV3({");
@@ -111,16 +350,19 @@ describe("TinyCloud share authority adapter", () => {
     sessionSignatures.length = 0;
     const originalFetch = globalThis.fetch;
     const revocations: Array<{ readonly url: string; readonly body: Record<string, unknown> }> = [];
-    globalThis.fetch = (async (input, init) => {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       revocations.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
       return Response.json({ ok: true });
-    }) as typeof globalThis.fetch;
+    }) as unknown as typeof globalThis.fetch;
 
+    nodeSpaceId = "tinycloud:transport-space";
+    restoredSpaceId = "tinycloud:restored-owner-space";
+    nativeSpaceId = restoredSpaceId;
     try {
       const { targetAdapter, revocation } = createShareAuthorityAdapters({
         origin: "https://share.example",
         profileName: async () => "test",
-        fetchFn: (async (input) => {
+        fetchFn: (async (input: string | URL | Request) => {
           expect(String(input)).toBe("https://share.example/.well-known/tinycloud-share/config.json");
           return Response.json({
             version: "tinycloud.share/config-v2",
@@ -128,22 +370,28 @@ describe("TinyCloud share authority adapter", () => {
             registryOrigin: "https://registry.example",
             credentialsOrigin: "https://credentials.example",
           });
-        }) as typeof globalThis.fetch,
+        }) as unknown as typeof globalThis.fetch,
       });
 
-      await targetAdapter.publish({
+      const addressed = await targetAdapter.publish({
         source: new TextEncoder().encode("holder-bound share"),
         filename: "readme.txt",
         target: { kind: "email", address: "alice@example.com" },
-        expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+        expiresAt: new Date("2100-01-01T00:00:00.000Z"),
+        expiryWasExplicit: false,
         origin: "https://share.example",
         mediaType: "text/plain",
       });
+      expect("state" in addressed).toBe(false);
+      if ("state" in addressed) throw new Error("expected addressed publication");
+      expect(addressed.metadata.expiryClamped).toBe(true);
+      expect(new Date(addressed.metadata.expiresAt).getTime()).toBe(new Date("2099-01-01T00:00:00.000Z").getTime());
+      expect(addressed.metadata.target.spaceId).toBe(restoredSpaceId);
+      expect(uploadedSpaces).toEqual([restoredSpaceId]);
+      expect(encryptionSpaces).toEqual([restoredSpaceId]);
 
-      expect(ownerRootInputs.map(({ ownerDid, role }) => ({ ownerDid, role }))).toEqual([
-        { ownerDid: credentialHolderDid, role: "policy-authority" },
-        { ownerDid: credentialHolderDid, role: "policy-enforcement" },
-      ]);
+      expect(addressed.metadata.ownerDid).toBe(credentialHolderDid);
+      expect(ownerRootInputs.map(({ role }) => role)).toEqual(["policy-authority", "policy-enforcement"]);
 
       await revocation.revokePolicyRoot!({
         rootCid: "bafy-enforcement-root",
@@ -234,7 +482,7 @@ describe("TinyCloud share authority adapter", () => {
             throw new Error("response lost after Node authorization");
           }
           return Response.json({ status: "accepted" }, { status: 202 });
-        }) as typeof globalThis.fetch,
+        }) as unknown as typeof globalThis.fetch,
       }).delivery;
 
       const first = await notifyShare({

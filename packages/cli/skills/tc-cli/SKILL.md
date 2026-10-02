@@ -48,7 +48,7 @@ tc kv delete mykey                     # Delete
 
 ```bash
 tc share publish ./decision.md
-cat decision.md | tc share publish - --name decision.md --expires 7d
+cat decision.md | tc share publish - --name decision.md
 printf '%s' "$SHARE_URL" | tc share inspect - --json
 printf '%s' "$SHARE_URL" | tc share receive - --output .
 printf '%s' "$SHARE_URL" | tc share receive - --stdout
@@ -58,6 +58,9 @@ Modern bearer links are verified through the canonical headless Share SDK.
 Keep the complete URL, including its fragment, local to the process; the
 fragment is the read authority. Publish human mode prints only the canonical
 URL, and receive writes create-exclusive output unless `--force` is explicit.
+The default lifetime is seven days, clamped to the verified session expiry;
+JSON output reports `expiryClamped`. Explicit `--expires` values beyond the
+session end fail instead of being silently shortened.
 
 For detailed command reference and all options, see [REFERENCE.md](REFERENCE.md).
 

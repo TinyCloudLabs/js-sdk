@@ -148,6 +148,7 @@ export type {
 export {
   TinyCloudNode,
   UnsupportedSessionRestoreError,
+  InvalidRestoredSessionError,
   type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,
@@ -168,6 +169,7 @@ export {
   BOOTSTRAP_COMPLETION_MARKER_VERSION,
   ACCEPTED_MARKER_VERSIONS,
 } from "./TinyCloudNode";
+export { extractSiweExpiration } from "./delegateToHelpers";
 export type { OwnerDelegationPermission } from "@tinycloud/sdk-core";
 
 export { AccountService } from "./account/AccountService";

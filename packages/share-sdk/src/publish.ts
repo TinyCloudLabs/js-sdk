@@ -16,6 +16,7 @@ export interface SharePublishOptions {
   readonly allowBinary?: boolean;
   readonly target?: SharePublishTarget;
   readonly expiresAt?: Date;
+  readonly expiryWasExplicit?: boolean;
   readonly origin: string;
   readonly maxBytes?: number;
   readonly now?: () => number;
@@ -29,6 +30,7 @@ export interface PublishedShareMetadata {
   readonly target: { readonly kind: "bearer" | "recipientDid" | "email" | "emailDomain"; readonly origin: string; readonly nodeAudience: string; readonly spaceId: string };
   readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
   readonly actions: readonly string[];
+  readonly expiryClamped?: boolean;
   readonly expiresAt: string;
   readonly display: { readonly filename?: string; readonly senderName?: string };
   readonly recipientMatcher?: { readonly kind: "bearer" | "recipientDid" | "exactEmail" | "emailDomain"; readonly value?: string };
@@ -86,6 +88,7 @@ export function redactPublishedShare(result: PublishedShare): Omit<PublishedShar
       target: { ...result.metadata.target },
       resource: { ...result.metadata.resource },
       actions: [...result.metadata.actions],
+      ...(result.metadata.expiryClamped === undefined ? {} : { expiryClamped: result.metadata.expiryClamped }),
       expiresAt: result.metadata.expiresAt,
       display: { ...result.metadata.display },
     },

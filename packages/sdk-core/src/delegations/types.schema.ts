@@ -130,6 +130,7 @@ export type DelegationError = z.infer<typeof DelegationErrorSchema>;
  */
 export const DelegationErrorCodes = {
   AUTH_REQUIRED: "AUTH_REQUIRED",
+  AUTH_UNAUTHORIZED: "AUTH_UNAUTHORIZED",
   AUTH_EXPIRED: "AUTH_EXPIRED",
   NOT_INITIALIZED: "NOT_INITIALIZED",
   NOT_FOUND: "NOT_FOUND",

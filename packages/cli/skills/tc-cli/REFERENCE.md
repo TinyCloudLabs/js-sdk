@@ -105,7 +105,7 @@ tc completion fish | source
 
 ```bash
 tc share publish ./decision.md
-cat decision.md | tc share publish - --name decision.md --expires 7d
+cat decision.md | tc share publish - --name decision.md
 printf '%s' "$SHARE_URL" | tc share inspect - --json
 printf '%s' "$SHARE_URL" | tc share receive - --output .
 printf '%s' "$SHARE_URL" | tc share receive - --stdout
@@ -119,6 +119,15 @@ Inspect never prints plaintext or secret-bearing fields. Receive invokes the
 owner node, uses a sanitized single-segment filename, and refuses overwrite
 unless `--force` is explicit. Pre-cutover blob-backed and plaintext `?tc2`
 link forms are not accepted.
+Share publication without `--expires` requests a seven-day lifetime. For a
+session-only profile, the CLI clamps that request to the verified SIWE session
+expiry, prints a notice to stderr, and reports `"expiryClamped": true` in JSON.
+Explicit lifetimes beyond the session end, or with less than 60 seconds left
+after second-precision rounding, fail with `SESSION_LIFETIME_EXCEEDED`.
+Expired/invalid restored sessions and missing owner authority return
+`AUTH_REQUIRED`; rejected KV upload or delegation scopes return
+`PERMISSION_DENIED`. JSON publish output includes `expiryClamped: false` when
+no clamp was needed.
 
 ### Share Publish Options
 
@@ -128,7 +137,7 @@ link forms are not accepted.
 | `--name <filename>` | Safe filename for stdin | `stdin.md` |
 | `--to <target>` | `anyone`, recipient DID, email, or `domain:<name>` | `anyone` |
 | `--notify` | Send the addressed link through the email-only API | off |
-| `--expires <duration>` | Duration: `1h`, `7d`, `1w`, or ISO date | `7d` |
+| `--expires <duration>` | Duration: `1h`, `7d`, `1w`, or ISO date | implicit `7d`, clamped for session-only profiles |
 | `--media-type <type>` | Media type for a single input | inferred |
 | `--action <actions...>` | Addressed permission: `read`, `list`, or `edit` | `read` |
 | `--prefix` | Publish multiple inputs beneath one addressed prefix | off |

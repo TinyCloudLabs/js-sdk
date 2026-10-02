@@ -109,6 +109,7 @@ export type {
 export {
   TinyCloudNode,
   UnsupportedSessionRestoreError,
+  InvalidRestoredSessionError,
   type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,

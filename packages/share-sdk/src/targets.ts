@@ -8,12 +8,13 @@ export type ShareTarget = SharePublishTarget;
 export interface TargetPublishInput {
   readonly source: Uint8Array;
   readonly filename: string;
+  readonly mediaType?: string;
   /** Additional files for a prefix resource; source remains the first file for compatibility. */
   readonly files?: readonly { readonly bytes: Uint8Array; readonly filename: string; readonly mediaType?: string }[];
   readonly target: ShareTarget;
   readonly expiresAt: Date;
+  readonly expiryWasExplicit?: boolean;
   readonly origin: string;
-  readonly mediaType?: string;
   readonly resourceKind?: "exact" | "prefix";
   readonly actions?: readonly ("read" | "list" | "edit")[];
   readonly notify?: boolean;
@@ -137,6 +138,7 @@ export async function publishTargetShare(input: SharePublishOptions & {
     ...(input.actions === undefined ? {} : { actions: input.actions }),
     target,
     expiresAt,
+    expiryWasExplicit: input.expiryWasExplicit ?? input.expiresAt !== undefined,
     origin: input.origin,
     ...(input.notify === undefined ? {} : { notify: input.notify }),
   });

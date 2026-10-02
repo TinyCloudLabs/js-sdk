@@ -179,6 +179,11 @@ describe("KeyInfoSchema", () => {
 // =============================================================================
 
 describe("DelegationErrorSchema", () => {
+  it("retains both authentication error codes", () => {
+    expect(DelegationErrorCodes.AUTH_REQUIRED).toBe("AUTH_REQUIRED");
+    expect(DelegationErrorCodes.AUTH_UNAUTHORIZED).toBe("AUTH_UNAUTHORIZED");
+  });
+
   it("should validate a minimal delegation error", () => {
     const error = {
       code: "AUTH_REQUIRED",

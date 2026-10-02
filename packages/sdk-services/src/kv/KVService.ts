@@ -860,17 +860,20 @@ export class KVService extends BaseService implements IKVService {
           }
         );
 
-        if (!response.ok) {
-          if (response.status === 401) {
-            const errorText = await response.text();
-            const { resource, action } = parseAuthError(errorText);
-            return err(authUnauthorizedError("kv", errorText, {
-              status: response.status,
-              ...(action && { requiredAction: action }),
-              ...(resource && { resource }),
-            }));
-          }
+        if (response.status === 401 || response.status === 403) {
+          const errorText = await response.text();
+          const message = errorText.trim().length > 0
+            ? errorText
+            : `Failed to put key "${key}": ${response.status} - ${response.statusText || "authorization failed"}`;
+          const { resource, action: requiredAction } = parseAuthError(errorText);
+          return err(authUnauthorizedError("kv", message, {
+            status: response.status,
+            ...(requiredAction && { requiredAction }),
+            ...(resource && { resource }),
+          }));
+        }
 
+        if (!response.ok) {
           const errorText = await response.text();
 
           if (response.status === 412) {

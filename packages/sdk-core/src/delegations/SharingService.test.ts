@@ -5,7 +5,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { CapabilityKeyRegistry } from "../authorization/CapabilityKeyRegistry";
 import { CaveatedDelegationUnsupportedError } from "../capabilities";
 import { SharingService, type EncodedShareData } from "./SharingService";
-import type { CreateDelegationWasmParams, KeyProvider } from "./types";
+import type { CreateDelegationWasmParams, Delegation, DelegationError, KeyProvider } from "./types";
 
 const OWNER = "0xd559CCd9EB87c530A9a349262669386dE93cf412";
 const SPACE = `tinycloud:pkh:eip155:1:${OWNER}:applications`;
@@ -93,6 +93,44 @@ function shareLink(service: SharingService, overrides: Partial<EncodedShareData[
     },
   });
 }
+
+describe("SharingService authority space comparison", () => {
+  test("matches owner addresses without relaxing chain or namespace identity", () => {
+    const { service } = makeService();
+    const matching = {
+      spaceId: SPACE.replace(OWNER, OWNER.toLowerCase()),
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+      expiry: PARENT_EXPIRY,
+      allowSubDelegation: true,
+      caveats: [],
+    };
+    const internal = service as unknown as {
+      session: { readonly spaceId: string };
+      registry: {
+        getAllKeys: () => { readonly id: string }[];
+        getDelegationsForKey: () => typeof matching[];
+        isDelegationValid: () => boolean;
+      };
+      findSuitableKeyForDelegation: (path: string, actions: string[], expiry: Date) => boolean;
+    };
+    internal.session = { spaceId: SPACE };
+    internal.registry = {
+      getAllKeys: () => [{ id: "session-key" }],
+      getDelegationsForKey: () => [matching],
+      isDelegationValid: () => true,
+    };
+
+    expect(internal.findSuitableKeyForDelegation("shared", ["tinycloud.kv/get"], PARENT_EXPIRY)).toBe(true);
+    for (const spaceId of [
+      `${matching.spaceId}:other`,
+      matching.spaceId.replace("eip155:1:", "eip155:2:"),
+    ]) {
+      internal.registry.getDelegationsForKey = () => [{ ...matching, spaceId }];
+      expect(internal.findSuitableKeyForDelegation("shared", ["tinycloud.kv/get"], PARENT_EXPIRY)).toBe(false);
+    }
+  });
+});
 
 describe("SharingService.delegateReceivedShare", () => {
   test("creates and registers a strict child without returning parent key material", async () => {
@@ -641,26 +679,38 @@ describe("SharingService.generate root-delegation signing failures", () => {
   // surface mid-compose. An unanswered prompt and a genuine authorization
   // refusal used to collapse into the same PERMISSION_DENIED message, so a
   // user who simply missed a signing popup was told they lacked permission.
+  type SharingFetch = NonNullable<ConstructorParameters<typeof SharingService>[0]["fetch"]>;
   function makeGeneratingService(
     onRootDelegationNeeded: NonNullable<
       ConstructorParameters<typeof SharingService>[0]["onRootDelegationNeeded"]
     >,
+    fetcher?: SharingFetch,
+    registry = new CapabilityKeyRegistry(),
   ): SharingService {
     const shareJwk = { kty: "OKP", crv: "Ed25519", x: SHARE_X, d: SHARE_D };
     return new SharingService({
       hosts: [HOST],
       invoke: mock(async () => ({ ok: true, data: undefined })) as never,
-      fetch: mock(async () => new Response(null, { status: 200 })),
+      fetch: fetcher ?? (async () => new Response(null, { status: 200 })),
       keyProvider: {
         createSessionKey: (name: string) => name,
         getDID: () => `${SHARE_DID}#${SHARE_DID.slice("did:key:".length)}`,
         getJWK: () => shareJwk,
       } as unknown as KeyProvider,
-      registry: new CapabilityKeyRegistry(),
+      registry,
       createKVService: mock(() => ({})) as never,
-      createDelegationWasm: mock(() => {
-        throw new Error("should not be reached");
-      }) as never,
+      createDelegationWasm: mock((params: CreateDelegationWasmParams) => ({
+        delegation: childToken(params),
+        cid: "bafy-child",
+        delegateDID: params.delegateDID,
+        expiry: new Date(params.expirationSecs * 1000),
+        resources: [{
+          service: "kv",
+          space: params.spaceId,
+          path: Object.keys(params.abilities.kv)[0]!,
+          actions: Object.values(params.abilities.kv)[0]!,
+        }],
+      })),
       computeCid: () => "bafy-child",
       session: {
         spaceId: SPACE,
@@ -671,6 +721,38 @@ describe("SharingService.generate root-delegation signing failures", () => {
       onRootDelegationNeeded,
     });
   }
+
+  test("preserves registration 403 as a typed authorization failure through generate", async () => {
+    const registry = new CapabilityKeyRegistry();
+    registry.registerKey({
+      id: "parent-key",
+      did: "did:key:z6MkParent",
+      type: "session",
+      priority: 0,
+    }, [{
+      cid: "bafy-parent",
+      delegateDID: "did:key:z6MkParent",
+      spaceId: SPACE,
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+      expiry: PARENT_EXPIRY,
+      isRevoked: false,
+      allowSubDelegation: true,
+    }]);
+    const fetcher: SharingFetch = async () => new Response("secret upstream body", { status: 403 });
+    const service = makeGeneratingService(async () => undefined, fetcher, registry);
+
+    const result = await service.generate({
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+      expiry: PARENT_EXPIRY,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected authorization failure");
+    expect(result.error.code).toBe("AUTH_UNAUTHORIZED");
+    expect(result.error.meta).toEqual({ status: 403 });
+    expect(result.error.message).toContain("Failed to register delegation with server: 403 secret upstream body");
+  });
 
   test("reports an unanswered signing prompt as TIMEOUT, not PERMISSION_DENIED", async () => {
     const service = makeGeneratingService(async () => {

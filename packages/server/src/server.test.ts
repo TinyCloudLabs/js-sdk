@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
 import {
+  CapabilityKeyRegistry,
+  SharingService,
+  type ServiceSession,
+} from "@tinycloud/sdk-core";
+import {
   NonceStore,
   createServerDelegateClient,
   deriveDstackPrivateKey,
@@ -9,9 +14,9 @@ import {
   serverDidForPrivateKey,
   verifySessionToken,
   verifySiweMessage,
+  withSessionRefresh,
 } from ".";
-import type { PortableDelegation } from "@tinycloud/node-sdk";
-
+import type { PortableDelegation, TinyCloudNode } from "@tinycloud/node-sdk";
 const PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const ACCOUNT = privateKeyToAccount(PRIVATE_KEY);
 
@@ -26,9 +31,100 @@ function siweMessage(address: string, nonce: string): string {
     "Version: 1",
     "Chain ID: 1",
     `Nonce: ${nonce}`,
+
     "Issued At: 2026-06-28T00:00:00.000Z",
   ].join("\n");
 }
+
+describe("@tinycloud/server sharing session refresh", () => {
+  test.each([401, 403])("wraps node.sharing.generate with status %i", async (status) => {
+    const registry = new CapabilityKeyRegistry();
+    registry.registerKey({
+      id: "parent-key",
+      did: "did:key:zParent",
+      type: "session",
+      priority: 0,
+    }, [{
+      cid: "bafy-parent",
+      delegateDID: "did:key:zParent",
+      spaceId: "tinycloud:test-space",
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+      expiry: new Date("2099-01-01T00:00:00.000Z"),
+      isRevoked: false,
+      allowSubDelegation: true,
+    }]);
+    let fetchCalls = 0;
+    let signedIn = false;
+    const sharing = new SharingService({
+      hosts: ["https://node.example"],
+      session: {
+        spaceId: "tinycloud:test-space",
+        delegationCid: "bafy-session",
+        verificationMethod: "did:key:zSession#zSession",
+        jwk: {},
+      } as unknown as ServiceSession,
+      invoke: (async () => ({})) as never,
+      fetch: async () => {
+        fetchCalls += 1;
+        return signedIn
+          ? new Response(null, { status: 200 })
+          : new Response("authorization denied", { status });
+      },
+      keyProvider: {
+        createSessionKey: () => "share-key",
+        getDID: () => "did:key:zShare#zShare",
+        getJWK: () => ({
+          kty: "OKP",
+          crv: "Ed25519",
+          x: "share",
+          d: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        }),
+      } as never,
+      registry,
+      createKVService: (() => ({})) as never,
+      createDelegationWasm: ((params) => ({
+        delegation: "share-delegation",
+        cid: "bafy-child",
+        delegateDID: params.delegateDID,
+        expiry: new Date(params.expirationSecs * 1000),
+        resources: [{
+          service: "kv",
+          space: params.spaceId,
+          path: "shared",
+          actions: ["tinycloud.kv/get"],
+        }],
+      })) as never,
+      computeCid: () => "bafy-child",
+    });
+    let signInCalls = 0;
+    const signIn = async () => {
+      signInCalls += 1;
+      signedIn = true;
+    };
+    const node = { sharing, signIn } as unknown as TinyCloudNode;
+    let generateCalls = 0;
+    const generate = () => withSessionRefresh(node, async () => {
+      generateCalls += 1;
+      const result = await node.sharing.generate({
+        path: "shared",
+        actions: ["tinycloud.kv/get"],
+      });
+      if (!result.ok) throw new Error(result.error.message);
+      return result.data;
+    });
+
+    if (status === 401) {
+      await expect(generate()).resolves.toBeDefined();
+    } else {
+      await expect(generate()).rejects.toThrow(/403/);
+    }
+    expect(generateCalls).toBe(status === 401 ? 2 : 1);
+    expect(fetchCalls).toBe(status === 401 ? 2 : 1);
+    expect(signedIn).toBe(status === 401);
+    expect(signInCalls).toBe(status === 401 ? 1 : 0);
+  });
+});
 
 describe("@tinycloud/server identity helpers", () => {
   test("derives a stable did:pkh from a raw server private key", () => {

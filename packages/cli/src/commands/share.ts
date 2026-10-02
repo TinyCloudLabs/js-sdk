@@ -26,6 +26,7 @@ import { CLIError, handleError } from "../output/errors.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, writeShareOutput } from "../share/io.js";
 
+import { SharePublishAuthorityError } from "../share/errors.js";
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
 
 export interface ShareCommandServices {
@@ -53,8 +54,36 @@ export function parseShareTarget(value: string): ShareTarget {
   throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
 }
 
-function shareCliError(error: unknown): CLIError {
+/** @internal Map publish authority failures without echoing remote error text. */
+export function shareCliError(error: unknown): CLIError {
   if (error instanceof CLIError) return error;
+  if (error instanceof SharePublishAuthorityError) {
+    const failure = error.failure;
+    const profileName = "profileName" in failure ? failure.profileName : undefined;
+    const localKey = "localKey" in failure && failure.localKey === true;
+    const profileHint = profileName === undefined ? "" : `--profile ${profileName} `;
+    const loginHint = `tc ${profileHint}auth login${localKey ? " --method local" : ""}`;
+    if (failure.kind === "owner-space-unresolved") {
+      return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run \`${loginHint}\``, 3);
+    }
+    if (failure.kind === "scope-denied") {
+      const requiredAction = failure.requiredAction === undefined ? "" : ` (${failure.requiredAction})`;
+      return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; renew it with \`${loginHint}\` using the required capability`, 5);
+    }
+    if (failure.kind === "lifetime-exceeds-session") {
+      const expiresAt = failure.sessionExpiresAt.toISOString();
+      if (failure.reason === "session-too-close") {
+        return new CLIError("AUTH_REQUIRED", `the signed session expires too soon (${expiresAt}); log in again with \`${loginHint}\``, 3);
+      }
+      if (failure.reason === "below-minimum") {
+        return new CLIError("SESSION_LIFETIME_EXCEEDED", "share expiry must be at least 60 seconds from now; use a longer --expires value", 2);
+      }
+      return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime exceeds session expiry ${expiresAt}; use a shorter --expires value or renew the session with \`${loginHint}\``, 2);
+    }
+    if (failure.kind === "origin-mismatch") {
+      return new CLIError("ORIGIN_MISMATCH", "share origin does not match the configured service", 2);
+    }
+  }
   if (error instanceof SharePublishError) {
     const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
     const code = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
@@ -172,7 +201,7 @@ export function registerShareCommand(program: Command): void {
     .option("--name <filename>", "Filename for stdin input")
     .option("--to <target>", "Share target", "anyone")
     .option("--notify", "Request idempotent email delivery for addressed targets")
-    .option("--expires <duration>", "Share lifetime", "7d")
+    .option("--expires <duration>", "Share lifetime")
     .option("--max-bytes <bytes>", "Bound input bytes")
     .option("--media-type <type>", "Media type for a single input")
     .option("--action <actions...>", "Addressed permission: read, list, or edit")
@@ -202,7 +231,8 @@ export function registerShareCommand(program: Command): void {
           target,
           resourceKind: options.prefix || inputs.length > 1 ? "prefix" : "exact",
           actions,
-          expiresAt: expires(options.expires),
+          expiresAt: expires(options.expires ?? "7d"),
+          expiryWasExplicit: options.expires !== undefined,
           origin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxBytes }),
           notify: options.notify === true,
@@ -222,7 +252,8 @@ export function registerShareCommand(program: Command): void {
           const delivery = await notifyShare({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
           if (delivery.state === "partial-failure") process.exitCode = 9;
         }
-        if (json) writeJson(redactPublishedShare(result));
+        if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).\n`);
+        if (json) writeJson({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true });
         else publishHuman(result);
       } catch (error) { handleError(shareCliError(error)); }
     });
