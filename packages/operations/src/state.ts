@@ -28,6 +28,7 @@ const TEST_LOCK_OWNERLESS_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_OWNERLESS_BARRIER_
 const TEST_LOCK_PUBLISH_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_PUBLISH_BARRIER_DIR";
 const TEST_LOCK_RELEASE_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RELEASE_BARRIER_DIR";
 const TEST_LOCK_CLAIM_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_CLAIM_BARRIER_DIR";
+const TEST_LOCK_CLAIMED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_CLAIMED_BARRIER_DIR";
 const invocationStateRoot = new AsyncLocalStorage<string>();
 /** One acquisition of a profile lock; `active` is cleared before release. */
 interface HeldProfileLock {
@@ -427,43 +428,24 @@ async function publishProfileLock(profile: string, lockPath: string, token: stri
   }
 }
 
+/**
+ * Releases the lock if `.lock/owner.json` is still this acquisition's. No
+ * one else can put an owner record there while it exists (owners are only
+ * linked into a directory their own `mkdir` created, and recovery removes
+ * only a dead holder's record), so the record read is the one unlinked.
+ */
 async function releaseProfileLock(profile: string, lockPath: string, token: string): Promise<void> {
   const ownerPath = join(lockPath, "owner.json");
-  const claimPath = join(lockPath, `.release-${token}.json`);
-  try {
-    await rename(ownerPath, claimPath);
-  } catch (error) {
-    if (isErrno(error, "ENOENT")) return;
-    throw error;
-  }
-  await waitForTestBarrier(TEST_LOCK_CLAIM_BARRIER_DIR, profile);
-
-  const claimed = await readJson<{ token?: unknown }>(claimPath).catch(() => null);
-  if (claimed?.token !== token) {
-    await returnClaimedOwner(claimPath, ownerPath);
-    return;
-  }
-
-  await rm(claimPath, { force: true });
+  const owner = await readJson<{ token?: unknown }>(ownerPath).catch(() => null);
+  if (owner?.token !== token) return;
+  await rm(ownerPath, { force: true });
   // `.lock` is empty from here until the rmdir; a contender that removes it
   // and creates its own meanwhile is not harmed: rmdir fails on its owner
-  // file, or the contender's link sees ENOENT and retries.
+  // file, or the contender's link sees ENOENT and retries. If a recoverer's
+  // claim file is still inside, rmdir fails and that recoverer removes the
+  // directory when it drops its claim.
   await waitForTestBarrier(TEST_LOCK_RELEASE_BARRIER_DIR, profile);
   await rmdir(lockPath).catch(() => undefined);
-}
-
-/**
- * Puts back an owner record claimed by mistake (it belonged to another
- * holder). `link` never replaces: if an owner record exists by now, the
- * claimed one is dropped rather than overwriting it.
- */
-async function returnClaimedOwner(claimPath: string, ownerPath: string): Promise<void> {
-  try {
-    await link(claimPath, ownerPath);
-  } catch (error) {
-    if (!isErrno(error, "EEXIST")) return;
-  }
-  await rm(claimPath, { force: true }).catch(() => undefined);
 }
 
 /**
@@ -498,14 +480,14 @@ async function signalTestLockContention(profile: string): Promise<void> {
 
 /**
  * Reclaims a lock directory with no owner record that is older than the
- * stale threshold: one left by a crash, or by an older release. A holder or
- * recoverer killed after claiming owner.json (renaming it to `.release-*` or
- * `.stale-*`) leaves only that claim file behind; such claim files are
- * removed first. owner.json is never touched, and the directory itself is
- * only `rmdir`ed, which succeeds only while it is empty, so a published lock
- * is never removed. If the directory was a contender's lock not yet
- * published, that contender's `link` fails with ENOENT and it retries
- * without holding anything.
+ * stale threshold: one left by a crash, or by an older release. A process
+ * killed while recovering (or releasing, in older releases) can leave its
+ * `.stale-*` / `.release-*` claim file behind; such claim files are removed
+ * first. owner.json is never touched, and the directory itself is only
+ * `rmdir`ed, which succeeds only while it is empty, so a published lock is
+ * never removed. If the directory was a contender's lock not yet published,
+ * that contender's `link` fails with ENOENT and it retries without holding
+ * anything.
  */
 async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfterMs: number): Promise<boolean> {
   try {
@@ -529,7 +511,7 @@ async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfte
   return true;
 }
 
-/** Owner records claimed for release or stale recovery (see releaseProfileLock, recoverStaleLock). */
+/** Claim files of stale recovery (and of release in older releases). */
 const ABANDONED_CLAIM = /^\.(?:release|stale)-[0-9a-f-]+\.json$/;
 /** Owner files staged by publishProfileLock beside `.lock`. */
 const STAGED_OWNER = /^\.lock-owner-[0-9a-f-]+\.tmp$/;
@@ -550,6 +532,16 @@ async function removeAgedOwnerFiles(lockPath: string, staleAfterMs: number): Pro
   }
 }
 
+/**
+ * Removes a dead holder's lock. The claim is a hard link to owner.json, so
+ * the owner record is never moved away: a recoverer whose observation is
+ * outdated (the dead holder's lock was already recovered and a live holder
+ * now owns `.lock`) sees another token, drops its link and leaves the live
+ * owner record in place. Only after the claimed record is confirmed to be
+ * the observed dead holder's is owner.json unlinked. Nothing can link a new
+ * owner.json meanwhile: the claim keeps `.lock` non-empty, so it cannot be
+ * removed and recreated.
+ */
 async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs: number): Promise<boolean> {
   const ownerPath = join(lockPath, "owner.json");
   const owner = await readJson<{ pid?: unknown; createdAt?: unknown; token?: unknown }>(ownerPath)
@@ -557,20 +549,17 @@ async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs:
   if (owner === null) return recoverOwnerlessLock(profile, lockPath, staleAfterMs);
   if (!isStaleOwner(owner, staleAfterMs)) return false;
 
-  // Claim the observed metadata file, rather than renaming/removing the lock
-  // directory. A contender can only acquire the directory after it is empty;
-  // rmdir below therefore cannot remove a replacement lock instance.
   const observedToken = typeof owner?.token === "string" && owner.token.length > 0
     ? owner.token
     : "legacy";
   await waitForTestBarrier(TEST_LOCK_RECOVERY_BARRIER_DIR, profile);
   const claimPath = join(lockPath, `.stale-${randomUUID()}.json`);
   try {
-    await rename(ownerPath, claimPath);
-  } catch (error) {
-    if (isErrno(error, "ENOENT")) return false;
+    await link(ownerPath, claimPath);
+  } catch {
     return false;
   }
+  await waitForTestBarrier(TEST_LOCK_CLAIM_BARRIER_DIR, profile);
 
   const claimed = await readJson<{ pid?: unknown; createdAt?: unknown; token?: unknown }>(claimPath)
     .catch(() => null);
@@ -579,13 +568,16 @@ async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs:
       ? claimed.token === undefined
       : claimed.token === observedToken
   );
-  if (!sameInstance) {
-    await returnClaimedOwner(claimPath, ownerPath);
-    return false;
+  if (sameInstance) {
+    await rm(ownerPath, { force: true });
+    await waitForTestBarrier(TEST_LOCK_CLAIMED_BARRIER_DIR, profile);
   }
-
   await rm(claimPath, { force: true });
+  // Empty now if the claimed holder is gone or a live holder released while
+  // this claim kept `.lock` from being removed: remove it rather than leave
+  // an ownerless lock to age out. rmdir fails while an owner record exists.
   await rmdir(lockPath).catch(() => undefined);
+  if (!sameInstance) return false;
   await removeAgedOwnerFiles(lockPath, staleAfterMs);
   return true;
 }

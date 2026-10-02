@@ -1,12 +1,10 @@
 import {
   createDecipheriv,
+  createECDH,
   createHash,
   createHmac,
-  createPublicKey,
-  diffieHellman,
-  generateKeyPairSync,
   randomBytes,
-  type KeyObject,
+  type ECDH,
 } from "node:crypto";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
@@ -222,15 +220,50 @@ function deriveRelayKey(sharedSecret: Buffer, transactionId: string): Buffer {
     .digest();
 }
 
-function decryptRelayResult(envelope: unknown, transactionId: string, privateKey: KeyObject): Record<string, unknown> {
+const P256_P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn;
+const P256_B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604bn;
+
+/**
+ * Whether (x, y) is a point on P-256 (y² = x³ − 3x + b mod p). Checked here
+ * rather than left to the runtime: Node's computeSecret refuses off-curve
+ * points, but not every runtime's ECDH does (Bun 1.2.0 accepts them).
+ */
+function onP256(x: Buffer, y: Buffer): boolean {
+  const px = BigInt(`0x${x.toString("hex")}`);
+  const py = BigInt(`0x${y.toString("hex")}`);
+  if (px >= P256_P || py >= P256_P) return false;
+  const mod = (value: bigint) => ((value % P256_P) + P256_P) % P256_P;
+  return mod(py * py) === mod(px * px * px - 3n * px + P256_B);
+}
+
+/**
+ * The relay key's public JWK. ECDH runs on `createECDH` with raw points rather
+ * than `KeyObject`s and `diffieHellman()`: the shared secret is identical, and
+ * Bun 1.2.0 (the CI test runtime) corrupts memory in `diffieHellman()` once a
+ * garbage collection separates two calls.
+ */
+function relayPublicJwkOf(relayKey: ECDH): DeviceRelayEnvelope["ephemeralPublicJwk"] {
+  const point = relayKey.getPublicKey();
+  return publicRelayJwk({ kty: "EC", crv: "P-256", x: point.subarray(1, 33).toString("base64url"), y: point.subarray(33).toString("base64url") });
+}
+
+function decryptRelayResult(envelope: unknown, transactionId: string, relayKey: ECDH): Record<string, unknown> {
   if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) throw invalidResponse("OpenKey returned an invalid encrypted relay result");
   const relay = envelope as Partial<DeviceRelayEnvelope>;
   if (relay.version !== 1 || relay.algorithm !== "ECDH-P256-A256GCM") throw invalidResponse("OpenKey returned an unsupported encrypted relay result");
-  const peer = createPublicKey({ key: publicRelayJwk(relay.ephemeralPublicJwk), format: "jwk" });
+  const peerJwk = publicRelayJwk(relay.ephemeralPublicJwk);
+  const x = decodeCanonicalBase64Url(peerJwk.x, "relay key");
+  const y = decodeCanonicalBase64Url(peerJwk.y, "relay key");
+  if (x.length !== 32 || y.length !== 32 || !onP256(x, y)) throw invalidResponse("OpenKey returned an invalid relay key");
   const nonce = decodeCanonicalBase64Url(relay.nonce, "relay nonce");
   const ciphertext = decodeCanonicalBase64Url(relay.ciphertext, "relay ciphertext");
   if (nonce.length !== 12 || ciphertext.length <= 16) throw invalidResponse("OpenKey returned an invalid encrypted relay result");
-  const sharedSecret = diffieHellman({ privateKey, publicKey: peer });
+  let sharedSecret: Buffer;
+  try {
+    sharedSecret = relayKey.computeSecret(Buffer.concat([Buffer.from([4]), x, y]));
+  } catch {
+    throw invalidResponse("OpenKey returned an invalid relay key");
+  }
   const key = deriveRelayKey(sharedSecret, transactionId);
   const decipher = createDecipheriv("aes-256-gcm", key, nonce);
   decipher.setAAD(Buffer.from(transactionId));
@@ -366,8 +399,9 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
   const fetchFn = input.fetchFn ?? globalThis.fetch;
   const deviceSecret = randomBytes(32).toString("base64url");
   const codeVerifier = randomBytes(32).toString("base64url");
-  const relayKeys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-  const relayPublicJwk = publicRelayJwk(relayKeys.publicKey.export({ format: "jwk" }));
+  const relayKey = createECDH("prime256v1");
+  relayKey.generateKeys();
+  const relayPublicJwk = relayPublicJwkOf(relayKey);
   const publicJwk = publicSessionJwk(input.jwk);
   let startResponse: Response;
   try {
@@ -461,7 +495,7 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
     if (result?.status !== "approved" || !result.relay || !result.binding) {
       throw invalidResponse("OpenKey returned an invalid device authorization result");
     }
-    const delegation = decryptRelayResult(result.relay, started.transactionId, relayKeys.privateKey);
+    const delegation = decryptRelayResult(result.relay, started.transactionId, relayKey);
     return verifyApproval({
       binding: result.binding,
       delegation,

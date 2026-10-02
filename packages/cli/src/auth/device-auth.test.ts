@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
-import { createCipheriv, createHmac, createPublicKey, diffieHellman, generateKeyPairSync, randomBytes, type JsonWebKey } from "node:crypto";
+import { createCipheriv, createHmac, randomBytes } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,9 +34,15 @@ function response(value: unknown, status = 200): Response {
   return Response.json(value, { status });
 }
 
-function encryptRelay(relayPublicJwk: object, transactionId: string, value: unknown) {
-  const ephemeral = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-  const sharedSecret = diffieHellman({ privateKey: ephemeral.privateKey, publicKey: createPublicKey({ key: relayPublicJwk as JsonWebKey, format: "jwk" }) });
+/**
+ * OpenKey's side of the relay, independently of the CLI's implementation:
+ * WebCrypto ECDH over the JWK the CLI sent (the CLI uses node:crypto ECDH).
+ */
+async function encryptRelay(relayPublicJwk: object, transactionId: string, value: unknown) {
+  const p256 = { name: "ECDH", namedCurve: "P-256" } as const;
+  const ephemeral = await crypto.subtle.generateKey(p256, true, ["deriveBits"]);
+  const relayPublicKey = await crypto.subtle.importKey("jwk", relayPublicJwk, p256, false, []);
+  const sharedSecret = Buffer.from(await crypto.subtle.deriveBits({ name: "ECDH", public: relayPublicKey }, ephemeral.privateKey, 256));
   const extracted = createHmac("sha256", Buffer.from(transactionId)).update(sharedSecret).digest();
   const relayKey = createHmac("sha256", extracted).update(Buffer.from("openkey-device-relay-v1")).update(Buffer.from([1])).digest();
   const nonce = randomBytes(12);
@@ -46,7 +52,7 @@ function encryptRelay(relayPublicJwk: object, transactionId: string, value: unkn
   return {
     version: 1,
     algorithm: "ECDH-P256-A256GCM",
-    ephemeralPublicJwk: ephemeral.publicKey.export({ format: "jwk" }),
+    ephemeralPublicJwk: await crypto.subtle.exportKey("jwk", ephemeral.publicKey),
     nonce: nonce.toString("base64url"),
     ciphertext: ciphertext.toString("base64url"),
   };
@@ -113,7 +119,7 @@ async function approved(start: Record<string, unknown>, transactionId: string, i
   const delegation = await signedDelegation(input.signed, start.publicJwk as object, input.claimed ?? input.signed, input.lifetimeMs, input.caveat);
   return response({
     status: "approved",
-    relay: encryptRelay(start.relayPublicJwk as object, transactionId, delegation),
+    relay: await encryptRelay(start.relayPublicJwk as object, transactionId, delegation),
     binding: {
       transactionId,
       sessionDid,
@@ -213,6 +219,15 @@ describe("OpenKey device authorization", () => {
   test("rejects a relay bound to another Share origin", async () => {
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested, shareOrigin: "https://attacker.example" }));
     await expect(acquire(openkey)).rejects.toMatchObject({ code: "DEVICE_AUTH_BINDING_MISMATCH" });
+  });
+
+  test("refuses a relay whose ephemeral key is not a P-256 point", async () => {
+    const openkey = fakeOpenKey(async (start, id) => {
+      const body = await (await approved(start, id, { signed: requested })).json() as { relay: { ephemeralPublicJwk: { y: string } } };
+      body.relay.ephemeralPublicJwk.y = Buffer.alloc(32).toString("base64url");
+      return response(body);
+    });
+    await expect(acquire(openkey)).rejects.toMatchObject({ code: "DEVICE_AUTH_INVALID_RESPONSE", message: "OpenKey returned an invalid relay key" });
   });
 
   test("rejects an approval by an identity other than the expected owner", async () => {
