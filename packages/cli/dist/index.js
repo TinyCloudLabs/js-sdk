@@ -21,7 +21,7 @@ var init_constants = __esm({
     CONFIG_DIR = tinycloudHomePath();
     PROFILES_DIR = profilesPath();
     CONFIG_FILE = tinycloudConfigPath();
-    DEFAULT_HOST = "https://node.tinycloud.xyz";
+    DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
     DEFAULT_PROFILE = "default";
     ExitCode = {
       SUCCESS: 0,
@@ -104,6 +104,7 @@ var init_formatter = __esm({
 // src/output/errors.ts
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
+import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
@@ -121,6 +122,14 @@ function wrapError(error) {
     );
   }
   if (error instanceof CLIError) return error;
+  if (error instanceof ProfileLockTimeoutError) {
+    return new CLIError(
+      "PROFILE_LOCK_TIMEOUT",
+      `${message} Another tc or MCP process held this profile's lock, so the change that needed it was not written.`,
+      ExitCode.ERROR,
+      { hint: "Wait for the other command to finish and retry. A crashed process's lock is reclaimed automatically after 30 s." }
+    );
+  }
   if (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired")) {
     return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
   }
@@ -244,9 +253,9 @@ async function readJson(filePath) {
 async function writeJson(filePath, data) {
   const directory = dirname(filePath);
   const tempPath = join2(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  await mkdir(directory, { recursive: true });
+  await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   try {
-    await writeFile(tempPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+    await writeFile(tempPath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
     await rename(tempPath, filePath);
   } catch (err) {
     await rm(tempPath, { force: true }).catch(() => void 0);
@@ -265,7 +274,7 @@ async function fileExists(filePath) {
   }
 }
 async function ensureDir(dirPath) {
-  await mkdir(dirPath, { recursive: true });
+  await mkdir(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
 }
 async function removeDir(dirPath) {
   await rm(dirPath, { recursive: true, force: true });
@@ -281,9 +290,12 @@ async function listDirs(dirPath) {
     throw err;
   }
 }
+var PRIVATE_FILE_MODE, PRIVATE_DIR_MODE;
 var init_storage = __esm({
   "src/config/storage.ts"() {
     "use strict";
+    PRIVATE_FILE_MODE = 384;
+    PRIVATE_DIR_MODE = 448;
   }
 });
 
@@ -419,17 +431,14 @@ function profileLocalNodeIdentityStore(profileName) {
       return profile?.pinnedLocalNodeDids?.[url];
     },
     set: async (url, nodeDid) => {
-      const profile = await ProfileManager.getProfile(profileName).catch(
-        () => null
-      );
-      if (!profile) return;
-      await ProfileManager.setProfile(profileName, {
+      if (!await ProfileManager.profileExists(profileName)) return;
+      await ProfileManager.updateProfile(profileName, (profile) => ({
         ...profile,
         pinnedLocalNodeDids: {
           ...profile.pinnedLocalNodeDids,
           [url]: nodeDid
         }
-      });
+      }));
     }
   };
 }
@@ -524,10 +533,12 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
+import { chmod, rm as rm2 } from "fs/promises";
 import { join as join3 } from "path";
 import {
   readSession,
   removeSession,
+  withProfileLock,
   writeSession
 } from "@tinycloud/operations/state";
 var ProfileManager;
@@ -540,11 +551,41 @@ var init_profiles = __esm({
     ProfileManager = class _ProfileManager {
       // ── Initialization ──────────────────────────────────────────────────
       /**
-       * Creates ~/.tinycloud/ and ~/.tinycloud/profiles/ if they don't exist.
+       * Runs `action` holding the profile's store lock (shared with operations
+       * and MCP). Reentrant, so the writers below can be called inside it; hold
+       * it around a whole read-modify-write, not just each write.
+       */
+      static async withLock(name, action, options) {
+        return withProfileLock(name, action, options);
+      }
+      /**
+       * Read-modify-write of profile.json under the profile lock, so concurrent
+       * updates (another command, a login commit) are never erased.
+       */
+      static async updateProfile(name, update) {
+        return _ProfileManager.withLock(name, async () => {
+          const next = update(await _ProfileManager.getProfile(name));
+          await _ProfileManager.setProfile(name, next);
+          return next;
+        });
+      }
+      /**
+       * Creates ~/.tinycloud/ and ~/.tinycloud/profiles/ if they don't exist and
+       * (re)sets both to 0700: older releases created them 0775.
        */
       static async ensureConfigDir() {
-        await ensureDir(CONFIG_DIR);
-        await ensureDir(PROFILES_DIR);
+        for (const directory of [CONFIG_DIR, PROFILES_DIR]) {
+          await ensureDir(directory);
+          await chmod(directory, PRIVATE_DIR_MODE);
+        }
+      }
+      /** Owner-only profile directory (0700), created or tightened before any write into it. */
+      static async ensureProfileDir(name) {
+        await _ProfileManager.ensureConfigDir();
+        const profileDir = join3(PROFILES_DIR, name);
+        await ensureDir(profileDir);
+        await chmod(profileDir, PRIVATE_DIR_MODE);
+        return profileDir;
       }
       // ── Global config ───────────────────────────────────────────────────
       /**
@@ -581,12 +622,17 @@ var init_profiles = __esm({
         return profile;
       }
       /**
-       * Saves a profile config, creating the profile directory if needed.
+       * Saves a profile config under the profile lock, creating the profile
+       * directory if needed. Use `updateProfile` to change an existing profile.
        */
       static async setProfile(name, data) {
-        const profileDir = join3(PROFILES_DIR, name);
-        await ensureDir(profileDir);
-        await writeJson(join3(profileDir, "profile.json"), data);
+        await _ProfileManager.withLock(name, async () => {
+          await writeJson(join3(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
+        });
+      }
+      /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
+      static async removeProfileConfig(name) {
+        await _ProfileManager.withLock(name, () => rm2(join3(PROFILES_DIR, name, "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
@@ -622,13 +668,15 @@ var init_profiles = __esm({
       static async getKey(name) {
         return readJson(join3(PROFILES_DIR, name, "key.json"));
       }
-      /**
-       * Saves a JWK key for a profile.
-       */
+      /** Saves a JWK key under the profile lock (0600, in an owner-only profile directory). */
       static async setKey(name, jwk) {
-        const profileDir = join3(PROFILES_DIR, name);
-        await ensureDir(profileDir);
-        await writeJson(join3(profileDir, "key.json"), jwk);
+        await _ProfileManager.withLock(name, async () => {
+          await writeJson(join3(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
+        });
+      }
+      /** Removes key.json under the profile lock (rollback of a key a failed login created). */
+      static async removeKey(name) {
+        await _ProfileManager.withLock(name, () => rm2(join3(PROFILES_DIR, name, "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -651,11 +699,13 @@ var init_profiles = __esm({
       }
       // ── Cache management ────────────────────────────────────────────────
       /**
-       * Returns the path to the profile's cache directory, creating it if needed.
+       * Returns the profile's cache directory (share history lives here),
+       * created or tightened to 0700.
        */
       static async getCacheDir(name) {
-        const cacheDir = join3(PROFILES_DIR, name, "cache");
+        const cacheDir = join3(await _ProfileManager.ensureProfileDir(name), "cache");
         await ensureDir(cacheDir);
+        await chmod(cacheDir, PRIVATE_DIR_MODE);
         return cacheDir;
       }
       // ── Resolution helpers ──────────────────────────────────────────────
@@ -5535,8 +5585,15 @@ var init_zod = __esm({
   }
 });
 
+// src/share/publishing-manifest.ts
+var init_publishing_manifest = __esm({
+  "src/share/publishing-manifest.ts"() {
+    "use strict";
+  }
+});
+
 // src/lib/permissions.ts
-import { appendFile, readFile as readFile3 } from "fs/promises";
+import { appendFile, chmod as chmod2, readFile as readFile3 } from "fs/promises";
 import { join as join5 } from "path";
 import {
   buildPermissionRequestArtifact,
@@ -5549,7 +5606,7 @@ import {
   readAdditionalDelegations,
   readAuthRequests,
   upsertProfileRecord,
-  withProfileLock,
+  withProfileLock as withProfileLock2,
   writeJsonAtomic
 } from "@tinycloud/operations/state";
 async function loadAdditionalDelegations(profile) {
@@ -5579,6 +5636,7 @@ var init_permissions = __esm({
     init_errors();
     init_constants();
     init_space();
+    init_publishing_manifest();
     init_types();
   }
 });
@@ -5694,17 +5752,19 @@ async function bootstrapDelegatedSession(ctx, delegation) {
   }
   const key = await ProfileManager.getKey(ctx.profile);
   const jwk = signerJwkForProfile(ctx.profile, void 0, key);
-  await ProfileManager.setSession(ctx.profile, {
-    delegationHeader: delegation.delegationHeader,
-    delegationCid: delegation.cid,
-    spaceId: delegation.spaceId,
-    jwk,
-    verificationMethod: sessionDid
-  });
-  await ProfileManager.setProfile(ctx.profile, {
-    ...profile,
-    sessionDid,
-    spaceId: delegation.spaceId
+  await ProfileManager.withLock(ctx.profile, async () => {
+    await ProfileManager.setSession(ctx.profile, {
+      delegationHeader: delegation.delegationHeader,
+      delegationCid: delegation.cid,
+      spaceId: delegation.spaceId,
+      jwk,
+      verificationMethod: sessionDid
+    });
+    await ProfileManager.updateProfile(ctx.profile, (current) => ({
+      ...current,
+      sessionDid,
+      spaceId: delegation.spaceId
+    }));
   });
   return createSDKInstance(ctx);
 }
@@ -15030,7 +15090,7 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat, mkdir as mkdir2, mkdtemp, open as open2, readFile as readFile2, realpath, stat as stat2, link, rename as rename2, rm as rm2, unlink } from "fs/promises";
+import { lstat, mkdir as mkdir2, mkdtemp, open as open2, readFile as readFile2, realpath, stat as stat2, link, rename as rename2, rm as rm3, unlink } from "fs/promises";
 import { randomBytes as randomBytes2 } from "crypto";
 import { basename as basename2, join as join4, resolve, sep } from "path";
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
@@ -15144,7 +15204,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (temporaryPath !== void 0) await unlink(temporaryPath);
     } catch {
     }
-    await rm2(stagingDirectory, { recursive: true, force: true });
+    await rm3(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
   return join4(outputDirectory, safeName);
@@ -15187,23 +15247,24 @@ function shareCliError(error) {
     const profileName = "profileName" in failure ? failure.profileName : void 0;
     const localKey = "localKey" in failure && failure.localKey === true;
     const profileHint = profileName === void 0 ? "" : `--profile ${profileName} `;
-    const loginHint = `tc ${profileHint}auth login${localKey ? " --method local" : ""}`;
+    const loginHint = localKey ? `\`tc ${profileHint}auth login --method local\`` : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
     if (failure.kind === "owner-space-unresolved") {
-      return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run \`${loginHint}\``, 3);
+      return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run ${loginHint}`, 3);
     }
     if (failure.kind === "scope-denied") {
       const requiredAction = failure.requiredAction === void 0 ? "" : ` (${failure.requiredAction})`;
-      return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; renew it with \`${loginHint}\` using the required capability`, 5);
+      const renew = localKey ? `renew it with ${loginHint} using the required capability` : `request the builtin:share-publishing scope with ${loginHint}`;
+      return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; ${renew}`, 5);
     }
     if (failure.kind === "lifetime-exceeds-session") {
       const expiresAt = failure.sessionExpiresAt.toISOString();
       if (failure.reason === "session-too-close") {
-        return new CLIError("AUTH_REQUIRED", `the signed session expires too soon (${expiresAt}); log in again with \`${loginHint}\``, 3);
+        return new CLIError("AUTH_REQUIRED", `the signed session expires too soon (${expiresAt}); log in again with ${loginHint}`, 3);
       }
       if (failure.reason === "below-minimum") {
         return new CLIError("SESSION_LIFETIME_EXCEEDED", "share expiry must be at least 60 seconds from now; use a longer --expires value", 2);
       }
-      return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime exceeds session expiry ${expiresAt}; use a shorter --expires value or renew the session with \`${loginHint}\``, 2);
+      return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime exceeds session expiry ${expiresAt}; use a shorter --expires value or renew the session with ${loginHint}`, 2);
     }
     if (failure.kind === "origin-mismatch") {
       return new CLIError("ORIGIN_MISMATCH", "share origin does not match the configured service", 2);
