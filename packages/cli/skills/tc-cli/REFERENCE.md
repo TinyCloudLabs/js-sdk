@@ -39,7 +39,7 @@ tc --profile publisher context --json
 
 | `auth login` flag | Description |
 |------|-------------|
-| `--device` | Approve on another device (phone) through OpenKey device authorization. Requires `--manifest`; KV-scoped manifests only (no `tinycloud.sql`). Prints `Approve on your phone: URL (code XXXX-XXXX)` to stderr and waits for the whole approval window |
+| `--device` | Approve on another device (phone) through OpenKey device authorization. Requires `--manifest`: KV abilities plus `tinycloud.capabilities/read` on path `""` in the same space (OpenKey requires it to sign; no `tinycloud.sql`). Prints `Approve on your phone: URL (code XXXX-XXXX)` to stderr and waits for the whole approval window |
 | `--manifest <file>` | Request only this manifest's permissions (one space). File path, `base64:<json>`, or `builtin:share-publishing` |
 | `--expiry <duration>` | Session lifetime (`1h`, `7d`) counted from approval, or an ISO date kept as an absolute deadline. Enforced against the signed session on every login path. Device login: at most `30d`, default `30d` |
 | `--owner <did>` | Refuse approval by any identity other than this `did:pkh`; must agree with an owner the profile already recorded |
@@ -53,13 +53,14 @@ Device login JSON lists the signed, approved `permissions`, owner-unchecked `dec
 
 | Prefix | Abilities | Why |
 |------|-------------|-----|
+| `""` (space root) | `capabilities/read` | required by OpenKey to sign any delegation; lets the CLI read its own capability set |
 | `xyz.tinycloud.share/shares/` | `kv/put` | store a bearer link's source |
 | | `kv/get` | mint the link's read-only child delegation (a session delegates only what it holds) |
 | `shares/` | `kv/put` | store an addressed share's encrypted source; `--action edit` |
 | | `kv/get`, `kv/metadata` | back the Policy/v3 root that grants recipients read; `--notify` delivery authorization |
 | | `kv/list` | `--action list` on a `--prefix` share |
 
-No `del` anywhere and no `list` on the bearer prefix: no `tc share` command uses them. Inspect and receive use the link's own authority. Revoke signs `tinycloud.delegation/revoke` over the delegation's own CID and a Policy/v3 root revocation with the issuing session key, not a space capability.
+No `del` anywhere and no `list` on the bearer prefix: no `tc share` command uses them. Inspect and receive use the link's own authority. Revoke signs `tinycloud.delegation/revoke` over the delegation's own CID and a Policy/v3 root revocation with the issuing session key, not a space capability. OpenKey shows the capability read as required (not uncheckable), so it is always in the signed grant and never in `declined`.
 
 ## Delegations
 

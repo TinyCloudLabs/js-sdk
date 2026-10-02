@@ -38,7 +38,7 @@ tc init --name publisher --key-only
 tc --profile publisher auth login --device --manifest builtin:share-publishing
 ```
 
-`builtin:share-publishing` covers `tc share publish`. Device login carries KV-scoped manifests only: OpenKey refuses `tinycloud.sql` (and other abilities its device policy excludes) with `SCOPE_REJECTED`. For app data that needs SQL, the owner signs in through the browser with the app's manifest instead (see [AUTH.md](AUTH.md)). For an existing app account, the owner approves with their existing OpenKey identity; do not create another account.
+`builtin:share-publishing` covers `tc share publish`. Device login carries KV-scoped manifests plus the `tinycloud.capabilities/read` entry on path `""` that OpenKey requires to sign (the built-in manifest includes it; an app manifest without it is refused with `SCOPE_REJECTED`). OpenKey also refuses `tinycloud.sql` (and other abilities its device policy excludes) with `SCOPE_REJECTED`. For app data that needs SQL, the owner signs in through the browser with the app's manifest instead (see [AUTH.md](AUTH.md)). For an existing app account, the owner approves with their existing OpenKey identity; do not create another account.
 
 ## Read general data
 

@@ -120,7 +120,7 @@ export function registerAuthCommand(program: Command): void {
   auth
     .command("login")
     .description("Authenticate with TinyCloud")
-    .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL needs browser login)")
+    .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest that also requests tinycloud.capabilities/read on the space root (SQL needs browser login)")
     .option("--paste", "Use manual paste mode instead of browser callback")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")

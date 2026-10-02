@@ -25,7 +25,9 @@ const spaceId = wasm.makeSpaceId(address, 1, "default");
 const key = JSON.parse(wasm.createSessionManager().jwk("default")!) as Record<string, string>;
 const sessionDid = keyToDID(key);
 const requested = sharePublishingPermissions();
-const bearerOnly = [requested[0]!];
+const [capabilityRead, bearerPrefix, addressedPrefix] = requested as [PermissionEntry, PermissionEntry, PermissionEntry];
+// OpenKey's required capability read is always signed; the owner unchecked addressed shares.
+const bearerOnly = [capabilityRead, bearerPrefix];
 
 function response(value: unknown, status = 200): Response {
   return Response.json(value, { status });
@@ -159,20 +161,25 @@ describe("OpenKey device authorization", () => {
     expect((result.session.jwk as Record<string, string>).d).toBe(key.d);
   });
 
-  test("reports capabilities the owner unchecked and keeps only the approved subset", async () => {
+  test("the built-in publishing manifest carries OpenKey's required capability read in its one space", () => {
+    expect(capabilityRead).toEqual({ service: "tinycloud.capabilities", space: "default", path: "", actions: ["tinycloud.capabilities/read"] });
+    expect(new Set(requested.map((permission) => permission.space))).toEqual(new Set(["default"]));
+  });
+
+  test("reports capabilities the owner unchecked and keeps only the signed subset, including the required capability read", async () => {
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: bearerOnly }));
     const result = await acquire(openkey);
-    expect(result.approved.map((p) => p.path)).toEqual(["xyz.tinycloud.share/shares/"]);
+    expect(result.approved.map((p) => `${p.service}:${p.path}`)).toEqual(["tinycloud.capabilities:", "tinycloud.kv:xyz.tinycloud.share/shares/"]);
     expect(result.declined).toEqual([{
       service: "tinycloud.kv",
       space: spaceId.toLowerCase(),
       path: "shares/",
-      actions: requested[1]!.actions,
+      actions: addressedPrefix.actions,
     }]);
   });
 
   test("rejects a signed grant broader than the approved binding claims", async () => {
-    const broad = [{ ...bearerOnly[0]!, path: "" }];
+    const broad = [capabilityRead, { ...bearerPrefix, path: "" }];
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: broad, claimed: bearerOnly }));
     await expect(acquire(openkey)).rejects.toMatchObject({ code: "OPENKEY_GRANT_BROADENED" });
   });
@@ -220,6 +227,15 @@ describe("OpenKey device authorization", () => {
       code: "SCOPE_REJECTED",
       metadata: { capability: "tinycloud.secrets/get is not allowed over device authorization" },
     });
+  });
+
+  test("sends a manifest without the capability read as written, so OpenKey's invalid_scope surfaces", async () => {
+    const kvOnly = [bearerPrefix, addressedPrefix];
+    const openkey = fakeOpenKey(() => response({}), {
+      start: response({ error: "invalid_scope", errorDescription: "tinycloud.capabilities/read on \"\" is required" }, 400),
+    });
+    await expect(acquire(openkey, { permissions: kvOnly })).rejects.toMatchObject({ code: "SCOPE_REJECTED" });
+    expect(openkey.startBodies[0]!.permissions).toEqual(kvOnly);
   });
 
   test("keeps waiting through dropped polls, server errors, pending and slow_down until approval", async () => {

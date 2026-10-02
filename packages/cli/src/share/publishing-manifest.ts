@@ -5,8 +5,12 @@ export const SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
 
 /**
  * Exactly the owner-space authority `tc share` needs, in the app manifest
- * shape `tc auth login --manifest` accepts. One space (`default`), two KV
- * prefixes, no delete anywhere:
+ * shape `tc auth login --manifest` accepts. One space (`default`), the
+ * capability-read entry OpenKey requires, two KV prefixes, no delete:
+ *
+ * - `tinycloud.capabilities/read` on path `""`: required by OpenKey to sign
+ *   any delegation (its consent page shows it as required, not uncheckable);
+ *   lets the CLI read its own capability set.
  *
  * - `xyz.tinycloud.share/shares/` (bearer links):
  *   - `put` stores the source file;
@@ -31,6 +35,12 @@ export const SHARE_PUBLISHING_MANIFEST = {
   name: "TinyCloud Share publishing",
   space: "default",
   permissions: [
+    {
+      service: "tinycloud.capabilities",
+      path: "",
+      skipPrefix: true,
+      actions: ["tinycloud.capabilities/read"],
+    },
     {
       service: "tinycloud.kv",
       path: "xyz.tinycloud.share/shares/",
