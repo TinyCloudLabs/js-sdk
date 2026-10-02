@@ -7,7 +7,8 @@ import {
   createNativeShare,
   parseNativeShareUrl,
   SHARE_PUBLISH_RESULT_VERSION,
-  addressedCredentialRequirement,
+  prepareAddressedShare,
+  type PreparedAddressedShare,
   publishAddressedShare,
   redactPublishedShare,
   type NativeShareResult,
@@ -353,15 +354,26 @@ export function createShareAuthorityAdapters(input: {
     const byteLength = file.bytes.byteLength;
     if (!Number.isSafeInteger(byteLength) || byteLength > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
     const mediaType = targetInput.mediaType ?? file.mediaType ?? "application/octet-stream";
-    // Mailbox recipients open the share by proving the mailbox, so the policy
-    // must commit to that credential; without it the SDK would sign a
-    // Policy/v1 share that no receiver accepts.
-    const target = targetInput.target;
-    const credentialRequirement = target.kind === "email" || target.kind === "emailDomain" ? addressedCredentialRequirement(target) : undefined;
+    const actions = targetInput.actions === undefined || targetInput.actions.length === 0 ? ["read"] as const : targetInput.actions;
+    const policyActions = [...new Set(actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]))] as ("tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put")[];
+    // Refuse a bad target, recipient, filename or action set before anything
+    // is published or uploaded. This also canonicalizes the recipient and
+    // derives the credential commitment mailbox recipients open the share
+    // with; without it the SDK would sign a Policy/v1 share no receiver opens.
+    let prepared: PreparedAddressedShare;
+    try {
+      prepared = prepareAddressedShare({ target: targetInput.target, actions, policyActions, filename: targetInput.filename });
+    } catch (error) {
+      throw new SharePublishAuthorityError({ kind: "invalid-request", reason: error instanceof TypeError ? error.message : "addressed share request is invalid" });
+    }
     // Receivers find the owner's node through a registry record signed by the
     // policy owner (this session key). Publish it before storing content so a
     // registry failure cannot leave an orphaned object or an unverifiable link.
-    await node.publishActiveNodeLocation(config.registryOrigin, fetchFn);
+    try {
+      await node.publishActiveNodeLocation(config.registryOrigin, fetchFn);
+    } catch {
+      throw new SharePublishAuthorityError({ kind: "registry-unavailable" });
+    }
     const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
@@ -391,8 +403,6 @@ export function createShareAuthorityAdapters(input: {
       mode: "immutable" as const,
       initialCiphertextDigestHex: createHash("sha256").update(storedBytes).digest("hex"),
     };
-    const actions = targetInput.actions === undefined || targetInput.actions.length === 0 ? ["read"] as const : targetInput.actions;
-    const policyActions = [...new Set(actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]))] as ("tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put")[];
     const published = await publishAddressedShare({
       shareId,
       shareOrigin: config.shareOrigin,
@@ -400,12 +410,12 @@ export function createShareAuthorityAdapters(input: {
       nodeAudience: activeNode.nodeDid,
       enforcerDid: activeNode.nodeDid,
       spaceId: ownerSpaceId,
-      target,
+      target: prepared.target,
       resource: { kind: resourceKind, path: resourcePath },
       actions,
       policyActions,
       contentSource,
-      ...(credentialRequirement === undefined ? {} : { credentialRequirement }),
+      ...(prepared.credentialRequirement === undefined ? {} : { credentialRequirement: prepared.credentialRequirement }),
       filename: targetInput.filename,
       mediaType,
       byteLength,

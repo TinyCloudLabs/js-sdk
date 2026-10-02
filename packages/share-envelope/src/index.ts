@@ -23,6 +23,7 @@ export {
   type SealedEnvelope,
 } from "./aead.js";
 export { canonicalize } from "./jcs.js";
+export { canonicalEmailDomain, canonicalMailbox, isCanonicalEmailDomain, mailboxBelongsToDomain } from "./email.js";
 export {
   signCompactUcanAuthorization,
   verifyCompactUcanAuthorization,

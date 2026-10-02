@@ -112,9 +112,7 @@ function targetKind(target: Exclude<ShareTarget, { readonly kind: "bearer" }>): 
 
 function assertSafeInput(input: AddressedSharePublishOptions): void {
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(input.shareId)) throw new TypeError("addressed share id is invalid");
-  if (input.filename.length === 0 || input.filename === "." || input.filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(input.filename)) throw new TypeError("addressed filename is invalid");
   if (!Number.isSafeInteger(input.byteLength) || input.byteLength < 0 || input.byteLength > SHARE_CONTENT_LIMIT) throw new TypeError("addressed content length is invalid");
-  if (input.actions.length === 0 || input.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
   if (!Number.isFinite(input.expiresAt.getTime()) || input.expiresAt.getTime() <= Date.now()) throw new TypeError("addressed share expiry must be in the future");
   if (input.artifact === "html" && (input.resource.kind !== "prefix" || !input.actions.includes("read") || !input.actions.includes("list"))) throw new TypeError("html artifacts require a readable prefix");
   if (input.contentSource.shareId !== input.shareId || input.contentSource.selector !== input.resource.kind) throw new TypeError("addressed content source is not bound to the share");
@@ -264,14 +262,38 @@ export function addressedCredentialRequirement(target: MailboxTarget): PolicyCre
   return mailboxCredentialCommitment(normalized);
 }
 
-function assertMailboxPolicy(options: AddressedSharePublishOptions, target: MailboxTarget): void {
-  const label = target.kind === "email" ? "email" : "email-domain";
+/** Facts every addressed-share check needs, available before any side effect. */
+export type AddressedShareRequest = Pick<AddressedSharePublishOptions, "target" | "actions" | "policyActions" | "filename" | "deliveryEmail">;
+
+export interface PreparedAddressedShare {
+  /** The canonical target the envelope's recipient matcher will carry. */
+  readonly target: Exclude<ShareTarget, { readonly kind: "bearer" }>;
+  /** Present for mailbox targets: the Policy/v2 commitment to pass to `publishAddressedShare`. */
+  readonly credentialRequirement?: PolicyCredentialRequirementV1;
+}
+
+/**
+ * Runs every argument and target check of `publishAddressedShare` that does
+ * not depend on stored content, and derives the credential commitment. It has
+ * no side effects, so senders call it before uploading content or publishing
+ * a location record; a refused share then leaves nothing behind.
+ */
+export function prepareAddressedShare(request: AddressedShareRequest): PreparedAddressedShare {
+  if (request.filename.length === 0 || request.filename === "." || request.filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(request.filename)) throw new TypeError("addressed filename is invalid");
+  if (request.actions.length === 0 || request.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
+  const target = normalizeShareTarget(request.target);
+  if (target.kind === "bearer") throw new TypeError("addressed target is required");
+  if (target.kind === "recipientDid") return { target };
   if (target.kind === "emailDomain") {
-    if (!options.actions.every((action) => action === "read" || action === "list")
-      || !options.policyActions.every((action) => action === "tinycloud.kv/get" || action === "tinycloud.kv/list" || action === "tinycloud.kv/metadata")) throw new TypeError("email-domain shares are view-only");
-    if (options.deliveryEmail !== undefined) throw new TypeError("email-domain shares are not emailed");
+    if (!request.actions.every((action) => action === "read" || action === "list")
+      || !request.policyActions.every((action) => action === "tinycloud.kv/get" || action === "tinycloud.kv/list" || action === "tinycloud.kv/metadata")) throw new TypeError("email-domain shares are view-only");
+    if (request.deliveryEmail !== undefined) throw new TypeError("email-domain shares are not emailed");
   }
-  const commitment = options.credentialRequirement;
+  return { target, credentialRequirement: mailboxCredentialCommitment(target) };
+}
+
+function assertMailboxCommitment(commitment: PolicyCredentialRequirementV1 | undefined, target: MailboxTarget): void {
+  const label = target.kind === "email" ? "email" : "email-domain";
   // Without a commitment the policy would be Policy/v1, which no receiver can open.
   if (commitment === undefined) throw new TypeError(`${label} shares require a credential requirement`);
   const expected = mailboxCredentialCommitment(target);
@@ -288,9 +310,8 @@ function assertMailboxPolicy(options: AddressedSharePublishOptions, target: Mail
 /** Canonical application-neutral Policy/v3 addressed publisher shared by browser and CLI. */
 export async function publishAddressedShare(options: AddressedSharePublishOptions): Promise<PublishedShare> {
   assertSafeInput(options);
-  const target = normalizeShareTarget(options.target);
-  if (target.kind === "bearer") throw new TypeError("addressed target is required");
-  if (target.kind === "email" || target.kind === "emailDomain") assertMailboxPolicy(options, target);
+  const { target } = prepareAddressedShare(options);
+  if (target.kind !== "recipientDid") assertMailboxCommitment(options.credentialRequirement, target);
   const expiry = rfc3339Seconds(options.expiresAt);
   const matcher = targetMatcher(target);
   const capabilities = sortCanonical<UnifiedPolicyCapability>([

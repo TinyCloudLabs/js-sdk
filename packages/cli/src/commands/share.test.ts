@@ -76,6 +76,14 @@ describe("tc share command contract", () => {
     expect(originMismatch.message).toBe("share origin does not match the configured service");
   });
 
+  test("names a refused addressed request and reports a registry outage as retryable", () => {
+    const invalid = shareCliError(new SharePublishAuthorityError({ kind: "invalid-request", reason: "email-domain shares are view-only" }));
+    expect([invalid.code, invalid.message, invalid.exitCode]).toEqual(["INVALID_ARGUMENT", "email-domain shares are view-only", 2]);
+    const registry = shareCliError(new SharePublishAuthorityError({ kind: "registry-unavailable" }));
+    expect([registry.code, registry.exitCode]).toEqual(["UNAVAILABLE", 4]);
+    expect(registry.message).toContain("try again");
+  });
+
   test("registers only the current native sharing lifecycle commands", () => {
     const program = new Command();
     registerShareCommand(program);

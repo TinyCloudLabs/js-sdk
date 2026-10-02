@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { encodeSealedInlineShareUrl, unifiedPolicyV2Schema } from "@tinycloud/share-envelope";
-import { notifyShare, type SenderShareRecord } from "@tinycloud/share-sdk";
-import { createEmailCredentialRequirement, credentialRequirementDigest } from "@tinycloud/sdk-core";
+import { notifyShare, type SenderShareRecord, type TargetPublishInput } from "@tinycloud/share-sdk";
+import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest } from "@tinycloud/sdk-core";
 
 const transportDid = "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX";
 const credentialHolderDid = "did:key:z6Mko9hTggMwjSTEaJaPUfE6tqcy2xvU6BnNq3e3o8qVBiyH";
@@ -24,6 +24,16 @@ let sessionOnly = true;
 let uploadErrorCode: string | undefined;
 let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
 let authenticationError: unknown;
+let registryError: unknown;
+
+/** Digest of the descriptor the issuer serves for `name`, from sdk-core's golden vectors. */
+async function goldenDescriptorDigest(name: string): Promise<string> {
+  const fixture: unknown = JSON.parse(await readFile(new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url), "utf8"));
+  const vectors: unknown[] = typeof fixture === "object" && fixture !== null && "vectors" in fixture && Array.isArray(fixture.vectors) ? fixture.vectors : [];
+  const vector = vectors.find((candidate) => typeof candidate === "object" && candidate !== null && "name" in candidate && candidate.name === name);
+  if (typeof vector !== "object" || vector === null || !("digest" in vector) || typeof vector.digest !== "string") throw new Error(`golden descriptor vector ${name} is missing`);
+  return vector.digest;
+}
 const node = {
   did: transportDid,
   credentialHolderDid,
@@ -38,6 +48,7 @@ const node = {
   },
   activeNodeIdentity: async () => ({ origin: "https://node.example", nodeDid }),
   publishActiveNodeLocation: async (registryUrl: string) => {
+    if (registryError !== undefined) throw registryError;
     publishEvents.push(`location ${registryUrl}`);
   },
   getEncryptionNetworkIdForSpace: (spaceId: string) => {
@@ -153,6 +164,7 @@ afterEach(() => {
   registeredPolicies.length = 0;
   sessionExpiresAt = "2099-01-01T00:00:00.000Z";
   authenticationError = undefined;
+  registryError = undefined;
 });
 
 describe("TinyCloud share authority adapter", () => {
@@ -434,41 +446,71 @@ describe("TinyCloud share authority adapter", () => {
     }
   });
 
+  const addressedAdapter = () => createShareAuthorityAdapters({
+    origin: "https://share.example",
+    profileName: async () => "test",
+    fetchFn: (async () => Response.json({
+      version: "tinycloud.share/config-v2",
+      shareOrigin: "https://share.example",
+      registryOrigin: "https://registry.example",
+      credentialsOrigin: "https://credentials.example",
+    })) as unknown as typeof globalThis.fetch,
+  }).targetAdapter;
+  const addressedInput = (target: TargetPublishInput["target"], actions?: TargetPublishInput["actions"]): TargetPublishInput => ({
+    source: new TextEncoder().encode("only me"),
+    filename: "note.md",
+    target,
+    ...(actions === undefined ? {} : { actions }),
+    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    origin: "https://share.example",
+    mediaType: "text/markdown",
+  });
+
   it("publishes owner-only email shares a receiver can open (TC-556)", async () => {
-    const { targetAdapter } = createShareAuthorityAdapters({
-      origin: "https://share.example",
-      profileName: async () => "test",
-      fetchFn: (async () => Response.json({
-        version: "tinycloud.share/config-v2",
-        shareOrigin: "https://share.example",
-        registryOrigin: "https://registry.example",
-        credentialsOrigin: "https://credentials.example",
-      })) as unknown as typeof globalThis.fetch,
-    });
-    const published = await targetAdapter.publish({
-      source: new TextEncoder().encode("only me"),
-      filename: "note.md",
-      target: { kind: "email", address: "owner@Example.COM" },
-      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
-      origin: "https://share.example",
-      mediaType: "text/markdown",
-    });
+    const published = await addressedAdapter().publish(addressedInput({ kind: "email", address: "Owner@Example.COM" }));
     if ("state" in published) throw new Error("expected addressed publication");
     // The viewer verifies the node binding against the owner's registry record,
     // so it must exist before the invitation does.
     expect(publishEvents).toEqual(["location https://registry.example", "upload"]);
+    // The issuer accepts only the lowercase mailbox, so the matcher is canonical.
     expect(published.metadata.recipientMatcher).toEqual({ kind: "exactEmail", value: "owner@example.com" });
     // The accountless receiver accepts only Policy/v2 and rebuilds the
     // requirement from the signed recipient matcher, exactly as here.
     expect(registeredPolicies).toHaveLength(1);
     const policy = unifiedPolicyV2Schema.parse(registeredPolicies[0]);
-    expect(policy.schema).toBe("xyz.tinycloud.policy/policy/v2");
     const commitment = policy.credentialRequirement;
     const requirement = createEmailCredentialRequirement({ email: "owner@example.com", profile: commitment.profile, credentialType: commitment.credentialType });
     expect(await credentialRequirementDigest(requirement)).toBe(commitment.requirementDigest);
-    // The descriptor the issuer serves for the exact-email profile.
-    const golden: unknown = JSON.parse(await readFile(new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url), "utf8"));
-    expect(golden).toMatchObject({ vectors: [{ name: "email", digest: commitment.descriptorDigest }, { name: "synthetic-handle" }, { name: "email-domain-proof-v1" }] });
+    expect(commitment.descriptorDigest).toBe(await goldenDescriptorDigest("email"));
+  });
+
+  it("publishes view-only email-domain shares with the domain credential commitment", async () => {
+    const published = await addressedAdapter().publish(addressedInput({ kind: "emailDomain", domain: "Example.com" }));
+    if ("state" in published) throw new Error("expected addressed publication");
+    expect(published.metadata.recipientMatcher).toEqual({ kind: "emailDomain", value: "example.com" });
+    const commitment = unifiedPolicyV2Schema.parse(registeredPolicies[0]).credentialRequirement;
+    const requirement = createEmailDomainCredentialRequirement({ domain: "example.com", profile: commitment.profile, credentialType: commitment.credentialType });
+    expect(await credentialRequirementDigest(requirement)).toBe(commitment.requirementDigest);
+    expect(commitment.descriptorDigest).toBe(await goldenDescriptorDigest("email-domain-proof-v1"));
+  });
+
+  it("refuses an invalid addressed request before publishing a location or uploading", async () => {
+    const adapter = addressedAdapter();
+    await expect(adapter.publish(addressedInput({ kind: "emailDomain", domain: "example.com" }, ["read", "edit"])))
+      .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "email-domain shares are view-only" } });
+    await expect(adapter.publish(addressedInput({ kind: "emailDomain", domain: "example.123" })))
+      .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "recipient email domain is invalid" } });
+    await expect(adapter.publish(addressedInput({ kind: "email", address: "a%b@example.com" })))
+      .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "recipient email is invalid" } });
+    expect(publishEvents).toEqual([]);
+    expect(uploadedSpaces).toEqual([]);
+  });
+
+  it("reports an unreachable location registry as unavailable and uploads nothing", async () => {
+    registryError = new TypeError("fetch failed");
+    await expect(addressedAdapter().publish(addressedInput({ kind: "email", address: "owner@example.com" })))
+      .rejects.toMatchObject({ failure: { kind: "registry-unavailable" } });
+    expect(uploadedSpaces).toEqual([]);
   });
 
   it("uses the reusable Share SDK invitation client and forwards notify idempotency to Node", async () => {

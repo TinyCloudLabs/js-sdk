@@ -2,10 +2,18 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { sha256 } from "@noble/hashes/sha256";
 import { canonicalize, toBase64Url } from "@tinycloud/share-envelope";
-import { addressedCredentialRequirement, publishAddressedShare, type AddressedSharePublishOptions } from "../src/index.js";
+import { addressedCredentialRequirement, normalizeShareTarget, prepareAddressedShare, publishAddressedShare, type AddressedSharePublishOptions } from "../src/index.js";
 
 const digest = (value: unknown) => toBase64Url(sha256(new TextEncoder().encode(canonicalize(value))));
-const golden: unknown = JSON.parse(readFileSync(new URL("../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url), "utf8"));
+
+/** Digest of the descriptor the issuer serves for `name`, from sdk-core's golden vectors. */
+function goldenDescriptorDigest(name: string): string {
+  const fixture: unknown = JSON.parse(readFileSync(new URL("../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url), "utf8"));
+  const vectors: unknown[] = typeof fixture === "object" && fixture !== null && "vectors" in fixture && Array.isArray(fixture.vectors) ? fixture.vectors : [];
+  const vector = vectors.find((candidate) => typeof candidate === "object" && candidate !== null && "name" in candidate && candidate.name === name);
+  if (typeof vector !== "object" || vector === null || !("digest" in vector) || typeof vector.digest !== "string") throw new Error(`golden descriptor vector ${name} is missing`);
+  return vector.digest;
+}
 
 function options(overrides: Partial<AddressedSharePublishOptions>): AddressedSharePublishOptions {
   const refuse = async (): Promise<never> => { throw new Error("authority must not be reached"); };
@@ -24,17 +32,44 @@ function options(overrides: Partial<AddressedSharePublishOptions>): AddressedSha
 }
 
 describe("mailbox credential commitments", () => {
-  it("commit to the requirement the receiver rebuilds from the normalized recipient", () => {
-    const commitment = addressedCredentialRequirement({ kind: "email", address: "Reader@TinyCloud.XYZ" });
+  it("commit to the requirement the receiver rebuilds from the canonical recipient", () => {
+    const commitment = addressedCredentialRequirement({ kind: "email", address: "reader@tinycloud.xyz" });
     const profile = { id: "tinycloud.email-proof/v1", version: 1 };
     const credentialType = { id: "opencredentials.email/v1", version: 1 };
-    // The envelope's matcher keeps the local part and lowercases the domain.
-    expect(commitment.requirementDigest).toBe(digest({ type: "TinyCloudCredentialRequirement", version: 1, profile, credentialType, claims: { email: "Reader@tinycloud.xyz" }, maxAgeSeconds: 3600 }));
+    expect(commitment.requirementDigest).toBe(digest({ type: "TinyCloudCredentialRequirement", version: 1, profile, credentialType, claims: { email: "reader@tinycloud.xyz" }, maxAgeSeconds: 3600 }));
     expect(commitment).toMatchObject({ profile, credentialType, issuerDid: "did:web:issuer.credentials.org", issuerKid: "did:web:issuer.credentials.org#controller" });
+    expect(commitment.descriptorDigest).toBe(goldenDescriptorDigest("email"));
     const domain = addressedCredentialRequirement({ kind: "emailDomain", domain: "TinyCloud.xyz" });
     expect(domain.requirementDigest).toBe(digest({ type: "TinyCloudCredentialRequirement", version: 1, profile: { id: "tinycloud.email-domain-proof/v1", version: 1 }, credentialType, claims: { emailDomain: "tinycloud.xyz" }, maxAgeSeconds: 300 }));
-    // The descriptors the issuer serves for each profile.
-    expect(golden).toMatchObject({ vectors: [{ name: "email", digest: commitment.descriptorDigest }, { name: "synthetic-handle" }, { name: "email-domain-proof-v1", digest: domain.descriptorDigest }] });
+    expect(domain.descriptorDigest).toBe(goldenDescriptorDigest("email-domain-proof-v1"));
+  });
+
+  it("canonicalize a mixed-case mailbox to the lowercase form the issuer accepts", async () => {
+    expect(normalizeShareTarget({ kind: "email", address: "Reader@TinyCloud.XYZ" })).toEqual({ kind: "email", address: "reader@tinycloud.xyz" });
+    const lowercase = addressedCredentialRequirement({ kind: "email", address: "reader@tinycloud.xyz" });
+    expect(addressedCredentialRequirement({ kind: "email", address: "Reader@TinyCloud.XYZ" })).toEqual(lowercase);
+    expect(prepareAddressedShare({ target: { kind: "email", address: "Reader@TinyCloud.XYZ" }, actions: ["read"], policyActions: ["tinycloud.kv/get"], filename: "readme.md" }))
+      .toEqual({ target: { kind: "email", address: "reader@tinycloud.xyz" }, credentialRequirement: lowercase });
+    // A sender that canonicalizes the mailbox itself passes the guard for mixed-case input.
+    await expect(publishAddressedShare(options({ target: { kind: "email", address: "Reader@TinyCloud.XYZ" }, credentialRequirement: lowercase }))).rejects.toThrow("authority must not be reached");
+  });
+
+  it("refuse recipients the issuer or receiver would reject", () => {
+    for (const address of ["reader@tinycloud.123", "reader@localhost", "a%b@tinycloud.xyz", "reader@tinycloud..xyz", "@tinycloud.xyz"]) {
+      expect(() => normalizeShareTarget({ kind: "email", address })).toThrow("recipient email is invalid");
+    }
+    for (const domain of ["example.123", "localhost", "tinycloud.xyz.", "192.168.0.1", "-tc.xyz"]) {
+      expect(() => normalizeShareTarget({ kind: "emailDomain", domain })).toThrow("recipient email domain is invalid");
+    }
+  });
+});
+
+describe("addressed publication preflight", () => {
+  it("refuses a domain share that is not view-only without touching any authority", () => {
+    const request = { target: { kind: "emailDomain" as const, domain: "tinycloud.xyz" }, actions: ["read", "edit"] as const, policyActions: ["tinycloud.kv/get", "tinycloud.kv/put"] as const, filename: "readme.md" };
+    expect(() => prepareAddressedShare(request)).toThrow("email-domain shares are view-only");
+    expect(() => prepareAddressedShare({ ...request, actions: ["read"], policyActions: ["tinycloud.kv/get"], deliveryEmail: "reader@tinycloud.xyz" })).toThrow("not emailed");
+    expect(() => prepareAddressedShare({ ...request, actions: ["read"], policyActions: ["tinycloud.kv/get"], filename: "../readme.md" })).toThrow("addressed filename is invalid");
   });
 });
 

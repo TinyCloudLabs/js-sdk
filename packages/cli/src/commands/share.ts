@@ -83,6 +83,12 @@ export function shareCliError(error: unknown): CLIError {
     if (failure.kind === "origin-mismatch") {
       return new CLIError("ORIGIN_MISMATCH", "share origin does not match the configured service", 2);
     }
+    if (failure.kind === "invalid-request") {
+      return new CLIError("INVALID_ARGUMENT", failure.reason, 2);
+    }
+    if (failure.kind === "registry-unavailable") {
+      return new CLIError("UNAVAILABLE", "the TinyCloud location registry could not be reached, so nothing was shared; try again shortly", 4);
+    }
   }
   if (error instanceof SharePublishError) {
     const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
