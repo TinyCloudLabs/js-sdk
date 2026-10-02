@@ -1,5 +1,11 @@
 # @tinycloud/share-sdk
 
+## 1.0.0-beta.6
+
+### Patch Changes
+
+- d8b122e: Bind restored-session share publication to the signed owner space, compare EIP-155 owner addresses without case sensitivity, classify authority failures, and constrain implicit share expiry to session lifetime.
+
 ## 1.0.0-beta.5
 
 ### Minor Changes

@@ -13682,16 +13682,17 @@ var init_dist2 = __esm({
                 ...options?.ifNoneMatch === void 0 ? {} : { "if-none-match": options.ifNoneMatch }
               }
             );
+            if (response.status === 401 || response.status === 403) {
+              const errorText = await response.text();
+              const message = errorText.trim().length > 0 ? errorText : `Failed to put key "${key}": ${response.status} - ${response.statusText || "authorization failed"}`;
+              const { resource, action: requiredAction } = parseAuthError(errorText);
+              return err(authUnauthorizedError("kv", message, {
+                status: response.status,
+                ...requiredAction && { requiredAction },
+                ...resource && { resource }
+              }));
+            }
             if (!response.ok) {
-              if (response.status === 401) {
-                const errorText2 = await response.text();
-                const { resource, action } = parseAuthError(errorText2);
-                return err(authUnauthorizedError("kv", errorText2, {
-                  status: response.status,
-                  ...action && { requiredAction: action },
-                  ...resource && { resource }
-                }));
-              }
               const errorText = await response.text();
               if (response.status === 412) {
                 return err(serviceError(
@@ -17970,6 +17971,7 @@ function redactPublishedShare(result) {
       target: { ...result.metadata.target },
       resource: { ...result.metadata.resource },
       actions: [...result.metadata.actions],
+      ...result.metadata.expiryClamped === void 0 ? {} : { expiryClamped: result.metadata.expiryClamped },
       expiresAt: result.metadata.expiresAt,
       display: { ...result.metadata.display }
     }
@@ -18329,6 +18331,7 @@ async function publishTargetShare(input) {
     ...input.actions === void 0 ? {} : { actions: input.actions },
     target,
     expiresAt,
+    expiryWasExplicit: input.expiryWasExplicit ?? input.expiresAt !== void 0,
     origin: input.origin,
     ...input.notify === void 0 ? {} : { notify: input.notify }
   });
@@ -18945,7 +18948,11 @@ function canonicalViewerUrl(viewerOrigin) {
 async function createNativeShare(sharing, input) {
   if (!input.path || input.path.startsWith("/") || input.path.endsWith("/") || input.path.includes("..") || input.path.includes("//")) throw new TypeError("native share path must be one canonical TinyCloud KV key");
   const generated = await sharing.generate({ path: input.path, actions: ["tinycloud.kv/get"], expiry: input.expiresAt });
-  if (generated.ok !== true) throw new Error(typeof generated.error?.message === "string" ? generated.error.message : "TinyCloud sharing service rejected delegation generation");
+  if (generated.ok !== true) {
+    const error = new Error(typeof generated.error?.message === "string" ? generated.error.message : "TinyCloud sharing service rejected delegation generation");
+    if (typeof generated.error?.code === "string") Object.assign(error, { code: generated.error.code });
+    throw error;
+  }
   if (typeof generated.data?.token !== "string" || typeof generated.data.delegation?.cid !== "string" || !(generated.data.expiresAt instanceof Date)) throw new Error("TinyCloud sharing service returned incomplete delegation metadata");
   const delegation = sharing.decodeLink(generated.data.token);
   if (typeof delegation.spaceId !== "string" || delegation.spaceId.length === 0 || typeof delegation.path !== "string" || delegation.path.length === 0) throw new Error("TinyCloud sharing service returned a non-canonical delegation authority");
@@ -29393,6 +29400,15 @@ async function writeShareOutput(directory, filename, bytes, force) {
   return join4(outputDirectory, safeName);
 }
 
+// src/share/errors.ts
+var SharePublishAuthorityError = class extends Error {
+  constructor(failure) {
+    super(failure.kind);
+    this.failure = failure;
+    this.name = "SharePublishAuthorityError";
+  }
+};
+
 // src/commands/share.ts
 var SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var shareServices = {};
@@ -29409,6 +29425,33 @@ function parseShareTarget(value) {
 }
 function shareCliError(error) {
   if (error instanceof CLIError) return error;
+  if (error instanceof SharePublishAuthorityError) {
+    const failure = error.failure;
+    const profileName = "profileName" in failure ? failure.profileName : void 0;
+    const localKey = "localKey" in failure && failure.localKey === true;
+    const profileHint = profileName === void 0 ? "" : `--profile ${profileName} `;
+    const loginHint = `tc ${profileHint}auth login${localKey ? " --method local" : ""}`;
+    if (failure.kind === "owner-space-unresolved") {
+      return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run \`${loginHint}\``, 3);
+    }
+    if (failure.kind === "scope-denied") {
+      const requiredAction = failure.requiredAction === void 0 ? "" : ` (${failure.requiredAction})`;
+      return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; renew it with \`${loginHint}\` using the required capability`, 5);
+    }
+    if (failure.kind === "lifetime-exceeds-session") {
+      const expiresAt = failure.sessionExpiresAt.toISOString();
+      if (failure.reason === "session-too-close") {
+        return new CLIError("AUTH_REQUIRED", `the signed session expires too soon (${expiresAt}); log in again with \`${loginHint}\``, 3);
+      }
+      if (failure.reason === "below-minimum") {
+        return new CLIError("SESSION_LIFETIME_EXCEEDED", "share expiry must be at least 60 seconds from now; use a longer --expires value", 2);
+      }
+      return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime exceeds session expiry ${expiresAt}; use a shorter --expires value or renew the session with \`${loginHint}\``, 2);
+    }
+    if (failure.kind === "origin-mismatch") {
+      return new CLIError("ORIGIN_MISMATCH", "share origin does not match the configured service", 2);
+    }
+  }
   if (error instanceof SharePublishError) {
     const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
     const code4 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
@@ -29491,7 +29534,7 @@ function assertAggregateInputLimit(inputs, maxBytes) {
 }
 function registerShareCommand(program2) {
   const share = program2.command("share").description("Publish and consume TinyCloud Share links");
-  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime", "7d").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
+  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
     try {
       const json = jsonOutput(options, command);
       const maxBytes = byteLimit(options.maxBytes);
@@ -29513,7 +29556,8 @@ function registerShareCommand(program2) {
         target,
         resourceKind: options.prefix || inputs.length > 1 ? "prefix" : "exact",
         actions,
-        expiresAt: expires(options.expires),
+        expiresAt: expires(options.expires ?? "7d"),
+        expiryWasExplicit: options.expires !== void 0,
         origin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxBytes },
         notify: options.notify === true,
@@ -29533,7 +29577,9 @@ function registerShareCommand(program2) {
         const delivery = await notifyShare({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
         if (delivery.state === "partial-failure") process.exitCode = 9;
       }
-      if (json) writeJson2(redactPublishedShare(result));
+      if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).
+`);
+      if (json) writeJson2({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true });
       else publishHuman(result);
     } catch (error) {
       handleError(shareCliError(error));
@@ -31015,6 +31061,12 @@ var MAX_INLINE_BYTES2 = 256 * 1024;
 
 // src/share/adapters.ts
 init_dist4();
+import { extractSiweExpiration, InvalidRestoredSessionError } from "@tinycloud/node-sdk";
+function requiredKvAction(meta) {
+  if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return void 0;
+  const action = meta.requiredAction;
+  return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" ? action : void 0;
+}
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 function createEncryptedSessionHistory() {
   const records = /* @__PURE__ */ new Map();
@@ -31170,16 +31222,76 @@ function createShareAuthorityAdapters(input = {}) {
     };
   })();
   let nodePromise;
+  let activeProfileName2;
   const authenticatedNode = async () => nodePromise ??= (async () => {
     const profile = await (input.profileName?.() ?? selectedProfileName());
+    activeProfileName2 = profile;
     const context = await ProfileManager.resolveContext({ profile, ...input.nodeOrigin === void 0 ? {} : { host: input.nodeOrigin } });
     const { ensureAuthenticated: ensureAuthenticated2 } = await Promise.resolve().then(() => (init_sdk(), sdk_exports));
-    return ensureAuthenticated2(context);
+    try {
+      return await ensureAuthenticated2(context);
+    } catch (error) {
+      const profileConfig = await ProfileManager.getProfile(profile).catch(() => void 0);
+      const code4 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+      if (error instanceof InvalidRestoredSessionError || code4 === "AUTH_EXPIRED") {
+        throw new SharePublishAuthorityError({
+          kind: "owner-space-unresolved",
+          localKey: profileConfig?.authMethod === "local",
+          profileName: profile
+        });
+      }
+      throw error;
+    }
   })();
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
-    if (targetInput.origin !== config.shareOrigin || node.spaceId === void 0) throw new Error("share publication is not bound to the configured Share service");
+    const session = node.restorableSession;
+    const ownerSpaceId = session?.spaceId;
+    const localKey = !node.isSessionOnly;
+    let sessionExpiresAt;
+    try {
+      sessionExpiresAt = node.isSessionOnly && session?.siwe ? extractSiweExpiration(session.siwe) : void 0;
+    } catch {
+      throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName2 });
+    }
+    if (ownerSpaceId === void 0 || node.isSessionOnly && (!session?.siwe || !session.signature || sessionExpiresAt === void 0)) {
+      throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName2 });
+    }
+    if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
+    if (node.isSessionOnly && sessionExpiresAt !== void 0) {
+      const roundedSessionExpiry = new Date(Math.floor(sessionExpiresAt.getTime() / 1e3) * 1e3);
+      if (roundedSessionExpiry.getTime() <= Date.now() + 6e4) {
+        throw new SharePublishAuthorityError({
+          kind: "lifetime-exceeds-session",
+          sessionExpiresAt,
+          reason: "session-too-close",
+          localKey,
+          profileName: activeProfileName2
+        });
+      }
+    }
+    const expiryClamped = node.isSessionOnly && sessionExpiresAt !== void 0 && targetInput.expiresAt > sessionExpiresAt;
+    if (expiryClamped && targetInput.expiryWasExplicit) {
+      throw new SharePublishAuthorityError({
+        kind: "lifetime-exceeds-session",
+        sessionExpiresAt,
+        reason: "beyond-session",
+        localKey,
+        profileName: activeProfileName2
+      });
+    }
+    const effectiveExpiry = expiryClamped ? sessionExpiresAt : targetInput.expiresAt;
+    const expiresAt = new Date(Math.floor(effectiveExpiry.getTime() / 1e3) * 1e3);
+    if (expiresAt.getTime() <= Date.now() + 6e4) {
+      throw new SharePublishAuthorityError({
+        kind: "lifetime-exceeds-session",
+        sessionExpiresAt: sessionExpiresAt ?? expiresAt,
+        reason: node.isSessionOnly && expiryClamped && !targetInput.expiryWasExplicit ? "session-too-close" : "below-minimum",
+        localKey,
+        profileName: activeProfileName2
+      });
+    }
     const activeNode = await node.activeNodeIdentity();
     const shareId = crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === void 0 || targetInput.files.length === 0 ? [{ bytes: targetInput.source, filename: targetInput.filename, mediaType: targetInput.mediaType }] : targetInput.files;
@@ -31188,16 +31300,43 @@ function createShareAuthorityAdapters(input = {}) {
       if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
       const file2 = files[0];
       const resourcePath2 = `xyz.tinycloud.share/shares/${shareId}/${targetInput.filename}`;
-      const written = await node.kvForSpace(node.spaceId).put(resourcePath2, file2.bytes.slice(), {
+      const written = await node.kvForSpace(ownerSpaceId).put(resourcePath2, file2.bytes.slice(), {
         contentType: targetInput.mediaType ?? file2.mediaType ?? "application/octet-stream"
       });
-      if (!written.ok) throw new Error("native bearer source upload was rejected");
-      const native = await createNativeShare(node.sharing, {
-        path: resourcePath2,
-        expiresAt: targetInput.expiresAt,
-        viewerOrigin: config.shareOrigin
-      });
-      if (native.spaceId !== node.spaceId) throw new Error("native bearer delegation authority does not match the authenticated owner space");
+      if (!written.ok) {
+        const code4 = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : void 0;
+        if (code4 === "AUTH_UNAUTHORIZED" || code4 === "PERMISSION_DENIED") {
+          const requiredAction = requiredKvAction(written.error.meta);
+          throw new SharePublishAuthorityError({
+            kind: "scope-denied",
+            capability: "KV upload",
+            ...requiredAction === void 0 ? {} : { requiredAction },
+            localKey,
+            profileName: activeProfileName2
+          });
+        }
+        throw new Error("native bearer source upload failed");
+      }
+      let native;
+      try {
+        native = await createNativeShare(node.sharing, {
+          path: resourcePath2,
+          expiresAt,
+          viewerOrigin: config.shareOrigin
+        });
+      } catch (error) {
+        const code4 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+        if (code4 === "AUTH_UNAUTHORIZED" || code4 === "PERMISSION_DENIED") {
+          throw new SharePublishAuthorityError({
+            kind: "scope-denied",
+            capability: "sharing delegation",
+            localKey,
+            profileName: activeProfileName2
+          });
+        }
+        throw error;
+      }
+      if (native.spaceId !== ownerSpaceId) throw new Error("native bearer delegation authority does not match the authenticated owner space");
       const result = {
         protocol: "tinycloud-share",
         version: SHARE_PUBLISH_RESULT_VERSION,
@@ -31211,6 +31350,7 @@ function createShareAuthorityAdapters(input = {}) {
           target: { kind: "bearer", origin: activeNode.origin, nodeAudience: activeNode.nodeDid, spaceId: native.spaceId },
           resource: { kind: "exact", path: resourcePath2 },
           actions: ["read"],
+          ...expiryClamped ? { expiryClamped: true } : {},
           expiresAt: native.expiresAt.toISOString(),
           display: { filename: targetInput.filename },
           recipientMatcher: { kind: "bearer" },
@@ -31227,15 +31367,28 @@ function createShareAuthorityAdapters(input = {}) {
     const byteLength = file.bytes.byteLength;
     if (!Number.isSafeInteger(byteLength) || byteLength > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
     const mediaType = targetInput.mediaType ?? file.mediaType ?? "application/octet-stream";
-    const encryptionNetwork = node.getEncryptionNetworkIdForSpace(node.spaceId);
+    const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
     const storedBytes = new TextEncoder().encode(canonicalize3(encrypted.data));
-    const stored = await node.kvForSpace(node.spaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
-    if (!stored.ok) throw new Error("addressed source upload was rejected");
+    const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
+    if (!stored.ok) {
+      const code4 = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : void 0;
+      if (code4 === "AUTH_UNAUTHORIZED" || code4 === "PERMISSION_DENIED") {
+        const requiredAction = requiredKvAction(stored.error.meta);
+        throw new SharePublishAuthorityError({
+          kind: "scope-denied",
+          capability: "KV upload",
+          ...requiredAction === void 0 ? {} : { requiredAction },
+          localKey,
+          profileName: activeProfileName2
+        });
+      }
+      throw new Error("addressed source upload failed");
+    }
     const contentSource = {
       shareId,
-      kvResource: `${node.spaceId}/kv/${resourcePath}`,
+      kvResource: `${ownerSpaceId}/kv/${resourcePath}`,
       selector: resourceKind,
       encryptionNetwork: encrypted.data.networkId,
       encryptedSymmetricKeyDigestHex: encrypted.data.encryptedSymmetricKeyHash,
@@ -31245,13 +31398,13 @@ function createShareAuthorityAdapters(input = {}) {
     };
     const actions = targetInput.actions === void 0 || targetInput.actions.length === 0 ? ["read"] : targetInput.actions;
     const policyActions = [...new Set(actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]))];
-    return publishAddressedShare({
+    const published = await publishAddressedShare({
       shareId,
       shareOrigin: config.shareOrigin,
       nodeOrigin: activeNode.origin,
       nodeAudience: activeNode.nodeDid,
       enforcerDid: activeNode.nodeDid,
-      spaceId: node.spaceId,
+      spaceId: ownerSpaceId,
       target: targetInput.target,
       resource: { kind: resourceKind, path: resourcePath },
       actions,
@@ -31260,7 +31413,7 @@ function createShareAuthorityAdapters(input = {}) {
       filename: targetInput.filename,
       mediaType,
       byteLength,
-      expiresAt: targetInput.expiresAt,
+      expiresAt,
       // App-neutral owner authority: the Node SDK owns every Policy/v3
       // transport hop, so the CLI supplies only owner signing material.
       authority: {
@@ -31270,6 +31423,8 @@ function createShareAuthorityAdapters(input = {}) {
         registerPolicy: (request) => node.registerPolicy(request)
       }
     });
+    if (expiryClamped) Object.defineProperty(published.metadata, "expiryClamped", { value: true, enumerable: true });
+    return published;
   } };
   const delivery = { deliver: input.deliver ?? (async (request) => {
     const record = request.record;

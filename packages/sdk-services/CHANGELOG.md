@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-services
 
+## 3.0.0-beta.14
+
+### Patch Changes
+
+- d8b122e: Preserve actionable sharing and KV authorization diagnostics while keeping CLI output safe and session expiry guidance prioritized.
+- d8b122e: Restore backwards-compatible auth codes and preserve typed session and authorization diagnostics across SDK boundaries.
+- d8b122e: Harden share publication expiry clamping and map restored-session and authorization failures to typed, safe errors.
+
 ## 3.0.0-beta.10
 
 ### Major Changes

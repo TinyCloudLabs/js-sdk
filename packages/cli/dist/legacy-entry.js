@@ -13791,16 +13791,17 @@ var init_dist2 = __esm({
                 ...options?.ifNoneMatch === void 0 ? {} : { "if-none-match": options.ifNoneMatch }
               }
             );
+            if (response.status === 401 || response.status === 403) {
+              const errorText = await response.text();
+              const message = errorText.trim().length > 0 ? errorText : `Failed to put key "${key}": ${response.status} - ${response.statusText || "authorization failed"}`;
+              const { resource, action: requiredAction } = parseAuthError(errorText);
+              return err(authUnauthorizedError("kv", message, {
+                status: response.status,
+                ...requiredAction && { requiredAction },
+                ...resource && { resource }
+              }));
+            }
             if (!response.ok) {
-              if (response.status === 401) {
-                const errorText2 = await response.text();
-                const { resource, action } = parseAuthError(errorText2);
-                return err(authUnauthorizedError("kv", errorText2, {
-                  status: response.status,
-                  ...action && { requiredAction: action },
-                  ...resource && { resource }
-                }));
-              }
               const errorText = await response.text();
               if (response.status === 412) {
                 return err(serviceError(
@@ -18045,6 +18046,7 @@ function redactPublishedShare(result) {
       target: { ...result.metadata.target },
       resource: { ...result.metadata.resource },
       actions: [...result.metadata.actions],
+      ...result.metadata.expiryClamped === void 0 ? {} : { expiryClamped: result.metadata.expiryClamped },
       expiresAt: result.metadata.expiresAt,
       display: { ...result.metadata.display }
     }
@@ -18404,6 +18406,7 @@ async function publishTargetShare(input) {
     ...input.actions === void 0 ? {} : { actions: input.actions },
     target,
     expiresAt,
+    expiryWasExplicit: input.expiryWasExplicit ?? input.expiresAt !== void 0,
     origin: input.origin,
     ...input.notify === void 0 ? {} : { notify: input.notify }
   });
@@ -34129,6 +34132,15 @@ async function writeShareOutput(directory, filename, bytes, force) {
   return join6(outputDirectory, safeName);
 }
 
+// src/share/errors.ts
+var SharePublishAuthorityError = class extends Error {
+  constructor(failure) {
+    super(failure.kind);
+    this.failure = failure;
+    this.name = "SharePublishAuthorityError";
+  }
+};
+
 // src/commands/share.ts
 var SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var shareServices = {};
@@ -34142,6 +34154,33 @@ function parseShareTarget(value) {
 }
 function shareCliError(error) {
   if (error instanceof CLIError) return error;
+  if (error instanceof SharePublishAuthorityError) {
+    const failure = error.failure;
+    const profileName = "profileName" in failure ? failure.profileName : void 0;
+    const localKey = "localKey" in failure && failure.localKey === true;
+    const profileHint = profileName === void 0 ? "" : `--profile ${profileName} `;
+    const loginHint = `tc ${profileHint}auth login${localKey ? " --method local" : ""}`;
+    if (failure.kind === "owner-space-unresolved") {
+      return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run \`${loginHint}\``, 3);
+    }
+    if (failure.kind === "scope-denied") {
+      const requiredAction = failure.requiredAction === void 0 ? "" : ` (${failure.requiredAction})`;
+      return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; renew it with \`${loginHint}\` using the required capability`, 5);
+    }
+    if (failure.kind === "lifetime-exceeds-session") {
+      const expiresAt = failure.sessionExpiresAt.toISOString();
+      if (failure.reason === "session-too-close") {
+        return new CLIError("AUTH_REQUIRED", `the signed session expires too soon (${expiresAt}); log in again with \`${loginHint}\``, 3);
+      }
+      if (failure.reason === "below-minimum") {
+        return new CLIError("SESSION_LIFETIME_EXCEEDED", "share expiry must be at least 60 seconds from now; use a longer --expires value", 2);
+      }
+      return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime exceeds session expiry ${expiresAt}; use a shorter --expires value or renew the session with \`${loginHint}\``, 2);
+    }
+    if (failure.kind === "origin-mismatch") {
+      return new CLIError("ORIGIN_MISMATCH", "share origin does not match the configured service", 2);
+    }
+  }
   if (error instanceof SharePublishError) {
     const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
     const code3 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
@@ -34224,7 +34263,7 @@ function assertAggregateInputLimit(inputs, maxBytes) {
 }
 function registerShareCommand(program) {
   const share = program.command("share").description("Publish and consume TinyCloud Share links");
-  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime", "7d").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
+  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
     try {
       const json = jsonOutput(options, command);
       const maxBytes = byteLimit(options.maxBytes);
@@ -34246,7 +34285,8 @@ function registerShareCommand(program) {
         target,
         resourceKind: options.prefix || inputs.length > 1 ? "prefix" : "exact",
         actions,
-        expiresAt: expires(options.expires),
+        expiresAt: expires(options.expires ?? "7d"),
+        expiryWasExplicit: options.expires !== void 0,
         origin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxBytes },
         notify: options.notify === true,
@@ -34266,7 +34306,9 @@ function registerShareCommand(program) {
         const delivery = await notifyShare({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
         if (delivery.state === "partial-failure") process.exitCode = 9;
       }
-      if (json) writeJson2(redactPublishedShare(result));
+      if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).
+`);
+      if (json) writeJson2({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true });
       else publishHuman(result);
     } catch (error) {
       handleError(shareCliError(error));

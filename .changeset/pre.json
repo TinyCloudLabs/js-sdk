@@ -46,6 +46,11 @@
     "tc-500-received-share-metadata",
     "tc-500-sealed-delivery-wire",
     "tc-500-share-release-correction",
+    "tc-538-authority-followup",
+    "tc-538-round-four",
+    "tc-538-round-three",
+    "tc-538-round-two",
+    "tc-538-share-restored-space",
     "tidy-cats-share"
   ]
 }

@@ -1,5 +1,20 @@
 # @tinycloudlabs/sdk-core
 
+## 3.0.0-beta.14
+
+### Patch Changes
+
+- d8b122e: Bind restored-session share publication to the signed owner space, compare EIP-155 owner addresses without case sensitivity, classify authority failures, and constrain implicit share expiry to session lifetime.
+- d8b122e: Preserve actionable sharing and KV authorization diagnostics while keeping CLI output safe and session expiry guidance prioritized.
+- d8b122e: Restore backwards-compatible auth codes and preserve typed session and authorization diagnostics across SDK boundaries.
+- d8b122e: Harden share publication expiry clamping and map restored-session and authorization failures to typed, safe errors.
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+  - @tinycloud/share-sdk@1.0.0-beta.6
+  - @tinycloud/sdk-services@3.0.0-beta.14
+
 ## 3.0.0-beta.13
 
 ### Patch Changes
