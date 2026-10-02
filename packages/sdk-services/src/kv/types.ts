@@ -23,8 +23,11 @@ export interface KVServiceConfig {
   prefix?: string;
 
   /**
-   * Default timeout in milliseconds for KV operations.
-   * Overrides the context-level timeout if set.
+   * Default timeout in milliseconds for each KV request, including reading
+   * the response body. When it elapses the request is aborted and the
+   * operation returns an `ErrorCodes.TIMEOUT` error. A per-call `timeout`
+   * option overrides it. Unset (the default), `0`, or `Infinity` means no
+   * timeout.
    */
   timeout?: number;
 
@@ -61,7 +64,8 @@ export interface KVGetOptions {
   maxResponseBytes?: number;
 
   /**
-   * Custom timeout for this operation in milliseconds.
+   * Custom timeout for this operation in milliseconds. Overrides
+   * `KVServiceConfig.timeout`; `0` disables a configured timeout.
    */
   timeout?: number;
 
@@ -98,7 +102,8 @@ export interface KVPutOptions {
   ifNoneMatch?: "*";
 
   /**
-   * Custom timeout for this operation in milliseconds.
+   * Custom timeout for this operation in milliseconds. Overrides
+   * `KVServiceConfig.timeout`; `0` disables a configured timeout.
    */
   timeout?: number;
 
@@ -142,7 +147,8 @@ export interface KVBatchPutOptions {
   prefix?: string;
 
   /**
-   * Custom timeout for this operation in milliseconds.
+   * Custom timeout for this operation in milliseconds. Overrides
+   * `KVServiceConfig.timeout`; `0` disables a configured timeout.
    */
   timeout?: number;
 
@@ -212,7 +218,8 @@ export interface KVListOptions {
   cursor?: string;
 
   /**
-   * Custom timeout for this operation in milliseconds.
+   * Custom timeout for this operation in milliseconds. Overrides
+   * `KVServiceConfig.timeout`; `0` disables a configured timeout.
    */
   timeout?: number;
 
@@ -235,7 +242,8 @@ export interface KVDeleteOptions {
   ifMatch?: string;
 
   /**
-   * Custom timeout for this operation in milliseconds.
+   * Custom timeout for this operation in milliseconds. Overrides
+   * `KVServiceConfig.timeout`; `0` disables a configured timeout.
    */
   timeout?: number;
 
@@ -255,7 +263,8 @@ export interface KVHeadOptions {
   prefix?: string;
 
   /**
-   * Custom timeout for this operation in milliseconds.
+   * Custom timeout for this operation in milliseconds. Overrides
+   * `KVServiceConfig.timeout`; `0` disables a configured timeout.
    */
   timeout?: number;
 
@@ -303,7 +312,8 @@ export interface KVCreateSignedReadUrlOptions {
   etag?: string;
 
   /**
-   * Custom timeout for this operation in milliseconds.
+   * Custom timeout for this operation in milliseconds. Overrides
+   * `KVServiceConfig.timeout`; `0` disables a configured timeout.
    */
   timeout?: number;
 

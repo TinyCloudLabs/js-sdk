@@ -17,7 +17,10 @@ export interface DuckDbServiceConfig {
   defaultDatabase?: string;
 
   /**
-   * Default timeout in milliseconds for DuckDB operations.
+   * Timeout in milliseconds for each DuckDB request, including reading the
+   * response body. When it elapses the request is aborted and the operation
+   * returns an `ErrorCodes.TIMEOUT` error. Unset (the default), `0`, or
+   * `Infinity` means no timeout.
    */
   timeout?: number;
 
