@@ -12,10 +12,15 @@ const deliveryAuthorizationInputs: Array<Record<string, unknown>> = [];
 let deliveryAuthorization: { readonly key: string; readonly body: string; readonly receipt: Record<string, unknown> } | undefined;
 let deliveryAuthorizationConflicts = 0;
 
+let nodeSpaceId: string | undefined = "tinycloud:test-space";
+let restoredSpaceId: string | undefined;
+let nativeSpaceId = "tinycloud:test-space";
+const uploadedSpaces: string[] = [];
 const node = {
   did: transportDid,
   credentialHolderDid,
-  spaceId: "tinycloud:test-space",
+  get spaceId() { return nodeSpaceId; },
+  get restorableSession() { return restoredSpaceId === undefined ? undefined : { spaceId: restoredSpaceId }; },
   activeNodeIdentity: async () => ({ origin: "https://node.example", nodeDid }),
   getEncryptionNetworkIdForSpace: () => `urn:tinycloud:encryption:${credentialHolderDid}:default`,
   encryption: {
@@ -33,7 +38,11 @@ const node = {
       },
     }),
   },
-  kvForSpace: () => ({ put: async () => ({ ok: true as const }) }),
+  kvForSpace: (spaceId: string) => ({ put: async () => { uploadedSpaces.push(spaceId); return { ok: true as const }; } }),
+  sharing: {
+    generate: async () => ({ ok: true, data: { token: "opaque-share-token", delegation: { cid: "bafy-native-share" }, expiresAt: new Date("2030-01-01T00:00:00.000Z") } }),
+    decodeLink: () => ({ spaceId: nativeSpaceId, path: "xyz.tinycloud.share/shares/report.md" }),
+  },
   createUnifiedOwnerRoot: async (input: { readonly ownerDid: string; readonly role: "policy-authority" | "policy-enforcement" }) => {
     // Match TinyCloudNode.createUnifiedOwnerRoot's holder-identity guard. A
     // transport DID here must fail, so this real adapter path catches it.
@@ -91,6 +100,47 @@ mock.module("../lib/sdk.js", () => ({ ensureAuthenticated: async () => node }));
 const { createShareAuthorityAdapters } = await import("./adapters.js");
 
 describe("TinyCloud share authority adapter", () => {
+  it("publishes bearer shares from the restored owner space and preserves origin binding", async () => {
+    nodeSpaceId = undefined;
+    restoredSpaceId = "tinycloud:restored-owner-space";
+    nativeSpaceId = restoredSpaceId;
+    uploadedSpaces.length = 0;
+    const { targetAdapter } = createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async () => Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      })) as typeof globalThis.fetch,
+    });
+
+    const published = await targetAdapter.publish({
+      source: new TextEncoder().encode("restored-session share"),
+      filename: "report.md",
+      target: { kind: "bearer" },
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      origin: "https://share.example",
+    });
+
+    expect("state" in published).toBe(false);
+    if ("state" in published) throw new Error("expected bearer publish success");
+    expect(uploadedSpaces).toEqual([restoredSpaceId]);
+    expect(published.metadata.target.spaceId).toBe(restoredSpaceId);
+    expect(published.metadata.origin).toBe("https://share.example");
+    await expect(targetAdapter.publish({
+      source: new TextEncoder().encode("wrong origin"),
+      filename: "report.md",
+      target: { kind: "bearer" },
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      origin: "https://attacker.example",
+    })).rejects.toThrow("share publication is not bound to the configured Share service");
+    expect(uploadedSpaces).toEqual([restoredSpaceId]);
+    nodeSpaceId = "tinycloud:test-space";
+    restoredSpaceId = undefined;
+    nativeSpaceId = "tinycloud:test-space";
+  });
   it("routes addressed delivery through Policy/v3 with no retired Node delivery fallback", async () => {
     const source = await readFile(new URL("./adapters.ts", import.meta.url), "utf8");
     expect(source).toContain("node.authorizeShareDeliveryV3({");

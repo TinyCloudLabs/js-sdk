@@ -198,7 +198,8 @@ export function createShareAuthorityAdapters(input: {
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
-    if (targetInput.origin !== config.shareOrigin || node.spaceId === undefined) throw new Error("share publication is not bound to the configured Share service");
+    const ownerSpaceId = node.spaceId ?? node.restorableSession?.spaceId;
+    if (targetInput.origin !== config.shareOrigin || ownerSpaceId === undefined) throw new Error("share publication is not bound to the configured Share service");
     const activeNode = await node.activeNodeIdentity();
     const shareId = crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === undefined || targetInput.files.length === 0
@@ -209,7 +210,7 @@ export function createShareAuthorityAdapters(input: {
       if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
       const file = files[0]!;
       const resourcePath = `xyz.tinycloud.share/shares/${shareId}/${targetInput.filename}`;
-      const written = await node.kvForSpace(node.spaceId).put(resourcePath, file.bytes.slice(), {
+      const written = await node.kvForSpace(ownerSpaceId).put(resourcePath, file.bytes.slice(), {
         contentType: targetInput.mediaType ?? file.mediaType ?? "application/octet-stream",
       });
       if (!written.ok) throw new Error("native bearer source upload was rejected");
@@ -218,7 +219,7 @@ export function createShareAuthorityAdapters(input: {
         expiresAt: targetInput.expiresAt,
         viewerOrigin: config.shareOrigin,
       });
-      if (native.spaceId !== node.spaceId) throw new Error("native bearer delegation authority does not match the authenticated owner space");
+      if (native.spaceId !== ownerSpaceId) throw new Error("native bearer delegation authority does not match the authenticated owner space");
       const result = {
         protocol: "tinycloud-share" as const,
         version: SHARE_PUBLISH_RESULT_VERSION,
@@ -251,15 +252,15 @@ export function createShareAuthorityAdapters(input: {
     const byteLength = file.bytes.byteLength;
     if (!Number.isSafeInteger(byteLength) || byteLength > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
     const mediaType = targetInput.mediaType ?? file.mediaType ?? "application/octet-stream";
-    const encryptionNetwork = node.getEncryptionNetworkIdForSpace(node.spaceId);
+    const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
     const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
-    const stored = await node.kvForSpace(node.spaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
+    const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
     if (!stored.ok) throw new Error("addressed source upload was rejected");
     const contentSource = {
       shareId,
-      kvResource: `${node.spaceId}/kv/${resourcePath}`,
+      kvResource: `${ownerSpaceId}/kv/${resourcePath}`,
       selector: resourceKind,
       encryptionNetwork: encrypted.data.networkId,
       encryptedSymmetricKeyDigestHex: encrypted.data.encryptedSymmetricKeyHash,
@@ -275,7 +276,7 @@ export function createShareAuthorityAdapters(input: {
       nodeOrigin: activeNode.origin,
       nodeAudience: activeNode.nodeDid,
       enforcerDid: activeNode.nodeDid,
-      spaceId: node.spaceId,
+      spaceId: ownerSpaceId,
       target: targetInput.target,
       resource: { kind: resourceKind, path: resourcePath },
       actions,
