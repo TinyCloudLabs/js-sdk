@@ -23,6 +23,7 @@ const uploadedPaths: string[] = [];
 const encryptionSpaces: string[] = [];
 let sessionOnly = true;
 let uploadErrorCode: string | undefined;
+let uploadErrorMeta: Record<string, unknown> | undefined;
 let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
 let authenticationError: unknown;
 let registryError: unknown;
@@ -78,7 +79,7 @@ const node = {
       uploadedPaths.push(path);
       return uploadErrorCode === undefined
         ? { ok: true as const }
-        : { ok: false as const, error: { code: uploadErrorCode, message: "secret server response", service: "kv", meta: { status: uploadErrorCode === "STORAGE_QUOTA_EXCEEDED" ? 402 : 503, usedBytes: 387_382_794, limitBytes: 8_119_195, requiredAction: "tinycloud.kv/put" } } };
+        : { ok: false as const, error: { code: uploadErrorCode, message: "secret server response", service: "kv", meta: uploadErrorMeta ?? { status: uploadErrorCode === "STORAGE_QUOTA_EXCEEDED" ? 402 : 503, usedBytes: 387_382_794, limitBytes: 8_119_195, requiredAction: "tinycloud.kv/put" } } };
     },
   }),
   sharing: {
@@ -148,6 +149,7 @@ mock.module("../lib/sdk.js", () => ({
 }));
 
 const { createShareAuthorityAdapters } = await import("./adapters.js");
+const { SharePublishAuthorityError } = await import("./errors.js");
 
 afterEach(() => {
   nodeSpaceId = "tinycloud:test-space";
@@ -156,6 +158,7 @@ afterEach(() => {
   uploadedPaths.length = 0;
   sessionOnly = true;
   uploadErrorCode = undefined;
+  uploadErrorMeta = undefined;
   uploadedSpaces.length = 0;
   encryptionSpaces.length = 0;
   ownerRootInputs.length = 0;
@@ -229,6 +232,15 @@ describe("TinyCloud share authority adapter", () => {
       "東京.html": "share.html",
       "my notes.tar.gz": "my-notes.tar.gz",
       "no extension here": "no-extension-here",
+      "notes..md": "notes.md",
+      "Q3 report..final.md": "Q3-report.final.md",
+      ".md": "share.md",
+      ".env": "share.env",
+      "my notes.md.": "my-notes-md",
+      "notes.md~": "notes-md",
+      "notes.\uff4d\uff44": "notes-md",
+      "x.html\u200b": "x-html",
+      "a\uff0e\uff0emd": "a-md",
     };
     for (const [filename, stored] of Object.entries(storedAs)) {
       for (const target of [{ kind: "bearer" as const }, { kind: "email" as const, address: "alice@example.com" }]) {
@@ -245,6 +257,7 @@ describe("TinyCloud share authority adapter", () => {
         const path = published.metadata.resource.path;
         expect(path).toMatch(/^(?:xyz\.tinycloud\.share\/)?shares?\/[a-f0-9]+\/[A-Za-z0-9][A-Za-z0-9._-]*$/);
         expect(path.split("/").at(-1)).toBe(stored);
+        expect(path).not.toContain("..");
         expect(uploadedPaths.at(-1)).toBe(path);
       }
     }
@@ -331,9 +344,17 @@ describe("TinyCloud share authority adapter", () => {
 
 
   it("classifies quota and other KV upload failures for bearer and addressed shares", async () => {
+    const cases = [
+      { code: "STORAGE_QUOTA_EXCEEDED", meta: undefined, failure: { kind: "storage-quota-exceeded", usedBytes: 387_382_794, limitBytes: 8_119_195 } },
+      { code: "STORAGE_QUOTA_EXCEEDED", meta: { status: 402 }, failure: { kind: "storage-quota-exceeded" } },
+      { code: "STORAGE_QUOTA_EXCEEDED", meta: { status: 402, usedBytes: -1, limitBytes: "8 MB" }, failure: { kind: "storage-quota-exceeded" } },
+      { code: "STORAGE_LIMIT_REACHED", meta: { status: 413 }, failure: { kind: "upload-failed" } },
+      { code: "UNAVAILABLE", meta: undefined, failure: { kind: "upload-failed" } },
+    ];
     for (const target of [{ kind: "bearer" as const }, { kind: "email" as const, address: "alice@example.com" }]) {
-      for (const code of ["STORAGE_QUOTA_EXCEEDED", "UNAVAILABLE"]) {
+      for (const { code, meta, failure } of cases) {
         uploadErrorCode = code;
+        uploadErrorMeta = meta;
         const { targetAdapter } = createShareAuthorityAdapters({
           origin: "https://share.example",
           profileName: async () => "test",
@@ -344,17 +365,16 @@ describe("TinyCloud share authority adapter", () => {
             credentialsOrigin: "https://credentials.example",
           })) as unknown as typeof globalThis.fetch,
         });
-        await expect(targetAdapter.publish({
+        const error = await targetAdapter.publish({
           source: new TextEncoder().encode("failed source"),
           filename: "report.md",
           target,
           expiresAt: new Date("2030-01-01T00:00:00.000Z"),
           origin: "https://share.example",
-        })).rejects.toMatchObject({
-          failure: code === "STORAGE_QUOTA_EXCEEDED"
-            ? { kind: "storage-quota-exceeded", usedBytes: 387_382_794, limitBytes: 8_119_195 }
-            : { kind: "upload-failed" },
-        });
+        }).then(() => undefined, (caught: unknown) => caught);
+        expect(error).toBeInstanceOf(SharePublishAuthorityError);
+        expect((error as InstanceType<typeof SharePublishAuthorityError>).failure as unknown).toEqual(failure);
+        expect(String((error as Error).message)).not.toContain("secret server response");
       }
     }
   });

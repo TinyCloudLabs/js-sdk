@@ -9,7 +9,8 @@ export type SharePublishFailure =
   | { readonly kind: "registry-unavailable" }
   /** The registry refused the record (other 4xx, or an invalid record): a retry cannot succeed. */
   | { readonly kind: "registry-rejected" }
-  | { readonly kind: "storage-quota-exceeded"; readonly usedBytes: number; readonly limitBytes: number }
+  /** Sizes are present only when the Node reported them. */
+  | { readonly kind: "storage-quota-exceeded"; readonly usedBytes?: number; readonly limitBytes?: number }
   | { readonly kind: "upload-failed" };
 
 export class SharePublishAuthorityError extends Error {

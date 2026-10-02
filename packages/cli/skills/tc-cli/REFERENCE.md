@@ -167,7 +167,7 @@ tc share revoke <id>
 
 The fragment after `#` is the read authority. It never reaches a server in a query string or HTTP request; keep complete URLs out of logs. Human publish output is exactly one URL. Inspect never prints plaintext or secret-bearing fields. Receive uses a sanitized single-segment filename and refuses overwrite unless `--force`. `revoke` revokes addressed shares at the owner node and reports bearer retention honestly. Pre-cutover blob-backed and plaintext `?tc2` links are not accepted.
 
-Share publication without `--expires` requests a seven-day lifetime. For a session-only profile, the CLI clamps that request to the verified SIWE session expiry, prints a notice to stderr, and reports `"expiryClamped": true` in JSON. Explicit lifetimes beyond the session end, or with less than 60 seconds left after second-precision rounding, fail with `SESSION_LIFETIME_EXCEEDED`. Expired/invalid restored sessions and missing owner authority return `AUTH_REQUIRED`; rejected KV upload or delegation scopes return `PERMISSION_DENIED`. JSON publish output includes `expiryClamped: false` when no clamp was needed.
+Share publication without `--expires` requests a seven-day lifetime. For a session-only profile, the CLI clamps that request to the verified SIWE session expiry, prints a notice to stderr, and reports `"expiryClamped": true` in JSON. Explicit lifetimes beyond the session end, or with less than 60 seconds left after second-precision rounding, fail with `SESSION_LIFETIME_EXCEEDED`. Expired/invalid restored sessions and missing owner authority return `AUTH_REQUIRED`; rejected KV upload or delegation scopes return `PERMISSION_DENIED`. A full storage quota returns `STORAGE_QUOTA_EXCEEDED`, with the used and limit sizes when the node reports them, and any other failed upload returns `UPLOAD_FAILED`; nothing is shared in either case. A filename with characters other than `A-Z a-z 0-9 . _ -`, or with `..`, is stored under a readable URI-safe name that keeps a plain extension (`Q3 plan (draft).md` is stored as `Q3-plan-draft.md`, `.env` as `share.env`): bearer links show that name and `receive` writes it, while addressed links keep the original. JSON publish output includes `expiryClamped: false` when no clamp was needed.
 
 ### Share Publish Options
 
@@ -192,6 +192,8 @@ Share publication without `--expires` requests a seven-day lifetime. For a sessi
 | File | `tc kv put key --file ./data.txt` |
 | Stdin | `echo "data" \| tc kv put key --stdin` |
 
+KV keys cannot contain spaces or control characters: the SDK sends keys unescaped in the node resource URI, so `get`, `put`, `head` and `delete` refuse them with `USAGE_ERROR` (exit 2) before authenticating. A full storage quota on `put` returns `STORAGE_QUOTA_EXCEEDED` (exit 1).
+
 ## Profile Directory Structure
 
 ```
@@ -212,4 +214,4 @@ Share publication without `--expires` requests a seven-day lifetime. For a sessi
 
 Use `--json` for machine-readable output; interactive commands can render human output. General command errors go to stderr as `{error: {code, message, hint?}}`. Inspect the structured code, not only the exit status.
 
-General storage/auth exit codes: 0 success, 1 operation error, 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, 7 node error. `tc share` uses its own: 3 upload authority required, 4 unavailable or expired, 5 verification failed, 6 recipient authorization required or network error, 7 byte limit, 8 output conflict or unsafe filename, 9 partial success.
+General storage/auth exit codes: 0 success, 1 operation error, 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, 7 node error. `tc share` uses its own: 3 upload authority required, 4 unavailable, expired, storage quota exceeded or upload failed, 5 verification failed, 6 recipient authorization required or network error, 7 byte limit, 8 output conflict or unsafe filename, 9 partial success.

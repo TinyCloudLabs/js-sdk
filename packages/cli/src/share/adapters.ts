@@ -31,17 +31,17 @@ function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get
   const action = meta.requiredAction;
   return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" ? action : undefined;
 }
+function isByteCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+/** A quota refusal stays one even when the Node's text carried no sizes; its text never reaches output. */
 function throwKvUploadFailure(error: unknown): never {
-  if (typeof error === "object" && error !== null && "code" in error && error.code === "STORAGE_QUOTA_EXCEEDED" && "meta" in error) {
-    const meta = error.meta;
-    if (typeof meta === "object" && meta !== null && "usedBytes" in meta && "limitBytes" in meta) {
-      const usedBytes = meta.usedBytes;
-      const limitBytes = meta.limitBytes;
-      if (typeof usedBytes === "number" && Number.isSafeInteger(usedBytes) && usedBytes >= 0
-        && typeof limitBytes === "number" && Number.isSafeInteger(limitBytes) && limitBytes >= 0) {
-        throw new SharePublishAuthorityError({ kind: "storage-quota-exceeded", usedBytes, limitBytes });
-      }
-    }
+  if (typeof error === "object" && error !== null && "code" in error && error.code === "STORAGE_QUOTA_EXCEEDED") {
+    const meta = ("meta" in error && typeof error.meta === "object" && error.meta !== null ? error.meta : {}) as { usedBytes?: unknown; limitBytes?: unknown };
+    const { usedBytes, limitBytes } = meta;
+    throw new SharePublishAuthorityError(isByteCount(usedBytes) && isByteCount(limitBytes)
+      ? { kind: "storage-quota-exceeded", usedBytes, limitBytes }
+      : { kind: "storage-quota-exceeded" });
   }
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
 }
@@ -49,21 +49,23 @@ const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const URI_SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /**
  * The SDK puts KV keys unescaped into the Node resource URI, so a stored name
- * keeps only URI-safe characters. It stays readable and keeps its extension
- * because the share viewer titles and renders bearer links by this segment;
- * the original filename travels separately as display metadata.
+ * keeps only URI-safe characters, and never `..`, which share links refuse.
+ * It stays readable and keeps a plain extension because the share viewer
+ * titles and renders bearer links by this segment; a name without one never
+ * gains one. The original filename travels separately as display metadata.
  */
 function safeStorageFilename(filename: string): string {
-  if (URI_SAFE_FILENAME.test(filename)) return filename;
+  if (URI_SAFE_FILENAME.test(filename) && !filename.includes("..")) return filename;
   const dot = filename.lastIndexOf(".");
-  const extension = dot > 0 && /^[A-Za-z0-9]{1,16}$/.test(filename.slice(dot + 1)) ? filename.slice(dot + 1) : "";
+  const extension = dot >= 0 && /^[A-Za-z0-9]{1,16}$/.test(filename.slice(dot + 1)) ? filename.slice(dot + 1) : "";
   const stem = (extension === "" ? filename : filename.slice(0, dot))
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(extension === "" ? /[^A-Za-z0-9_-]+/g : /[^A-Za-z0-9._-]+/g, "-")
+    .replace(/\.{2,}/g, ".")
     .replace(/-{2,}/g, "-")
     .slice(0, 100)
-    .replace(/^[-.]+|[-.]+$/g, "");
+    .replace(/^[^A-Za-z0-9]+|[-.]+$/g, "");
   return `${stem === "" ? "share" : stem}${extension === "" ? "" : `.${extension}`}`;
 }
 
@@ -321,7 +323,7 @@ export function createShareAuthorityAdapters(input: {
       const written = await node.kvForSpace(ownerSpaceId).put(resourcePath, file.bytes.slice(), {
         contentType: targetInput.mediaType ?? file.mediaType ?? "application/octet-stream",
       });
-      if (written.ok === false) {
+      if (!written.ok) {
         const code = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : undefined;
         if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
           const requiredAction = requiredKvAction(written.error.meta);
@@ -417,7 +419,7 @@ export function createShareAuthorityAdapters(input: {
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
     const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
     const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
-    if (stored.ok === false) {
+    if (!stored.ok) {
       const code = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : undefined;
       if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
         const requiredAction = requiredKvAction(stored.error.meta);

@@ -112,7 +112,10 @@ export function shareCliError(error: unknown): CLIError {
       return new CLIError("REGISTRY_REJECTED", "the TinyCloud location registry rejected this session's location record, so nothing was shared; retrying will not help. Log in again, and report the problem if it persists", 6);
     }
     if (failure.kind === "storage-quota-exceeded") {
-      return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded (${formatBytes(failure.usedBytes)} used of ${formatBytes(failure.limitBytes)} limit); nothing was shared`, 4);
+      const sizes = failure.usedBytes === undefined || failure.limitBytes === undefined
+        ? ""
+        : ` (${formatBytes(failure.usedBytes)} used of ${formatBytes(failure.limitBytes)} limit)`;
+      return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded${sizes}; nothing was shared`, 4);
     }
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);

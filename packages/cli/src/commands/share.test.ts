@@ -73,6 +73,9 @@ describe("tc share command contract", () => {
     });
     expect(quota.message).toContain("369.4 MB used of 7.7 MB limit");
     expect(quota.message).toContain("nothing was shared");
+    const quotaWithoutSizes = shareCliError(new SharePublishAuthorityError({ kind: "storage-quota-exceeded" }));
+    expect(quotaWithoutSizes).toMatchObject({ code: "STORAGE_QUOTA_EXCEEDED", exitCode: 4 });
+    expect(quotaWithoutSizes.message).toBe("storage quota exceeded; nothing was shared");
 
     const upload = shareCliError(new SharePublishAuthorityError({ kind: "upload-failed" }));
     expect(upload).toMatchObject({ code: "UPLOAD_FAILED", exitCode: 4 });
