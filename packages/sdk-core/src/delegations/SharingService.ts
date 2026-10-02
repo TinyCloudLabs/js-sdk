@@ -1016,6 +1016,17 @@ export class SharingService implements ISharingService {
         if (registrationActiveError) return { ok: false, error: registrationActiveError };
 
         if (!registerRes.ok) {
+          if (registerRes.status === 401 || registerRes.status === 403) {
+            return {
+              ok: false,
+              error: createError(
+                DelegationErrorCodes.AUTH_UNAUTHORIZED,
+                "Share delegation registration is not authorized.",
+                undefined,
+                { status: registerRes.status },
+              ),
+            };
+          }
           const errorText = await registerRes.text();
           const registrationTextActiveError = this.retiredGraphError();
           if (registrationTextActiveError) return { ok: false, error: registrationTextActiveError };

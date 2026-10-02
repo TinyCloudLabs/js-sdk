@@ -201,6 +201,8 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       ...expired,
       now: new Date(expired.expiresAt).toISOString(),
     } as any)).toThrow();
+    await expect(new TinyCloudNode({ wasmBindings: wasm }).restoreSession(expired))
+      .rejects.toMatchObject({ name: "InvalidRestoredSessionError", code: "AUTH_EXPIRED" });
     const node = new TinyCloudNode({
       host: RESTORE_HOST,
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),

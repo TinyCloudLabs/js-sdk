@@ -22,7 +22,13 @@ import {
 } from "@tinycloud/share-sdk";
 import { canonicalize } from "@tinycloud/share-envelope";
 import { revokePolicyRootV3 } from "@tinycloud/sdk-core";
+import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
 
+function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | undefined {
+  if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return undefined;
+  const action = meta.requiredAction;
+  return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" ? action : undefined;
+}
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 
 export class ShareAuthorityError extends Error {
@@ -190,30 +196,57 @@ export function createShareAuthorityAdapters(input: {
       credentialsOrigin: canonicalOrigin(input.credentialsOrigin ?? object.credentialsOrigin, "credentials origin"),
     };
   })();
-  let nodePromise: Promise<Awaited<ReturnType<typeof import("../lib/sdk.js")["ensureAuthenticated"]>>> | undefined;
+  let nodePromise: Promise<TinyCloudNode> | undefined;
   const authenticatedNode = async () => nodePromise ??= (async () => {
     const profile = await (input.profileName?.() ?? selectedProfileName());
     const context = await ProfileManager.resolveContext({ profile, ...(input.nodeOrigin === undefined ? {} : { host: input.nodeOrigin }) });
+    // Keep the full SDK lazy for injected and config-only share paths.
     const { ensureAuthenticated } = await import("../lib/sdk.js");
-    return ensureAuthenticated(context);
+    try {
+      return await ensureAuthenticated(context);
+    } catch (error) {
+      const profileConfig = await ProfileManager.getProfile(profile).catch(() => undefined);
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+      if (error instanceof InvalidRestoredSessionError || code === "AUTH_EXPIRED") {
+        throw new SharePublishAuthorityError({
+          kind: "owner-space-unresolved",
+          localKey: profileConfig?.authMethod === "local",
+        });
+      }
+      throw error;
+    }
   })();
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
     const session = node.restorableSession;
     const ownerSpaceId = session?.spaceId;
-    const siwe = typeof session?.siwe === "string" ? session.siwe : "";
-    const expiration = /^Expiration Time:\s*(.+)$/im.exec(siwe)?.[1]?.trim();
-    const sessionExpiresAt = expiration === undefined ? undefined : new Date(expiration);
-    if (ownerSpaceId === undefined || !siwe || !session?.signature || sessionExpiresAt === undefined || !Number.isFinite(sessionExpiresAt.getTime())) {
-      throw new SharePublishAuthorityError({ kind: "owner-space-unresolved" });
+    const localKey = !node.isSessionOnly;
+    let sessionExpiresAt: Date | undefined;
+    try {
+      sessionExpiresAt = node.isSessionOnly && session?.siwe ? extractSiweExpiration(session.siwe) : undefined;
+    } catch {
+      throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey });
+    }
+    if (
+      ownerSpaceId === undefined ||
+      (node.isSessionOnly && (!session?.siwe || !session.signature || sessionExpiresAt === undefined))
+    ) {
+      throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey });
     }
     if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
-    const expiryClamped = targetInput.expiresAt > sessionExpiresAt;
+    const expiryClamped = node.isSessionOnly && sessionExpiresAt !== undefined && targetInput.expiresAt > sessionExpiresAt;
     if (expiryClamped && targetInput.expiryWasExplicit) {
-      throw new SharePublishAuthorityError({ kind: "lifetime-exceeds-session", sessionExpiresAt });
+      throw new SharePublishAuthorityError({ kind: "lifetime-exceeds-session", sessionExpiresAt: sessionExpiresAt! });
     }
-    const expiresAt = expiryClamped ? sessionExpiresAt : targetInput.expiresAt;
+    const effectiveExpiry = expiryClamped ? sessionExpiresAt! : targetInput.expiresAt;
+    const expiresAt = new Date(Math.floor(effectiveExpiry.getTime() / 1000) * 1000);
+    if (node.isSessionOnly && expiresAt.getTime() <= Date.now() + 60_000) {
+      throw new SharePublishAuthorityError({
+        kind: "lifetime-exceeds-session",
+        sessionExpiresAt: sessionExpiresAt ?? effectiveExpiry,
+      });
+    }
     const activeNode = await node.activeNodeIdentity();
     const shareId = crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === undefined || targetInput.files.length === 0
@@ -229,7 +262,14 @@ export function createShareAuthorityAdapters(input: {
       });
       if (!written.ok) {
         const code = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : undefined;
-        if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") throw new SharePublishAuthorityError({ kind: "scope-denied", capability: "KV upload" });
+        if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
+          const requiredAction = requiredKvAction(written.error.meta);
+          throw new SharePublishAuthorityError({
+            kind: "scope-denied",
+            capability: "KV upload",
+            ...(requiredAction === undefined ? {} : { requiredAction }),
+          });
+        }
         throw new Error("native bearer source upload failed");
       }
       let native: NativeShareResult;
@@ -287,7 +327,14 @@ export function createShareAuthorityAdapters(input: {
     const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
     if (!stored.ok) {
       const code = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : undefined;
-      if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") throw new SharePublishAuthorityError({ kind: "scope-denied", capability: "KV upload" });
+      if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
+        const requiredAction = requiredKvAction(stored.error.meta);
+        throw new SharePublishAuthorityError({
+          kind: "scope-denied",
+          capability: "KV upload",
+          ...(requiredAction === undefined ? {} : { requiredAction }),
+        });
+      }
       throw new Error("addressed source upload failed");
     }
     const contentSource = {

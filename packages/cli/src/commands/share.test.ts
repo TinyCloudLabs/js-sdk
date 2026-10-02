@@ -3,7 +3,8 @@ import { Command } from "commander";
 import { mkdtemp, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inspectShareInputOnce, registerShareCommand, parseShareTarget } from "./share.js";
+import { inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError } from "./share.js";
+import { SharePublishAuthorityError } from "../share/errors.js";
 import { safeFilename, writeShareOutput } from "../share/io.js";
 
 describe("tc share command contract", () => {
@@ -13,6 +14,37 @@ describe("tc share command contract", () => {
     expect(parseShareTarget("person@example.com")).toEqual({ kind: "email", address: "person@example.com" });
     expect(parseShareTarget("domain:Example.COM")).toEqual({ kind: "emailDomain", domain: "Example.COM" });
     expect(() => parseShareTarget("unknown-target")).toThrow();
+  });
+  test("maps authority failures to safe actionable CLI codes", () => {
+    const localAuth = shareCliError(new SharePublishAuthorityError({
+      kind: "owner-space-unresolved",
+      localKey: true,
+    }));
+    expect(localAuth.code).toBe("AUTH_REQUIRED");
+    expect(localAuth.message).toContain("tc auth login --method local");
+
+    const sessionAuth = shareCliError(new SharePublishAuthorityError({
+      kind: "owner-space-unresolved",
+      localKey: false,
+    }));
+    expect(sessionAuth.code).toBe("AUTH_REQUIRED");
+    expect(sessionAuth.message).toContain("tc auth login");
+    expect(sessionAuth.message).not.toContain("--method local");
+
+    const scope = shareCliError(new SharePublishAuthorityError({
+      kind: "scope-denied",
+      capability: "KV upload",
+      requiredAction: "tinycloud.kv/put",
+    }));
+    expect(scope.code).toBe("PERMISSION_DENIED");
+    expect(scope.message).toContain("tinycloud.kv/put");
+
+    const lifetime = shareCliError(new SharePublishAuthorityError({
+      kind: "lifetime-exceeds-session",
+      sessionExpiresAt: new Date("2099-01-01T00:00:00.000Z"),
+    }));
+    expect(lifetime.code).toBe("SESSION_LIFETIME_EXCEEDED");
+    expect(lifetime.message).toContain("2099-01-01T00:00:00.000Z");
   });
 
   test("registers only the current native sharing lifecycle commands", () => {
@@ -29,7 +61,7 @@ describe("tc share command contract", () => {
     let inspected = "";
     const result = await inspectShareInputOnce(undefined, true, "https://share.example", {
       read: async () => { reads += 1; return "https://share.example/s/inline#v=2&p=sealed"; },
-      inspect: (async (link) => {
+      inspect: (async (link: string) => {
         inspected = link;
         return { protocol: "tinycloud-share", version: 1 } as never;
       }) as never,

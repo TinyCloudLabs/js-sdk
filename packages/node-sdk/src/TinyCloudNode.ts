@@ -530,6 +530,14 @@ export class UnsupportedSessionRestoreError extends Error {
     this.name = "UnsupportedSessionRestoreError";
   }
 }
+export class InvalidRestoredSessionError extends Error {
+  readonly code = "AUTH_EXPIRED" as const;
+
+  constructor(message = "Persisted session authority is invalid or expired.") {
+    super(message);
+    this.name = "InvalidRestoredSessionError";
+  }
+}
 
 function canonicalRestoredVerificationMethod(
   canonicalVerificationMethod: string,
@@ -544,12 +552,10 @@ function canonicalRestoredVerificationMethod(
 }
 
 function persistedExpiry(value: unknown): Date {
-  if (typeof value !== "string") {
-    throw new Error("Persisted session without a SIWE expiration must include expiresAt.");
-  }
+  if (typeof value !== "string") throw new InvalidRestoredSessionError("Persisted session must include expiresAt.");
   const expiry = new Date(value);
   if (!Number.isFinite(expiry.getTime()) || expiry.getTime() <= Date.now()) {
-    throw new Error("Persisted session expiry is invalid or expired.");
+    throw new InvalidRestoredSessionError();
   }
   return expiry;
 }
@@ -2737,16 +2743,22 @@ export class TinyCloudNode {
       if (typeof this.wasmBindings.validatePersistedSession !== "function") {
         throw new UnsupportedSessionRestoreError("it cannot verify persisted SIWE authority");
       }
-      const verified = this.wasmBindings.validatePersistedSession({
-        delegationHeader: sessionData.delegationHeader,
-        delegationCid: sessionData.delegationCid,
-        spaceId: sessionData.spaceId,
-        jwk: stagedJwk,
-        address: restoredAddress!,
-        chainId: sessionData.chainId!,
-        siwe: sessionData.siwe!,
-        signature: sessionData.signature!,
-      });
+      const verified = (() => {
+        try {
+          return this.wasmBindings.validatePersistedSession!({
+            delegationHeader: sessionData.delegationHeader,
+            delegationCid: sessionData.delegationCid,
+            spaceId: sessionData.spaceId,
+            jwk: stagedJwk,
+            address: restoredAddress!,
+            chainId: sessionData.chainId!,
+            siwe: sessionData.siwe!,
+            signature: sessionData.signature!,
+          });
+        } catch (error) {
+          throw new InvalidRestoredSessionError(error instanceof Error ? error.message : undefined);
+        }
+      })();
       const exactRecap = verified.verifiedRecap;
       if (!Array.isArray(exactRecap) || !exactRecap.every((entry) =>
         entry !== null && typeof entry === "object" &&
@@ -2776,7 +2788,7 @@ export class TinyCloudNode {
         ? undefined
         : persistedExpiry(sessionData.expiresAt);
       if (signedExpiry && persistedPolicyExpiry && !sameInstant(signedExpiry, persistedPolicyExpiry)) {
-        throw new Error("Persisted session expiry does not match its signed SIWE authority.");
+        throw new InvalidRestoredSessionError("Persisted session expiry does not match its signed SIWE authority.");
       }
       stagedSessionExpiry = signedExpiry ?? persistedPolicyExpiry ?? persistedExpiry(undefined);
     }
@@ -6447,13 +6459,9 @@ export class TinyCloudNode {
       this.pathContains(granted.path, requested.path);
   }
 
-  // Space IDs are `tinycloud:pkh:eip155:<chain>:<0xADDR>:<name>`. The embedded
-  // EIP-155 address is case-insensitive, but the CLI canonicalizes it to
-  // lowercase when building a space URI while stored runtime delegations keep
-  // the EIP-55 checksummed form — so a byte-for-byte compare spuriously rejects
-  // an otherwise-valid grant. Lowercase ONLY the `eip155:<chain>:0x<addr>`
-  // segment and leave everything else (crucially the case-sensitive space NAME)
-  // byte-exact. Mirrors the CLI's `normalizeSpaceForCompare` (OPENKEY_SCOPE_MISMATCH fix).
+  // Space IDs are `tinycloud:pkh:eip155:<chain>:<0xADDR>:<name>`. Compare
+  // only the embedded EIP-155 address without case sensitivity; chain, name,
+  // and all non-PKH space identifiers remain byte-exact.
   private spaceIdsEqual(a: string, b: string): boolean {
     return this.normalizeSpaceAddress(a) === this.normalizeSpaceAddress(b);
   }

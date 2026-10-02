@@ -54,13 +54,22 @@ export function parseShareTarget(value: string): ShareTarget {
   throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
 }
 
-function shareCliError(error: unknown): CLIError {
+/** @internal Map publish authority failures without echoing remote error text. */
+export function shareCliError(error: unknown): CLIError {
   if (error instanceof CLIError) return error;
   if (error instanceof SharePublishAuthorityError) {
     const failure = error.failure;
-    if (failure.kind === "owner-space-unresolved") return new CLIError("AUTH_REQUIRED", "a signed, restored TinyCloud session is required; run `tc auth login --method openkey`", 3);
-    if (failure.kind === "scope-denied") return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority; renew the session with the required share capability`, 5);
-    if (failure.kind === "lifetime-exceeds-session") return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime exceeds session expiry ${failure.sessionExpiresAt.toISOString()}; use a shorter --expires value`, 2);
+    const loginHint = failure.kind === "owner-space-unresolved" && failure.localKey === true
+      ? "tc auth login --method local"
+      : "tc auth login";
+    if (failure.kind === "owner-space-unresolved") {
+      return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run \`${loginHint}\``, 3);
+    }
+    if (failure.kind === "scope-denied") {
+      const requiredAction = failure.requiredAction === undefined ? "" : ` (${failure.requiredAction})`;
+      return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; renew it with \`${loginHint}\` using the required capability`, 5);
+    }
+    if (failure.kind === "lifetime-exceeds-session") return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime is too close to or exceeds session expiry ${failure.sessionExpiresAt.toISOString()}; use a shorter --expires value`, 2);
     return new CLIError("ORIGIN_MISMATCH", "share origin does not match the configured service", 2);
   }
   if (error instanceof SharePublishError) {

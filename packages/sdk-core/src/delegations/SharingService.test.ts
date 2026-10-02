@@ -5,7 +5,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { CapabilityKeyRegistry } from "../authorization/CapabilityKeyRegistry";
 import { CaveatedDelegationUnsupportedError } from "../capabilities";
 import { SharingService, type EncodedShareData } from "./SharingService";
-import type { CreateDelegationWasmParams, KeyProvider } from "./types";
+import type { CreateDelegationWasmParams, Delegation, DelegationError, KeyProvider } from "./types";
 
 const OWNER = "0xd559CCd9EB87c530A9a349262669386dE93cf412";
 const SPACE = `tinycloud:pkh:eip155:1:${OWNER}:applications`;
@@ -683,12 +683,13 @@ describe("SharingService.generate root-delegation signing failures", () => {
     onRootDelegationNeeded: NonNullable<
       ConstructorParameters<typeof SharingService>[0]["onRootDelegationNeeded"]
     >,
+    fetcher?: typeof globalThis.fetch,
   ): SharingService {
     const shareJwk = { kty: "OKP", crv: "Ed25519", x: SHARE_X, d: SHARE_D };
     return new SharingService({
       hosts: [HOST],
       invoke: mock(async () => ({ ok: true, data: undefined })) as never,
-      fetch: mock(async () => new Response(null, { status: 200 })),
+      fetch: fetcher ?? mock(async () => new Response(null, { status: 200 })),
       keyProvider: {
         createSessionKey: (name: string) => name,
         getDID: () => `${SHARE_DID}#${SHARE_DID.slice("did:key:".length)}`,
@@ -696,9 +697,18 @@ describe("SharingService.generate root-delegation signing failures", () => {
       } as unknown as KeyProvider,
       registry: new CapabilityKeyRegistry(),
       createKVService: mock(() => ({})) as never,
-      createDelegationWasm: mock(() => {
-        throw new Error("should not be reached");
-      }) as never,
+      createDelegationWasm: mock((params: CreateDelegationWasmParams) => ({
+        delegation: childToken(params),
+        cid: "bafy-child",
+        delegateDID: params.delegateDID,
+        expiry: new Date(params.expirationSecs * 1000),
+        resources: [{
+          service: "kv",
+          space: params.spaceId,
+          path: Object.keys(params.abilities.kv)[0]!,
+          actions: Object.values(params.abilities.kv)[0]!,
+        }],
+      })),
       computeCid: () => "bafy-child",
       session: {
         spaceId: SPACE,
@@ -709,6 +719,32 @@ describe("SharingService.generate root-delegation signing failures", () => {
       onRootDelegationNeeded,
     });
   }
+
+  test("preserves registration 403 as a typed authorization failure", async () => {
+    const fetcher = mock(async () => new Response("secret upstream body", { status: 403 }));
+    const service = makeGeneratingService(async () => undefined, fetcher);
+    const internal = service as unknown as {
+      createSessionDelegation: (
+        delegateDID: string,
+        path: string,
+        actions: string[],
+        expiry: Date,
+      ) => Promise<Delegation | { readonly ok: false; readonly error: DelegationError }>;
+    };
+
+    const result = await internal.createSessionDelegation(
+      "did:key:z6MkFeedHost",
+      "shared",
+      ["tinycloud.kv/get"],
+      PARENT_EXPIRY,
+    );
+
+    expect("ok" in result).toBe(true);
+    if (!("ok" in result) || result.ok) throw new Error("expected authorization failure");
+    expect(result.error.code).toBe("AUTH_UNAUTHORIZED");
+    expect(result.error.meta).toEqual({ status: 403 });
+    expect(result.error.message).not.toContain("secret upstream body");
+  });
 
   test("reports an unanswered signing prompt as TIMEOUT, not PERMISSION_DENIED", async () => {
     const service = makeGeneratingService(async () => {

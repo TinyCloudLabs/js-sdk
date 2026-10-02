@@ -903,6 +903,28 @@ describe("KVService.put serialization", () => {
     expect(requestInit?.body).toBe("hello-artifact");
   });
 
+  test("classifies KV upload 403 as typed authorization without server text", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        response(false, 403, "Unauthorized Action: vault/API_KEY / tinycloud.kv/put", "Forbidden")
+      )
+    );
+
+    const result = await service.put("vault/API_KEY", "value");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+    expect(result.error.message).toBe("KV upload is not authorized");
+    expect(result.error.meta).toMatchObject({
+      status: 403,
+      resource: "vault/API_KEY",
+      requiredAction: "tinycloud.kv/put",
+    });
+    expect(result.error.message).not.toContain("API_KEY");
+  });
+
   test("JSON-encodes plain objects", async () => {
     let requestInit: FetchRequestInit | undefined;
     const service = new KVService({});
