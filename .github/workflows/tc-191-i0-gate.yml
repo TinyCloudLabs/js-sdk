@@ -18,6 +18,10 @@ jobs:
       # npm pack is part of the offline contract tests. Keep its cache inside
       # the runner workspace so a pre-existing user cache cannot make I0 fail.
       NPM_CONFIG_CACHE: ${{ github.workspace }}/.npm-cache
+      # Bun 1.2.0's concurrent JIT intermittently corrupts WASM execution (bad
+      # signatures, out-of-bounds access) in the SDK verifier; about 8 of 400
+      # processes fail with it on, 0 with it off, and 0 on newer Bun.
+      BUN_JSC_useConcurrentJIT: "0"
     steps:
       - uses: actions/checkout@v4
 

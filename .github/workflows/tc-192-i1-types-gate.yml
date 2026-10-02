@@ -14,6 +14,11 @@ jobs:
     name: I1 operations strict TypeScript
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Bun 1.2.0's concurrent JIT intermittently corrupts WASM execution (bad
+      # signatures, out-of-bounds access) in the SDK verifier; about 8 of 400
+      # processes fail with it on, 0 with it off, and 0 on newer Bun.
+      BUN_JSC_useConcurrentJIT: "0"
     steps:
       - uses: actions/checkout@v4
 
