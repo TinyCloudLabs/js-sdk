@@ -70,6 +70,10 @@ describe("tc share command contract", () => {
     expect(sessionTooClose.code).toBe("AUTH_REQUIRED");
     expect(sessionTooClose.message).toContain("log in again");
     expect(sessionTooClose.message).toContain("tc --profile remote auth login");
+
+    const originMismatch = shareCliError(new SharePublishAuthorityError({ kind: "origin-mismatch" }));
+    expect(originMismatch.code).toBe("ORIGIN_MISMATCH");
+    expect(originMismatch.message).toBe("share origin does not match the configured service");
   });
 
   test("registers only the current native sharing lifecycle commands", () => {

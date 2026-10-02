@@ -240,6 +240,20 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     })).rejects.toThrow("does not match its signed SIWE authority");
   });
 
+  test("preserves string-valued WASM restore errors", async () => {
+    const proof = await signedRestorableSession();
+    const wasm = new NodeWasmBindings();
+    (wasm as any).validatePersistedSession = () => {
+      throw "WASM validation rejected the persisted session";
+    };
+
+    await expect(new TinyCloudNode({ wasmBindings: wasm }).restoreSession(proof))
+      .rejects.toMatchObject({
+        name: "InvalidRestoredSessionError",
+        message: "WASM validation rejected the persisted session",
+      });
+  });
+
   test("classifies malformed persisted identity fields as AUTH_EXPIRED", async () => {
     const proof = await signedRestorableSession();
     const node = new TinyCloudNode({ signer: new PrivateKeySigner(PROOF_PRIVATE_KEY), wasmBindings: new NodeWasmBindings() });

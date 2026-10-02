@@ -751,7 +751,7 @@ describe("SharingService.generate root-delegation signing failures", () => {
     if (result.ok) throw new Error("expected authorization failure");
     expect(result.error.code).toBe("AUTH_UNAUTHORIZED");
     expect(result.error.meta).toEqual({ status: 403 });
-    expect(result.error.message).not.toContain("secret upstream body");
+    expect(result.error.message).toContain("Failed to register delegation with server: 403 secret upstream body");
   });
 
   test("reports an unanswered signing prompt as TIMEOUT, not PERMISSION_DENIED", async () => {

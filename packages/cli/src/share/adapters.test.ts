@@ -214,6 +214,16 @@ describe("TinyCloud share authority adapter", () => {
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       expiryWasExplicit: false,
     })).rejects.toMatchObject({ failure: { kind: "lifetime-exceeds-session", reason: "session-too-close" } });
+    sessionExpiresAt = new Date(Date.now() + 50_000).toISOString();
+    for (const lifetimeMs of [30_000, 70_000]) {
+      await expect(targetAdapter.publish({
+        ...base,
+        expiresAt: new Date(Date.now() + lifetimeMs),
+        expiryWasExplicit: true,
+      })).rejects.toMatchObject({
+        failure: { kind: "lifetime-exceeds-session", reason: "session-too-close" },
+      });
+    }
     expect(uploadedSpaces).toEqual([]);
   });
   it("allows signer-backed local-key shares to outlive the restored session", async () => {

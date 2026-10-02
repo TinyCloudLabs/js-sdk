@@ -2325,7 +2325,7 @@ export class TinyCloudNode {
         // 2026-07-03 recap-storm incident). Warn once and stop; generic errors
         // still get the full retry budget below.
         const message = error instanceof Error ? error.message : String(error);
-        if (/Unauthorized Action|\b401\b/.test(message)) {
+        if (/Unauthorized Action|\b(?:401|403)\b/.test(message)) {
           console.warn(
             "TinyCloud account registry sync stopped: authorization verdict is not retryable",
             error,
@@ -2763,7 +2763,7 @@ export class TinyCloudNode {
             signature: sessionData.signature!,
           });
         } catch (error) {
-          throw new InvalidRestoredSessionError(error instanceof Error ? error.message : undefined);
+          throw new InvalidRestoredSessionError(error instanceof Error ? error.message : String(error));
         }
       })();
       const exactRecap = verified.verifiedRecap;

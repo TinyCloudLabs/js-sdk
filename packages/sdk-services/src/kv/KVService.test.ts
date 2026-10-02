@@ -925,6 +925,19 @@ describe("KVService.put serialization", () => {
     });
   });
 
+  test("provides key and status when authorization response body is empty", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(false, 403, "", "Forbidden")));
+
+    const result = await service.put("vault/record", "value");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+    expect(result.error.message).toBe('Failed to put key "vault/record": 403 - Forbidden');
+    expect(result.error.meta?.status).toBe(403);
+  });
+
   test("JSON-encodes plain objects", async () => {
     let requestInit: FetchRequestInit | undefined;
     const service = new KVService({});

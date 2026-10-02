@@ -292,7 +292,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
       invoke: () => ({ Authorization: "Bearer signed-invocation" }),
       fetch: async () => {
         fetchCalls += 1;
-        return new Response("Unauthorized Action: vault/record / tinycloud.kv/put", { status });
+        return new Response("", { status });
       },
     });
     const kv = new KVService({});

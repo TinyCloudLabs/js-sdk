@@ -237,6 +237,18 @@ export function createShareAuthorityAdapters(input: {
       throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName });
     }
     if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
+    if (node.isSessionOnly && sessionExpiresAt !== undefined) {
+      const roundedSessionExpiry = new Date(Math.floor(sessionExpiresAt.getTime() / 1000) * 1000);
+      if (roundedSessionExpiry.getTime() <= Date.now() + 60_000) {
+        throw new SharePublishAuthorityError({
+          kind: "lifetime-exceeds-session",
+          sessionExpiresAt,
+          reason: "session-too-close",
+          localKey,
+          profileName: activeProfileName,
+        });
+      }
+    }
     const expiryClamped = node.isSessionOnly && sessionExpiresAt !== undefined && targetInput.expiresAt > sessionExpiresAt;
     if (expiryClamped && targetInput.expiryWasExplicit) {
       throw new SharePublishAuthorityError({
