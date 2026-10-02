@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -232,13 +233,18 @@ test("recovers a stale profile lock only after its owner is gone", async () => {
     "req-stale",
     request("req-stale"),
     (candidate) => candidate.requestId,
-    { staleAfterMs: 1, retryMs: 1 },
+    { staleAfterMs: 10_000, retryMs: 1 },
   );
 
   expect((await readProfileStore<{ requestId: string; revision: number }>(profile, "auth-requests")).records)
     .toEqual([request("req-stale")]);
   await expect(readFile(profileLockMetadataPath(profile), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 });
+
+// A contender's lock wait starts before it parks at the recovery barrier, so
+// the time the parent waits for the other contender to boot counts against
+// it. Correctness, not the 2 s default, is under test here.
+const CONTENDER_LOCK_TIMEOUT_MS = "15000";
 
 test("two contenders recover one crashed stale lock without deleting the live replacement", async () => {
   const home = await isolatedHome();
@@ -262,6 +268,7 @@ test("two contenders recover one crashed stale lock without deleting the live re
     profile,
     "req-first-recovery",
     JSON.stringify(request("req-first-recovery")),
+    CONTENDER_LOCK_TIMEOUT_MS,
   ], { env, stdout: "pipe", stderr: "pipe" });
   const second = Bun.spawn([
     process.execPath,
@@ -269,6 +276,7 @@ test("two contenders recover one crashed stale lock without deleting the live re
     profile,
     "req-second-recovery",
     JSON.stringify(request("req-second-recovery")),
+    CONTENDER_LOCK_TIMEOUT_MS,
   ], { env, stdout: "pipe", stderr: "pipe" });
 
   await waitForProfileLockProtocol(
@@ -333,19 +341,429 @@ test("times out rather than reclaiming a lock held by a live process", async () 
   )).rejects.toBeInstanceOf(ProfileLockTimeoutError);
 });
 
-test("times out rather than reclaiming an ownerless stale-looking lock", async () => {
+test("waits rather than reclaiming an ownerless lock younger than the stale threshold", async () => {
   await isolatedHome();
   const profile = "delegate";
   await mkdir(profileLockPath(profile), { recursive: true });
 
+  // A live acquirer may be between mkdir and publishing its owner file.
   await expect(upsertProfileRecord(
     profile,
     "auth-requests",
     "req-ownerless-timeout",
     request("req-ownerless-timeout"),
     (candidate) => candidate.requestId,
-    { timeoutMs: 30, retryMs: 2, staleAfterMs: 1 },
+    { timeoutMs: 30, retryMs: 2, staleAfterMs: 60_000 },
   )).rejects.toBeInstanceOf(ProfileLockTimeoutError);
+});
+
+const holdFixture = new URL("../test-support/hold-profile-lock.ts", import.meta.url).pathname;
+const cycleFixture = new URL("../test-support/cycle-profile-lock.ts", import.meta.url).pathname;
+const LOCK_BARRIERS = ["OWNERLESS", "PUBLISH", "RELEASE", "RECOVERY", "CLAIM", "CLAIMED", "FENCED", "VERIFIED"].map((name) => `TC_TEST_PROFILE_LOCK_${name}_BARRIER_DIR`);
+
+/** Environment for a lock child process: this test's TC_HOME, no inherited barriers. */
+function lockChildEnv(home: string, extra: Record<string, string> = {}): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env, TC_HOME: home, HOME: homedir(), NODE_ENV: "test" };
+  for (const name of [...LOCK_BARRIERS, "TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH"]) delete env[name];
+  return { ...env, ...extra };
+}
+
+interface LockHolder {
+  readonly pid: number;
+  readonly readyPath: string;
+  release(): Promise<void>;
+  kill(): void;
+  finished(): Promise<[number, string]>;
+}
+
+/**
+ * A child that takes the lock once (hold-profile-lock.ts), signals `<name>-ready`
+ * and holds until released. Exit 3 means it timed out without holding.
+ */
+function spawnLockHolder(home: string, holders: string, profile: string, name: string, options: { timeoutMs: number; staleAfterMs: number; holdUntilReleased?: boolean; env?: Record<string, string> }): LockHolder {
+  const readyPath = join(home, `${name}-ready`);
+  const releasePath = join(home, `${name}-release`);
+  const child = Bun.spawn([process.execPath, holdFixture, profile, holders, readyPath, options.holdUntilReleased === false ? "-" : releasePath, String(options.timeoutMs), String(options.staleAfterMs)], {
+    env: lockChildEnv(home, options.env),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    pid: child.pid,
+    readyPath,
+    release: () => writeFile(releasePath, "release\n", "utf8"),
+    kill: () => child.kill("SIGKILL"),
+    finished: async () => {
+      const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      return [exit, stderr];
+    },
+  };
+}
+
+async function violations(holders: string): Promise<string[]> {
+  return (await readdir(holders)).filter((name) => name.startsWith("violation-"));
+}
+
+async function exists(path: string): Promise<boolean> {
+  return stat(path).then(() => true, () => false);
+}
+
+async function ageLock(profile: string): Promise<void> {
+  const aMinuteAgo = new Date(Date.now() - 60_000);
+  await utimes(profileLockPath(profile), aMinuteAgo, aMinuteAgo);
+}
+
+async function lockTestHome(): Promise<{ home: string; holders: string }> {
+  const home = await isolatedHome();
+  const holders = join(home, "holders");
+  await mkdir(holders, { recursive: true });
+  return { home, holders };
+}
+
+test("a delayed ownerless reclaim cannot remove the lock another process reclaimed and now holds", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const barrier = join(home, "ownerless-barrier");
+  await mkdir(barrier, { recursive: true });
+  // An ownerless lock left by an older release or a crash, a minute old.
+  await mkdir(profileLockPath(profile), { recursive: true });
+  await ageLock(profile);
+
+  // C sees the aged empty lock and stops just before its rmdir.
+  const late = spawnLockHolder(home, holders, profile, "late", { timeoutMs: 2000, staleAfterMs: 30_000, holdUntilReleased: false, env: { TC_TEST_PROFILE_LOCK_OWNERLESS_BARRIER_DIR: barrier } });
+  await waitForProfileLockProtocol(join(barrier, `ready-${late.pid}-${profile}`), "the late reclaimer at its rmdir");
+
+  // B reclaims the same directory, acquires, and holds the lock.
+  const holder = spawnLockHolder(home, holders, profile, "holder", { timeoutMs: 10_000, staleAfterMs: 30_000 });
+  await waitForProfileLockProtocol(holder.readyPath, "the reclaiming holder");
+
+  // C now runs its rmdir against B's lock.
+  await writeFile(join(barrier, "release"), "release\n", "utf8");
+  const [lateExit, lateError] = await late.finished();
+  expect(lateExit, lateError).toBe(3);
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: holder.pid });
+
+  await holder.release();
+  const [holderExit, holderError] = await holder.finished();
+  expect(holderExit, holderError).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+}, 30_000);
+
+test("an older release's lock, created but not yet owned, excludes this release and vice versa", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const lockPath = profileLockPath(profile);
+  await mkdir(profilePath(profile), { recursive: true });
+
+  // 842377d4-style writer: mkdir(.lock), paused before writing owner.json.
+  await mkdir(lockPath);
+  const contended = join(home, "contended");
+  const contender = spawnLockHolder(home, holders, profile, "contender", { timeoutMs: 10_000, staleAfterMs: 30_000, env: { TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH: contended } });
+  await waitForProfileLockProtocol(contended, "the contender finding the older release's lock");
+  // The older writer resumes: writes its owner record (writeJsonAtomic, as it
+  // did) and enters its critical section. The contender never replaced it.
+  await writeJsonAtomic(profileLockMetadataPath(profile), { pid: process.pid, createdAt: new Date().toISOString(), token: "older-release" });
+  await writeFile(join(holders, "active"), "older-release\n", { encoding: "utf8", flag: "wx" });
+  expect(await exists(contender.readyPath)).toBe(false);
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ token: "older-release" });
+  // ...and releases the way it did.
+  await rm(join(holders, "active"));
+  await rm(profileLockMetadataPath(profile));
+  await rmdir(lockPath);
+  await waitForProfileLockProtocol(contender.readyPath, "the contender acquiring after the older release");
+
+  // This release holding, the older writer's mkdir is refused.
+  await expect(mkdir(lockPath)).rejects.toMatchObject({ code: "EEXIST" });
+  await contender.release();
+  const [exit, stderr] = await contender.finished();
+  expect(exit, stderr).toBe(0);
+
+  // A lock this release created but has not yet published excludes it too.
+  const barrier = join(home, "publish-barrier");
+  await mkdir(barrier);
+  const publishing = spawnLockHolder(home, holders, profile, "publishing", { timeoutMs: 10_000, staleAfterMs: 30_000, env: { TC_TEST_PROFILE_LOCK_PUBLISH_BARRIER_DIR: barrier } });
+  await waitForProfileLockProtocol(join(barrier, `ready-${publishing.pid}-${profile}`), "the writer between mkdir and link");
+  await expect(mkdir(lockPath)).rejects.toMatchObject({ code: "EEXIST" });
+  await writeFile(join(barrier, "release"), "release\n", "utf8");
+  await waitForProfileLockProtocol(publishing.readyPath, "the writer publishing its owner");
+  await publishing.release();
+  const [publishingExit, publishingError] = await publishing.finished();
+  expect(publishingExit, publishingError).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+}, 30_000);
+
+test("a writer whose unpublished lock was reclaimed and taken over does not enter", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const barrier = join(home, "publish-barrier");
+  await mkdir(barrier, { recursive: true });
+
+  // B creates `.lock` and stops before linking its owner record.
+  const contended = join(home, "b-contended");
+  const slow = spawnLockHolder(home, holders, profile, "slow", { timeoutMs: 10_000, staleAfterMs: 30_000, env: { TC_TEST_PROFILE_LOCK_PUBLISH_BARRIER_DIR: barrier, TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH: contended } });
+  await waitForProfileLockProtocol(join(barrier, `ready-${slow.pid}-${profile}`), "B between mkdir and link");
+  // B's empty lock looks abandoned; C reclaims it and takes the lock.
+  await ageLock(profile);
+  const fast = spawnLockHolder(home, holders, profile, "fast", { timeoutMs: 10_000, staleAfterMs: 30_000 });
+  await waitForProfileLockProtocol(fast.readyPath, "C holding the reclaimed lock");
+
+  // B resumes: its link finds C's owner record, so it holds nothing and waits.
+  await writeFile(join(barrier, "release"), "release\n", "utf8");
+  await waitForProfileLockProtocol(contended, "B's link refused");
+  expect(await exists(slow.readyPath)).toBe(false);
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: fast.pid });
+
+  await fast.release();
+  const [fastExit, fastError] = await fast.finished();
+  expect(fastExit, fastError).toBe(0);
+  await waitForProfileLockProtocol(slow.readyPath, "B acquiring after C");
+  await slow.release();
+  const [slowExit, slowError] = await slow.finished();
+  expect(slowExit, slowError).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+}, 30_000);
+
+test("a releasing holder's rmdir cannot hand the lock to two writers", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const releaseBarrier = join(home, "release-barrier");
+  const publishBarrier = join(home, "publish-barrier");
+  await mkdir(releaseBarrier, { recursive: true });
+  await mkdir(publishBarrier, { recursive: true });
+
+  // H takes the lock and stops mid-release, with `.lock` empty.
+  const releasing = spawnLockHolder(home, holders, profile, "releasing", { timeoutMs: 10_000, staleAfterMs: 30_000, holdUntilReleased: false, env: { TC_TEST_PROFILE_LOCK_RELEASE_BARRIER_DIR: releaseBarrier } });
+  await waitForProfileLockProtocol(join(releaseBarrier, `ready-${releasing.pid}-${profile}`), "H between owner removal and rmdir");
+  expect(await readdir(profileLockPath(profile))).toEqual([]);
+
+  // C reclaims the empty directory, creates its own and stops before linking.
+  await ageLock(profile);
+  const contender = spawnLockHolder(home, holders, profile, "contender", { timeoutMs: 10_000, staleAfterMs: 30_000, env: { TC_TEST_PROFILE_LOCK_PUBLISH_BARRIER_DIR: publishBarrier } });
+  await waitForProfileLockProtocol(join(publishBarrier, `ready-${contender.pid}-${profile}`), "C between mkdir and link");
+
+  // H's delayed rmdir removes C's still-empty directory...
+  await writeFile(join(releaseBarrier, "release"), "release\n", "utf8");
+  const [releasingExit, releasingError] = await releasing.finished();
+  expect(releasingExit, releasingError).toBe(0);
+  expect(await exists(profileLockPath(profile))).toBe(false);
+
+  // ...so C's link fails with ENOENT; C holds nothing, retries and then holds.
+  await writeFile(join(publishBarrier, "release"), "release\n", "utf8");
+  await waitForProfileLockProtocol(contender.readyPath, "C acquiring after its retry");
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: contender.pid });
+  await contender.release();
+  const [contenderExit, contenderError] = await contender.finished();
+  expect(contenderExit, contenderError).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+}, 30_000);
+
+async function crashedHolderLock(profile: string): Promise<void> {
+  await mkdir(profileLockPath(profile), { recursive: true });
+  await writeJsonAtomic(profileLockMetadataPath(profile), {
+    pid: 999_999_999,
+    createdAt: new Date(Date.now() - 60_000).toISOString(),
+    token: "crashed-holder",
+  });
+}
+
+test("a recoverer killed holding only its claim leaves a lock the next writer reclaims once aged", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const lockPath = profileLockPath(profile);
+  const barrier = join(home, "claimed-barrier");
+  await mkdir(barrier, { recursive: true });
+  await crashedHolderLock(profile);
+
+  // K recovers the dead holder's lock: links its `.stale-*` claim, unlinks
+  // owner.json, and is killed before removing the claim.
+  const killed = spawnLockHolder(home, holders, profile, "killed", { timeoutMs: 10_000, staleAfterMs: 30_000, holdUntilReleased: false, env: { TC_TEST_PROFILE_LOCK_CLAIMED_BARRIER_DIR: barrier } });
+  await waitForProfileLockProtocol(join(barrier, `ready-${killed.pid}-${profile}`), "K holding only its claim");
+  killed.kill();
+  await killed.finished();
+  const left = await readdir(lockPath);
+  expect(left).toHaveLength(1);
+  expect(left[0]).toMatch(/^\.stale-[0-9a-f-]+\.json$/);
+  // A crashed acquirer's staged owner file, long abandoned.
+  const staged = join(profilePath(profile), `.lock-owner-${randomUUID()}.tmp`);
+  await writeFile(staged, "{}\n", "utf8");
+  const aMinuteAgo = new Date(Date.now() - 60_000);
+  await utimes(staged, aMinuteAgo, aMinuteAgo);
+
+  // While the claim is fresh the lock is not reclaimed...
+  await expect(withProfileLock(profile, async () => undefined, { timeoutMs: 200, staleAfterMs: 30_000, retryMs: 5 }))
+    .rejects.toBeInstanceOf(ProfileLockTimeoutError);
+  // ...once aged, the next writer removes the claim, the directory and the staged file.
+  await ageLock(profile);
+  const next = spawnLockHolder(home, holders, profile, "next", { timeoutMs: 10_000, staleAfterMs: 30_000 });
+  await waitForProfileLockProtocol(next.readyPath, "the next writer reclaiming");
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: next.pid });
+  expect(await exists(staged)).toBe(false);
+  await next.release();
+  const [exit, stderr] = await next.finished();
+  expect(exit, stderr).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+  expect(await exists(lockPath)).toBe(false);
+}, 30_000);
+
+test("a recoverer acting on an outdated observation never strands the live holder's lock", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const recoveryBarrier = join(home, "recovery-barrier");
+  const claimBarrier = join(home, "claim-barrier");
+  await mkdir(recoveryBarrier, { recursive: true });
+  await mkdir(claimBarrier, { recursive: true });
+  await crashedHolderLock(profile);
+
+  // L observes the dead holder's record and stops before claiming it.
+  const late = spawnLockHolder(home, holders, profile, "late", { timeoutMs: 10_000, staleAfterMs: 30_000, env: { TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR: recoveryBarrier, TC_TEST_PROFILE_LOCK_CLAIM_BARRIER_DIR: claimBarrier } });
+  await waitForProfileLockProtocol(join(recoveryBarrier, `ready-${late.pid}-${profile}`), "L at its stale claim");
+  // H recovers that lock first and holds a fresh one.
+  const holder = spawnLockHolder(home, holders, profile, "holder", { timeoutMs: 10_000, staleAfterMs: 30_000 });
+  await waitForProfileLockProtocol(holder.readyPath, "H holding the recovered lock");
+
+  // L's outdated claim lands on H's owner record, which stays in place.
+  await writeFile(join(recoveryBarrier, "release"), "release\n", "utf8");
+  await waitForProfileLockProtocol(join(claimBarrier, `ready-${late.pid}-${profile}`), "L holding its claim");
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: holder.pid });
+  // H releases while L's claim is still inside `.lock`.
+  await holder.release();
+  const [holderExit, holderError] = await holder.finished();
+  expect(holderExit, holderError).toBe(0);
+
+  // L drops its claim, removes the lock H gave up, and acquires: the dead
+  // record H released is never restored to block everyone until it ages.
+  await writeFile(join(claimBarrier, "release"), "release\n", "utf8");
+  await waitForProfileLockProtocol(late.readyPath, "L acquiring after H");
+  await late.release();
+  const [lateExit, lateError] = await late.finished();
+  expect(lateExit, lateError).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+  expect(await exists(profileLockPath(profile))).toBe(false);
+}, 30_000);
+
+test("a recoverer paused past its fence drops its claim and never removes a newer holder's record", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const verifiedBarrier = join(home, "verified-barrier");
+  const fencedBarrier = join(home, "fenced-barrier");
+  await mkdir(verifiedBarrier, { recursive: true });
+  await mkdir(fencedBarrier, { recursive: true });
+  await crashedHolderLock(profile);
+
+  // R1 links its claim, confirms it is the dead holder's record, and is
+  // paused before unlinking owner.json. Its 4 ms stale threshold puts its
+  // fence 2 ms after the claim, well inside the time the steps below take.
+  const paused = spawnLockHolder(home, holders, profile, "paused", { timeoutMs: 10_000, staleAfterMs: 4, env: { TC_TEST_PROFILE_LOCK_VERIFIED_BARRIER_DIR: verifiedBarrier, TC_TEST_PROFILE_LOCK_FENCED_BARRIER_DIR: fencedBarrier } });
+  await waitForProfileLockProtocol(join(verifiedBarrier, `ready-${paused.pid}-${profile}`), "R1 holding its confirmed claim");
+  // R2 finishes the same recovery (unlinks the dead record); R1's claim keeps
+  // `.lock` until a later cleanup finds it unchanged long enough and removes
+  // the claim and the directory, after which H takes the lock.
+  await rm(profileLockMetadataPath(profile));
+  await ageLock(profile);
+  const holder = spawnLockHolder(home, holders, profile, "holder", { timeoutMs: 10_000, staleAfterMs: 30_000 });
+  await waitForProfileLockProtocol(holder.readyPath, "H holding the lock after the cleanup");
+
+  // R1 resumes long past its fence: it drops only its claim.
+  await writeFile(join(verifiedBarrier, "release"), "release\n", "utf8");
+  await waitForProfileLockProtocol(join(fencedBarrier, `ready-${paused.pid}-${profile}`), "R1 stopping at its fence");
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: holder.pid });
+  await writeFile(join(fencedBarrier, "release"), "release\n", "utf8");
+
+  await holder.release();
+  const [holderExit, holderError] = await holder.finished();
+  expect(holderExit, holderError).toBe(0);
+  await waitForProfileLockProtocol(paused.readyPath, "R1 acquiring after H");
+  await paused.release();
+  const [pausedExit, pausedError] = await paused.finished();
+  expect(pausedExit, pausedError).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+}, 30_000);
+
+test("many processes reclaiming eagerly from an aged empty lock never overlap or leave staging files", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  await mkdir(profileLockPath(profile), { recursive: true });
+  await ageLock(profile);
+  // A 20 ms stale threshold reclaims an ownerless `.lock` almost at once,
+  // including a contender's not-yet-linked one and a holder's mid-release one
+  // whenever a process stalls, while leaving recovery its 10 ms fence.
+  const workers = Array.from({ length: 8 }, () => Bun.spawn([process.execPath, cycleFixture, profile, holders, "25", "20"], {
+    env: lockChildEnv(home),
+    stdout: "pipe",
+    stderr: "pipe",
+  }));
+  const results = await Promise.all(workers.map(async (worker) => [await worker.exited, await new Response(worker.stderr).text()] as const));
+  for (const [exit, stderr] of results) expect(exit, stderr).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+  expect((await readdir(profilePath(profile))).filter((name) => name.startsWith(".lock"))).toEqual([]);
+}, 60_000);
+
+test("writers of this release and of the 842377d4 lock protocol never hold the lock together", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const olderFixture = new URL("../test-support/older-release-lock-cycle.ts", import.meta.url).pathname;
+  // Realistic stale threshold: exclusion between versions rests on mkdir alone.
+  const workers = [
+    ...Array.from({ length: 4 }, () => Bun.spawn([process.execPath, cycleFixture, profile, holders, "25", "30000"], { env: lockChildEnv(home), stdout: "pipe", stderr: "pipe" })),
+    ...Array.from({ length: 4 }, () => Bun.spawn([process.execPath, olderFixture, profile, holders, "25"], { env: lockChildEnv(home), stdout: "pipe", stderr: "pipe" })),
+  ];
+  const results = await Promise.all(workers.map(async (worker) => [await worker.exited, await new Response(worker.stderr).text()] as const));
+  for (const [exit, stderr] of results) expect(exit, stderr).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+  expect((await readdir(profilePath(profile))).filter((name) => name.startsWith(".lock"))).toEqual([]);
+}, 60_000);
+
+test("reclaims an ownerless lock directory older than the stale threshold", async () => {
+  await isolatedHome();
+  const profile = "delegate";
+  await mkdir(profileLockPath(profile), { recursive: true });
+  // The holder crashed between mkdir and publishing its owner file a minute ago.
+  const aMinuteAgo = new Date(Date.now() - 60_000);
+  await utimes(profileLockPath(profile), aMinuteAgo, aMinuteAgo);
+
+  const records = await upsertProfileRecord(
+    profile,
+    "auth-requests",
+    "req-ownerless-reclaimed",
+    request("req-ownerless-reclaimed"),
+    (candidate) => candidate.requestId,
+    { timeoutMs: 1_000, retryMs: 2, staleAfterMs: 30_000 },
+  );
+  expect(records.map((record) => record.requestId)).toEqual(["req-ownerless-reclaimed"]);
+});
+
+test("lock ownership ends with the critical section: deferred work waits for the lock", async () => {
+  await isolatedHome();
+  const profile = "delegate";
+  const deferredStart = Promise.withResolvers<void>();
+  let deferred: Promise<string> | undefined;
+  await withProfileLock(profile, async () => {
+    // Started inside the section, runs after it returned.
+    deferred = deferredStart.promise.then(() => withProfileLock(profile, async () => "entered", { timeoutMs: 50, retryMs: 2 }));
+  });
+  const holderReleased = Promise.withResolvers<void>();
+  const holding = withProfileLock(profile, async () => {
+    deferredStart.resolve();
+    await deferred!.catch(() => undefined);
+    holderReleased.resolve();
+  });
+  await expect(deferred!).rejects.toBeInstanceOf(ProfileLockTimeoutError);
+  await holderReleased.promise;
+  await holding;
+});
+
+test("a lock held in one state root does not stand in for another root's lock", async () => {
+  const rootA = await mkdtemp(join(tmpdir(), "tc-lock-root-a-"));
+  const rootB = await mkdtemp(join(tmpdir(), "tc-lock-root-b-"));
+  try {
+    const innerLockSeen = await withTinyCloudStateRoot(rootA, () => withProfileLock("delegate", () =>
+      withTinyCloudStateRoot(rootB, () => withProfileLock("delegate", () =>
+        stat(profileLockPath("delegate")).then(() => true, () => false)))));
+    expect(innerLockSeen).toBe(true);
+  } finally {
+    await rm(rootA, { recursive: true, force: true });
+    await rm(rootB, { recursive: true, force: true });
+  }
 });
 
 test("two child processes append distinct records without losing either update", async () => {

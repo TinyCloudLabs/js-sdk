@@ -444,6 +444,34 @@ function cloneRecapCaveats(
   }
 }
 
+/**
+ * The WASM verifier serializes ReCap caveats with serde-wasm-bindgen, which
+ * returns JSON objects as `Map`s and JSON `null` as `undefined`. Convert
+ * exactly those back to JSON: string-keyed `Map`s to plain objects and
+ * `undefined` to `null`, recursively. Anything else is passed through for
+ * cloneRecapCaveats to accept or reject.
+ */
+function jsonFromVerifier(value: unknown): unknown {
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map(jsonFromVerifier);
+  if (value instanceof Map) {
+    const entries = [...value.entries()];
+    if (!entries.every(([key]) => typeof key === "string")) return value;
+    return Object.fromEntries(entries.map(([key, nested]) => [key, jsonFromVerifier(nested)]));
+  }
+  if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, jsonFromVerifier(nested)]));
+  }
+  return value;
+}
+
+/** Verifier ReCap entries with their caveats converted by jsonFromVerifier. */
+function verifierRecapEntries<T extends { caveats?: Record<string, unknown>[] }>(entries: T[]): T[] {
+  return entries.map((entry) => Array.isArray(entry.caveats)
+    ? { ...entry, caveats: entry.caveats.map((caveat) => jsonFromVerifier(caveat) as Record<string, unknown>) }
+    : entry);
+}
+
 /** One replaceable set of services bound to a single host/session authority. */
 class ServiceGraphLifetime {
   private readonly abortController = new AbortController();
@@ -2766,7 +2794,11 @@ export class TinyCloudNode {
           throw new InvalidRestoredSessionError(error instanceof Error ? error.message : String(error));
         }
       })();
-      const exactRecap = verified.verifiedRecap;
+      // Caveats are verifier output (Maps, undefined for null): convert them
+      // before the strict JSON checks below.
+      const exactRecap = Array.isArray(verified.verifiedRecap)
+        ? verifierRecapEntries(verified.verifiedRecap)
+        : verified.verifiedRecap;
       if (!Array.isArray(exactRecap) || !exactRecap.every((entry) =>
         entry !== null && typeof entry === "object" &&
         typeof entry.service === "string" &&
@@ -6497,8 +6529,10 @@ export class TinyCloudNode {
 
   /** Prefer the v2 caveat-preserving parser while retaining old custom WASM. */
   private parseRecapWithCaveats(siwe: string): WasmRecapEntry[] {
-    return this.wasmBindings.parseVerifiedRecapFromSiwe?.(siwe)
-      ?? this.wasmBindings.parseRecapFromSiwe(siwe);
+    const verified = this.wasmBindings.parseVerifiedRecapFromSiwe?.(siwe);
+    return verified == null
+      ? this.wasmBindings.parseRecapFromSiwe(siwe)
+      : verifierRecapEntries(verified);
   }
 
   private isEncryptionNetworkOperation(service: string, path: string): boolean {

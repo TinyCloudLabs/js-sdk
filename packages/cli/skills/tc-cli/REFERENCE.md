@@ -11,15 +11,56 @@ This release has **Commander coverage tracked, not complete parity**:
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
 <!-- END GENERATED TINYCloud operations coverage -->
 
+## Calling the CLI
+
+`/usr/sbin/tc` (iproute2 traffic control) shadows TinyCloud's `tc` on many Linux hosts. Call the CLI by absolute path: `TC="$(npm prefix --global)/bin/tc"; "$TC" --version`.
+
 ## Global Options
 
 | Flag | Description |
 |------|-------------|
 | `-p, --profile <name>` | Profile to use |
-| `-H, --host <url>` | Node URL override |
+| `-H, --host <url>` | Node URL override (default `https://tee.node.tinycloud.xyz`) |
 | `-v, --verbose` | Verbose output |
 | `-q, --quiet` | Suppress non-essential output |
 | `--no-cache` | Disable caching |
+| `--json` | Force machine-readable output |
+
+## Context and Login
+
+```bash
+tc profile list                    # use a new profile name; keep existing profiles
+tc init --name publisher --key-only
+tc --profile publisher auth login --device --manifest builtin:share-publishing --expiry 7d
+tc --profile publisher context --json
+```
+
+`context` always emits JSON: profile, `ownerDid`, `sessionDid`, host, `spaceId` and local session expiry, with `access: "not-tested"`. It never prints keys or signed material.
+
+| `auth login` flag | Description |
+|------|-------------|
+| `--device` | Approve on another device (phone) through OpenKey device authorization. Requires `--manifest`: KV abilities plus `tinycloud.capabilities/read` on path `""` in the same space (OpenKey requires it to sign; no `tinycloud.sql`). Prints `Approve on your phone: URL (code XXXX-XXXX)` to stderr and waits for the whole approval window |
+| `--manifest <file>` | Request only this manifest's permissions (one space). File path, `base64:<json>`, or `builtin:share-publishing` |
+| `--expiry <duration>` | Session lifetime (`1h`, `7d`, milliseconds; at least `1m`) counted from approval; ISO dates are refused because OpenKey signs approval time plus a lifetime. Enforced against the signed session on every login path. Device login: at most `30d`, default `30d` |
+| `--owner <did>` | Refuse approval by any identity other than this `did:pkh`; must agree with an owner the profile already recorded |
+| `--replace-session` | Scoped or device login: replace a live session the new scope would narrow, change or shorten (otherwise `SESSION_IN_USE`); renewals and widenings that last at least as long need no flag |
+| `--method openkey\|local` | Browser OpenKey flow or local Ethereum key |
+| `--paste`, `--no-popup` | Browser flow without a local callback / without opening a browser |
+
+Device login JSON lists the signed, approved `permissions`, owner-unchecked `declined` capabilities, `ownerDid`, `spaceId` and `expiresAt`. `tc auth request --manifest FILE --grant --device` adds another space to a logged-in profile the same way (default lifetime 7d). `tc enable share [--replace-session]` is shorthand for device login with `builtin:share-publishing`. OpenKey refuses `tinycloud.sql` and other abilities outside its device policy; use browser login (`--method openkey --manifest`) for those. Non-interactive browser login without `--paste` or `--no-popup` fails fast with `INTERACTIVE_LOGIN_REQUIRED`. Only an explicit `--host` is stored on the profile. Errors: `MANIFEST_REQUIRED`, `SCOPE_REJECTED` (OpenKey refused a capability; the message names it), `SESSION_IN_USE` (the request or the approved scope would narrow a live session; use a new profile or `--replace-session`), `PROFILE_CHANGED_DURING_LOGIN` (another login, key rotation or logout changed the profile while approval was pending; nothing saved), `PROFILE_STATE_INCONSISTENT` (profile, key and session disagree after an interrupted write; `--replace-session` or a new profile), `PROFILE_LOCK_TIMEOUT` (another process held the profile lock past 45 s), `LOCAL_OWNER_PROFILE` (scoped or device login on a local-owner-key profile; use a separate profile), `OPENKEY_UNREACHABLE`, `DEVICE_AUTH_DENIED`, `DEVICE_AUTH_EXPIRED`, `DEVICE_AUTH_BINDING_MISMATCH` (OpenKey's approval metadata disagrees with the signed grant), `OPENKEY_OWNER_MISMATCH`, `OPENKEY_GRANT_BROADENED`, `OPENKEY_EXPIRY_EXCEEDED` (the signed session outlives `--expiry`). Owner addresses compare case-insensitively (EIP-55 or lowercase); chain id and space name compare exactly. See [AUTH.md](AUTH.md).
+
+`builtin:share-publishing` requests, in the owner's `default` space, exactly:
+
+| Prefix | Abilities | Why |
+|------|-------------|-----|
+| `""` (space root) | `capabilities/read` | required by OpenKey to sign any delegation; lets the CLI read its own capability set |
+| `xyz.tinycloud.share/shares/` | `kv/put` | store a bearer link's source |
+| | `kv/get` | mint the link's read-only child delegation (a session delegates only what it holds) |
+| `shares/` | `kv/put` | store an addressed share's encrypted source; `--action edit` |
+| | `kv/get`, `kv/metadata` | back the Policy/v3 root that grants recipients read; `--notify` delivery authorization |
+| | `kv/list` | `--action list` on a `--prefix` share |
+
+No `del` anywhere and no `list` on the bearer prefix: no `tc share` command uses them. Inspect and receive use the link's own authority. Revoke signs `tinycloud.delegation/revoke` over the delegation's own CID and a Policy/v3 root revocation with the issuing session key, not a space capability. OpenKey shows the capability read as required (not uncheckable), so it is always in the signed grant and never in `declined`.
 
 ## Delegations
 
@@ -101,33 +142,32 @@ eval "$(tc completion zsh)"
 tc completion fish | source
 ```
 
-## Share Publish, Inspect, and Receive
+## Share Publish, Inspect, Receive, List, Revoke
+
+Publishing needs the publishing scope on a dedicated profile (`tc --profile publisher auth login --device --manifest builtin:share-publishing`, or `tc --profile publisher enable share`). Publish with `tc --profile publisher share publish ...`.
 
 ```bash
-tc share publish ./decision.md
-cat decision.md | tc share publish - --name decision.md
-printf '%s' "$SHARE_URL" | tc share inspect - --json
+tc share publish ./note.md --json                                  # bearer link
+tc share publish ./note.md --to email:alice@example.com --notify   # addressed: exact email, emailed invitation
+tc share publish ./note.md --to did:pkh:eip155:1:0xRecipient...    # addressed: one DID
+tc share publish ./note.md --to domain:example.com                 # addressed: any verified address at the domain
+cat note.md | tc share publish - --name note.md
+
+printf '%s' "$SHARE_URL" | tc share inspect - --json               # verify, print safe metadata
+printf '%s' "$SHARE_URL" | tc share receive - --stdout             # bearer link: verified bytes
 printf '%s' "$SHARE_URL" | tc share receive - --output .
-printf '%s' "$SHARE_URL" | tc share receive - --stdout
+
+tc share list --json                                               # sender history, no complete URLs
+tc share show <id> [--reveal-link]
+tc share notify <id> --to alice@example.com                        # retry email delivery
+tc share revoke <id>
 ```
 
-Human publish output is exactly one canonical URL. Bearer shares use
-`/viewer#tc1=<opaque TinyCloud delegation>`; addressed shares use
-`/s/inline#v=2&p=<sealed Policy/v3 envelope>`. The sealed envelope and its
-AES-GCM key remain in the fragment, never in a query string or HTTP request.
-Inspect never prints plaintext or secret-bearing fields. Receive invokes the
-owner node, uses a sanitized single-segment filename, and refuses overwrite
-unless `--force` is explicit. Pre-cutover blob-backed and plaintext `?tc2`
-link forms are not accepted.
-Share publication without `--expires` requests a seven-day lifetime. For a
-session-only profile, the CLI clamps that request to the verified SIWE session
-expiry, prints a notice to stderr, and reports `"expiryClamped": true` in JSON.
-Explicit lifetimes beyond the session end, or with less than 60 seconds left
-after second-precision rounding, fail with `SESSION_LIFETIME_EXCEEDED`.
-Expired/invalid restored sessions and missing owner authority return
-`AUTH_REQUIRED`; rejected KV upload or delegation scopes return
-`PERMISSION_DENIED`. JSON publish output includes `expiryClamped: false` when
-no clamp was needed.
+**Bearer vs addressed.** A bearer link (default, `--to anyone`) is `/viewer#tc1=<TinyCloud delegation>`: anyone holding the complete URL can read the file until it expires, and revocation cannot recall copies already received. Addressed links (`--to email:`, `--to did:`, `--to domain:`) are `/s/inline#v=2&p=<sealed Policy/v3 envelope>`: the content is encrypted and only the named recipient can open it after proving their email or DID in Share. `tc share receive` returns the bytes of a bearer link; for an addressed link it exits 6 with `CLAIM_REQUIRED` because the recipient claims it in Share. `--notify` emails an exact-email recipient an invitation.
+
+The fragment after `#` is the read authority. It never reaches a server in a query string or HTTP request; keep complete URLs out of logs. Human publish output is exactly one URL. Inspect never prints plaintext or secret-bearing fields. Receive uses a sanitized single-segment filename and refuses overwrite unless `--force`. `revoke` revokes addressed shares at the owner node and reports bearer retention honestly. Pre-cutover blob-backed and plaintext `?tc2` links are not accepted.
+
+Share publication without `--expires` requests a seven-day lifetime. For a session-only profile, the CLI clamps that request to the verified SIWE session expiry, prints a notice to stderr, and reports `"expiryClamped": true` in JSON. Explicit lifetimes beyond the session end, or with less than 60 seconds left after second-precision rounding, fail with `SESSION_LIFETIME_EXCEEDED`. Expired/invalid restored sessions and missing owner authority return `AUTH_REQUIRED`; rejected KV upload or delegation scopes return `PERMISSION_DENIED`. JSON publish output includes `expiryClamped: false` when no clamp was needed.
 
 ### Share Publish Options
 
@@ -155,13 +195,13 @@ no clamp was needed.
 ## Profile Directory Structure
 
 ```
-~/.tinycloud/
+~/.tinycloud/                      # 0700
 ├── config.json                    # Global config (defaultProfile)
 └── profiles/
-    └── {name}/
-        ├── profile.json           # Host, DID, chainId
-        ├── key.json               # Ed25519 JWK keypair
-        ├── session.json           # Delegation, spaceId
+    └── {name}/                    # 0700
+        ├── profile.json           # Host, DID, chainId, ownerDid, spaceId (0600)
+        ├── key.json               # Ed25519 JWK keypair (0600)
+        ├── session.json           # Delegation, spaceId (0600)
         └── cache/
 ```
 
@@ -170,4 +210,6 @@ no clamp was needed.
 - **Session key**: `did:key:z6Mk...#z6Mk...` — generated at init
 - **Owner DID**: `did:pkh:eip155:{chainId}:{address}` — after auth
 
-All output is JSON. Errors go to stderr as `{error: {code, message}}`.
+Use `--json` for machine-readable output; interactive commands can render human output. General command errors go to stderr as `{error: {code, message, hint?}}`. Inspect the structured code, not only the exit status.
+
+General storage/auth exit codes: 0 success, 1 operation error, 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, 7 node error. `tc share` uses its own: 3 upload authority required, 4 unavailable or expired, 5 verification failed, 6 recipient authorization required or network error, 7 byte limit, 8 output conflict or unsafe filename, 9 partial success.

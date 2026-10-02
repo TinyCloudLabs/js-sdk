@@ -73,23 +73,30 @@ export function shareCliError(error: unknown): CLIError {
     const profileName = "profileName" in failure ? failure.profileName : undefined;
     const localKey = "localKey" in failure && failure.localKey === true;
     const profileHint = profileName === undefined ? "" : `--profile ${profileName} `;
-    const loginHint = `tc ${profileHint}auth login${localKey ? " --method local" : ""}`;
+    // A local-key profile signs in again with its key. Any other profile gets
+    // the publishing scope through OpenKey device login.
+    const loginHint = localKey
+      ? `\`tc ${profileHint}auth login --method local\``
+      : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
     if (failure.kind === "owner-space-unresolved") {
-      return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run \`${loginHint}\``, 3);
+      return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run ${loginHint}`, 3);
     }
     if (failure.kind === "scope-denied") {
       const requiredAction = failure.requiredAction === undefined ? "" : ` (${failure.requiredAction})`;
-      return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; renew it with \`${loginHint}\` using the required capability`, 5);
+      const renew = localKey
+        ? `renew it with ${loginHint} using the required capability`
+        : `request the builtin:share-publishing scope with ${loginHint}`;
+      return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; ${renew}`, 5);
     }
     if (failure.kind === "lifetime-exceeds-session") {
       const expiresAt = failure.sessionExpiresAt.toISOString();
       if (failure.reason === "session-too-close") {
-        return new CLIError("AUTH_REQUIRED", `the signed session expires too soon (${expiresAt}); log in again with \`${loginHint}\``, 3);
+        return new CLIError("AUTH_REQUIRED", `the signed session expires too soon (${expiresAt}); log in again with ${loginHint}`, 3);
       }
       if (failure.reason === "below-minimum") {
         return new CLIError("SESSION_LIFETIME_EXCEEDED", "share expiry must be at least 60 seconds from now; use a longer --expires value", 2);
       }
-      return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime exceeds session expiry ${expiresAt}; use a shorter --expires value or renew the session with \`${loginHint}\``, 2);
+      return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime exceeds session expiry ${expiresAt}; use a shorter --expires value or renew the session with ${loginHint}`, 2);
     }
     if (failure.kind === "origin-mismatch") {
       return new CLIError("ORIGIN_MISMATCH", "share origin does not match the configured service", 2);

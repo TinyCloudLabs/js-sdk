@@ -11,7 +11,7 @@ import { invokeOperation } from "@tinycloud/operations";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
-import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_HOST } from "../config/constants.js";
+import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
   resolveProfileOperatorType,
   resolveProfilePosture,
@@ -33,9 +33,24 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
 import {
-  ensureShareDeviceAuthorization,
+  acquireDeviceDelegation,
+  loginWithDeviceAuthorization,
   mergePrivateJwkIntoSession,
+  resolveDeviceApiHost,
 } from "../auth/device-auth.js";
+import {
+  expectedOwnerFor,
+  parseRequestedExpiry,
+  pinnedOwner,
+  validateLoginPermissions,
+  verifyScopedLogin,
+  verifySignedSession,
+  openKeyExpiryParam,
+  withoutTrustFields,
+  withVerifiedAuthority,
+} from "../auth/scoped-login.js";
+import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
+import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 export { mergePrivateJwkIntoSession } from "../auth/device-auth.js";
 import {
   generateLocalIdentity,
@@ -47,6 +62,7 @@ import {
 } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
 import { bootstrapDelegatedSession, ensureAuthenticated } from "../lib/sdk.js";
+import { normalizePkhIdentifier } from "../lib/space.js";
 import {
   appendAdditionalDelegation,
   appendPermissionRequestArtifact,
@@ -108,26 +124,76 @@ export function registerAuthCommand(program: Command): void {
   auth
     .command("login")
     .description("Authenticate with TinyCloud")
-    .option("--device", "Use OpenKey device authorization (recommended for remote/headless use)")
+    .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest that also requests tinycloud.capabilities/read on the space root (SQL needs browser login)")
     .option("--paste", "Use manual paste mode instead of browser callback")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
+    .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`tc share publish\``)
+    .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
+    .option("--owner <did>", "Require this existing primary DID (did:pkh:eip155:CHAIN:ADDRESS) for scoped login")
+    .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .action(async (options, cmd) => {
       try {
         if (options.device && options.paste) {
           throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
         }
+        const scoped = options.device || options.manifest || options.expiry || options.owner;
+        if (scoped && options.method === "local") {
+          throw new CLIError("INVALID_ARGUMENT", "--device, --manifest, --expiry and --owner require OpenKey login.", ExitCode.USAGE_ERROR);
+        }
+        if (options.owner && !options.manifest) {
+          throw new CLIError("INVALID_ARGUMENT", "--owner requires --manifest so the signed identity is verified.", ExitCode.USAGE_ERROR);
+        }
+        if (options.device && !options.manifest) {
+          throw new CLIError(
+            "MANIFEST_REQUIRED",
+            `Device login requests an explicit scope. Pass --manifest FILE, or --manifest ${SHARE_PUBLISHING_MANIFEST_REF} for Share publishing.`,
+            ExitCode.USAGE_ERROR,
+          );
+        }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
+        const permissions = options.manifest
+          ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true })
+          : undefined;
+
+        // Only an explicit --host becomes the profile's host; TC_HOST and a
+        // discovered local node stay one-off.
+        const persistHost = globalOpts.host !== undefined;
+
+        if (options.device) {
+          const { profile, result } = await loginWithDeviceAuthorization({
+            profileName: ctx.profile,
+            nodeOrigin: ctx.host,
+            shareOrigin: DEFAULT_SHARE_ORIGIN,
+            permissions: permissions!,
+            ...(options.expiry === undefined ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options.expiry)!) }),
+            reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
+            expectedOwner: options.owner,
+            replaceSession: options.replaceSession === true,
+            persistHost,
+          });
+          reportDeclined(result.declined);
+          outputJson({
+            authenticated: true,
+            profile: ctx.profile,
+            did: profile.did,
+            ownerDid: result.ownerDid,
+            spaceId: result.spaceId,
+            host: ctx.host,
+            authMethod: "openkey",
+            mode: "device",
+            scoped: true,
+            permissions: result.approved,
+            declined: result.declined,
+            expiresAt: result.expiresAt,
+          });
+          return;
+        }
 
         // Determine auth method
         let method: AuthMethod;
-        if (options.device && options.method === "local") {
-          throw new CLIError("INVALID_ARGUMENT", "--device requires --method openkey.", ExitCode.USAGE_ERROR);
-        }
-        if (options.device) {
-          method = "openkey";
-        } else if (options.method) {
+        if (options.method) {
           if (options.method !== "local" && options.method !== "openkey") {
             throw new CLIError(
               "INVALID_METHOD",
@@ -137,7 +203,14 @@ export function registerAuthCommand(program: Command): void {
           }
           method = options.method;
         } else {
-          method = await promptAuthMethod();
+          method = scoped ? "openkey" : await promptAuthMethod();
+        }
+        if (method === "openkey" && !options.paste && options.popup !== false && !isInteractive()) {
+          throw new CLIError(
+            "INTERACTIVE_LOGIN_REQUIRED",
+            `Browser login needs a browser on this machine and would wait silently. Use \`tc auth login --device --manifest ${SHARE_PUBLISHING_MANIFEST_REF}\` (or your app's manifest) to approve on a phone, or \`--paste\` to paste a return code.`,
+            ExitCode.USAGE_ERROR,
+          );
         }
 
         if (method === "local") {
@@ -146,7 +219,11 @@ export function registerAuthCommand(program: Command): void {
           await handleOpenKeyAuth(ctx.profile, ctx.host, {
             paste: options.paste,
             noPopup: options.popup === false,
-            device: options.device === true || (!isInteractive() && options.paste !== true),
+            permissions,
+            expiry: parseExpiryOption(options.expiry),
+            expectedOwner: options.owner,
+            replaceSession: options.replaceSession === true,
+            persistHost,
           });
         }
       } catch (error) {
@@ -261,11 +338,15 @@ export function registerAuthCommand(program: Command): void {
     .option("--grant", "Grant the requested permissions immediately with this owner profile")
     .option("--yes", "Skip local-key TTY confirmation", false)
     .option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey")
+    .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const profile = await ProfileManager.getProfile(ctx.profile);
+        if (options.device && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
+          throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
+        }
         const requested = await collectRequestedPermissions(options, ctx.profile);
         const expiryOption = parseExpiryOption(options.expiry);
 
@@ -300,7 +381,7 @@ export function registerAuthCommand(program: Command): void {
           return;
         }
 
-        if (profile.authMethod === "openkey") {
+        if (profile.authMethod === "openkey" || options.device) {
           const key = await ProfileManager.getKey(ctx.profile);
           if (!key) {
             throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`tc init\` first.`, ExitCode.AUTH_REQUIRED);
@@ -312,19 +393,38 @@ export function registerAuthCommand(program: Command): void {
           // delegation so the CLI output reports what was actually
           // conferred (never over-reports the originally-requested set).
           const openkeyEffective: typeof requested = [];
+          const declined: PermissionEntry[] = [];
           for (const group of groupPermissionsBySpace(requested)) {
-            const delegationData = await startAuthFlow(profile.did, {
-              jwk: key,
-              host: ctx.host,
-              permissions: group,
-              reason: permissionGrantReason(
-                "Grant requested TinyCloud permissions from `tc auth request --grant`.",
-                group,
-              ),
-              openkeyHost,
-              expiry: expiryOption,
-              noPopup: options.popup === false,
-            });
+            const reason = permissionGrantReason(
+              "Grant requested TinyCloud permissions from `tc auth request --grant`.",
+              group,
+            );
+            let delegationData: Record<string, unknown>;
+            if (options.device) {
+              const approval = await acquireDeviceDelegation({
+                sessionDid: keyToDID(key),
+                jwk: key,
+                nodeOrigin: ctx.host,
+                shareOrigin: DEFAULT_SHARE_ORIGIN,
+                permissions: group,
+                expiry: parseRequestedExpiry(expiryOption ?? "7d"),
+                reason,
+                expectedOwner: pinnedOwner(profile),
+                openkeyHost: resolveDeviceApiHost(profile),
+              });
+              declined.push(...approval.declined);
+              delegationData = approval.session;
+            } else {
+              delegationData = await startAuthFlow(profile.did, {
+                jwk: key,
+                host: ctx.host,
+                permissions: group,
+                reason,
+                openkeyHost,
+                expiry: expiryOption === undefined ? undefined : openKeyExpiryParam(parseRequestedExpiry(expiryOption)),
+                noPopup: options.popup === false,
+              });
+            }
             const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
             // Sol MAJOR-6: report EFFECTIVE grants (what the delegation
             // actually confers) rather than the requested `group`. The
@@ -344,12 +444,14 @@ export function registerAuthCommand(program: Command): void {
               expiry,
             });
           }
+          reportDeclined(declined);
           outputJson({
             changed: delegationCids.length > 0,
             added: openkeyEffective,
             delegationCid: delegationCids[0],
             delegationCids,
             expiry,
+            ...(options.device ? { declined } : {}),
           });
           return;
         }
@@ -892,8 +994,10 @@ async function importRequestBoundDelegationWithBootstrap(
     await bootstrapDelegatedSession(ctx, delegation);
     await importRequestBoundDelegation(ctx, artifact);
   } catch (error) {
-    await ProfileManager.clearSession(ctx.profile);
-    await ProfileManager.setProfile(ctx.profile, profile);
+    await ProfileManager.withLock(ctx.profile, async () => {
+      await ProfileManager.clearSession(ctx.profile);
+      await ProfileManager.setProfile(ctx.profile, profile);
+    });
     throw error;
   }
 }
@@ -1013,7 +1117,7 @@ export async function ensureDelegationAuthority(params: {
         permissions: group,
         reason: permissionGrantReason(params.reason, group),
         openkeyHost,
-        expiry: params.expiryOption,
+        expiry: params.expiryOption === undefined ? undefined : openKeyExpiryParam(parseRequestedExpiry(params.expiryOption)),
       });
       const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host);
       // Sol MAJOR-6: report effective grants, not requested `group`.
@@ -1195,7 +1299,7 @@ export function groupPermissionsBySpace(permissions: PermissionEntry[]): Permiss
     // into one OpenKey round-trip even when one cap's address is checksummed and
     // another is lowercase. The space NAME stays case-sensitive, so genuinely
     // different names are NOT merged. Entries keep their original space string.
-    const key = normalizeSpaceForCompare(permission.space ?? "");
+    const key = normalizePkhIdentifier(permission.space ?? "");
     const group = groups.get(key) ?? [];
     group.push(permission);
     groups.set(key, group);
@@ -1213,26 +1317,8 @@ function isRawPermission(permission: PermissionEntry): boolean {
     permission.path.startsWith("urn:tinycloud:encryption:");
 }
 
-/**
- * Normalize a space identifier for case-insensitive comparison of its
- * embedded Ethereum address ONLY.
- *
- * Space URIs are `tinycloud:pkh:eip155:<chain>:<0xADDR>:<name>`. Ethereum
- * addresses are case-insensitive, but OpenKey returns the EIP-55 checksummed
- * form (mixed case) while the CLI builds the lowercase form, so a byte-for-byte
- * compare spuriously fails. Lowercase ONLY the `eip155:<chain>:0x<addr>` address
- * segment and leave everything else — crucially the space NAME, which repo
- * parsers treat as case-sensitive — byte-exact.
- */
-function normalizeSpaceForCompare(space: string): string {
-  return space.replace(
-    /(eip155:\d+:)(0x[0-9a-fA-F]{40})/,
-    (_match, prefix: string, addr: string) => prefix + addr.toLowerCase(),
-  );
-}
-
 export function returnedSpaceMatchesExpected(returnedSpace: string, expectedSpace: string): boolean {
-  if (normalizeSpaceForCompare(returnedSpace) === normalizeSpaceForCompare(expectedSpace)) {
+  if (normalizePkhIdentifier(returnedSpace) === normalizePkhIdentifier(expectedSpace)) {
     return true;
   }
 
@@ -1255,7 +1341,7 @@ export function portableFromOpenKeyDelegation(
   const expectedSpaces = new Set(
     permissions
       .filter((permission) => !isRawPermission(permission))
-      .map((permission) => normalizeSpaceForCompare(permission.space ?? "")),
+      .map((permission) => normalizePkhIdentifier(permission.space ?? "")),
   );
   const matchesExpectedSpace = expectedSpaces.size === 1 &&
     returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]!);
@@ -1276,7 +1362,7 @@ export function portableFromOpenKeyDelegation(
     permissions.flatMap((p) =>
       isRawPermission(p)
         ? p.actions.map((a) => `${p.service}|${p.space ?? ""}|${p.path}|${a}`)
-        : p.actions.map((a) => `${p.service}|${normalizeSpaceForCompare(p.space ?? "")}|${p.path}|${a}`),
+        : p.actions.map((a) => `${p.service}|${normalizePkhIdentifier(p.space ?? "")}|${p.path}|${a}`),
     ),
   );
   const returnedPermissions = Array.isArray(data.permissions)
@@ -1285,6 +1371,7 @@ export function portableFromOpenKeyDelegation(
         space: string;
         path: string;
         actions: string[];
+        caveats?: Record<string, unknown>[];
       }>)
     : null;
   const resources = (returnedPermissions ?? permissions).map((permission) => {
@@ -1305,7 +1392,7 @@ export function portableFromOpenKeyDelegation(
         actions: [],
       })
         ? permSpace
-        : normalizeSpaceForCompare(permSpace);
+        : normalizePkhIdentifier(permSpace);
       for (const action of permission.actions) {
         const key = `${rawService}|${rawSpace}|${permission.path}|${action}`;
         if (!requestedPairs.has(key)) {
@@ -1325,11 +1412,17 @@ export function portableFromOpenKeyDelegation(
     })
       ? permSpace
       : returnedSpace;
+    // Signed ReCap caveats restrict the resource; dropping them would make
+    // consumers treat a caveated grant as unrestricted.
+    const caveats = Array.isArray(permission.caveats) && permission.caveats.length > 0
+      ? permission.caveats.map((caveat) => structuredClone(caveat))
+      : undefined;
     return {
       service,
       space: resolvedSpace,
       path: permission.path,
       actions: [...permission.actions],
+      ...(caveats === undefined ? {} : { caveats }),
     };
   });
 
@@ -1421,16 +1514,21 @@ async function rotateAuthKey(
     return generateKey();
   });
 
-  await ProfileManager.setKey(profileName, jwk);
-  await ProfileManager.clearSession(profileName);
-  await ProfileManager.setProfile(profileName, {
-    ...profile,
-    host,
-    did,
-    sessionDid: did,
-    posture: profile.posture ?? "owner-openkey",
-    operatorType: profile.operatorType ?? "human",
-    authMethod: "openkey",
+  // One transaction: a concurrent login commit either lands before (and this
+  // rotation then discards its session) or sees the new key and refuses.
+  await ProfileManager.withLock(profileName, async () => {
+    const current = await ProfileManager.getProfile(profileName);
+    await ProfileManager.setKey(profileName, jwk);
+    await ProfileManager.clearSession(profileName);
+    await ProfileManager.setProfile(profileName, {
+      ...current,
+      host,
+      did,
+      sessionDid: did,
+      posture: current.posture ?? "owner-openkey",
+      operatorType: current.operatorType ?? "human",
+      authMethod: "openkey",
+    });
   });
 
   const result = await refreshOpenKeySession(profileName, host, {
@@ -1464,26 +1562,27 @@ async function persistCurrentLocalSession(
 ): Promise<void> {
   if (!session) return;
 
-  await ProfileManager.setSession(profileName, {
-    authMethod: "local",
-    address: session.address,
-    chainId: session.chainId,
-    spaceId: session.spaceId,
-    delegationHeader: session.delegationHeader,
-    delegationCid: session.delegationCid,
-    jwk: session.jwk,
-    verificationMethod: session.verificationMethod,
-    siwe: session.siwe,
-    signature: session.signature,
-  });
-
-  if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId) {
-    await ProfileManager.setProfile(profileName, {
-      ...profile,
-      sessionDid: session.verificationMethod,
+  await ProfileManager.withLock(profileName, async () => {
+    await ProfileManager.setSession(profileName, {
+      authMethod: "local",
+      address: session.address,
+      chainId: session.chainId,
       spaceId: session.spaceId,
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      jwk: session.jwk,
+      verificationMethod: session.verificationMethod,
+      siwe: session.siwe,
+      signature: session.signature,
     });
-  }
+    if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId) {
+      await ProfileManager.updateProfile(profileName, (current) => ({
+        ...current,
+        sessionDid: session.verificationMethod,
+        spaceId: session.spaceId,
+      }));
+    }
+  });
 }
 
 type LocalAuthResult = {
@@ -1501,7 +1600,8 @@ async function handleLocalAuth(
   host: string,
   options: { emitOutput?: boolean; forceSessionKey?: boolean } = {},
 ): Promise<LocalAuthResult> {
-  const profile = await ProfileManager.getProfile(profileName).catch(() => null);
+  const snapshot = await readProfileSnapshot(profileName);
+  const profile = snapshot.profile;
   const posture = profile ? resolveProfilePosture(profile) : null;
 
   let privateKey: string;
@@ -1539,15 +1639,17 @@ async function handleLocalAuth(
   }
 
   // We also need a session key (Ed25519 JWK) for the profile
-  const hasKey = await ProfileManager.getKey(profileName);
+  const hasKey = snapshot.key;
+  let key: object;
   if (options.forceSessionKey || !hasKey) {
     const { jwk, did: generatedSessionDid } = await withSpinner("Generating session key...", async () => {
       return generateKey();
     });
-    await ProfileManager.setKey(profileName, jwk);
+    key = jwk;
     sessionDid = generatedSessionDid;
-  } else if (!sessionDid) {
-    sessionDid = keyToDID(hasKey);
+  } else {
+    key = hasKey;
+    sessionDid ??= keyToDID(hasKey);
   }
 
   // Sign in using the private key
@@ -1555,8 +1657,7 @@ async function handleLocalAuth(
     return localKeySignIn({ privateKey, host });
   });
 
-  // Store session data
-  await ProfileManager.setSession(profileName, {
+  const session = {
     authMethod: "local",
     address,
     chainId: DEFAULT_CHAIN_ID,
@@ -1567,7 +1668,7 @@ async function handleLocalAuth(
     verificationMethod: sessionResult.verificationMethod,
     siwe: sessionResult.siwe,
     signature: sessionResult.signature,
-  });
+  };
   sessionDid = sessionResult.verificationMethod;
 
   // Update profile
@@ -1589,7 +1690,7 @@ async function handleLocalAuth(
     address,
   } satisfies ProfileConfig;
 
-  await ProfileManager.setProfile(profileName, updatedProfile);
+  await commitLogin(profileName, snapshot, { key, session, profile: updatedProfile });
 
   if (options.emitOutput ?? true) {
     outputJson({
@@ -1607,32 +1708,14 @@ async function handleLocalAuth(
 }
 
 /**
- * Handle OpenKey (browser-based) authentication.
- * This is the original auth flow.
+ * Handle OpenKey (browser-based) authentication. With `permissions`, only the
+ * manifest's scope is requested and the signed proof is verified first.
  */
 async function handleOpenKeyAuth(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean; device?: boolean } = {},
+  options: OpenKeyLoginOptions = {},
 ): Promise<void> {
-  if (options.device) {
-    const result = await ensureShareDeviceAuthorization({
-      profileName,
-      nodeOrigin: host,
-      shareOrigin: "https://share.tinycloud.xyz",
-      openkeyHost: process.env.TC_OPENKEY_HOST,
-      allowReplaceLocal: true,
-    });
-    outputJson({
-      authenticated: true,
-      profile: profileName,
-      did: result.profile.did,
-      spaceId: result.profile.spaceId ?? null,
-      authMethod: "openkey",
-      mode: "device",
-    });
-    return;
-  }
   const { profile, delegationData } = await refreshOpenKeySession(profileName, host, options);
 
   outputJson({
@@ -1641,31 +1724,48 @@ async function handleOpenKeyAuth(
     did: profile.did,
     spaceId: delegationData.spaceId,
     authMethod: "openkey",
+    ...(options.permissions
+      ? {
+          scoped: true,
+          ownerDid: profile.ownerDid,
+          host,
+          permissions: delegationData.permissions,
+          expiresAt: delegationData.expiresAt,
+          activation: delegationData.hostActivated === true ? "confirmed-by-openkey" : "unverified",
+        }
+      : {}),
   });
 }
 
-/**
- * If the OpenKey callback returned a public-only JWK (no `d`), splice the
- * private parameter from the profile's `key.json` back in so the persisted
- * session is usable for WASM signing later.
- *
- * Why this exists: `browser-auth.ts:publicJwkForDelegation` strips `d` before
- * sending the JWK to OpenKey, OpenKey echoes the public-only JWK back, and
- * the previous code path persisted it verbatim. Downstream callers
- * (`tc kv get`, `tc sql execute`) then hit `Missing private key parameter in
- * JWK` because `sdk.ts` preferred `session.jwk` over `key.json`.
- *
- * Note: `key` here is the profile's full JWK (loaded from `key.json` above)
- * and is exported with `d`. If the delegation flow ever evolves so OpenKey
- * legitimately returns a session JWK with its own private parameter, this
- * function leaves that JWK untouched.
- */
+/** Tell the operator which requested capabilities the owner unchecked. */
+function reportDeclined(declined: PermissionEntry[]): void {
+  if (declined.length === 0) return;
+  process.stderr.write(
+    `${theme.warn("The owner did not approve:")}\n${declined.map((permission) => `  ${compactPermission(permission)}`).join("\n")}\n`,
+  );
+}
+
+interface OpenKeyLoginOptions {
+  paste?: boolean;
+  noPopup?: boolean;
+  /** Manifest scope for first login: one space, verified before persistence. */
+  permissions?: PermissionEntry[];
+  expiry?: string | number;
+  expectedOwner?: string;
+  /** Scoped login: replace a live session the approved scope would narrow. */
+  replaceSession?: boolean;
+  /** Record `host` as the profile host (an explicit `--host`). */
+  persistHost?: boolean;
+  openKeyAcquisition?: OpenKeyAcquisition;
+}
+
 export async function refreshOpenKeySession(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean; openKeyAcquisition?: OpenKeyAcquisition } = {},
+  options: OpenKeyLoginOptions = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown> }> {
-  const key = await ProfileManager.getKey(profileName);
+  const snapshot = await readProfileSnapshot(profileName);
+  const key = snapshot.key;
   if (!key) {
     throw new CLIError(
       "NO_KEY",
@@ -1673,9 +1773,20 @@ export async function refreshOpenKeySession(
       ExitCode.AUTH_REQUIRED,
     );
   }
-
-  // Get DID from profile
-  const profile = await ProfileManager.getProfile(profileName);
+  const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
+  if (options.permissions !== undefined) {
+    validateLoginPermissions(options.permissions);
+    assertNotLocalOwner(profileName, profile, "Scoped browser login");
+  }
+  // Resolve before consent so an invalid --expiry, owner conflict or live
+  // session in use never opens OpenKey.
+  const expiry = options.expiry === undefined ? undefined : parseRequestedExpiry(options.expiry);
+  const openKeyExpiry = expiry === undefined ? undefined : openKeyExpiryParam(expiry);
+  const expectedOwner = expectedOwnerFor(profileName, profile, options.expectedOwner);
+  if (options.permissions !== undefined && options.replaceSession !== true) {
+    const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
+    assertSessionReplaceable(profileName, snapshot, expectedOwner, options.permissions, estimatedExpiry);
+  }
 
   // Start browser auth flow
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
@@ -1685,33 +1796,60 @@ export async function refreshOpenKeySession(
     jwk: key,
     host,
     openkeyHost: resolveOpenKeyHost(profile),
+    permissions: options.permissions,
+    expiry: openKeyExpiry,
+    ...(options.permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
   });
 
-  // Defensive: OpenKey only ever receives the public JWK (see
-  // browser-auth.ts `publicJwkForDelegation`), so any JWK it echoes back is
-  // public-only. Persisting that verbatim shadows the full keypair in
-  // key.json and breaks anything that needs the WASM signer (kv/sql). Merge
-  // the private parameter from key.json back in before writing session.json.
-  const sanitizedSession = mergePrivateJwkIntoSession(delegationData, key);
+  // Scoped login persists only signed, verified authority. Every path checks
+  // the signed proof whenever it carries one, the profile records an owner
+  // (which it must keep) or --expiry was requested; the owner recorded on the
+  // profile only ever comes from a verified proof.
+  // OpenKey only ever receives the public JWK (browser-auth.ts
+  // `publicJwkForDelegation`), so any JWK it echoes back is public-only;
+  // persisting it verbatim would shadow key.json and break the WASM signer
+  // (kv/sql). Merge the private parameter back in before writing session.json.
+  const sessionDid = profile.sessionDid ?? profile.did;
+  let sanitizedSession: Record<string, unknown>;
+  let verifiedOwner: string | undefined;
+  if (options.permissions) {
+    sanitizedSession = verifyScopedLogin(delegationData, key, sessionDid, options.permissions, { expectedOwner, expiry });
+    verifiedOwner = sanitizedSession.ownerDid as string;
+  } else {
+    // Authority fields (owner, permissions, expiry, trust marker) come only
+    // from a verified proof; an unverified callback contributes none of them.
+    const carriesProof = typeof delegationData.siwe === "string" && typeof delegationData.signature === "string";
+    const merged = mergePrivateJwkIntoSession(delegationData, key);
+    if (carriesProof || expiry !== undefined || expectedOwner !== undefined) {
+      const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
+      verifiedOwner = signed.ownerDid;
+      sanitizedSession = withVerifiedAuthority(merged, signed);
+    } else {
+      // Not a proof: also drop a lone SIWE or signature, so an unsigned
+      // `Expiration Time` is never read as this session's expiry.
+      sanitizedSession = Object.fromEntries(Object.entries(withoutTrustFields(merged)).filter(([name]) => name !== "siwe" && name !== "signature"));
+    }
+  }
 
-  // Store session
-  await ProfileManager.setSession(profileName, sanitizedSession);
-
-  // Update profile with owner DID if present
-  const updatedProfile = {
+  const updatedProfile: ProfileConfig = {
     ...profile,
+    host: options.persistHost === true || !profile.host ? host : profile.host,
     sessionDid: profile.sessionDid ?? profile.did,
     posture: profile.posture ?? "owner-openkey",
     operatorType: profile.operatorType ?? "human",
     authMethod: "openkey" as const,
+    ...(typeof sanitizedSession.spaceId === "string" ? { spaceId: sanitizedSession.spaceId } : {}),
+    ...(verifiedOwner === undefined ? {} : { ownerDid: verifiedOwner }),
   };
 
-  if (sanitizedSession.spaceId) {
-    updatedProfile.spaceId = sanitizedSession.spaceId as string;
-    updatedProfile.ownerDid = sanitizedSession.ownerDid as string | undefined;
-  }
-
-  await ProfileManager.setProfile(profileName, updatedProfile);
+  await commitLogin(profileName, snapshot, {
+    key,
+    session: sanitizedSession,
+    profile: updatedProfile,
+    ...(options.permissions && verifiedOwner
+      ? { approved: { scope: sanitizedSession.permissions as PermissionEntry[], ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } }
+      : {}),
+  });
 
   return { profile: updatedProfile, delegationData: sanitizedSession };
 }

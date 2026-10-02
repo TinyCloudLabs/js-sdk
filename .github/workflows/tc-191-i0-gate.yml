@@ -88,6 +88,10 @@ jobs:
           bun test packages/cli/src/commands/secrets.test.ts
           bun test packages/cli/src/commands/secrets-owner-retry.test.ts
           bun test packages/cli/src/commands/auth.test.ts
+          bun test packages/cli/src/auth/device-auth.test.ts
+          bun test packages/cli/src/auth/scoped-login.test.ts
+          bun test packages/cli/src/commands/context.test.ts
+          bun run --cwd packages/cli check:skill-pack
           bun test packages/cli/src/lib/permissions.test.ts
           bun test packages/cli/src/output/errors.test.ts
           bun test tests/packed-runtime/cli.test.ts

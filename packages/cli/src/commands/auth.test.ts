@@ -135,6 +135,11 @@ function resetState(): void {
     ownerDid: "did:pkh:eip155:1:0xowner",
     verificationMethod: "did:key:new-openkey",
     expiry: "2099-01-01T00:00:00.000Z",
+    // OpenKey always returns its SIWE proof; the wasm verifier below stands in for checking it.
+    siwe: "siwe-message",
+    signature: "0xsignature",
+    address: "0xowner",
+    chainId: 1,
   };
   localSignInResult = {
     spaceId: "space-local-new",
@@ -172,6 +177,16 @@ function makeProfile(overrides: Partial<ProfileLike> = {}): ProfileLike {
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
+    // Real logins commit under the profile lock; these mocks keep state in memory.
+    updateProfile: async (name: string, update: (profile: ProfileLike) => ProfileLike) => {
+      const current = profiles.get(name);
+      if (!current) throw new Error(`Profile "${name}" does not exist.`);
+      const next = update(current);
+      profiles.set(name, next);
+      recorded.setProfiles.push({ profile: name, data: next });
+      return next;
+    },
+    withLock: async <T>(_name: string, action: () => Promise<T>) => action(),
     resolveContext: async () => ({
       profile: activeProfile,
       host: activeHost,
@@ -253,6 +268,16 @@ mock.module("@tinycloud/node-sdk", () => ({
   },
   principalDidEquals: (left: string, right: string) =>
     left.split("#", 1)[0] === right.split("#", 1)[0],
+  // Signature checks run against real proofs in auth/scoped-login.test.ts and
+  // auth/device-auth.test.ts; here any structurally complete proof verifies.
+  NodeWasmBindings: class NodeWasmBindings {
+    validatePersistedSession(proof: { spaceId: string }) {
+      return {
+        verifiedRecap: [{ service: "kv", space: proof.spaceId, path: "", actions: ["tinycloud.kv/get"] }],
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      };
+    }
+  },
 }));
 
 const operationRecorded = {
@@ -451,7 +476,8 @@ describe("CLI auth rotate command", () => {
       },
     ]);
     expect(recorded.startAuthFlows[0]?.options.jwk).not.toBe(oldJwk);
-    expect(sessions.get("default")).toEqual(openKeyDelegation);
+    // The callback state plus the authority fields verification set.
+    expect(sessions.get("default")).toMatchObject({ ...openKeyDelegation, permissionsSource: "signed-recap" });
     expect(profiles.get("default")).toEqual(expect.objectContaining({
       did: "did:key:new-openkey",
       sessionDid: "did:key:new-openkey",
@@ -654,6 +680,51 @@ describe("CLI auth rotate command", () => {
         }),
       ],
     }));
+  });
+});
+
+describe("CLI auth login command", () => {
+  beforeEach(() => {
+    resetState();
+  });
+
+  test("non-interactive OpenKey login keeps the requested browser/paste flow instead of switching to device mode", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+    profiles.set("default", makeProfile({ did: "did:key:openkey-session", sessionDid: "did:key:openkey-session", authMethod: "openkey" }));
+    keys.set("default", key);
+    openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session" };
+
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.startAuthFlows).toEqual([
+      { did: "did:key:openkey-session", options: expect.objectContaining({ noPopup: true, jwk: key }) },
+    ]);
+    expect(recorded.outputs).toEqual([expect.not.objectContaining({ mode: "device" })]);
+  });
+
+  test("non-interactive login with no flags fails fast instead of waiting on a browser", async () => {
+    profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });
+
+    await runAuthCommand(["auth", "login"]);
+
+    expect(recorded.errors).toEqual([expect.objectContaining({
+      code: "INTERACTIVE_LOGIN_REQUIRED",
+      message: expect.stringMatching(/--device --manifest.*--paste/s),
+    })]);
+    expect(recorded.startAuthFlows).toEqual([]);
+  });
+
+  test("device login without an explicit manifest is refused before any approval starts", async () => {
+    profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });
+
+    await runAuthCommand(["auth", "login", "--device"]);
+
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "MANIFEST_REQUIRED" })]);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(sessions.has("default")).toBe(false);
   });
 });
 

@@ -1,8 +1,11 @@
+import { chmod, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   readSession,
   removeSession,
+  withProfileLock,
   writeSession,
+  type ProfileLockOptions,
 } from "@tinycloud/operations/state";
 import {
   CONFIG_DIR,
@@ -18,6 +21,7 @@ import {
   ensureDir,
   removeDir,
   listDirs,
+  PRIVATE_DIR_MODE,
 } from "./storage.js";
 import type { GlobalConfig, ProfileConfig, CLIContext } from "./types.js";
 import { CLIError, setActiveProfileName } from "../output/errors.js";
@@ -26,11 +30,44 @@ export class ProfileManager {
   // ── Initialization ──────────────────────────────────────────────────
 
   /**
-   * Creates ~/.tinycloud/ and ~/.tinycloud/profiles/ if they don't exist.
+   * Runs `action` holding the profile's store lock (shared with operations
+   * and MCP). Reentrant, so the writers below can be called inside it; hold
+   * it around a whole read-modify-write, not just each write.
+   */
+  static async withLock<T>(name: string, action: () => Promise<T>, options?: ProfileLockOptions): Promise<T> {
+    return withProfileLock(name, action, options);
+  }
+
+  /**
+   * Read-modify-write of profile.json under the profile lock, so concurrent
+   * updates (another command, a login commit) are never erased.
+   */
+  static async updateProfile(name: string, update: (profile: ProfileConfig) => ProfileConfig): Promise<ProfileConfig> {
+    return ProfileManager.withLock(name, async () => {
+      const next = update(await ProfileManager.getProfile(name));
+      await ProfileManager.setProfile(name, next);
+      return next;
+    });
+  }
+
+  /**
+   * Creates ~/.tinycloud/ and ~/.tinycloud/profiles/ if they don't exist and
+   * (re)sets both to 0700: older releases created them 0775.
    */
   static async ensureConfigDir(): Promise<void> {
-    await ensureDir(CONFIG_DIR);
-    await ensureDir(PROFILES_DIR);
+    for (const directory of [CONFIG_DIR, PROFILES_DIR]) {
+      await ensureDir(directory);
+      await chmod(directory, PRIVATE_DIR_MODE);
+    }
+  }
+
+  /** Owner-only profile directory (0700), created or tightened before any write into it. */
+  static async ensureProfileDir(name: string): Promise<string> {
+    await ProfileManager.ensureConfigDir();
+    const profileDir = join(PROFILES_DIR, name);
+    await ensureDir(profileDir);
+    await chmod(profileDir, PRIVATE_DIR_MODE);
+    return profileDir;
   }
 
   // ── Global config ───────────────────────────────────────────────────
@@ -73,12 +110,18 @@ export class ProfileManager {
   }
 
   /**
-   * Saves a profile config, creating the profile directory if needed.
+   * Saves a profile config under the profile lock, creating the profile
+   * directory if needed. Use `updateProfile` to change an existing profile.
    */
   static async setProfile(name: string, data: ProfileConfig): Promise<void> {
-    const profileDir = join(PROFILES_DIR, name);
-    await ensureDir(profileDir);
-    await writeJson(join(profileDir, "profile.json"), data);
+    await ProfileManager.withLock(name, async () => {
+      await writeJson(join(await ProfileManager.ensureProfileDir(name), "profile.json"), data);
+    });
+  }
+
+  /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
+  static async removeProfileConfig(name: string): Promise<void> {
+    await ProfileManager.withLock(name, () => rm(join(PROFILES_DIR, name, "profile.json"), { force: true }));
   }
 
   /**
@@ -120,13 +163,16 @@ export class ProfileManager {
     return readJson<object>(join(PROFILES_DIR, name, "key.json"));
   }
 
-  /**
-   * Saves a JWK key for a profile.
-   */
+  /** Saves a JWK key under the profile lock (0600, in an owner-only profile directory). */
   static async setKey(name: string, jwk: object): Promise<void> {
-    const profileDir = join(PROFILES_DIR, name);
-    await ensureDir(profileDir);
-    await writeJson(join(profileDir, "key.json"), jwk);
+    await ProfileManager.withLock(name, async () => {
+      await writeJson(join(await ProfileManager.ensureProfileDir(name), "key.json"), jwk);
+    });
+  }
+
+  /** Removes key.json under the profile lock (rollback of a key a failed login created). */
+  static async removeKey(name: string): Promise<void> {
+    await ProfileManager.withLock(name, () => rm(join(PROFILES_DIR, name, "key.json"), { force: true }));
   }
 
   // ── Session management ──────────────────────────────────────────────
@@ -155,11 +201,13 @@ export class ProfileManager {
   // ── Cache management ────────────────────────────────────────────────
 
   /**
-   * Returns the path to the profile's cache directory, creating it if needed.
+   * Returns the profile's cache directory (share history lives here),
+   * created or tightened to 0700.
    */
   static async getCacheDir(name: string): Promise<string> {
-    const cacheDir = join(PROFILES_DIR, name, "cache");
+    const cacheDir = join(await ProfileManager.ensureProfileDir(name), "cache");
     await ensureDir(cacheDir);
+    await chmod(cacheDir, PRIVATE_DIR_MODE);
     return cacheDir;
   }
 

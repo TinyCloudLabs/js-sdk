@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, isInteractive, shouldOutputJson, formatField } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
-import { ExitCode } from "../config/constants.js";
+import { DEFAULT_HOST, ExitCode } from "../config/constants.js";
 import { generateKey } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
 import {
@@ -88,7 +88,7 @@ export function registerProfileCommand(program: Command): void {
     .action(async (name: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const host = options.host ?? globalOpts.host ?? "https://node.tinycloud.xyz";
+        const host = options.host ?? globalOpts.host ?? DEFAULT_HOST;
         const posture = parseProfilePosture(options.posture);
         const operatorType = parseOperatorType(options.operator);
 
@@ -219,9 +219,8 @@ Examples:
           );
         }
 
-        const p = await ProfileManager.getProfile(profileName);
         const defaultSpace = options.unset ? undefined : (name as string);
-        await ProfileManager.setProfile(profileName, { ...p, defaultSpace });
+        await ProfileManager.updateProfile(profileName, (p) => ({ ...p, defaultSpace }));
 
         outputJson({ profile: profileName, defaultSpace: defaultSpace ?? null, updated: true });
       } catch (error) {

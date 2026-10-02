@@ -24,6 +24,8 @@ async function signedRestorableSession(options?: {
   spaces?: Record<string, string>;
   signedSpaces?: Record<string, string>;
   abilities?: Record<string, Record<string, string[]>>;
+  /** Signed onto every ReCap action before the owner signs. */
+  caveat?: Record<string, unknown>;
 }) {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
@@ -63,6 +65,7 @@ async function signedRestorableSession(options?: {
       additionalSpaces: options?.signedSpaces ?? options?.spaces,
       jwk,
     });
+  if (options?.caveat) prepared.siwe = withRecapCaveat(prepared.siwe, options.caveat);
   const signature = await signer.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
   const expiresAt = options?.expirationless
@@ -81,6 +84,17 @@ async function signedRestorableSession(options?: {
     signature,
     expiresAt,
   };
+}
+
+/** The SIWE with `caveat` as the note-bene of every ReCap action (prepareSession signs only `[{}]`). */
+function withRecapCaveat(siwe: string, caveat: Record<string, unknown>): string {
+  const encoded = siwe.match(/urn:recap:([A-Za-z0-9_-]+)/)?.[1];
+  if (encoded === undefined) throw new Error("SIWE has no ReCap resource");
+  const recap = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as { att: Record<string, Record<string, unknown[]>> };
+  for (const abilities of Object.values(recap.att)) {
+    for (const action of Object.keys(abilities)) abilities[action] = [caveat];
+  }
+  return siwe.replace(encoded, Buffer.from(JSON.stringify(recap)).toString("base64url"));
 }
 
 function restorableData(jwk: object, verificationMethod: string) {
@@ -187,6 +201,29 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       path: "vault/secrets/API_KEY",
       actions: ["tinycloud.kv/get"],
       caveats: [],
+    }]);
+  });
+
+  test("restores a genuinely signed caveated session, converting the verifier's Map and undefined encodings", async () => {
+    const caveat = { tenant: "alpha", nested: { value: null, list: [null, 1] } };
+    const proof = await signedRestorableSession({
+      abilities: { kv: { "vault/": ["tinycloud.kv/get"] } },
+      caveat,
+    });
+    // What the real verifier returns: objects as Maps, JSON null as undefined.
+    const raw: unknown = new NodeWasmBindings().validatePersistedSession!(proof).verifiedRecap![0]!.caveats[0];
+    const nested = raw instanceof Map ? raw.get("nested") : undefined;
+    expect(nested).toBeInstanceOf(Map);
+    expect(nested instanceof Map && nested.has("value") && nested.get("value") === undefined).toBe(true);
+
+    const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
+    await node.restoreSession(proof);
+    expect(node.getVerifiedSessionCapabilities()).toEqual([{
+      service: "tinycloud.kv",
+      space: "default",
+      path: "vault/",
+      actions: ["tinycloud.kv/get"],
+      caveats: [caveat],
     }]);
   });
 

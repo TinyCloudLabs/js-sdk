@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
+import * as fsPromises from "node:fs/promises";
 
 type PutCall = { handle: string; key: string; value: unknown };
 type DeleteCall = { handle: string; key: string };
@@ -119,6 +120,9 @@ mock.module("../output/theme.js", () => ({
 }));
 
 mock.module("node:fs/promises", () => ({
+  // Modules this command loads (the profile store and its lock) import other
+  // fs functions; keep them real so the mock only replaces what is asserted.
+  ...fsPromises,
   writeFile: async (path: string, data: unknown) => {
     recorded.fileWrites.push({ path, data: toBytes(data) });
   },

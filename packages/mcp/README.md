@@ -33,7 +33,7 @@ docker run --rm -p 3000:3000 \
 
 Set `TC_MCP_OAUTH_METADATA_URL` for a self-hosted OpenKey issuer and
 `TC_MCP_ALLOWED_ORIGINS` when browsers call the MCP endpoint directly. The
-default TinyCloud node is `https://node.tinycloud.xyz`.
+default TinyCloud node is `https://tee.node.tinycloud.xyz`.
 
 Use one service replica with the filesystem store. Multi-replica deployments
 require a shared transactional state provider, which this release does not

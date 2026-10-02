@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
+import * as fsPromises from "node:fs/promises";
 
 const recorded = {
   outputs: [] as unknown[],
@@ -335,6 +336,9 @@ mock.module("../output/errors.js", () => ({
 }));
 
 mock.module("node:fs/promises", () => ({
+  // Modules this command loads (the profile store and its lock) import other
+  // fs functions; keep them real so the mock only replaces what is asserted.
+  ...fsPromises,
   readFile: async () => JSON.stringify({ app_id: "com.notes.app", name: "Notes", defaults: false }),
 }));
 

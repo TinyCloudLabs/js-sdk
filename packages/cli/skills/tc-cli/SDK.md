@@ -5,7 +5,7 @@
 ```typescript
 import { TinyCloudNode } from "@tinycloud/node-sdk";
 
-const tc = new TinyCloudNode({ host: "https://node.tinycloud.xyz" });
+const tc = new TinyCloudNode({ host: "https://tee.node.tinycloud.xyz" });
 await tc.connectWallet(signer);
 ```
 

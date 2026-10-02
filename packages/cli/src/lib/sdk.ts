@@ -169,17 +169,19 @@ export async function bootstrapDelegatedSession(
 
   const key = await ProfileManager.getKey(ctx.profile);
   const jwk = signerJwkForProfile(ctx.profile, undefined, key);
-  await ProfileManager.setSession(ctx.profile, {
-    delegationHeader: delegation.delegationHeader,
-    delegationCid: delegation.cid,
-    spaceId: delegation.spaceId,
-    jwk,
-    verificationMethod: sessionDid,
-  });
-  await ProfileManager.setProfile(ctx.profile, {
-    ...profile,
-    sessionDid,
-    spaceId: delegation.spaceId,
+  await ProfileManager.withLock(ctx.profile, async () => {
+    await ProfileManager.setSession(ctx.profile, {
+      delegationHeader: delegation.delegationHeader,
+      delegationCid: delegation.cid,
+      spaceId: delegation.spaceId,
+      jwk,
+      verificationMethod: sessionDid,
+    });
+    await ProfileManager.updateProfile(ctx.profile, (current) => ({
+      ...current,
+      sessionDid,
+      spaceId: delegation.spaceId,
+    }));
   });
 
   return createSDKInstance(ctx);

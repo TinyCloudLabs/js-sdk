@@ -15,6 +15,19 @@ function canonicalizeAddress(address: string): string {
     : trimmed.toLowerCase();
 }
 
+/**
+ * The one comparison rule for `did:pkh:eip155:…` and `tinycloud:pkh:eip155:…`
+ * identifiers: the Ethereum address is case-insensitive (OpenKey signs with
+ * EIP-55, the CLI builds lowercase), while chain id and space name stay
+ * byte-exact. Use only for comparison keys, never for stored values.
+ */
+export function normalizePkhIdentifier(identifier: string): string {
+  return identifier.replace(
+    /(eip155:\d+:)(0x[0-9a-fA-F]{40})(?=[:#]|$)/,
+    (_match, prefix: string, address: string) => prefix + address.toLowerCase(),
+  );
+}
+
 function parsePkhDid(did: string): ParsedPkhDid | null {
   const match = did.match(/^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/);
   if (!match) return null;

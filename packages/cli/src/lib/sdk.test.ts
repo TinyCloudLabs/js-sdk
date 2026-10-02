@@ -28,6 +28,13 @@ mock.module("../config/profiles.js", () => ({
       profile = next;
       savedProfiles.push(next);
     },
+    withLock: async <T>(_name: string, action: () => Promise<T>) => action(),
+    updateProfile: async (_name: string, update: (current: Record<string, unknown>) => Record<string, unknown>) => {
+      if (profile === null) throw new CLIError("PROFILE_NOT_FOUND", "Profile does not exist.");
+      profile = update(profile);
+      savedProfiles.push(profile);
+      return profile;
+    },
   },
 }));
 

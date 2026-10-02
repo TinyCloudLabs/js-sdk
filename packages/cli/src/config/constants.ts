@@ -10,10 +10,13 @@ export const CONFIG_DIR = tinycloudHomePath();
 export const PROFILES_DIR = profilesPath();
 export const CONFIG_FILE = tinycloudConfigPath();
 
-export const DEFAULT_HOST = "https://node.tinycloud.xyz";
+// Production TinyCloud node. `node.tinycloud.xyz` does not resolve.
+export const DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
 // OpenKey serves browser approval and its device API from distinct origins.
 export const DEFAULT_OPENKEY_HOST = "https://openkey.so";
 export const DEFAULT_OPENKEY_DEVICE_API_HOST = "https://api.openkey.so";
+// Share service origin bound into OpenKey device authorizations.
+export const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 export const DEFAULT_PROFILE = "default";
 export const DEFAULT_CHAIN_ID = 1;
 

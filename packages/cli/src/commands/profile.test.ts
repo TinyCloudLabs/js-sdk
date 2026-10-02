@@ -35,6 +35,11 @@ mock.module("../config/profiles.js", () => ({
     setProfile: async (name: string, data: Record<string, unknown>) => {
       recorded.setProfiles.push({ name, data });
     },
+    updateProfile: async (name: string, update: (profile: Record<string, unknown>) => Record<string, unknown>) => {
+      const data = update({ ...existingProfile });
+      recorded.setProfiles.push({ name, data });
+      return data;
+    },
   },
 }));
 

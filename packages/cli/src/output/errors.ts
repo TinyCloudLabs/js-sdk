@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
+import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { outputError } from "./formatter.js";
 
 let activeProfileName: string | undefined;
@@ -42,6 +43,18 @@ export function wrapError(error: unknown): CLIError {
   }
 
   if (error instanceof CLIError) return error;
+
+  // Any profile write (session, key, profile settings, stores) waits on the
+  // profile lock; a timeout means another tc/MCP process held it, not that
+  // the profile is broken.
+  if (error instanceof ProfileLockTimeoutError) {
+    return new CLIError(
+      "PROFILE_LOCK_TIMEOUT",
+      `${message} Another tc or MCP process held this profile's lock, so the change that needed it was not written.`,
+      ExitCode.ERROR,
+      { hint: "Wait for the other command to finish and retry. A crashed process's lock is reclaimed automatically after 30 s." },
+    );
+  }
 
   // Map known error patterns to exit codes
   if (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired")) {

@@ -391,6 +391,8 @@ mock.module("../lib/permissions.js", () => ({
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
+    // Real logins commit under the profile lock; these mocks keep state in memory.
+    withLock: async <T>(_name: string, action: () => Promise<T>) => action(),
     resolveContext: async (globalOpts: unknown) => {
       recorded.resolveContexts.push(globalOpts);
       return {

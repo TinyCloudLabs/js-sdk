@@ -4,8 +4,7 @@ import { outputJson, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode, DEFAULT_HOST, DEFAULT_CHAIN_ID } from "../config/constants.js";
 import { generateKey } from "../auth/local-key.js";
-import { startAuthFlow } from "../auth/browser-auth.js";
-import { mergePrivateJwkIntoSession } from "./auth.js";
+import { refreshOpenKeySession } from "./auth.js";
 
 export function registerInitCommand(program: Command): void {
   program
@@ -78,35 +77,19 @@ export function registerInitCommand(program: Command): void {
           return;
         }
 
-        // Auth flow
-        const delegationData = await startAuthFlow(did, {
+        // Same verified, lock-protected browser login as `tc auth login`: the
+        // owner and expiry come only from the signed proof.
+        const { delegationData } = await refreshOpenKeySession(profileName, host, {
           paste: options.paste,
           noPopup: options.popup === false,
-          jwk,
-          host,
-        });
-
-        // Defensive: OpenKey only ever receives the public JWK (browser-auth.ts
-        // strips `d`), so any JWK it echoes back is public-only. Splice `d`
-        // back in from the freshly-generated JWK before persisting so the
-        // signer can find it on the next CLI invocation.
-        const sanitizedSession = mergePrivateJwkIntoSession(delegationData, jwk);
-
-        // Store session
-        await ProfileManager.setSession(profileName, sanitizedSession);
-
-        // Update profile with auth data
-        await ProfileManager.setProfile(profileName, {
-          ...profileConfig,
-          spaceId: sanitizedSession.spaceId as string,
-          ownerDid: sanitizedSession.ownerDid as string | undefined,
+          persistHost: true,
         });
 
         outputJson({
           profile: profileName,
           did,
           host,
-          spaceId: sanitizedSession.spaceId,
+          spaceId: delegationData.spaceId,
           authenticated: true,
         });
       } catch (error) {

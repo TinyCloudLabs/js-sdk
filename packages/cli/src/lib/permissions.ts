@@ -1,4 +1,4 @@
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, chmod, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   buildPermissionRequestArtifact,
@@ -29,11 +29,12 @@ import {
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
 import { PROFILES_DIR } from "../config/constants.js";
-import { ensureDir, fileExists } from "../config/storage.js";
+import { fileExists, PRIVATE_FILE_MODE } from "../config/storage.js";
 import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
+import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 import {
   resolveProfileOperatorType,
   resolveProfilePosture,
@@ -261,14 +262,16 @@ export async function appendGrantHistory(
   profile: string,
   entry: Omit<GrantHistoryEntry, "ts" | "profile">,
 ): Promise<void> {
-  const profileDir = join(PROFILES_DIR, profile);
-  await ensureDir(profileDir);
+  await ProfileManager.ensureProfileDir(profile);
   const line = JSON.stringify({
     ts: new Date().toISOString(),
     profile,
     ...entry,
   }) + "\n";
-  await appendFile(grantHistoryPath(profile), line, "utf8");
+  const path = grantHistoryPath(profile);
+  await appendFile(path, line, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
+  // `mode` only applies on creation; tighten history written by older releases.
+  await chmod(path, PRIVATE_FILE_MODE);
 }
 
 export async function readGrantHistory(
@@ -334,13 +337,14 @@ export async function loadPermissionRequest(
 export async function loadManifestPermissions(
   source: string,
   profile: string,
+  options: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw) as Record<string, unknown>;
 
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest as Parameters<typeof resolveManifest>[0]);
-    return resolvePermissionSpaces(resolved.resources, profile);
+    return resolvePermissionSpaces(resolved.resources, profile, options);
   }
 
   if (typeof manifest.app_id === "string") {
@@ -366,7 +370,7 @@ export async function loadManifestPermissions(
         };
       });
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile));
-    return resolvePermissionSpaces(permissions, profile);
+    return resolvePermissionSpaces(permissions, profile, options);
   }
 
   throw new CLIError(
@@ -444,6 +448,7 @@ export function permissionsFromDelegation(
       space: resource.space,
       path: resource.path,
       actions: [...resource.actions],
+      ...(resource.caveats?.length ? { caveats: resource.caveats.map((caveat) => structuredClone(caveat)) } : {}),
     }));
   }
   return [{
@@ -468,9 +473,13 @@ export function compactPermission(permission: PermissionEntry): string {
 export async function resolvePermissionSpaces(
   entries: PermissionEntry[],
   profile: string,
+  options: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const profileConfig = await ProfileManager.getProfile(profile);
-  const allowLogicalSpaces = resolveProfilePosture(profileConfig) === "delegate-session";
+  // First login (and delegates) may not know the owner's address yet. Keep
+  // logical space names; the approving owner binds them to their own space.
+  const allowLogicalSpaces = options.allowLogicalSpaces === true ||
+    resolveProfilePosture(profileConfig) === "delegate-session";
   const resolved: PermissionEntry[] = [];
   for (const entry of entries) {
     const service = normalizeService(entry.service);
@@ -501,6 +510,9 @@ export async function resolvePermissionSpaces(
 }
 
 async function loadManifestText(source: string): Promise<string> {
+  if (source === SHARE_PUBLISHING_MANIFEST_REF) {
+    return JSON.stringify(SHARE_PUBLISHING_MANIFEST);
+  }
   if (source.startsWith("base64:")) {
     return Buffer.from(source.slice("base64:".length), "base64").toString("utf8");
   }
