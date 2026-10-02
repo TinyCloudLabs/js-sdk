@@ -28,4 +28,4 @@ export { SHARE_V2_PROTOCOL, createShareV2HolderBindingArtifact } from "./protoco
 export { publishPolicyShare, claimShare, resumeShareAuthorization } from "./policy.js";
 export type { SharePolicyPublishAdapter } from "./policy.js";
 export { NATIVE_SHARE_FRAGMENT_PARAMETER, createNativeShare, openNativeShare, parseNativeShareUrl } from "./native.js";
-export type { NativeSharingService } from "./native.js";
+export type { NativeShareResult, NativeSharingService } from "./native.js";

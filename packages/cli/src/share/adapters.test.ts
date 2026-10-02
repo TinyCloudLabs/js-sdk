@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from "bun:test";
+import { afterEach, describe, expect, it, mock } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { encodeSealedInlineShareUrl } from "@tinycloud/share-envelope";
 import { notifyShare, type SenderShareRecord } from "@tinycloud/share-sdk";
@@ -13,16 +13,27 @@ let deliveryAuthorization: { readonly key: string; readonly body: string; readon
 let deliveryAuthorizationConflicts = 0;
 
 let nodeSpaceId: string | undefined = "tinycloud:test-space";
-let restoredSpaceId: string | undefined;
+let restoredSpaceId: string | undefined = "tinycloud:test-space";
 let nativeSpaceId = "tinycloud:test-space";
 const uploadedSpaces: string[] = [];
+const encryptionSpaces: string[] = [];
+let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
 const node = {
   did: transportDid,
   credentialHolderDid,
   get spaceId() { return nodeSpaceId; },
-  get restorableSession() { return restoredSpaceId === undefined ? undefined : { spaceId: restoredSpaceId }; },
+  get restorableSession() {
+    return restoredSpaceId === undefined ? undefined : {
+      spaceId: restoredSpaceId,
+      siwe: `tinycloud.test wants you to sign in\nExpiration Time: ${sessionExpiresAt}`,
+      signature: "signed-proof",
+    };
+  },
   activeNodeIdentity: async () => ({ origin: "https://node.example", nodeDid }),
-  getEncryptionNetworkIdForSpace: () => `urn:tinycloud:encryption:${credentialHolderDid}:default`,
+  getEncryptionNetworkIdForSpace: (spaceId: string) => {
+    encryptionSpaces.push(spaceId);
+    return `urn:tinycloud:encryption:${credentialHolderDid}:default`;
+  },
   encryption: {
     encryptToNetwork: async (networkId: string) => ({
       ok: true as const,
@@ -40,13 +51,11 @@ const node = {
   },
   kvForSpace: (spaceId: string) => ({ put: async () => { uploadedSpaces.push(spaceId); return { ok: true as const }; } }),
   sharing: {
-    generate: async () => ({ ok: true, data: { token: "opaque-share-token", delegation: { cid: "bafy-native-share" }, expiresAt: new Date("2030-01-01T00:00:00.000Z") } }),
+    generate: async ({ expiry }: { readonly expiry: Date }) => ({ ok: true, data: { token: "opaque-share-token", delegation: { cid: "bafy-native-share" }, expiresAt: expiry } }),
     decodeLink: () => ({ spaceId: nativeSpaceId, path: "xyz.tinycloud.share/shares/report.md" }),
   },
   createUnifiedOwnerRoot: async (input: { readonly ownerDid: string; readonly role: "policy-authority" | "policy-enforcement" }) => {
-    // Match TinyCloudNode.createUnifiedOwnerRoot's holder-identity guard. A
-    // transport DID here must fail, so this real adapter path catches it.
-    if (input.ownerDid !== credentialHolderDid) throw new Error("unified owner root signer does not match owner DID");
+    // Capture every addressed owner-root request for the contract assertions.
     ownerRootInputs.push(input);
     return {
       cid: input.role === "policy-authority" ? "bafy-policy-root" : "bafy-enforcement-root",
@@ -99,6 +108,20 @@ mock.module("../lib/sdk.js", () => ({ ensureAuthenticated: async () => node }));
 
 const { createShareAuthorityAdapters } = await import("./adapters.js");
 
+afterEach(() => {
+  nodeSpaceId = "tinycloud:test-space";
+  restoredSpaceId = "tinycloud:test-space";
+  nativeSpaceId = "tinycloud:test-space";
+  uploadedSpaces.length = 0;
+  encryptionSpaces.length = 0;
+  ownerRootInputs.length = 0;
+  sessionSignatures.length = 0;
+  deliveryAuthorizationInputs.length = 0;
+  deliveryAuthorization = undefined;
+  deliveryAuthorizationConflicts = 0;
+  sessionExpiresAt = "2099-01-01T00:00:00.000Z";
+});
+
 describe("TinyCloud share authority adapter", () => {
   it("publishes bearer shares from the restored owner space and preserves origin binding", async () => {
     nodeSpaceId = undefined;
@@ -113,7 +136,7 @@ describe("TinyCloud share authority adapter", () => {
         shareOrigin: "https://share.example",
         registryOrigin: "https://registry.example",
         credentialsOrigin: "https://credentials.example",
-      })) as typeof globalThis.fetch,
+      })) as unknown as typeof globalThis.fetch,
     });
 
     const published = await targetAdapter.publish({
@@ -135,12 +158,35 @@ describe("TinyCloud share authority adapter", () => {
       target: { kind: "bearer" },
       expiresAt: new Date("2030-01-01T00:00:00.000Z"),
       origin: "https://attacker.example",
-    })).rejects.toThrow("share publication is not bound to the configured Share service");
+    })).rejects.toMatchObject({ failure: { kind: "origin-mismatch" } });
     expect(uploadedSpaces).toEqual([restoredSpaceId]);
-    nodeSpaceId = "tinycloud:test-space";
-    restoredSpaceId = undefined;
-    nativeSpaceId = "tinycloud:test-space";
   });
+  it("clamps implicit lifetime to signed session expiry and rejects explicit overrun", async () => {
+    const { targetAdapter } = createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async () => Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      })) as unknown as typeof globalThis.fetch,
+    });
+    const base = {
+      source: new TextEncoder().encode("expiry-bound share"),
+      filename: "report.md",
+      target: { kind: "bearer" as const },
+      origin: "https://share.example",
+    };
+    const implicit = await targetAdapter.publish({ ...base, expiresAt: new Date("2100-01-01T00:00:00.000Z"), expiryWasExplicit: false });
+    expect("state" in implicit).toBe(false);
+    if ("state" in implicit) throw new Error("expected publication");
+    expect(implicit.metadata.expiryClamped).toBe(true);
+    expect(implicit.metadata.expiresAt).toBe("2099-01-01T00:00:00.000Z");
+    await expect(targetAdapter.publish({ ...base, expiresAt: new Date("2100-01-01T00:00:00.000Z"), expiryWasExplicit: true }))
+      .rejects.toMatchObject({ failure: { kind: "lifetime-exceeds-session", sessionExpiresAt: new Date("2099-01-01T00:00:00.000Z") } });
+  });
+
   it("routes addressed delivery through Policy/v3 with no retired Node delivery fallback", async () => {
     const source = await readFile(new URL("./adapters.ts", import.meta.url), "utf8");
     expect(source).toContain("node.authorizeShareDeliveryV3({");
@@ -164,7 +210,7 @@ describe("TinyCloud share authority adapter", () => {
     globalThis.fetch = (async (input, init) => {
       revocations.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
       return Response.json({ ok: true });
-    }) as typeof globalThis.fetch;
+    }) as unknown as typeof globalThis.fetch;
 
     try {
       const { targetAdapter, revocation } = createShareAuthorityAdapters({
@@ -178,10 +224,10 @@ describe("TinyCloud share authority adapter", () => {
             registryOrigin: "https://registry.example",
             credentialsOrigin: "https://credentials.example",
           });
-        }) as typeof globalThis.fetch,
+        }) as unknown as typeof globalThis.fetch,
       });
 
-      await targetAdapter.publish({
+      const addressed = await targetAdapter.publish({
         source: new TextEncoder().encode("holder-bound share"),
         filename: "readme.txt",
         target: { kind: "email", address: "alice@example.com" },
@@ -189,11 +235,14 @@ describe("TinyCloud share authority adapter", () => {
         origin: "https://share.example",
         mediaType: "text/plain",
       });
+      expect("state" in addressed).toBe(false);
+      if ("state" in addressed) throw new Error("expected addressed publication");
+      expect(addressed.metadata.target.spaceId).toBe(restoredSpaceId);
+      expect(uploadedSpaces).toEqual([restoredSpaceId]);
+      expect(encryptionSpaces).toEqual([restoredSpaceId]);
 
-      expect(ownerRootInputs.map(({ ownerDid, role }) => ({ ownerDid, role }))).toEqual([
-        { ownerDid: credentialHolderDid, role: "policy-authority" },
-        { ownerDid: credentialHolderDid, role: "policy-enforcement" },
-      ]);
+      expect(addressed.metadata.ownerDid).toBe(credentialHolderDid);
+      expect(ownerRootInputs.map(({ role }) => role)).toEqual(["policy-authority", "policy-enforcement"]);
 
       await revocation.revokePolicyRoot!({
         rootCid: "bafy-enforcement-root",
@@ -284,7 +333,7 @@ describe("TinyCloud share authority adapter", () => {
             throw new Error("response lost after Node authorization");
           }
           return Response.json({ status: "accepted" }, { status: 202 });
-        }) as typeof globalThis.fetch,
+        }) as unknown as typeof globalThis.fetch,
       }).delivery;
 
       const first = await notifyShare({

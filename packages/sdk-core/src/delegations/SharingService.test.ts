@@ -94,6 +94,44 @@ function shareLink(service: SharingService, overrides: Partial<EncodedShareData[
   });
 }
 
+describe("SharingService authority space comparison", () => {
+  test("matches owner addresses without relaxing chain or namespace identity", () => {
+    const { service } = makeService();
+    const matching = {
+      spaceId: SPACE.replace(OWNER, OWNER.toLowerCase()),
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+      expiry: PARENT_EXPIRY,
+      allowSubDelegation: true,
+      caveats: [],
+    };
+    const internal = service as unknown as {
+      session: { readonly spaceId: string };
+      registry: {
+        getAllKeys: () => { readonly id: string }[];
+        getDelegationsForKey: () => typeof matching[];
+        isDelegationValid: () => boolean;
+      };
+      findSuitableKeyForDelegation: (path: string, actions: string[], expiry: Date) => boolean;
+    };
+    internal.session = { spaceId: SPACE };
+    internal.registry = {
+      getAllKeys: () => [{ id: "session-key" }],
+      getDelegationsForKey: () => [matching],
+      isDelegationValid: () => true,
+    };
+
+    expect(internal.findSuitableKeyForDelegation("shared", ["tinycloud.kv/get"], PARENT_EXPIRY)).toBe(true);
+    for (const spaceId of [
+      `${matching.spaceId}:other`,
+      matching.spaceId.replace("eip155:1:", "eip155:2:"),
+    ]) {
+      internal.registry.getDelegationsForKey = () => [{ ...matching, spaceId }];
+      expect(internal.findSuitableKeyForDelegation("shared", ["tinycloud.kv/get"], PARENT_EXPIRY)).toBe(false);
+    }
+  });
+});
+
 describe("SharingService.delegateReceivedShare", () => {
   test("creates and registers a strict child without returning parent key material", async () => {
     const { service, createDelegationWasm, fetch } = makeService();

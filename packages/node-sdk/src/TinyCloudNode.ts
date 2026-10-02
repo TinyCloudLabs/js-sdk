@@ -3020,7 +3020,7 @@ export class TinyCloudNode {
       const delegations: Delegation[] = input.recap.map((entry) => ({
           cid: session.delegationCid,
           delegateDID: session.verificationMethod,
-          spaceId: entry.space,
+          spaceId: this.spaceIdsEqual(entry.space, session.spaceId) ? session.spaceId : entry.space,
           path: entry.path,
           actions: [...entry.actions],
           caveats: cloneRecapCaveats(entry.caveats),
@@ -6459,10 +6459,8 @@ export class TinyCloudNode {
   }
 
   private normalizeSpaceAddress(space: string): string {
-    return space.replace(
-      /(eip155:\d+:)(0x[0-9a-fA-F]{40})/,
-      (_match, prefix: string, addr: string) => prefix + addr.toLowerCase(),
-    );
+    const match = /^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.+)$/.exec(space);
+    return match === null ? space : `${match[1]}${match[2]!.toLowerCase()}${match[3]}`;
   }
 
   private actionContains(grantedAction: string, requestedAction: string): boolean {

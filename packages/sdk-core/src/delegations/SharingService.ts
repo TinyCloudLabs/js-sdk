@@ -55,6 +55,14 @@ import type { ShareAccessV2, ShareRecipientClientOptions } from "./recipient-typ
 // Local helpers
 // ---------------------------------------------------------------------------
 
+function spaceIdsEqual(left: string, right: string): boolean {
+  const normalizeOwnerAddress = (space: string): string => {
+    const match = /^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.+)$/.exec(space);
+    return match === null ? space : `${match[1]}${match[2]!.toLowerCase()}${match[3]}`;
+  };
+  return normalizeOwnerAddress(left) === normalizeOwnerAddress(right);
+}
+
 /**
  * Infer the short-form service name (`"kv"`, `"sql"`, etc) that all of the
  * given full-URN action strings belong to.
@@ -832,7 +840,7 @@ export class SharingService implements ISharingService {
         // A registry can contain capabilities for several spaces. A share
         // created by this service may only spend authority for its own
         // session space.
-        if (delegation.spaceId !== this.session?.spaceId) {
+        if (delegation.spaceId === undefined || !spaceIdsEqual(delegation.spaceId, this.session?.spaceId ?? "")) {
           continue;
         }
 
