@@ -205,7 +205,7 @@ describe("TinyCloud share authority adapter", () => {
     expect(implicit.metadata.expiryClamped).toBe(true);
     expect(implicit.metadata.expiresAt).toBe("2099-01-01T00:00:00.000Z");
     await expect(targetAdapter.publish({ ...base, expiresAt: new Date("2100-01-01T00:00:00.000Z"), expiryWasExplicit: true }))
-      .rejects.toMatchObject({ failure: { kind: "lifetime-exceeds-session", sessionExpiresAt: new Date("2099-01-01T00:00:00.000Z") } });
+      .rejects.toMatchObject({ failure: { kind: "lifetime-exceeds-session", reason: "beyond-session", sessionExpiresAt: new Date("2099-01-01T00:00:00.000Z") } });
     const nearExpiry = new Date(Date.now() + 600).toISOString();
     sessionExpiresAt = nearExpiry;
     uploadedSpaces.length = 0;
@@ -213,7 +213,7 @@ describe("TinyCloud share authority adapter", () => {
       ...base,
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       expiryWasExplicit: false,
-    })).rejects.toMatchObject({ failure: { kind: "lifetime-exceeds-session" } });
+    })).rejects.toMatchObject({ failure: { kind: "lifetime-exceeds-session", reason: "session-too-close" } });
     expect(uploadedSpaces).toEqual([]);
   });
   it("allows signer-backed local-key shares to outlive the restored session", async () => {
@@ -241,6 +241,14 @@ describe("TinyCloud share authority adapter", () => {
     if ("state" in published) throw new Error("expected local-key publication");
     expect(published.metadata.expiryClamped).toBeUndefined();
     expect(published.metadata.expiresAt).toBe("2100-01-01T00:00:00.000Z");
+    await expect(targetAdapter.publish({
+      source: new TextEncoder().encode("too-short local share"),
+      filename: "report.md",
+      target: { kind: "bearer" },
+      expiresAt: new Date(Date.now() + 30_000),
+      expiryWasExplicit: true,
+      origin: "https://share.example",
+    })).rejects.toMatchObject({ failure: { kind: "lifetime-exceeds-session", reason: "below-minimum" } });
   });
 
 

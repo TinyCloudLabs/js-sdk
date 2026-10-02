@@ -59,9 +59,10 @@ export function shareCliError(error: unknown): CLIError {
   if (error instanceof CLIError) return error;
   if (error instanceof SharePublishAuthorityError) {
     const failure = error.failure;
-    const loginHint = failure.kind === "owner-space-unresolved" && failure.localKey === true
-      ? "tc auth login --method local"
-      : "tc auth login";
+    const profileName = "profileName" in failure ? failure.profileName : undefined;
+    const localKey = "localKey" in failure && failure.localKey === true;
+    const profileHint = profileName === undefined ? "" : `--profile ${profileName} `;
+    const loginHint = `tc ${profileHint}auth login${localKey ? " --method local" : ""}`;
     if (failure.kind === "owner-space-unresolved") {
       return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run \`${loginHint}\``, 3);
     }
@@ -69,8 +70,16 @@ export function shareCliError(error: unknown): CLIError {
       const requiredAction = failure.requiredAction === undefined ? "" : ` (${failure.requiredAction})`;
       return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; renew it with \`${loginHint}\` using the required capability`, 5);
     }
-    if (failure.kind === "lifetime-exceeds-session") return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime is too close to or exceeds session expiry ${failure.sessionExpiresAt.toISOString()}; use a shorter --expires value`, 2);
-    return new CLIError("ORIGIN_MISMATCH", "share origin does not match the configured service", 2);
+    if (failure.kind === "lifetime-exceeds-session") {
+      const expiresAt = failure.sessionExpiresAt.toISOString();
+      if (failure.reason === "session-too-close") {
+        return new CLIError("AUTH_REQUIRED", `the signed session expires too soon (${expiresAt}); log in again with \`${loginHint}\``, 3);
+      }
+      if (failure.reason === "below-minimum") {
+        return new CLIError("SESSION_LIFETIME_EXCEEDED", "share expiry must be at least 60 seconds from now; use a longer --expires value", 2);
+      }
+      return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime exceeds session expiry ${expiresAt}; use a shorter --expires value or renew the session with \`${loginHint}\``, 2);
+    }
   }
   if (error instanceof SharePublishError) {
     const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;

@@ -240,6 +240,24 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     })).rejects.toThrow("does not match its signed SIWE authority");
   });
 
+  test("classifies malformed persisted identity fields as AUTH_EXPIRED", async () => {
+    const proof = await signedRestorableSession();
+    const node = new TinyCloudNode({ signer: new PrivateKeySigner(PROOF_PRIVATE_KEY), wasmBindings: new NodeWasmBindings() });
+    const invalidSessions = [
+      { ...proof, chainId: -1 },
+      { ...proof, signature: undefined },
+      { ...proof, verificationMethod: "did:key:z6MkWrong#z6MkWrong" },
+      { ...proof, jwk: { ...proof.jwk, alg: null } },
+    ];
+
+    for (const session of invalidSessions) {
+      await expect(node.restoreSession(session as any)).rejects.toMatchObject({
+        name: "InvalidRestoredSessionError",
+        code: "AUTH_EXPIRED",
+      });
+    }
+  });
+
   test("replaces auth, host, core publicKV, spaces, and all live keys on repeated cross-host restore", async () => {
     const proof = await signedRestorableSession({
       spaces: { public: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:public" },

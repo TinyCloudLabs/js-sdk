@@ -197,10 +197,11 @@ export function createShareAuthorityAdapters(input: {
     };
   })();
   let nodePromise: Promise<TinyCloudNode> | undefined;
+  let activeProfileName: string | undefined;
   const authenticatedNode = async () => nodePromise ??= (async () => {
     const profile = await (input.profileName?.() ?? selectedProfileName());
+    activeProfileName = profile;
     const context = await ProfileManager.resolveContext({ profile, ...(input.nodeOrigin === undefined ? {} : { host: input.nodeOrigin }) });
-    // Keep the full SDK lazy for injected and config-only share paths.
     const { ensureAuthenticated } = await import("../lib/sdk.js");
     try {
       return await ensureAuthenticated(context);
@@ -211,6 +212,7 @@ export function createShareAuthorityAdapters(input: {
         throw new SharePublishAuthorityError({
           kind: "owner-space-unresolved",
           localKey: profileConfig?.authMethod === "local",
+          profileName: profile,
         });
       }
       throw error;
@@ -226,25 +228,36 @@ export function createShareAuthorityAdapters(input: {
     try {
       sessionExpiresAt = node.isSessionOnly && session?.siwe ? extractSiweExpiration(session.siwe) : undefined;
     } catch {
-      throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey });
+      throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName });
     }
     if (
       ownerSpaceId === undefined ||
       (node.isSessionOnly && (!session?.siwe || !session.signature || sessionExpiresAt === undefined))
     ) {
-      throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey });
+      throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName });
     }
     if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     const expiryClamped = node.isSessionOnly && sessionExpiresAt !== undefined && targetInput.expiresAt > sessionExpiresAt;
     if (expiryClamped && targetInput.expiryWasExplicit) {
-      throw new SharePublishAuthorityError({ kind: "lifetime-exceeds-session", sessionExpiresAt: sessionExpiresAt! });
+      throw new SharePublishAuthorityError({
+        kind: "lifetime-exceeds-session",
+        sessionExpiresAt: sessionExpiresAt!,
+        reason: "beyond-session",
+        localKey,
+        profileName: activeProfileName,
+      });
     }
     const effectiveExpiry = expiryClamped ? sessionExpiresAt! : targetInput.expiresAt;
     const expiresAt = new Date(Math.floor(effectiveExpiry.getTime() / 1000) * 1000);
-    if (node.isSessionOnly && expiresAt.getTime() <= Date.now() + 60_000) {
+    if (expiresAt.getTime() <= Date.now() + 60_000) {
       throw new SharePublishAuthorityError({
         kind: "lifetime-exceeds-session",
-        sessionExpiresAt: sessionExpiresAt ?? effectiveExpiry,
+        sessionExpiresAt: sessionExpiresAt ?? expiresAt,
+        reason: node.isSessionOnly && expiryClamped && !targetInput.expiryWasExplicit
+          ? "session-too-close"
+          : "below-minimum",
+        localKey,
+        profileName: activeProfileName,
       });
     }
     const activeNode = await node.activeNodeIdentity();
@@ -268,6 +281,8 @@ export function createShareAuthorityAdapters(input: {
             kind: "scope-denied",
             capability: "KV upload",
             ...(requiredAction === undefined ? {} : { requiredAction }),
+            localKey,
+            profileName: activeProfileName,
           });
         }
         throw new Error("native bearer source upload failed");
@@ -282,7 +297,12 @@ export function createShareAuthorityAdapters(input: {
       } catch (error) {
         const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
         if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
-          throw new SharePublishAuthorityError({ kind: "scope-denied", capability: "sharing delegation" });
+          throw new SharePublishAuthorityError({
+            kind: "scope-denied",
+            capability: "sharing delegation",
+            localKey,
+            profileName: activeProfileName,
+          });
         }
         throw error;
       }
@@ -333,6 +353,8 @@ export function createShareAuthorityAdapters(input: {
           kind: "scope-denied",
           capability: "KV upload",
           ...(requiredAction === undefined ? {} : { requiredAction }),
+          localKey,
+          profileName: activeProfileName,
         });
       }
       throw new Error("addressed source upload failed");

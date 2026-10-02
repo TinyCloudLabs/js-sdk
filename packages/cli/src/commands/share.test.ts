@@ -15,36 +15,61 @@ describe("tc share command contract", () => {
     expect(parseShareTarget("domain:Example.COM")).toEqual({ kind: "emailDomain", domain: "Example.COM" });
     expect(() => parseShareTarget("unknown-target")).toThrow();
   });
-  test("maps authority failures to safe actionable CLI codes", () => {
+  test("maps authority failures to profile-aware actionable CLI codes", () => {
     const localAuth = shareCliError(new SharePublishAuthorityError({
       kind: "owner-space-unresolved",
       localKey: true,
+      profileName: "wallet",
     }));
     expect(localAuth.code).toBe("AUTH_REQUIRED");
-    expect(localAuth.message).toContain("tc auth login --method local");
+    expect(localAuth.message).toContain("tc --profile wallet auth login --method local");
 
     const sessionAuth = shareCliError(new SharePublishAuthorityError({
       kind: "owner-space-unresolved",
       localKey: false,
+      profileName: "remote",
     }));
     expect(sessionAuth.code).toBe("AUTH_REQUIRED");
-    expect(sessionAuth.message).toContain("tc auth login");
+    expect(sessionAuth.message).toContain("tc --profile remote auth login");
     expect(sessionAuth.message).not.toContain("--method local");
 
     const scope = shareCliError(new SharePublishAuthorityError({
       kind: "scope-denied",
       capability: "KV upload",
       requiredAction: "tinycloud.kv/put",
+      localKey: true,
+      profileName: "wallet",
     }));
     expect(scope.code).toBe("PERMISSION_DENIED");
     expect(scope.message).toContain("tinycloud.kv/put");
+    expect(scope.message).toContain("tc --profile wallet auth login --method local");
 
-    const lifetime = shareCliError(new SharePublishAuthorityError({
+    const beyondSession = shareCliError(new SharePublishAuthorityError({
       kind: "lifetime-exceeds-session",
       sessionExpiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      reason: "beyond-session",
     }));
-    expect(lifetime.code).toBe("SESSION_LIFETIME_EXCEEDED");
-    expect(lifetime.message).toContain("2099-01-01T00:00:00.000Z");
+    expect(beyondSession.code).toBe("SESSION_LIFETIME_EXCEEDED");
+    expect(beyondSession.message).toContain("2099-01-01T00:00:00.000Z");
+    expect(beyondSession.message).toContain("shorter --expires value or renew the session");
+
+    const belowMinimum = shareCliError(new SharePublishAuthorityError({
+      kind: "lifetime-exceeds-session",
+      sessionExpiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      reason: "below-minimum",
+    }));
+    expect(belowMinimum.code).toBe("SESSION_LIFETIME_EXCEEDED");
+    expect(belowMinimum.message).toContain("longer --expires");
+
+    const sessionTooClose = shareCliError(new SharePublishAuthorityError({
+      kind: "lifetime-exceeds-session",
+      sessionExpiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      reason: "session-too-close",
+      profileName: "remote",
+    }));
+    expect(sessionTooClose.code).toBe("AUTH_REQUIRED");
+    expect(sessionTooClose.message).toContain("log in again");
+    expect(sessionTooClose.message).toContain("tc --profile remote auth login");
   });
 
   test("registers only the current native sharing lifecycle commands", () => {

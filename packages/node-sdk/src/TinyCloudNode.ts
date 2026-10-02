@@ -2671,12 +2671,17 @@ export class TinyCloudNode {
 
     // Build every part of the restored state against a disposable manager.
     // Nothing live is touched until the commit below.
-    const restoredJwk = clonePersistedSessionJwk(sessionData.jwk);
+    let restoredJwk: object;
+    try {
+      restoredJwk = clonePersistedSessionJwk(sessionData.jwk);
+    } catch {
+      throw new InvalidRestoredSessionError("Persisted session has an invalid private Ed25519 session key.");
+    }
     if (
       sessionData.chainId !== undefined &&
       (!Number.isSafeInteger(sessionData.chainId) || sessionData.chainId <= 0)
     ) {
-      throw new Error("Persisted session chain ID must be a positive safe integer.");
+      throw new InvalidRestoredSessionError("Persisted session chain ID must be a positive safe integer.");
     }
     const stagedManager = this.wasmBindings.createSessionManager();
     const stagedReplace = stagedManager.replaceSessionKey;
@@ -2692,34 +2697,33 @@ export class TinyCloudNode {
     let stagedKeyId: string;
     let stagedJwk: object;
     let canonicalVerificationMethod: string;
-    try {
-      // Replacing a primary signer without a complete key inventory silently
-      // loses receive/share keys. Require the capability rather than guessing.
-      const keyIds = liveKeys.call(this.sessionManager);
-      if (!Array.isArray(keyIds) || !keyIds.every((keyId) => typeof keyId === "string")) {
-        throw new UnsupportedSessionRestoreError("it cannot reliably enumerate every live session signer");
-      }
-      for (const keyId of keyIds) {
-        if (keyId === this.sessionKeyId) continue;
-        const jwk = this.sessionManager.jwk(keyId);
-        if (!jwk) throw new Error("missing live session key");
-        stagedReplace.call(stagedManager, clonePersistedSessionJwk(JSON.parse(jwk)), keyId);
-      }
-      stagedKeyId = stagedReplace.call(stagedManager, restoredJwk, this.sessionKeyId);
-      const stagedJwkJson = stagedManager.jwk(stagedKeyId);
-      if (!stagedJwkJson) throw new Error("missing restored session key");
-      stagedJwk = clonePersistedSessionJwk(JSON.parse(stagedJwkJson));
-      canonicalVerificationMethod = stagedManager.getDID(stagedKeyId);
-    } catch (error) {
-      if (error instanceof UnsupportedSessionRestoreError) throw error;
-      throw new Error("Persisted session has an invalid private Ed25519 session key.");
+    // Replacing a primary signer without a complete key inventory silently
+    // loses receive/share keys. Require the capability rather than guessing.
+    const keyIds = liveKeys.call(this.sessionManager);
+    if (!Array.isArray(keyIds) || !keyIds.every((keyId) => typeof keyId === "string")) {
+      throw new UnsupportedSessionRestoreError("it cannot reliably enumerate every live session signer");
     }
+    for (const keyId of keyIds) {
+      if (keyId === this.sessionKeyId) continue;
+      const jwk = this.sessionManager.jwk(keyId);
+      if (!jwk) throw new Error("missing live session key");
+      stagedReplace.call(stagedManager, clonePersistedSessionJwk(JSON.parse(jwk)), keyId);
+    }
+    try {
+      stagedKeyId = stagedReplace.call(stagedManager, restoredJwk, this.sessionKeyId);
+    } catch {
+      throw new InvalidRestoredSessionError("Persisted session has an invalid private Ed25519 session key.");
+    }
+    const stagedJwkJson = stagedManager.jwk(stagedKeyId);
+    if (!stagedJwkJson) throw new Error("missing restored session key");
+    stagedJwk = clonePersistedSessionJwk(JSON.parse(stagedJwkJson));
+    canonicalVerificationMethod = stagedManager.getDID(stagedKeyId);
     const restoredVerificationMethod = canonicalRestoredVerificationMethod(
       canonicalVerificationMethod,
       sessionData.verificationMethod,
     );
     if (!restoredVerificationMethod) {
-      throw new Error(
+      throw new InvalidRestoredSessionError(
         "Persisted session verification method does not match its private Ed25519 session key.",
       );
     }
@@ -2731,12 +2735,15 @@ export class TinyCloudNode {
     ];
     const hasPersistedProof = proofValues.every((value) => value !== undefined);
     if (!hasPersistedProof && (proofValues.some((value) => value !== undefined) || sessionData.expiresAt !== undefined)) {
-      throw new Error("Persisted session authority metadata is incomplete.");
+      throw new InvalidRestoredSessionError("Persisted session authority metadata is incomplete.");
     }
 
-    const restoredAddress = hasPersistedProof
-      ? canonicalizeAddress(sessionData.address!)
-      : undefined;
+    let restoredAddress: string | undefined;
+    try {
+      restoredAddress = hasPersistedProof ? canonicalizeAddress(sessionData.address!) : undefined;
+    } catch {
+      throw new InvalidRestoredSessionError("Persisted session has an invalid wallet address.");
+    }
     let stagedSessionExpiry = new Date(0);
     let stagedRecap: WasmRecapEntry[] = [];
     if (hasPersistedProof) {

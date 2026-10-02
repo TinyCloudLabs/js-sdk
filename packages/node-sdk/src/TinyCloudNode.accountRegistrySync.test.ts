@@ -20,6 +20,8 @@
 import { describe, expect, mock, test } from "bun:test";
 
 import {
+  KVService,
+  ServiceContext,
   type ISessionManager,
   type IWasmBindings,
 } from "@tinycloud/sdk-core";
@@ -272,6 +274,44 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     }
 
     expect(task).toHaveBeenCalledTimes(1);
+    expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(true);
+  });
+
+  test.each([401, 403])("real KV put authorization responses stop retries (%i)", async (status) => {
+    const { node } = makeNode();
+    let fetchCalls = 0;
+    const context = new ServiceContext({
+      hosts: ["https://tinycloud.test"],
+      session: {
+        delegationHeader: { Authorization: "Bearer session" },
+        delegationCid: "bafy-session",
+        spaceId: SPACE_URI,
+        verificationMethod: "did:key:default",
+        jwk: {},
+      },
+      invoke: () => ({ Authorization: "Bearer signed-invocation" }),
+      fetch: async () => {
+        fetchCalls += 1;
+        return new Response("Unauthorized Action: vault/record / tinycloud.kv/put", { status });
+      },
+    });
+    const kv = new KVService({});
+    kv.initialize(context);
+    const originalWarn = console.warn;
+    const warnSpy = mock(() => {});
+    console.warn = warnSpy as any;
+    const task = async () => {
+      const result = await kv.put("vault/record", "value");
+      if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
+    };
+
+    try {
+      await (node as any).withAccountRegistryRetry(task);
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(fetchCalls).toBe(1);
     expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(true);
   });
 

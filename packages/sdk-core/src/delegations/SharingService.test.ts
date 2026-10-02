@@ -679,23 +679,25 @@ describe("SharingService.generate root-delegation signing failures", () => {
   // surface mid-compose. An unanswered prompt and a genuine authorization
   // refusal used to collapse into the same PERMISSION_DENIED message, so a
   // user who simply missed a signing popup was told they lacked permission.
+  type SharingFetch = NonNullable<ConstructorParameters<typeof SharingService>[0]["fetch"]>;
   function makeGeneratingService(
     onRootDelegationNeeded: NonNullable<
       ConstructorParameters<typeof SharingService>[0]["onRootDelegationNeeded"]
     >,
-    fetcher?: typeof globalThis.fetch,
+    fetcher?: SharingFetch,
+    registry = new CapabilityKeyRegistry(),
   ): SharingService {
     const shareJwk = { kty: "OKP", crv: "Ed25519", x: SHARE_X, d: SHARE_D };
     return new SharingService({
       hosts: [HOST],
       invoke: mock(async () => ({ ok: true, data: undefined })) as never,
-      fetch: fetcher ?? mock(async () => new Response(null, { status: 200 })),
+      fetch: fetcher ?? (async () => new Response(null, { status: 200 })),
       keyProvider: {
         createSessionKey: (name: string) => name,
         getDID: () => `${SHARE_DID}#${SHARE_DID.slice("did:key:".length)}`,
         getJWK: () => shareJwk,
       } as unknown as KeyProvider,
-      registry: new CapabilityKeyRegistry(),
+      registry,
       createKVService: mock(() => ({})) as never,
       createDelegationWasm: mock((params: CreateDelegationWasmParams) => ({
         delegation: childToken(params),
@@ -720,27 +722,33 @@ describe("SharingService.generate root-delegation signing failures", () => {
     });
   }
 
-  test("preserves registration 403 as a typed authorization failure", async () => {
-    const fetcher = mock(async () => new Response("secret upstream body", { status: 403 }));
-    const service = makeGeneratingService(async () => undefined, fetcher);
-    const internal = service as unknown as {
-      createSessionDelegation: (
-        delegateDID: string,
-        path: string,
-        actions: string[],
-        expiry: Date,
-      ) => Promise<Delegation | { readonly ok: false; readonly error: DelegationError }>;
-    };
+  test("preserves registration 403 as a typed authorization failure through generate", async () => {
+    const registry = new CapabilityKeyRegistry();
+    registry.registerKey({
+      id: "parent-key",
+      did: "did:key:z6MkParent",
+      type: "session",
+      priority: 0,
+    }, [{
+      cid: "bafy-parent",
+      delegateDID: "did:key:z6MkParent",
+      spaceId: SPACE,
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+      expiry: PARENT_EXPIRY,
+      isRevoked: false,
+      allowSubDelegation: true,
+    }]);
+    const fetcher: SharingFetch = async () => new Response("secret upstream body", { status: 403 });
+    const service = makeGeneratingService(async () => undefined, fetcher, registry);
 
-    const result = await internal.createSessionDelegation(
-      "did:key:z6MkFeedHost",
-      "shared",
-      ["tinycloud.kv/get"],
-      PARENT_EXPIRY,
-    );
-
-    expect("ok" in result).toBe(true);
-    if (!("ok" in result) || result.ok) throw new Error("expected authorization failure");
+    const result = await service.generate({
+      path: "shared",
+      actions: ["tinycloud.kv/get"],
+      expiry: PARENT_EXPIRY,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected authorization failure");
     expect(result.error.code).toBe("AUTH_UNAUTHORIZED");
     expect(result.error.meta).toEqual({ status: 403 });
     expect(result.error.message).not.toContain("secret upstream body");

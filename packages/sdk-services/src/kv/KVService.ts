@@ -863,7 +863,7 @@ export class KVService extends BaseService implements IKVService {
         if (response.status === 401 || response.status === 403) {
           const errorText = await response.text();
           const { resource, action } = parseAuthError(errorText);
-          return err(authUnauthorizedError("kv", "KV upload is not authorized", {
+          return err(authUnauthorizedError("kv", errorText, {
             status: response.status,
             ...(action && { requiredAction: action }),
             ...(resource && { resource }),
