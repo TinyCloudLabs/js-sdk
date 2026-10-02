@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
+import * as fsPromises from "node:fs/promises";
 
 const SELF_ADDR = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
 const OTHER_ADDR = "0xd559ccd9eb87c530a9a349262669386de93cf412";
@@ -79,6 +80,9 @@ mock.module("../output/errors.js", () => ({
 }));
 
 mock.module("node:fs/promises", () => ({
+  // Modules this command loads (the profile store and its lock) import other
+  // fs functions; keep them real so the mock only replaces what is asserted.
+  ...fsPromises,
   mkdir: async () => {},
   writeFile: async (path: string, data: string) => {
     recorded.fileWrites.push({ path, data });

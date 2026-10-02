@@ -349,6 +349,49 @@ test("waits rather than reclaiming an ownerless lock younger than the stale thre
   )).rejects.toBeInstanceOf(ProfileLockTimeoutError);
 });
 
+test("a delayed ownerless reclaim cannot remove the lock another process reclaimed and now holds", async () => {
+  const home = await isolatedHome();
+  const profile = "delegate";
+  const barrier = join(home, "ownerless-barrier");
+  const holders = join(home, "holders");
+  await mkdir(holders, { recursive: true });
+  await mkdir(barrier, { recursive: true });
+  // An ownerless lock left by an older release or a crash, a minute old.
+  await mkdir(profileLockPath(profile), { recursive: true });
+  const aMinuteAgo = new Date(Date.now() - 60_000);
+  await utimes(profileLockPath(profile), aMinuteAgo, aMinuteAgo);
+
+  const fixture = new URL("../test-support/hold-profile-lock.ts", import.meta.url).pathname;
+  const baseEnv: Record<string, string | undefined> = { ...process.env, TC_HOME: home, HOME: homedir(), NODE_ENV: "test" };
+  delete baseEnv.TC_TEST_PROFILE_LOCK_OWNERLESS_BARRIER_DIR;
+  // C sees the aged empty lock and stops just before its rmdir.
+  const late = Bun.spawn([process.execPath, fixture, profile, holders, join(home, "late-ready"), "-", "2000", "30000"], {
+    env: { ...baseEnv, TC_TEST_PROFILE_LOCK_OWNERLESS_BARRIER_DIR: barrier },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  await waitForProfileLockProtocol(join(barrier, `ready-${late.pid}-${profile}`), "the late reclaimer at its rmdir");
+
+  // B reclaims the same directory, acquires, and holds the lock.
+  const holder = Bun.spawn([process.execPath, fixture, profile, holders, join(home, "holder-ready"), join(home, "holder-release"), "10000", "30000"], {
+    env: baseEnv,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  await waitForProfileLockProtocol(join(home, "holder-ready"), "the reclaiming holder");
+
+  // C now runs its rmdir against B's lock.
+  await writeFile(join(barrier, "release"), "release\n", "utf8");
+  const [lateExit, lateError] = await Promise.all([late.exited, new Response(late.stderr).text()]);
+  expect(lateExit, lateError).toBe(3);
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: holder.pid });
+
+  await writeFile(join(home, "holder-release"), "release\n", "utf8");
+  const [holderExit, holderError] = await Promise.all([holder.exited, new Response(holder.stderr).text()]);
+  expect(holderExit, holderError).toBe(0);
+  expect((await readdir(holders)).filter((name) => name.startsWith("violation-"))).toEqual([]);
+}, 30_000);
+
 test("reclaims an ownerless lock directory older than the stale threshold", async () => {
   await isolatedHome();
   const profile = "delegate";

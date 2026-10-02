@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
+import { withRecapCaveat } from "./test-support/recap-caveat.js";
 
 const home = await mkdtemp(join(tmpdir(), "tc-scoped-login-"));
 process.env.TC_HOME = home;
@@ -20,7 +21,8 @@ const key = JSON.parse(manager.jwk("default")!);
 const did = manager.getDID("default");
 const requested: PermissionEntry[] = [{ service: "tinycloud.kv", space: "applications", path: "example/", actions: ["tinycloud.kv/get"] }];
 
-async function proof(options: { write?: boolean; expired?: boolean; lifetimeMs?: number } = {}) {
+/** A real owner-signed session for kv `example/`; `caveat` is signed onto every action. */
+async function proof(options: { write?: boolean; expired?: boolean; lifetimeMs?: number; caveat?: Record<string, unknown> } = {}) {
   const now = Date.now();
   const prepared = wasm.prepareSession({
     abilities: { kv: { "example/": options.write ? ["tinycloud.kv/get", "tinycloud.kv/put"] : ["tinycloud.kv/get"] } },
@@ -28,6 +30,7 @@ async function proof(options: { write?: boolean; expired?: boolean; lifetimeMs?:
     issuedAt: new Date(now - 60_000).toISOString(),
     expirationTime: new Date(now + (options.expired ? -30_000 : options.lifetimeMs ?? 3600_000)).toISOString(),
   });
+  if (options.caveat) prepared.siwe = withRecapCaveat(prepared.siwe, options.caveat);
   const signature = await signer.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
   return { ...session, jwk: { kty: key.kty, crv: key.crv, x: key.x }, verificationMethod: did,
@@ -243,5 +246,73 @@ describe("scoped first login", () => {
     expect(calls).toBe(0);
     await refreshOpenKeySession("scoped", host, { permissions: requested, replaceSession: true, openKeyAcquisition: acquire });
     expect(await ProfileManager.getSession("scoped")).toMatchObject({ verificationMethod: did });
+  });
+
+  test("a renewal that adds a signed caveat narrows the live session and needs --replace-session", async () => {
+    await refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => proof() });
+    const unrestricted = await ProfileManager.getSession("scoped");
+    // Same service, space, path and action, but signed only for one tenant.
+    const narrowed = async () => proof({ caveat: { tenant: "alpha" } });
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: narrowed }))
+      .rejects.toMatchObject({ code: "SESSION_IN_USE" });
+    expect(await ProfileManager.getSession("scoped")).toEqual(unrestricted);
+
+    await refreshOpenKeySession("scoped", host, { permissions: requested, replaceSession: true, openKeyAcquisition: narrowed });
+    const saved = await ProfileManager.getSession("scoped") as Record<string, unknown>;
+    expect(saved.permissions).toEqual([{ ...requested[0], space: spaceId, caveats: [{ tenant: "alpha" }] }]);
+    // Dropping the caveat keeps everything the restricted session held.
+    await refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => proof() });
+    expect((await ProfileManager.getSession("scoped") as Record<string, unknown>).permissions).toEqual([{ ...requested[0], space: spaceId }]);
+  });
+
+  test("reports every failure when restoring after a failed commit also fails", async () => {
+    const before = await ProfileManager.getProfile("scoped");
+    // The commit publishes key and session, then fails writing the profile;
+    // the restore then fails to put the key back but still restores the rest.
+    const profileWrite = spyOn(ProfileManager, "setProfile").mockImplementationOnce(async () => {
+      throw new Error("EIO: i/o error, write profile.json");
+    });
+    const realSetKey = ProfileManager.setKey.bind(ProfileManager);
+    let keyWrites = 0;
+    const keyWrite = spyOn(ProfileManager, "setKey").mockImplementation(async (name, value) => {
+      if (++keyWrites === 2) throw new Error("ENOSPC: no space left on device, write key.json");
+      await realSetKey(name, value);
+    });
+    let failure: unknown;
+    try {
+      await refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => proof() }).catch((error: unknown) => { failure = error; });
+    } finally {
+      profileWrite.mockRestore();
+      keyWrite.mockRestore();
+    }
+    expect(failure).toMatchObject({ code: "PROFILE_STATE_INCONSISTENT" });
+    const message = failure instanceof Error ? failure.message : "";
+    expect(message).toContain("EIO: i/o error, write profile.json");
+    expect(message).toContain("ENOSPC: no space left on device, write key.json");
+    expect(message).toContain("--replace-session");
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+    expect(await ProfileManager.getProfile("scoped")).toEqual(before);
+  });
+
+  test("an unsigned SIWE's past Expiration Time does not make the saved session look expired", async () => {
+    const valid = await proof();
+    const { signature: _signature, ...unsigned } = valid;
+    const expired = valid.siwe.replace(/^Expiration Time: .+$/m, "Expiration Time: 2000-01-01T00:00:00.000Z");
+    await refreshOpenKeySession("scoped", host, { openKeyAcquisition: async () => ({ ...unsigned, siwe: expired }) });
+    const saved = await ProfileManager.getSession("scoped") as Record<string, unknown>;
+    expect(saved.siwe).toBeUndefined();
+    let calls = 0;
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => { calls++; return proof(); } }))
+      .rejects.toMatchObject({ code: "SESSION_IN_USE" });
+    expect(calls).toBe(0);
+  });
+
+  test("a session naming an owner beside a profile without one is inconsistent", async () => {
+    await refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => proof() });
+    await ProfileManager.setProfile("scoped", baseProfile());
+    let calls = 0;
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => { calls++; return proof(); } }))
+      .rejects.toMatchObject({ code: "PROFILE_STATE_INCONSISTENT" });
+    expect(calls).toBe(0);
   });
 });

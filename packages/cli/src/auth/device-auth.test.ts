@@ -4,6 +4,7 @@ import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
+import { withRecapCaveat } from "./test-support/recap-caveat.js";
 import type { DeviceAuthorizationInput } from "./device-auth.js";
 
 // TC_HOME is read when the profile store loads, so import it afterwards.
@@ -51,8 +52,8 @@ function encryptRelay(relayPublicJwk: object, transactionId: string, value: unkn
   };
 }
 
-/** What OpenKey's /delegate/complete returns for an owner-signed SIWE over `signed`. */
-async function signedDelegation(signed: PermissionEntry[], publicJwk: object, claimed: PermissionEntry[] = signed, lifetimeMs = 3600_000) {
+/** What OpenKey's /delegate/complete returns for an owner-signed SIWE over `signed`; `caveat` is signed onto every action. */
+async function signedDelegation(signed: PermissionEntry[], publicJwk: object, claimed: PermissionEntry[] = signed, lifetimeMs = 3600_000, caveat?: Record<string, unknown>) {
   const abilities: Record<string, Record<string, string[]>> = {};
   for (const permission of signed) {
     const service = permission.service.slice("tinycloud.".length);
@@ -63,6 +64,7 @@ async function signedDelegation(signed: PermissionEntry[], publicJwk: object, cl
     abilities, address, chainId: 1, domain: "openkey.so", spaceId, jwk: key,
     issuedAt: new Date(Date.now() - 60_000).toISOString(), expirationTime: expiresAt,
   });
+  if (caveat) prepared.siwe = withRecapCaveat(prepared.siwe, caveat);
   const signature = await signer.signMessage(prepared.siwe);
   return {
     ...wasm.completeSessionSetup({ ...prepared, signature }),
@@ -107,8 +109,8 @@ function fakeOpenKey(approve: (start: Record<string, unknown>, transactionId: st
   return { fetchFn, startBodies, urls, get polls() { return polls; } };
 }
 
-async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string; lifetimeMs?: number }) {
-  const delegation = await signedDelegation(input.signed, start.publicJwk as object, input.claimed ?? input.signed, input.lifetimeMs);
+async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string; lifetimeMs?: number; caveat?: Record<string, unknown> }) {
+  const delegation = await signedDelegation(input.signed, start.publicJwk as object, input.claimed ?? input.signed, input.lifetimeMs, input.caveat);
   return response({
     status: "approved",
     relay: encryptRelay(start.relayPublicJwk as object, transactionId, delegation),
@@ -404,6 +406,22 @@ describe("device login persistence", () => {
     // ...and renewing with the full manifest widens it again without the flag.
     const widened = await login(fakeOpenKey((start, id) => approved(start, id, { signed: requested })));
     expect(widened.result.declined).toEqual([]);
+  });
+
+  test("an approval that signs a caveat onto the same actions does not replace the unrestricted session", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { ...baseProfile, ownerDid, posture: "owner-openkey" });
+    await login(fakeOpenKey((start, id) => approved(start, id, { signed: requested })));
+    const unrestricted = await ProfileManager.getSession("agent");
+
+    const caveated = () => fakeOpenKey((start, id) => approved(start, id, { signed: requested, caveat: { tenant: "alpha" } }));
+    await expect(login(caveated())).rejects.toMatchObject({ code: "SESSION_IN_USE" });
+    expect(await ProfileManager.getSession("agent")).toEqual(unrestricted);
+
+    await login(caveated(), { replaceSession: true });
+    const permissions = (await ProfileManager.getSession("agent") as { permissions: PermissionEntry[] }).permissions;
+    expect(permissions.length).toBeGreaterThan(0);
+    expect(permissions.every((permission) => JSON.stringify(permission.caveats) === JSON.stringify([{ tenant: "alpha" }]))).toBe(true);
   });
 
   test("refuses to commit when another login for a different owner finished during approval", async () => {

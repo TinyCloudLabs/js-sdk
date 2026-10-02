@@ -22,6 +22,7 @@ import {
   validateLoginPermissions,
   verifyScopedLogin,
   type RequestedExpiry,
+  type SignedSession,
 } from "./scoped-login.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "./login-commit.js";
 
@@ -99,7 +100,7 @@ export interface DeviceAuthorizationInput {
 
 export interface DeviceAuthorizationResult {
   /** Verified session, ready to persist (local private key merged back in). */
-  session: Record<string, unknown>;
+  session: Record<string, unknown> & SignedSession;
   ownerDid: string;
   spaceId: string;
   expiresAt: string;
@@ -538,7 +539,8 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
     key,
     session: result.session,
     profile,
-    approved: { scope: result.approved, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true },
+    // The signed permissions, with their caveats; `approved` is the action summary.
+    approved: { scope: result.session.permissions, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true },
   });
   return { profile, result };
 }

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { CLIError, handleError, setActiveProfileName, wrapError } from "./errors.js";
 
 afterEach(() => {
@@ -38,6 +39,13 @@ describe("wrapError", () => {
       code: "NETWORK_ERROR",
       exitCode: 6,
     });
+  });
+
+  test("classifies a profile lock timeout from any writer as PROFILE_LOCK_TIMEOUT with a retry hint", () => {
+    const error = wrapError(new ProfileLockTimeoutError("publisher", 10_000));
+    expect(error).toMatchObject({ code: "PROFILE_LOCK_TIMEOUT", exitCode: 1 });
+    expect(error.message).toContain("\"publisher\"");
+    expect(error.metadata?.hint).toContain("retry");
   });
 
   test("preserves an existing CLI error without claiming arbitrary-message redaction", () => {

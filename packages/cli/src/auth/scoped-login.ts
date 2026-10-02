@@ -119,14 +119,85 @@ export function ownerSpaceId(space: string, ownerDid: string): string {
   return space.startsWith("tinycloud:") ? space : `tinycloud:${ownerDid.slice("did:".length)}:${space}`;
 }
 
-/** Canonical one-action tuples, so permission sets compare independently of grouping or casing. */
+/** Canonical one-action tuples, so permission sets compare independently of grouping or casing. Caveats are not part of a tuple. */
 export function permissionTuples(permissions: readonly PermissionEntry[], ownerDid: string): Set<string> {
-  return new Set(permissions.flatMap((permission) => {
-    const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
-    const space = normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
-    return permission.actions.map((action) =>
-      JSON.stringify([service, space, permission.path, action.includes("/") ? action : `${service}/${action}`]));
-  }));
+  return new Set(permissions.flatMap((permission) => actionTuples(permission, ownerDid)));
+}
+
+function actionTuples(permission: PermissionEntry, ownerDid: string): string[] {
+  const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
+  const space = normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
+  return permission.actions.map((action) =>
+    JSON.stringify([service, space, permission.path, action.includes("/") ? action : `${service}/${action}`]));
+}
+
+/** JSON with object keys sorted, so equal values serialize identically. */
+export function canonicalJson(value: unknown): string {
+  const canonical = (entry: unknown): unknown => Array.isArray(entry)
+    ? entry.map(canonical)
+    : entry && typeof entry === "object"
+      ? Object.fromEntries(Object.entries(entry as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([name, inner]) => [name, canonical(inner)]))
+      : entry;
+  return JSON.stringify(canonical(value) ?? null);
+}
+
+/**
+ * The restriction a permission's ReCap caveats impose: "" when unrestricted
+ * (no caveats, or only empty ones), else their canonical, order-independent JSON.
+ */
+function caveatRestriction(caveats: readonly Record<string, unknown>[] | undefined): string {
+  const restrictions = (caveats ?? []).filter((caveat) => Object.keys(caveat).length > 0).map(canonicalJson).sort();
+  return restrictions.length === 0 ? "" : JSON.stringify(restrictions);
+}
+
+/**
+ * Whether `granted` holds every action `held` holds, with no added caveat:
+ * a granted action covers a held one when it is unrestricted or carries
+ * exactly the same caveats. Caveats only narrow, so an action signed with a
+ * new caveat (say `{tenant: "alpha"}`) does not cover the unrestricted one.
+ */
+export function scopeCovers(granted: readonly PermissionEntry[], held: readonly PermissionEntry[], ownerDid: string): boolean {
+  const grants = new Map<string, Set<string>>();
+  for (const permission of granted) {
+    const restriction = caveatRestriction(permission.caveats);
+    for (const tuple of actionTuples(permission, ownerDid)) {
+      const restrictions = grants.get(tuple) ?? new Set<string>();
+      restrictions.add(restriction);
+      grants.set(tuple, restrictions);
+    }
+  }
+  return held.every((permission) => {
+    const restriction = caveatRestriction(permission.caveats);
+    return actionTuples(permission, ownerDid).every((tuple) => {
+      const restrictions = grants.get(tuple);
+      return restrictions !== undefined && (restrictions.has("") || restrictions.has(restriction));
+    });
+  });
+}
+
+/** A verified ReCap caveat as plain JSON (the WASM verifier returns objects as `Map`s). */
+function plainCaveat(value: unknown): unknown {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.map(plainCaveat);
+  if (value instanceof Map) {
+    return Object.fromEntries([...value].map(([name, inner]: [unknown, unknown]) => {
+      if (typeof name !== "string") throw new Error("ReCap caveat keys must be strings");
+      return [name, plainCaveat(inner)];
+    }));
+  }
+  if (typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value).map(([name, inner]) => [name, plainCaveat(inner)]));
+  }
+  throw new Error("ReCap caveats must contain only JSON values");
+}
+
+function plainCaveats(caveats: readonly unknown[] | undefined): Record<string, unknown>[] {
+  return (caveats ?? []).map((caveat) => {
+    const plain = plainCaveat(caveat);
+    if (plain === null || typeof plain !== "object" || Array.isArray(plain)) throw new Error("ReCap caveats must be objects");
+    return plain as Record<string, unknown>;
+  }).filter((caveat) => Object.keys(caveat).length > 0);
 }
 
 /** Regroup tuples into permission entries (one entry per service/space/path). */
@@ -160,6 +231,12 @@ export interface SignedSessionExpectations {
   expiry?: RequestedExpiry;
 }
 
+/** What the WASM verifier returns (its binding is untyped). Caveats arrive as `Map`s. */
+interface VerifiedSessionProof {
+  verifiedRecap?: Array<{ service: string; space: string; path: string; actions: string[]; caveats?: unknown[] }>;
+  expiresAt?: string;
+}
+
 export interface SignedSession {
   ownerDid: string;
   /** The verified ReCap, with fully qualified services and actions. */
@@ -177,7 +254,7 @@ export function verifySignedSession(
   sessionDid: string,
   expected: SignedSessionExpectations = {},
 ): SignedSession {
-  let recap: PermissionEntry[];
+  let permissions: PermissionEntry[];
   let expiresAt: string;
   try {
     if (typeof data.siwe !== "string" || typeof data.signature !== "string" ||
@@ -186,14 +263,21 @@ export function verifySignedSession(
       !data.delegationHeader || typeof data.delegationHeader !== "object" ||
       typeof data.verificationMethod !== "string" ||
       data.verificationMethod.split("#")[0] !== sessionDid.split("#")[0]) throw new Error();
-    const proof = new NodeWasmBindings().validatePersistedSession({
+    const proof: VerifiedSessionProof = new NodeWasmBindings().validatePersistedSession({
       delegationHeader: data.delegationHeader as { Authorization: string },
       delegationCid: data.delegationCid, spaceId: data.spaceId,
       jwk: key, address: data.address, chainId: data.chainId as number,
       siwe: data.siwe, signature: data.signature,
     });
     if (!proof.verifiedRecap?.length || !proof.expiresAt || !Number.isFinite(Date.parse(proof.expiresAt))) throw new Error();
-    recap = proof.verifiedRecap;
+    // One entry per signed action, with its caveats. Dropping them would
+    // record a restricted action as unrestricted.
+    permissions = proof.verifiedRecap.map((entry) => {
+      const service = entry.service.startsWith("tinycloud.") ? entry.service : `tinycloud.${entry.service}`;
+      const actions = entry.actions.map((action) => action.includes("/") ? action : `${service}/${action}`);
+      const caveats = plainCaveats(entry.caveats);
+      return { service, space: entry.space, path: entry.path, actions, ...(caveats.length > 0 ? { caveats } : {}) };
+    });
     expiresAt = proof.expiresAt;
   } catch (error) {
     if (/expir/i.test(error instanceof Error ? error.message : String(error))) {
@@ -212,11 +296,6 @@ export function verifySignedSession(
   if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
     throw new CLIError("OPENKEY_OWNER_MISMATCH", "The approved signing identity differs from this profile's owner. No session was saved. Use a new profile for another account.", ExitCode.PERMISSION_DENIED);
   }
-  const permissions = recap.map((entry) => {
-    const service = entry.service.startsWith("tinycloud.") ? entry.service : `tinycloud.${entry.service}`;
-    const actions = entry.actions.map((action) => action.includes("/") ? action : `${service}/${action}`);
-    return { service, space: entry.space, path: entry.path, actions };
-  });
   return { ownerDid, permissions, expiresAt };
 }
 
@@ -235,11 +314,10 @@ export function verifyScopedLogin(
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved space differs from the requested space. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
     }
   }
-  const allowed = permissionTuples(requested, signed.ownerDid);
-  for (const tuple of permissionTuples(signed.permissions, signed.ownerDid)) {
-    if (!allowed.has(tuple)) {
-      throw new CLIError("OPENKEY_GRANT_BROADENED", "The signed grant contains authority beyond the requested manifest. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
-    }
+  // A signed action is inside the request when a requested one covers it: the
+  // same action, unrestricted or with the same caveats (OpenKey may narrow).
+  if (!scopeCovers(requested, signed.permissions, signed.ownerDid)) {
+    throw new CLIError("OPENKEY_GRANT_BROADENED", "The signed grant contains authority beyond the requested manifest. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
   }
   // Keep signed proof intact; unsigned callback identity/expiry/permissions
   // cannot override the verified values. Never accept a returned private key.

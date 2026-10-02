@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   chmod,
+  lstat,
   mkdir,
   readFile,
   rename,
@@ -22,6 +23,7 @@ const TEST_LOCK_CONTENTION_SIGNAL_PATH = "TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL
 const PRIVATE_FILE_MODE = 0o600;
 const PRIVATE_DIR_MODE = 0o700;
 const TEST_LOCK_RECOVERY_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR";
+const TEST_LOCK_OWNERLESS_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_OWNERLESS_BARRIER_DIR";
 const invocationStateRoot = new AsyncLocalStorage<string>();
 /** One acquisition of a profile lock; `active` is cleared before release. */
 interface HeldProfileLock {
@@ -361,27 +363,13 @@ async function acquireProfileLock(
   }
 
   while (true) {
-    try {
-      await mkdir(lockPath);
-      const token = randomUUID();
-      try {
-        await writeJsonAtomic(profileLockMetadataPath(profile), {
-          pid: process.pid,
-          createdAt: new Date().toISOString(),
-          token,
-        });
-      } catch (error) {
-        await rmdir(lockPath).catch(() => undefined);
-        throw error;
-      }
-
+    const token = randomUUID();
+    if (await publishProfileLock(lockPath, token)) {
       return async () => {
         await releaseProfileLock(lockPath, token);
       };
-    } catch (error) {
-      if (!isLockAlreadyHeld(error)) throw error;
-      await signalTestLockContention(profile);
     }
+    await signalTestLockContention(profile);
 
     if (await recoverStaleLock(profile, lockPath, staleAfterMs)) continue;
 
@@ -390,6 +378,42 @@ async function acquireProfileLock(
       throw new ProfileLockTimeoutError(profile, timeoutMs);
     }
     await sleep(Math.min(retryMs, timeoutMs - elapsedMs));
+  }
+}
+
+/**
+ * Publishes `.lock` atomically with its owner record: the owner file is
+ * written into a private staging directory, which one `rename` moves to the
+ * lock path. A lock this release creates therefore never exists without
+ * owner.json, and nothing is ever written into `.lock` afterwards.
+ *
+ * rename(2) replaces an existing *empty* directory. Publication is attempted
+ * only when the lock path is absent, so that can happen only if an empty
+ * directory appears between the check and the rename. This release never
+ * creates one; it comes from an older release's `mkdir` (between its mkdir
+ * and owner write, i.e. mixed-version writers on one profile within the same
+ * instant) or from a holder's own release/stale recovery after it removed
+ * its owner record, when the lock is already being given up. Returns false
+ * when the lock is held.
+ */
+async function publishProfileLock(lockPath: string, token: string): Promise<boolean> {
+  try {
+    await lstat(lockPath);
+    return false;
+  } catch (error) {
+    if (!isErrno(error, "ENOENT")) throw error;
+  }
+  const staging = join(dirname(lockPath), `.lock-${token}.staging`);
+  await mkdir(staging, { mode: PRIVATE_DIR_MODE });
+  try {
+    const owner = { pid: process.pid, createdAt: new Date().toISOString(), token };
+    await writeFile(join(staging, "owner.json"), `${JSON.stringify(owner, null, 2)}\n`, { encoding: "utf8", mode: PRIVATE_FILE_MODE, flag: "wx" });
+    await rename(staging, lockPath);
+    return true;
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+    if (isLockAlreadyHeld(error)) return false;
+    throw error;
   }
 }
 
@@ -444,15 +468,23 @@ async function signalTestLockContention(profile: string): Promise<void> {
 }
 
 /**
- * A lock directory whose holder crashed between `mkdir` and publishing its
- * owner file. A live acquirer publishes within milliseconds, so an empty
- * directory older than the stale threshold is dead; `rmdir` removes it only
- * while it is still empty, so a late owner file keeps the lock.
+ * Reclaims a lock directory with no owner record. This release never creates
+ * one (see publishProfileLock), so an empty `.lock` comes from an older
+ * release or a crash before this change. Only an empty directory older than
+ * the stale threshold is removed, and `rmdir` succeeds only while it is still
+ * empty: if another writer reclaimed it and published its own lock meanwhile,
+ * that lock already holds its owner record and `rmdir` fails with ENOTEMPTY,
+ * which counts as "not reclaimed".
  */
-async function recoverOwnerlessLock(lockPath: string, staleAfterMs: number): Promise<boolean> {
+async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfterMs: number): Promise<boolean> {
   try {
     const { mtimeMs } = await stat(lockPath);
     if (Date.now() - mtimeMs < staleAfterMs) return false;
+  } catch {
+    return false;
+  }
+  await waitForTestBarrier(TEST_LOCK_OWNERLESS_BARRIER_DIR, profile);
+  try {
     await rmdir(lockPath);
     return true;
   } catch {
@@ -464,7 +496,7 @@ async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs:
   const ownerPath = join(lockPath, "owner.json");
   const owner = await readJson<{ pid?: unknown; createdAt?: unknown; token?: unknown }>(ownerPath)
     .catch(() => null);
-  if (owner === null) return recoverOwnerlessLock(lockPath, staleAfterMs);
+  if (owner === null) return recoverOwnerlessLock(profile, lockPath, staleAfterMs);
   if (!isStaleOwner(owner, staleAfterMs)) return false;
 
   // Claim the observed metadata file, rather than renaming/removing the lock
@@ -473,7 +505,7 @@ async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs:
   const observedToken = typeof owner?.token === "string" && owner.token.length > 0
     ? owner.token
     : "legacy";
-  await waitForTestStaleRecoveryBarrier(profile);
+  await waitForTestBarrier(TEST_LOCK_RECOVERY_BARRIER_DIR, profile);
   const claimPath = join(lockPath, `.stale-${randomUUID()}.json`);
   try {
     await rename(ownerPath, claimPath);
@@ -499,9 +531,10 @@ async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs:
   return true;
 }
 
-async function waitForTestStaleRecoveryBarrier(profile: string): Promise<void> {
+/** Test-only rendezvous (NODE_ENV=test and the named barrier directory set). */
+async function waitForTestBarrier(environmentName: string, profile: string): Promise<void> {
   if (process.env.NODE_ENV !== "test") return;
-  const barrierDirectory = process.env[TEST_LOCK_RECOVERY_BARRIER_DIR];
+  const barrierDirectory = process.env[environmentName];
   if (!barrierDirectory) return;
   await mkdir(barrierDirectory, { recursive: true });
   const readyPath = join(barrierDirectory, `ready-${process.pid}-${profile}`);
@@ -527,10 +560,9 @@ function isStaleOwner(
     : Number.NaN;
 
   // Reclaim only a fully published lock whose owner PID is confirmed dead.
-  // An ownerless or malformed directory may still be between mkdir and
-  // metadata publication, so reclaiming it could let two writers enter the
-  // critical section. Current writers claim .lock with exclusive mkdir before
-  // publishing owner metadata and therefore take the same conservative path.
+  // A lock without an owner record is handled by recoverOwnerlessLock: this
+  // release publishes `.lock` already containing owner.json (one rename of a
+  // populated staging directory), so it is never ownerless while held.
   if (!Number.isFinite(createdAt) || now - createdAt < staleAfterMs) return false;
   if (typeof owner?.pid !== "number" || !Number.isInteger(owner.pid) || owner.pid <= 0) {
     return false;

@@ -1818,7 +1818,9 @@ export async function refreshOpenKeySession(
       verifiedOwner = signed.ownerDid;
       sanitizedSession = withVerifiedAuthority(merged, signed);
     } else {
-      sanitizedSession = withoutTrustFields(merged);
+      // Not a proof: also drop a lone SIWE or signature, so an unsigned
+      // `Expiration Time` is never read as this session's expiry.
+      sanitizedSession = Object.fromEntries(Object.entries(withoutTrustFields(merged)).filter(([name]) => name !== "siwe" && name !== "signature"));
     }
   }
 
