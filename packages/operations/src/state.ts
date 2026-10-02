@@ -29,6 +29,8 @@ const TEST_LOCK_PUBLISH_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_PUBLISH_BARRIER_DIR"
 const TEST_LOCK_RELEASE_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RELEASE_BARRIER_DIR";
 const TEST_LOCK_CLAIM_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_CLAIM_BARRIER_DIR";
 const TEST_LOCK_CLAIMED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_CLAIMED_BARRIER_DIR";
+const TEST_LOCK_FENCED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_FENCED_BARRIER_DIR";
+const TEST_LOCK_VERIFIED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_VERIFIED_BARRIER_DIR";
 const invocationStateRoot = new AsyncLocalStorage<string>();
 /** One acquisition of a profile lock; `active` is cleared before release. */
 interface HeldProfileLock {
@@ -496,10 +498,13 @@ async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfte
   } catch {
     return false;
   }
+  const checkedAt = performance.now();
   await waitForTestBarrier(TEST_LOCK_OWNERLESS_BARRIER_DIR, profile);
   try {
     const entries = await readdir(lockPath);
     if (entries.includes("owner.json")) return false;
+    // The age check above is only good for a while; see recoveryFenced.
+    if (recoveryFenced(checkedAt, staleAfterMs)) return false;
     for (const name of entries.filter((entry) => ABANDONED_CLAIM.test(entry))) {
       await rm(join(lockPath, name), { force: true });
     }
@@ -509,6 +514,19 @@ async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfte
   }
   await removeAgedOwnerFiles(lockPath, staleAfterMs);
   return true;
+}
+
+/**
+ * Whether a recovery step decided at `since` (a monotonic timestamp) is too
+ * old to act on. Claim-only and ownerless cleanup act only on a `.lock`
+ * unchanged for `staleAfterMs`, and a recoverer's claim (or the change that
+ * made a directory look abandoned) dates the directory no earlier than
+ * `since`. Acting within half that window means no such cleanup can have
+ * removed the directory and let a new holder in meanwhile; past it, the
+ * recoverer drops only its own claim and starts the acquisition over.
+ */
+function recoveryFenced(since: number, staleAfterMs: number): boolean {
+  return performance.now() - since >= staleAfterMs / 2;
 }
 
 /** Claim files of stale recovery (and of release in older releases). */
@@ -559,6 +577,7 @@ async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs:
   } catch {
     return false;
   }
+  const claimedAt = performance.now();
   await waitForTestBarrier(TEST_LOCK_CLAIM_BARRIER_DIR, profile);
 
   const claimed = await readJson<{ pid?: unknown; createdAt?: unknown; token?: unknown }>(claimPath)
@@ -568,6 +587,15 @@ async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs:
       ? claimed.token === undefined
       : claimed.token === observedToken
   );
+  await waitForTestBarrier(TEST_LOCK_VERIFIED_BARRIER_DIR, profile);
+  if (sameInstance && recoveryFenced(claimedAt, staleAfterMs)) {
+    // Paused too long: another recoverer may have finished this recovery and
+    // a cleanup may have removed this claim, so owner.json may now be a live
+    // holder's. Touch nothing but this claim.
+    await rm(claimPath, { force: true });
+    await waitForTestBarrier(TEST_LOCK_FENCED_BARRIER_DIR, profile);
+    return false;
+  }
   if (sameInstance) {
     await rm(ownerPath, { force: true });
     await waitForTestBarrier(TEST_LOCK_CLAIMED_BARRIER_DIR, profile);

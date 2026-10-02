@@ -1,4 +1,6 @@
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { createCipheriv, createHmac, randomBytes, type JsonWebKey } from "node:crypto";
+import { Command } from "commander";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +18,10 @@ const { refreshOpenKeySession } = await import("../commands/auth.js");
 const { ensureAuthenticated } = await import("../lib/sdk.js");
 const { createShareAuthorityAdapters } = await import("../share/adapters.js");
 const { sharePublishingPermissions } = await import("../share/publishing-manifest.js");
+const { registerAuthCommand } = await import("../commands/auth.js");
+const { keyToDID } = await import("./local-key.js");
+const { readAdditionalDelegations } = await import("@tinycloud/operations/state");
+const { DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_SHARE_ORIGIN } = await import("../config/constants.js");
 
 const host = "https://node.example.test";
 const shareOrigin = "https://share.example.test";
@@ -122,4 +128,79 @@ describe("a scoped session with signed caveats", () => {
     await login(caveat);
     expect(caveatsOf((await ProfileManager.getSession("publisher") as { permissions: PermissionEntry[] }).permissions)).toEqual([JSON.stringify([caveat])]);
   });
+});
+
+/** OpenKey's relay encryption (WebCrypto ECDH, HKDF-style key, AES-256-GCM). */
+async function encryptRelay(relayPublicJwk: JsonWebKey, transactionId: string, value: unknown) {
+  const p256 = { name: "ECDH", namedCurve: "P-256" } as const;
+  const ephemeral = await crypto.subtle.generateKey(p256, true, ["deriveBits"]);
+  const relayKey = await crypto.subtle.importKey("jwk", relayPublicJwk, p256, false, []);
+  const sharedSecret = Buffer.from(await crypto.subtle.deriveBits({ name: "ECDH", public: relayKey }, ephemeral.privateKey, 256));
+  const extracted = createHmac("sha256", Buffer.from(transactionId)).update(sharedSecret).digest();
+  const key = createHmac("sha256", extracted).update(Buffer.from("openkey-device-relay-v1")).update(Buffer.from([1])).digest();
+  const nonce = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, nonce);
+  cipher.setAAD(Buffer.from(transactionId));
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value)), cipher.final(), cipher.getAuthTag()]);
+  return { version: 1, algorithm: "ECDH-P256-A256GCM", ephemeralPublicJwk: await crypto.subtle.exportKey("jwk", ephemeral.publicKey), nonce: nonce.toString("base64url"), ciphertext: ciphertext.toString("base64url") };
+}
+
+describe("auth request --grant --device", () => {
+  test("keeps a signed caveat on the granted resources, the stored delegation and the runtime grant", async () => {
+    await login();
+    const caveat = { tenant: "acme" };
+    const notes: PermissionEntry = { service: "tinycloud.kv", space: spaceId, path: "notes/", actions: ["tinycloud.kv/get"] };
+    const sessionDid = keyToDID(key);
+    const transactionId = randomBytes(18).toString("base64url");
+    const site = new URL(DEFAULT_OPENKEY_DEVICE_API_HOST);
+    site.hostname = site.hostname.replace(/^api\./, "");
+    let start: { relayPublicJwk: JsonWebKey; publicJwk: object } | undefined;
+    const node = nodeAndShareDouble();
+    globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin !== DEFAULT_OPENKEY_DEVICE_API_HOST) return node(input, init);
+      if (url.pathname === "/api/device-authorizations") {
+        start = JSON.parse(String(init?.body));
+        return Response.json({ transactionId, userCode: "ABCD-EFGH", verificationUri: `${site.origin}/device`, verificationUriComplete: `${site.origin}/device?user_code=ABCD-EFGH`, expiresIn: 600, interval: 1 }, { status: 201 });
+      }
+      // The owner approves `notes/` with a signed tenant caveat.
+      const expiresAt = new Date(Math.floor(Date.now() / 1000) * 1000 + 3600_000).toISOString();
+      const prepared = wasm.prepareSession({
+        abilities: { kv: { "notes/": ["tinycloud.kv/get"] } }, address, chainId: 1, domain: "openkey.so", spaceId, jwk: key,
+        issuedAt: new Date(Date.now() - 60_000).toISOString(), expirationTime: expiresAt,
+      });
+      prepared.siwe = withRecapCaveat(prepared.siwe, caveat);
+      const signature = await signer.signMessage(prepared.siwe);
+      const delegation = { ...wasm.completeSessionSetup({ ...prepared, signature }), jwk: start!.publicJwk, verificationMethod: sessionDid, address, chainId: 1, spaceId, siwe: prepared.siwe, signature, expiresAt, permissions: [notes], hostActivated: true };
+      return Response.json({
+        status: "approved",
+        relay: await encryptRelay(start!.relayPublicJwk, transactionId, delegation),
+        binding: { transactionId, sessionDid, nodeOrigin: host, shareOrigin: DEFAULT_SHARE_ORIGIN, permissions: [notes], delegationExpiresAt: expiresAt },
+      });
+    }, { preconnect: () => undefined }) as typeof globalThis.fetch;
+
+    const outputs: string[] = [];
+    const stdout = spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => { outputs.push(String(chunk)); return true; });
+    const exit = spyOn(process, "exit").mockImplementation((code?: number) => { throw new Error(`exit ${code}`); });
+    const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+    process.env.TC_PROFILE = "publisher";
+    try {
+      const program = new Command();
+      registerAuthCommand(program);
+      await program.parseAsync(["node", "tc", "auth", "request", "--grant", "--device", "--cap", "tinycloud.kv:default:notes/:get"], { from: "node" });
+    } finally {
+      delete process.env.TC_PROFILE;
+      stdout.mockRestore();
+      exit.mockRestore();
+      stderr.mockRestore();
+    }
+
+    const result = JSON.parse(outputs.join("")) as { added: PermissionEntry[] };
+    expect(result.added).toEqual([expect.objectContaining({ path: "notes/", actions: ["tinycloud.kv/get"], caveats: [caveat] })]);
+    const stored = await readAdditionalDelegations<{ delegation: { resources: { path: string; caveats?: unknown }[] } }>("publisher");
+    expect(stored.at(-1)!.delegation.resources).toEqual([expect.objectContaining({ path: "notes/", caveats: [caveat] })]);
+    // A later command replays the stored grant: still restricted to the tenant.
+    const replayed = await ensureAuthenticated(await ProfileManager.resolveContext({ profile: "publisher" }));
+    expect(replayed.getEffectiveRuntimePermissionEntries()).toEqual([expect.objectContaining({ path: "notes/", caveats: [caveat] })]);
+  }, 20_000);
 });

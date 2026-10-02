@@ -1371,6 +1371,7 @@ export function portableFromOpenKeyDelegation(
         space: string;
         path: string;
         actions: string[];
+        caveats?: Record<string, unknown>[];
       }>)
     : null;
   const resources = (returnedPermissions ?? permissions).map((permission) => {
@@ -1411,11 +1412,17 @@ export function portableFromOpenKeyDelegation(
     })
       ? permSpace
       : returnedSpace;
+    // Signed ReCap caveats restrict the resource; dropping them would make
+    // consumers treat a caveated grant as unrestricted.
+    const caveats = Array.isArray(permission.caveats) && permission.caveats.length > 0
+      ? permission.caveats.map((caveat) => structuredClone(caveat))
+      : undefined;
     return {
       service,
       space: resolvedSpace,
       path: permission.path,
       actions: [...permission.actions],
+      ...(caveats === undefined ? {} : { caveats }),
     };
   });
 

@@ -233,7 +233,7 @@ test("recovers a stale profile lock only after its owner is gone", async () => {
     "req-stale",
     request("req-stale"),
     (candidate) => candidate.requestId,
-    { staleAfterMs: 1, retryMs: 1 },
+    { staleAfterMs: 10_000, retryMs: 1 },
   );
 
   expect((await readProfileStore<{ requestId: string; revision: number }>(profile, "auth-requests")).records)
@@ -359,7 +359,7 @@ test("waits rather than reclaiming an ownerless lock younger than the stale thre
 
 const holdFixture = new URL("../test-support/hold-profile-lock.ts", import.meta.url).pathname;
 const cycleFixture = new URL("../test-support/cycle-profile-lock.ts", import.meta.url).pathname;
-const LOCK_BARRIERS = ["OWNERLESS", "PUBLISH", "RELEASE", "RECOVERY", "CLAIM", "CLAIMED"].map((name) => `TC_TEST_PROFILE_LOCK_${name}_BARRIER_DIR`);
+const LOCK_BARRIERS = ["OWNERLESS", "PUBLISH", "RELEASE", "RECOVERY", "CLAIM", "CLAIMED", "FENCED", "VERIFIED"].map((name) => `TC_TEST_PROFILE_LOCK_${name}_BARRIER_DIR`);
 
 /** Environment for a lock child process: this test's TC_HOME, no inherited barriers. */
 function lockChildEnv(home: string, extra: Record<string, string> = {}): Record<string, string | undefined> {
@@ -641,14 +641,53 @@ test("a recoverer acting on an outdated observation never strands the live holde
   expect(await exists(profileLockPath(profile))).toBe(false);
 }, 30_000);
 
+test("a recoverer paused past its fence drops its claim and never removes a newer holder's record", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const verifiedBarrier = join(home, "verified-barrier");
+  const fencedBarrier = join(home, "fenced-barrier");
+  await mkdir(verifiedBarrier, { recursive: true });
+  await mkdir(fencedBarrier, { recursive: true });
+  await crashedHolderLock(profile);
+
+  // R1 links its claim, confirms it is the dead holder's record, and is
+  // paused before unlinking owner.json. Its 4 ms stale threshold puts its
+  // fence 2 ms after the claim, well inside the time the steps below take.
+  const paused = spawnLockHolder(home, holders, profile, "paused", { timeoutMs: 10_000, staleAfterMs: 4, env: { TC_TEST_PROFILE_LOCK_VERIFIED_BARRIER_DIR: verifiedBarrier, TC_TEST_PROFILE_LOCK_FENCED_BARRIER_DIR: fencedBarrier } });
+  await waitForProfileLockProtocol(join(verifiedBarrier, `ready-${paused.pid}-${profile}`), "R1 holding its confirmed claim");
+  // R2 finishes the same recovery (unlinks the dead record); R1's claim keeps
+  // `.lock` until a later cleanup finds it unchanged long enough and removes
+  // the claim and the directory, after which H takes the lock.
+  await rm(profileLockMetadataPath(profile));
+  await ageLock(profile);
+  const holder = spawnLockHolder(home, holders, profile, "holder", { timeoutMs: 10_000, staleAfterMs: 30_000 });
+  await waitForProfileLockProtocol(holder.readyPath, "H holding the lock after the cleanup");
+
+  // R1 resumes long past its fence: it drops only its claim.
+  await writeFile(join(verifiedBarrier, "release"), "release\n", "utf8");
+  await waitForProfileLockProtocol(join(fencedBarrier, `ready-${paused.pid}-${profile}`), "R1 stopping at its fence");
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: holder.pid });
+  await writeFile(join(fencedBarrier, "release"), "release\n", "utf8");
+
+  await holder.release();
+  const [holderExit, holderError] = await holder.finished();
+  expect(holderExit, holderError).toBe(0);
+  await waitForProfileLockProtocol(paused.readyPath, "R1 acquiring after H");
+  await paused.release();
+  const [pausedExit, pausedError] = await paused.finished();
+  expect(pausedExit, pausedError).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+}, 30_000);
+
 test("many processes reclaiming eagerly from an aged empty lock never overlap or leave staging files", async () => {
   const { home, holders } = await lockTestHome();
   const profile = "delegate";
   await mkdir(profileLockPath(profile), { recursive: true });
   await ageLock(profile);
-  // A 0 ms stale threshold reclaims every ownerless `.lock` at once, including
-  // a contender's not-yet-linked one and a holder's mid-release one.
-  const workers = Array.from({ length: 8 }, () => Bun.spawn([process.execPath, cycleFixture, profile, holders, "25", "0"], {
+  // A 20 ms stale threshold reclaims an ownerless `.lock` almost at once,
+  // including a contender's not-yet-linked one and a holder's mid-release one
+  // whenever a process stalls, while leaving recovery its 10 ms fence.
+  const workers = Array.from({ length: 8 }, () => Bun.spawn([process.execPath, cycleFixture, profile, holders, "25", "20"], {
     env: lockChildEnv(home),
     stdout: "pipe",
     stderr: "pipe",

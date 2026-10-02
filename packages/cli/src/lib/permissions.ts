@@ -448,6 +448,7 @@ export function permissionsFromDelegation(
       space: resource.space,
       path: resource.path,
       actions: [...resource.actions],
+      ...(resource.caveats?.length ? { caveats: resource.caveats.map((caveat) => structuredClone(caveat)) } : {}),
     }));
   }
   return [{
